@@ -19,6 +19,8 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -38,6 +40,107 @@ public class FedExConnector implements CarrierConnector {
     @Override
     public String getCarrierName() {
         return "FedEx";
+    }
+
+    @Override
+    public ServiceAvailability listServices(String originCountry, String accessToken) {
+        List<ServiceOffering> matrix = serviceMatrix(originCountry);
+        boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
+        if (!realToken) {
+            return new ServiceAvailability(matrix, false, "built-in availability — no live FedEx credentials");
+        }
+        try {
+            List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken);
+            if (!live.isEmpty()) {
+                return new ServiceAvailability(live, true, "FedEx Service Availability API");
+            }
+            return new ServiceAvailability(matrix, false, "FedEx API returned no services — used built-in availability");
+        } catch (Exception ex) {
+            log.warn("FedEx availability lookup failed; using built-in availability. Reason: {}", ex.getMessage());
+            return new ServiceAvailability(matrix, false, "FedEx API unreachable — used built-in availability");
+        }
+    }
+
+    /**
+     * LIVE FedEx availability via the Service Availability API. Real endpoint +
+     * auth; the request (origin/destination postal) and output→service mapping
+     * must be finalised against a FedEx sandbox (see CUSTOMS_CARRIER_MAPPING.md).
+     * Throws/returns empty when unreachable so the caller uses the built-in model.
+     */
+    private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken) throws Exception {
+        String url = carrierProperties.getFedEx().getApiBaseUrl() + "/availability/v1/service/availability";
+        String response = RestClient.builder().baseUrl(url).build()
+                .post()
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + accessToken)
+                .body(Map.of("requestedShipment", Map.of("shipper",
+                        Map.of("address", Map.of("countryCode",
+                                originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT))))))
+                .retrieve()
+                .body(String.class);
+        List<ServiceOffering> out = new java.util.ArrayList<>();
+        for (JsonNode opt : objectMapper.readTree(Optional.ofNullable(response).orElse("{}"))
+                .path("output").path("serviceOptions")) {
+            String code = opt.path("serviceType").asText(null);
+            if (StringUtils.hasText(code)) {
+                out.add(new ServiceOffering(code, opt.path("serviceName").asText(code), "BOTH"));
+            }
+        }
+        return out;
+    }
+
+    @Override
+    public PackageAvailability listPackages(String originCountry, String accessToken) {
+        String o = originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT);
+        boolean us = "US".equals(o) || "PR".equals(o);
+        java.util.List<PackageOffering> pkgs = new java.util.ArrayList<>(List.of(
+                new PackageOffering("FEDEX_ENVELOPE", "FedEx Envelope", bd("12.5"), bd("9.5"), bd("0.5"), bd("1"), false, "BOTH"),
+                new PackageOffering("FEDEX_PAK", "FedEx Pak", bd("15.5"), bd("12"), bd("1.5"), bd("3"), false, "BOTH"),
+                new PackageOffering("FEDEX_TUBE", "FedEx Tube", bd("38"), bd("6"), bd("6"), null, false, "BOTH"),
+                new PackageOffering("FEDEX_10KG_BOX", "FedEx 10kg Box", bd("15.81"), bd("12.94"), bd("10.19"), bd("22"), true, "INTERNATIONAL"),
+                new PackageOffering("FEDEX_25KG_BOX", "FedEx 25kg Box", bd("21.56"), bd("16.56"), bd("13.19"), bd("55"), true, "INTERNATIONAL")));
+        if (us) {
+            // FedEx One Rate boxes are US-domestic flat-rate packaging.
+            pkgs.addAll(List.of(
+                    new PackageOffering("FEDEX_SMALL_BOX", "FedEx Small Box (One Rate)", bd("12.375"), bd("10.875"), bd("1.5"), bd("50"), true, "DOMESTIC"),
+                    new PackageOffering("FEDEX_MEDIUM_BOX", "FedEx Medium Box (One Rate)", bd("13.25"), bd("11.5"), bd("2.375"), bd("50"), true, "DOMESTIC"),
+                    new PackageOffering("FEDEX_LARGE_BOX", "FedEx Large Box (One Rate)", bd("17.875"), bd("12.375"), bd("3"), bd("50"), true, "DOMESTIC"),
+                    new PackageOffering("FEDEX_EXTRA_LARGE_BOX", "FedEx Extra Large Box (One Rate)", bd("11.875"), bd("11"), bd("10.75"), bd("50"), true, "DOMESTIC")));
+        }
+        return new PackageAvailability(pkgs, false, "FedEx published packaging");
+    }
+
+    private static BigDecimal bd(String v) {
+        return new BigDecimal(v);
+    }
+
+    private List<ServiceOffering> serviceMatrix(String originCountry) {
+        String o = originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT);
+        return switch (o) {
+            // US/PR: Ground + Express portfolio + the two international tiers.
+            case "US", "PR" -> List.of(
+                    new ServiceOffering("FEDEX_GROUND", "FedEx Ground", "DOMESTIC"),
+                    new ServiceOffering("GROUND_HOME_DELIVERY", "FedEx Home Delivery", "DOMESTIC"),
+                    new ServiceOffering("FEDEX_EXPRESS_SAVER", "FedEx Express Saver", "DOMESTIC"),
+                    new ServiceOffering("FEDEX_2_DAY", "FedEx 2Day", "DOMESTIC"),
+                    new ServiceOffering("STANDARD_OVERNIGHT", "FedEx Standard Overnight", "DOMESTIC"),
+                    new ServiceOffering("PRIORITY_OVERNIGHT", "FedEx Priority Overnight", "DOMESTIC"),
+                    new ServiceOffering("INTERNATIONAL_ECONOMY", "FedEx International Economy", "INTERNATIONAL"),
+                    new ServiceOffering("INTERNATIONAL_PRIORITY", "FedEx International Priority", "INTERNATIONAL"));
+            // Europe/UK: domestic Priority + the Europe First / International tiers.
+            case "DE", "GB", "FR", "NL", "IT", "ES", "PL", "BE" -> List.of(
+                    new ServiceOffering("FEDEX_PRIORITY", "FedEx Priority", "DOMESTIC"),
+                    new ServiceOffering("EUROPE_FIRST_INTERNATIONAL_PRIORITY", "FedEx Europe First Intl Priority", "INTERNATIONAL"),
+                    new ServiceOffering("INTERNATIONAL_PRIORITY", "FedEx International Priority", "INTERNATIONAL"),
+                    new ServiceOffering("INTERNATIONAL_ECONOMY", "FedEx International Economy", "INTERNATIONAL"),
+                    new ServiceOffering("INTERNATIONAL_FIRST", "FedEx International First", "INTERNATIONAL"));
+            // Rest of world: international export tiers only.
+            default -> List.of(
+                    new ServiceOffering("INTERNATIONAL_PRIORITY", "FedEx International Priority", "INTERNATIONAL"),
+                    new ServiceOffering("INTERNATIONAL_ECONOMY", "FedEx International Economy", "INTERNATIONAL"),
+                    new ServiceOffering("INTERNATIONAL_FIRST", "FedEx International First", "INTERNATIONAL"));
+        };
     }
 
     @Override

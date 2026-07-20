@@ -300,7 +300,7 @@ public class OrderController {
         com.multiship.backend.model.ShippingService ruledService = shippingConfigService
                 .resolveService(
                         com.multiship.backend.service.ShippingConfigService.canonicalCarrierFor(order.getShipviaCd()),
-                        clientCode, order.getShipviaCd(), shipToCountry, serviceIntl)
+                        clientCode, order.getShipviaCd(), shipToCountry, serviceIntl, shipperCountry)
                 .orElse(null);
         if (ruledService != null) {
             Map<String, Object> serviceMap = new LinkedHashMap<>();
@@ -326,7 +326,6 @@ public class OrderController {
                     pkg.put("dimUnit", p.getDimUnit());
                     pkg.put("maxWeight", p.getMaxWeight());
                     pkg.put("weightUnit", p.getWeightUnit());
-                    pkg.put("discountPct", pick.discountPct());
                     // carrier billing math (what this box actually costs to ship)
                     pkg.put("dimWeight", com.multiship.backend.util.PackageMath.dimWeight(p));
                     pkg.put("billableWeight",

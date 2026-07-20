@@ -212,8 +212,6 @@ export interface LabelDocumentPayload {
     dimUnit?: string
     maxWeight?: number | null
     weightUnit?: string
-    /** Negotiated rate discount % from the service↔package link. */
-    discountPct?: number | null
   } | null
 }
 

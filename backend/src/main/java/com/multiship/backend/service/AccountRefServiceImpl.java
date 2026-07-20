@@ -192,8 +192,12 @@ public class AccountRefServiceImpl implements AccountRefService {
 
     /** At most one client-default per customerNo. */
     private void demoteOtherClientDefaults(CarrierAccountRef account) {
+        // The default is per (client, carrier): a client can have one default UPS
+        // account AND one default FedEx account. Only demote same-carrier peers.
+        String carrier = account.getCarrierCode();
         carrierAccountRefRepository.findByCustomerNoIgnoreCaseAndClientDefaultTrue(account.getCustomerNo()).stream()
                 .filter(other -> !java.util.Objects.equals(other.getId(), account.getId()))
+                .filter(other -> carrier == null || carrier.equalsIgnoreCase(other.getCarrierCode()))
                 .forEach(other -> {
                     other.setClientDefault(false);
                     carrierAccountRefRepository.save(other);

@@ -17,4 +17,8 @@ public interface PackagePresetRepository extends JpaRepository<PackagePreset, Lo
     Optional<PackagePreset> findByNameIgnoreCase(String name);
 
     List<PackagePreset> findByIsDefaultTrue();
+
+    /** Sync upsert key for carrier packaging: one row per (carrier, code, origin country). */
+    Optional<PackagePreset> findByCarrierIgnoreCaseAndCarrierPackageCodeIgnoreCaseAndOriginCountryIgnoreCase(
+            String carrier, String carrierPackageCode, String originCountry);
 }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import {
   FiBox,
+  FiDownloadCloud,
   FiGlobe,
   FiHome,
   FiLink,
@@ -14,6 +15,8 @@ import {
   FiX,
 } from 'react-icons/fi'
 import {
+  fitAgainstService,
+  limitsOf,
   shippingConfigService,
   type PackagePreset,
   type ServicePackageLink,
@@ -30,6 +33,54 @@ const CARRIER_BADGE: Record<string, { bg: string; mono: string }> = {
   UPS: { bg: 'bg-[#351C15]', mono: 'UPS' },
   FEDEX: { bg: 'bg-[#4D148C]', mono: 'FDX' },
   USPS: { bg: 'bg-[#1F5AA6]', mono: 'USP' },
+}
+
+/** The carriers a manifest is always shown for (so an un-synced origin can still be synced). */
+const CARRIERS = ['UPS', 'FEDEX', 'USPS'] as const
+
+/** Common ship-from origins offered in the picker (merged with whatever's already synced). */
+const COMMON_ORIGINS = ['US', 'GB', 'DE', 'FR', 'NL', 'IT', 'ES', 'IN', 'CN', 'JP', 'AU', 'CA', 'MX', 'BR', 'SG']
+
+/** Short relative time for the "synced N ago" provenance chip. */
+const relTime = (iso: string): string => {
+  const secs = Math.round((Date.now() - new Date(iso).getTime()) / 1000)
+  if (secs < 60) return 'just now'
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.round(hrs / 24)}d ago`
+}
+
+/**
+ * Provenance of a carrier's service group:
+ *  live      — the carrier's LIVE availability API answered (CARRIER_API)
+ *  built-in  — the built-in availability model was used (CARRIER_SYNC, no live creds)
+ *  seeded    — legacy starter data (CARRIER_SYNC pre-dates the live path / SEEDED)
+ */
+const groupProvenance = (list: ShippingServiceItem[]): { kind: 'live' | 'built-in' | 'seeded'; when: string } | null => {
+  if (!list.length) return null
+  const dated = list.map((s) => s.syncedAt).filter(Boolean).sort()
+  const when = dated.length ? relTime(dated.at(-1) as string) : ''
+  if (list.some((s) => s.source === 'CARRIER_API')) return { kind: 'live', when }
+  if (list.some((s) => s.source === 'CARRIER_SYNC')) return { kind: 'built-in', when }
+  return { kind: 'seeded', when: '' }
+}
+
+/**
+ * Whether a package can be LINKED to a service ("according to the carrier
+ * service"): your custom boxes work anywhere; a carrier's own packaging only
+ * links to that carrier's services, from the same origin, on a compatible
+ * scope (a domestic-only flat-rate box can't go on an international service, an
+ * international-only 10/25kg box can't go on a domestic one).
+ */
+const packageFitsService = (p: PackagePreset, s: ShippingServiceItem): boolean => {
+  if (p.kind !== 'CARRIER') return true
+  if ((p.carrier || '').toUpperCase() !== s.carrier.toUpperCase()) return false
+  if ((p.originCountry ?? 'US').toUpperCase() !== (s.originCountry ?? 'US').toUpperCase()) return false
+  const ps = p.scope || 'BOTH'
+  if (ps === 'BOTH') return true
+  return s.scope === 'BOTH' || s.scope === ps
 }
 
 const blankRule = { shipviaCd: '', clientCode: '', destCodes: [] as string[], serviceId: '' }
@@ -70,7 +121,7 @@ function ZoneChips({ codes }: { codes: string[] }) {
 
 /**
  * Shipping Services — the carrier service catalog (toggle what the platform
- * offers), each service's ALLOWED PACKAGES (with negotiated discount %), and
+ * offers), each service's ALLOWED PACKAGES (its carrier's own packaging + custom boxes), and
  * the SHIP-METHOD RULES that resolve an order's ship method to a carrier
  * service by client + destination (most specific wins).
  */
@@ -87,7 +138,12 @@ export default function ShippingServicesPage() {
   const [zoneCodes, setZoneCodes] = useState<string[]>([])
   /** Service whose allowed-packages modal is open. */
   const [pkgService, setPkgService] = useState<ShippingServiceItem | null>(null)
-  const [pkgDraft, setPkgDraft] = useState<Map<number, { on: boolean; discount: string }>>(new Map())
+  const [pkgDraft, setPkgDraft] = useState<Set<number>>(new Set())
+  /** The origin country whose services are shown — carrier availability is lane-specific. */
+  const [origin, setOrigin] = useState('US')
+  const [originCountries, setOriginCountries] = useState<string[]>([])
+  /** Carrier currently syncing (its Sync button spins). */
+  const [syncing, setSyncing] = useState<string | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -100,6 +156,7 @@ export default function ShippingServicesPage() {
       setServices(catalog.services)
       setRules(catalog.rules)
       setLinks(catalog.links)
+      setOriginCountries(catalog.originCountries)
       setPresets(presetList)
       setClients(clientPage.data?.content ?? [])
     } catch (e) {
@@ -113,15 +170,21 @@ export default function ShippingServicesPage() {
     void load()
   }, [])
 
-  const byCarrier = useMemo(() => {
-    const groups = new Map<string, ShippingServiceItem[]>()
-    services.forEach((s) => {
-      const list = groups.get(s.carrier) ?? []
-      list.push(s)
-      groups.set(s.carrier, list)
-    })
-    return [...groups.entries()]
-  }, [services])
+  // Services offered FROM the selected origin (seeded rows default to US).
+  const visibleServices = useMemo(
+    () => services.filter((s) => (s.originCountry ?? 'US').toUpperCase() === origin.toUpperCase()),
+    [services, origin],
+  )
+  // Always render the three carriers so an un-synced origin still shows a Sync button.
+  const byCarrier = useMemo(
+    () => CARRIERS.map((c) => [c, visibleServices.filter((s) => s.carrier === c)] as const),
+    [visibleServices],
+  )
+  // Origin picker: a curated set of common origins merged with any already in the catalog.
+  const originOptions = useMemo(() => {
+    const merged = new Set<string>([...COMMON_ORIGINS, ...originCountries.map((c) => c.toUpperCase()), origin])
+    return [...merged].sort((a, b) => countryName(a).localeCompare(countryName(b)))
+  }, [originCountries, origin])
 
   const serviceById = useMemo(() => new Map(services.map((s) => [s.id, s])), [services])
   const linksByService = useMemo(() => {
@@ -129,7 +192,31 @@ export default function ShippingServicesPage() {
     links.forEach((l) => m.set(l.serviceId, [...(m.get(l.serviceId) ?? []), l]))
     return m
   }, [links])
-  const enabledCount = services.filter((s) => s.enabled).length
+  const enabledCount = visibleServices.filter((s) => s.enabled).length
+
+  const syncCarrier = async (carrier: string) => {
+    setSyncing(carrier)
+    try {
+      const res = await shippingConfigService.syncServices(carrier, origin)
+      const d = res.data
+      if (d) {
+        const head =
+          d.total > 0
+            ? `${carrier} · ${countryName(origin)}: ${d.added} new, ${d.updated} refreshed`
+            : `${carrier} offers no services from ${countryName(origin)}`
+        const msg = `${head} — ${d.via}.`
+        // A live carrier response gets a success check; a built-in/fallback
+        // result is reported neutrally so it's never mistaken for live data.
+        if (d.live) toast.success(msg)
+        else toast(msg, { icon: 'ℹ️' })
+      }
+      await load()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to sync from the carrier.')
+    } finally {
+      setSyncing(null)
+    }
+  }
 
   const toggle = async (svc: ShippingServiceItem) => {
     setServices((cur) => cur.map((s) => (s.id === svc.id ? { ...s, enabled: !s.enabled } : s)))
@@ -225,20 +312,13 @@ export default function ShippingServicesPage() {
 
   const openPackages = (svc: ShippingServiceItem) => {
     const current = linksByService.get(svc.id) ?? []
-    const draft = new Map<number, { on: boolean; discount: string }>()
-    presets.forEach((p) => {
-      const link = current.find((l) => l.presetId === p.id)
-      draft.set(p.id!, { on: !!link, discount: link?.discountPct != null ? String(link.discountPct) : '' })
-    })
-    setPkgDraft(draft)
+    setPkgDraft(new Set(current.map((l) => l.presetId)))
     setPkgService(svc)
   }
 
   const savePackages = async () => {
     if (!pkgService) return
-    const payload = [...pkgDraft.entries()]
-      .filter(([, v]) => v.on)
-      .map(([presetId, v]) => ({ presetId, discountPct: v.discount === '' ? null : Number(v.discount) }))
+    const payload = [...pkgDraft].map((presetId) => ({ presetId }))
     try {
       await shippingConfigService.setServicePackages(pkgService.id, payload)
       toast.success(`Allowed packages saved for ${pkgService.name}.`)
@@ -253,22 +333,44 @@ export default function ShippingServicesPage() {
     <div className="space-y-4 pb-16">
       <PageSectionHeader
         title="Shipping Services"
-        description="Carrier service levels, their allowed packages, and the ship-method rules that pick the service per client + destination."
+        description="Carrier service levels pulled from each carrier's availability API per ship-from (origin) country, their allowed packages, and the ship-method rules that pick the service by client + where the order ships to (destination)."
         actions={
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
-          >
-            <FiRefreshCw className="h-3.5 w-3.5" /> Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <label
+              title="Origin — the country shipments depart from. Filters which carrier services are available (it is NOT the destination)."
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white pl-3 pr-1.5 py-1.5"
+            >
+              <FiGlobe className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                Ship from <span className="text-slate-300">· origin</span>
+              </span>
+              <select
+                value={origin}
+                onChange={(e) => setOrigin(e.target.value)}
+                className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[#1f150c] outline-none"
+              >
+                {originOptions.map((code) => (
+                  <option key={code} value={code}>
+                    {countryName(code)} ({code})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+            >
+              <FiRefreshCw className="h-3.5 w-3.5" /> Refresh
+            </button>
+          </div>
         }
       />
 
       {/* health strip — tally tickets */}
       <section className="grid grid-cols-3 gap-3">
         {[
-          { label: 'Services enabled', value: `${enabledCount}/${services.length}`, unit: 'services', icon: FiSend, tone: 'border-[#412d15]/25 bg-[#412d15]/[0.06] text-[#412d15]' },
+          { label: `Services from ${origin}`, value: `${enabledCount}/${visibleServices.length}`, unit: 'services', icon: FiSend, tone: 'border-[#412d15]/25 bg-[#412d15]/[0.06] text-[#412d15]' },
           { label: 'Ship-method rules', value: rules.length, unit: 'rules', icon: FiLink, tone: 'border-sky-200 bg-sky-50 text-sky-700' },
           { label: 'Package links', value: links.length, unit: 'links', icon: FiBox, tone: 'border-emerald-200 bg-emerald-50 text-emerald-600' },
         ].map((c, idx) => (
@@ -300,22 +402,71 @@ export default function ShippingServicesPage() {
           byCarrier.map(([carrier, list]) => {
             const badge = CARRIER_BADGE[carrier] ?? { bg: 'bg-slate-700', mono: carrier.slice(0, 3) }
             const on = list.filter((s) => s.enabled).length
+            const prov = groupProvenance(list)
+            const isSyncing = syncing === carrier
             return (
               <div key={carrier} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                {/* document band: carrier plate + manifest title */}
+                {/* document band: carrier plate + manifest title + origin + sync */}
                 <div className="flex items-center justify-between gap-2 bg-[#1f150c] px-4 py-2.5">
                   <p className="flex min-w-0 items-center gap-2.5">
                     <span className={`flex h-6 w-9 shrink-0 items-center justify-center rounded ${badge.bg} font-mono text-[9px] font-black tracking-wider text-white`}>
                       {badge.mono}
                     </span>
                     <span className="truncate text-[10px] font-black uppercase tracking-[0.2em] text-[#e1dcc9]">
-                      {carrier} · Service manifest
+                      {carrier} · from {origin}
                     </span>
                   </p>
-                  <span className="shrink-0 rounded bg-[#e1dcc9]/15 px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums text-[#e1dcc9]">
-                    {on}/{list.length} ON
-                  </span>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {list.length ? (
+                      <span className="rounded bg-[#e1dcc9]/15 px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums text-[#e1dcc9]">
+                        {on}/{list.length} ON
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => void syncCarrier(carrier)}
+                      disabled={isSyncing}
+                      title={`Pull ${carrier}'s available services from ${countryName(origin)}`}
+                      className="inline-flex items-center gap-1 rounded bg-[#e1dcc9]/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-[#e1dcc9] transition hover:bg-[#e1dcc9]/25 disabled:opacity-50"
+                    >
+                      <FiDownloadCloud className={`h-3 w-3 ${isSyncing ? 'animate-pulse' : ''}`} />
+                      {isSyncing ? 'Syncing' : 'Sync'}
+                    </button>
+                  </div>
                 </div>
+                {prov ? (
+                  <div className="flex items-center gap-1.5 border-b border-dashed border-slate-200 bg-[#faf9f7] px-4 py-1.5">
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        prov.kind === 'live' ? 'bg-emerald-500' : prov.kind === 'built-in' ? 'bg-amber-400' : 'bg-slate-300'
+                      }`}
+                    />
+                    <span className="font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                      {prov.kind === 'live'
+                        ? 'Live carrier API'
+                        : prov.kind === 'built-in'
+                          ? 'Built-in availability'
+                          : 'Starter catalog'}
+                      {prov.when ? ` · ${prov.when}` : ''}
+                    </span>
+                  </div>
+                ) : null}
+                {!list.length ? (
+                  <div className="px-4 py-8 text-center">
+                    <p className="text-[12.5px] font-medium text-slate-500">
+                      No {carrier} services from {countryName(origin)} yet.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void syncCarrier(carrier)}
+                      disabled={isSyncing}
+                      className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15] disabled:opacity-50"
+                    >
+                      <FiDownloadCloud className="h-3.5 w-3.5" />
+                      {isSyncing ? 'Syncing…' : 'Sync from carrier'}
+                    </button>
+                  </div>
+                ) : null}
                 <ul className="divide-y divide-dashed divide-slate-200">
                   {list.map((s, i) => {
                     const pkgCount = (linksByService.get(s.id) ?? []).length
@@ -373,8 +524,9 @@ export default function ShippingServicesPage() {
           Ship-method rules
         </h3>
         <p className="mt-1 text-[12px] text-slate-500">
-          An order's ship method (P80, F77…) resolves to a carrier service. Narrow a rule by client and destination —
-          the most specific rule wins (client + country → client + region → client → global).
+          An order's ship method (P80, F77…) resolves to a carrier service. Narrow a rule by client and where the order{' '}
+          <span className="font-semibold text-slate-600">ships to</span> (a region or set of destination countries) — the
+          most specific rule wins (client + country → client + region → client → global).
         </p>
 
         <div className="mt-3 overflow-x-auto">
@@ -383,7 +535,9 @@ export default function ShippingServicesPage() {
               <tr>
                 <th className="px-2.5 py-2.5">Order method</th>
                 <th className="px-2.5 py-2.5">Client</th>
-                <th className="px-2.5 py-2.5">Destination</th>
+                <th className="px-2.5 py-2.5" title="Where the parcel is going — a region or a set of destination countries">
+                  Ships to
+                </th>
                 <th className="px-2.5 py-2.5">Resolves to</th>
                 <th className="px-2.5 py-2.5 text-right">Actions</th>
               </tr>
@@ -507,7 +661,7 @@ export default function ShippingServicesPage() {
             <div className="mb-1 flex items-start justify-between">
               <h3 className="inline-flex items-center gap-2 text-[15px] font-semibold text-slate-950">
                 <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-sky-50 text-sky-700"><FiGlobe className="h-4 w-4" /></span>
-                Destination zone
+                Ships to — destination zone
               </h3>
               <button
                 type="button"
@@ -523,7 +677,8 @@ export default function ShippingServicesPage() {
                 <>Rule <span className="font-mono font-bold text-slate-700">{zoneFor.shipviaCd}</span>
                 {zoneFor.clientCode ? <> · {zoneFor.clientCode}</> : null} — </>
               ) : null}
-              pick any mix of regions and countries. <span className="font-semibold text-slate-700">Empty = anywhere.</span>
+where the parcel is going — pick any mix of destination regions and countries.{' '}
+              <span className="font-semibold text-slate-700">Empty = anywhere.</span>
             </p>
 
             <div className="mt-3">
@@ -586,48 +741,85 @@ export default function ShippingServicesPage() {
               packages this service may ship in. The smallest box whose max weight fits the order is auto-picked; none
               ticked = the global default package.
             </p>
+            {(() => {
+              const lim = limitsOf(pkgService)
+              return (
+                <p className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <span className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">Service limits</span>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[10px] font-semibold text-slate-600">
+                    max {lim.maxWeightLb ?? '—'} lb
+                  </span>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[10px] font-semibold text-slate-600">
+                    {lim.maxLengthGirthIn ?? '—'}&quot; L+girth
+                  </span>
+                  {lim.maxLengthIn != null ? (
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[10px] font-semibold text-slate-600">
+                      {lim.maxLengthIn}&quot; length
+                    </span>
+                  ) : null}
+                </p>
+              )
+            })()}
 
             <ul className="mt-3 max-h-[300px] divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200">
               {presets
-                .filter((p) => !p.carrier || p.carrier === pkgService.carrier)
+                .filter((p) => packageFitsService(p, pkgService))
                 .map((p) => {
-                  const d = pkgDraft.get(p.id!) ?? { on: false, discount: '' }
+                  const on = pkgDraft.has(p.id!)
+                  const fit = fitAgainstService(p, pkgService)
+                  const fitChip =
+                    fit.status === 'FITS'
+                      ? null
+                      : fit.status === 'SURCHARGE'
+                        ? { cls: 'bg-amber-50 text-amber-700 ring-amber-200', label: '⚠ Surcharge' }
+                        : fit.status === 'OVERWEIGHT'
+                          ? { cls: 'bg-amber-50 text-amber-700 ring-amber-200', label: '⚠ Over weight limit' }
+                          : { cls: 'bg-rose-50 text-rose-700 ring-rose-200', label: '✕ Exceeds this service' }
                   return (
                     <li key={p.id} className="flex items-center gap-2.5 px-3 py-2.5">
                       <input
                         type="checkbox"
-                        checked={d.on}
-                        onChange={(e) => setPkgDraft((cur) => new Map(cur).set(p.id!, { ...d, on: e.target.checked }))}
+                        checked={on}
+                        onChange={(e) =>
+                          setPkgDraft((cur) => {
+                            const next = new Set(cur)
+                            if (e.target.checked) next.add(p.id!)
+                            else next.delete(p.id!)
+                            return next
+                          })
+                        }
                         className="h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
                       />
                       <div className="min-w-0 flex-1">
-                        <p className="text-[12.5px] font-semibold text-slate-900">{p.name}</p>
+                        <p className="flex items-center gap-1.5 text-[12.5px] font-semibold text-slate-900">
+                          <span className="truncate">{p.name}</span>
+                          {p.kind === 'CARRIER' ? (
+                            <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-500">
+                              {p.carrier}
+                            </span>
+                          ) : null}
+                          {fitChip ? (
+                            <span
+                              title={fit.reason}
+                              className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ring-1 ${fitChip.cls}`}
+                            >
+                              {fitChip.label}
+                            </span>
+                          ) : null}
+                        </p>
                         <p className="text-[10.5px] text-slate-400">
                           {p.length && p.width && p.height ? `${p.length}×${p.width}×${p.height} ${p.dimUnit.toLowerCase()} · ` : ''}
                           max {p.maxWeight ?? '—'} {p.weightUnit.toLowerCase()}
-                          {p.carrier ? ` · ${p.carrier}` : ''}
+                          {p.kind === 'CARRIER' ? ' · carrier packaging' : ' · your box'}
                         </p>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="0.1"
-                          value={d.discount}
-                          disabled={!d.on}
-                          onChange={(e) => setPkgDraft((cur) => new Map(cur).set(p.id!, { ...d, discount: e.target.value }))}
-                          placeholder="—"
-                          className="w-16 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-right text-[12px] text-slate-900 outline-none transition focus:border-[#412d15] disabled:bg-slate-50 disabled:text-slate-300"
-                          aria-label={`Discount % for ${p.name}`}
-                        />
-                        <span className="text-[11px] font-semibold text-slate-400">%</span>
                       </div>
                     </li>
                   )
                 })}
             </ul>
-            <p className="mt-1.5 text-[10.5px] text-slate-400">% = negotiated rate discount for this service + package (reporting).</p>
+            <p className="mt-1.5 text-[10.5px] text-slate-400">
+              Only {pkgService.carrier}'s own packaging and your custom boxes can be linked to a {pkgService.carrier} service.
+            </p>
 
             <div className="mt-4 flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
               <button

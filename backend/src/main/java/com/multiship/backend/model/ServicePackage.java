@@ -12,7 +12,6 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.math.BigDecimal;
 
 /**
  * Allowed package for a carrier service ("1 carrier → service → multiple
@@ -40,8 +39,4 @@ public class ServicePackage {
 
     @Column(name = "preset_id", nullable = false)
     private Long presetId;
-
-    /** Negotiated rate discount % for this service+package (display/reporting). */
-    @Column(name = "discount_pct", precision = 5, scale = 2)
-    private BigDecimal discountPct;
 }

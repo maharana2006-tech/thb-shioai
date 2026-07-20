@@ -26,8 +26,8 @@ import java.time.LocalDateTime;
  */
 @Entity
 @Table(name = "shipping_service",
-        uniqueConstraints = @UniqueConstraint(name = "uq_shipping_service_code",
-                columnNames = {"carrier", "service_code"}))
+        uniqueConstraints = @UniqueConstraint(name = "uq_shipping_service_lane",
+                columnNames = {"carrier", "service_code", "origin_country"}))
 @Data
 @Builder
 @NoArgsConstructor
@@ -52,6 +52,41 @@ public class ShippingService {
     /** DOMESTIC | INTERNATIONAL | BOTH. */
     @Column(nullable = false, length = 15)
     private String scope;
+
+    /**
+     * ISO alpha-2 country this service is offered FROM. Carrier service
+     * availability is lane-specific — UPS from DE offers Standard (intra-EU
+     * ground); USPS ships only from the US. Seeded rows default to US.
+     */
+    @Column(name = "origin_country", length = 2)
+    @Builder.Default
+    private String originCountry = "US";
+
+    /** SEEDED (starter catalog) | CARRIER_SYNC (pulled from the carrier's availability API). */
+    @Column(length = 20)
+    @Builder.Default
+    private String source = "SEEDED";
+
+    /** When this row was last refreshed from the carrier API (null for seeded rows). */
+    @Column(name = "synced_at")
+    private LocalDateTime syncedAt;
+
+    // ===== Package limits (lb / inches) — the carrier rules this service enforces.
+    // Seeded from carrier defaults on sync; admin may override. Null = use the
+    // PackageMath default for the carrier. =====
+
+    @Column(name = "max_weight_lb")
+    private Integer maxWeightLb;
+
+    @Column(name = "max_length_in")
+    private Integer maxLengthIn;
+
+    @Column(name = "max_length_girth_in")
+    private Integer maxLengthGirthIn;
+
+    /** L+girth (in) at which a Large Package/oversize surcharge applies; null = no surcharge tier. */
+    @Column(name = "surcharge_length_girth_in")
+    private Integer surchargeLengthGirthIn;
 
     @Column(nullable = false)
     @Builder.Default

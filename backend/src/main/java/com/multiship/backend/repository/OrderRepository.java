@@ -115,26 +115,49 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             AND UPPER(c.status) = 'ACTIVE')
     """;
 
-    /** The order's client has a usable default account of its own. */
-    String CLIENT_DEFAULT_OK_SQL = """
-        EXISTS (SELECT 1 FROM carrier_account_ref r
-            WHERE UPPER(TRIM(COALESCE(r.customer_no,''))) = UPPER(COALESCE(b.tenant_id, b.cust_no))
-            AND COALESCE(r.client_default, FALSE) = TRUE AND COALESCE(r.active, TRUE) = TRUE
-            AND COALESCE(r.account_number,'') <> '' AND COALESCE(r.client_id,'') <> '' AND COALESCE(r.client_secret,'') <> '')
+    /** The order's canonical carrier from its ship-via code (mirrors resolveCanonicalCarrierCode). */
+    String ORDER_CARRIER_SQL = """
+        (CASE UPPER(TRIM(COALESCE(b.shipvia_cd,'')))
+            WHEN 'P80' THEN 'UPS' WHEN 'F77' THEN 'FEDEX' WHEN 'L01' THEN 'USPS'
+            ELSE UPPER(TRIM(COALESCE(b.shipvia_cd,''))) END)
     """;
+
+    /** How many usable accounts the order's client has ON THE ORDER'S CARRIER. */
+    String CLIENT_CARRIER_ACCOUNT_COUNT_SQL = """
+        (SELECT COUNT(*) FROM carrier_account_ref r
+            WHERE UPPER(TRIM(COALESCE(r.customer_no,''))) = UPPER(COALESCE(b.tenant_id, b.cust_no))
+            AND COALESCE(r.active, TRUE) = TRUE
+            AND COALESCE(r.account_number,'') <> '' AND COALESCE(r.client_id,'') <> '' AND COALESCE(r.client_secret,'') <> ''
+            AND UPPER(TRIM(COALESCE(r.carrier_code,''))) = """ + ORDER_CARRIER_SQL + ")";
+
+    /** A usable PLATFORM (house) account exists for the order's carrier. */
+    String PLATFORM_CARRIER_ACCOUNT_SQL = """
+        EXISTS (SELECT 1 FROM carrier_account_ref r
+            WHERE (r.customer_no IS NULL OR TRIM(r.customer_no) = '')
+            AND COALESCE(r.active, TRUE) = TRUE
+            AND COALESCE(r.account_number,'') <> '' AND COALESCE(r.client_id,'') <> '' AND COALESCE(r.client_secret,'') <> ''
+            AND UPPER(TRIM(COALESCE(r.carrier_code,''))) = """ + ORDER_CARRIER_SQL + ")";
+
+    /**
+     * Auto-resolves without a prompt: exactly ONE of the client's accounts on
+     * the carrier, or NONE but a platform account covers it (used in the
+     * background). Only 2+ client accounts require the shipper to choose.
+     */
+    String CLIENT_AUTO_ACCOUNT_SQL = "((" + CLIENT_CARRIER_ACCOUNT_COUNT_SQL + " = 1) OR ("
+            + CLIENT_CARRIER_ACCOUNT_COUNT_SQL + " = 0 AND " + PLATFORM_CARRIER_ACCOUNT_SQL + "))";
 
     String RESOLUTION_READY_SQL = "(" + OCD_COMPLETE_SQL
             + " OR (" + OCD_ANY_SQL + " AND " + BOOK_MATCH_SQL + ")"
             + " OR (NOT " + OCD_ANY_SQL + " AND " + CLIENT_OK_SQL
-            + " AND " + CLIENT_DEFAULT_OK_SQL + "))";
+            + " AND " + CLIENT_AUTO_ACCOUNT_SQL + "))";
 
     String RESOLUTION_NEEDS_DETAILS_SQL = "(" + OCD_ANY_SQL
             + " AND NOT " + OCD_COMPLETE_SQL
             + " AND NOT " + BOOK_MATCH_SQL + ")";
 
-    /** Client exists but has no default account — the shipper picks manually. */
+    /** Client exists but has 2+ accounts on the carrier (or none and no platform) — the shipper picks one. */
     String RESOLUTION_CHOOSE_ACCOUNT_SQL = "(NOT " + OCD_ANY_SQL + " AND " + CLIENT_OK_SQL
-            + " AND NOT " + CLIENT_DEFAULT_OK_SQL + ")";
+            + " AND NOT " + CLIENT_AUTO_ACCOUNT_SQL + ")";
 
     /** The order's client is unregistered (or inactive) — generation prompts to add the client. */
     String RESOLUTION_CLIENT_MISSING_SQL = "(NOT " + OCD_ANY_SQL + " AND NOT " + CLIENT_OK_SQL + ")";

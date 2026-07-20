@@ -10,6 +10,17 @@ export interface ShippingServiceItem {
   scope: 'DOMESTIC' | 'INTERNATIONAL' | 'BOTH'
   enabled: boolean
   sortOrder: number
+  /** ISO alpha-2 origin country this service is offered from (carrier availability is lane-specific). */
+  originCountry?: string | null
+  /** CARRIER_API (live carrier response) | CARRIER_SYNC (built-in availability model) | SEEDED (legacy starter). */
+  source?: 'CARRIER_API' | 'CARRIER_SYNC' | 'SEEDED' | null
+  /** When last refreshed from the carrier API (ISO string; null for seeded rows). */
+  syncedAt?: string | null
+  /** Package limits this service enforces (lb / inches); null = use the carrier default. */
+  maxWeightLb?: number | null
+  maxLengthIn?: number | null
+  maxLengthGirthIn?: number | null
+  surchargeLengthGirthIn?: number | null
 }
 
 /**
@@ -26,12 +37,11 @@ export interface ShipMethodRule {
   serviceId: number
 }
 
-/** Service ↔ package link with the negotiated discount %. */
+/** Service ↔ package link (which packages a service may ship in). */
 export interface ServicePackageLink {
   id?: number
   serviceId: number
   presetId: number
-  discountPct?: number | null
 }
 
 export interface PackagePreset {
@@ -60,6 +70,12 @@ export interface PackagePreset {
   /** Serialized as `default` by the backend (Lombok boolean isDefault). */
   default?: boolean
   enabled: boolean
+  /** CARRIER packaging: origin country it's offered from (null for custom boxes). */
+  originCountry?: string | null
+  /** SEEDED | CARRIER_SYNC (carrier catalogue) | CARRIER_API. */
+  source?: 'SEEDED' | 'CARRIER_SYNC' | 'CARRIER_API' | null
+  /** DOMESTIC | INTERNATIONAL | BOTH — lanes this packaging is valid on. */
+  scope?: 'DOMESTIC' | 'INTERNATIONAL' | 'BOTH' | null
 }
 
 /** DIM weight in the preset's weight unit (139 in→lb / 5000 cm→kg, dims rounded UP). Null: no dims or flat-rate. */
@@ -84,10 +100,88 @@ export const oversizeOf = (p: PackagePreset): { lengthPlusGirth: number; status:
   return { lengthPlusGirth: Math.round(lpg * 10) / 10, status }
 }
 
+/** The package limits a service enforces (its own values, or the carrier default). Mirror of PackageMath. */
+export interface ResolvedLimits {
+  maxWeightLb: number | null
+  maxLengthIn: number | null
+  maxLengthGirthIn: number | null
+  surchargeLengthGirthIn: number | null
+}
+
+const carrierDefaultLimits = (carrier: string, code: string): ResolvedLimits => {
+  const c = (carrier || '').toUpperCase()
+  const s = (code || '').toUpperCase()
+  if (c === 'USPS') {
+    return s.includes('PRIORITY') && !s.includes('GROUND')
+      ? { maxWeightLb: 70, maxLengthIn: null, maxLengthGirthIn: 108, surchargeLengthGirthIn: null }
+      : { maxWeightLb: 70, maxLengthIn: null, maxLengthGirthIn: 130, surchargeLengthGirthIn: null }
+  }
+  if (c === 'FEDEX') {
+    return { maxWeightLb: 150, maxLengthIn: s.includes('GROUND') ? 108 : 119, maxLengthGirthIn: 165, surchargeLengthGirthIn: 130 }
+  }
+  return { maxWeightLb: 150, maxLengthIn: 108, maxLengthGirthIn: 165, surchargeLengthGirthIn: 130 }
+}
+
+/** A service's effective limits: its stored values, falling back to the carrier default per field. */
+export const limitsOf = (s: ShippingServiceItem): ResolvedLimits => {
+  const d = carrierDefaultLimits(s.carrier, s.serviceCode)
+  return {
+    maxWeightLb: s.maxWeightLb ?? d.maxWeightLb,
+    maxLengthIn: s.maxLengthIn ?? d.maxLengthIn,
+    maxLengthGirthIn: s.maxLengthGirthIn ?? d.maxLengthGirthIn,
+    surchargeLengthGirthIn: s.surchargeLengthGirthIn ?? d.surchargeLengthGirthIn,
+  }
+}
+
+export type ServiceFit = { status: 'FITS' | 'SURCHARGE' | 'OVER_MAX' | 'OVERWEIGHT'; reason: string }
+
+/** How a package measures up against a specific service's limits (for the allowed-packages modal). */
+export const fitAgainstService = (p: PackagePreset, s: ShippingServiceItem): ServiceFit => {
+  const lim = limitsOf(s)
+  const ov = oversizeOf(p)
+  // 1) dimensional over-max — cannot ship on this service at all
+  if (ov) {
+    const lenIn = (p.length ?? 0) * (p.dimUnit === 'CM' ? 0.393701 : 1)
+    if (lim.maxLengthGirthIn != null && ov.lengthPlusGirth > lim.maxLengthGirthIn) {
+      return { status: 'OVER_MAX', reason: `${ov.lengthPlusGirth}" length+girth exceeds the ${lim.maxLengthGirthIn}" limit` }
+    }
+    if (lim.maxLengthIn != null && lenIn > lim.maxLengthIn) {
+      return { status: 'OVER_MAX', reason: `${Math.round(lenIn)}" length exceeds the ${lim.maxLengthIn}" limit` }
+    }
+  }
+  // 2) box weight capacity beyond the service's weight cap
+  if (p.maxWeight != null && lim.maxWeightLb != null) {
+    const boxLb = p.weightUnit === 'KG' ? p.maxWeight * 2.20462 : p.maxWeight
+    if (boxLb > lim.maxWeightLb) {
+      return { status: 'OVERWEIGHT', reason: `holds up to ${Math.round(boxLb)} lb, over the ${lim.maxWeightLb} lb limit` }
+    }
+  }
+  // 3) oversize surcharge tier
+  if (ov && lim.surchargeLengthGirthIn != null && ov.lengthPlusGirth > lim.surchargeLengthGirthIn) {
+    return { status: 'SURCHARGE', reason: `${ov.lengthPlusGirth}" length+girth — large-package surcharge` }
+  }
+  return { status: 'FITS', reason: '' }
+}
+
 export interface ShippingCatalog {
   services: ShippingServiceItem[]
   rules: ShipMethodRule[]
   links: ServicePackageLink[]
+  /** Distinct origin countries present in the catalog. */
+  originCountries: string[]
+}
+
+/** Result of a carrier availability sync. */
+export interface SyncResult {
+  carrier: string
+  originCountry: string
+  added: number
+  updated: number
+  total: number
+  /** True only when the LIVE carrier API answered (not the built-in availability model). */
+  live: boolean
+  /** Human-readable source, e.g. "UPS Rating API" or "built-in availability — no live UPS credentials". */
+  via: string
 }
 
 export const shippingConfigService = {
@@ -97,8 +191,16 @@ export const shippingConfigService = {
       services: r.data?.services ?? [],
       rules: r.data?.rules ?? [],
       links: r.data?.links ?? [],
+      originCountries: r.data?.originCountries ?? [],
     }
   },
+
+  /** Pull a carrier's available services for an origin country from its availability API. */
+  syncServices: (carrier: string, originCountry: string) =>
+    apiClient.post<ApiResponse<SyncResult>>(
+      `/shipping-services/sync?carrier=${encodeURIComponent(carrier)}&originCountry=${encodeURIComponent(originCountry)}`,
+      {},
+    ),
 
   setServiceEnabled: (id: number, enabled: boolean) =>
     apiClient.patch<ApiResponse<ShippingServiceItem>>(`/shipping-services/${id}`, { enabled }),
@@ -107,7 +209,7 @@ export const shippingConfigService = {
 
   deleteRule: (id: number) => apiClient.delete<ApiResponse<void>>(`/ship-method-rules/${id}`),
 
-  setServicePackages: (serviceId: number, links: Array<{ presetId: number; discountPct?: number | null }>) =>
+  setServicePackages: (serviceId: number, links: Array<{ presetId: number }>) =>
     apiClient.put<ApiResponse<ServicePackageLink[]>>(`/shipping-services/${serviceId}/packages`, links),
 
   listPresets: async (): Promise<PackagePreset[]> => {
@@ -124,4 +226,11 @@ export const shippingConfigService = {
     apiClient.put<ApiResponse<PackagePreset>>(`/package-presets/${id}/default`, {}),
 
   deletePreset: (id: number) => apiClient.delete<ApiResponse<void>>(`/package-presets/${id}`),
+
+  /** Pull a carrier's predefined packaging (fixed dims/weights/flat-rate) for an origin country. */
+  syncPackages: (carrier: string, originCountry: string) =>
+    apiClient.post<ApiResponse<SyncResult>>(
+      `/package-presets/sync?carrier=${encodeURIComponent(carrier)}&originCountry=${encodeURIComponent(originCountry)}`,
+      {},
+    ),
 }

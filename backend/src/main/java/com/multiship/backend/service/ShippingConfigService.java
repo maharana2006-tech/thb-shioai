@@ -9,7 +9,10 @@ import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.repository.PackagePresetRepository;
 import com.multiship.backend.repository.ServicePackageRepository;
 import com.multiship.backend.repository.ShipViaMappingRepository;
+import com.multiship.backend.model.CarrierAccountRef;
+import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
+import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.util.CountryRegions;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -42,9 +45,13 @@ public class ShippingConfigService {
     private final ShipViaMappingRepository ruleRepository;
     private final PackagePresetRepository presetRepository;
     private final ServicePackageRepository servicePackageRepository;
+    /** The carrier connectors — the source of truth for what a carrier offers per origin. */
+    private final List<CarrierConnector> carrierConnectors;
+    /** Platform carrier accounts — their credentials authenticate the live availability call. */
+    private final CarrierAccountRefRepository carrierAccountRefRepository;
 
-    /** A package chosen for a service: preset + the link's negotiated discount. */
-    public record PickedPackage(PackagePreset preset, BigDecimal discountPct) {}
+    /** A package chosen for a service. */
+    public record PickedPackage(PackagePreset preset) {}
 
     /**
      * ERP connect code → canonical carrier (mirror of the private map in
@@ -64,12 +71,182 @@ public class ShippingConfigService {
     // ===== Catalog =====
 
     @Transactional(readOnly = true)
-    public ApiResponse<Map<String, Object>> catalog() {
+    public ApiResponse<Map<String, Object>> catalog(String originCountry) {
         Map<String, Object> data = new LinkedHashMap<>();
-        data.put("services", serviceRepository.findAllByOrderByCarrierAscSortOrderAsc());
+        List<ShippingService> services = StringUtils.hasText(originCountry)
+                ? serviceRepository.findByOriginCountryIgnoreCaseOrderByCarrierAscSortOrderAsc(originCountry.trim())
+                : serviceRepository.findAllByOrderByCarrierAscSortOrderAsc();
+        data.put("services", services);
         data.put("rules", ruleRepository.findAllByOrderByShipviaCdAsc());
         data.put("links", servicePackageRepository.findAll());
+        data.put("originCountries", serviceRepository.findDistinctOriginCountries());
         return success("Shipping catalog retrieved.", data);
+    }
+
+    /**
+     * Pull a carrier's available services for an origin country and upsert them
+     * into the catalog. Authenticates with the carrier's PLATFORM-account
+     * credentials and calls the connector's live availability lookup: with real
+     * credentials it hits the carrier's API (source CARRIER_API, live=true);
+     * without them it falls back to the built-in availability model (source
+     * CARRIER_SYNC, live=false) and says so — nobody is misled into thinking
+     * simulated data is a live carrier response. Existing (carrier, code,
+     * origin) rows keep their enabled state; vanished services are NOT deleted
+     * (rules may point at them) — surfaced as setup-health debt instead.
+     */
+    @Transactional
+    public ApiResponse<Map<String, Object>> syncFromCarrier(String carrier, String originCountry) {
+        String canonical = canonicalCarrierFor(carrier);
+        if (!StringUtils.hasText(canonical)) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "A carrier is required.");
+        }
+        String origin = StringUtils.hasText(originCountry)
+                ? originCountry.trim().toUpperCase(Locale.ROOT) : "US";
+        CarrierConnector connector = carrierConnectors.stream()
+                .filter(c -> c.getCarrierCode().equalsIgnoreCase(canonical))
+                .findFirst().orElse(null);
+        if (connector == null) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                    "Unknown carrier: " + carrier + ".");
+        }
+
+        // Authenticate with the platform account's real credentials (if any).
+        String accessToken = platformAccessToken(connector, canonical);
+        CarrierConnector.ServiceAvailability availability = connector.listServices(origin, accessToken);
+        List<CarrierConnector.ServiceOffering> offerings = availability.offerings();
+        String source = availability.live() ? "CARRIER_API" : "CARRIER_SYNC";
+
+        LocalDateTime now = LocalDateTime.now();
+        int added = 0, updated = 0, sort = 0;
+        for (CarrierConnector.ServiceOffering off : offerings) {
+            // Standard carrier package limits for this service, filled in by default.
+            com.multiship.backend.util.PackageMath.ServiceLimits lim =
+                    com.multiship.backend.util.PackageMath.defaultLimits(canonical, off.serviceCode());
+            ShippingService existing = serviceRepository
+                    .findByCarrierIgnoreCaseAndServiceCodeIgnoreCaseAndOriginCountryIgnoreCase(
+                            canonical, off.serviceCode(), origin)
+                    .orElse(null);
+            if (existing == null) {
+                serviceRepository.save(ShippingService.builder()
+                        .carrier(canonical).serviceCode(off.serviceCode()).name(off.name()).scope(off.scope())
+                        .originCountry(origin).source(source).syncedAt(now)
+                        .maxWeightLb(lim.maxWeightLb()).maxLengthIn(lim.maxLengthIn())
+                        .maxLengthGirthIn(lim.maxLengthGirthIn()).surchargeLengthGirthIn(lim.surchargeLengthGirthIn())
+                        .enabled(true).sortOrder(sort++).build());
+                added++;
+            } else {
+                existing.setName(off.name());
+                existing.setScope(off.scope());
+                existing.setSource(source);
+                existing.setSyncedAt(now);
+                existing.setSortOrder(sort++);
+                // Fill limits only where the admin hasn't set them (preserve overrides).
+                if (existing.getMaxWeightLb() == null) existing.setMaxWeightLb(lim.maxWeightLb());
+                if (existing.getMaxLengthIn() == null) existing.setMaxLengthIn(lim.maxLengthIn());
+                if (existing.getMaxLengthGirthIn() == null) existing.setMaxLengthGirthIn(lim.maxLengthGirthIn());
+                if (existing.getSurchargeLengthGirthIn() == null)
+                    existing.setSurchargeLengthGirthIn(lim.surchargeLengthGirthIn());
+                serviceRepository.save(existing);
+                updated++;
+            }
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("carrier", canonical);
+        data.put("originCountry", origin);
+        data.put("added", added);
+        data.put("updated", updated);
+        data.put("total", offerings.size());
+        data.put("live", availability.live());
+        data.put("via", availability.via());
+        String outcome = offerings.isEmpty()
+                ? canonical + " offers no services from " + origin
+                : "Synced " + canonical + " from " + origin + ": " + added + " new, " + updated + " refreshed";
+        String msg = outcome + " (" + availability.via() + ").";
+        return success(msg, data);
+    }
+
+    /**
+     * Pull a carrier's PREDEFINED PACKAGING for an origin country and upsert it
+     * as CARRIER-kind presets — the carrier's fixed dimensions, weight cap and
+     * flat-rate nature are filled in automatically (USPS Flat Rate = US-only,
+     * FedEx One Rate = US-domestic, 10/25KG boxes = international). Custom boxes
+     * are never touched. Upserts by (carrier, code, origin); keeps enabled state.
+     */
+    @Transactional
+    public ApiResponse<Map<String, Object>> syncPackagesFromCarrier(String carrier, String originCountry) {
+        String canonical = canonicalCarrierFor(carrier);
+        if (!StringUtils.hasText(canonical)) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "A carrier is required.");
+        }
+        String origin = StringUtils.hasText(originCountry) ? originCountry.trim().toUpperCase(Locale.ROOT) : "US";
+        CarrierConnector connector = carrierConnectors.stream()
+                .filter(c -> c.getCarrierCode().equalsIgnoreCase(canonical)).findFirst().orElse(null);
+        if (connector == null) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "Unknown carrier: " + carrier + ".");
+        }
+
+        String token = platformAccessToken(connector, canonical);
+        CarrierConnector.PackageAvailability availability = connector.listPackages(origin, token);
+        String source = availability.live() ? "CARRIER_API" : "CARRIER_SYNC";
+        int added = 0, updated = 0, sort = 100;
+        for (CarrierConnector.PackageOffering off : availability.offerings()) {
+            PackagePreset existing = presetRepository
+                    .findByCarrierIgnoreCaseAndCarrierPackageCodeIgnoreCaseAndOriginCountryIgnoreCase(
+                            canonical, off.code(), origin).orElse(null);
+            PackagePreset p = existing != null ? existing : new PackagePreset();
+            p.setName(off.name());
+            p.setKind("CARRIER");
+            p.setCarrier(canonical);
+            p.setCarrierPackageCode(off.code());
+            p.setOriginCountry(origin);
+            p.setSource(source);
+            p.setScope(off.scope());
+            p.setLength(off.length());
+            p.setWidth(off.width());
+            p.setHeight(off.height());
+            p.setDimUnit("IN");
+            p.setMaxWeight(off.maxWeight());
+            p.setWeightUnit("LB");
+            p.setFlatRate(off.flatRate());
+            if (p.getEnabled() == null) p.setEnabled(true);
+            if (p.getSortOrder() == null) p.setSortOrder(sort++);
+            presetRepository.save(p);
+            if (existing == null) added++; else updated++;
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("carrier", canonical);
+        data.put("originCountry", origin);
+        data.put("added", added);
+        data.put("updated", updated);
+        data.put("total", availability.offerings().size());
+        data.put("live", availability.live());
+        data.put("via", availability.via());
+        String head = availability.offerings().isEmpty()
+                ? canonical + " offers no packaging from " + origin
+                : "Synced " + canonical + " packaging from " + origin + ": " + added + " new, " + updated + " refreshed";
+        return success(head + " (" + availability.via() + ").", data);
+    }
+
+    /**
+     * A real OAuth token for the carrier's platform account, or null when no
+     * platform credentials are configured. The connector still returns a local
+     * fallback token in dev — the availability lookup treats that as "not live".
+     */
+    private String platformAccessToken(CarrierConnector connector, String canonicalCarrier) {
+        CarrierAccountRef account = carrierAccountRefRepository.findPlatformAccountsByCarrier(canonicalCarrier)
+                .stream()
+                .filter(a -> StringUtils.hasText(a.getClientId()) && StringUtils.hasText(a.getClientSecret()))
+                .findFirst().orElse(null);
+        if (account == null) {
+            return null;
+        }
+        try {
+            return connector.getAccessToken(account.getClientId(), account.getClientSecret());
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     @Transactional
@@ -169,7 +346,7 @@ public class ShippingConfigService {
         List<ServicePackage> saved = links.stream()
                 .filter(l -> l.getPresetId() != null && presetRepository.existsById(l.getPresetId()))
                 .map(l -> servicePackageRepository.save(ServicePackage.builder()
-                        .serviceId(serviceId).presetId(l.getPresetId()).discountPct(l.getDiscountPct()).build()))
+                        .serviceId(serviceId).presetId(l.getPresetId()).build()))
                 .toList();
         return success("Allowed packages saved (" + saved.size() + ").", saved);
     }
@@ -297,20 +474,42 @@ public class ShippingConfigService {
     /**
      * The service a shipment rides: the winning rule when its service matches
      * the shipping carrier; otherwise the carrier's first enabled service
-     * whose scope fits (international = COUNTRY difference).
+     * whose scope fits (international = COUNTRY difference). When an origin
+     * country is known, services offered FROM that origin win; if none are
+     * synced for that origin the resolution falls back to any enabled service
+     * for the carrier so existing lanes keep generating.
      */
     @Transactional(readOnly = true)
-    public Optional<ShippingService> resolveService(String canonicalCarrier, String clientCode,
-                                                    String orderService, String destCountry, boolean international) {
+    public Optional<ShippingService> resolveService(String canonicalCarrier, String clientCode, String orderService,
+                                                    String destCountry, boolean international, String originCountry) {
         Optional<ShippingService> ruled = resolveRule(clientCode, orderService, destCountry)
                 .filter(s -> s.getCarrier().equalsIgnoreCase(canonicalCarrier));
         if (ruled.isPresent()) {
             return ruled;
         }
         String neededScope = international ? "INTERNATIONAL" : "DOMESTIC";
-        return serviceRepository.findByCarrierIgnoreCaseAndEnabledTrueOrderBySortOrderAsc(canonicalCarrier).stream()
-                .filter(s -> "BOTH".equalsIgnoreCase(s.getScope()) || neededScope.equalsIgnoreCase(s.getScope()))
-                .findFirst();
+        String origin = StringUtils.hasText(originCountry) ? originCountry.trim() : null;
+        List<ShippingService> enabled =
+                serviceRepository.findByCarrierIgnoreCaseAndEnabledTrueOrderBySortOrderAsc(canonicalCarrier);
+        java.util.function.Predicate<ShippingService> scopeFits = s ->
+                "BOTH".equalsIgnoreCase(s.getScope()) || neededScope.equalsIgnoreCase(s.getScope());
+        if (origin != null) {
+            Optional<ShippingService> byOrigin = enabled.stream()
+                    .filter(s -> origin.equalsIgnoreCase(s.getOriginCountry()))
+                    .filter(scopeFits)
+                    .findFirst();
+            if (byOrigin.isPresent()) {
+                return byOrigin;
+            }
+        }
+        return enabled.stream().filter(scopeFits).findFirst();
+    }
+
+    /** Origin-agnostic overload (kept for callers without a known origin). */
+    @Transactional(readOnly = true)
+    public Optional<ShippingService> resolveService(String canonicalCarrier, String clientCode,
+                                                    String orderService, String destCountry, boolean international) {
+        return resolveService(canonicalCarrier, clientCode, orderService, destCountry, international, null);
     }
 
     /**
@@ -324,21 +523,30 @@ public class ShippingConfigService {
     @Transactional(readOnly = true)
     public Optional<PickedPackage> pickPackage(Long serviceId, BigDecimal orderWeight) {
         BigDecimal actual = orderWeight != null ? orderWeight : BigDecimal.ONE;
+        // The resolved service's own package limits (falling back to carrier
+        // defaults) — so a box legal on UPS but over-max on USPS is excluded
+        // when the shipment actually rides USPS.
+        com.multiship.backend.util.PackageMath.ServiceLimits limits = serviceId != null
+                ? serviceRepository.findById(serviceId)
+                        .map(s -> com.multiship.backend.util.PackageMath.limitsOf(s.getCarrier(), s.getServiceCode(),
+                                s.getMaxWeightLb(), s.getMaxLengthIn(), s.getMaxLengthGirthIn(), s.getSurchargeLengthGirthIn()))
+                        .orElse(null)
+                : null;
         List<ServicePackage> links = serviceId != null ? servicePackageRepository.findByServiceId(serviceId) : List.of();
         List<PickedPackage> candidates = links.stream()
                 .map(l -> presetRepository.findById(l.getPresetId())
                         .filter(pp2 -> Boolean.TRUE.equals(pp2.getEnabled()))
-                        .map(p -> new PickedPackage(p, l.getDiscountPct()))
+                        .map(PickedPackage::new)
                         .orElse(null))
                 .filter(Objects::nonNull)
                 .filter(pp -> pp.preset().getMaxWeight() == null
                         || pp.preset().getMaxWeight().compareTo(actual) >= 0)
-                .filter(pp -> com.multiship.backend.util.PackageMath.oversizeStatus(pp.preset())
+                .filter(pp -> com.multiship.backend.util.PackageMath.oversizeStatus(pp.preset(), limits)
                         != com.multiship.backend.util.PackageMath.OversizeStatus.OVER_MAX)
                 .toList();
         // avoid the $220+ oversize surcharge whenever a normal box also fits
         List<PickedPackage> preferred = candidates.stream()
-                .filter(pp -> com.multiship.backend.util.PackageMath.oversizeStatus(pp.preset())
+                .filter(pp -> com.multiship.backend.util.PackageMath.oversizeStatus(pp.preset(), limits)
                         == com.multiship.backend.util.PackageMath.OversizeStatus.OK)
                 .toList();
         Optional<PickedPackage> linked = (preferred.isEmpty() ? candidates : preferred).stream()
@@ -353,7 +561,7 @@ public class ShippingConfigService {
             return linked;
         }
         return presetRepository.findFirstByIsDefaultTrueAndEnabledTrue()
-                .map(p -> new PickedPackage(p, null));
+                .map(PickedPackage::new);
     }
 
     /** Default preset regardless of links (fallback + document display). */

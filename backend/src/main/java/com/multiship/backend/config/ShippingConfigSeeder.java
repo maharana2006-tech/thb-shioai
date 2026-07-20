@@ -32,47 +32,13 @@ public class ShippingConfigSeeder implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        seedServices();
+        // NOTE: the shipping SERVICE catalog is NO LONGER seeded — services come
+        // exclusively from each carrier's availability API via the "Sync from
+        // carrier" flow (ShippingConfigService.syncFromCarrier). This keeps the
+        // Shipping Services page free of demo/starter data, per the client. The
+        // ERP ship-via mappings still seed IF matching synced services exist.
         seedMappings();
         seedPresets();
-    }
-
-    private void seedServices() {
-        if (services.count() > 0) return;
-        int i = 0;
-        // UPS (API service codes)
-        svc("UPS", "03", "UPS Ground", "DOMESTIC", i++);
-        svc("UPS", "12", "UPS 3 Day Select", "DOMESTIC", i++);
-        svc("UPS", "02", "UPS 2nd Day Air", "DOMESTIC", i++);
-        svc("UPS", "01", "UPS Next Day Air", "DOMESTIC", i++);
-        svc("UPS", "11", "UPS Standard", "INTERNATIONAL", i++);
-        svc("UPS", "65", "UPS Worldwide Saver", "INTERNATIONAL", i++);
-        svc("UPS", "08", "UPS Worldwide Expedited", "INTERNATIONAL", i++);
-        svc("UPS", "07", "UPS Worldwide Express", "INTERNATIONAL", i++);
-        i = 0;
-        // FedEx
-        svc("FEDEX", "FEDEX_GROUND", "FedEx Ground", "DOMESTIC", i++);
-        svc("FEDEX", "GROUND_HOME_DELIVERY", "FedEx Home Delivery", "DOMESTIC", i++);
-        svc("FEDEX", "FEDEX_EXPRESS_SAVER", "FedEx Express Saver", "DOMESTIC", i++);
-        svc("FEDEX", "FEDEX_2_DAY", "FedEx 2Day", "DOMESTIC", i++);
-        svc("FEDEX", "STANDARD_OVERNIGHT", "FedEx Standard Overnight", "DOMESTIC", i++);
-        svc("FEDEX", "PRIORITY_OVERNIGHT", "FedEx Priority Overnight", "DOMESTIC", i++);
-        svc("FEDEX", "INTERNATIONAL_ECONOMY", "FedEx International Economy", "INTERNATIONAL", i++);
-        svc("FEDEX", "INTERNATIONAL_PRIORITY", "FedEx International Priority", "INTERNATIONAL", i++);
-        i = 0;
-        // USPS
-        svc("USPS", "GROUND_ADVANTAGE", "USPS Ground Advantage", "DOMESTIC", i++);
-        svc("USPS", "PRIORITY", "USPS Priority Mail", "DOMESTIC", i++);
-        svc("USPS", "PRIORITY_EXPRESS", "USPS Priority Mail Express", "DOMESTIC", i++);
-        svc("USPS", "FIRST_CLASS_INTL", "USPS First-Class Package Intl", "INTERNATIONAL", i++);
-        svc("USPS", "PRIORITY_INTL", "USPS Priority Mail Intl", "INTERNATIONAL", i++);
-        svc("USPS", "EXPRESS_INTL", "USPS Priority Mail Express Intl", "INTERNATIONAL", i++);
-        log.info("Seeded shipping service catalog ({} services).", services.count());
-    }
-
-    private void svc(String carrier, String code, String name, String scope, int sort) {
-        services.save(ShippingService.builder()
-                .carrier(carrier).serviceCode(code).name(name).scope(scope).enabled(true).sortOrder(sort).build());
     }
 
     private void seedMappings() {

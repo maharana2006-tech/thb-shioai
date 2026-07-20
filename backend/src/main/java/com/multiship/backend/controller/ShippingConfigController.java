@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -32,11 +33,22 @@ public class ShippingConfigController {
 
     private final ShippingConfigService service;
 
-    @Operation(summary = "Service catalog with ship-via mappings")
+    @Operation(summary = "Service catalog with ship-via mappings (optionally filtered by origin country)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/shipping-services")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> catalog() {
-        ApiResponse<Map<String, Object>> r = service.catalog();
+    public ResponseEntity<ApiResponse<Map<String, Object>>> catalog(
+            @RequestParam(name = "originCountry", required = false) String originCountry) {
+        ApiResponse<Map<String, Object>> r = service.catalog(originCountry);
+        return ResponseEntity.status(r.getCode()).body(r);
+    }
+
+    @Operation(summary = "Sync a carrier's available services for an origin country from its availability API")
+    @PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/shipping-services/sync")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> sync(
+            @RequestParam String carrier,
+            @RequestParam(name = "originCountry", required = false, defaultValue = "US") String originCountry) {
+        ApiResponse<Map<String, Object>> r = service.syncFromCarrier(carrier, originCountry);
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
@@ -81,6 +93,16 @@ public class ShippingConfigController {
     @GetMapping("/package-presets")
     public ResponseEntity<ApiResponse<List<PackagePreset>>> listPresets() {
         ApiResponse<List<PackagePreset>> r = service.listPresets();
+        return ResponseEntity.status(r.getCode()).body(r);
+    }
+
+    @Operation(summary = "Sync a carrier's predefined packaging for an origin country")
+    @PreAuthorize("hasRole('ADMIN')")
+    @PostMapping("/package-presets/sync")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> syncPackages(
+            @RequestParam String carrier,
+            @RequestParam(name = "originCountry", required = false, defaultValue = "US") String originCountry) {
+        ApiResponse<Map<String, Object>> r = service.syncPackagesFromCarrier(carrier, originCountry);
         return ResponseEntity.status(r.getCode()).body(r);
     }
 

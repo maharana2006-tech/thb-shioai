@@ -320,9 +320,12 @@ public class CarrierServiceImpl implements CarrierService {
         if (AccountResolution.SCENARIO_CHOOSE_ACCOUNT.equals(resolution.scenario())) {
             LabelGenerationResponse chooseAccount = LabelGenerationResponse.builder()
                     .orderNo(orderNo)
+                    .carrierCode(resolution.carrierCode())
                     .status("CHOOSE_ACCOUNT")
                     .clientCode(tenantId)
-                    .message("No account resolved automatically — choose a carrier account to ship with.")
+                    // the client's per-carrier default (if any) — the picker pre-selects it
+                    .prefillAccountNumber(resolution.accountNumber())
+                    .message("Choose which " + resolution.carrierCode() + " account to ship this order with.")
                     .build();
             return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.ACCOUNT_SELECTION_REQUIRED,
                     "Order " + orderNo + " needs a manually selected carrier account.", chooseAccount);
@@ -581,24 +584,58 @@ public class CarrierServiceImpl implements CarrierService {
                     null, null, null, null, null);
         }
 
-        // The client's own default account wins over the company default.
-        CarrierAccountRef clientDefaultRef = carrierAccountRefRepository
-                .findFirstByCustomerNoIgnoreCaseAndClientDefaultTrueAndActiveTrue(clientCode)
+        // The client's own complete, active accounts ON THIS CARRIER decide it:
+        //   exactly 1 → use it automatically (no prompt),
+        //   2 or more → the operator chooses which one at generation time,
+        //   0         → nothing to auto-pick → choose from the whole book.
+        // (A client with several UPS accounts must always be asked which UPS
+        //  account to bill — the client's requirement.)
+        String carrier = carrierCode;
+        List<CarrierAccountRef> clientCarrierAccounts = carrierAccountRefRepository
+                .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(clientCode).stream()
+                .filter(a -> !Boolean.FALSE.equals(a.getActive()))
                 .filter(CarrierAccountRef::isComplete)
-                .orElse(null);
+                .filter(a -> carrier.equalsIgnoreCase(
+                        resolveCanonicalCarrierCode(firstNonBlank(a.getCarrierCode(), carrier))))
+                .toList();
 
-        if (clientDefaultRef != null) {
+        if (clientCarrierAccounts.size() == 1) {
+            CarrierAccountRef only = clientCarrierAccounts.get(0);
             return AccountResolution.of(AccountResolution.SCENARIO_CLIENT_DEFAULT,
-                    resolveCanonicalCarrierCode(firstNonBlank(clientDefaultRef.getCarrierCode(), carrierCode)),
-                    clientDefaultRef.getAccountNumber(), clientDefaultRef.getClientId(), clientDefaultRef.getClientSecret(),
-                    firstNonBlank(clientDefaultRef.getEnvironment(), carrierProperties.getDefaultEnvironment()),
-                    clientDefaultRef.getAccountName());
+                    resolveCanonicalCarrierCode(firstNonBlank(only.getCarrierCode(), carrier)),
+                    only.getAccountNumber(), only.getClientId(), only.getClientSecret(),
+                    firstNonBlank(only.getEnvironment(), carrierProperties.getDefaultEnvironment()),
+                    only.getAccountName());
         }
 
-        // No client default: the shipper chooses an account manually at
-        // generation time — there is no company-wide default any more.
-        return AccountResolution.of(AccountResolution.SCENARIO_CHOOSE_ACCOUNT, carrierCode,
-                null, null, null, null, null);
+        if (clientCarrierAccounts.isEmpty()) {
+            // No account for this client on this carrier → ship on the PLATFORM
+            // (house) account automatically, in the background. Platform accounts
+            // are never offered in the picker — the operator only sees the
+            // client's own accounts.
+            CarrierAccountRef platform = carrierAccountRefRepository
+                    .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+            if (platform != null) {
+                return AccountResolution.of(AccountResolution.SCENARIO_DEFAULT,
+                        resolveCanonicalCarrierCode(firstNonBlank(platform.getCarrierCode(), carrier)),
+                        platform.getAccountNumber(), platform.getClientId(), platform.getClientSecret(),
+                        firstNonBlank(platform.getEnvironment(), carrierProperties.getDefaultEnvironment()),
+                        platform.getAccountName());
+            }
+            // Nothing for this client and no platform account → nothing to ship with.
+            return AccountResolution.of(AccountResolution.SCENARIO_CHOOSE_ACCOUNT, carrier,
+                    null, null, null, null, null);
+        }
+
+        // 2+ of the CLIENT's own accounts on this carrier → the operator picks
+        // one of them. The client's per-carrier default rides along (in the
+        // accountNumber slot) so the picker can pre-select it.
+        String suggested = clientCarrierAccounts.stream()
+                .filter(a -> Boolean.TRUE.equals(a.getClientDefault()))
+                .map(CarrierAccountRef::getAccountNumber)
+                .findFirst().orElse(null);
+        return AccountResolution.of(AccountResolution.SCENARIO_CHOOSE_ACCOUNT, carrier,
+                suggested, null, null, null, null);
     }
 
     @Override
@@ -870,7 +907,7 @@ public class CarrierServiceImpl implements CarrierService {
         String orderClient = firstNonBlank(order.getTenantId(), order.getCustNo());
         com.multiship.backend.model.ShippingService resolvedService = shippingConfigService
                 .resolveService(connector.getCarrierCode(), orderClient, order.getShipviaCd(),
-                        order.getShiptoCountryCd(), international)
+                        order.getShiptoCountryCd(), international, shipper.getCountryCode())
                 .orElse(null);
         String serviceType = resolvedService != null ? resolvedService.getServiceCode()
                 : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");

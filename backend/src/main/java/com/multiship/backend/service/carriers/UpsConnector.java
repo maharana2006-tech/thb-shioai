@@ -22,6 +22,8 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -43,6 +45,109 @@ public class UpsConnector implements CarrierConnector {
     @Override
     public String getCarrierName() {
         return "UPS";
+    }
+
+    @Override
+    public ServiceAvailability listServices(String originCountry, String accessToken) {
+        List<ServiceOffering> matrix = serviceMatrix(originCountry);
+        // A live availability lookup needs a REAL OAuth token. In dev the
+        // connectors run on local fallback tokens (no live UPS credentials) —
+        // report the built-in model honestly rather than faking a live call.
+        boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
+        if (!realToken) {
+            return new ServiceAvailability(matrix, false, "built-in availability — no live UPS credentials");
+        }
+        try {
+            List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken);
+            if (!live.isEmpty()) {
+                return new ServiceAvailability(live, true, "UPS Rating API (Shop)");
+            }
+            return new ServiceAvailability(matrix, false, "UPS API returned no services — used built-in availability");
+        } catch (Exception ex) {
+            log.warn("UPS availability lookup failed; using built-in availability. Reason: {}", ex.getMessage());
+            return new ServiceAvailability(matrix, false, "UPS API unreachable — used built-in availability");
+        }
+    }
+
+    /**
+     * LIVE UPS availability via the Rating API "Shop" request (returns every
+     * rated service for a lane). Real endpoint + auth; the request body and
+     * RatedShipment→service mapping must be finalised against a UPS sandbox
+     * (see backend/docs/CUSTOMS_CARRIER_MAPPING.md). Throws/returns empty when
+     * unreachable so the caller falls back to the built-in model.
+     */
+    private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken) throws Exception {
+        String url = carrierProperties.getUps().getApiBaseUrl() + "/api/rating/"
+                + carrierProperties.getUps().getApiVersion() + "/Shop";
+        String response = RestClient.builder().baseUrl(url).build()
+                .post()
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + accessToken)
+                .body(Map.of("RateRequest", Map.of("Shipment",
+                        Map.of("ShipFrom", Map.of("Address", Map.of("CountryCode",
+                                originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT)))))))
+                .retrieve()
+                .body(String.class);
+        List<ServiceOffering> out = new java.util.ArrayList<>();
+        JsonNode rated = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"))
+                .path("RateResponse").path("RatedShipment");
+        for (JsonNode r : rated.isArray() ? rated : objectMapper.createArrayNode().add(rated)) {
+            String code = r.path("Service").path("Code").asText(null);
+            if (StringUtils.hasText(code)) {
+                out.add(new ServiceOffering(code, r.path("Service").path("Description").asText("UPS " + code), "BOTH"));
+            }
+        }
+        return out;
+    }
+
+    private List<ServiceOffering> serviceMatrix(String originCountry) {
+        String o = originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT);
+        return switch (o) {
+            // US/PR: domestic ground+air ladder + the Worldwide export portfolio.
+            case "US", "PR" -> List.of(
+                    new ServiceOffering("03", "UPS Ground", "DOMESTIC"),
+                    new ServiceOffering("12", "UPS 3 Day Select", "DOMESTIC"),
+                    new ServiceOffering("02", "UPS 2nd Day Air", "DOMESTIC"),
+                    new ServiceOffering("01", "UPS Next Day Air", "DOMESTIC"),
+                    new ServiceOffering("65", "UPS Worldwide Saver", "INTERNATIONAL"),
+                    new ServiceOffering("08", "UPS Worldwide Expedited", "INTERNATIONAL"),
+                    new ServiceOffering("07", "UPS Worldwide Express", "INTERNATIONAL"));
+            // Europe/UK: Standard is the intra-Europe ground service; export uses Express tiers.
+            case "DE", "GB", "FR", "NL", "IT", "ES", "PL", "BE" -> List.of(
+                    new ServiceOffering("11", "UPS Standard", "DOMESTIC"),
+                    new ServiceOffering("65", "UPS Express Saver", "INTERNATIONAL"),
+                    new ServiceOffering("07", "UPS Express", "INTERNATIONAL"),
+                    new ServiceOffering("54", "UPS Express Plus", "INTERNATIONAL"),
+                    new ServiceOffering("08", "UPS Expedited", "INTERNATIONAL"));
+            // Rest of world (Asia-Pacific, etc.): export-only, no UPS domestic ground.
+            default -> List.of(
+                    new ServiceOffering("65", "UPS Worldwide Saver", "INTERNATIONAL"),
+                    new ServiceOffering("08", "UPS Worldwide Expedited", "INTERNATIONAL"),
+                    new ServiceOffering("07", "UPS Worldwide Express", "INTERNATIONAL"),
+                    new ServiceOffering("54", "UPS Worldwide Express Plus", "INTERNATIONAL"));
+        };
+    }
+
+    @Override
+    public PackageAvailability listPackages(String originCountry, String accessToken) {
+        // UPS packaging is a published, static catalogue (same set every origin);
+        // the 10/25KG boxes are international-only. Token unused — packaging isn't
+        // a live availability call.
+        List<PackageOffering> pkgs = List.of(
+                new PackageOffering("01", "UPS Letter", bd("12.5"), bd("9.5"), bd("0.5"), bd("1"), false, "BOTH"),
+                new PackageOffering("04", "UPS Express Pak", bd("16"), bd("12.75"), bd("2"), bd("3"), false, "BOTH"),
+                new PackageOffering("03", "UPS Tube", bd("38"), bd("6"), bd("6"), null, false, "BOTH"),
+                new PackageOffering("2a", "UPS Small Express Box", bd("13"), bd("11"), bd("2"), null, false, "BOTH"),
+                new PackageOffering("2b", "UPS Medium Express Box", bd("15"), bd("11"), bd("3"), null, false, "BOTH"),
+                new PackageOffering("2c", "UPS Large Express Box", bd("18"), bd("13"), bd("3"), null, false, "BOTH"),
+                new PackageOffering("25", "UPS 10KG Box", bd("16.5"), bd("13.25"), bd("10.75"), bd("22"), true, "INTERNATIONAL"),
+                new PackageOffering("24", "UPS 25KG Box", bd("16.5"), bd("13.25"), bd("10.75"), bd("55"), true, "INTERNATIONAL"));
+        return new PackageAvailability(pkgs, false, "UPS published packaging");
+    }
+
+    private static BigDecimal bd(String v) {
+        return new BigDecimal(v);
     }
 
     @Override

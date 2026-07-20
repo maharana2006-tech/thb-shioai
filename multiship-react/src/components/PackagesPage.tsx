@@ -1,9 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import toast from 'react-hot-toast'
-import { FiEdit3, FiPlus, FiRefreshCw, FiStar, FiTrash2, FiTruck, FiX } from 'react-icons/fi'
+import { FiDownloadCloud, FiEdit3, FiGlobe, FiPlus, FiRefreshCw, FiStar, FiTrash2, FiTruck, FiX } from 'react-icons/fi'
 import { dimWeightOf, oversizeOf, shippingConfigService, type PackagePreset } from '../api/shippingConfigService'
+import { countryName } from '../utils/countries'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import Select from './workspace/Select'
+import TablePagination from './workspace/TablePagination'
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15] focus:ring-4 focus:ring-[#412d15]/10'
@@ -112,6 +114,11 @@ export default function PackagesPage() {
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<PackagePreset | null>(null)
   const [saving, setSaving] = useState(false)
+  /** Ship-from origin for carrier packaging (USPS Flat Rate is US-only, etc.). */
+  const [origin, setOrigin] = useState('US')
+  const [syncing, setSyncing] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
 
   const load = async () => {
     setLoading(true)
@@ -186,19 +193,85 @@ export default function PackagesPage() {
 
   const num = (v: string) => (v === '' ? null : Number(v))
 
+  // Custom boxes are universal; carrier packaging is per ship-from origin.
+  const visiblePresets = useMemo(
+    () =>
+      presets.filter(
+        (p) => p.kind !== 'CARRIER' || (p.originCountry ?? 'US').toUpperCase() === origin.toUpperCase(),
+      ),
+    [presets, origin],
+  )
+  const totalPages = Math.max(1, Math.ceil(visiblePresets.length / pageSize))
+  const safePage = Math.min(page, totalPages)
+  const pagedPresets = useMemo(
+    () => visiblePresets.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [visiblePresets, safePage, pageSize],
+  )
+  // Snap back to page 1 whenever the filtered set changes (origin switch, sync…).
+  useEffect(() => {
+    setPage(1)
+  }, [origin, visiblePresets.length])
+  const originOptions = useMemo(() => {
+    const base = ['US', 'GB', 'DE', 'FR', 'NL', 'IT', 'ES', 'IN', 'CN', 'JP', 'AU', 'CA', 'MX', 'BR', 'SG']
+    const merged = new Set<string>([...base, ...presets.map((p) => (p.originCountry || '').toUpperCase()).filter(Boolean), origin])
+    return [...merged].sort((a, b) => countryName(a).localeCompare(countryName(b)))
+  }, [presets, origin])
+
+  const syncCarrierPackaging = async () => {
+    setSyncing(true)
+    try {
+      let added = 0
+      let updated = 0
+      for (const c of ['UPS', 'FEDEX', 'USPS']) {
+        const res = await shippingConfigService.syncPackages(c, origin)
+        added += res.data?.added ?? 0
+        updated += res.data?.updated ?? 0
+      }
+      toast.success(`Carrier packaging · ${countryName(origin)}: ${added} new, ${updated} refreshed.`)
+      await load()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to sync carrier packaging.')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   return (
     <div className="space-y-4 pb-16">
       <PageSectionHeader
         title="Packages"
-        description="The boxes and carrier packaging labels ship in — the default preset supplies package type and dimensions on every label."
+        description="Your own boxes plus each carrier's predefined packaging — pulled from the carrier per ship-from country (USPS Flat Rate is US-only, 10/25kg boxes are international). The default preset supplies package type and dimensions on every label."
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <label
+              title="Origin — carrier packaging is shown for this ship-from country. Your custom boxes always show."
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white pl-3 pr-1.5 py-1.5"
+            >
+              <FiGlobe className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                Ship from <span className="text-slate-300">· origin</span>
+              </span>
+              <select
+                value={origin}
+                onChange={(e) => setOrigin(e.target.value)}
+                className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[#1f150c] outline-none"
+              >
+                {originOptions.map((code) => (
+                  <option key={code} value={code}>
+                    {countryName(code)} ({code})
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
               type="button"
-              onClick={() => void load()}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+              onClick={() => void syncCarrierPackaging()}
+              disabled={syncing}
+              title={`Pull UPS/FedEx/USPS predefined packaging for ${countryName(origin)}`}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
             >
-              <FiRefreshCw className="h-3.5 w-3.5" /> Refresh
+              <FiDownloadCloud className={`h-3.5 w-3.5 ${syncing ? 'animate-pulse' : ''}`} />
+              {syncing ? 'Syncing…' : 'Sync carrier packaging'}
             </button>
             <button
               type="button"
@@ -215,7 +288,7 @@ export default function PackagesPage() {
         {loading && !presets.length ? (
           <p className="col-span-3 py-10 text-center text-sm text-slate-500">Loading packages…</p>
         ) : (
-          presets.map((p) => (
+          pagedPresets.map((p) => (
             <div
               key={p.id}
               className={`group relative rounded-2xl border bg-white shadow-sm transition hover:shadow-md ${
@@ -251,6 +324,17 @@ export default function PackagesPage() {
                     {p.carrier ? (
                       <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-slate-600">
                         <FiTruck className="h-2.5 w-2.5" /> {p.carrier}
+                      </span>
+                    ) : null}
+                    {p.kind === 'CARRIER' && p.scope && p.scope !== 'BOTH' ? (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ring-1 ${
+                          p.scope === 'DOMESTIC'
+                            ? 'bg-emerald-50 text-emerald-700 ring-emerald-100'
+                            : 'bg-sky-50 text-sky-700 ring-sky-100'
+                        }`}
+                      >
+                        {p.scope === 'DOMESTIC' ? '⌂ Domestic' : '⊕ Intl'}
                       </span>
                     ) : null}
                     {p.flatRate ? (
@@ -353,6 +437,19 @@ export default function PackagesPage() {
           <p className="col-span-3 py-10 text-center text-sm text-slate-500">No packages yet — click "Add Package".</p>
         ) : null}
       </section>
+
+      {visiblePresets.length > pageSize ? (
+        <TablePagination
+          page={safePage}
+          pageSize={pageSize}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size)
+            setPage(1)
+          }}
+        />
+      ) : null}
 
       {/* add/edit modal */}
       {editing ? (

@@ -6,7 +6,6 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -24,8 +23,7 @@ import java.time.LocalDateTime;
  * it for package type + dimensions (weight still comes from the order).
  */
 @Entity
-@Table(name = "package_preset",
-        uniqueConstraints = @UniqueConstraint(name = "uq_package_preset_name", columnNames = "name"))
+@Table(name = "package_preset")
 @Data
 @Builder
 @NoArgsConstructor
@@ -50,6 +48,24 @@ public class PackagePreset {
     /** Restrict to one carrier (UPS/FEDEX/USPS); null = usable with any. */
     @Column(length = 20)
     private String carrier;
+
+    /**
+     * For CARRIER packaging: the origin country it's offered from (USPS Flat
+     * Rate is US-only, FedEx One Rate is US-domestic, 10/25KG boxes are
+     * international). Null for CUSTOM boxes (usable anywhere).
+     */
+    @Column(name = "origin_country", length = 2)
+    private String originCountry;
+
+    /** SEEDED (starter) | CARRIER_SYNC (built-in availability) | CARRIER_API (live carrier response). */
+    @Column(length = 20)
+    @Builder.Default
+    private String source = "SEEDED";
+
+    /** DOMESTIC | INTERNATIONAL | BOTH — the lanes this packaging is valid on. */
+    @Column(length = 15)
+    @Builder.Default
+    private String scope = "BOTH";
 
     // External dimensions — what the carrier measures (rating, DIM weight, girth).
     @Column(precision = 8, scale = 2) private BigDecimal length;

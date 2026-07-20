@@ -113,6 +113,8 @@ export default function OrdersWorkspace() {
   } | null>(null)
   const [addClientCode, setAddClientCode] = useState<string | null>(null)
   const [pickerTarget, setPickerTarget] = useState<Order | null>(null)
+  const [pickerCarrier, setPickerCarrier] = useState<string | null>(null)
+  const [pickerSuggested, setPickerSuggested] = useState<string | null>(null)
   const [detailsOrderNo, setDetailsOrderNo] = useState<number | null>(null)
 
   // The header's global search lands here as /orders?q=…
@@ -349,6 +351,9 @@ export default function OrdersWorkspace() {
             if (orderNos.length === 1) {
               const target = generatable.find((o) => o.orderDetails.orderNo === orderNo)
               if (target) setPickerTarget(target)
+              const payload = error.payload as { carrierCode?: string | null; prefillAccountNumber?: string | null } | undefined
+              setPickerCarrier(payload?.carrierCode ?? null)
+              setPickerSuggested(payload?.prefillAccountNumber ?? null)
             }
             return
           }
@@ -521,7 +526,11 @@ export default function OrdersWorkspace() {
       return (
         <button
           type="button"
-          onClick={() => setPickerTarget(order)}
+          onClick={() => {
+            setPickerTarget(order)
+            setPickerCarrier(resolution?.carrierCode ?? null)
+            setPickerSuggested(resolution?.accountNumber ?? null)
+          }}
           disabled={isGenerating}
           className={`${ACTION_BASE} ${ACTION_OUTLINE}`}
         >
@@ -691,7 +700,7 @@ export default function OrdersWorkspace() {
               >
                 {t.tone !== 'slate' ? <span className={`h-1.5 w-1.5 rounded-full ${dotTone[t.tone]}`} /> : null}
                 {t.label}
-                <span className="text-[11px] font-semibold tabular-nums text-slate-400">{t.count}</span>
+                <span className="font-mono text-[11px] font-semibold tabular-nums text-slate-400">{t.count}</span>
               </button>
             ))}
           </div>
@@ -786,9 +795,19 @@ export default function OrdersWorkspace() {
           ) : null}
         </div>
 
-        <div className="mt-3.5 overflow-x-auto">
+        {/* manifest caption strip */}
+        <div className="mt-3.5 flex items-center justify-between border-b border-dashed border-slate-200 pb-1.5">
+          <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-slate-400">
+            Order manifest
+          </span>
+          <span className="font-mono text-[9px] font-bold uppercase tracking-[0.16em] tabular-nums text-slate-400">
+            {rows.length} {rows.length === 1 ? 'line' : 'lines'}
+          </span>
+        </div>
+
+        <div className="mt-2 overflow-x-auto">
           <table className="w-full min-w-[880px] text-[13px] text-slate-700">
-            <thead className="border-b border-slate-200 text-left text-[10px] uppercase tracking-[0.16em] text-slate-500">
+            <thead className="border-b border-dashed border-slate-300 text-left font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400">
               <tr>
                 {view === 'ready' ? <th className="px-2.5 py-3">Select</th> : null}
                 {sortableHeader('Order #', 'orderNo')}
@@ -809,7 +828,7 @@ export default function OrdersWorkspace() {
               </tr>
 
               {showFilters ? (
-                <tr className="border-b border-slate-100 bg-slate-50/60">
+                <tr className="border-b border-dashed border-slate-200 bg-slate-50/60">
                   {view === 'ready' ? <th className="px-2 pb-2.5" /> : null}
                   {filterCell('orderNo', 'e.g. 11153')}
                   {filterCell('customer', 'e.g. ARHDEV')}
@@ -842,13 +861,13 @@ export default function OrdersWorkspace() {
                 </tr>
               ) : null}
             </thead>
-            <tbody className="divide-y divide-slate-200">
+            <tbody className="divide-y divide-dashed divide-slate-200">
               {rows.map((order) => {
                 const orderNo = order.orderDetails.orderNo
                 const resolution = order.accountResolution ?? null
 
                 return (
-                  <tr key={orderNo} className="transition hover:bg-slate-50/80">
+                  <tr key={orderNo} className="transition hover:bg-[#faf7f0]">
                     {view === 'ready' ? (
                       <td className="px-2.5 py-3">
                         <input
@@ -859,8 +878,12 @@ export default function OrdersWorkspace() {
                         />
                       </td>
                     ) : null}
-                    <td className="px-2.5 py-3 font-semibold text-slate-950">{orderNo}</td>
-                    <td className="px-2.5 py-3">{order.orderDetails.customerCode}</td>
+                    <td className="px-2.5 py-3">
+                      <span className="font-mono text-[12.5px] font-bold text-[#1f150c]">#{orderNo}</span>
+                    </td>
+                    <td className="px-2.5 py-3 font-mono text-[12px] font-semibold text-slate-600">
+                      {order.orderDetails.customerCode}
+                    </td>
                     <td className="px-2.5 py-3">
                       {order.shippingDetails.city}, {order.shippingDetails.state}
                     </td>
@@ -1033,7 +1056,13 @@ export default function OrdersWorkspace() {
         <AccountPickerModal
           orderNo={pickerTarget.orderDetails.orderNo}
           clientCode={pickerTarget.orderDetails.customerCode}
-          onClose={() => setPickerTarget(null)}
+          carrierCode={pickerCarrier}
+          suggestedAccountNumber={pickerSuggested}
+          onClose={() => {
+            setPickerTarget(null)
+            setPickerCarrier(null)
+            setPickerSuggested(null)
+          }}
           onPick={(account) => {
             void generateWithAccount(pickerTarget.orderDetails.orderNo, account)
           }}

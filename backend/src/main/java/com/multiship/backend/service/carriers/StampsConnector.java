@@ -22,6 +22,8 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -43,6 +45,94 @@ public class StampsConnector implements CarrierConnector {
     @Override
     public String getCarrierName() {
         return "USPS via Stamps.com";
+    }
+
+    @Override
+    public ServiceAvailability listServices(String originCountry, String accessToken) {
+        List<ServiceOffering> matrix = serviceMatrix(originCountry);
+        boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
+        if (!realToken) {
+            return new ServiceAvailability(matrix, false, "built-in availability — no live USPS credentials");
+        }
+        try {
+            List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken);
+            if (!live.isEmpty()) {
+                return new ServiceAvailability(live, true, "USPS Shipping Options API");
+            }
+            // USPS legitimately offers nothing from a non-US origin — a live
+            // empty result is still authoritative.
+            String o = originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT);
+            boolean usOrigin = "US".equals(o) || "PR".equals(o);
+            return new ServiceAvailability(usOrigin ? matrix : List.of(), !usOrigin,
+                    usOrigin ? "USPS API returned no services — used built-in availability"
+                            : "USPS Shipping Options API (US-only carrier)");
+        } catch (Exception ex) {
+            log.warn("USPS availability lookup failed; using built-in availability. Reason: {}", ex.getMessage());
+            return new ServiceAvailability(matrix, false, "USPS API unreachable — used built-in availability");
+        }
+    }
+
+    /**
+     * LIVE USPS availability via the Shipping Options API (US origins only).
+     * Real endpoint + auth; request/response mapping to be finalised against
+     * the USPS sandbox (see CUSTOMS_CARRIER_MAPPING.md). Throws/returns empty
+     * when unreachable so the caller uses the built-in model.
+     */
+    private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken) throws Exception {
+        String url = carrierProperties.getStamps().getApiBaseUrl() + "/shipments/v3/options/search";
+        String response = RestClient.builder().baseUrl(url).build()
+                .post()
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + accessToken)
+                .body(Map.of("originZIPCode", "", "destinationZIPCode", ""))
+                .retrieve()
+                .body(String.class);
+        List<ServiceOffering> out = new java.util.ArrayList<>();
+        for (JsonNode opt : objectMapper.readTree(Optional.ofNullable(response).orElse("{}")).path("shippingOptions")) {
+            String code = opt.path("mailClass").asText(null);
+            if (StringUtils.hasText(code)) {
+                out.add(new ServiceOffering(code, opt.path("mailClassDisplayName").asText(code),
+                        code.toUpperCase(Locale.ROOT).contains("INTL") ? "INTERNATIONAL" : "DOMESTIC"));
+            }
+        }
+        return out;
+    }
+
+    @Override
+    public PackageAvailability listPackages(String originCountry, String accessToken) {
+        String o = originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT);
+        // USPS Flat Rate packaging is US-domestic only; from any other origin
+        // USPS offers nothing (US-only carrier).
+        if (!"US".equals(o) && !"PR".equals(o)) {
+            return new PackageAvailability(List.of(), false, "USPS published packaging (US-only carrier)");
+        }
+        List<PackageOffering> pkgs = List.of(
+                new PackageOffering("FLAT_RATE_ENVELOPE", "USPS Flat Rate Envelope", bd("12.5"), bd("9.5"), bd("0.5"), bd("70"), true, "DOMESTIC"),
+                new PackageOffering("SM_FLAT_RATE_BOX", "USPS Small Flat Rate Box", bd("8.69"), bd("5.44"), bd("1.75"), bd("70"), true, "DOMESTIC"),
+                new PackageOffering("MD_FLAT_RATE_BOX", "USPS Medium Flat Rate Box", bd("11.25"), bd("8.75"), bd("6"), bd("70"), true, "DOMESTIC"),
+                new PackageOffering("LG_FLAT_RATE_BOX", "USPS Large Flat Rate Box", bd("12.25"), bd("12"), bd("6"), bd("70"), true, "DOMESTIC"));
+        return new PackageAvailability(pkgs, false, "USPS published packaging");
+    }
+
+    private static BigDecimal bd(String v) {
+        return new BigDecimal(v);
+    }
+
+    private List<ServiceOffering> serviceMatrix(String originCountry) {
+        String o = originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT);
+        // USPS ships ONLY from the United States (and PR) — from any other
+        // origin the service-availability call returns nothing.
+        if (!"US".equals(o) && !"PR".equals(o)) {
+            return List.of();
+        }
+        return List.of(
+                new ServiceOffering("GROUND_ADVANTAGE", "USPS Ground Advantage", "DOMESTIC"),
+                new ServiceOffering("PRIORITY", "USPS Priority Mail", "DOMESTIC"),
+                new ServiceOffering("PRIORITY_EXPRESS", "USPS Priority Mail Express", "DOMESTIC"),
+                new ServiceOffering("FIRST_CLASS_INTL", "USPS First-Class Package Intl", "INTERNATIONAL"),
+                new ServiceOffering("PRIORITY_INTL", "USPS Priority Mail Intl", "INTERNATIONAL"),
+                new ServiceOffering("EXPRESS_INTL", "USPS Priority Mail Express Intl", "INTERNATIONAL"));
     }
 
     @Override
