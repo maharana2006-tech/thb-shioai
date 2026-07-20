@@ -1,0 +1,7 @@
+<svg width="96" height="64" viewBox="0 0 96 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="96" height="64" rx="16" fill="white"/>
+  <rect x="0.75" y="0.75" width="94.5" height="62.5" rx="15.25" stroke="#E2E8F0" stroke-width="1.5"/>
+  <path d="M48 12C54.4 16.1 61.5 18.4 69.2 18.8V34.1C69.2 42.8 60.7 49.7 48 53C35.3 49.7 26.8 42.8 26.8 34.1V18.8C34.5 18.4 41.6 16.1 48 12Z" fill="#351C15"/>
+  <path d="M48 15.8C53.3 18.8 59 20.6 65.2 21V33.4C65.2 40 58.6 45.4 48 48.3C37.4 45.4 30.8 40 30.8 33.4V21C37 20.6 42.7 18.8 48 15.8Z" stroke="#F2C94C" stroke-width="1.6"/>
+  <text x="48" y="36.5" text-anchor="middle" fill="#F5C242" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700">UPS</text>
+</svg>

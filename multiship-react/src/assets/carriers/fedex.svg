@@ -1,0 +1,6 @@
+<svg width="96" height="64" viewBox="0 0 96 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="96" height="64" rx="16" fill="white"/>
+  <rect x="0.75" y="0.75" width="94.5" height="62.5" rx="15.25" stroke="#E2E8F0" stroke-width="1.5"/>
+  <text x="17" y="39" fill="#4D148C" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">Fed</text>
+  <text x="53" y="39" fill="#FF6600" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">Ex</text>
+</svg>

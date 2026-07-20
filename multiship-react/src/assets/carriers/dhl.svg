@@ -1,0 +1,7 @@
+<svg width="96" height="64" viewBox="0 0 96 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="96" height="64" rx="16" fill="#FFCC00"/>
+  <rect x="0.75" y="0.75" width="94.5" height="62.5" rx="15.25" stroke="#EAB308" stroke-width="1.5"/>
+  <text x="24" y="39" fill="#D40511" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">DHL</text>
+  <path d="M16 24H28" stroke="#D40511" stroke-width="2" stroke-linecap="round"/>
+  <path d="M68 24H80" stroke="#D40511" stroke-width="2" stroke-linecap="round"/>
+</svg>

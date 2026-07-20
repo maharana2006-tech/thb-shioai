@@ -1,0 +1,276 @@
+package com.multiship.backend.service;
+
+import com.multiship.backend.dto.ApiResponse;
+import com.multiship.backend.dto.ClientCustomsProfileDTO;
+import com.multiship.backend.dto.ErrorCode;
+import com.multiship.backend.model.ClientCustomsProfile;
+import com.multiship.backend.repository.ClientCustomsProfileRepository;
+import com.multiship.backend.repository.ClientRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+@Service
+@RequiredArgsConstructor
+public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileService {
+
+    private final ClientCustomsProfileRepository repository;
+    private final ClientRepository clientRepository;
+
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<List<ClientCustomsProfileDTO>> listAll() {
+        Map<String, String> names = clientRepository.findAll().stream()
+                .collect(Collectors.toMap(
+                        c -> c.getClientCode().toUpperCase(Locale.ROOT),
+                        com.multiship.backend.model.Client::getName, (a, b) -> a));
+        List<ClientCustomsProfileDTO> all = repository.findAll().stream()
+                .sorted(Comparator.comparing(ClientCustomsProfile::getClientCode)
+                        .thenComparing(p -> firstCountry(p)))
+                .map(p -> {
+                    ClientCustomsProfileDTO dto = toDTO(p);
+                    dto.setClientName(names.get(p.getClientCode().toUpperCase(Locale.ROOT)));
+                    return dto;
+                })
+                .toList();
+        return success("Customs profiles retrieved.", all);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<List<ClientCustomsProfileDTO>> list(String clientCode) {
+        String code = norm(clientCode);
+        ApiResponse<List<ClientCustomsProfileDTO>> guard = requireClient(code);
+        if (guard != null) return guard;
+
+        List<ClientCustomsProfileDTO> profiles = repository.findByClientCodeIgnoreCase(code)
+                .stream()
+                .sorted(Comparator.comparing(this::firstCountry))
+                .map(this::toDTO)
+                .toList();
+        return success("Customs profiles retrieved.", profiles);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<ClientCustomsProfileDTO> get(String clientCode, Long id) {
+        String code = norm(clientCode);
+        ApiResponse<ClientCustomsProfileDTO> guard = requireClient(code);
+        if (guard != null) return guard;
+
+        return repository.findById(id)
+                .filter(p -> p.getClientCode().equalsIgnoreCase(code))
+                .map(p -> success("Customs profile retrieved.", toDTO(p)))
+                .orElseGet(() -> success("No such profile.", null));
+    }
+
+    @Override
+    @Transactional
+    public ApiResponse<ClientCustomsProfileDTO> upsert(String clientCode, ClientCustomsProfileDTO r) {
+        String code = norm(clientCode);
+        ApiResponse<ClientCustomsProfileDTO> guard = requireClient(code);
+        if (guard != null) return guard;
+
+        // Normalise & validate the destination set.
+        Set<String> countries = new LinkedHashSet<>();
+        if (r.getCountries() != null) {
+            for (String c : r.getCountries()) {
+                String cc = upper(c);
+                if (cc != null && cc.length() == 2) countries.add(cc);
+            }
+        }
+        if (countries.isEmpty()) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                    "Select at least one destination country.");
+        }
+
+        // Load target (update) or start fresh (create).
+        ClientCustomsProfile p = null;
+        if (r.getId() != null) {
+            p = repository.findById(r.getId())
+                    .filter(x -> x.getClientCode().equalsIgnoreCase(code))
+                    .orElse(null);
+            if (p == null) {
+                return failure(HttpStatus.NOT_FOUND, ErrorCode.VALIDATION_ERROR,
+                        "Profile " + r.getId() + " was not found for " + code + ".");
+            }
+        }
+        if (p == null) {
+            p = ClientCustomsProfile.builder().clientCode(code).build();
+        }
+
+        // No destination may belong to another profile of the same client.
+        Long selfId = p.getId();
+        for (ClientCustomsProfile other : repository.findByClientCodeIgnoreCase(code)) {
+            if (selfId != null && selfId.equals(other.getId())) continue;
+            for (String c : other.getCountries()) {
+                if (countries.contains(c)) {
+                    return failure(HttpStatus.CONFLICT, ErrorCode.VALIDATION_ERROR,
+                            c + " is already covered by another " + code + " profile. "
+                                    + "Remove it there first, or edit that profile instead.");
+                }
+            }
+        }
+
+        // RECEIVER (DAP): the consignee is the importer — no fixed identity needed.
+        // BUSINESS (DDP): a real registered importer identity is mandatory.
+        String importerType = "RECEIVER".equalsIgnoreCase(trimOrEmpty(r.getImporterType()))
+                ? "RECEIVER" : "BUSINESS";
+        if ("BUSINESS".equals(importerType)
+                && (!StringUtils.hasText(r.getImporterName())
+                        || !StringUtils.hasText(r.getImporterAddress1())
+                        || !StringUtils.hasText(r.getImporterCity()))) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                    "A business importer needs a name, address line 1 and city — "
+                            + "or switch the profile to 'Receiver is importer (DAP)'.");
+        }
+
+        p.syncCountries(countries);
+        p.setImporterType(importerType);
+        p.setImporterName(trim(r.getImporterName()));
+        p.setImporterContact(trim(r.getImporterContact()));
+        p.setImporterCountry(upper(r.getImporterCountry()));
+        p.setImporterAddress1(trim(r.getImporterAddress1()));
+        p.setImporterAddress2(trim(r.getImporterAddress2()));
+        p.setImporterPhone(trim(r.getImporterPhone()));
+        p.setImporterCity(trim(r.getImporterCity()));
+        p.setImporterState(trim(r.getImporterState()));
+        p.setImporterPostcode(trim(r.getImporterPostcode()));
+        p.setImporterTaxId(trim(r.getImporterTaxId()));
+        p.setImporterTaxIdType(upper(r.getImporterTaxIdType()));
+        p.setImporterEori(trim(r.getImporterEori()));
+        p.setImporterIoss(trim(r.getImporterIoss()));
+        p.setImporterCompanyReg(trim(r.getImporterCompanyReg()));
+        p.setImporterIec(trim(r.getImporterIec()));
+        p.setImporterGstin(trim(r.getImporterGstin()));
+        p.setBrokerName(trim(r.getBrokerName()));
+        p.setBrokerCompany(trim(r.getBrokerCompany()));
+        p.setBrokerCountry(upper(r.getBrokerCountry()));
+        p.setBrokerAddress1(trim(r.getBrokerAddress1()));
+        p.setBrokerAddress2(trim(r.getBrokerAddress2()));
+        p.setBrokerPhone(trim(r.getBrokerPhone()));
+        p.setBrokerCity(trim(r.getBrokerCity()));
+        p.setBrokerState(trim(r.getBrokerState()));
+        p.setBrokerPostcode(trim(r.getBrokerPostcode()));
+        p.setBrokerId(trim(r.getBrokerId()));
+        p.setBrokerLicense(trim(r.getBrokerLicense()));
+        p.setIncoterms(upper(r.getIncoterms()));
+        p.setDutiesBillTo(upper(r.getDutiesBillTo()));
+        p.setDutiesAccount(trim(r.getDutiesAccount()));
+        p.setReasonForExport(trim(r.getReasonForExport()));
+        p.setCurrency(upper(r.getCurrency()));
+        p.setAccountCarrier(upper(r.getAccountCarrier()));
+        p.setAccountNo(trim(r.getAccountNo()));
+
+        try {
+            // Flush now so the unique(client_code, country) constraint fires inside
+            // this method — the service pre-check above gives the friendly message;
+            // this is the race-proof backstop.
+            repository.saveAndFlush(p);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            return failure(HttpStatus.CONFLICT, ErrorCode.VALIDATION_ERROR,
+                    "One of those countries was just claimed by another " + code
+                            + " profile. Refresh and try again.");
+        }
+        return success("Importer/Broker profile for " + code + " saved (" + countries.size()
+                + " destination" + (countries.size() == 1 ? "" : "s") + ").", toDTO(p));
+    }
+
+    @Override
+    @Transactional
+    public ApiResponse<Void> delete(String clientCode, Long id) {
+        String code = norm(clientCode);
+        ApiResponse<Void> guard = requireClient(code);
+        if (guard != null) return guard;
+
+        repository.findById(id)
+                .filter(p -> p.getClientCode().equalsIgnoreCase(code))
+                .ifPresent(repository::delete);
+        return success("Customs profile removed.", null);
+    }
+
+    // ===== helpers =====
+
+    private String firstCountry(ClientCustomsProfile p) {
+        return p.getCountries().stream().sorted().findFirst().orElse("");
+    }
+
+    private <T> ApiResponse<T> requireClient(String code) {
+        if (!clientRepository.existsByClientCodeIgnoreCase(code)) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND, "Client " + code + " was not found.");
+        }
+        return null;
+    }
+
+    private ClientCustomsProfileDTO toDTO(ClientCustomsProfile p) {
+        return ClientCustomsProfileDTO.builder()
+                .id(p.getId())
+                .clientCode(p.getClientCode())
+                .countries(new ArrayList<>(p.getCountries()).stream().sorted().collect(Collectors.toList()))
+                .importerType(p.getImporterType())
+                .importerName(p.getImporterName())
+                .importerContact(p.getImporterContact())
+                .importerCountry(p.getImporterCountry())
+                .importerAddress1(p.getImporterAddress1())
+                .importerAddress2(p.getImporterAddress2())
+                .importerPhone(p.getImporterPhone())
+                .importerCity(p.getImporterCity())
+                .importerState(p.getImporterState())
+                .importerPostcode(p.getImporterPostcode())
+                .importerTaxId(p.getImporterTaxId())
+                .importerTaxIdType(p.getImporterTaxIdType())
+                .importerEori(p.getImporterEori())
+                .importerIoss(p.getImporterIoss())
+                .importerCompanyReg(p.getImporterCompanyReg())
+                .importerIec(p.getImporterIec())
+                .importerGstin(p.getImporterGstin())
+                .brokerName(p.getBrokerName())
+                .brokerCompany(p.getBrokerCompany())
+                .brokerCountry(p.getBrokerCountry())
+                .brokerAddress1(p.getBrokerAddress1())
+                .brokerAddress2(p.getBrokerAddress2())
+                .brokerPhone(p.getBrokerPhone())
+                .brokerCity(p.getBrokerCity())
+                .brokerState(p.getBrokerState())
+                .brokerPostcode(p.getBrokerPostcode())
+                .brokerId(p.getBrokerId())
+                .brokerLicense(p.getBrokerLicense())
+                .incoterms(p.getIncoterms())
+                .dutiesBillTo(p.getDutiesBillTo())
+                .dutiesAccount(p.getDutiesAccount())
+                .reasonForExport(p.getReasonForExport())
+                .currency(p.getCurrency())
+                .accountCarrier(p.getAccountCarrier())
+                .accountNo(p.getAccountNo())
+                .createdAt(p.getCreatedAt())
+                .updatedAt(p.getUpdatedAt())
+                .build();
+    }
+
+    private String norm(String v) { return v != null ? v.trim().toUpperCase(Locale.ROOT) : ""; }
+    private String trimOrEmpty(String v) { return v != null ? v.trim() : ""; }
+    private String upper(String v) { return StringUtils.hasText(v) ? v.trim().toUpperCase(Locale.ROOT) : null; }
+    private String trim(String v) { return StringUtils.hasText(v) ? v.trim() : null; }
+
+    private <T> ApiResponse<T> success(String message, T data) {
+        return ApiResponse.<T>builder().status("SUCCESS").code(200).message(message)
+                .timestamp(LocalDateTime.now()).data(data).build();
+    }
+
+    private <T> ApiResponse<T> failure(HttpStatus status, ErrorCode errorCode, String message) {
+        return ApiResponse.<T>builder().status("ERROR").code(status.value()).errorCode(errorCode.name())
+                .message(message).timestamp(LocalDateTime.now()).build();
+    }
+}

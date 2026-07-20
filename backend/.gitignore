@@ -1,11 +1,8 @@
 HELP.md
 target/
-!.mvn/wrapper/maven-wrapper.jar
+.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
-
-# Compiled class files
-*.class
 
 ### STS ###
 .apt_generated
@@ -15,14 +12,12 @@ target/
 .settings
 .springBeans
 .sts4-cache
-# application.properties
 
 ### IntelliJ IDEA ###
 .idea
 *.iws
 *.iml
 *.ipr
-
 
 ### NetBeans ###
 /nbproject/private/
@@ -34,7 +29,24 @@ build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 
+._*
+*._*
+*.class
+.idea/
+.DS_Store
+
 ### VS Code ###
 .vscode/
-/storage
-/.m2
+
+# macOS metadata files
+._*
+.DS_Store
+*.class
+target/
+.idea/
+._*
+.DS_Store
+*.class
+target/
+.idea/
+*.iml

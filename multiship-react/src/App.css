@@ -1,0 +1,274 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+/* ===== Espresso & cream brand =====
+   Anchors: #000000 · #1F150C · #412D15 · #E1DCC9 live in the chrome,
+   buttons, headings, and the accent (sky) ramp below. Content neutrals
+   stay Tailwind's cool slate for a crisp light workspace. */
+@theme {
+  --color-sky-50: #f2ede1;
+  --color-sky-100: #e8e0cd;
+  --color-sky-200: #d3c4a4;
+  --color-sky-300: #b7a077;
+  --color-sky-400: #96793f;
+  --color-sky-500: #6f5527;
+  --color-sky-600: #412d15;
+  --color-sky-700: #35240f;
+  --color-sky-800: #2a1c0c;
+  --color-sky-900: #1f150c;
+  --color-sky-950: #000000;
+}
+
+:root {
+  color: #1e293b;
+  background: #f7f6f3;
+  font-family: "Inter", "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --color-primary: #1f150c;
+  --color-secondary: #412d15;
+  --color-accent-hover: #000000;
+  --color-success: #27ae60;
+  --color-warning: #f2c94c;
+  --color-danger: #eb5757;
+  --color-background: #f7f6f3;
+  --color-border: #e2e8f0;
+  --color-text: #1f150c;
+  --color-text-secondary: #4a5568;
+  --app-bg: #f7f6f3;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(245, 247, 250, 0.96) 32%, #f5f7fa 100%),
+    var(--color-background);
+  color: var(--color-text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(45, 156, 219, 0.18);
+  color: var(--color-text);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(215, 223, 235, 0.65);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(30, 58, 95, 0.22);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(30, 58, 95, 0.32);
+}
+
+.field-input {
+  height: 40px;
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  padding: 0 0.75rem;
+  font-size: 0.875rem;
+  color: var(--color-text);
+  outline: none;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.field-input:focus {
+  border-color: var(--color-secondary);
+  box-shadow: 0 0 0 4px rgba(45, 156, 219, 0.16);
+}
+
+@keyframes authFadeUp {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 20px, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes authFloat {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  50% {
+    transform: translate3d(0, -8px, 0);
+  }
+}
+
+@keyframes authPulseGlow {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.auth-fade-up {
+  animation: authFadeUp 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.auth-fade-up-delay-1 {
+  animation-delay: 120ms;
+}
+
+.auth-fade-up-delay-2 {
+  animation-delay: 220ms;
+}
+
+.auth-fade-up-delay-3 {
+  animation-delay: 320ms;
+}
+
+.auth-float {
+  animation: authFloat 7s ease-in-out infinite;
+}
+
+.auth-glow {
+  animation: authPulseGlow 3.2s ease-in-out infinite;
+}
+
+.auth-card-motion {
+  transition:
+    transform 220ms ease,
+    border-color 220ms ease,
+    background-color 220ms ease,
+    box-shadow 220ms ease;
+}
+
+.auth-card-motion:hover {
+  transform: translate3d(0, -3px, 0);
+}
+
+/* dashboard sorting belt: a parcel diamond traveling the conveyor line */
+@keyframes mbBeltRun {
+  0% {
+    left: 0%;
+    opacity: 0;
+  }
+
+  6% {
+    opacity: 1;
+  }
+
+  94% {
+    opacity: 1;
+  }
+
+  100% {
+    left: calc(100% - 18px);
+    opacity: 0;
+  }
+}
+
+.mb-belt-parcel {
+  animation: mbBeltRun 9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-fade-up,
+  .auth-fade-up-delay-1,
+  .auth-fade-up-delay-2,
+  .auth-fade-up-delay-3,
+  .auth-float,
+  .auth-glow,
+  .mb-belt-parcel {
+    animation: none !important;
+  }
+
+  .auth-card-motion {
+    transition: none;
+  }
+
+  .auth-card-motion:hover {
+    transform: none;
+  }
+}
+
+/* ===== Printing label documents (4x6 label / Letter invoice) ===== */
+@media print {
+  header,
+  nav,
+  aside {
+    display: none !important;
+  }
+
+  main {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  main {
+    padding: 0 !important;
+  }
+
+  body {
+    background: white !important;
+  }
+
+  /* Barcodes, service bands, and table headers must keep their ink. */
+  .print-doc,
+  .print-doc * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
+/* BrandBackdrop: shipping routes drift very slowly across the sky. */
+@keyframes mb-drift {
+  from { transform: translate3d(0, 0, 0); }
+  50%  { transform: translate3d(-14px, 4px, 0); }
+  to   { transform: translate3d(0, 0, 0); }
+}
+.mb-drift {
+  animation: mb-drift 26s ease-in-out infinite;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mb-drift { animation: none !important; }
+}

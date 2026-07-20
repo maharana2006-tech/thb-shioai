@@ -1,0 +1,923 @@
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import toast from 'react-hot-toast'
+import {
+  FiActivity,
+  FiAlertTriangle,
+  FiBox,
+  FiCheckCircle,
+  FiEdit2,
+  FiPlus,
+  FiPower,
+  FiRefreshCw,
+  FiServer,
+  FiStar,
+  FiFilter,
+  FiSearch,
+  FiShield,
+  FiTruck,
+  FiUser,
+  FiUsers,
+  FiX,
+  FiXCircle,
+} from 'react-icons/fi'
+import {
+  accountRefService,
+  type AccountRefUpsertPayload,
+  type CarrierAccountRef,
+} from '../api/accountRefService'
+import { clientService } from '../api/clientService'
+import {
+  carrierEnvironmentOptions,
+  formatCarrierName,
+  normalizeCarrierCode,
+  type CarrierEnvironment,
+} from '../utils/carrierUtils'
+import PageSectionHeader from './workspace/PageSectionHeader'
+import CarrierLogo from './workspace/CarrierLogo'
+import TablePagination from './workspace/TablePagination'
+import Select from './workspace/Select'
+
+type TypeTab = 'all' | 'platform' | 'client'
+
+const typeTabs: Array<{ key: TypeTab; label: string }> = [
+  { key: 'all', label: 'All accounts' },
+  { key: 'platform', label: 'Platform accounts' },
+  { key: 'client', label: 'Client accounts' },
+]
+
+const carrierOptions = [
+  { code: 'UPS', id: 'ups', label: 'UPS' },
+  { code: 'FEDEX', id: 'fedex', label: 'FedEx' },
+  { code: 'USPS', id: 'usps', label: 'USPS' },
+]
+
+const isPlatform = (a: CarrierAccountRef) => !a.customerNo || !a.customerNo.trim()
+
+const relativeTime = (value?: string | null) => {
+  if (!value) return null
+  const then = new Date(value).getTime()
+  if (Number.isNaN(then)) return value
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000))
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} min ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.round(hours / 24)}d ago`
+}
+
+interface DrawerState {
+  editingId: number | null
+  accountType: 'platform' | 'client'
+  carrierCode: string
+  accountNumber: string
+  accountName: string
+  clientId: string
+  clientSecret: string
+  customerNo: string
+  environment: CarrierEnvironment
+  clientDefault: boolean
+}
+
+const emptyDrawer: DrawerState = {
+  editingId: null,
+  accountType: 'platform',
+  carrierCode: 'UPS',
+  accountNumber: '',
+  accountName: '',
+  clientId: '',
+  clientSecret: '',
+  customerNo: '',
+  environment: 'SANDBOX',
+  clientDefault: false,
+}
+
+const inputClassName =
+  'w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15] focus:ring-4 focus:ring-[#412d15]/10'
+
+const filterLabelClass = 'mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
+
+export default function CarrierConnections() {
+  const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
+  const [clientCodes, setClientCodes] = useState<string[]>([])
+  const [loading, setLoading] = useState(true)
+  const [typeTab, setTypeTab] = useState<TypeTab>('all')
+  const [carrierFilter, setCarrierFilter] = useState('')
+  const [clientFilter, setClientFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('') // ACTIVE | INACTIVE
+  const [envFilter, setEnvFilter] = useState('') // SANDBOX | PRODUCTION
+  const [verifiedFilter, setVerifiedFilter] = useState('') // YES | NO
+  const [defaultFilter, setDefaultFilter] = useState('') // YES (client default) | NO
+  const [showFilters, setShowFilters] = useState(false)
+  const [query, setQuery] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
+  const [busyId, setBusyId] = useState<number | null>(null)
+
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawer, setDrawer] = useState<DrawerState>(emptyDrawer)
+  const [drawerCheck, setDrawerCheck] = useState<{ state: 'idle' | 'checking' | 'ok' | 'fail'; message?: string }>({ state: 'idle' })
+  const [saving, setSaving] = useState(false)
+
+  const loadAccounts = async () => {
+    setLoading(true)
+    try {
+      setAccounts(await accountRefService.listAccounts())
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to load the account book.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadAccounts()
+    clientService
+      .listClients({ size: 100 })
+      .then((r) => setClientCodes((r.data?.content ?? []).map((c) => c.clientCode)))
+      .catch(() => {})
+  }, [])
+
+  // Pre-fill Client ID / Secret from the platform account of the chosen
+  // carrier when adding a NEW account. The shipper can override them.
+  useEffect(() => {
+    if (!drawerOpen || drawer.editingId !== null) return
+    let cancelled = false
+    accountRefService
+      .getPlatformCredentials(drawer.carrierCode)
+      .then((r) => {
+        if (cancelled) return
+        if (r.data?.found) {
+          setDrawer((c) => ({ ...c, clientId: r.data.clientId || '', clientSecret: r.data.clientSecret || '' }))
+        } else {
+          setDrawer((c) => ({ ...c, clientId: '', clientSecret: '' }))
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawerOpen, drawer.carrierCode, drawer.editingId])
+
+  const readyCount = accounts.filter((a) => a.complete && a.active).length
+  const unverifiedCount = accounts.filter((a) => a.active && a.complete && a.verified !== true).length
+  const platformCount = accounts.filter(isPlatform).length
+  const clientCount = accounts.length - platformCount
+
+  const visibleAccounts = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return accounts
+      .filter((a) => {
+        if (typeTab === 'platform' && !isPlatform(a)) return false
+        if (typeTab === 'client' && isPlatform(a)) return false
+        if (carrierFilter && normalizeCarrierCode(a.carrierCode) !== carrierFilter) return false
+        if (clientFilter && (a.customerNo || '').toUpperCase() !== clientFilter) return false
+        if (statusFilter === 'ACTIVE' && !a.active) return false
+        if (statusFilter === 'INACTIVE' && a.active) return false
+        if (envFilter && (a.environment || '').toUpperCase() !== envFilter) return false
+        if (verifiedFilter === 'YES' && a.verified !== true) return false
+        if (verifiedFilter === 'NO' && a.verified === true) return false
+        if (defaultFilter === 'YES' && !a.clientDefault) return false
+        if (defaultFilter === 'NO' && a.clientDefault) return false
+        if (!q) return true
+        return [a.accountNumber, a.accountName || '', a.customerNo || '', a.carrierCode].join(' ').toLowerCase().includes(q)
+      })
+      // Stable display order that does NOT depend on default/updatedAt, so a
+      // row never jumps under the cursor after a default-change reload.
+      .sort((a, b) => {
+        const ac = (a.customerNo || '').toUpperCase()
+        const bc = (b.customerNo || '').toUpperCase()
+        if (ac !== bc) return ac.localeCompare(bc)
+        const acr = normalizeCarrierCode(a.carrierCode)
+        const bcr = normalizeCarrierCode(b.carrierCode)
+        if (acr !== bcr) return acr.localeCompare(bcr)
+        return a.id - b.id
+      })
+  }, [accounts, typeTab, carrierFilter, clientFilter, statusFilter, envFilter, verifiedFilter, defaultFilter, query])
+
+  // Only the dropdown filters live in the collapsible panel — tabs and search
+  // have their own controls, so the badge/Clear count just those.
+  const filterOnlyCount =
+    (carrierFilter ? 1 : 0) +
+    (clientFilter ? 1 : 0) +
+    (statusFilter ? 1 : 0) +
+    (envFilter ? 1 : 0) +
+    (verifiedFilter ? 1 : 0) +
+    (defaultFilter ? 1 : 0)
+
+  const clearFilters = () => {
+    setCarrierFilter('')
+    setClientFilter('')
+    setStatusFilter('')
+    setEnvFilter('')
+    setVerifiedFilter('')
+    setDefaultFilter('')
+  }
+
+  // Client-side pagination over the filtered set.
+  const totalPages = Math.max(1, Math.ceil(visibleAccounts.length / pageSize))
+  const currentPage = Math.min(page, totalPages)
+  const pagedAccounts = visibleAccounts.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+
+  // Snap back to page 1 whenever the filtered result set changes.
+  useEffect(() => {
+    setPage(1)
+  }, [typeTab, carrierFilter, clientFilter, statusFilter, envFilter, verifiedFilter, defaultFilter, query, pageSize])
+
+  const handleVerify = async (account: CarrierAccountRef) => {
+    setBusyId(account.id)
+    try {
+      const response = await accountRefService.verifyAccount(account.id)
+      response.data?.verified ? toast.success(response.message) : toast.error(response.message)
+      await loadAccounts()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Verification failed.')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleToggleActive = async (account: CarrierAccountRef) => {
+    setBusyId(account.id)
+    try {
+      await accountRefService.toggleActive(account.id)
+      toast.success(account.active ? 'Account deactivated.' : 'Account activated.')
+      await loadAccounts()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to update the account.')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleMakeClientDefault = async (account: CarrierAccountRef) => {
+    setBusyId(account.id)
+    try {
+      await accountRefService.setClientDefault(account.id)
+      toast.success(`${account.accountNumber} is now ${account.customerNo}'s default account.`)
+      await loadAccounts()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to set the client default.')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const openDrawer = (account?: CarrierAccountRef) => {
+    setDrawerCheck({ state: 'idle' })
+    if (account) {
+      setDrawer({
+        editingId: account.id,
+        accountType: isPlatform(account) ? 'platform' : 'client',
+        carrierCode: carrierOptions.find((c) => normalizeCarrierCode(c.code) === normalizeCarrierCode(account.carrierCode))?.code || 'UPS',
+        accountNumber: account.accountNumber,
+        accountName: account.accountName || '',
+        clientId: '',
+        clientSecret: '',
+        customerNo: account.customerNo || '',
+        environment: account.environment === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX',
+        clientDefault: Boolean(account.clientDefault),
+      })
+    } else {
+      setDrawer(emptyDrawer)
+    }
+    setDrawerOpen(true)
+  }
+
+  const runDrawerCheck = async () => {
+    if (!drawer.clientId.trim() || !drawer.clientSecret.trim()) {
+      toast.error('Enter the client ID and secret first.')
+      return
+    }
+    setDrawerCheck({ state: 'checking' })
+    try {
+      const response = await accountRefService.verifyCredentials({
+        carrierCode: drawer.carrierCode,
+        clientId: drawer.clientId.trim(),
+        clientSecret: drawer.clientSecret.trim(),
+      })
+      setDrawerCheck({ state: response.data?.verified ? 'ok' : 'fail', message: response.message })
+    } catch (error) {
+      setDrawerCheck({ state: 'fail', message: error instanceof Error ? error.message : 'Verification failed.' })
+    }
+  }
+
+  const handleSave = async () => {
+    if (!drawer.accountNumber.trim() || !drawer.clientId.trim() || !drawer.clientSecret.trim()) {
+      toast.error('Account number, client ID, and client secret are required.')
+      return
+    }
+    if (drawer.accountType === 'client' && !drawer.customerNo.trim()) {
+      toast.error('Choose a client for a client account.')
+      return
+    }
+
+    setSaving(true)
+    try {
+      const payload: AccountRefUpsertPayload = {
+        accountNumber: drawer.accountNumber.trim(),
+        carrierCode: drawer.carrierCode,
+        accountName: drawer.accountName.trim() || undefined,
+        clientId: drawer.clientId.trim(),
+        clientSecret: drawer.clientSecret.trim(),
+        environment: drawer.environment,
+        customerNo: drawer.accountType === 'client' ? drawer.customerNo.trim() : undefined,
+        clientDefault: drawer.accountType === 'client' ? drawer.clientDefault : undefined,
+      }
+      await accountRefService.upsertAccount(payload)
+      toast.success(`Account ${payload.accountNumber} saved to the account book.`)
+      setDrawerOpen(false)
+      await loadAccounts()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to save the account.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <PageSectionHeader
+        eyebrow="Carrier Management"
+        title="Carrier accounts"
+        description="Every carrier account lives here — platform accounts (your own) and client accounts (a customer's). Add, verify, and set client defaults from one place."
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void loadAccounts()}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+            >
+              <FiRefreshCw className="h-3.5 w-3.5" />
+              Refresh
+            </button>
+            <button
+              type="button"
+              onClick={() => openDrawer()}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
+            >
+              <FiPlus className="h-3.5 w-3.5" />
+              Add Account
+            </button>
+          </div>
+        }
+      />
+
+      {/* ===== health strip ===== */}
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[
+          { label: 'Ready to ship', value: `${readyCount}/${accounts.length}`, tone: 'text-emerald-600', icon: FiCheckCircle, chip: 'bg-emerald-50 text-emerald-600' },
+          { label: 'Unverified', value: unverifiedCount, tone: unverifiedCount ? 'text-amber-600' : 'text-slate-950', icon: FiAlertTriangle, chip: unverifiedCount ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-400' },
+          { label: 'Platform accounts', value: platformCount, tone: 'text-slate-950', icon: FiBox, chip: 'bg-slate-100 text-slate-500' },
+          { label: 'Client accounts', value: clientCount, tone: 'text-slate-950', icon: FiUsers, chip: 'bg-[#412d15]/10 text-[#412d15]' },
+        ].map((card) => (
+          <div key={card.label} className="flex items-start justify-between rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{card.label}</p>
+              <p className={`mt-1.5 text-2xl font-semibold tabular-nums ${card.tone}`}>{card.value}</p>
+            </div>
+            <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${card.chip}`}>
+              <card.icon className="h-4 w-4" />
+            </span>
+          </div>
+        ))}
+      </section>
+
+      {/* ===== account table ===== */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        {/* toolbar: tabs · search · filters toggle */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="mr-auto flex flex-wrap gap-0.5 rounded-lg bg-slate-100 p-0.5" role="tablist">
+            {typeTabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                role="tab"
+                aria-selected={typeTab === t.key}
+                onClick={() => setTypeTab(t.key)}
+                className={`rounded-md px-3 py-1.5 text-[12.5px] font-semibold transition ${
+                  typeTab === t.key ? 'bg-white text-[#1f150c] shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                {t.label}
+                <span className="ml-1.5 text-[11px] font-semibold tabular-nums text-slate-400">
+                  {t.key === 'all' ? accounts.length : t.key === 'platform' ? platformCount : clientCount}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <label className="flex min-w-[220px] items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <FiSearch className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search account #, name, client…"
+              className="w-full bg-transparent text-[12.5px] text-slate-950 outline-none"
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={() => setShowFilters((cur) => !cur)}
+            aria-pressed={showFilters}
+            className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-[12px] font-semibold transition ${
+              showFilters || filterOnlyCount
+                ? 'bg-[#1f150c] text-white'
+                : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <FiFilter className="h-3.5 w-3.5" />
+            Filters
+            {filterOnlyCount ? (
+              <span className="rounded-full bg-white/25 px-1.5 py-0.5 text-[10px] tabular-nums">{filterOnlyCount}</span>
+            ) : null}
+          </button>
+        </div>
+
+        {/* collapsible labeled filter panel */}
+        {showFilters ? (
+          <div className="mt-3 rounded-2xl border border-[#412d15]/15 bg-gradient-to-br from-[#412d15]/[0.04] to-sky-50/40 p-4">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
+              <div>
+                <span className={filterLabelClass}><FiTruck className="h-3 w-3 text-emerald-600" />Carrier</span>
+                <Select value={carrierFilter} onChange={(e) => setCarrierFilter(e.target.value)} aria-label="Filter by carrier">
+                  <option value="">All carriers</option>
+                  <option value="ups">UPS</option>
+                  <option value="fedex">FedEx</option>
+                  <option value="usps">USPS</option>
+                </Select>
+              </div>
+              <div>
+                <span className={filterLabelClass}><FiUser className="h-3 w-3 text-[#412d15]" />Client</span>
+                <Select value={clientFilter} onChange={(e) => setClientFilter(e.target.value)} aria-label="Filter by client">
+                  <option value="">All clients</option>
+                  {clientCodes.map((code) => (
+                    <option key={code} value={code}>
+                      {code}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div>
+                <span className={filterLabelClass}><FiActivity className="h-3 w-3 text-sky-600" />Status</span>
+                <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filter by status">
+                  <option value="">Any status</option>
+                  <option value="ACTIVE">Active</option>
+                  <option value="INACTIVE">Inactive</option>
+                </Select>
+              </div>
+              <div>
+                <span className={filterLabelClass}><FiServer className="h-3 w-3 text-violet-600" />Environment</span>
+                <Select value={envFilter} onChange={(e) => setEnvFilter(e.target.value)} aria-label="Filter by environment">
+                  <option value="">Any environment</option>
+                  <option value="SANDBOX">Sandbox</option>
+                  <option value="PRODUCTION">Production</option>
+                </Select>
+              </div>
+              <div>
+                <span className={filterLabelClass}><FiShield className="h-3 w-3 text-emerald-600" />Verification</span>
+                <Select value={verifiedFilter} onChange={(e) => setVerifiedFilter(e.target.value)} aria-label="Filter by verification">
+                  <option value="">Any</option>
+                  <option value="YES">Verified</option>
+                  <option value="NO">Unverified</option>
+                </Select>
+              </div>
+              <div>
+                <span className={filterLabelClass}><FiStar className="h-3 w-3 text-amber-500" />Client default</span>
+                <Select value={defaultFilter} onChange={(e) => setDefaultFilter(e.target.value)} aria-label="Filter by client default">
+                  <option value="">Any</option>
+                  <option value="YES">Default</option>
+                  <option value="NO">Not default</option>
+                </Select>
+              </div>
+            </div>
+
+            {filterOnlyCount ? (
+              <div className="mt-3.5 flex justify-end border-t border-slate-200 pt-3">
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+                >
+                  <FiX className="h-3.5 w-3.5" />
+                  Clear all filters
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <p className="mt-2.5 text-[11.5px] text-slate-400">
+          Showing {visibleAccounts.length} of {accounts.length} account{accounts.length === 1 ? '' : 's'}
+        </p>
+
+        <div className="mt-3.5 overflow-x-auto">
+          <table className="w-full min-w-[880px] text-[13px] text-slate-700">
+            <thead className="border-b border-slate-200 text-left text-[10px] uppercase tracking-[0.16em] text-slate-500">
+              <tr>
+                <th className="px-2.5 py-3">Carrier</th>
+                <th className="px-2.5 py-3">Type</th>
+                <th className="px-2.5 py-3">Environment</th>
+                <th className="px-2.5 py-3">Status</th>
+                <th className="px-2.5 py-3">Usage</th>
+                <th className="px-2.5 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {pagedAccounts.map((account) => {
+                const platform = isPlatform(account)
+                return (
+                  <tr key={account.id} className={`transition hover:bg-slate-50/70 ${account.active ? '' : 'opacity-55'}`}>
+                    <td className="px-2.5 py-3">
+                      <span className="inline-flex items-center gap-2.5">
+                        {/* default star — coloured = this client's default */}
+                        {platform ? (
+                          <span className="h-4 w-4 shrink-0" />
+                        ) : account.clientDefault && account.active ? (
+                          <span title={`Default account for ${account.customerNo}`}>
+                            <FiStar className="h-4 w-4 shrink-0 fill-[#f2c94c] text-[#f2c94c]" />
+                          </span>
+                        ) : account.clientDefault && !account.active ? (
+                          <span title={`Was ${account.customerNo}'s default — inactive, not used`}>
+                            <FiStar className="h-4 w-4 shrink-0 fill-slate-300 text-slate-300" />
+                          </span>
+                        ) : account.complete && account.active ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleMakeClientDefault(account)}
+                            disabled={busyId !== null}
+                            title={`Make this ${account.customerNo}'s default account`}
+                            className="shrink-0 text-slate-300 transition hover:text-[#f2c94c] disabled:opacity-50"
+                          >
+                            <FiStar className="h-4 w-4" />
+                          </button>
+                        ) : (
+                          <span className="h-4 w-4 shrink-0" />
+                        )}
+                        {/* premium carrier avatar */}
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-gradient-to-br from-white to-slate-100 shadow-sm ring-1 ring-slate-100">
+                          <CarrierLogo carrierId={account.carrierCode} size={22} className="rounded" />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block font-semibold text-slate-950">{formatCarrierName(account.carrierCode)}</span>
+                          {account.accountName ? (
+                            <span className="block text-[11px] text-slate-400">{account.accountName}</span>
+                          ) : null}
+                        </span>
+                      </span>
+                    </td>
+                    <td className="px-2.5 py-3">
+                      {platform ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                          <FiBox className="h-3 w-3" />
+                          Platform account
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#412d15]/10 py-1 pl-1 pr-2.5 text-[11px] font-semibold text-[#412d15]">
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#412d15] text-[9px] font-bold uppercase text-white">
+                            {(account.customerNo || '?').slice(0, 1)}
+                          </span>
+                          {account.customerNo}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-2.5 py-3 text-[12px] text-slate-500">{account.environment || 'SANDBOX'}</td>
+                    <td className="px-2.5 py-3">
+                      {!account.complete ? (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">Incomplete</span>
+                      ) : !account.active ? (
+                        <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-600">Inactive</span>
+                      ) : (
+                        <VerifiedChip account={account} />
+                      )}
+                    </td>
+                    <td className="px-2.5 py-3 text-[11.5px] text-slate-500">
+                      <span className="block font-semibold tabular-nums text-slate-600">
+                        {account.labelsGenerated || 0} label{(account.labelsGenerated || 0) === 1 ? '' : 's'}
+                      </span>
+                      {account.lastUsedAt ? relativeTime(account.lastUsedAt) : 'never used'}
+                    </td>
+                    <td className="px-2.5 py-3">
+                      <div className="flex flex-wrap justify-end gap-1.5">
+                        {account.complete && account.active ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleVerify(account)}
+                            disabled={busyId !== null}
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            <FiShield className="h-3 w-3" />
+                            {busyId === account.id ? '…' : account.verified === true ? 'Re-verify' : 'Verify'}
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => openDrawer(account)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50"
+                        >
+                          <FiEdit2 className="h-3 w-3" />
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleToggleActive(account)}
+                          disabled={busyId !== null}
+                          className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition disabled:opacity-50 ${
+                            account.active
+                              ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                              : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                          }`}
+                        >
+                          <FiPower className="h-3 w-3" />
+                          {account.active ? 'Deactivate' : 'Activate'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+
+              {!visibleAccounts.length ? (
+                <tr>
+                  <td colSpan={6} className="px-2.5 py-12 text-center text-sm text-slate-500">
+                    {loading
+                      ? 'Loading the account book…'
+                      : accounts.length
+                      ? 'No accounts match the current filters.'
+                      : 'No accounts saved yet — add your first carrier account.'}
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+
+        {visibleAccounts.length > 0 ? (
+          <TablePagination
+            page={currentPage}
+            pageSize={pageSize}
+            totalPages={totalPages}
+            compact
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
+        ) : null}
+      </section>
+
+      {/* ===== add / edit drawer ===== */}
+      {drawerOpen ? (
+        <>
+          <div className="fixed inset-0 z-40 bg-slate-950/45" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-label={drawer.editingId ? 'Update carrier account' : 'Add carrier account'}
+            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[420px] flex-col border-l border-slate-200 bg-white shadow-[-18px_0_50px_rgba(8,14,26,0.18)]"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <div>
+                <p className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-slate-400">Account book</p>
+                <h3 className="mt-1 text-[15px] font-semibold text-slate-950">
+                  {drawer.editingId ? `Update ${drawer.accountNumber}` : 'Add carrier account'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDrawerOpen(false)}
+                aria-label="Close"
+                className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
+              >
+                <FiX className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+              {/* Account type toggle */}
+              <DrawerStep n="1" title="Account type">
+                <div className="grid grid-cols-2 gap-2">
+                  {(['platform', 'client'] as const).map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setDrawer((c) => ({ ...c, accountType: t }))}
+                      className={`rounded-xl border px-3 py-2.5 text-[12px] font-semibold transition ${
+                        drawer.accountType === t
+                          ? 'border-[#1f150c] bg-white text-[#1f150c]'
+                          : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
+                      }`}
+                    >
+                      {t === 'platform' ? 'Platform account' : 'Client account'}
+                    </button>
+                  ))}
+                </div>
+                {drawer.accountType === 'client' ? (
+                  <div className="mt-2.5">
+                    <Field label="Client">
+                      <Select
+                        value={drawer.customerNo}
+                        onChange={(e) => setDrawer((c) => ({ ...c, customerNo: e.target.value }))}
+                      >
+                        <option value="">Select a client…</option>
+                        {clientCodes.map((code) => (
+                          <option key={code} value={code}>
+                            {code}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    A platform account is your own — pickable manually for any order.
+                  </p>
+                )}
+              </DrawerStep>
+
+              <DrawerStep n="2" title="Carrier">
+                <div className="grid grid-cols-3 gap-2">
+                  {carrierOptions.map((option) => (
+                    <button
+                      key={option.code}
+                      type="button"
+                      onClick={() => setDrawer((c) => ({ ...c, carrierCode: option.code }))}
+                      className={`grid justify-items-center gap-1.5 rounded-2xl border px-2 py-2.5 text-[10.5px] font-bold transition ${
+                        drawer.carrierCode === option.code
+                          ? 'border-slate-950 bg-white text-slate-950'
+                          : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
+                      }`}
+                    >
+                      <CarrierLogo carrierId={option.id} size={18} className="rounded-sm" />
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </DrawerStep>
+
+              <DrawerStep n="3" title="Credentials">
+                <Field label="Account name">
+                  <input
+                    value={drawer.accountName}
+                    onChange={(e) => setDrawer((c) => ({ ...c, accountName: e.target.value }))}
+                    className={inputClassName}
+                    placeholder='Shown across the app, e.g. "Acme UPS"'
+                  />
+                </Field>
+                <Field label="Account number">
+                  <input
+                    value={drawer.accountNumber}
+                    onChange={(e) => setDrawer((c) => ({ ...c, accountNumber: e.target.value }))}
+                    className={inputClassName}
+                    placeholder="e.g. 740561111"
+                    readOnly={drawer.editingId !== null}
+                  />
+                </Field>
+                <Field label="Client ID">
+                  <input
+                    value={drawer.clientId}
+                    onChange={(e) => setDrawer((c) => ({ ...c, clientId: e.target.value }))}
+                    className={inputClassName}
+                    placeholder={drawer.editingId ? 'Re-enter to update' : 'OAuth client id'}
+                    autoComplete="off"
+                  />
+                </Field>
+                <Field label="Client Secret">
+                  <input
+                    type="password"
+                    value={drawer.clientSecret}
+                    onChange={(e) => setDrawer((c) => ({ ...c, clientSecret: e.target.value }))}
+                    className={inputClassName}
+                    placeholder={drawer.editingId ? 'Re-enter to update' : 'OAuth client secret'}
+                    autoComplete="off"
+                  />
+                </Field>
+                <Field label="Environment">
+                  <Select
+                    value={drawer.environment}
+                    onChange={(e) => setDrawer((c) => ({ ...c, environment: e.target.value as CarrierEnvironment }))}
+                  >
+                    {carrierEnvironmentOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </DrawerStep>
+
+              <DrawerStep n="4" title="Verify & save">
+                <div className="flex items-center justify-between gap-2">
+                  {drawerCheck.state === 'checking' ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10.5px] font-bold text-slate-500">
+                      <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
+                      Checking…
+                    </span>
+                  ) : drawerCheck.state === 'ok' ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-[10.5px] font-bold text-emerald-700">
+                      <FiCheckCircle className="h-3 w-3" />
+                      Verified
+                    </span>
+                  ) : drawerCheck.state === 'fail' ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-1 text-[10.5px] font-bold text-rose-700">
+                      <FiXCircle className="h-3 w-3" />
+                      Check failed
+                    </span>
+                  ) : (
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10.5px] font-bold text-slate-500">
+                      Not verified yet
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void runDrawerCheck()}
+                    disabled={drawerCheck.state === 'checking'}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Run verification
+                  </button>
+                </div>
+                {drawerCheck.message ? (
+                  <p className={`mt-2 text-[11px] leading-4 ${drawerCheck.state === 'ok' ? 'text-emerald-700' : 'text-rose-700'}`}>
+                    {drawerCheck.message}
+                  </p>
+                ) : null}
+                {drawer.accountType === 'client' ? (
+                  <label className="mt-3 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[12.5px] text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={drawer.clientDefault}
+                      onChange={(e) => setDrawer((c) => ({ ...c, clientDefault: e.target.checked }))}
+                      className="h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
+                    />
+                    Make this the client's default account
+                  </label>
+                ) : null}
+              </DrawerStep>
+            </div>
+
+            <div className="flex gap-2 border-t border-slate-100 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setDrawerOpen(false)}
+                className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSave()}
+                disabled={saving}
+                className="flex-1 rounded-xl bg-[#1f150c] px-3 py-2.5 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {saving ? 'Saving…' : 'Save to Account Book'}
+              </button>
+            </div>
+          </aside>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+function VerifiedChip({ account }: { account: CarrierAccountRef }) {
+  if (account.verified === true) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+        <FiCheckCircle className="h-2.5 w-2.5" />
+        Verified
+      </span>
+    )
+  }
+  if (account.verified === false) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700">
+        <FiXCircle className="h-2.5 w-2.5" />
+        Check failed
+      </span>
+    )
+  }
+  return <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">⚠ Unverified</span>
+}
+
+function DrawerStep({ n, title, children }: { n: string; title: string; children: ReactNode }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 p-3.5">
+      <div className="mb-3 flex items-center gap-2 text-[12.5px] font-semibold text-slate-950">
+        <span className="grid h-5 w-5 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-[10.5px] text-slate-500">
+          {n}
+        </span>
+        {title}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="mb-2.5 block">
+      <span className="mb-1 block text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">{label}</span>
+      {children}
+    </label>
+  )
+}
