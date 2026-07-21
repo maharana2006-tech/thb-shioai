@@ -15,6 +15,10 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
 
     Optional<Order> findByOrderNo(Integer orderNo);
 
+    /** Highest order number in the table (0 when empty) — manual orders take max+1. */
+    @Query("SELECT COALESCE(MAX(o.orderNo), 0) FROM Order o")
+    Integer findMaxOrderNo();
+
     /**
      * Locks the order row (SELECT ... FOR UPDATE) so concurrent label
      * generations for the same order serialize: the second request waits for

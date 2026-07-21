@@ -228,7 +228,29 @@ export default function LabelDocumentPage() {
   const generated = Boolean(label?.isGenerated && trackingNumber)
   const shipDate = label?.generatedAt || order?.createdDate
 
-  const lines = order?.orderLines || []
+  // Commercial-invoice lines: prefer the per-order customs items entered against
+  // the order (manual/international shipments); fall back to the ERP order lines.
+  const customsItems = payload?.customs?.items ?? []
+  const lines =
+    customsItems.length > 0
+      ? customsItems.map((it, i) => {
+          const qty = it.quantity ?? 1
+          const unit = it.unitValue ?? 0
+          return {
+            id: i,
+            lineNo: i + 1,
+            itemNo: it.sku ?? null,
+            itemDescription: it.description ?? null,
+            description: it.description ?? null,
+            hsCode: it.hsCode ?? null,
+            countryOfOrigin: it.countryOfOrigin ?? null,
+            qtyShipped: qty,
+            unitPrice: unit,
+            totalPrice: qty * unit,
+            customsDeclValue: qty * unit,
+          }
+        })
+      : order?.orderLines || []
   const invoiceTotal = lines.reduce((sum, line) => sum + (line.totalPrice ?? 0), 0)
   const customsTotal = lines.reduce((sum, line) => sum + (line.customsDeclValue ?? 0), 0)
   const totalQty = lines.reduce((sum, line) => sum + (line.qtyShipped ?? 0), 0)

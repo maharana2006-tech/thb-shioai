@@ -599,6 +599,18 @@ public class ShippingConfigService {
         return presetRepository.findFirstByIsDefaultTrueAndEnabledTrue();
     }
 
+    /** Look up a service by id (for the manual-shipment flow's explicit service pick). */
+    @Transactional(readOnly = true)
+    public Optional<ShippingService> serviceById(Long id) {
+        return id == null ? Optional.empty() : serviceRepository.findById(id);
+    }
+
+    /** Look up a package preset by id (for the manual-shipment flow's explicit package pick). */
+    @Transactional(readOnly = true)
+    public Optional<PackagePreset> presetById(Long id) {
+        return id == null ? Optional.empty() : presetRepository.findById(id);
+    }
+
     // ===== helpers =====
 
     private String normType(ShipViaMapping r) {

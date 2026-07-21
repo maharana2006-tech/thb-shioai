@@ -524,6 +524,24 @@ public class OrderController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
+    /** One-shot manual shipment: operator enters everything and the label is purchased immediately. */
+    @Operation(summary = "Create a manual shipment and generate its label in one step",
+            description = "The operator supplies ship-from, ship-to, package + weight and picks the carrier account / "
+                    + "service / packaging explicitly. The label is purchased immediately and recorded as a manual "
+                    + "order (is_manual = 'Y') that appears in the queue/archive.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Label generated — tracking + label URL in data")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "errorCode VALIDATION_ERROR — missing/invalid recipient, weight or account")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "errorCode CARRIER_FAILURE — the carrier rejected the shipment")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/manual-label")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>> generateManualLabel(
+            @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.ManualShipmentRequest request,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> response =
+                carrierService.generateManualLabel(request, userDetails);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
     /** Preview which account (scenario) each order will use at generation time. */
     @Operation(summary = "Preview account resolution for a batch of orders",
             description = "Returns the cascade result per order: scenario ORDER / REFERENCE / NEEDS_DETAILS / DEFAULT / NO_DEFAULT plus the account it would use.")

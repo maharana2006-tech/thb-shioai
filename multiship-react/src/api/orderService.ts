@@ -184,6 +184,17 @@ export interface LabelCustomsDefaults {
   currency?: string | null
 }
 
+/** One commercial-invoice line item entered against an order (customs.items). */
+export interface LabelCustomsItem {
+  description?: string | null
+  hsCode?: string | null
+  countryOfOrigin?: string | null
+  quantity?: number | null
+  unitValue?: number | null
+  weight?: number | null
+  sku?: string | null
+}
+
 export interface LabelDocumentPayload {
   order: OrderWithLines
   /** Which account the order ships with, from the three-scenario cascade. */
@@ -199,6 +210,15 @@ export interface LabelDocumentPayload {
   /** CARRIER_DEFAULT (carrier's included brokerage) | BROKER_SELECT (named broker). */
   brokerage?: 'CARRIER_DEFAULT' | 'BROKER_SELECT' | null
   customsDefaults?: LabelCustomsDefaults | null
+  /** Per-order commercial-invoice line items entered against the order (international). */
+  customs?: {
+    items?: LabelCustomsItem[] | null
+    incoterms?: string | null
+    reasonForExport?: string | null
+    currency?: string | null
+    weightUnit?: string | null
+    notes?: string | null
+  } | null
   /** Service level resolved from the ERP ship-via mapping (Settings → Shipping Services). */
   service?: { carrier: string; code: string; name: string; scope?: string } | null
   /** The default package preset (Settings → Packages) used for type + dimensions. */
@@ -297,6 +317,59 @@ export interface LabelGenerationResponse {
   prefillEnvironment?: string | null
   /** Set on CLIENT_MISSING / CHOOSE_ACCOUNT payloads. */
   clientCode?: string | null
+  /** Manual one-shot shipments echo the generated order number so the UI can open the label. */
+  orderNo?: number
+  carrierCode?: string
+  carrierName?: string
+}
+
+/** One party (sender or recipient) on a manual shipment. */
+export interface ManualShipmentAddress {
+  name: string
+  company?: string
+  phone?: string
+  email?: string
+  addressLine1: string
+  addressLine2?: string
+  city: string
+  state?: string
+  postalCode: string
+  countryCode: string
+}
+
+/** One commercial-invoice line on an international manual shipment. */
+export interface ManualShipmentItem {
+  description: string
+  hsCode?: string
+  countryOfOrigin?: string
+  quantity?: number | null
+  unitValue?: number | null
+  weight?: number | null
+  sku?: string
+}
+
+/** Payload for the one-shot manual shipment / label endpoint. */
+export interface ManualShipmentPayload {
+  sender: ManualShipmentAddress
+  recipient: ManualShipmentAddress
+  accountId: number
+  serviceId?: number | null
+  packagePresetId?: number | null
+  length?: number | null
+  width?: number | null
+  height?: number | null
+  dimUnit?: string
+  weight: number
+  weightUnit?: string
+  clientCode?: string
+  declaredValue?: number | null
+  goodsDescription?: string
+  reference?: string
+  // International (cross-border) only:
+  items?: ManualShipmentItem[]
+  incoterms?: string
+  reasonForExport?: string
+  currency?: string
 }
 
 // ===== Order Service =====
@@ -441,6 +514,10 @@ export const orderService = {
       { headers: { 'Idempotency-Key': key } }
     )
   },
+
+  /** One-shot manual shipment: create + purchase the label in a single call. */
+  generateManualLabel: (payload: ManualShipmentPayload) =>
+    apiClient.post<ApiResponse<LabelGenerationResponse>>('/orders/manual-label', payload),
 
   /**
    * Get city distribution (using stats endpoint)

@@ -68,6 +68,7 @@ public class CarrierServiceImpl implements CarrierService {
     private final com.multiship.backend.repository.OrderCustomsRepository orderCustomsRepository;
     private final com.multiship.backend.repository.ClientCustomsProfileRepository clientCustomsProfileRepository;
     private final ShippingConfigService shippingConfigService;
+    private final CustomsService customsService;
 
     @Override
     @Transactional(readOnly = true)
@@ -465,6 +466,200 @@ public class CarrierServiceImpl implements CarrierService {
                         : "Shipment label generated successfully using the " + resolution.sourceDescription() + ".")
                 .build();
 
+        return success("Label generated successfully.", response);
+    }
+
+    /**
+     * One-shot MANUAL shipment: the operator supplies every input explicitly
+     * (ship-from, ship-to, package + weight, carrier account, service, packaging)
+     * — nothing is auto-resolved. Purchase the label immediately, then record it
+     * as a manual order (label_batch.is_manual = 'Y') + tracking so it appears in
+     * the queue/archive and its label document renders.
+     */
+    @Override
+    @org.springframework.transaction.annotation.Transactional
+    public ApiResponse<LabelGenerationResponse> generateManualLabel(
+            com.multiship.backend.dto.ManualShipmentRequest req,
+            org.springframework.security.core.userdetails.UserDetails user) {
+
+        if (req == null || req.getRecipient() == null) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "Recipient details are required.");
+        }
+        com.multiship.backend.dto.ManualShipmentRequest.Address to = req.getRecipient();
+        com.multiship.backend.dto.ManualShipmentRequest.Address from = req.getSender();
+
+        if (!StringUtils.hasText(to.getName()) || !StringUtils.hasText(to.getAddressLine1())
+                || !StringUtils.hasText(to.getCity()) || !StringUtils.hasText(to.getPostalCode())
+                || !StringUtils.hasText(to.getCountryCode())) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                    "Recipient name, address, city, postal code and country are required.");
+        }
+        if (req.getWeight() == null || req.getWeight().signum() <= 0) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                    "A shipment weight greater than zero is required.");
+        }
+        if (req.getAccountId() == null) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                    "Select a carrier account to bill the shipment to.");
+        }
+
+        CarrierAccountRef account = carrierAccountRefRepository.findById(req.getAccountId()).orElse(null);
+        if (account == null) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "Carrier account not found.");
+        }
+        String carrier = resolveCanonicalCarrierCode(firstNonBlank(account.getCarrierCode(), "UPS"));
+        CarrierConnector connector = getCarrierConnector(carrier);
+
+        // Explicit service + packaging picks — no rule/weight auto-resolution.
+        com.multiship.backend.model.ShippingService service =
+                shippingConfigService.serviceById(req.getServiceId()).orElse(null);
+        com.multiship.backend.model.PackagePreset preset =
+                shippingConfigService.presetById(req.getPackagePresetId()).orElse(null);
+
+        String serviceType = service != null ? service.getServiceCode()
+                : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");
+        String packageType = preset != null
+                ? ("CARRIER".equalsIgnoreCase(preset.getKind()) ? preset.getCarrierPackageCode() : "YOUR_PACKAGING")
+                : firstNonBlank(connector.getConfiguration().defaultPackageType(), "YOUR_PACKAGING");
+        BigDecimal length = req.getLength() != null ? req.getLength() : (preset != null ? preset.getLength() : null);
+        BigDecimal width = req.getWidth() != null ? req.getWidth() : (preset != null ? preset.getWidth() : null);
+        BigDecimal height = req.getHeight() != null ? req.getHeight() : (preset != null ? preset.getHeight() : null);
+
+        CarrierProperties.ShipperDefaults dflt = carrierProperties.getShipper();
+        String fromCountry = firstNonBlank(from != null ? from.getCountryCode() : null, dflt.getCountryCode());
+
+        ShipmentRequestDTO shipmentRequest = ShipmentRequestDTO.builder()
+                .carrierCode(carrier)
+                .accountNumber(firstNonBlank(account.getAccountNumber(), "ACCOUNT"))
+                .serviceType(serviceType)
+                .packageType(packageType)
+                .length(length).width(width).height(height)
+                .weight(req.getWeight())
+                .shipperName(firstNonBlank(from != null ? from.getName() : null, dflt.getName()))
+                .shipperPhone(firstNonBlank(from != null ? from.getPhone() : null, dflt.getPhone()))
+                .shipperAddressLine1(firstNonBlank(from != null ? from.getAddressLine1() : null, dflt.getAddressLine1()))
+                .shipperAddressLine2(firstNonBlank(from != null ? from.getAddressLine2() : null, dflt.getAddressLine2()))
+                .shipperCity(firstNonBlank(from != null ? from.getCity() : null, dflt.getCity()))
+                .shipperState(firstNonBlank(from != null ? from.getState() : null, dflt.getState()))
+                .shipperPostalCode(firstNonBlank(from != null ? from.getPostalCode() : null, dflt.getPostalCode()))
+                .shipperCountryCode(fromCountry)
+                .recipientName(to.getName())
+                .recipientPhone(firstNonBlank(to.getPhone(), "0000000000"))
+                .recipientAddressLine1(to.getAddressLine1())
+                .recipientAddressLine2(to.getAddressLine2())
+                .recipientCity(to.getCity())
+                .recipientState(firstNonBlank(to.getState(), ""))
+                .recipientPostalCode(to.getPostalCode())
+                .recipientCountryCode(to.getCountryCode())
+                .referenceNumber(firstNonBlank(req.getReference(), "MANUAL"))
+                .specialInstructions(req.getGoodsDescription())
+                .declaredValue(req.getDeclaredValue())
+                .build();
+
+        CarrierConnector.ShipmentResult result;
+        try {
+            connector.validateCredentials(account.getClientId(), account.getClientSecret());
+            String token = connector.getAccessToken(account.getClientId(), account.getClientSecret());
+            result = connector.createShipment(shipmentRequest, token);
+        } catch (Exception ex) {
+            log.warn("Manual shipment failed at carrier {}: {}", carrier, ex.getMessage());
+            return failure(HttpStatus.BAD_GATEWAY, ErrorCode.CARRIER_FAILURE,
+                    "The carrier rejected the manual shipment: " + ex.getMessage());
+        }
+
+        Integer maxNo = orderRepository.findMaxOrderNo();
+        int orderNo = Math.max(maxNo == null ? 0 : maxNo, 900000) + 1;
+        boolean intl = to.getCountryCode() != null && fromCountry != null
+                && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
+
+        Order order = new Order();
+        order.setOrderNo(orderNo);
+        order.setOrderSuffix(0);
+        order.setOrderStatus("GENERATED");
+        order.setIsManual("Y");
+        order.setCustNo(firstNonBlank(req.getClientCode(), "MANUAL"));
+        order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : null);
+        order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
+        order.setShipName(to.getName());
+        order.setShipAttn(to.getCompany());
+        order.setShipAddr1(to.getAddressLine1());
+        order.setLocation(to.getAddressLine2());
+        order.setShiptoCity(to.getCity());
+        order.setShiptoState(to.getState());
+        order.setShiptoZip(to.getPostalCode());
+        order.setShiptoCountryCd(to.getCountryCode());
+        order.setCountryName(to.getCountryCode());
+        order.setPhone(to.getPhone());
+        order.setWeight(req.getWeight());
+        order.setGoodsDesc(req.getGoodsDescription());
+        order.setPrice(req.getDeclaredValue());
+        order.setIntlYn(intl ? "Y" : "N");
+        order.setCreatedDate(java.time.LocalDate.now());
+        orderRepository.save(order);
+
+        // International: persist the operator's commercial-invoice line items so the
+        // commercial invoice renders. Importer/broker resolve from the client's
+        // customs profile at document time (unchanged).
+        if (intl && req.getItems() != null && !req.getItems().isEmpty()) {
+            var lines = req.getItems().stream()
+                    .filter(it -> StringUtils.hasText(it.getDescription()))
+                    .map(it -> com.multiship.backend.dto.OrderCustomsItemDTO.builder()
+                            .description(it.getDescription())
+                            .hsCode(it.getHsCode())
+                            .countryOfOrigin(it.getCountryOfOrigin())
+                            .quantity(it.getQuantity())
+                            .unitValue(it.getUnitValue())
+                            .weight(it.getWeight())
+                            .sku(it.getSku())
+                            .build())
+                    .toList();
+            if (!lines.isEmpty()) {
+                com.multiship.backend.dto.OrderCustomsUpsertRequest customsReq =
+                        new com.multiship.backend.dto.OrderCustomsUpsertRequest();
+                customsReq.setIncoterms(req.getIncoterms());
+                customsReq.setReasonForExport(req.getReasonForExport());
+                customsReq.setCurrency(firstNonBlank(req.getCurrency(), "USD"));
+                customsReq.setItems(lines);
+                try {
+                    customsService.upsertCustoms(String.valueOf(orderNo), customsReq);
+                } catch (Exception ex) {
+                    log.warn("Manual order {}: could not save commercial-invoice items: {}", orderNo, ex.getMessage());
+                }
+            }
+        }
+
+        OrderTracking tracking = new OrderTracking();
+        tracking.setOrderNo(orderNo);
+        tracking.setOrderSuffix(0);
+        tracking.setTrackingNumber(result.trackingNumber());
+        tracking.setTrackingUrl(result.trackingUrl());
+        tracking.setShipViaCd(order.getShipviaCd());
+        tracking.setAccountNumber(account.getAccountNumber());
+        tracking.setIsLabelGenerated(true);
+        tracking.setLabelGeneratedAt(LocalDateTime.now());
+        tracking.setLabelFilePath(result.labelUrl());
+        tracking.setStatus("GENERATED");
+        tracking.setCreatedAt(LocalDateTime.now());
+        tracking.setUpdatedAt(LocalDateTime.now());
+        orderTrackingRepository.save(tracking);
+
+        LabelGenerationResponse response = LabelGenerationResponse.builder()
+                .orderNo((long) orderNo)
+                .carrierCode(carrier)
+                .carrierName(connector.getCarrierName())
+                .carrierAccountCode(account.getAccountNumber())
+                .tenantId(order.getTenantId())
+                .trackingNumber(result.trackingNumber())
+                .trackingUrl(result.trackingUrl())
+                .labelUrl(result.labelUrl())
+                .labelPdf(result.labelPdf())
+                .status("GENERATED")
+                .shippingCost(result.shippingCost())
+                .estimatedDelivery(result.estimatedDelivery())
+                .accountSource("MANUAL")
+                .message("Manual shipment #" + orderNo + " labelled on "
+                        + firstNonBlank(account.getAccountName(), account.getAccountNumber()) + ".")
+                .build();
         return success("Label generated successfully.", response);
     }
 

@@ -15,6 +15,7 @@ import {
   FiSearch,
   FiX,
   FiZap,
+  FiPlus,
 } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import { orderService, type Order, type QueueStats } from '../api/orderService'
@@ -28,6 +29,7 @@ import FillCarrierDetailsModal from './modals/FillCarrierDetailsModal'
 import ClientEditorModal from './modals/ClientEditorModal'
 import AccountPickerModal from './modals/AccountPickerModal'
 import OrderDetailsModal from './modals/OrderDetailsModal'
+import NewShipmentModal from './modals/NewShipmentModal'
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
 
@@ -122,6 +124,7 @@ export default function OrdersWorkspace() {
   const [pickerCarrier, setPickerCarrier] = useState<string | null>(null)
   const [pickerSuggested, setPickerSuggested] = useState<string | null>(null)
   const [detailsOrderNo, setDetailsOrderNo] = useState<number | null>(null)
+  const [showNewShipment, setShowNewShipment] = useState(false)
 
   // The header's global search lands here as /orders?q=…
   useEffect(() => {
@@ -821,10 +824,14 @@ export default function OrdersWorkspace() {
                 void generateAllReady()
               }}
               disabled={busy || !readyCount}
-              className={BTN_PRIMARY}
+              className={BTN_GHOST}
             >
               <FiZap className="h-3.5 w-3.5" />
               Generate all ready ({readyCount})
+            </button>
+            <button type="button" onClick={() => setShowNewShipment(true)} className={BTN_PRIMARY}>
+              <FiPlus className="h-3.5 w-3.5" />
+              New shipment
             </button>
           </div>
         }
@@ -1193,6 +1200,17 @@ export default function OrdersWorkspace() {
 
       {detailsOrderNo !== null ? (
         <OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} />
+      ) : null}
+
+      {showNewShipment ? (
+        <NewShipmentModal
+          onClose={() => setShowNewShipment(false)}
+          onCreated={(orderNo) => {
+            setShowNewShipment(false)
+            refreshQueues()
+            if (orderNo) navigate(`/label/${orderNo}`)
+          }}
+        />
       ) : null}
     </div>
   )

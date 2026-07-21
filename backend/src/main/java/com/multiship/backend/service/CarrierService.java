@@ -31,6 +31,9 @@ public interface CarrierService {
      */
     ApiResponse<LabelGenerationResponse> generateLabel(Long orderNo, UserDetails user, String idempotencyKey, Long accountId);
 
+    /** One-shot manual shipment: purchase a label from explicit operator input and record it as a manual order. */
+    ApiResponse<LabelGenerationResponse> generateManualLabel(com.multiship.backend.dto.ManualShipmentRequest request, UserDetails user);
+
     ApiResponse<List<OrderAccountResolutionDTO>> resolveOrderAccounts(List<Integer> orderNos);
 
     CarrierConnector getCarrierConnector(String carrierCode);
