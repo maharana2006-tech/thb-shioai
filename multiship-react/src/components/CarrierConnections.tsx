@@ -188,8 +188,8 @@ export default function CarrierConnections() {
         const ac = (a.customerNo || '').toUpperCase()
         const bc = (b.customerNo || '').toUpperCase()
         if (ac !== bc) return ac.localeCompare(bc)
-        const acr = normalizeCarrierCode(a.carrierCode)
-        const bcr = normalizeCarrierCode(b.carrierCode)
+        const acr = normalizeCarrierCode(a.carrierCode) ?? ''
+        const bcr = normalizeCarrierCode(b.carrierCode) ?? ''
         if (acr !== bcr) return acr.localeCompare(bcr)
         return a.id - b.id
       })

@@ -416,7 +416,7 @@ export default function LabelDocumentPage() {
                         (max of actual+tare and DIM weight), not the raw scale weight. */}
                     <p>
                       ACTWGT: {(() => {
-                        const w = payload?.packagePreset?.billableWeight ?? order.weight
+                        const w = (payload?.packagePreset as { billableWeight?: number | null } | null | undefined)?.billableWeight ?? order.weight
                         return typeof w === 'number' ? w.toFixed(2) : '—'
                       })()} KG
                     </p>

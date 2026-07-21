@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import toast from 'react-hot-toast'
-import { FiDownloadCloud, FiEdit3, FiGlobe, FiPlus, FiRefreshCw, FiStar, FiTrash2, FiTruck, FiX } from 'react-icons/fi'
+import { FiDownloadCloud, FiEdit3, FiGlobe, FiPlus, FiStar, FiTrash2, FiTruck, FiX } from 'react-icons/fi'
 import { dimWeightOf, oversizeOf, shippingConfigService, type PackagePreset } from '../api/shippingConfigService'
 import { countryName } from '../utils/countries'
 import PageSectionHeader from './workspace/PageSectionHeader'

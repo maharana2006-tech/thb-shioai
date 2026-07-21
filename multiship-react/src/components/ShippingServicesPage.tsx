@@ -10,7 +10,6 @@ import {
   FiRefreshCw,
   FiSend,
   FiTrash2,
-  FiTruck,
   FiUser,
   FiX,
 } from 'react-icons/fi'
