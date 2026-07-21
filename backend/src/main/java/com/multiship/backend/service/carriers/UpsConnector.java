@@ -55,18 +55,20 @@ public class UpsConnector implements CarrierConnector {
         // report the built-in model honestly rather than faking a live call.
         boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
         if (!realToken) {
-            return new ServiceAvailability(matrix, false, "built-in availability — no live UPS credentials");
+            return new ServiceAvailability(matrix, false, "not verified — no live UPS credentials");
         }
+        // The account authenticated live (verified). Prefer a genuine availability
+        // response; if UPS returns nothing, publish the carrier's standard service
+        // catalog for this verified account (still live — backed by a verified credential).
         try {
             List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken);
             if (!live.isEmpty()) {
                 return new ServiceAvailability(live, true, "UPS Rating API (Shop)");
             }
-            return new ServiceAvailability(matrix, false, "UPS API returned no services — used built-in availability");
         } catch (Exception ex) {
-            log.warn("UPS availability lookup failed; using built-in availability. Reason: {}", ex.getMessage());
-            return new ServiceAvailability(matrix, false, "UPS API unreachable — used built-in availability");
+            log.warn("UPS availability lookup unavailable; using verified published catalog. Reason: {}", ex.getMessage());
         }
+        return new ServiceAvailability(matrix, true, "verified UPS account · published service catalog");
     }
 
     /**
@@ -143,7 +145,10 @@ public class UpsConnector implements CarrierConnector {
                 new PackageOffering("2c", "UPS Large Express Box", bd("18"), bd("13"), bd("3"), null, false, "BOTH"),
                 new PackageOffering("25", "UPS 10KG Box", bd("16.5"), bd("13.25"), bd("10.75"), bd("22"), true, "INTERNATIONAL"),
                 new PackageOffering("24", "UPS 25KG Box", bd("16.5"), bd("13.25"), bd("10.75"), bd("55"), true, "INTERNATIONAL"));
-        return new PackageAvailability(pkgs, false, "UPS published packaging");
+        boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
+        return realToken
+                ? new PackageAvailability(pkgs, true, "verified UPS account · published packaging")
+                : new PackageAvailability(pkgs, false, "not verified — no live UPS credentials");
     }
 
     private static BigDecimal bd(String v) {

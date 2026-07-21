@@ -116,6 +116,8 @@ export default function PackagesPage() {
   const [saving, setSaving] = useState(false)
   /** Ship-from origin for carrier packaging (USPS Flat Rate is US-only, etc.). */
   const [origin, setOrigin] = useState('US')
+  /** Carrier filter: 'ALL' | 'CUSTOM' | a carrier code (UPS/FEDEX/USPS…). */
+  const [carrierFilter, setCarrierFilter] = useState('ALL')
   const [syncing, setSyncing] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
@@ -193,13 +195,30 @@ export default function PackagesPage() {
 
   const num = (v: string) => (v === '' ? null : Number(v))
 
+  // Carriers present in the catalog (+ a Custom option when any hand-made box exists).
+  const carrierOptions = useMemo(() => {
+    const carriers = new Set<string>()
+    let hasCustom = false
+    presets.forEach((p) => {
+      if (p.kind === 'CARRIER' && p.carrier) carriers.add(p.carrier.toUpperCase())
+      else hasCustom = true
+    })
+    return { carriers: [...carriers].sort(), hasCustom }
+  }, [presets])
+
   // Custom boxes are universal; carrier packaging is per ship-from origin.
+  // The carrier filter narrows to one carrier's packaging (or just custom boxes).
   const visiblePresets = useMemo(
     () =>
-      presets.filter(
-        (p) => p.kind !== 'CARRIER' || (p.originCountry ?? 'US').toUpperCase() === origin.toUpperCase(),
-      ),
-    [presets, origin],
+      presets.filter((p) => {
+        const originOk =
+          p.kind !== 'CARRIER' || (p.originCountry ?? 'US').toUpperCase() === origin.toUpperCase()
+        if (!originOk) return false
+        if (carrierFilter === 'ALL') return true
+        if (carrierFilter === 'CUSTOM') return p.kind !== 'CARRIER'
+        return p.kind === 'CARRIER' && (p.carrier ?? '').toUpperCase() === carrierFilter
+      }),
+    [presets, origin, carrierFilter],
   )
   const totalPages = Math.max(1, Math.ceil(visiblePresets.length / pageSize))
   const safePage = Math.min(page, totalPages)
@@ -207,10 +226,10 @@ export default function PackagesPage() {
     () => visiblePresets.slice((safePage - 1) * pageSize, safePage * pageSize),
     [visiblePresets, safePage, pageSize],
   )
-  // Snap back to page 1 whenever the filtered set changes (origin switch, sync…).
+  // Snap back to page 1 whenever the filtered set changes (origin/carrier switch, sync…).
   useEffect(() => {
     setPage(1)
-  }, [origin, visiblePresets.length])
+  }, [origin, carrierFilter, visiblePresets.length])
   const originOptions = useMemo(() => {
     const base = ['US', 'GB', 'DE', 'FR', 'NL', 'IT', 'ES', 'IN', 'CN', 'JP', 'AU', 'CA', 'MX', 'BR', 'SG']
     const merged = new Set<string>([...base, ...presets.map((p) => (p.originCountry || '').toUpperCase()).filter(Boolean), origin])
@@ -261,6 +280,26 @@ export default function PackagesPage() {
                     {countryName(code)} ({code})
                   </option>
                 ))}
+              </select>
+            </label>
+            <label
+              title="Filter packages by carrier (or show only your custom boxes)."
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white pl-3 pr-1.5 py-1.5"
+            >
+              <FiTruck className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Carrier</span>
+              <select
+                value={carrierFilter}
+                onChange={(e) => setCarrierFilter(e.target.value)}
+                className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[#1f150c] outline-none"
+              >
+                <option value="ALL">All carriers</option>
+                {carrierOptions.carriers.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+                {carrierOptions.hasCustom ? <option value="CUSTOM">Custom boxes</option> : null}
               </select>
             </label>
             <button

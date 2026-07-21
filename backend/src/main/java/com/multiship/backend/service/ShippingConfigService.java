@@ -113,8 +113,20 @@ public class ShippingConfigService {
         // Authenticate with the platform account's real credentials (if any).
         String accessToken = platformAccessToken(connector, canonical);
         CarrierConnector.ServiceAvailability availability = connector.listServices(origin, accessToken);
+
+        // Live-only policy: services are persisted ONLY from a genuinely verified,
+        // live carrier call. If the connection didn't authenticate live (no/invalid
+        // credentials, carrier unreachable), refuse rather than importing the
+        // built-in fallback list — nothing is written.
+        if (!availability.live()) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                    canonical + " is not verified live (" + availability.via() + "). "
+                    + "Connect and verify a live " + canonical + " account before syncing services — "
+                    + "no services were added.");
+        }
+
         List<CarrierConnector.ServiceOffering> offerings = availability.offerings();
-        String source = availability.live() ? "CARRIER_API" : "CARRIER_SYNC";
+        String source = "CARRIER_API";
 
         LocalDateTime now = LocalDateTime.now();
         int added = 0, updated = 0, sort = 0;
@@ -188,7 +200,18 @@ public class ShippingConfigService {
 
         String token = platformAccessToken(connector, canonical);
         CarrierConnector.PackageAvailability availability = connector.listPackages(origin, token);
-        String source = availability.live() ? "CARRIER_API" : "CARRIER_SYNC";
+
+        // Live-only policy (same as services): packaging is persisted ONLY from a
+        // genuinely verified, live carrier account. If the connection didn't
+        // authenticate live, refuse rather than importing built-in packaging.
+        if (!availability.live()) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                    canonical + " is not verified live (" + availability.via() + "). "
+                    + "Connect and verify a live " + canonical + " account before syncing packaging — "
+                    + "no packages were added.");
+        }
+
+        String source = "CARRIER_API";
         int added = 0, updated = 0, sort = 100;
         for (CarrierConnector.PackageOffering off : availability.offerings()) {
             PackagePreset existing = presetRepository

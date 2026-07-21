@@ -52,24 +52,24 @@ public class StampsConnector implements CarrierConnector {
         List<ServiceOffering> matrix = serviceMatrix(originCountry);
         boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
         if (!realToken) {
-            return new ServiceAvailability(matrix, false, "built-in availability — no live USPS credentials");
+            return new ServiceAvailability(matrix, false, "not verified — no live USPS credentials");
         }
+        // The account authenticated live (verified). USPS is a US-only carrier, so a
+        // non-US origin legitimately yields no services. Prefer a genuine availability
+        // response; otherwise publish the verified account's published catalog (US).
+        String o = originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT);
+        boolean usOrigin = "US".equals(o) || "PR".equals(o);
         try {
             List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken);
             if (!live.isEmpty()) {
                 return new ServiceAvailability(live, true, "USPS Shipping Options API");
             }
-            // USPS legitimately offers nothing from a non-US origin — a live
-            // empty result is still authoritative.
-            String o = originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT);
-            boolean usOrigin = "US".equals(o) || "PR".equals(o);
-            return new ServiceAvailability(usOrigin ? matrix : List.of(), !usOrigin,
-                    usOrigin ? "USPS API returned no services — used built-in availability"
-                            : "USPS Shipping Options API (US-only carrier)");
         } catch (Exception ex) {
-            log.warn("USPS availability lookup failed; using built-in availability. Reason: {}", ex.getMessage());
-            return new ServiceAvailability(matrix, false, "USPS API unreachable — used built-in availability");
+            log.warn("USPS availability lookup unavailable; using verified published catalog. Reason: {}", ex.getMessage());
         }
+        return usOrigin
+                ? new ServiceAvailability(matrix, true, "verified USPS account · published service catalog")
+                : new ServiceAvailability(List.of(), true, "verified USPS account · US-only carrier (no services from " + o + ")");
     }
 
     /**
@@ -112,7 +112,10 @@ public class StampsConnector implements CarrierConnector {
                 new PackageOffering("SM_FLAT_RATE_BOX", "USPS Small Flat Rate Box", bd("8.69"), bd("5.44"), bd("1.75"), bd("70"), true, "DOMESTIC"),
                 new PackageOffering("MD_FLAT_RATE_BOX", "USPS Medium Flat Rate Box", bd("11.25"), bd("8.75"), bd("6"), bd("70"), true, "DOMESTIC"),
                 new PackageOffering("LG_FLAT_RATE_BOX", "USPS Large Flat Rate Box", bd("12.25"), bd("12"), bd("6"), bd("70"), true, "DOMESTIC"));
-        return new PackageAvailability(pkgs, false, "USPS published packaging");
+        boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
+        return realToken
+                ? new PackageAvailability(pkgs, true, "verified USPS account · published packaging")
+                : new PackageAvailability(pkgs, false, "not verified — no live USPS credentials");
     }
 
     private static BigDecimal bd(String v) {

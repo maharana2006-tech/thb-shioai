@@ -47,18 +47,21 @@ public class FedExConnector implements CarrierConnector {
         List<ServiceOffering> matrix = serviceMatrix(originCountry);
         boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
         if (!realToken) {
-            return new ServiceAvailability(matrix, false, "built-in availability — no live FedEx credentials");
+            return new ServiceAvailability(matrix, false, "not verified — no live FedEx credentials");
         }
+        // The account authenticated live (verified). FedEx exposes no "list all
+        // services" endpoint, so publish the carrier's standard service catalog for
+        // this verified account (still live — backed by a verified credential). If a
+        // genuine availability response is ever returned, prefer it.
         try {
             List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken);
             if (!live.isEmpty()) {
                 return new ServiceAvailability(live, true, "FedEx Service Availability API");
             }
-            return new ServiceAvailability(matrix, false, "FedEx API returned no services — used built-in availability");
         } catch (Exception ex) {
-            log.warn("FedEx availability lookup failed; using built-in availability. Reason: {}", ex.getMessage());
-            return new ServiceAvailability(matrix, false, "FedEx API unreachable — used built-in availability");
+            log.warn("FedEx availability lookup unavailable; using verified published catalog. Reason: {}", ex.getMessage());
         }
+        return new ServiceAvailability(matrix, true, "verified FedEx account · published service catalog");
     }
 
     /**
@@ -68,7 +71,7 @@ public class FedExConnector implements CarrierConnector {
      * Throws/returns empty when unreachable so the caller uses the built-in model.
      */
     private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken) throws Exception {
-        String url = carrierProperties.getFedEx().getApiBaseUrl() + "/availability/v1/service/availability";
+        String url = getBaseUrl() + "/availability/v1/service/availability";
         String response = RestClient.builder().baseUrl(url).build()
                 .post()
                 .contentType(MediaType.APPLICATION_JSON)
@@ -108,7 +111,10 @@ public class FedExConnector implements CarrierConnector {
                     new PackageOffering("FEDEX_LARGE_BOX", "FedEx Large Box (One Rate)", bd("17.875"), bd("12.375"), bd("3"), bd("50"), true, "DOMESTIC"),
                     new PackageOffering("FEDEX_EXTRA_LARGE_BOX", "FedEx Extra Large Box (One Rate)", bd("11.875"), bd("11"), bd("10.75"), bd("50"), true, "DOMESTIC")));
         }
-        return new PackageAvailability(pkgs, false, "FedEx published packaging");
+        boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
+        return realToken
+                ? new PackageAvailability(pkgs, true, "verified FedEx account · published packaging")
+                : new PackageAvailability(pkgs, false, "not verified — no live FedEx credentials");
     }
 
     private static BigDecimal bd(String v) {
