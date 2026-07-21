@@ -12,6 +12,7 @@ import ShippingServicesPage from '../components/ShippingServicesPage'
 import PackagesPage from '../components/PackagesPage'
 import DashboardPage from '../pages/DashboardPage'
 import OrdersPage from '../pages/OrdersPage'
+import NewShipmentPage from '../components/NewShipmentPage'
 import ProtectedRoute from './ProtectedRoute'
 import AnonymousRoute from './AnonymousRoute'
 import RequireRole from './RequireRole'
@@ -45,6 +46,7 @@ export default function AppRoutes() {
           </Route>
 
           <Route path={workspacePaths.orders} element={<OrdersPage />} />
+          <Route path="/orders/new" element={<NewShipmentPage />} />
 
           <Route path="/label/:orderNo" element={<LabelDocumentPage />} />
 

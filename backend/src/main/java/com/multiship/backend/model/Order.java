@@ -117,6 +117,15 @@ public class Order {
     @Column(name = "is_manual")
     private String isManual;
 
+    /** 'Y' when this is a reverse/return label (customer ships back). */
+    @Column(name = "is_return")
+    private String isReturn;
+
+    /** Per-shipment importer/broker override (JSON) — used INSTEAD of the client's saved
+     *  profile for this one label, without changing the profile. Null = use the profile. */
+    @Column(name = "importer_broker_override", columnDefinition = "text")
+    private String importerBrokerOverride;
+
     @OneToMany(mappedBy = "order", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
     @ToString.Exclude
     @EqualsAndHashCode.Exclude

@@ -498,16 +498,42 @@ public class CarrierServiceImpl implements CarrierService {
             return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
                     "A shipment weight greater than zero is required.");
         }
-        if (req.getAccountId() == null) {
+        String typedNumber = StringUtils.hasText(req.getAccountNumber()) ? req.getAccountNumber().trim() : null;
+        if (req.getAccountId() == null && typedNumber == null) {
             return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
-                    "Select a carrier account to bill the shipment to.");
+                    "Enter the bill-to account number for the shipment.");
         }
 
-        CarrierAccountRef account = carrierAccountRefRepository.findById(req.getAccountId()).orElse(null);
-        if (account == null) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "Carrier account not found.");
+        // Carrier: from the request, else inferred from the credential account.
+        String carrier = resolveCanonicalCarrierCode(firstNonBlank(
+                req.getCarrierCode(),
+                req.getAccountId() != null
+                        ? carrierAccountRefRepository.findById(req.getAccountId())
+                                .map(CarrierAccountRef::getCarrierCode).orElse(null)
+                        : null,
+                "UPS"));
+
+        // Credential account: the picked account, else the typed number on file, else
+        // the carrier's platform account (so a hand-typed account still authenticates).
+        CarrierAccountRef account = null;
+        if (req.getAccountId() != null) {
+            account = carrierAccountRefRepository.findById(req.getAccountId()).orElse(null);
         }
-        String carrier = resolveCanonicalCarrierCode(firstNonBlank(account.getCarrierCode(), "UPS"));
+        if (account == null && typedNumber != null) {
+            account = carrierAccountRefRepository
+                    .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(typedNumber, carrier).orElse(null);
+        }
+        if (account == null) {
+            account = carrierAccountRefRepository.findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+        }
+        if (account == null) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                    "No verified " + carrier + " credentials are available to ship. Add or verify a "
+                    + carrier + " account first.");
+        }
+        // Bill-to account number that prints on the label: the typed number wins.
+        String billToNumber = firstNonBlank(typedNumber, account.getAccountNumber(), "ACCOUNT");
+
         CarrierConnector connector = getCarrierConnector(carrier);
 
         // Explicit service + packaging picks — no rule/weight auto-resolution.
@@ -530,7 +556,7 @@ public class CarrierServiceImpl implements CarrierService {
 
         ShipmentRequestDTO shipmentRequest = ShipmentRequestDTO.builder()
                 .carrierCode(carrier)
-                .accountNumber(firstNonBlank(account.getAccountNumber(), "ACCOUNT"))
+                .accountNumber(billToNumber)
                 .serviceType(serviceType)
                 .packageType(packageType)
                 .length(length).width(width).height(height)
@@ -572,11 +598,14 @@ public class CarrierServiceImpl implements CarrierService {
         boolean intl = to.getCountryCode() != null && fromCountry != null
                 && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
 
+        boolean isReturn = Boolean.TRUE.equals(req.getIsReturn());
+
         Order order = new Order();
         order.setOrderNo(orderNo);
         order.setOrderSuffix(0);
         order.setOrderStatus("GENERATED");
         order.setIsManual("Y");
+        order.setIsReturn(isReturn ? "Y" : "N");
         order.setCustNo(firstNonBlank(req.getClientCode(), "MANUAL"));
         order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : null);
         order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
@@ -595,6 +624,17 @@ public class CarrierServiceImpl implements CarrierService {
         order.setPrice(req.getDeclaredValue());
         order.setIntlYn(intl ? "Y" : "N");
         order.setCreatedDate(java.time.LocalDate.now());
+        // Per-shipment importer/broker override (does NOT touch the client's saved profile).
+        if (req.getImporter() != null || req.getBroker() != null) {
+            try {
+                java.util.Map<String, Object> ov = new java.util.LinkedHashMap<>();
+                ov.put("importer", req.getImporter());
+                ov.put("broker", req.getBroker());
+                order.setImporterBrokerOverride(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(ov));
+            } catch (Exception ignore) {
+                // best-effort; a serialization failure just falls back to the client profile
+            }
+        }
         orderRepository.save(order);
 
         // International: persist the operator's commercial-invoice line items so the
@@ -634,7 +674,7 @@ public class CarrierServiceImpl implements CarrierService {
         tracking.setTrackingNumber(result.trackingNumber());
         tracking.setTrackingUrl(result.trackingUrl());
         tracking.setShipViaCd(order.getShipviaCd());
-        tracking.setAccountNumber(account.getAccountNumber());
+        tracking.setAccountNumber(billToNumber);
         tracking.setIsLabelGenerated(true);
         tracking.setLabelGeneratedAt(LocalDateTime.now());
         tracking.setLabelFilePath(result.labelUrl());
@@ -647,7 +687,7 @@ public class CarrierServiceImpl implements CarrierService {
                 .orderNo((long) orderNo)
                 .carrierCode(carrier)
                 .carrierName(connector.getCarrierName())
-                .carrierAccountCode(account.getAccountNumber())
+                .carrierAccountCode(billToNumber)
                 .tenantId(order.getTenantId())
                 .trackingNumber(result.trackingNumber())
                 .trackingUrl(result.trackingUrl())
@@ -658,7 +698,7 @@ public class CarrierServiceImpl implements CarrierService {
                 .estimatedDelivery(result.estimatedDelivery())
                 .accountSource("MANUAL")
                 .message("Manual shipment #" + orderNo + " labelled on "
-                        + firstNonBlank(account.getAccountName(), account.getAccountNumber()) + ".")
+                        + billToNumber + ".")
                 .build();
         return success("Label generated successfully.", response);
     }

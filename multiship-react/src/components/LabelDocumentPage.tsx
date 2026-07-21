@@ -306,9 +306,14 @@ export default function LabelDocumentPage() {
           </button>
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Label Documents</p>
-            <h2 className="text-base font-semibold text-slate-950">
+            <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950">
               Order #{orderNo}
-              {order?.tenantId ? <span className="ml-2 text-xs font-medium text-slate-500">Tenant {order.tenantId}</span> : null}
+              {payload?.isReturn ? (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-amber-700">
+                  Return label
+                </span>
+              ) : null}
+              {order?.tenantId ? <span className="text-xs font-medium text-slate-500">Tenant {order.tenantId}</span> : null}
             </h2>
           </div>
         </div>

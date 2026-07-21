@@ -280,6 +280,7 @@ public class OrderController {
         payload.put("label", labelDetails);
         payload.put("shipper", shipper);
         payload.put("returnTo", returnTo);
+        payload.put("isReturn", order.getIsReturn() != null && "Y".equalsIgnoreCase(order.getIsReturn()));
 
         // ===== customs (international shipments only) =====
         // International when the destination country differs from the origin.
@@ -337,10 +338,30 @@ public class OrderController {
                     payload.put("packagePreset", pkg);
                 });
 
-        // Importer + broker are resolved AUTOMATICALLY from the client's profile
-        // for this destination country (client + ship-to country). No per-order
-        // or per-client single identity anymore.
-        if (international && clientCode != null && !shipToCountry.isEmpty()) {
+        // Importer + broker: a PER-SHIPMENT override on the order wins (it never
+        // touches the client's saved profile); otherwise resolve from the client's
+        // profile for this destination country.
+        String importerBrokerOverride = order.getImporterBrokerOverride();
+        if (international && importerBrokerOverride != null && !importerBrokerOverride.isBlank()) {
+            try {
+                Map<String, Object> ov = new com.fasterxml.jackson.databind.ObjectMapper()
+                        .readValue(importerBrokerOverride,
+                                new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                Object imp = ov.get("importer");
+                Object brk = ov.get("broker");
+                if (imp != null) {
+                    payload.put("importer", imp);
+                }
+                boolean namedBroker = brk instanceof Map
+                        && org.springframework.util.StringUtils.hasText(String.valueOf(((Map<?, ?>) brk).get("name")));
+                payload.put("brokerage", namedBroker ? "BROKER_SELECT" : "CARRIER_DEFAULT");
+                if (namedBroker) {
+                    payload.put("broker", brk);
+                }
+            } catch (Exception ignore) {
+                // malformed override → fall through to no importer/broker (rare)
+            }
+        } else if (international && clientCode != null && !shipToCountry.isEmpty()) {
             clientCustomsProfileRepository
                     .findByClientAndCountry(clientCode.trim().toUpperCase(), shipToCountry.toUpperCase())
                     .ifPresent(p -> {

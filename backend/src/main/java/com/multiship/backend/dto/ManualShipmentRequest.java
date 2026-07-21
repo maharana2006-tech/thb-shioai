@@ -14,14 +14,27 @@ import java.util.List;
 @Data
 public class ManualShipmentRequest {
 
-    /** Ship-from (sender). Falls back to the platform shipper defaults when blank. */
+    /** Ship-from (sender). For a RETURN this is the customer; for a shipment it's your warehouse. */
     private Address sender;
 
-    /** Ship-to (recipient). Required. */
+    /** Ship-to (recipient). For a RETURN this is your return address; for a shipment it's the customer. */
     private Address recipient;
 
-    /** carrier_account_ref id to bill — determines the carrier + credentials. Required. */
+    /** True = reverse/return label (customer ships back to you); false/null = normal outbound shipment. */
+    private Boolean isReturn;
+
+    /** Return label delivery type — PRINT | EMAIL (informational for now; finalised against the carrier sandbox). */
+    private String returnType;
+
+    /** carrier_account_ref id to bill — optional credential hint. */
     private Long accountId;
+
+    /** Carrier code (UPS/FEDEX/USPS) — used to resolve credentials when the bill-to account is typed manually. */
+    private String carrierCode;
+
+    /** Bill-to account number (may be typed manually). Credentials resolve from the matching
+     *  carrier account, or the carrier's platform account when the number isn't on file. */
+    private String accountNumber;
 
     /** shipping_service id (the chosen service level). Optional — falls back to the carrier default. */
     private Long serviceId;
@@ -60,6 +73,11 @@ public class ManualShipmentRequest {
     private String reasonForExport;
     /** 3-letter currency for the declared/unit values. */
     private String currency;
+
+    /** Per-shipment importer override (label-document keys) — overrides the client profile for THIS label only. */
+    private java.util.Map<String, Object> importer;
+    /** Per-shipment customs-broker override — overrides the client profile for THIS label only. */
+    private java.util.Map<String, Object> broker;
 
     @Data
     public static class Address {

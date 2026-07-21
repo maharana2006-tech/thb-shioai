@@ -31,5 +31,9 @@ public class OrderWithLinesDTO {
     private BigDecimal weight;
     private String goodsDesc;
     private LocalDate createdDate;
+    /** 'Y' when this is a reverse/return label. */
+    private String isReturn;
+    /** Per-shipment importer/broker override (JSON), or null to use the client profile. */
+    private String importerBrokerOverride;
     private List<OrderLineDTO> orderLines;
 }

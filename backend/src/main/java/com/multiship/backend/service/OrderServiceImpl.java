@@ -270,6 +270,8 @@ public class OrderServiceImpl implements OrderService {
                 .weight(entity.getWeight())
                 .goodsDesc(entity.getGoodsDesc())
                 .createdDate(entity.getCreatedDate())
+                .isReturn(entity.getIsReturn())
+                .importerBrokerOverride(entity.getImporterBrokerOverride())
                 .orderLines(lines)
                 .build();
 

@@ -203,6 +203,8 @@ export interface LabelDocumentPayload {
   carrierAccount?: OrderWithLinesPayload['carrierAccount']
   label: LabelDetails | null
   shipper: ShipperInfo
+  /** True when this is a reverse/return label. */
+  isReturn?: boolean
   /** International-only customs blocks resolved from the client's profile. */
   international?: boolean
   importer?: LabelImporter | null
@@ -352,7 +354,16 @@ export interface ManualShipmentItem {
 export interface ManualShipmentPayload {
   sender: ManualShipmentAddress
   recipient: ManualShipmentAddress
-  accountId: number
+  /** True = reverse/return label (customer ships back); false/omitted = normal outbound shipment. */
+  isReturn?: boolean
+  /** Return delivery type — PRINT | EMAIL. */
+  returnType?: string
+  /** Optional credential-account hint; resolved from accountNumber + carrierCode when absent. */
+  accountId?: number | null
+  /** Carrier (UPS/FEDEX/USPS) — needed to resolve credentials for a manually-typed account. */
+  carrierCode?: string
+  /** Bill-to account number (may be typed manually). */
+  accountNumber?: string
   serviceId?: number | null
   packagePresetId?: number | null
   length?: number | null
@@ -369,6 +380,9 @@ export interface ManualShipmentPayload {
   items?: ManualShipmentItem[]
   incoterms?: string
   reasonForExport?: string
+  /** Per-shipment importer/broker override (does not touch the client's saved profile). */
+  importer?: Record<string, string>
+  broker?: Record<string, string>
   currency?: string
 }
 
