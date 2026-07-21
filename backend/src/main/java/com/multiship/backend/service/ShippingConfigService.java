@@ -382,6 +382,12 @@ public class ShippingConfigService {
         if (p == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.VALIDATION_ERROR, "Package preset not found.");
         }
+        // A hand-created box is real data authored by the admin — tag it CUSTOM so
+        // it's never mistaken for demo/starter data (source=SEEDED) or carrier-synced
+        // packaging (source=CARRIER_SYNC/CARRIER_API). Edits keep the existing source.
+        if (id == null) {
+            p.setSource("CUSTOM");
+        }
         p.setName(request.getName().trim());
         p.setKind(carrierKind ? "CARRIER" : "CUSTOM");
         p.setCarrierPackageCode(carrierKind ? request.getCarrierPackageCode().trim() : null);

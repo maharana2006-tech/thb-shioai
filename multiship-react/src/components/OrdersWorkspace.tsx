@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
@@ -53,13 +53,19 @@ const BULK_FETCH_SIZE = 100
  * outline = "needs your input", amber outline = "recover from error".
  */
 const ACTION_BASE =
-  'inline-flex w-[132px] items-center justify-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[11px] font-semibold transition disabled:cursor-not-allowed'
+  'inline-flex min-w-[112px] items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-[11px] font-semibold transition disabled:cursor-not-allowed'
 const ACTION_SOLID =
-  'bg-[#1f150c] text-[#f4eede] hover:bg-[#412d15] disabled:bg-[#dcd4c4] disabled:text-white'
+  'bg-[#1f150c] text-[#f4eede] shadow-sm ring-1 ring-inset ring-white/10 hover:bg-[#412d15] disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none disabled:ring-0'
 const ACTION_OUTLINE =
-  'border border-[#412d15]/30 bg-white text-[#412d15] hover:border-[#412d15] hover:bg-[#412d15]/[0.04] disabled:opacity-50'
+  'border border-[#d8cbb0] bg-white text-[#412d15] hover:border-[#412d15] hover:bg-[#faf7f0] disabled:opacity-50'
 const ACTION_RETRY =
-  'border border-amber-400 bg-white text-amber-700 hover:border-amber-500 hover:bg-amber-50 disabled:opacity-50'
+  'border border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-400 hover:bg-amber-100 disabled:opacity-50'
+
+/** Toolbar button tokens — espresso/cream, consistent across the workspace. */
+const BTN_GHOST =
+  'inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+const BTN_PRIMARY =
+  'inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none'
 
 const relativeTime = (value?: string | null) => {
   if (!value) return null
@@ -610,43 +616,192 @@ export default function OrdersWorkspace() {
     sky: 'bg-sky-400',
   }
 
-  /** Clickable column header with sort arrows. */
-  const sortableHeader = (label: string, key: string) => (
-    <th className="px-2.5 py-3">
-      <button
-        type="button"
-        onClick={() => handleSort(key)}
-        className={`inline-flex items-center gap-1 uppercase tracking-[0.16em] transition hover:text-slate-950 ${
-          sortBy === key ? 'text-slate-950' : ''
-        }`}
-      >
-        {label}
-        {sortBy === key ? (
-          sortDirection === 'ASC' ? (
-            <FiArrowUp className="h-3 w-3" />
-          ) : (
-            <FiArrowDown className="h-3 w-3" />
-          )
-        ) : (
-          <span className="text-slate-300">↕</span>
-        )}
-      </button>
-    </th>
+  /** Compact per-column filter input (rendered in the filter row under the header). */
+  const filterInput = (key: 'orderNo' | 'customer' | 'city' | 'tracking', placeholder: string) => (
+    <input
+      value={columnFilters[key]}
+      onChange={(e) => setColumnFilter(key)(e.target.value)}
+      placeholder={placeholder}
+      className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2 py-1.5 text-[11.5px] font-medium normal-case tracking-normal text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f]"
+    />
   )
 
-  const filterCell = (key: 'orderNo' | 'customer' | 'city' | 'tracking', placeholder: string) => (
-    <th className="px-2 pb-2.5">
-      <input
-        value={columnFilters[key]}
-        onChange={(e) => setColumnFilter(key)(e.target.value)}
-        placeholder={placeholder}
-        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11.5px] font-medium normal-case tracking-normal text-slate-950 outline-none transition placeholder:text-slate-300 focus:border-sky-600"
-      />
-    </th>
+  const statusFilterSelect = (
+    <select
+      value={columnFilters.status}
+      onChange={(e) => setColumnFilter('status')(e.target.value)}
+      className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2 py-1.5 text-[11.5px] font-medium normal-case tracking-normal text-[#1f150c] outline-none transition focus:border-[#cdbf9f]"
+    >
+      <option value="">Any status</option>
+      <option value="PENDING">Pending</option>
+      <option value="GENERATED">Generated</option>
+      <option value="ERROR">Error</option>
+    </select>
   )
 
   const showStatusColumn = view === 'all'
   const showTracking = view === 'generated'
+
+  // ── Advanced table column model ────────────────────────────────────────────
+  // Each column declares a fixed pixel width so `table-fixed` + <colgroup>
+  // guarantees cells line up row-to-row. Text truncates (never wraps), numbers
+  // use tabular figures, and the Actions column stays pinned to the right.
+  type OrderColumn = {
+    id: string
+    header: string
+    sortKey?: string
+    width: number
+    /** Exactly one column per view is flexible: it absorbs slack so the table
+     *  fills the container on wide screens (actions flush right, no gap) and only
+     *  scrolls once the container drops below the fixed columns' total. */
+    flex?: boolean
+    align?: 'left' | 'right' | 'center'
+    cell: (order: Order) => ReactNode
+    filter?: ReactNode
+  }
+
+  const formatCreated = (value?: string | null) =>
+    value
+      ? new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : '—'
+
+  const columns: OrderColumn[] = []
+
+  if (view === 'ready') {
+    columns.push({
+      id: 'select',
+      header: '',
+      width: 44,
+      align: 'center',
+      cell: (order) => (
+        <input
+          type="checkbox"
+          checked={selectedOrderNos.includes(order.orderDetails.orderNo)}
+          onChange={() => toggleOrder(order.orderDetails.orderNo)}
+          className="h-4 w-4 rounded border-[#cdbf9f] text-[#1f150c] focus:ring-[#e3d9c4]"
+        />
+      ),
+    })
+  }
+
+  columns.push({
+    id: 'orderNo',
+    header: 'Order #',
+    sortKey: 'orderNo',
+    width: 100,
+    cell: (order) => (
+      <span className="font-mono text-[12.5px] font-bold tabular-nums text-[#1f150c]">
+        #{order.orderDetails.orderNo}
+      </span>
+    ),
+    filter: filterInput('orderNo', 'e.g. 11153'),
+  })
+
+  columns.push({
+    id: 'client',
+    header: 'Client',
+    sortKey: 'customer',
+    width: 116,
+    cell: (order) => (
+      <span className="block truncate font-mono text-[12px] font-semibold text-[#5a4526]">
+        {order.orderDetails.customerCode}
+      </span>
+    ),
+    filter: filterInput('customer', 'e.g. ARHDEV'),
+  })
+
+  columns.push({
+    id: 'destination',
+    header: 'Destination',
+    sortKey: 'city',
+    width: 190,
+    flex: showTracking, // in the Archive/generated view (no carrier column) destination absorbs slack
+    cell: (order) => {
+      const dest = `${order.shippingDetails.city}, ${order.shippingDetails.state}`
+      return (
+        <span className="block truncate text-[12.5px] text-[#3f3527]" title={dest}>
+          {dest}
+        </span>
+      )
+    },
+    filter: filterInput('city', 'city or state'),
+  })
+
+  if (showStatusColumn) {
+    columns.push({
+      id: 'status',
+      header: 'Status',
+      sortKey: 'status',
+      width: 128,
+      cell: (order) => <OrderStatusBadge status={order.labelDetails.status} />,
+      filter: statusFilterSelect,
+    })
+    columns.push({
+      id: 'created',
+      header: 'Created',
+      sortKey: 'createdDate',
+      width: 108,
+      cell: (order) => (
+        <span className="whitespace-nowrap text-[12px] text-[#8a7959]">
+          {formatCreated(order.orderDetails.createdDate)}
+        </span>
+      ),
+    })
+  }
+
+  if (showTracking) {
+    columns.push({
+      id: 'tracking',
+      header: 'Tracking',
+      sortKey: 'tracking',
+      width: 160,
+      cell: (order) => (
+        <span
+          className="block truncate font-mono text-[12px] text-[#5a4526]"
+          title={order.labelDetails.trackingNumber || undefined}
+        >
+          {order.labelDetails.trackingNumber || '—'}
+        </span>
+      ),
+      filter: filterInput('tracking', 'tracking #'),
+    })
+    columns.push({
+      id: 'generatedAt',
+      header: 'Generated',
+      sortKey: 'generatedAt',
+      width: 124,
+      cell: (order) => (
+        <span className="whitespace-nowrap text-[12px] text-[#8a7959]">
+          {relativeTime(order.labelDetails.generatedAt) || '—'}
+        </span>
+      ),
+    })
+  } else {
+    columns.push({
+      id: 'carrierAccount',
+      header: 'Carrier account',
+      width: 200,
+      flex: true, // absorbs slack so the table fills wide screens
+      cell: (order) => <AccountScenarioBadge resolution={order.accountResolution ?? undefined} />,
+    })
+  }
+
+  if (view === 'failed') {
+    columns.push({
+      id: 'failure',
+      header: 'Failure reason',
+      width: 240,
+      cell: (order) => (
+        <span className="line-clamp-2 text-[11.5px] leading-4 text-rose-700">
+          {order.errorDetails?.errorMessage || 'Unknown failure'}
+        </span>
+      ),
+    })
+  }
+
+  const actionsWidth = showTracking ? 248 : 200
+  const alignClass = (align?: 'left' | 'right' | 'center') =>
+    align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
 
   return (
     <div className="space-y-4 pb-24">
@@ -656,11 +811,7 @@ export default function OrdersWorkspace() {
         description="Every order in one queue — generate in bulk, fix exceptions inline, review the archive."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={refreshQueues}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
-            >
+            <button type="button" onClick={refreshQueues} className={BTN_GHOST}>
               <FiRefreshCw className="h-3.5 w-3.5" />
               Refresh
             </button>
@@ -670,7 +821,7 @@ export default function OrdersWorkspace() {
                 void generateAllReady()
               }}
               disabled={busy || !readyCount}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+              className={BTN_PRIMARY}
             >
               <FiZap className="h-3.5 w-3.5" />
               Generate all ready ({readyCount})
@@ -683,7 +834,7 @@ export default function OrdersWorkspace() {
       {/* ===== workspace card ===== */}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center gap-2.5">
-          <div className="mr-auto flex flex-wrap gap-0.5 rounded-lg border border-slate-200/70 bg-slate-100 p-0.5" role="tablist">
+          <div className="mr-auto flex flex-wrap gap-0.5 rounded-xl border border-[#e3d9c4] bg-[#f4eede]/60 p-1" role="tablist">
             {tabs.map((t) => (
               <button
                 key={t.key}
@@ -694,13 +845,21 @@ export default function OrdersWorkspace() {
                   setView(t.key)
                   setSelectedOrderNos([])
                 }}
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-semibold transition ${
-                  view === t.key ? 'bg-white text-[#1f150c] shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-semibold transition ${
+                  view === t.key
+                    ? 'bg-white text-[#1f150c] shadow-sm ring-1 ring-[#e3d9c4]'
+                    : 'text-[#8a7959] hover:text-[#412d15]'
                 }`}
               >
                 {t.tone !== 'slate' ? <span className={`h-1.5 w-1.5 rounded-full ${dotTone[t.tone]}`} /> : null}
                 {t.label}
-                <span className="font-mono text-[11px] font-semibold tabular-nums text-slate-400">{t.count}</span>
+                <span
+                  className={`font-mono text-[11px] font-semibold tabular-nums ${
+                    view === t.key ? 'text-[#8a7959]' : 'text-[#b6a684]'
+                  }`}
+                >
+                  {t.count}
+                </span>
               </button>
             ))}
           </div>
@@ -711,7 +870,7 @@ export default function OrdersWorkspace() {
               onClick={() =>
                 setSelectedOrderNos(allSelected ? [] : selectableVisible.map((o) => o.orderDetails.orderNo))
               }
-              className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+              className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
             >
               {allSelected ? 'Clear selection' : `Select all (${selectableVisible.length})`}
             </button>
@@ -720,20 +879,20 @@ export default function OrdersWorkspace() {
 
         {/* ===== filters row ===== */}
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <label className="flex min-w-[210px] flex-1 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 sm:max-w-xs">
-            <FiSearch className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+          <label className="flex min-w-[210px] flex-1 items-center gap-2 rounded-xl border border-[#e3d9c4] bg-[#faf7f0] px-3 py-2 transition focus-within:border-[#cdbf9f] sm:max-w-xs">
+            <FiSearch className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search order #, client, city, tracking…"
-              className="w-full bg-transparent text-[12.5px] text-slate-950 outline-none"
+              className="w-full bg-transparent text-[12.5px] text-[#1f150c] outline-none placeholder:text-[#b6a684]"
             />
           </label>
 
           <select
             value={clientFilter}
             onChange={(e) => setClientFilter(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-[12px] font-semibold text-slate-600 outline-none transition focus:border-sky-600"
+            className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-2 text-[12px] font-semibold text-[#5a4526] outline-none transition focus:border-[#cdbf9f]"
             aria-label="Filter by client"
           >
             <option value="">All clients</option>
@@ -744,25 +903,25 @@ export default function OrdersWorkspace() {
             ))}
           </select>
 
-          <label className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-500">
+          <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#8a7959]">
             From
             <input
               type="date"
               value={dateFrom}
               max={dateTo || undefined}
               onChange={(e) => setDateFrom(e.target.value)}
-              className="bg-transparent text-[12px] font-medium text-slate-950 outline-none"
+              className="bg-transparent text-[12px] font-medium text-[#1f150c] outline-none"
               aria-label="Created from date"
             />
           </label>
-          <label className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-500">
+          <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#8a7959]">
             To
             <input
               type="date"
               value={dateTo}
               min={dateFrom || undefined}
               onChange={(e) => setDateTo(e.target.value)}
-              className="bg-transparent text-[12px] font-medium text-slate-950 outline-none"
+              className="bg-transparent text-[12px] font-medium text-[#1f150c] outline-none"
               aria-label="Created to date"
             />
           </label>
@@ -773,8 +932,8 @@ export default function OrdersWorkspace() {
             aria-pressed={showFilters}
             className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-2 text-[12px] font-semibold transition ${
               showFilters || activeFilterCount
-                ? 'bg-[#1f150c] text-white'
-                : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                ? 'bg-[#1f150c] text-[#f4eede] shadow-sm'
+                : 'border border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
             }`}
           >
             <FiFilter className="h-3.5 w-3.5" />
@@ -788,7 +947,7 @@ export default function OrdersWorkspace() {
             <button
               type="button"
               onClick={clearColumnFilters}
-              className="rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-[12px] font-semibold text-slate-600 transition hover:bg-slate-50"
+              className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-2 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
             >
               Clear
             </button>
@@ -796,146 +955,88 @@ export default function OrdersWorkspace() {
         </div>
 
         {/* manifest caption strip */}
-        <div className="mt-3.5 flex items-center justify-between border-b border-dashed border-slate-200 pb-1.5">
-          <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-slate-400">
+        <div className="mt-3.5 flex items-center justify-between border-b border-dashed border-[#e3d9c4] pb-1.5">
+          <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
             Order manifest
           </span>
-          <span className="font-mono text-[9px] font-bold uppercase tracking-[0.16em] tabular-nums text-slate-400">
+          <span className="font-mono text-[9px] font-bold uppercase tracking-[0.16em] tabular-nums text-[#b6a684]">
             {rows.length} {rows.length === 1 ? 'line' : 'lines'}
           </span>
         </div>
 
         <div className="mt-2 overflow-x-auto">
-          <table className="w-full min-w-[880px] text-[13px] text-slate-700">
-            <thead className="border-b border-dashed border-slate-300 text-left font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400">
-              <tr>
-                {view === 'ready' ? <th className="px-2.5 py-3">Select</th> : null}
-                {sortableHeader('Order #', 'orderNo')}
-                {sortableHeader('Client', 'customer')}
-                {sortableHeader('Destination', 'city')}
-                {showStatusColumn ? sortableHeader('Status', 'status') : null}
-                {showStatusColumn ? sortableHeader('Created', 'createdDate') : null}
-                {showTracking ? (
-                  <>
-                    {sortableHeader('Tracking', 'tracking')}
-                    {sortableHeader('Generated', 'generatedAt')}
-                  </>
-                ) : (
-                  <th className="px-2.5 py-3">Carrier account</th>
-                )}
-                {view === 'failed' ? <th className="px-2.5 py-3">Failure reason</th> : null}
-                <th className="px-2.5 py-3 text-right">Actions</th>
+          <table className="w-full min-w-[1040px] table-fixed border-collapse text-[13px] text-[#3f3527]">
+            <colgroup>
+              {columns.map((col) => (
+                <col key={col.id} style={col.flex ? undefined : { width: `${col.width}px` }} />
+              ))}
+              <col style={{ width: `${actionsWidth}px` }} />
+            </colgroup>
+
+            <thead>
+              <tr className="border-b border-dashed border-[#d8cbb0] font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-[#a1906d]">
+                {columns.map((col) => (
+                  <th key={col.id} className={`px-2.5 py-3 align-middle ${alignClass(col.align)}`}>
+                    {col.sortKey ? (
+                      <button
+                        type="button"
+                        onClick={() => handleSort(col.sortKey!)}
+                        className={`inline-flex items-center gap-1 uppercase tracking-[0.16em] transition hover:text-[#1f150c] ${
+                          sortBy === col.sortKey ? 'text-[#1f150c]' : ''
+                        }`}
+                      >
+                        {col.header}
+                        {sortBy === col.sortKey ? (
+                          sortDirection === 'ASC' ? (
+                            <FiArrowUp className="h-3 w-3" />
+                          ) : (
+                            <FiArrowDown className="h-3 w-3" />
+                          )
+                        ) : (
+                          <span className="text-[#cdbf9f]">↕</span>
+                        )}
+                      </button>
+                    ) : (
+                      col.header
+                    )}
+                  </th>
+                ))}
+                <th className="sticky right-0 z-20 bg-white px-2.5 py-3 text-right align-middle shadow-[-10px_0_12px_-10px_rgba(31,21,12,0.14)]">
+                  Actions
+                </th>
               </tr>
 
               {showFilters ? (
-                <tr className="border-b border-dashed border-slate-200 bg-slate-50/60">
-                  {view === 'ready' ? <th className="px-2 pb-2.5" /> : null}
-                  {filterCell('orderNo', 'e.g. 11153')}
-                  {filterCell('customer', 'e.g. ARHDEV')}
-                  {filterCell('city', 'city or state')}
-                  {showStatusColumn ? (
-                    <th className="px-2 pb-2.5">
-                      <select
-                        value={columnFilters.status}
-                        onChange={(e) => setColumnFilter('status')(e.target.value)}
-                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11.5px] font-medium normal-case tracking-normal text-slate-950 outline-none transition focus:border-sky-600"
-                      >
-                        <option value="">Any status</option>
-                        <option value="PENDING">Pending</option>
-                        <option value="GENERATED">Generated</option>
-                        <option value="ERROR">Error</option>
-                      </select>
+                <tr className="border-b border-dashed border-[#e3d9c4] bg-[#faf7f0]/70">
+                  {columns.map((col) => (
+                    <th key={col.id} className="px-2 pb-2.5 align-middle">
+                      {col.filter ?? null}
                     </th>
-                  ) : null}
-                  {showStatusColumn ? <th className="px-2 pb-2.5" /> : null}
-                  {showTracking ? (
-                    <>
-                      {filterCell('tracking', 'tracking #')}
-                      <th className="px-2 pb-2.5" />
-                    </>
-                  ) : (
-                    <th className="px-2 pb-2.5" />
-                  )}
-                  {view === 'failed' ? <th className="px-2 pb-2.5" /> : null}
-                  <th className="px-2 pb-2.5" />
+                  ))}
+                  <th className="sticky right-0 z-20 bg-[#faf7f0] px-2 pb-2.5 shadow-[-10px_0_12px_-10px_rgba(31,21,12,0.14)]" />
                 </tr>
               ) : null}
             </thead>
-            <tbody className="divide-y divide-dashed divide-slate-200">
+
+            <tbody className="divide-y divide-dashed divide-[#e6dcc7]">
               {rows.map((order) => {
                 const orderNo = order.orderDetails.orderNo
-                const resolution = order.accountResolution ?? null
 
                 return (
-                  <tr key={orderNo} className="transition hover:bg-[#faf7f0]">
-                    {view === 'ready' ? (
-                      <td className="px-2.5 py-3">
-                        <input
-                          type="checkbox"
-                          checked={selectedOrderNos.includes(orderNo)}
-                          onChange={() => toggleOrder(orderNo)}
-                          className="h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
-                        />
+                  <tr key={orderNo} className="group transition hover:bg-[#faf7f0]">
+                    {columns.map((col) => (
+                      <td key={col.id} className={`px-2.5 py-3 align-middle ${alignClass(col.align)}`}>
+                        {col.cell(order)}
                       </td>
-                    ) : null}
-                    <td className="px-2.5 py-3">
-                      <span className="font-mono text-[12.5px] font-bold text-[#1f150c]">#{orderNo}</span>
-                    </td>
-                    <td className="px-2.5 py-3 font-mono text-[12px] font-semibold text-slate-600">
-                      {order.orderDetails.customerCode}
-                    </td>
-                    <td className="px-2.5 py-3">
-                      {order.shippingDetails.city}, {order.shippingDetails.state}
-                    </td>
-
-                    {showStatusColumn ? (
-                      <td className="px-2.5 py-3">
-                        <OrderStatusBadge status={order.labelDetails.status} />
-                      </td>
-                    ) : null}
-                    {showStatusColumn ? (
-                      <td className="px-2.5 py-3 text-[12px] text-slate-500">
-                        {order.orderDetails.createdDate
-                          ? new Date(order.orderDetails.createdDate).toLocaleDateString('en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                              year: 'numeric',
-                            })
-                          : '—'}
-                      </td>
-                    ) : null}
-
-                    {showTracking ? (
-                      <>
-                        <td className="px-2.5 py-3 font-mono text-[12px] text-slate-600">
-                          {order.labelDetails.trackingNumber || '—'}
-                        </td>
-                        <td className="px-2.5 py-3 text-[12px] text-slate-500">
-                          {relativeTime(order.labelDetails.generatedAt) || '—'}
-                        </td>
-                      </>
-                    ) : (
-                      <td className="px-2.5 py-3">
-                        <AccountScenarioBadge resolution={resolution ?? undefined} />
-                      </td>
-                    )}
-
-                    {view === 'failed' ? (
-                      <td className="max-w-[260px] px-2.5 py-3">
-                        <span className="line-clamp-2 text-[11.5px] leading-4 text-rose-700">
-                          {order.errorDetails?.errorMessage || 'Unknown failure'}
-                        </span>
-                      </td>
-                    ) : null}
-
-                    <td className="px-2.5 py-3 text-right">
+                    ))}
+                    <td className="sticky right-0 z-10 bg-white px-2.5 py-3 text-right align-middle shadow-[-10px_0_12px_-10px_rgba(31,21,12,0.14)] transition group-hover:bg-[#faf7f0]">
                       <span className="inline-flex items-center justify-end gap-1.5">
                         {view === 'generated' && order.labelDetails.trackingUrl ? (
                           <a
                             href={order.labelDetails.trackingUrl}
                             target="_blank"
                             rel="noreferrer"
-                            className="inline-flex items-center gap-1.5 rounded-xl border border-[#e6dcc7] bg-[#faf7f0] px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#dccfb4] hover:bg-[#f2ebda]"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-[#e6dcc7] bg-[#faf7f0] px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#dccfb4] hover:bg-[#f2ebda]"
                           >
                             <FiExternalLink className="h-3 w-3" />
                             Track
@@ -945,7 +1046,7 @@ export default function OrdersWorkspace() {
                           type="button"
                           onClick={() => setDetailsOrderNo(orderNo)}
                           aria-label={`Details for order ${orderNo}`}
-                          className="rounded-xl border border-[#e6dcc7] bg-[#faf7f0] p-1.5 text-[#8a7959] transition hover:border-[#dccfb4] hover:bg-[#f2ebda] hover:text-[#412d15]"
+                          className="rounded-lg border border-[#e6dcc7] bg-[#faf7f0] p-1.5 text-[#8a7959] transition hover:border-[#dccfb4] hover:bg-[#f2ebda] hover:text-[#412d15]"
                         >
                           <FiFileText className="h-3.5 w-3.5" />
                         </button>
@@ -958,7 +1059,7 @@ export default function OrdersWorkspace() {
 
               {!rows.length ? (
                 <tr>
-                  <td colSpan={9} className="px-2.5 py-14 text-center text-sm text-slate-500">
+                  <td colSpan={columns.length + 1} className="px-2.5 py-14 text-center text-sm text-[#8a7959]">
                     {loading ? (
                       'Loading orders…'
                     ) : debouncedQuery || clientFilter || activeFilterCount ? (
@@ -1033,7 +1134,7 @@ export default function OrdersWorkspace() {
                     )
                   }}
                   disabled={busy}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+                  className={BTN_PRIMARY}
                 >
                   <FiZap className="h-3.5 w-3.5" />
                   Generate selected
@@ -1042,7 +1143,7 @@ export default function OrdersWorkspace() {
                   type="button"
                   onClick={() => setSelectedOrderNos([])}
                   aria-label="Clear selection"
-                  className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
+                  className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#8a7959] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
                 >
                   <FiX className="h-3.5 w-3.5" />
                 </button>

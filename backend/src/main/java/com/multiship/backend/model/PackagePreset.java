@@ -57,10 +57,11 @@ public class PackagePreset {
     @Column(name = "origin_country", length = 2)
     private String originCountry;
 
-    /** SEEDED (starter) | CARRIER_SYNC (built-in availability) | CARRIER_API (live carrier response). */
+    /** CUSTOM (admin-created box) | CARRIER_SYNC (built-in availability) | CARRIER_API (live carrier response).
+     *  Legacy demo rows used SEEDED; that path no longer produces data. */
     @Column(length = 20)
     @Builder.Default
-    private String source = "SEEDED";
+    private String source = "CUSTOM";
 
     /** DOMESTIC | INTERNATIONAL | BOTH — the lanes this packaging is valid on. */
     @Column(length = 15)

@@ -14,14 +14,16 @@ export default function AuthField({
   hint,
   icon,
   id,
+  type,
   className = '',
   ...inputProps
 }: AuthFieldProps) {
   const generatedId = useId()
   const fieldId = id ?? generatedId
   const [showPassword, setShowPassword] = useState(false)
-  const isPasswordField = inputProps.type === 'password'
-  const resolvedType = isPasswordField ? (showPassword ? 'text' : 'password') : inputProps.type
+  const isPasswordField = type === 'password'
+  // Pull `type` out of the spread props so it can't override the toggle below.
+  const resolvedType = isPasswordField ? (showPassword ? 'text' : 'password') : type
 
   return (
     <div className="space-y-1.5">

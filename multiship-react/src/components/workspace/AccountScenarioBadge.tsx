@@ -1,11 +1,26 @@
 import { FiAlertCircle, FiCheckCircle, FiEdit3, FiPackage, FiXCircle } from 'react-icons/fi'
+import type { ReactNode } from 'react'
 import type { OrderAccountResolution } from '../../api/accountRefService'
 import { formatCarrierName } from '../../utils/carrierUtils'
 
+/** Single-line chip: icon stays fixed, label truncates with an ellipsis + hover title. */
+function Chip({ tone, icon, label }: { tone: string; icon?: ReactNode; label: string }) {
+  return (
+    <span
+      title={label}
+      className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${tone}`}
+    >
+      {icon ? <span className="shrink-0">{icon}</span> : null}
+      <span className="truncate">{label}</span>
+    </span>
+  )
+}
+
 /**
- * Colored badge showing which carrier account an order will ship with:
- * green = client's own account, teal = saved reference, blue = company default,
- * amber = details needed, red = nothing available.
+ * Colored chip showing which carrier account an order will ship with:
+ * green = client's own account, teal = saved reference, blue = default,
+ * amber = details needed, red = nothing available. Always one line — the
+ * label truncates so table columns stay aligned.
  */
 export default function AccountScenarioBadge({
   resolution,
@@ -13,79 +28,70 @@ export default function AccountScenarioBadge({
   resolution: OrderAccountResolution | undefined
 }) {
   if (!resolution) {
-    return (
-      <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-400">
-        Checking…
-      </span>
-    )
+    return <Chip tone="bg-slate-100 text-slate-400" label="Checking…" />
   }
 
   const carrier = formatCarrierName(resolution.carrierCode)
+  const named = resolution.accountName || `${carrier} ${resolution.accountNumber}`
 
   switch (resolution.scenario) {
     case 'ORDER':
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
-          <FiCheckCircle className="h-3 w-3" />
-          Client account • {carrier} {resolution.accountNumber}
-        </span>
+        <Chip
+          tone="bg-emerald-100 text-emerald-700"
+          icon={<FiCheckCircle className="h-3 w-3" />}
+          label={`Client account • ${carrier} ${resolution.accountNumber}`}
+        />
       )
     case 'REFERENCE':
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-teal-100 px-2.5 py-1 text-[11px] font-semibold text-teal-700">
-          <FiCheckCircle className="h-3 w-3" />
-          Saved account • {resolution.accountName || `${carrier} ${resolution.accountNumber}`}
-        </span>
+        <Chip
+          tone="bg-teal-100 text-teal-700"
+          icon={<FiCheckCircle className="h-3 w-3" />}
+          label={`Saved account • ${named}`}
+        />
       )
     case 'CLIENT_DEFAULT':
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-semibold text-sky-700">
-          <FiCheckCircle className="h-3 w-3" />
-          Client default • {resolution.accountName || `${carrier} ${resolution.accountNumber}`}
-        </span>
+        <Chip
+          tone="bg-sky-100 text-sky-700"
+          icon={<FiCheckCircle className="h-3 w-3" />}
+          label={`Client default • ${named}`}
+        />
       )
     case 'CHOOSE_ACCOUNT':
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-semibold text-sky-700">
-          <FiEdit3 className="h-3 w-3" />
-          Pick an account
-        </span>
+        <Chip tone="bg-sky-100 text-sky-700" icon={<FiEdit3 className="h-3 w-3" />} label="Pick an account" />
       )
     case 'CLIENT_MISSING':
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-semibold text-violet-700">
-          <FiAlertCircle className="h-3 w-3" />
-          Client not registered
-        </span>
+        <Chip
+          tone="bg-violet-100 text-violet-700"
+          icon={<FiAlertCircle className="h-3 w-3" />}
+          label="Client not registered"
+        />
       )
     case 'CLIENT_INACTIVE':
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-          <FiXCircle className="h-3 w-3" />
-          Client inactive
-        </span>
+        <Chip tone="bg-slate-200 text-slate-600" icon={<FiXCircle className="h-3 w-3" />} label="Client inactive" />
       )
     case 'DEFAULT':
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-semibold text-sky-700">
-          <FiPackage className="h-3 w-3" />
-          Default • {resolution.accountName || `${carrier} ${resolution.accountNumber}`}
-        </span>
+        <Chip tone="bg-sky-100 text-sky-700" icon={<FiPackage className="h-3 w-3" />} label={`Default • ${named}`} />
       )
     case 'NEEDS_DETAILS':
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
-          <FiEdit3 className="h-3 w-3" />
-          Needs details{resolution.accountNumber ? ` • ${resolution.accountNumber}` : ''}
-        </span>
+        <Chip
+          tone="bg-amber-100 text-amber-700"
+          icon={<FiEdit3 className="h-3 w-3" />}
+          label={`Needs details${resolution.accountNumber ? ` • ${resolution.accountNumber}` : ''}`}
+        />
       )
     case 'NO_DEFAULT':
+      return <Chip tone="bg-rose-100 text-rose-700" icon={<FiXCircle className="h-3 w-3" />} label="No default set" />
     default:
       return (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-semibold text-rose-700">
-          {resolution.scenario === 'NO_DEFAULT' ? <FiXCircle className="h-3 w-3" /> : <FiAlertCircle className="h-3 w-3" />}
-          No default set
-        </span>
+        <Chip tone="bg-rose-100 text-rose-700" icon={<FiAlertCircle className="h-3 w-3" />} label="No default set" />
       )
   }
 }
