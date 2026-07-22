@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3 } from 'react-icons/fi'
+import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import {
   orderService,
@@ -13,6 +13,7 @@ import { accountRefService, type CarrierAccountRef } from '../api/accountRefServ
 import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
 import { shippingConfigService, type ShippingServiceItem, type PackagePreset } from '../api/shippingConfigService'
+import { addressService } from '../api/addressService'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import ShipmentPartiesOverrideModal, { type Party } from './modals/ShipmentPartiesOverrideModal'
 
@@ -25,11 +26,40 @@ const canon = (c?: string | null) => {
   return v
 }
 
-const COUNTRIES = [
+const COUNTRIES: [string, string][] = [
   ['US', 'United States'], ['CA', 'Canada'], ['MX', 'Mexico'], ['GB', 'United Kingdom'],
-  ['DE', 'Germany'], ['FR', 'France'], ['NL', 'Netherlands'], ['IT', 'Italy'], ['ES', 'Spain'],
-  ['IN', 'India'], ['CN', 'China'], ['JP', 'Japan'], ['AU', 'Australia'], ['SG', 'Singapore'], ['BR', 'Brazil'],
+  ['IE', 'Ireland'], ['FR', 'France'], ['DE', 'Germany'], ['NL', 'Netherlands'], ['BE', 'Belgium'],
+  ['LU', 'Luxembourg'], ['IT', 'Italy'], ['ES', 'Spain'], ['PT', 'Portugal'], ['CH', 'Switzerland'],
+  ['AT', 'Austria'], ['DK', 'Denmark'], ['SE', 'Sweden'], ['NO', 'Norway'], ['FI', 'Finland'],
+  ['PL', 'Poland'], ['CZ', 'Czechia'], ['HU', 'Hungary'], ['RO', 'Romania'], ['GR', 'Greece'],
+  ['IN', 'India'], ['CN', 'China'], ['HK', 'Hong Kong'], ['JP', 'Japan'], ['KR', 'South Korea'],
+  ['SG', 'Singapore'], ['MY', 'Malaysia'], ['TH', 'Thailand'], ['VN', 'Vietnam'], ['ID', 'Indonesia'],
+  ['PH', 'Philippines'], ['AE', 'United Arab Emirates'], ['SA', 'Saudi Arabia'], ['IL', 'Israel'],
+  ['TR', 'Turkey'], ['ZA', 'South Africa'], ['NG', 'Nigeria'], ['EG', 'Egypt'], ['KE', 'Kenya'],
+  ['AU', 'Australia'], ['NZ', 'New Zealand'], ['BR', 'Brazil'], ['AR', 'Argentina'], ['CL', 'Chile'],
+  ['CO', 'Colombia'], ['PE', 'Peru'],
 ]
+const COUNTRY_NAME: Record<string, string> = Object.fromEntries(COUNTRIES)
+
+/** Reason-for-export choices, shown at the top of the shipment. */
+const EXPORT_REASONS = ['SALE', 'GIFT', 'SAMPLE', 'RETURN', 'REPAIR', 'PERSONAL']
+const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'INR', 'AUD', 'SGD', 'JPY', 'CNY', 'AED']
+
+/** Persist the last-used value for a field so it prefills next time (sticky default). */
+const readSticky = (key: string, fallback: string) => {
+  try {
+    return localStorage.getItem(key) || fallback
+  } catch {
+    return fallback
+  }
+}
+const writeSticky = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    /* ignore storage errors */
+  }
+}
 
 const CARRIER_LABEL: Record<string, string> = { UPS: 'UPS', FEDEX: 'FedEx', USPS: 'USPS' }
 
@@ -76,6 +106,67 @@ function SectionCard({ icon, title, badge, note, children }: { icon: ReactNode; 
   )
 }
 
+/** Searchable country dropdown — type to filter, click to select. */
+function CountrySelect({ value, onChange }: { value: string; onChange: (code: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const selectedName = COUNTRY_NAME[value] || value || ''
+  const q = query.trim().toLowerCase()
+  const matches = q
+    ? COUNTRIES.filter(([code, name]) => name.toLowerCase().includes(q) || code.toLowerCase().includes(q))
+    : COUNTRIES
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#b6a684]" />
+        <input
+          className={`${inputCls} pl-8`}
+          value={open ? query : selectedName ? `${selectedName} (${value})` : ''}
+          placeholder="Search country…"
+          onFocus={() => {
+            setOpen(true)
+            setQuery('')
+          }}
+          onChange={(e) => {
+            setOpen(true)
+            setQuery(e.target.value)
+          }}
+          onBlur={() => setTimeout(() => setOpen(false), 120)}
+          autoComplete="off"
+        />
+      </div>
+      {open ? (
+        <ul className="absolute z-40 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-[#e3d9c4] bg-white py-1 shadow-lg">
+          {matches.length === 0 ? (
+            <li className="px-3 py-2 text-[12px] text-[#b6a684]">No match</li>
+          ) : (
+            matches.map(([code, name]) => (
+              <li key={code}>
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    onChange(code)
+                    setOpen(false)
+                    setQuery('')
+                  }}
+                  className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-[12.5px] hover:bg-[#faf7f0] ${
+                    code === value ? 'font-semibold text-[#1f150c]' : 'text-[#5a4526]'
+                  }`}
+                >
+                  <span>{name}</span>
+                  <span className="font-mono text-[10px] text-[#b6a684]">{code}</span>
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
+
 function AddressBlock({
   value,
   onChange,
@@ -109,11 +200,7 @@ function AddressBlock({
         <input className={inputCls} value={value.postalCode} onChange={(e) => onChange({ postalCode: e.target.value })} placeholder="14201" />
       </Field>
       <Field label="Country" required>
-        <select className={inputCls} value={value.countryCode} onChange={(e) => onChange({ countryCode: e.target.value })}>
-          {COUNTRIES.map(([code, name]) => (
-            <option key={code} value={code}>{name} ({code})</option>
-          ))}
-        </select>
+        <CountrySelect value={value.countryCode} onChange={(code) => onChange({ countryCode: code })} />
       </Field>
       <Field label="Phone">
         <input className={inputCls} value={value.phone} onChange={(e) => onChange({ phone: e.target.value })} placeholder="2125550100" />
@@ -156,22 +243,28 @@ export default function NewShipmentPage() {
   const [carrier, setCarrier] = useState('')
   const [accountNumber, setAccountNumber] = useState('') // bill-to account, manually editable
   const [serviceId, setServiceId] = useState<number | ''>('')
+  const [incoterms, setIncoterms] = useState('DDP') // DAP | DDP — who pays duties/taxes
   const [packageChoice, setPackageChoice] = useState<string>('') // preset id as string, or CUSTOM_PKG
   const [length, setLength] = useState('')
   const [width, setWidth] = useState('')
   const [height, setHeight] = useState('')
+  const [dimUnit, setDimUnit] = useState<'IN' | 'CM'>('IN')
   const [weight, setWeight] = useState('')
+  const [weightUnit, setWeightUnit] = useState<'LB' | 'KG'>('LB')
   const [declaredValue, setDeclaredValue] = useState('')
-  const [goodsDescription, setGoodsDescription] = useState('')
   const [clientCode, setClientCode] = useState('')
-  const [reference, setReference] = useState('')
+
+  // Recipient address validation result (from the Validate button).
+  const [recipientCheck, setRecipientCheck] = useState<{ valid: boolean; issues: string[] } | null>(null)
+  const [validating, setValidating] = useState(false)
 
   // International commercial-invoice line items (shown only for cross-border lanes).
-  type ItemRow = { description: string; hsCode: string; countryOfOrigin: string; quantity: string; unitValue: string; weight: string }
-  const blankItem = (): ItemRow => ({ description: '', hsCode: '', countryOfOrigin: '', quantity: '1', unitValue: '', weight: '' })
+  type ItemRow = { description: string; sku: string; hsCode: string; countryOfOrigin: string; quantity: string; unitValue: string }
+  const blankItem = (): ItemRow => ({ description: '', sku: '', hsCode: '', countryOfOrigin: '', quantity: '1', unitValue: '' })
   const [items, setItems] = useState<ItemRow[]>([blankItem()])
-  const [reasonForExport, setReasonForExport] = useState('SALE')
-  const [currency, setCurrency] = useState('USD')
+  // Reason of export + currency are sticky — they prefill from the last shipment.
+  const [reasonForExport, setReasonForExport] = useState(() => readSticky('ms:lastReason', 'SALE'))
+  const [currency, setCurrency] = useState(() => readSticky('ms:lastCurrency', 'USD'))
 
   useEffect(() => {
     let alive = true
@@ -226,6 +319,19 @@ export default function NewShipmentPage() {
     }
   }, [clientCode])
 
+  // Route: does this shipment cross a customs border? Drives which services/packages apply.
+  const EU = new Set([
+    'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT',
+    'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE',
+  ])
+  const sameTerritory = (a: string, b: string) => a === b || (EU.has(a) && EU.has(b))
+  const isInternational =
+    !!sender.countryCode &&
+    !!recipient.countryCode &&
+    !sameTerritory(sender.countryCode.toUpperCase(), recipient.countryCode.toUpperCase())
+  const neededScope: 'DOMESTIC' | 'INTERNATIONAL' = isInternational ? 'INTERNATIONAL' : 'DOMESTIC'
+  const scopeFits = (scope?: string | null) => !scope || scope === 'BOTH' || scope === neededScope
+
   const originMatch = (o?: string | null) => (o ?? 'US').toUpperCase() === (sender.countryCode || 'US').toUpperCase()
   const accountsForCarrier = useMemo(() => {
     const onCarrier = accounts.filter((a) => canon(a.carrierCode) === carrier)
@@ -233,13 +339,16 @@ export default function NewShipmentPage() {
     const own = onCarrier.filter((a) => (a.customerNo || '').toUpperCase() === clientCode.toUpperCase())
     return own.length ? own : onCarrier
   }, [accounts, carrier, clientCode])
+  // Services offered on THIS route: right carrier, ship-from country, and domestic/international scope.
   const servicesForCarrier = useMemo(
-    () => services.filter((s) => canon(s.carrier) === carrier && originMatch(s.originCountry)),
-    [services, carrier, sender.countryCode],
+    () => services.filter((s) => canon(s.carrier) === carrier && originMatch(s.originCountry) && scopeFits(s.scope)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [services, carrier, sender.countryCode, neededScope],
   )
   const packagesForCarrier = useMemo(
-    () => packages.filter((p) => p.kind === 'CARRIER' && canon(p.carrier) === carrier && originMatch(p.originCountry)),
-    [packages, carrier, sender.countryCode],
+    () => packages.filter((p) => p.kind === 'CARRIER' && canon(p.carrier) === carrier && originMatch(p.originCountry) && scopeFits(p.scope)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [packages, carrier, sender.countryCode, neededScope],
   )
   const customBoxes = useMemo(() => packages.filter((p) => p.kind !== 'CARRIER'), [packages])
 
@@ -257,8 +366,9 @@ export default function NewShipmentPage() {
           ? String(packagesForCarrier[0]?.id)
           : CUSTOM_PKG,
     )
+    // Re-validate account/service/package whenever the carrier, client, or route changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [carrier, clientCode])
+  }, [carrier, clientCode, accountsForCarrier, servicesForCarrier, packagesForCarrier])
 
   /**
    * Select a client: fill YOUR address on the correct side and auto-pick its
@@ -305,17 +415,6 @@ export default function NewShipmentPage() {
 
   const isCustomPkg = packageChoice === CUSTOM_PKG
 
-  // A commercial invoice (line items) is required only across a customs border.
-  const EU = new Set([
-    'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT',
-    'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE',
-  ])
-  const sameTerritory = (a: string, b: string) => a === b || (EU.has(a) && EU.has(b))
-  const isInternational =
-    !!sender.countryCode &&
-    !!recipient.countryCode &&
-    !sameTerritory(sender.countryCode.toUpperCase(), recipient.countryCode.toUpperCase())
-
   // Importer/broker resolve from the client's profile covering the destination country.
   const destCountry = (recipient.countryCode || '').toUpperCase()
   const importerProfile = useMemo(
@@ -356,10 +455,36 @@ export default function NewShipmentPage() {
     setOverride(null)
   }, [clientCode, destCountry])
 
+  // Sticky defaults: remember the last reason/currency for the next shipment.
+  useEffect(() => writeSticky('ms:lastReason', reasonForExport), [reasonForExport])
+  useEffect(() => writeSticky('ms:lastCurrency', currency), [currency])
+
+  // A changed recipient invalidates a previous validation result.
+  useEffect(() => {
+    setRecipientCheck(null)
+  }, [recipient.addressLine1, recipient.city, recipient.state, recipient.postalCode, recipient.countryCode])
+
+  /** Validate the ship-to address against the platform's address checks. */
+  const validateRecipient = async () => {
+    setValidating(true)
+    try {
+      const res = await addressService.validate(recipient)
+      const d = res.data
+      setRecipientCheck({ valid: !!d?.valid, issues: d?.issues ?? [] })
+      if (d?.valid) toast.success('Recipient address looks valid.')
+      else toast.error('Recipient address has issues.')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Address validation failed.')
+    } finally {
+      setValidating(false)
+    }
+  }
+
   const patchItem = (i: number, patch: Partial<ItemRow>) =>
     setItems((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
   const addItem = () => setItems((rows) => [...rows, blankItem()])
   const removeItem = (i: number) => setItems((rows) => (rows.length > 1 ? rows.filter((_, idx) => idx !== i) : rows))
+  const invoiceTotal = items.reduce((sum, it) => sum + (Number(it.quantity) || 0) * (Number(it.unitValue) || 0), 0)
 
   const submit = async () => {
     if (!carrier) return toast.error('Pick a carrier you have a verified account with.')
@@ -377,11 +502,11 @@ export default function NewShipmentPage() {
       .filter((it) => it.description.trim())
       .map((it) => ({
         description: it.description.trim(),
+        sku: it.sku.trim() || undefined,
         hsCode: it.hsCode.trim() || undefined,
         countryOfOrigin: it.countryOfOrigin.trim().toUpperCase() || undefined,
         quantity: it.quantity ? Number(it.quantity) : null,
         unitValue: it.unitValue ? Number(it.unitValue) : null,
-        weight: it.weight ? Number(it.weight) : null,
       }))
     if (isInternational) {
       if (!cleanItems.length) {
@@ -410,14 +535,12 @@ export default function NewShipmentPage() {
       length: isCustomPkg ? Number(length) : null,
       width: isCustomPkg ? Number(width) : null,
       height: isCustomPkg ? Number(height) : null,
-      dimUnit: 'IN',
+      dimUnit,
       weight: w,
-      weightUnit: 'LB',
+      weightUnit,
       clientCode: clientCode.trim() || undefined,
       declaredValue: declaredValue ? Number(declaredValue) : null,
-      goodsDescription: goodsDescription.trim() || undefined,
-      reference: reference.trim() || undefined,
-      ...(isInternational ? { items: cleanItems, reasonForExport, currency, incoterms: undefined } : {}),
+      ...(isInternational ? { items: cleanItems, reasonForExport, currency, incoterms } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
     }
 
@@ -494,14 +617,14 @@ export default function NewShipmentPage() {
               ) : null}
             </div>
 
-            {/* ── Client & carrier ── */}
+            {/* ── Top: client · reason of export · currency ── */}
             <SectionCard
               icon={<FiUsers className="h-3.5 w-3.5" />}
-              title="Client & carrier"
-              note="Choosing a client fills its ship-from and auto-selects its default carrier account."
+              title="Shipment"
+              note="Choosing a client fills its ship-from and auto-selects its default carrier account. Reason & currency remember your last choice."
             >
-              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                <Field label="Client" className="col-span-2 lg:col-span-1">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Field label="Client">
                   <select className={inputCls} value={clientCode} onChange={(e) => applyClient(e.target.value)}>
                     <option value="">No client — ad-hoc</option>
                     {clients.map((c) => (
@@ -518,36 +641,25 @@ export default function NewShipmentPage() {
                     ))}
                   </select>
                 </Field>
-                <Field label="Account (bill to)" required>
-                  <input
-                    className={inputCls}
-                    list="bill-to-accounts"
-                    value={accountNumber}
-                    onChange={(e) => setAccountNumber(e.target.value)}
-                    placeholder="Account number"
-                    autoComplete="off"
-                  />
-                  <datalist id="bill-to-accounts">
-                    {accountsForCarrier.map((a) => (
-                      <option key={a.id} value={a.accountNumber}>
-                        {a.accountName || a.accountNumber}
-                      </option>
+                <Field label="Reason of export">
+                  <select className={inputCls} value={reasonForExport} onChange={(e) => setReasonForExport(e.target.value)}>
+                    {EXPORT_REASONS.map((r) => (
+                      <option key={r} value={r}>{r.charAt(0) + r.slice(1).toLowerCase()}</option>
                     ))}
-                  </datalist>
+                  </select>
                 </Field>
-                <Field label="Service level" className="col-span-2 lg:col-span-1">
-                  <select className={inputCls} value={serviceId} onChange={(e) => setServiceId(e.target.value ? Number(e.target.value) : '')}>
-                    {servicesForCarrier.length === 0 ? <option value="">Carrier default</option> : null}
-                    {servicesForCarrier.map((s) => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
+                <Field label="Currency">
+                  <select className={inputCls} value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                    {CURRENCIES.map((c) => (
+                      <option key={c} value={c}>{c}</option>
                     ))}
                   </select>
                 </Field>
               </div>
             </SectionCard>
 
-            {/* ── Ship from / Ship to side by side ── */}
-            <div className="grid gap-4 lg:grid-cols-2">
+            {/* ── Addresses ── */}
+            <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
               <SectionCard
                 icon={<FiHome className="h-3.5 w-3.5" />}
                 title={isReturn ? 'Return from · customer' : 'Ship from · sender'}
@@ -557,15 +669,124 @@ export default function NewShipmentPage() {
               <SectionCard
                 icon={<FiMapPin className="h-3.5 w-3.5" />}
                 title={isReturn ? 'Return to · your address' : 'Ship to · recipient'}
+                badge={
+                  <button
+                    type="button"
+                    onClick={() => void validateRecipient()}
+                    disabled={validating}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                  >
+                    {validating ? (
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+                    ) : (
+                      <FiCheckCircle className="h-3.5 w-3.5" />
+                    )}
+                    Validate address
+                  </button>
+                }
               >
                 <AddressBlock value={recipient} onChange={(patch) => setRecipient((r) => ({ ...r, ...patch }))} withEmail={!isReturn} />
+                {recipientCheck ? (
+                  recipientCheck.valid ? (
+                    <div className="mt-3 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12px] font-medium text-emerald-800">
+                      <FiCheckCircle className="h-4 w-4 shrink-0" /> Address looks valid.
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800">
+                      <p className="flex items-center gap-2 font-semibold">
+                        <FiAlertTriangle className="h-4 w-4 shrink-0" /> Address needs attention
+                      </p>
+                      <ul className="mt-1 list-disc space-y-0.5 pl-6">
+                        {recipientCheck.issues.map((iss, idx) => (
+                          <li key={idx}>{iss}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )
+                ) : null}
               </SectionCard>
             </div>
 
+            {/* ── Carrier & package ── */}
+            <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+              <SectionCard
+                icon={<FiTruck className="h-3.5 w-3.5" />}
+                title="Account & service"
+                note={`${sender.countryCode || '—'} → ${recipient.countryCode || '—'} · ${isInternational ? 'international' : 'domestic'}`}
+              >
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <Field label="Account (bill to)" required className="sm:col-span-2">
+                    <input
+                      className={inputCls}
+                      list="bill-to-accounts"
+                      value={accountNumber}
+                      onChange={(e) => setAccountNumber(e.target.value)}
+                      placeholder="Account number"
+                      autoComplete="off"
+                    />
+                    <datalist id="bill-to-accounts">
+                      {accountsForCarrier.map((a) => (
+                        <option key={a.id} value={a.accountNumber}>
+                          {a.accountName || a.accountNumber}
+                        </option>
+                      ))}
+                    </datalist>
+                  </Field>
+                  <Field label="Service level">
+                    <select className={inputCls} value={serviceId} onChange={(e) => setServiceId(e.target.value ? Number(e.target.value) : '')}>
+                      {servicesForCarrier.length === 0 ? <option value="">Carrier default</option> : null}
+                      {servicesForCarrier.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Incoterms">
+                    <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
+                      <option value="DDP">DDP — sender pays duties</option>
+                      <option value="DAP">DAP — receiver pays duties</option>
+                    </select>
+                  </Field>
+                </div>
+              </SectionCard>
+
             {/* ── Package & weight ── */}
-            <SectionCard icon={<FiPackage className="h-3.5 w-3.5" />} title="Package & weight">
-              {/* All fields in a 4-column grid → two lines (custom L/W/H fill line 2). */}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <SectionCard
+              icon={<FiPackage className="h-3.5 w-3.5" />}
+              title="Package & weight"
+            >
+              <div className="mb-3 flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#8a7959]">Weight</span>
+                  <div className="inline-flex rounded-lg border border-[#e3d9c4] bg-white p-0.5">
+                    {(['LB', 'KG'] as const).map((u) => (
+                      <button
+                        key={u}
+                        type="button"
+                        onClick={() => setWeightUnit(u)}
+                        className={`rounded-md px-2 py-0.5 text-[11px] font-semibold transition ${weightUnit === u ? 'bg-[#1f150c] text-[#f4eede]' : 'text-[#5a4526] hover:bg-[#faf7f0]'}`}
+                      >
+                        {u.toLowerCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#8a7959]">Dims</span>
+                  <div className="inline-flex rounded-lg border border-[#e3d9c4] bg-white p-0.5">
+                    {(['IN', 'CM'] as const).map((u) => (
+                      <button
+                        key={u}
+                        type="button"
+                        onClick={() => setDimUnit(u)}
+                        className={`rounded-md px-2 py-0.5 text-[11px] font-semibold transition ${dimUnit === u ? 'bg-[#1f150c] text-[#f4eede]' : 'text-[#5a4526] hover:bg-[#faf7f0]'}`}
+                      >
+                        {u.toLowerCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-3">
                 <Field label="Packaging" required>
                   <select className={inputCls} value={packageChoice} onChange={(e) => setPackageChoice(e.target.value)}>
                     <optgroup label={`${CARRIER_LABEL[carrier] || carrier} packaging`}>
@@ -580,38 +801,35 @@ export default function NewShipmentPage() {
                         ))}
                       </optgroup>
                     ) : null}
-                    <option value={CUSTOM_PKG}>Custom dimensions…</option>
+                    <option value={CUSTOM_PKG}>Custom package…</option>
                   </select>
                 </Field>
-                <Field label="Weight (lb)" required>
-                  <input className={inputCls} type="number" min="0" step="0.1" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="2.5" />
-                </Field>
-                <Field label="Declared value ($)">
-                  <input className={inputCls} type="number" min="0" step="0.01" value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value)} placeholder="100.00" />
-                </Field>
-                <Field label="Goods description">
-                  <input className={inputCls} value={goodsDescription} onChange={(e) => setGoodsDescription(e.target.value)} placeholder="Apparel" />
-                </Field>
-                <Field label="Reference">
-                  <input className={inputCls} value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Optional" />
-                </Field>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label={`Weight (${weightUnit.toLowerCase()})`} required>
+                    <input className={inputCls} type="number" min="0" step="0.1" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="2.5" />
+                  </Field>
+                  <Field label={`Declared value (${currency})`}>
+                    <input className={inputCls} type="number" min="0" step="0.01" value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value)} placeholder="100.00" />
+                  </Field>
+                </div>
                 {isCustomPkg ? (
-                  <>
-                    <Field label="Length (in)" required>
+                  <div className="grid grid-cols-3 gap-3">
+                    <Field label={`Length (${dimUnit.toLowerCase()})`} required>
                       <input className={inputCls} type="number" min="0" step="0.1" value={length} onChange={(e) => setLength(e.target.value)} placeholder="12" />
                     </Field>
-                    <Field label="Width (in)" required>
+                    <Field label={`Width (${dimUnit.toLowerCase()})`} required>
                       <input className={inputCls} type="number" min="0" step="0.1" value={width} onChange={(e) => setWidth(e.target.value)} placeholder="9" />
                     </Field>
-                    <Field label="Height (in)" required>
+                    <Field label={`Height (${dimUnit.toLowerCase()})`} required>
                       <input className={inputCls} type="number" min="0" step="0.1" value={height} onChange={(e) => setHeight(e.target.value)} placeholder="4" />
                     </Field>
-                  </>
+                  </div>
                 ) : null}
               </div>
-            </SectionCard>
+              </SectionCard>
+            </div>
 
-            {/* ── Importer of record & customs broker (international only) ── */}
+            {/* ── Customs · international only ── */}
             {isInternational ? (
               <SectionCard
                 icon={<FiGlobe className="h-3.5 w-3.5" />}
@@ -720,7 +938,7 @@ export default function NewShipmentPage() {
               </SectionCard>
             ) : null}
 
-            {/* ── Commercial invoice items (international only) ── */}
+            {/* ── Items · commercial invoice (international only) ── */}
             {isInternational ? (
               <SectionCard
                 icon={<FiFileText className="h-3.5 w-3.5" />}
@@ -738,44 +956,31 @@ export default function NewShipmentPage() {
                   </>
                 }
               >
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    <Field label="Reason for export">
-                      <select className={inputCls} value={reasonForExport} onChange={(e) => setReasonForExport(e.target.value)}>
-                        {['SALE', 'GIFT', 'SAMPLE', 'RETURN', 'REPAIR', 'PERSONAL'].map((r) => (
-                          <option key={r} value={r}>{r.charAt(0) + r.slice(1).toLowerCase()}</option>
-                        ))}
-                      </select>
-                    </Field>
-                    <Field label="Currency">
-                      <select className={inputCls} value={currency} onChange={(e) => setCurrency(e.target.value)}>
-                        {['USD', 'EUR', 'GBP', 'CAD', 'INR', 'AUD', 'SGD', 'JPY'].map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </select>
-                    </Field>
+                <div className="space-y-1.5 overflow-x-auto">
+                  {/* header labels (once) */}
+                  <div className="hidden min-w-[760px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_auto] gap-2 px-0.5 sm:grid">
+                    {['Description *', 'SKU', 'HS code', 'Origin', 'Qty', `Unit value (${currency}) *`, `Amount (${currency})`].map((h) => (
+                      <span key={h} className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">{h}</span>
+                    ))}
+                    <span className="w-[62px]" />
                   </div>
 
-                  <div className="space-y-1.5 overflow-x-auto">
-                    {/* header labels (once) */}
-                    <div className="hidden min-w-[720px] grid-cols-[minmax(0,2.2fr)_1fr_0.7fr_0.65fr_1.1fr_1fr_auto] gap-2 px-0.5 sm:grid">
-                      {['Description *', 'HS code', 'Origin', 'Qty', `Unit value (${currency}) *`, 'Weight (lb)'].map((h) => (
-                        <span key={h} className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">{h}</span>
-                      ))}
-                      <span className="w-[62px]" />
-                    </div>
-
-                    {items.map((it, i) => (
+                  {items.map((it, i) => {
+                    const amount = (Number(it.quantity) || 0) * (Number(it.unitValue) || 0)
+                    return (
                       <div
                         key={i}
-                        className="grid min-w-[720px] grid-cols-[minmax(0,2.2fr)_1fr_0.7fr_0.65fr_1.1fr_1fr_auto] items-center gap-2"
+                        className="grid min-w-[760px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_auto] items-center gap-2"
                       >
                         <input className={inputCls} value={it.description} onChange={(e) => patchItem(i, { description: e.target.value })} placeholder="Cotton t-shirt" />
+                        <input className={inputCls} value={it.sku} onChange={(e) => patchItem(i, { sku: e.target.value })} placeholder="SKU-001" />
                         <input className={inputCls} value={it.hsCode} onChange={(e) => patchItem(i, { hsCode: e.target.value })} placeholder="6109.10" />
                         <input className={`${inputCls} uppercase`} value={it.countryOfOrigin} onChange={(e) => patchItem(i, { countryOfOrigin: e.target.value })} placeholder="US" maxLength={2} />
                         <input className={inputCls} type="number" min="1" step="1" value={it.quantity} onChange={(e) => patchItem(i, { quantity: e.target.value })} placeholder="1" />
                         <input className={inputCls} type="number" min="0" step="0.01" value={it.unitValue} onChange={(e) => patchItem(i, { unitValue: e.target.value })} placeholder="20.00" />
-                        <input className={inputCls} type="number" min="0" step="0.1" value={it.weight} onChange={(e) => patchItem(i, { weight: e.target.value })} placeholder="0.5" />
+                        <div className={`${inputCls} flex items-center justify-end bg-[#faf7f0] font-mono tabular-nums`}>
+                          {amount > 0 ? amount.toFixed(2) : '—'}
+                        </div>
                         <div className="flex items-center gap-1">
                           <button
                             type="button"
@@ -799,7 +1004,15 @@ export default function NewShipmentPage() {
                           ) : null}
                         </div>
                       </div>
-                    ))}
+                    )
+                  })}
+
+                  {/* invoice total */}
+                  <div className="flex min-w-[760px] items-center justify-end gap-3 border-t border-dashed border-[#e3d9c4] px-0.5 pt-2">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">Total amount</span>
+                    <span className="font-mono text-[14px] font-semibold tabular-nums text-[#1f150c]">
+                      {invoiceTotal.toFixed(2)} {currency}
+                    </span>
                   </div>
                 </div>
               </SectionCard>
