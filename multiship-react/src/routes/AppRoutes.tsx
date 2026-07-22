@@ -9,6 +9,7 @@ import CarrierPage from '../pages/CarrierPage'
 import ClientsPage from '../pages/ClientsPage'
 import ImporterBrokerPage from '../components/ImporterBrokerPage'
 import ShippingServicesPage from '../components/ShippingServicesPage'
+import ShippingServiceMappingPage from '../components/ShippingServiceMappingPage'
 import PackagesPage from '../components/PackagesPage'
 import DashboardPage from '../pages/DashboardPage'
 import OrdersPage from '../pages/OrdersPage'
@@ -37,6 +38,7 @@ export default function AppRoutes() {
               <Route index element={<Navigate to={settingsPaths.clients} replace />} />
               <Route path="clients" element={<ClientsPage />} />
               <Route path="shipping-services" element={<ShippingServicesPage />} />
+              <Route path="shipping-service-mapping" element={<ShippingServiceMappingPage />} />
               <Route path="packages" element={<PackagesPage />} />
               <Route path="importer-broker" element={<ImporterBrokerPage />} />
               <Route element={<RequireRole roles={['ADMIN']} />}>

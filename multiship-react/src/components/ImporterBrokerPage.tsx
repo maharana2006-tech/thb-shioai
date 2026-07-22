@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
   FiBriefcase,
@@ -10,7 +11,6 @@ import {
   FiList,
   FiMapPin,
   FiPlus,
-  FiRefreshCw,
   FiSearch,
   FiTrash2,
   FiTruck,
@@ -21,7 +21,7 @@ import {
 import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
 import { countryName, groupByRegion, regionOf, REGIONS, type Region } from '../utils/countries'
-import PageSectionHeader from './workspace/PageSectionHeader'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import TablePagination from './workspace/TablePagination'
 import Select from './workspace/Select'
 import CustomsProfileModal from './modals/CustomsProfileModal'
@@ -77,7 +77,7 @@ export default function ImporterBrokerPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       const [list, clientPage] = await Promise.all([
@@ -91,11 +91,17 @@ export default function ImporterBrokerPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [load])
+
+  const { registerRefresh } = useOutletContext<SettingsOutletContext>()
+  useEffect(() => {
+    registerRefresh(load)
+    return () => registerRefresh(null)
+  }, [registerRefresh, load])
 
   const clientOptions = useMemo(
     () => [...new Set(profiles.map((p) => p.clientCode ?? ''))].filter(Boolean).sort(),
@@ -224,28 +230,16 @@ export default function ImporterBrokerPage() {
 
   return (
     <div className="space-y-4 pb-16">
-      <PageSectionHeader
-        title="Importer / Broker"
-        description="Each profile is one importer + broker identity applied to a set of destination countries — resolved automatically at shipment."
-        actions={
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void load()}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
-            >
-              <FiRefreshCw className="h-3.5 w-3.5" /> Refresh
-            </button>
-            <button
-              type="button"
-              onClick={() => setModal({ mode: 'new' })}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
-            >
-              <FiPlus className="h-3.5 w-3.5" /> Add profile
-            </button>
-          </div>
-        }
-      />
+      {/* Page-specific actions bar — Refresh is global (submenus row). */}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setModal({ mode: 'new' })}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
+        >
+          <FiPlus className="h-3.5 w-3.5" /> Add profile
+        </button>
+      </div>
 
       {/* health strip */}
       <section className="grid grid-cols-3 gap-3">

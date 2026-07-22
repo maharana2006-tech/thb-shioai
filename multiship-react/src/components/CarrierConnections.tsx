@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
   FiActivity,
@@ -8,7 +9,6 @@ import {
   FiEdit2,
   FiPlus,
   FiPower,
-  FiRefreshCw,
   FiServer,
   FiStar,
   FiFilter,
@@ -32,7 +32,7 @@ import {
   normalizeCarrierCode,
   type CarrierEnvironment,
 } from '../utils/carrierUtils'
-import PageSectionHeader from './workspace/PageSectionHeader'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import CarrierLogo from './workspace/CarrierLogo'
 import TablePagination from './workspace/TablePagination'
 import Select from './workspace/Select'
@@ -118,7 +118,7 @@ export default function CarrierConnections() {
   const [drawerCheck, setDrawerCheck] = useState<{ state: 'idle' | 'checking' | 'ok' | 'fail'; message?: string }>({ state: 'idle' })
   const [saving, setSaving] = useState(false)
 
-  const loadAccounts = async () => {
+  const loadAccounts = useCallback(async () => {
     setLoading(true)
     try {
       setAccounts(await accountRefService.listAccounts())
@@ -127,7 +127,7 @@ export default function CarrierConnections() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     void loadAccounts()
@@ -135,7 +135,13 @@ export default function CarrierConnections() {
       .listClients({ size: 100 })
       .then((r) => setClientCodes((r.data?.content ?? []).map((c) => c.clientCode)))
       .catch(() => {})
-  }, [])
+  }, [loadAccounts])
+
+  const { registerRefresh } = useOutletContext<SettingsOutletContext>()
+  useEffect(() => {
+    registerRefresh(loadAccounts)
+    return () => registerRefresh(null)
+  }, [registerRefresh, loadAccounts])
 
   // Pre-fill Client ID / Secret from the platform account of the chosen
   // carrier when adding a NEW account. The shipper can override them.
@@ -337,31 +343,17 @@ export default function CarrierConnections() {
 
   return (
     <div className="space-y-4">
-      <PageSectionHeader
-        eyebrow="Carrier Management"
-        title="Carrier accounts"
-        description="Every carrier account lives here — platform accounts (your own) and client accounts (a customer's). Add, verify, and set client defaults from one place."
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void loadAccounts()}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
-            >
-              <FiRefreshCw className="h-3.5 w-3.5" />
-              Refresh
-            </button>
-            <button
-              type="button"
-              onClick={() => openDrawer()}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
-            >
-              <FiPlus className="h-3.5 w-3.5" />
-              Add Account
-            </button>
-          </div>
-        }
-      />
+      {/* Page-specific actions bar — Refresh is global (submenus row). */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => openDrawer()}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
+        >
+          <FiPlus className="h-3.5 w-3.5" />
+          Add Account
+        </button>
+      </div>
 
       {/* ===== health strip ===== */}
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">

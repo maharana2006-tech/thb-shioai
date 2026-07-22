@@ -46,4 +46,12 @@ export const navIcons: Record<string, ReactNode> = {
       <path d="M3.25 6 10 9.25 16.75 6M10 9.25v8M6.5 4.5l6.75 3.25" strokeLinejoin="round" />
     </svg>
   ),
+  // Chain-link — mapping ties an order's ship method to a carrier service.
+  mapping: (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-[18px] w-[18px]" aria-hidden="true">
+      <path d="M8.25 11.75 6 14a2.75 2.75 0 0 1-3.9-3.9l2.25-2.25a2.75 2.75 0 0 1 3.9 0" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M11.75 8.25 14 6a2.75 2.75 0 0 1 3.9 3.9l-2.25 2.25a2.75 2.75 0 0 1-3.9 0" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M7.75 12.25 12.25 7.75" strokeLinecap="round" />
+    </svg>
+  ),
 }

@@ -14,6 +14,7 @@ export const settingsPaths = {
   clients: '/settings/clients',
   carriers: '/settings/carriers',
   shippingServices: '/settings/shipping-services',
+  shippingServiceMapping: '/settings/shipping-service-mapping',
   packages: '/settings/packages',
   importerBroker: '/settings/importer-broker',
 } as const
@@ -28,19 +29,35 @@ export const workspaceNavItems: Array<{
   { key: 'settings', label: 'Settings', to: settingsPaths.clients },
 ]
 
-/** Sub-nav inside the Settings hub. iconKey maps into navIcons; roles gate it. */
+/** Sub-nav inside the Settings hub. iconKey maps into navIcons; roles gate it.
+ *  description is the tight one-line caption SettingsLayout renders under the
+ *  submenus row for the active tab. */
 export const settingsNavItems: Array<{
   key: string
   label: string
   to: string
   iconKey: string
+  description: string
   roles: UserRole[]
 }> = [
-  { key: 'clients', label: 'Clients', to: settingsPaths.clients, iconKey: 'clients', roles: ['ADMIN', 'USER'] },
-  { key: 'carriers', label: 'Carriers', to: settingsPaths.carriers, iconKey: 'carrier', roles: ['ADMIN'] },
-  { key: 'shipping-services', label: 'Shipping Services', to: settingsPaths.shippingServices, iconKey: 'service', roles: ['ADMIN', 'USER'] },
-  { key: 'packages', label: 'Packages', to: settingsPaths.packages, iconKey: 'package', roles: ['ADMIN', 'USER'] },
-  { key: 'importer-broker', label: 'Importer / Broker', to: settingsPaths.importerBroker, iconKey: 'customs', roles: ['ADMIN', 'USER'] },
+  { key: 'clients', label: 'Clients', to: settingsPaths.clients, iconKey: 'clients',
+    description: 'Customer master data — who you ship for, their carrier accounts, and defaults.',
+    roles: ['ADMIN', 'USER'] },
+  { key: 'carriers', label: 'Carriers', to: settingsPaths.carriers, iconKey: 'carrier',
+    description: 'Connect + verify live UPS / FedEx / USPS accounts (platform + client).',
+    roles: ['ADMIN'] },
+  { key: 'shipping-services', label: 'Shipping Services', to: settingsPaths.shippingServices, iconKey: 'service',
+    description: "The carrier service catalog per origin, and each service's allowed packages.",
+    roles: ['ADMIN', 'USER'] },
+  { key: 'shipping-service-mapping', label: 'Shipping Service Mapping', to: settingsPaths.shippingServiceMapping, iconKey: 'mapping',
+    description: "How order ship-methods resolve to a carrier service — most specific mapping wins.",
+    roles: ['ADMIN', 'USER'] },
+  { key: 'packages', label: 'Packages', to: settingsPaths.packages, iconKey: 'package',
+    description: "Your own boxes plus each carrier's predefined packaging per ship-from country.",
+    roles: ['ADMIN', 'USER'] },
+  { key: 'importer-broker', label: 'Importer / Broker', to: settingsPaths.importerBroker, iconKey: 'customs',
+    description: 'Customs identities — importer/broker profiles applied per destination country.',
+    roles: ['ADMIN', 'USER'] },
 ]
 
 export const getNavItemsForRole = (role: UserRole) => {

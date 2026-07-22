@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { FiDownloadCloud, FiEdit3, FiGlobe, FiPlus, FiStar, FiTrash2, FiTruck, FiX } from 'react-icons/fi'
 import { dimWeightOf, oversizeOf, shippingConfigService, type PackagePreset } from '../api/shippingConfigService'
 import { countryName } from '../utils/countries'
-import PageSectionHeader from './workspace/PageSectionHeader'
+import { useAppSession } from '../hooks/useAppSession'
+import { canManageCarriers, normalizeRole } from '../utils/roles'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import Select from './workspace/Select'
 import TablePagination from './workspace/TablePagination'
 
@@ -110,6 +113,10 @@ function CartonMarks() {
  * order's weight).
  */
 export default function PackagesPage() {
+  const { role } = useAppSession()
+  // Sync pulls the carrier's live packaging catalog — requires the admin-only
+  // carrier credentials on the backend, so gate the button to admins.
+  const canSync = canManageCarriers(normalizeRole(role))
   const [presets, setPresets] = useState<PackagePreset[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<PackagePreset | null>(null)
@@ -122,7 +129,7 @@ export default function PackagesPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       setPresets(await shippingConfigService.listPresets())
@@ -131,11 +138,17 @@ export default function PackagesPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [load])
+
+  const { registerRefresh } = useOutletContext<SettingsOutletContext>()
+  useEffect(() => {
+    registerRefresh(load)
+    return () => registerRefresh(null)
+  }, [registerRefresh, load])
 
   const save = async () => {
     if (!editing) return
@@ -237,19 +250,41 @@ export default function PackagesPage() {
   }, [presets, origin])
 
   const syncCarrierPackaging = async () => {
+    // Sync only the carrier the user is filtering on; when they're looking at
+    // ALL or CUSTOM, fall back to sweeping every supported carrier.
+    const targets =
+      carrierFilter && carrierFilter !== 'ALL' && carrierFilter !== 'CUSTOM'
+        ? [carrierFilter]
+        : ['UPS', 'FEDEX', 'USPS']
+
     setSyncing(true)
     try {
       let added = 0
       let updated = 0
-      for (const c of ['UPS', 'FEDEX', 'USPS']) {
-        const res = await shippingConfigService.syncPackages(c, origin)
-        added += res.data?.added ?? 0
-        updated += res.data?.updated ?? 0
+      const skipped: Array<{ carrier: string; message: string }> = []
+      // Continue past per-carrier failures so one unverified carrier doesn't
+      // hide the result of another (or surface a misleading error for the
+      // carrier the user actually picked).
+      for (const c of targets) {
+        try {
+          const res = await shippingConfigService.syncPackages(c, origin)
+          added += res.data?.added ?? 0
+          updated += res.data?.updated ?? 0
+        } catch (e) {
+          skipped.push({ carrier: c, message: e instanceof Error ? e.message : 'Sync failed.' })
+        }
       }
-      toast.success(`Carrier packaging · ${countryName(origin)}: ${added} new, ${updated} refreshed.`)
+
+      if (added || updated) {
+        toast.success(`Carrier packaging · ${countryName(origin)}: ${added} new, ${updated} refreshed.`)
+      }
+      for (const s of skipped) {
+        toast.error(`${s.carrier}: ${s.message}`)
+      }
+      if (!added && !updated && !skipped.length) {
+        toast.success(`Carrier packaging · ${countryName(origin)}: nothing to sync.`)
+      }
       await load()
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to sync carrier packaging.')
     } finally {
       setSyncing(false)
     }
@@ -257,71 +292,72 @@ export default function PackagesPage() {
 
   return (
     <div className="space-y-4 pb-16">
-      <PageSectionHeader
-        title="Packages"
-        description="Your own boxes plus each carrier's predefined packaging — pulled from the carrier per ship-from country (USPS Flat Rate is US-only, 10/25kg boxes are international). The default preset supplies package type and dimensions on every label."
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <label
-              title="Origin — carrier packaging is shown for this ship-from country. Your custom boxes always show."
-              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white pl-3 pr-1.5 py-1.5"
-            >
-              <FiGlobe className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-              <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
-                Ship from <span className="text-slate-300">· origin</span>
-              </span>
-              <select
-                value={origin}
-                onChange={(e) => setOrigin(e.target.value)}
-                className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[#1f150c] outline-none"
-              >
-                {originOptions.map((code) => (
-                  <option key={code} value={code}>
-                    {countryName(code)} ({code})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label
-              title="Filter packages by carrier (or show only your custom boxes)."
-              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white pl-3 pr-1.5 py-1.5"
-            >
-              <FiTruck className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-              <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Carrier</span>
-              <select
-                value={carrierFilter}
-                onChange={(e) => setCarrierFilter(e.target.value)}
-                className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[#1f150c] outline-none"
-              >
-                <option value="ALL">All carriers</option>
-                {carrierOptions.carriers.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-                {carrierOptions.hasCustom ? <option value="CUSTOM">Custom boxes</option> : null}
-              </select>
-            </label>
-            <button
-              type="button"
-              onClick={() => void syncCarrierPackaging()}
-              disabled={syncing}
-              title={`Pull UPS/FedEx/USPS predefined packaging for ${countryName(origin)}`}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
-            >
-              <FiDownloadCloud className={`h-3.5 w-3.5 ${syncing ? 'animate-pulse' : ''}`} />
-              {syncing ? 'Syncing…' : 'Sync carrier packaging'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditing(blankPreset())}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
-            >
-              <FiPlus className="h-3.5 w-3.5" /> Add Package
-            </button>
-          </div>
-        }
-      />
+      {/* Page-specific actions bar — origin/carrier filters + sync + add. Refresh is global. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <label
+          title="Origin — carrier packaging is shown for this ship-from country. Your custom boxes always show."
+          className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white pl-3 pr-1.5 py-1.5"
+        >
+          <FiGlobe className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+          <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+            Ship from <span className="text-slate-300">· origin</span>
+          </span>
+          <select
+            value={origin}
+            onChange={(e) => setOrigin(e.target.value)}
+            className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[#1f150c] outline-none"
+          >
+            {originOptions.map((code) => (
+              <option key={code} value={code}>
+                {countryName(code)} ({code})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label
+          title="Filter packages by carrier (or show only your custom boxes)."
+          className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white pl-3 pr-1.5 py-1.5"
+        >
+          <FiTruck className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+          <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Carrier</span>
+          <select
+            value={carrierFilter}
+            onChange={(e) => setCarrierFilter(e.target.value)}
+            className="cursor-pointer bg-transparent py-1 pr-1 text-[12.5px] font-semibold text-[#1f150c] outline-none"
+          >
+            <option value="ALL">All carriers</option>
+            {carrierOptions.carriers.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+            {carrierOptions.hasCustom ? <option value="CUSTOM">Custom boxes</option> : null}
+          </select>
+        </label>
+        {canSync ? (
+          <button
+            type="button"
+            onClick={() => void syncCarrierPackaging()}
+            disabled={syncing}
+            title={
+              carrierFilter && carrierFilter !== 'ALL' && carrierFilter !== 'CUSTOM'
+                ? `Pull ${carrierFilter} predefined packaging for ${countryName(origin)}`
+                : `Pull UPS/FedEx/USPS predefined packaging for ${countryName(origin)}`
+            }
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+          >
+            <FiDownloadCloud className={`h-3.5 w-3.5 ${syncing ? 'animate-pulse' : ''}`} />
+            {syncing ? 'Syncing…' : 'Sync carrier packaging'}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => setEditing(blankPreset())}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
+        >
+          <FiPlus className="h-3.5 w-3.5" /> Add Package
+        </button>
+      </div>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {loading && !presets.length ? (

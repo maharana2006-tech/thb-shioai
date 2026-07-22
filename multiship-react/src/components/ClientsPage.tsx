@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
   FiArrowDown,
@@ -7,7 +8,6 @@ import {
   FiFilter,
   FiGlobe,
   FiPlus,
-  FiRefreshCw,
   FiSearch,
   FiTrash2,
 } from 'react-icons/fi'
@@ -17,7 +17,7 @@ import { formatCarrierName } from '../utils/carrierUtils'
 import { countryName } from '../utils/countries'
 import ClientEditorModal from './modals/ClientEditorModal'
 import CustomsProfileModal from './modals/CustomsProfileModal'
-import PageSectionHeader from './workspace/PageSectionHeader'
+import type { SettingsOutletContext } from './layout/SettingsLayout'
 import Select from './workspace/Select'
 import TablePagination from './workspace/TablePagination'
 
@@ -95,7 +95,13 @@ export default function ClientsPage() {
     }
   }, [debouncedSearch, statusFilter, carrierFilter, ordersFilter, debouncedCols, sortBy, sortDirection, page, pageSize, reloadToken])
 
-  const refresh = () => setReloadToken((t) => t + 1)
+  const refresh = useCallback(() => setReloadToken((t) => t + 1), [])
+
+  const { registerRefresh } = useOutletContext<SettingsOutletContext>()
+  useEffect(() => {
+    registerRefresh(refresh)
+    return () => registerRefresh(null)
+  }, [registerRefresh, refresh])
 
   const handleSort = (key: string) => {
     if (sortBy === key) {
@@ -167,31 +173,17 @@ export default function ClientsPage() {
 
   return (
     <div className="space-y-4">
-      <PageSectionHeader
-        eyebrow="Client Management"
-        title="Clients"
-        description="The customers you ship for — each with their own carrier accounts and default."
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={refresh}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
-            >
-              <FiRefreshCw className="h-3.5 w-3.5" />
-              Refresh
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditor({ client: null })}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
-            >
-              <FiPlus className="h-3.5 w-3.5" />
-              Add Client
-            </button>
-          </div>
-        }
-      />
+      {/* Page-specific actions bar — Refresh is global (submenus row). */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setEditor({ client: null })}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
+        >
+          <FiPlus className="h-3.5 w-3.5" />
+          Add Client
+        </button>
+      </div>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         {/* toolbar */}
