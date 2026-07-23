@@ -30,7 +30,9 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwtService) throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwtService,
+                                                   com.multiship.backend.service.ApiKeyService apiKeyService)
+            throws Exception {
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .csrf(csrf -> csrf.disable())
@@ -44,6 +46,9 @@ public class SecurityConfig {
                         // request body is even parsed (403 beats 400).
                         .requestMatchers("/api/v1/carriers/connect", "/api/v1/carriers/disconnect",
                                 "/api/v1/carriers/refresh-token").hasRole("ADMIN")
+                        .requestMatchers("/api/v1/api-keys/**").hasRole("ADMIN")
+                        // Public shipping API for external apps — API key (ROLE_API); ADMIN allowed for testing.
+                        .requestMatchers("/api/v1/external/**").hasAnyRole("API", "ADMIN")
                         .requestMatchers(HttpMethod.POST, "/api/v1/orders/*/label").hasAnyRole("ADMIN", "USER")
                         // All other requests need authentication
                         .anyRequest().authenticated()
@@ -57,6 +62,7 @@ public class SecurityConfig {
                                 writeJsonError(response, HttpServletResponse.SC_FORBIDDEN,
                                         "FORBIDDEN", "You do not have permission to perform this action."))
                 )
+                .addFilterBefore(new ApiKeyAuthenticationFilter(apiKeyService), UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(new JwtAuthenticationFilter(jwtService), UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
@@ -80,7 +86,7 @@ public class SecurityConfig {
                 "http://[::1]:*"
         ));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Cache-Control", "Idempotency-Key"));
+        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Cache-Control", "Idempotency-Key", "X-API-Key"));
         configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
