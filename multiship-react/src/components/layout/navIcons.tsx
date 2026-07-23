@@ -46,6 +46,20 @@ export const navIcons: Record<string, ReactNode> = {
       <path d="M3.25 6 10 9.25 16.75 6M10 9.25v8M6.5 4.5l6.75 3.25" strokeLinejoin="round" />
     </svg>
   ),
+  // Key — external API keys for the public shipping API.
+  apiKey: (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-[18px] w-[18px]" aria-hidden="true">
+      <circle cx="6.5" cy="13.5" r="3.75" />
+      <path d="M9.25 10.75 16.5 3.5M13.5 6.5l2.5 2.5M11.5 8.5l1.75 1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  // Open book — reference docs for the public shipping API.
+  apiDocs: (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-[18px] w-[18px]" aria-hidden="true">
+      <path d="M10 4.75C8.6 3.6 6.7 3 4.75 3c-.7 0-1.35.08-2 .25v11.5c.65-.17 1.3-.25 2-.25 1.95 0 3.85.6 5.25 1.75 1.4-1.15 3.3-1.75 5.25-1.75.7 0 1.35.08 2 .25V3.25c-.65-.17-1.3-.25-2-.25-1.95 0-3.85.6-5.25 1.75Z" strokeLinejoin="round" />
+      <path d="M10 4.75v11.5" strokeLinecap="round" />
+    </svg>
+  ),
   // Chain-link — mapping ties an order's ship method to a carrier service.
   mapping: (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-[18px] w-[18px]" aria-hidden="true">

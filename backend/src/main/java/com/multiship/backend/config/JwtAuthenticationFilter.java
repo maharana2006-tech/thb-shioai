@@ -46,6 +46,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7);
 
+            // API keys (msk_...) are handled by ApiKeyAuthenticationFilter — don't
+            // treat one as a JWT (parsing would fail and clear a valid context).
+            if (token.startsWith("msk_")) {
+                filterChain.doFilter(request, response);
+                return;
+            }
+
             try {
                 Claims claims = jwtService.parseClaims(token);
                 String username = claims.getSubject();
