@@ -93,7 +93,7 @@ function Field({ label, required, children, className = '' }: { label: string; r
 function SectionCard({ icon, title, badge, note, children }: { icon: ReactNode; title: string; badge?: ReactNode; note?: ReactNode; children: ReactNode }) {
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-2 border-b border-dashed border-[#e3d9c4] pb-2">
+      <div className="flex min-h-[38px] items-center justify-between gap-2 border-b border-dashed border-[#e3d9c4] pb-2">
         <div className="flex items-center gap-2">
           <span className="text-[#8a7959]">{icon}</span>
           <h3 className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#8a7959]">{title}</h3>
@@ -482,7 +482,7 @@ export default function NewShipmentPage() {
 
   const patchItem = (i: number, patch: Partial<ItemRow>) =>
     setItems((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
-  const addItem = () => setItems((rows) => [...rows, blankItem()])
+  const addItem = () => setItems((rows) => [blankItem(), ...rows])
   const removeItem = (i: number) => setItems((rows) => (rows.length > 1 ? rows.filter((_, idx) => idx !== i) : rows))
   const invoiceTotal = items.reduce((sum, it) => sum + (Number(it.quantity) || 0) * (Number(it.unitValue) || 0), 0)
 
@@ -712,7 +712,11 @@ export default function NewShipmentPage() {
               <SectionCard
                 icon={<FiTruck className="h-3.5 w-3.5" />}
                 title="Account & service"
-                note={`${sender.countryCode || '—'} → ${recipient.countryCode || '—'} · ${isInternational ? 'international' : 'domestic'}`}
+                badge={
+                  <span className="rounded-full bg-[#efe7d4] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[#5a4526]">
+                    {sender.countryCode || '—'} → {recipient.countryCode || '—'} · {isInternational ? 'Intl' : 'Domestic'}
+                  </span>
+                }
               >
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Field label="Account (bill to)" required className="sm:col-span-2">
@@ -753,39 +757,41 @@ export default function NewShipmentPage() {
             <SectionCard
               icon={<FiPackage className="h-3.5 w-3.5" />}
               title="Package & weight"
+              badge={
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#8a7959]">Weight</span>
+                    <div className="inline-flex rounded-lg border border-[#e3d9c4] bg-white p-0.5">
+                      {(['LB', 'KG'] as const).map((u) => (
+                        <button
+                          key={u}
+                          type="button"
+                          onClick={() => setWeightUnit(u)}
+                          className={`rounded-md px-2 py-0.5 text-[11px] font-semibold transition ${weightUnit === u ? 'bg-[#1f150c] text-[#f4eede]' : 'text-[#5a4526] hover:bg-[#faf7f0]'}`}
+                        >
+                          {u.toLowerCase()}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#8a7959]">Dims</span>
+                    <div className="inline-flex rounded-lg border border-[#e3d9c4] bg-white p-0.5">
+                      {(['IN', 'CM'] as const).map((u) => (
+                        <button
+                          key={u}
+                          type="button"
+                          onClick={() => setDimUnit(u)}
+                          className={`rounded-md px-2 py-0.5 text-[11px] font-semibold transition ${dimUnit === u ? 'bg-[#1f150c] text-[#f4eede]' : 'text-[#5a4526] hover:bg-[#faf7f0]'}`}
+                        >
+                          {u.toLowerCase()}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              }
             >
-              <div className="mb-3 flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#8a7959]">Weight</span>
-                  <div className="inline-flex rounded-lg border border-[#e3d9c4] bg-white p-0.5">
-                    {(['LB', 'KG'] as const).map((u) => (
-                      <button
-                        key={u}
-                        type="button"
-                        onClick={() => setWeightUnit(u)}
-                        className={`rounded-md px-2 py-0.5 text-[11px] font-semibold transition ${weightUnit === u ? 'bg-[#1f150c] text-[#f4eede]' : 'text-[#5a4526] hover:bg-[#faf7f0]'}`}
-                      >
-                        {u.toLowerCase()}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#8a7959]">Dims</span>
-                  <div className="inline-flex rounded-lg border border-[#e3d9c4] bg-white p-0.5">
-                    {(['IN', 'CM'] as const).map((u) => (
-                      <button
-                        key={u}
-                        type="button"
-                        onClick={() => setDimUnit(u)}
-                        className={`rounded-md px-2 py-0.5 text-[11px] font-semibold transition ${dimUnit === u ? 'bg-[#1f150c] text-[#f4eede]' : 'text-[#5a4526] hover:bg-[#faf7f0]'}`}
-                      >
-                        {u.toLowerCase()}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
               <div className="space-y-3">
                 <Field label="Packaging" required>
                   <select className={inputCls} value={packageChoice} onChange={(e) => setPackageChoice(e.target.value)}>
@@ -944,9 +950,18 @@ export default function NewShipmentPage() {
                 icon={<FiFileText className="h-3.5 w-3.5" />}
                 title="Items · commercial invoice"
                 badge={
-                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-amber-700">
-                    Cross-border · required
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-amber-700">
+                      Cross-border · required
+                    </span>
+                    <button
+                      type="button"
+                      onClick={addItem}
+                      className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+                    >
+                      <FiPlus className="h-3.5 w-3.5" /> Add item
+                    </button>
+                  </div>
                 }
                 note={
                   <>
@@ -958,11 +973,11 @@ export default function NewShipmentPage() {
               >
                 <div className="space-y-1.5 overflow-x-auto">
                   {/* header labels (once) */}
-                  <div className="hidden min-w-[760px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_auto] gap-2 px-0.5 sm:grid">
+                  <div className="hidden min-w-[760px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_44px] gap-2 sm:grid">
                     {['Description *', 'SKU', 'HS code', 'Origin', 'Qty', `Unit value (${currency}) *`, `Amount (${currency})`].map((h) => (
                       <span key={h} className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">{h}</span>
                     ))}
-                    <span className="w-[62px]" />
+                    <span />
                   </div>
 
                   {items.map((it, i) => {
@@ -970,7 +985,7 @@ export default function NewShipmentPage() {
                     return (
                       <div
                         key={i}
-                        className="grid min-w-[760px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_auto] items-center gap-2"
+                        className="grid min-w-[760px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_44px] items-center gap-2"
                       >
                         <input className={inputCls} value={it.description} onChange={(e) => patchItem(i, { description: e.target.value })} placeholder="Cotton t-shirt" />
                         <input className={inputCls} value={it.sku} onChange={(e) => patchItem(i, { sku: e.target.value })} placeholder="SKU-001" />
@@ -981,7 +996,7 @@ export default function NewShipmentPage() {
                         <div className={`${inputCls} flex items-center justify-end bg-[#faf7f0] font-mono tabular-nums`}>
                           {amount > 0 ? amount.toFixed(2) : '—'}
                         </div>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center justify-center">
                           <button
                             type="button"
                             onClick={() => removeItem(i)}
@@ -991,17 +1006,6 @@ export default function NewShipmentPage() {
                           >
                             <FiTrash2 className="h-3.5 w-3.5" />
                           </button>
-                          {i === items.length - 1 ? (
-                            <button
-                              type="button"
-                              onClick={addItem}
-                              className="rounded-lg border border-dashed border-[#cdbf9f] bg-white p-1.5 text-[#5a4526] transition hover:bg-[#faf7f0]"
-                              aria-label="Add item"
-                              title="Add item"
-                            >
-                              <FiPlus className="h-3.5 w-3.5" />
-                            </button>
-                          ) : null}
                         </div>
                       </div>
                     )
