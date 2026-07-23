@@ -18,6 +18,7 @@ export const settingsPaths = {
   packages: '/settings/packages',
   importerBroker: '/settings/importer-broker',
   apiKeys: '/settings/api-keys',
+  apiReference: '/settings/api-reference',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -61,6 +62,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN', 'USER'] },
   { key: 'api-keys', label: 'API Keys', to: settingsPaths.apiKeys, iconKey: 'apiKey',
     description: 'Mint and revoke the msk_ tokens external systems use to call the public shipping API.',
+    roles: ['ADMIN'] },
+  { key: 'api-reference', label: 'API Reference', to: settingsPaths.apiReference, iconKey: 'apiDocs',
+    description: 'How external systems call the public shipping API — endpoints, examples, and error codes.',
     roles: ['ADMIN'] },
 ]
 

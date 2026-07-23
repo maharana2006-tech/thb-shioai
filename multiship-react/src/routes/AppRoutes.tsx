@@ -11,6 +11,7 @@ import ImporterBrokerPage from '../components/ImporterBrokerPage'
 import ShippingServicesPage from '../components/ShippingServicesPage'
 import ShippingServiceMappingPage from '../components/ShippingServiceMappingPage'
 import ApiKeysPage from '../components/ApiKeysPage'
+import ApiReferencePage from '../components/ApiReferencePage'
 import PackagesPage from '../components/PackagesPage'
 import DashboardPage from '../pages/DashboardPage'
 import OrdersPage from '../pages/OrdersPage'
@@ -45,6 +46,7 @@ export default function AppRoutes() {
               <Route element={<RequireRole roles={['ADMIN']} />}>
                 <Route path="carriers" element={<CarrierPage />} />
                 <Route path="api-keys" element={<ApiKeysPage />} />
+                <Route path="api-reference" element={<ApiReferencePage />} />
               </Route>
             </Route>
           </Route>
