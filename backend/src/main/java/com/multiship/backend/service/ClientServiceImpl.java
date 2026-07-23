@@ -36,6 +36,68 @@ public class ClientServiceImpl implements ClientService {
 
     @Override
     @Transactional(readOnly = true)
+    public String exportClientsCsv(ClientListFilters filters) {
+        String keyword = norm(filters.getSearch());
+        String status = norm(filters.getStatus());
+        String carrier = norm(filters.getCarrier());
+        String hasOrders = norm(filters.getHasOrders());
+        String code = norm(filters.getCode());
+        String name = norm(filters.getName());
+        String city = norm(filters.getCity());
+        String sortBy = filters.getSortBy() != null ? filters.getSortBy() : "code";
+        String sortDirection = filters.getSortDirection() != null ? filters.getSortDirection() : "ASC";
+
+        // Two-query approach: count first so we bound the fetch, then pull
+        // every matching row. Avoids passing Integer.MAX_VALUE as LIMIT.
+        long total = clientRepository.countFiltered(keyword, status, carrier, hasOrders, code, name, city);
+        int limit = total > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) total;
+        List<String> codes = clientRepository.filterCodes(
+                keyword, status, carrier, hasOrders, code, name, city,
+                sortBy, sortDirection, 0, Math.max(limit, 1));
+
+        List<ClientDTO> clients = codes.stream()
+                .map(c -> clientRepository.findByClientCodeIgnoreCase(c).orElse(null))
+                .filter(java.util.Objects::nonNull)
+                .map(this::toDTO)
+                .toList();
+
+        StringBuilder csv = new StringBuilder(64 + clients.size() * 96);
+        csv.append("Code,Name,Email,Phone,Country,Ship-from city,Carrier accounts,Orders,Status,Created,Updated\r\n");
+        for (ClientDTO c : clients) {
+            AddressDTO ship = c.getShipFrom();
+            String country = ship != null && ship.getCountry() != null ? ship.getCountry().toUpperCase(Locale.ROOT) : "";
+            String cityValue = ship != null && ship.getCity() != null ? ship.getCity() : "";
+            String accounts = c.getCarrierAccounts() == null ? "" :
+                    c.getCarrierAccounts().stream()
+                            .map(a -> a.getCarrierCode() + ":" + a.getAccountNumber() + (Boolean.TRUE.equals(a.getClientDefault()) ? "*" : ""))
+                            .reduce((a, b) -> a + "; " + b)
+                            .orElse("");
+            csv.append(csvCell(c.getClientCode())).append(',')
+               .append(csvCell(c.getName())).append(',')
+               .append(csvCell(c.getEmail())).append(',')
+               .append(csvCell(c.getPhone())).append(',')
+               .append(csvCell(country)).append(',')
+               .append(csvCell(cityValue)).append(',')
+               .append(csvCell(accounts)).append(',')
+               .append(c.getOrderCount() == null ? 0L : c.getOrderCount()).append(',')
+               .append(csvCell(c.getStatus())).append(',')
+               .append(csvCell(c.getCreatedAt() == null ? "" : c.getCreatedAt().toString())).append(',')
+               .append(csvCell(c.getUpdatedAt() == null ? "" : c.getUpdatedAt().toString())).append("\r\n");
+        }
+        return csv.toString();
+    }
+
+    /** RFC-4180 CSV field: quote when the value contains ", newline, or a comma. */
+    private static String csvCell(String value) {
+        if (value == null) return "";
+        boolean needsQuote = value.indexOf(',') >= 0 || value.indexOf('"') >= 0
+                || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0;
+        if (!needsQuote) return value;
+        return '"' + value.replace("\"", "\"\"") + '"';
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public ApiResponse<PageResponseDTO<ClientDTO>> listClients(ClientListFilters filters) {
         int page = Math.max(filters.getPage(), 0);
         int size = Math.min(Math.max(filters.getSize(), 1), 100);

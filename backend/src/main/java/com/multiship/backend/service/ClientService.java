@@ -24,4 +24,11 @@ public interface ClientService {
     ApiResponse<Void> deleteClient(String clientCode);
 
     ApiResponse<List<CarrierAccountRefDTO>> listClientAccounts(String clientCode);
+
+    /**
+     * Build a CSV export of every client that matches the given filters,
+     * ignoring the page/size on {@link ClientListFilters}. Used by the
+     * server-side Export action in the Clients settings page.
+     */
+    String exportClientsCsv(ClientListFilters filters);
 }

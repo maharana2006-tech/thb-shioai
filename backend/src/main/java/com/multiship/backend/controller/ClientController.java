@@ -10,6 +10,8 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -22,6 +24,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -113,5 +117,35 @@ public class ClientController {
     public ResponseEntity<ApiResponse<List<CarrierAccountRefDTO>>> listClientAccounts(@PathVariable String clientCode) {
         ApiResponse<List<CarrierAccountRefDTO>> response = clientService.listClientAccounts(clientCode);
         return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Export every filtered client as CSV",
+            description = "Same filter/sort parameters as GET /clients; ignores page/size and streams the entire result set.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping(value = "/export.csv", produces = "text/csv;charset=UTF-8")
+    public ResponseEntity<byte[]> exportClientsCsv(
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String carrier,
+            @RequestParam(required = false) String hasOrders,
+            @RequestParam(required = false) String code,
+            @RequestParam(required = false) String name,
+            @RequestParam(required = false) String city,
+            @RequestParam(defaultValue = "code") String sortBy,
+            @RequestParam(defaultValue = "ASC") String sortDirection) {
+        com.multiship.backend.dto.ClientListFilters filters = com.multiship.backend.dto.ClientListFilters.builder()
+                .search(search).status(status).carrier(carrier).hasOrders(hasOrders)
+                .code(code).name(name).city(city)
+                .sortBy(sortBy).sortDirection(sortDirection)
+                .page(0).size(1)
+                .build();
+        String csv = clientService.exportClientsCsv(filters);
+        // Prepend a UTF-8 BOM so Excel opens the file in UTF-8 by default.
+        byte[] body = ("﻿" + csv).getBytes(StandardCharsets.UTF_8);
+        String filename = "clients-" + LocalDate.now() + ".csv";
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("text/csv;charset=UTF-8"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .body(body);
     }
 }

@@ -2,7 +2,9 @@ package com.multiship.backend.service;
 
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ClientCustomsProfileDTO;
+import com.multiship.backend.dto.CustomsProfileFilters;
 import com.multiship.backend.dto.ErrorCode;
+import com.multiship.backend.dto.PageResponseDTO;
 import com.multiship.backend.model.ClientCustomsProfile;
 import com.multiship.backend.repository.ClientCustomsProfileRepository;
 import com.multiship.backend.repository.ClientRepository;
@@ -15,6 +17,8 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -46,6 +50,180 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
                 })
                 .toList();
         return success("Customs profiles retrieved.", all);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<PageResponseDTO<ClientCustomsProfileDTO>> listPaginated(CustomsProfileFilters filters) {
+        List<ClientCustomsProfileDTO> filtered = fetchFiltered(filters);
+        int page = Math.max(filters.getPage(), 0);
+        int size = Math.min(Math.max(filters.getSize(), 1), 200);
+        int from = Math.min(page * size, filtered.size());
+        int to = Math.min(from + size, filtered.size());
+        List<ClientCustomsProfileDTO> slice = filtered.subList(from, to);
+        return success("Customs profiles retrieved.", PageResponseDTO.of(slice, page, size, filtered.size()));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<Map<String, Long>> getStats() {
+        // Aggregate counts across every profile — the page's health strip.
+        // Reuse repository.findAll() once and derive the three totals in-memory.
+        List<ClientCustomsProfile> all = repository.findAll();
+        long profiles = all.size();
+        long destinationsCovered = all.stream()
+                .flatMap(p -> p.getCountries().stream())
+                .distinct()
+                .count();
+        long clientsConfigured = all.stream()
+                .map(p -> p.getClientCode() == null ? "" : p.getClientCode().toUpperCase(Locale.ROOT))
+                .distinct()
+                .count();
+        Map<String, Long> out = new LinkedHashMap<>();
+        out.put("profiles", profiles);
+        out.put("destinationsCovered", destinationsCovered);
+        out.put("clientsConfigured", clientsConfigured);
+        return success("Customs profile stats.", out);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public String exportProfilesCsv(CustomsProfileFilters filters) {
+        List<ClientCustomsProfileDTO> profiles = fetchFiltered(filters);
+        StringBuilder csv = new StringBuilder(96 + profiles.size() * 128);
+        csv.append("Client code,Client name,Countries,Importer type,Importer,Importer city,Broker,Broker city,Account carrier,Account no,Incoterms,Currency\r\n");
+        for (ClientCustomsProfileDTO p : profiles) {
+            String countries = p.getCountries() == null ? "" : String.join(";", p.getCountries());
+            csv.append(csvCell(p.getClientCode())).append(',')
+               .append(csvCell(p.getClientName())).append(',')
+               .append(csvCell(countries)).append(',')
+               .append(csvCell(p.getImporterType())).append(',')
+               .append(csvCell(p.getImporterName())).append(',')
+               .append(csvCell(p.getImporterCity())).append(',')
+               .append(csvCell(nvl(p.getBrokerName(), p.getBrokerCompany()))).append(',')
+               .append(csvCell(p.getBrokerCity())).append(',')
+               .append(csvCell(p.getAccountCarrier())).append(',')
+               .append(csvCell(p.getAccountNo())).append(',')
+               .append(csvCell(p.getIncoterms())).append(',')
+               .append(csvCell(p.getCurrency())).append("\r\n");
+        }
+        return csv.toString();
+    }
+
+    /**
+     * In-memory apply-all-filters over every profile. Small dataset (typically
+     * fewer than a few hundred rows across the whole system), so the simplicity
+     * of a single fetch beats bespoke SQL. Sort + slice happen after.
+     */
+    private List<ClientCustomsProfileDTO> fetchFiltered(CustomsProfileFilters filters) {
+        Map<String, String> clientNames = clientRepository.findAll().stream()
+                .collect(Collectors.toMap(
+                        c -> c.getClientCode().toUpperCase(Locale.ROOT),
+                        com.multiship.backend.model.Client::getName, (a, b) -> a));
+
+        String search = norm(filters.getSearch());
+        String clientCode = norm(filters.getClientCode());
+        String carrier = norm(filters.getCarrier());
+        String broker = norm(filters.getBroker());
+        Set<String> countries = filters.getCountries() == null
+                ? Set.of()
+                : filters.getCountries().stream()
+                    .filter(s -> s != null && !s.isBlank())
+                    .map(s -> s.toUpperCase(Locale.ROOT))
+                    .collect(Collectors.toSet());
+
+        return repository.findAll().stream()
+                .filter(p -> matchesClient(p, clientCode))
+                .filter(p -> matchesCarrier(p, carrier))
+                .filter(p -> matchesBroker(p, broker))
+                .filter(p -> matchesCountries(p, countries))
+                .filter(p -> matchesSearch(p, clientNames, search))
+                .map(p -> {
+                    ClientCustomsProfileDTO dto = toDTO(p);
+                    dto.setClientName(clientNames.get(
+                            p.getClientCode() == null ? "" : p.getClientCode().toUpperCase(Locale.ROOT)));
+                    return dto;
+                })
+                .sorted(profileComparator(filters.getSortBy(), filters.getSortDirection()))
+                .toList();
+    }
+
+    private boolean matchesClient(ClientCustomsProfile p, String clientCode) {
+        if (clientCode.isEmpty()) return true;
+        return p.getClientCode() != null && p.getClientCode().equalsIgnoreCase(clientCode);
+    }
+
+    private boolean matchesCarrier(ClientCustomsProfile p, String carrier) {
+        if (carrier.isEmpty()) return true;
+        return p.getAccountCarrier() != null && p.getAccountCarrier().equalsIgnoreCase(carrier);
+    }
+
+    private boolean matchesBroker(ClientCustomsProfile p, String broker) {
+        if (broker.isEmpty()) return true;
+        boolean has = (p.getBrokerName() != null && !p.getBrokerName().isBlank())
+                || (p.getBrokerCompany() != null && !p.getBrokerCompany().isBlank());
+        return "YES".equals(broker) ? has : !has;
+    }
+
+    private boolean matchesCountries(ClientCustomsProfile p, Set<String> countries) {
+        if (countries.isEmpty()) return true;
+        for (com.multiship.backend.model.CustomsProfileCountry link : p.getCountryLinks()) {
+            if (link.getCountry() != null && countries.contains(link.getCountry().toUpperCase(Locale.ROOT))) return true;
+        }
+        return false;
+    }
+
+    private boolean matchesSearch(ClientCustomsProfile p, Map<String, String> clientNames, String search) {
+        if (search.isEmpty()) return true;
+        String needle = search.toLowerCase(Locale.ROOT);
+        StringBuilder hay = new StringBuilder(160);
+        hay.append(p.getClientCode() == null ? "" : p.getClientCode()).append(' ');
+        String name = clientNames.get(p.getClientCode() == null ? "" : p.getClientCode().toUpperCase(Locale.ROOT));
+        if (name != null) hay.append(name).append(' ');
+        if (p.getImporterName() != null) hay.append(p.getImporterName()).append(' ');
+        if (p.getBrokerName() != null) hay.append(p.getBrokerName()).append(' ');
+        if (p.getBrokerCompany() != null) hay.append(p.getBrokerCompany()).append(' ');
+        for (com.multiship.backend.model.CustomsProfileCountry link : p.getCountryLinks()) {
+            if (link.getCountry() != null) hay.append(link.getCountry()).append(' ');
+        }
+        return hay.toString().toLowerCase(Locale.ROOT).contains(needle);
+    }
+
+    private Comparator<ClientCustomsProfileDTO> profileComparator(String sortBy, String sortDirection) {
+        Comparator<ClientCustomsProfileDTO> cmp;
+        switch (sortBy == null ? "client" : sortBy) {
+            case "destinations":
+                cmp = Comparator.comparingInt(d -> d.getCountries() == null ? 0 : d.getCountries().size());
+                break;
+            case "importer":
+                cmp = Comparator.comparing(d -> d.getImporterName() == null ? "" : d.getImporterName(),
+                        String.CASE_INSENSITIVE_ORDER);
+                break;
+            case "broker":
+                cmp = Comparator.comparing(d -> nvl(d.getBrokerName(), d.getBrokerCompany()),
+                        String.CASE_INSENSITIVE_ORDER);
+                break;
+            case "client":
+            default:
+                cmp = Comparator.comparing(d -> d.getClientCode() == null ? "" : d.getClientCode(),
+                        String.CASE_INSENSITIVE_ORDER);
+        }
+        return "DESC".equalsIgnoreCase(sortDirection) ? cmp.reversed() : cmp;
+    }
+
+    private static String nvl(String a, String b) {
+        if (a != null && !a.isBlank()) return a;
+        if (b != null && !b.isBlank()) return b;
+        return "";
+    }
+
+    /** RFC-4180 CSV field: quote when the value contains ", newline, or a comma. */
+    private static String csvCell(String value) {
+        if (value == null) return "";
+        boolean needsQuote = value.indexOf(',') >= 0 || value.indexOf('"') >= 0
+                || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0;
+        if (!needsQuote) return value;
+        return '"' + value.replace("\"", "\"\"") + '"';
     }
 
     @Override

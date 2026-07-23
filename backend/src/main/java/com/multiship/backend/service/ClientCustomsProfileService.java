@@ -2,13 +2,34 @@ package com.multiship.backend.service;
 
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ClientCustomsProfileDTO;
+import com.multiship.backend.dto.CustomsProfileFilters;
+import com.multiship.backend.dto.PageResponseDTO;
 
 import java.util.List;
+import java.util.Map;
 
 public interface ClientCustomsProfileService {
 
     /** Every profile across all clients (master list) with client name. */
     ApiResponse<List<ClientCustomsProfileDTO>> listAll();
+
+    /**
+     * Filtered + sorted + paginated list for the Importer/Broker settings page.
+     * See {@link CustomsProfileFilters} for the recognised inputs.
+     */
+    ApiResponse<PageResponseDTO<ClientCustomsProfileDTO>> listPaginated(CustomsProfileFilters filters);
+
+    /**
+     * Cross-cutting counts for the page's health strip. Keys:
+     * {@code profiles}, {@code destinationsCovered}, {@code clientsConfigured}.
+     */
+    ApiResponse<Map<String, Long>> getStats();
+
+    /**
+     * Build a CSV export of every profile that matches the given filters,
+     * ignoring the page/size on {@link CustomsProfileFilters}.
+     */
+    String exportProfilesCsv(CustomsProfileFilters filters);
 
     /** All importer/broker profiles for a client. */
     ApiResponse<List<ClientCustomsProfileDTO>> list(String clientCode);
