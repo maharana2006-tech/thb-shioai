@@ -15,6 +15,9 @@ import java.util.Set;
  */
 public class ApiKeyPrincipal implements UserDetails {
 
+    /** clientCode value marking a key that ships for ALL clients (e.g. the WMS itself). */
+    public static final String ALL_CLIENTS = "*";
+
     private final Long apiKeyId;
     private final String keyName;
     private final String clientCode;
@@ -32,6 +35,8 @@ public class ApiKeyPrincipal implements UserDetails {
     public String getClientCode() { return clientCode; }
     public Set<String> getScopes() { return scopes; }
     public boolean hasScope(String scope) { return scopes.contains(scope) || scopes.contains("*"); }
+    /** True for a platform-wide key (e.g. the WMS) — the request must then name the client. */
+    public boolean isAllClients() { return ALL_CLIENTS.equals(clientCode); }
 
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {

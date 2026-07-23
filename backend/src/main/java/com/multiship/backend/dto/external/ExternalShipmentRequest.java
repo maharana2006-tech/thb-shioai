@@ -16,6 +16,12 @@ public class ExternalShipmentRequest {
     /** The caller's own order/shipment reference (prints on the label). */
     private String reference;
 
+    /**
+     * The client to ship on behalf of. Required for a platform-wide (WMS) key;
+     * for a client-bound key it may be omitted — if sent, it must match the key.
+     */
+    private String clientCode;
+
     /** Ship-method code that resolves to carrier + service (e.g. F77, P01). */
     private String shipMethod;
 

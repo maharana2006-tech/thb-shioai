@@ -10,6 +10,7 @@ import ClientsPage from '../pages/ClientsPage'
 import ImporterBrokerPage from '../components/ImporterBrokerPage'
 import ShippingServicesPage from '../components/ShippingServicesPage'
 import ShippingServiceMappingPage from '../components/ShippingServiceMappingPage'
+import ApiKeysPage from '../components/ApiKeysPage'
 import PackagesPage from '../components/PackagesPage'
 import DashboardPage from '../pages/DashboardPage'
 import OrdersPage from '../pages/OrdersPage'
@@ -43,6 +44,7 @@ export default function AppRoutes() {
               <Route path="importer-broker" element={<ImporterBrokerPage />} />
               <Route element={<RequireRole roles={['ADMIN']} />}>
                 <Route path="carriers" element={<CarrierPage />} />
+                <Route path="api-keys" element={<ApiKeysPage />} />
               </Route>
             </Route>
           </Route>

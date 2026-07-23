@@ -41,7 +41,10 @@ public class ApiKeyController {
     @PostMapping
     public ResponseEntity<ApiResponse<ApiKeyResponse>> issue(@Valid @RequestBody ApiKeyIssueRequest req,
                                                              @AuthenticationPrincipal UserDetails admin) {
-        if (!clientRepository.existsByClientCodeIgnoreCase(req.getClientCode().trim())) {
+        // "*" mints a platform-wide key (e.g. for the WMS): it ships for ANY client,
+        // and each external call must then name the client in its body.
+        boolean allClients = com.multiship.backend.config.ApiKeyPrincipal.ALL_CLIENTS.equals(req.getClientCode().trim());
+        if (!allClients && !clientRepository.existsByClientCodeIgnoreCase(req.getClientCode().trim())) {
             return ResponseEntity.status(404).body(ApiResponse.<ApiKeyResponse>builder()
                     .status("ERROR").code(404).timestamp(LocalDateTime.now())
                     .message("Client " + req.getClientCode() + " was not found.")

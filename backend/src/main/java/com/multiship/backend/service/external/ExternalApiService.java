@@ -77,7 +77,7 @@ public class ExternalApiService {
     // ─────────────────────────── create shipment ───────────────────────────
 
     public ExternalShipmentResponse createShipment(ApiKeyPrincipal caller, ExternalShipmentRequest req) {
-        String clientCode = caller.getClientCode();
+        String clientCode = effectiveClient(caller, req.getClientCode());
         if (req.getShipTo() == null || !StringUtils.hasText(req.getShipTo().getAddressLine1())) {
             throw new ExternalApiException(422, ErrorCode.VALIDATION_ERROR, "shipTo address is required.");
         }
@@ -194,7 +194,7 @@ public class ExternalApiService {
     // ─────────────────────────────── rates ─────────────────────────────────
 
     public ExternalRateResponse rate(ApiKeyPrincipal caller, ExternalRateRequest req) {
-        String clientCode = caller.getClientCode();
+        String clientCode = effectiveClient(caller, req.getClientCode());
         String destCountry = req.getShipTo() != null ? req.getShipTo().getCountryCode() : null;
         String originCountry = req.getShipFrom() != null ? req.getShipFrom().getCountryCode()
                 : carrierProperties.getShipper().getCountryCode();
@@ -354,6 +354,31 @@ public class ExternalApiService {
 
     // ─────────────────────────────── helpers ───────────────────────────────
 
+    /**
+     * The client a call operates on. A client-bound key always acts as its own
+     * client (a differing clientCode in the body is rejected, not silently
+     * ignored); a platform-wide (WMS) key must name an existing client per call.
+     */
+    private String effectiveClient(ApiKeyPrincipal caller, String requested) {
+        String req = StringUtils.hasText(requested) ? requested.trim() : null;
+        if (!caller.isAllClients()) {
+            if (req != null && !req.equalsIgnoreCase(caller.getClientCode())) {
+                throw new ExternalApiException(403, ErrorCode.UNAUTHORIZED,
+                        "This API key ships for client " + caller.getClientCode()
+                        + " and cannot act for '" + req + "'.");
+            }
+            return caller.getClientCode();
+        }
+        if (req == null) {
+            throw new ExternalApiException(422, ErrorCode.VALIDATION_ERROR,
+                    "clientCode is required — this is a platform-wide key, so each call must name the client it ships for.");
+        }
+        return clientRepository.findByClientCodeIgnoreCase(req)
+                .map(Client::getClientCode)
+                .orElseThrow(() -> new ExternalApiException(422, ErrorCode.VALIDATION_ERROR,
+                        "Client '" + req + "' was not found."));
+    }
+
     private Order loadScopedOrder(ApiKeyPrincipal caller, Long shipmentId) {
         if (shipmentId == null) {
             throw new ExternalApiException(404, ErrorCode.ORDER_NOT_FOUND, "Shipment not found.");
@@ -361,7 +386,10 @@ public class ExternalApiService {
         Order order = orderRepository.findByOrderNo(shipmentId.intValue()).orElse(null);
         String owner = order == null ? null
                 : firstNonBlank(order.getTenantId(), order.getCustNo());
-        if (order == null || owner == null || !owner.trim().equalsIgnoreCase(caller.getClientCode())) {
+        // A platform-wide (WMS) key may read/void any client's shipment.
+        boolean owned = owner != null
+                && (caller.isAllClients() || owner.trim().equalsIgnoreCase(caller.getClientCode()));
+        if (order == null || !owned) {
             // Do not leak existence of other clients' shipments.
             throw new ExternalApiException(404, ErrorCode.ORDER_NOT_FOUND, "Shipment " + shipmentId + " not found.");
         }
