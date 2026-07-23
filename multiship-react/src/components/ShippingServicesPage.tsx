@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import {
   FiBox,
   FiDownloadCloud,
@@ -106,7 +106,7 @@ export default function ShippingServicesPage() {
       setOriginCountries(catalog.originCountries)
       setPresets(presetList)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to load the catalog.')
+      notify.error(e instanceof Error ? e.message : 'Failed to load the catalog.')
     } finally {
       setLoading(false)
     }
@@ -158,12 +158,12 @@ export default function ShippingServicesPage() {
         const msg = `${head} — ${d.via}.`
         // A live carrier response gets a success check; a built-in/fallback
         // result is reported neutrally so it's never mistaken for live data.
-        if (d.live) toast.success(msg)
-        else toast(msg, { icon: 'ℹ️' })
+        if (d.live) notify.success(msg)
+        else notify.info(msg)
       }
       await load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to sync from the carrier.')
+      notify.error(e instanceof Error ? e.message : 'Failed to sync from the carrier.')
     } finally {
       setSyncing(null)
     }
@@ -174,7 +174,7 @@ export default function ShippingServicesPage() {
     try {
       await shippingConfigService.setServiceEnabled(svc.id, !svc.enabled)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to update the service.')
+      notify.error(e instanceof Error ? e.message : 'Failed to update the service.')
       void load()
     }
   }
@@ -192,11 +192,11 @@ export default function ShippingServicesPage() {
     const payload = [...pkgDraft].map((presetId) => ({ presetId }))
     try {
       await shippingConfigService.setServicePackages(pkgService.id, payload)
-      toast.success(`Allowed packages saved for ${pkgService.name}.`)
+      notify.success(`Allowed packages saved for ${pkgService.name}.`)
       setPkgService(null)
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to save packages.')
+      notify.error(e instanceof Error ? e.message : 'Failed to save packages.')
     }
   }
 

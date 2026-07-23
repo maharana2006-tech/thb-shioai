@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import type { CarrierConnectionPayload } from '../api/carrierService'
 import { syncCarrierSession } from './useAppSession'
 import { useCarriers } from './useCarriers'
@@ -85,7 +85,7 @@ export const useCarrier = () => {
 
     const status = (await fetchCarrierStatus()) || result
     syncSession(status)
-    toast.success(`${formatCarrierName(payload.carrierCode)} session connected.`)
+    notify.success(`${formatCarrierName(payload.carrierCode)} session connected.`)
     return status
   }
 
@@ -93,7 +93,7 @@ export const useCarrier = () => {
     await disconnectFromCarrier(carrierStatus?.carrierCode || undefined)
     const status = await fetchCarrierStatus()
     syncSession(status?.connected ? status : null)
-    toast.success('Carrier session disconnected.')
+    notify.success('Carrier session disconnected.')
     return status
   }
 

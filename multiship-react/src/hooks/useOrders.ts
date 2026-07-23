@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo } from 'react'
-import { toast } from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import {
   clearError as clearErrorAction,
@@ -111,7 +111,7 @@ export const useOrders = (): UseOrdersReturn => {
     try {
       await loadOrders()
     } catch (err: any) {
-      toast.error(err.message || 'Failed to fetch orders')
+      notify.error(err.message || 'Failed to fetch orders')
     }
   }, [loadOrders])
 
@@ -120,7 +120,7 @@ export const useOrders = (): UseOrdersReturn => {
       try {
         dispatch(setStatusFilter(status as 'ALL' | 'PENDING' | 'GENERATED' | 'ERROR'))
       } catch (err: any) {
-        toast.error(err.message || `Failed to switch to ${status} orders`)
+        notify.error(err.message || `Failed to switch to ${status} orders`)
       }
     },
     [dispatch]
@@ -131,7 +131,7 @@ export const useOrders = (): UseOrdersReturn => {
       try {
         dispatch(setSearchKeyword(keyword))
       } catch (err: any) {
-        toast.error(err.message || 'Failed to search orders')
+        notify.error(err.message || 'Failed to search orders')
       }
     },
     [dispatch]
@@ -141,7 +141,7 @@ export const useOrders = (): UseOrdersReturn => {
     try {
       await dispatch(fetchDashboardStatsThunk()).unwrap()
     } catch (err: any) {
-      toast.error(err.message || 'Failed to fetch dashboard stats')
+      notify.error(err.message || 'Failed to fetch dashboard stats')
     }
   }, [dispatch])
 
@@ -150,12 +150,12 @@ export const useOrders = (): UseOrdersReturn => {
       const id = typeof orderNo === 'string' ? Number(orderNo) : orderNo
       try {
         const result = await dispatch(generateLabelThunk(id)).unwrap()
-        toast.success(`Label generated successfully for order #${id}`)
+        notify.success(`Label generated successfully for order #${id}`)
         await loadOrders()
         return result
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        toast.error(message || `Failed to generate label for order #${id}`)
+        notify.error(message || `Failed to generate label for order #${id}`)
       }
     },
     [dispatch, loadOrders]

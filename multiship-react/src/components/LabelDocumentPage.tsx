@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import { FiArrowLeft, FiCopy, FiDownload, FiExternalLink, FiFileText, FiPrinter, FiTag } from 'react-icons/fi'
 import { orderService, type LabelDocumentPayload } from '../api/orderService'
 import { useAppSession } from '../hooks/useAppSession'
@@ -131,7 +131,7 @@ export default function LabelDocumentPage() {
     try {
       return await orderService.getLabelZpl(orderNo)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to fetch the ZPL label.')
+      notify.error(err instanceof Error ? err.message : 'Failed to fetch the ZPL label.')
       return null
     } finally {
       setZplBusy(false)
@@ -149,7 +149,7 @@ export default function LabelDocumentPage() {
     link.download = `label-${orderNo}.zpl`
     link.click()
     URL.revokeObjectURL(url)
-    toast.success(`label-${orderNo}.zpl downloaded — send it straight to a Zebra printer.`)
+    notify.success(`label-${orderNo}.zpl downloaded — send it straight to a Zebra printer.`)
   }
 
   const copyZpl = async () => {
@@ -158,9 +158,9 @@ export default function LabelDocumentPage() {
 
     try {
       await navigator.clipboard.writeText(zpl)
-      toast.success('ZPL copied — paste into labelary.com/viewer to preview the thermal print.')
+      notify.success('ZPL copied — paste into labelary.com/viewer to preview the thermal print.')
     } catch {
-      toast.error('Clipboard is blocked in this browser — use Download .zpl instead.')
+      notify.error('Clipboard is blocked in this browser — use Download .zpl instead.')
     }
   }
 

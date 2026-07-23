@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import toast from 'react-hot-toast'
+import { notify } from '../../utils/notify'
 import {
   FiBriefcase,
   FiGlobe,
@@ -270,28 +270,28 @@ export default function CustomsProfileModal({
 
   const handleSave = async () => {
     if (!clientCode) {
-      toast.error('Choose a client.')
+      notify.error('Choose a client.')
       return
     }
     const countries = form.countries ?? []
     if (!countries.length) {
-      toast.error('Select at least one destination country.')
+      notify.error('Select at least one destination country.')
       return
     }
     // One region per profile — also catches legacy cross-region data on edit.
     const region = regionOf(countries[0])
     if (countries.some((c) => regionOf(c) !== region)) {
-      toast.error('A profile covers one region — remove countries outside ' + region + '.')
+      notify.error('A profile covers one region — remove countries outside ' + region + '.')
       return
     }
     // A usable registered importer is mandatory — the customs gate must never
     // pass on a husk profile.
     if (!form.importerName?.trim()) {
-      toast.error('Importer name is required.')
+      notify.error('Importer name is required.')
       return
     }
     if (!form.importerAddress1?.trim() || !form.importerCity?.trim()) {
-      toast.error('Importer address line 1 and city are required — customs paperwork needs a real address.')
+      notify.error('Importer address line 1 and city are required — customs paperwork needs a real address.')
       return
     }
     // One importer registration is valid for exactly ONE customs territory
@@ -301,20 +301,20 @@ export default function CustomsProfileModal({
     const territory = territoryOf(countries[0])
     const outsider = countries.find((c) => territoryOf(c) !== territory)
     if (outsider) {
-      toast.error(
+      notify.error(
         `${countryName(outsider)} is outside ${territoryLabel(territory)} — an importer registration covers one customs territory. Create a separate profile for it.`
       )
       return
     }
     // The Importer of Record must be established IN that territory.
     if (form.importerCountry && territoryOf(form.importerCountry) !== territory) {
-      toast.error(`Importer country must be in ${territoryLabel(territory)}.`)
+      notify.error(`Importer country must be in ${territoryLabel(territory)}.`)
       return
     }
     // A named broker needs at least a name — otherwise ghost broker data
     // persists while the backend treats the profile as carrier-default.
     if (ownBroker && !form.brokerName?.trim()) {
-      toast.error('Enter the broker name — or choose "Carrier clears customs".')
+      notify.error('Enter the broker name — or choose "Carrier clears customs".')
       return
     }
     setSaving(true)
@@ -337,11 +337,11 @@ export default function CustomsProfileModal({
         importerType: 'BUSINESS',
         clientCode,
       })
-      toast.success(`Importer/Broker for ${clientCode} saved (${form.countries.length} destinations).`)
+      notify.success(`Importer/Broker for ${clientCode} saved (${form.countries.length} destinations).`)
       onSaved?.()
       onClose()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to save the profile.')
+      notify.error(e instanceof Error ? e.message : 'Failed to save the profile.')
     } finally {
       setSaving(false)
     }
@@ -349,15 +349,19 @@ export default function CustomsProfileModal({
 
   const handleDelete = async () => {
     if (!editing || !form.id) return
-    if (!window.confirm('Delete this importer/broker profile?')) return
+    if (!(await notify.confirm('Delete this importer/broker profile?', {
+      title: 'Delete profile',
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return
     setSaving(true)
     try {
       await customsProfileService.remove(clientCode, form.id)
-      toast.success('Profile deleted.')
+      notify.success('Profile deleted.')
       onSaved?.()
       onClose()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to delete the profile.')
+      notify.error(e instanceof Error ? e.message : 'Failed to delete the profile.')
     } finally {
       setSaving(false)
     }

@@ -43,7 +43,7 @@ export const settingsNavItems: Array<{
   { key: 'clients', label: 'Clients', to: settingsPaths.clients, iconKey: 'clients',
     description: 'Customer master data — who you ship for, their carrier accounts, and defaults.',
     roles: ['ADMIN', 'USER'] },
-  { key: 'carriers', label: 'Carriers', to: settingsPaths.carriers, iconKey: 'carrier',
+  { key: 'carriers', label: 'Carrier Accounts', to: settingsPaths.carriers, iconKey: 'carrier',
     description: 'Connect + verify live UPS / FedEx / USPS accounts (platform + client).',
     roles: ['ADMIN'] },
   { key: 'shipping-services', label: 'Shipping Services', to: settingsPaths.shippingServices, iconKey: 'service',

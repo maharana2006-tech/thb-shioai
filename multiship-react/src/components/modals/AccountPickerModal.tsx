@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import toast from 'react-hot-toast'
+import { notify } from '../../utils/notify'
 import { FiX } from 'react-icons/fi'
 import { accountRefService, type CarrierAccountRef } from '../../api/accountRefService'
 import { formatCarrierName } from '../../utils/carrierUtils'
@@ -57,7 +57,7 @@ export default function AccountPickerModal({
         setAccounts(own)
       })
       .catch((error) => {
-        toast.error(error instanceof Error ? error.message : 'Failed to load carrier accounts.')
+        notify.error(error instanceof Error ? error.message : 'Failed to load carrier accounts.')
       })
       .finally(() => setLoading(false))
   }, [clientCode, carrierCode])

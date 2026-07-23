@@ -1,18 +1,17 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import {
   FiActivity,
   FiAlertTriangle,
   FiBox,
   FiCheckCircle,
   FiEdit2,
+  FiMoreVertical,
   FiPlus,
-  FiPower,
   FiServer,
   FiStar,
   FiFilter,
-  FiSearch,
   FiShield,
   FiTruck,
   FiUser,
@@ -20,6 +19,7 @@ import {
   FiX,
   FiXCircle,
 } from 'react-icons/fi'
+import type { ColumnDef } from '@tanstack/react-table'
 import {
   accountRefService,
   type AccountRefUpsertPayload,
@@ -33,17 +33,12 @@ import {
   type CarrierEnvironment,
 } from '../utils/carrierUtils'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
+import AdvancedDataTable from './workspace/AdvancedDataTable'
 import CarrierLogo from './workspace/CarrierLogo'
-import TablePagination from './workspace/TablePagination'
 import Select from './workspace/Select'
 
-type TypeTab = 'all' | 'platform' | 'client'
-
-const typeTabs: Array<{ key: TypeTab; label: string }> = [
-  { key: 'all', label: 'All accounts' },
-  { key: 'platform', label: 'Platform accounts' },
-  { key: 'client', label: 'Client accounts' },
-]
+/** Which drawer input receives focus when opened via cell click. */
+type DrawerFocusField = 'accountName' | 'environment' | null
 
 const carrierOptions = [
   { code: 'UPS', id: 'ups', label: 'UPS' },
@@ -100,7 +95,7 @@ export default function CarrierConnections() {
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
   const [clientCodes, setClientCodes] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
-  const [typeTab, setTypeTab] = useState<TypeTab>('all')
+  const [typeFilter, setTypeFilter] = useState('') // PLATFORM | CLIENT
   const [carrierFilter, setCarrierFilter] = useState('')
   const [clientFilter, setClientFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('') // ACTIVE | INACTIVE
@@ -108,13 +103,35 @@ export default function CarrierConnections() {
   const [verifiedFilter, setVerifiedFilter] = useState('') // YES | NO
   const [defaultFilter, setDefaultFilter] = useState('') // YES (client default) | NO
   const [showFilters, setShowFilters] = useState(false)
+  const filtersRef = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState('')
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
   const [busyId, setBusyId] = useState<number | null>(null)
+
+  // Close the Filters popover on outside click / Escape.
+  useEffect(() => {
+    if (!showFilters) return
+    const onDocClick = (e: MouseEvent) => {
+      if (!filtersRef.current?.contains(e.target as Node)) setShowFilters(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowFilters(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [showFilters])
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawer, setDrawer] = useState<DrawerState>(emptyDrawer)
+  // One-shot signal: which drawer input to focus when the drawer opens next.
+  // Ref (not state) so setting it doesn't cascade a re-render, and reading it
+  // in the mount-focus effect doesn't trip react-hooks/set-state-in-effect.
+  const drawerFocusRef = useRef<DrawerFocusField>(null)
+  const accountNameRef = useRef<HTMLInputElement>(null)
+  const environmentRef = useRef<HTMLSelectElement>(null)
   const [drawerCheck, setDrawerCheck] = useState<{ state: 'idle' | 'checking' | 'ok' | 'fail'; message?: string }>({ state: 'idle' })
   const [saving, setSaving] = useState(false)
 
@@ -123,7 +140,7 @@ export default function CarrierConnections() {
     try {
       setAccounts(await accountRefService.listAccounts())
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to load the account book.')
+      notify.error(error instanceof Error ? error.message : 'Failed to load the account book.')
     } finally {
       setLoading(false)
     }
@@ -174,8 +191,8 @@ export default function CarrierConnections() {
     const q = query.trim().toLowerCase()
     return accounts
       .filter((a) => {
-        if (typeTab === 'platform' && !isPlatform(a)) return false
-        if (typeTab === 'client' && isPlatform(a)) return false
+        if (typeFilter === 'PLATFORM' && !isPlatform(a)) return false
+        if (typeFilter === 'CLIENT' && isPlatform(a)) return false
         if (carrierFilter && normalizeCarrierCode(a.carrierCode) !== carrierFilter) return false
         if (clientFilter && (a.customerNo || '').toUpperCase() !== clientFilter) return false
         if (statusFilter === 'ACTIVE' && !a.active) return false
@@ -199,11 +216,10 @@ export default function CarrierConnections() {
         if (acr !== bcr) return acr.localeCompare(bcr)
         return a.id - b.id
       })
-  }, [accounts, typeTab, carrierFilter, clientFilter, statusFilter, envFilter, verifiedFilter, defaultFilter, query])
+  }, [accounts, typeFilter, carrierFilter, clientFilter, statusFilter, envFilter, verifiedFilter, defaultFilter, query])
 
-  // Only the dropdown filters live in the collapsible panel — tabs and search
-  // have their own controls, so the badge/Clear count just those.
   const filterOnlyCount =
+    (typeFilter ? 1 : 0) +
     (carrierFilter ? 1 : 0) +
     (clientFilter ? 1 : 0) +
     (statusFilter ? 1 : 0) +
@@ -212,6 +228,7 @@ export default function CarrierConnections() {
     (defaultFilter ? 1 : 0)
 
   const clearFilters = () => {
+    setTypeFilter('')
     setCarrierFilter('')
     setClientFilter('')
     setStatusFilter('')
@@ -220,24 +237,14 @@ export default function CarrierConnections() {
     setDefaultFilter('')
   }
 
-  // Client-side pagination over the filtered set.
-  const totalPages = Math.max(1, Math.ceil(visibleAccounts.length / pageSize))
-  const currentPage = Math.min(page, totalPages)
-  const pagedAccounts = visibleAccounts.slice((currentPage - 1) * pageSize, currentPage * pageSize)
-
-  // Snap back to page 1 whenever the filtered result set changes.
-  useEffect(() => {
-    setPage(1)
-  }, [typeTab, carrierFilter, clientFilter, statusFilter, envFilter, verifiedFilter, defaultFilter, query, pageSize])
-
   const handleVerify = async (account: CarrierAccountRef) => {
     setBusyId(account.id)
     try {
       const response = await accountRefService.verifyAccount(account.id)
-      response.data?.verified ? toast.success(response.message) : toast.error(response.message)
+      response.data?.verified ? notify.success(response.message) : notify.error(response.message)
       await loadAccounts()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Verification failed.')
+      notify.error(error instanceof Error ? error.message : 'Verification failed.')
     } finally {
       setBusyId(null)
     }
@@ -247,10 +254,10 @@ export default function CarrierConnections() {
     setBusyId(account.id)
     try {
       await accountRefService.toggleActive(account.id)
-      toast.success(account.active ? 'Account deactivated.' : 'Account activated.')
+      notify.success(account.active ? 'Account deactivated.' : 'Account activated.')
       await loadAccounts()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update the account.')
+      notify.error(error instanceof Error ? error.message : 'Failed to update the account.')
     } finally {
       setBusyId(null)
     }
@@ -260,16 +267,16 @@ export default function CarrierConnections() {
     setBusyId(account.id)
     try {
       await accountRefService.setClientDefault(account.id)
-      toast.success(`${account.accountNumber} is now ${account.customerNo}'s default account.`)
+      notify.success(`${account.accountNumber} is now ${account.customerNo}'s default account.`)
       await loadAccounts()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to set the client default.')
+      notify.error(error instanceof Error ? error.message : 'Failed to set the client default.')
     } finally {
       setBusyId(null)
     }
   }
 
-  const openDrawer = (account?: CarrierAccountRef) => {
+  const openDrawer = (account?: CarrierAccountRef, focus: DrawerFocusField = null) => {
     setDrawerCheck({ state: 'idle' })
     if (account) {
       setDrawer({
@@ -287,12 +294,24 @@ export default function CarrierConnections() {
     } else {
       setDrawer(emptyDrawer)
     }
+    drawerFocusRef.current = focus
     setDrawerOpen(true)
   }
 
+  // Prefill focus on the specific field when the drawer opens via a cell click.
+  useEffect(() => {
+    if (!drawerOpen || !drawerFocusRef.current) return
+    const el = drawerFocusRef.current === 'accountName' ? accountNameRef.current : environmentRef.current
+    if (el) {
+      el.focus()
+      if ('select' in el) el.select()
+    }
+    drawerFocusRef.current = null
+  }, [drawerOpen])
+
   const runDrawerCheck = async () => {
     if (!drawer.clientId.trim() || !drawer.clientSecret.trim()) {
-      toast.error('Enter the client ID and secret first.')
+      notify.error('Enter the client ID and secret first.')
       return
     }
     setDrawerCheck({ state: 'checking' })
@@ -310,11 +329,11 @@ export default function CarrierConnections() {
 
   const handleSave = async () => {
     if (!drawer.accountNumber.trim() || !drawer.clientId.trim() || !drawer.clientSecret.trim()) {
-      toast.error('Account number, client ID, and client secret are required.')
+      notify.error('Account number, client ID, and client secret are required.')
       return
     }
     if (drawer.accountType === 'client' && !drawer.customerNo.trim()) {
-      toast.error('Choose a client for a client account.')
+      notify.error('Choose a client for a client account.')
       return
     }
 
@@ -331,30 +350,203 @@ export default function CarrierConnections() {
         clientDefault: drawer.accountType === 'client' ? drawer.clientDefault : undefined,
       }
       await accountRefService.upsertAccount(payload)
-      toast.success(`Account ${payload.accountNumber} saved to the account book.`)
+      notify.success(`Account ${payload.accountNumber} saved to the account book.`)
       setDrawerOpen(false)
       await loadAccounts()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save the account.')
+      notify.error(error instanceof Error ? error.message : 'Failed to save the account.')
     } finally {
       setSaving(false)
     }
   }
 
+  const columns = useMemo<ColumnDef<CarrierAccountRef, unknown>[]>(
+    () => [
+      {
+        id: 'carrier',
+        accessorFn: (a) => formatCarrierName(a.carrierCode),
+        header: 'Carrier',
+        cell: ({ row }) => {
+          const account = row.original
+          const platform = isPlatform(account)
+          return (
+            <span className="inline-flex items-center gap-2.5">
+              {platform ? (
+                <span className="h-4 w-4 shrink-0" />
+              ) : account.clientDefault && account.active ? (
+                <span title={`Default account for ${account.customerNo}`}>
+                  <FiStar className="h-4 w-4 shrink-0 fill-[#f2c94c] text-[#f2c94c]" />
+                </span>
+              ) : account.clientDefault && !account.active ? (
+                <span title={`Was ${account.customerNo}'s default — inactive, not used`}>
+                  <FiStar className="h-4 w-4 shrink-0 fill-slate-300 text-slate-300" />
+                </span>
+              ) : account.complete && account.active ? (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); void handleMakeClientDefault(account) }}
+                  disabled={busyId !== null}
+                  title={`Make this ${account.customerNo}'s default account`}
+                  className="shrink-0 text-slate-300 transition hover:text-[#f2c94c] disabled:opacity-50"
+                >
+                  <FiStar className="h-4 w-4" />
+                </button>
+              ) : (
+                <span className="h-4 w-4 shrink-0" />
+              )}
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-gradient-to-br from-white to-slate-100 shadow-sm ring-1 ring-slate-100">
+                <CarrierLogo carrierId={account.carrierCode} size={22} className="rounded" />
+              </span>
+              <span className="min-w-0">
+                <span className="block font-semibold text-slate-950">{formatCarrierName(account.carrierCode)}</span>
+                <span className="block text-[11px] text-slate-400">{account.accountNumber}</span>
+              </span>
+            </span>
+          )
+        },
+        meta: {
+          headerLabel: 'Carrier',
+          exportValue: (a: CarrierAccountRef) => `${formatCarrierName(a.carrierCode)} — ${a.accountNumber}`,
+        },
+      },
+      {
+        id: 'accountName',
+        accessorFn: (a) => a.accountName || '',
+        header: 'Account name',
+        cell: ({ row }) =>
+          row.original.accountName ? (
+            <span className="text-[12.5px] text-slate-700">{row.original.accountName}</span>
+          ) : (
+            <span className="text-[11.5px] italic text-slate-400">Unnamed — click to add</span>
+          ),
+        meta: {
+          headerLabel: 'Account name',
+          editByPicker: (a: CarrierAccountRef) => openDrawer(a, 'accountName'),
+        },
+      },
+      {
+        id: 'type',
+        accessorFn: (a) => (isPlatform(a) ? 'Platform' : a.customerNo || ''),
+        header: 'Type',
+        cell: ({ row }) => {
+          const account = row.original
+          return isPlatform(account) ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+              <FiBox className="h-3 w-3" />
+              Platform
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#412d15]/10 py-1 pl-1 pr-2.5 text-[11px] font-semibold text-[#412d15]">
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#412d15] text-[9px] font-bold uppercase text-white">
+                {(account.customerNo || '?').slice(0, 1)}
+              </span>
+              {account.customerNo}
+            </span>
+          )
+        },
+        meta: {
+          headerLabel: 'Type',
+          exportValue: (a: CarrierAccountRef) => (isPlatform(a) ? 'Platform' : `Client: ${a.customerNo || ''}`),
+        },
+      },
+      {
+        id: 'environment',
+        accessorFn: (a) => a.environment || 'SANDBOX',
+        header: 'Environment',
+        cell: ({ row }) => (
+          <span className="text-[12px] text-slate-500">{row.original.environment || 'SANDBOX'}</span>
+        ),
+        meta: {
+          headerLabel: 'Environment',
+          editByPicker: (a: CarrierAccountRef) => openDrawer(a, 'environment'),
+        },
+      },
+      {
+        id: 'status',
+        // Sort key: verified true > pending > false so healthy accounts float up.
+        accessorFn: (a) => (!a.complete ? -2 : !a.active ? -1 : a.verified === true ? 2 : a.verified === false ? 0 : 1),
+        header: 'Status',
+        cell: ({ row }) => {
+          const account = row.original
+          return (
+            <div className="flex items-center gap-2.5">
+              <ActiveToggle
+                active={account.active}
+                busy={busyId !== null}
+                onToggle={(e) => { e.stopPropagation(); void handleToggleActive(account) }}
+              />
+              {!account.complete ? (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">Incomplete</span>
+              ) : !account.active ? (
+                <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-600">Inactive</span>
+              ) : (
+                <VerifiedChip account={account} />
+              )}
+            </div>
+          )
+        },
+        meta: {
+          headerLabel: 'Status',
+          exportValue: (a: CarrierAccountRef) =>
+            !a.complete
+              ? 'Incomplete'
+              : !a.active
+                ? 'Inactive'
+                : a.verified === true
+                  ? 'Verified'
+                  : a.verified === false
+                    ? 'Check failed'
+                    : 'Unverified',
+        },
+      },
+      {
+        id: 'usage',
+        accessorFn: (a) => a.labelsGenerated || 0,
+        header: 'Usage',
+        cell: ({ row }) => {
+          const account = row.original
+          return (
+            <div className="text-[11.5px] text-slate-500">
+              <span className="block font-semibold tabular-nums text-slate-600">
+                {account.labelsGenerated || 0} label{(account.labelsGenerated || 0) === 1 ? '' : 's'}
+              </span>
+              {account.lastUsedAt ? relativeTime(account.lastUsedAt) : 'never used'}
+            </div>
+          )
+        },
+        meta: {
+          headerLabel: 'Usage',
+          exportValue: (a: CarrierAccountRef) => `${a.labelsGenerated || 0} labels; last used ${a.lastUsedAt || 'never'}`,
+        },
+      },
+      {
+        id: 'actions',
+        header: '',
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="text-right">
+            <RowActionsMenu
+              account={row.original}
+              busy={busyId !== null}
+              onVerify={() => void handleVerify(row.original)}
+              onEdit={() => openDrawer(row.original)}
+            />
+          </div>
+        ),
+        meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+      },
+    ],
+    // Handlers (handleVerify / handleToggleActive / handleMakeClientDefault /
+    // openDrawer) close over the latest state through their function bodies but
+    // themselves aren't referentially stable — including them would rebuild the
+    // column model every render. busyId is the one value the columns visually
+    // depend on for disabled states.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [busyId],
+  )
+
   return (
     <div className="space-y-4">
-      {/* Page-specific actions bar — Refresh is global (submenus row). */}
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => openDrawer()}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15]"
-        >
-          <FiPlus className="h-3.5 w-3.5" />
-          Add Account
-        </button>
-      </div>
-
       {/* ===== health strip ===== */}
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {[
@@ -377,284 +569,153 @@ export default function CarrierConnections() {
 
       {/* ===== account table ===== */}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        {/* toolbar: tabs · search · filters toggle */}
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="mr-auto flex flex-wrap gap-0.5 rounded-lg bg-slate-100 p-0.5" role="tablist">
-            {typeTabs.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                role="tab"
-                aria-selected={typeTab === t.key}
-                onClick={() => setTypeTab(t.key)}
-                className={`rounded-md px-3 py-1.5 text-[12.5px] font-semibold transition ${
-                  typeTab === t.key ? 'bg-white text-[#1f150c] shadow-sm' : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                {t.label}
-                <span className="ml-1.5 text-[11px] font-semibold tabular-nums text-slate-400">
-                  {t.key === 'all' ? accounts.length : t.key === 'platform' ? platformCount : clientCount}
-                </span>
-              </button>
-            ))}
-          </div>
-
-          <label className="flex min-w-[220px] items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-            <FiSearch className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search account #, name, client…"
-              className="w-full bg-transparent text-[12.5px] text-slate-950 outline-none"
-            />
-          </label>
-
-          <button
-            type="button"
-            onClick={() => setShowFilters((cur) => !cur)}
-            aria-pressed={showFilters}
-            className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-[12px] font-semibold transition ${
-              showFilters || filterOnlyCount
-                ? 'bg-[#1f150c] text-white'
-                : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            <FiFilter className="h-3.5 w-3.5" />
-            Filters
-            {filterOnlyCount ? (
-              <span className="rounded-full bg-white/25 px-1.5 py-0.5 text-[10px] tabular-nums">{filterOnlyCount}</span>
-            ) : null}
-          </button>
-        </div>
-
-        {/* collapsible labeled filter panel */}
-        {showFilters ? (
-          <div className="mt-3 rounded-2xl border border-[#412d15]/15 bg-gradient-to-br from-[#412d15]/[0.04] to-sky-50/40 p-4">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
-              <div>
-                <span className={filterLabelClass}><FiTruck className="h-3 w-3 text-emerald-600" />Carrier</span>
-                <Select value={carrierFilter} onChange={(e) => setCarrierFilter(e.target.value)} aria-label="Filter by carrier">
-                  <option value="">All carriers</option>
-                  <option value="ups">UPS</option>
-                  <option value="fedex">FedEx</option>
-                  <option value="usps">USPS</option>
-                </Select>
-              </div>
-              <div>
-                <span className={filterLabelClass}><FiUser className="h-3 w-3 text-[#412d15]" />Client</span>
-                <Select value={clientFilter} onChange={(e) => setClientFilter(e.target.value)} aria-label="Filter by client">
-                  <option value="">All clients</option>
-                  {clientCodes.map((code) => (
-                    <option key={code} value={code}>
-                      {code}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div>
-                <span className={filterLabelClass}><FiActivity className="h-3 w-3 text-sky-600" />Status</span>
-                <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filter by status">
-                  <option value="">Any status</option>
-                  <option value="ACTIVE">Active</option>
-                  <option value="INACTIVE">Inactive</option>
-                </Select>
-              </div>
-              <div>
-                <span className={filterLabelClass}><FiServer className="h-3 w-3 text-violet-600" />Environment</span>
-                <Select value={envFilter} onChange={(e) => setEnvFilter(e.target.value)} aria-label="Filter by environment">
-                  <option value="">Any environment</option>
-                  <option value="SANDBOX">Sandbox</option>
-                  <option value="PRODUCTION">Production</option>
-                </Select>
-              </div>
-              <div>
-                <span className={filterLabelClass}><FiShield className="h-3 w-3 text-emerald-600" />Verification</span>
-                <Select value={verifiedFilter} onChange={(e) => setVerifiedFilter(e.target.value)} aria-label="Filter by verification">
-                  <option value="">Any</option>
-                  <option value="YES">Verified</option>
-                  <option value="NO">Unverified</option>
-                </Select>
-              </div>
-              <div>
-                <span className={filterLabelClass}><FiStar className="h-3 w-3 text-amber-500" />Client default</span>
-                <Select value={defaultFilter} onChange={(e) => setDefaultFilter(e.target.value)} aria-label="Filter by client default">
-                  <option value="">Any</option>
-                  <option value="YES">Default</option>
-                  <option value="NO">Not default</option>
-                </Select>
-              </div>
-            </div>
-
-            {filterOnlyCount ? (
-              <div className="mt-3.5 flex justify-end border-t border-slate-200 pt-3">
+        {loading && !accounts.length ? (
+          <p className="py-10 text-center text-sm text-slate-500">Loading the account book…</p>
+        ) : (
+          <AdvancedDataTable<CarrierAccountRef>
+            tableKey="carriers"
+            columns={columns}
+            data={visibleAccounts}
+            search={{
+              value: query,
+              onChange: setQuery,
+              placeholder: 'Search account #, name, client…',
+            }}
+            filterToggle={
+              <div ref={filtersRef} className="relative">
                 <button
                   type="button"
-                  onClick={clearFilters}
-                  className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+                  onClick={() => setShowFilters((cur) => !cur)}
+                  aria-pressed={showFilters}
+                  aria-expanded={showFilters}
+                  aria-label="Filters"
+                  title="Filters"
+                  className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[12px] font-semibold transition md:px-3 ${
+                    showFilters || filterOnlyCount
+                      ? 'bg-[#1f150c] text-white'
+                      : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
                 >
-                  <FiX className="h-3.5 w-3.5" />
-                  Clear all filters
+                  <FiFilter className="h-3.5 w-3.5" />
+                  <span className="hidden md:inline">Filters</span>
+                  {filterOnlyCount ? (
+                    <span className="rounded-full bg-white/25 px-1.5 py-0.5 text-[10px] tabular-nums">{filterOnlyCount}</span>
+                  ) : null}
                 </button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        <p className="mt-2.5 text-[11.5px] text-slate-400">
-          Showing {visibleAccounts.length} of {accounts.length} account{accounts.length === 1 ? '' : 's'}
-        </p>
-
-        <div className="mt-3.5 overflow-x-auto">
-          <table className="w-full min-w-[880px] text-[13px] text-slate-700">
-            <thead className="border-b border-slate-200 text-left text-[10px] uppercase tracking-[0.16em] text-slate-500">
-              <tr>
-                <th className="px-2.5 py-3">Carrier</th>
-                <th className="px-2.5 py-3">Type</th>
-                <th className="px-2.5 py-3">Environment</th>
-                <th className="px-2.5 py-3">Status</th>
-                <th className="px-2.5 py-3">Usage</th>
-                <th className="px-2.5 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {pagedAccounts.map((account) => {
-                const platform = isPlatform(account)
-                return (
-                  <tr key={account.id} className={`transition hover:bg-slate-50/70 ${account.active ? '' : 'opacity-55'}`}>
-                    <td className="px-2.5 py-3">
-                      <span className="inline-flex items-center gap-2.5">
-                        {/* default star — coloured = this client's default */}
-                        {platform ? (
-                          <span className="h-4 w-4 shrink-0" />
-                        ) : account.clientDefault && account.active ? (
-                          <span title={`Default account for ${account.customerNo}`}>
-                            <FiStar className="h-4 w-4 shrink-0 fill-[#f2c94c] text-[#f2c94c]" />
-                          </span>
-                        ) : account.clientDefault && !account.active ? (
-                          <span title={`Was ${account.customerNo}'s default — inactive, not used`}>
-                            <FiStar className="h-4 w-4 shrink-0 fill-slate-300 text-slate-300" />
-                          </span>
-                        ) : account.complete && account.active ? (
-                          <button
-                            type="button"
-                            onClick={() => void handleMakeClientDefault(account)}
-                            disabled={busyId !== null}
-                            title={`Make this ${account.customerNo}'s default account`}
-                            className="shrink-0 text-slate-300 transition hover:text-[#f2c94c] disabled:opacity-50"
-                          >
-                            <FiStar className="h-4 w-4" />
-                          </button>
-                        ) : (
-                          <span className="h-4 w-4 shrink-0" />
-                        )}
-                        {/* premium carrier avatar */}
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-gradient-to-br from-white to-slate-100 shadow-sm ring-1 ring-slate-100">
-                          <CarrierLogo carrierId={account.carrierCode} size={22} className="rounded" />
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block font-semibold text-slate-950">{formatCarrierName(account.carrierCode)}</span>
-                          {account.accountName ? (
-                            <span className="block text-[11px] text-slate-400">{account.accountName}</span>
-                          ) : null}
-                        </span>
-                      </span>
-                    </td>
-                    <td className="px-2.5 py-3">
-                      {platform ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
-                          <FiBox className="h-3 w-3" />
-                          Platform account
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#412d15]/10 py-1 pl-1 pr-2.5 text-[11px] font-semibold text-[#412d15]">
-                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#412d15] text-[9px] font-bold uppercase text-white">
-                            {(account.customerNo || '?').slice(0, 1)}
-                          </span>
-                          {account.customerNo}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-2.5 py-3 text-[12px] text-slate-500">{account.environment || 'SANDBOX'}</td>
-                    <td className="px-2.5 py-3">
-                      {!account.complete ? (
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">Incomplete</span>
-                      ) : !account.active ? (
-                        <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-600">Inactive</span>
-                      ) : (
-                        <VerifiedChip account={account} />
-                      )}
-                    </td>
-                    <td className="px-2.5 py-3 text-[11.5px] text-slate-500">
-                      <span className="block font-semibold tabular-nums text-slate-600">
-                        {account.labelsGenerated || 0} label{(account.labelsGenerated || 0) === 1 ? '' : 's'}
-                      </span>
-                      {account.lastUsedAt ? relativeTime(account.lastUsedAt) : 'never used'}
-                    </td>
-                    <td className="px-2.5 py-3">
-                      <div className="flex flex-wrap justify-end gap-1.5">
-                        {account.complete && account.active ? (
-                          <button
-                            type="button"
-                            onClick={() => void handleVerify(account)}
-                            disabled={busyId !== null}
-                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
-                          >
-                            <FiShield className="h-3 w-3" />
-                            {busyId === account.id ? '…' : account.verified === true ? 'Re-verify' : 'Verify'}
-                          </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          onClick={() => openDrawer(account)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50"
-                        >
-                          <FiEdit2 className="h-3 w-3" />
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleToggleActive(account)}
-                          disabled={busyId !== null}
-                          className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition disabled:opacity-50 ${
-                            account.active
-                              ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
-                              : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                          }`}
-                        >
-                          <FiPower className="h-3 w-3" />
-                          {account.active ? 'Deactivate' : 'Activate'}
-                        </button>
+                {showFilters ? (
+                  <div
+                    role="dialog"
+                    aria-label="Filter accounts"
+                    className="absolute left-0 top-full z-30 mt-1.5 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_60px_rgba(15,23,42,0.15)]"
+                  >
+                    <div className="space-y-2.5">
+                      <div>
+                        <span className={filterLabelClass}><FiUsers className="h-3 w-3 text-[#412d15]" />Account type</span>
+                        <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} aria-label="Filter by account type">
+                          <option value="">All accounts</option>
+                          <option value="PLATFORM">Platform ({platformCount})</option>
+                          <option value="CLIENT">Client ({clientCount})</option>
+                        </Select>
                       </div>
-                    </td>
-                  </tr>
-                )
-              })}
+                      <div>
+                        <span className={filterLabelClass}><FiTruck className="h-3 w-3 text-emerald-600" />Carrier</span>
+                        <Select value={carrierFilter} onChange={(e) => setCarrierFilter(e.target.value)} aria-label="Filter by carrier">
+                          <option value="">All carriers</option>
+                          <option value="ups">UPS</option>
+                          <option value="fedex">FedEx</option>
+                          <option value="usps">USPS</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <span className={filterLabelClass}><FiUser className="h-3 w-3 text-[#412d15]" />Client</span>
+                        <Select value={clientFilter} onChange={(e) => setClientFilter(e.target.value)} aria-label="Filter by client">
+                          <option value="">All clients</option>
+                          {clientCodes.map((code) => (
+                            <option key={code} value={code}>
+                              {code}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div>
+                        <span className={filterLabelClass}><FiActivity className="h-3 w-3 text-sky-600" />Status</span>
+                        <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filter by status">
+                          <option value="">Any status</option>
+                          <option value="ACTIVE">Active</option>
+                          <option value="INACTIVE">Inactive</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <span className={filterLabelClass}><FiServer className="h-3 w-3 text-violet-600" />Environment</span>
+                        <Select value={envFilter} onChange={(e) => setEnvFilter(e.target.value)} aria-label="Filter by environment">
+                          <option value="">Any environment</option>
+                          <option value="SANDBOX">Sandbox</option>
+                          <option value="PRODUCTION">Production</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <span className={filterLabelClass}><FiShield className="h-3 w-3 text-emerald-600" />Verification</span>
+                        <Select value={verifiedFilter} onChange={(e) => setVerifiedFilter(e.target.value)} aria-label="Filter by verification">
+                          <option value="">Any</option>
+                          <option value="YES">Verified</option>
+                          <option value="NO">Unverified</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <span className={filterLabelClass}><FiStar className="h-3 w-3 text-amber-500" />Client default</span>
+                        <Select value={defaultFilter} onChange={(e) => setDefaultFilter(e.target.value)} aria-label="Filter by client default">
+                          <option value="">Any</option>
+                          <option value="YES">Default</option>
+                          <option value="NO">Not default</option>
+                        </Select>
+                      </div>
+                    </div>
 
-              {!visibleAccounts.length ? (
-                <tr>
-                  <td colSpan={6} className="px-2.5 py-12 text-center text-sm text-slate-500">
-                    {loading
-                      ? 'Loading the account book…'
-                      : accounts.length
-                      ? 'No accounts match the current filters.'
-                      : 'No accounts saved yet — add your first carrier account.'}
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-
-        {visibleAccounts.length > 0 ? (
-          <TablePagination
-            page={currentPage}
-            pageSize={pageSize}
-            totalPages={totalPages}
-            compact
-            onPageChange={setPage}
-            onPageSizeChange={setPageSize}
+                    <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2.5">
+                      {filterOnlyCount ? (
+                        <button
+                          type="button"
+                          onClick={clearFilters}
+                          className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+                        >
+                          <FiX className="h-3.5 w-3.5" />
+                          Clear
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => setShowFilters(false)}
+                        className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            }
+            caption={
+              <p className="text-[11.5px] text-slate-400">
+                Showing {visibleAccounts.length} of {accounts.length} account{accounts.length === 1 ? '' : 's'}
+              </p>
+            }
+            emptyState={
+              accounts.length
+                ? 'No accounts match the current filters.'
+                : 'No accounts saved yet — add your first carrier account.'
+            }
+            csvFilename="carrier-accounts"
+            toolbarActions={
+              <button
+                type="button"
+                onClick={() => openDrawer()}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
+              >
+                <FiPlus className="h-3.5 w-3.5" /> Add Account
+              </button>
+            }
           />
-        ) : null}
+        )}
       </section>
 
       {/* ===== add / edit drawer ===== */}
@@ -749,6 +810,7 @@ export default function CarrierConnections() {
               <DrawerStep n="3" title="Credentials">
                 <Field label="Account name">
                   <input
+                    ref={accountNameRef}
                     value={drawer.accountName}
                     onChange={(e) => setDrawer((c) => ({ ...c, accountName: e.target.value }))}
                     className={inputClassName}
@@ -785,6 +847,7 @@ export default function CarrierConnections() {
                 </Field>
                 <Field label="Environment">
                   <Select
+                    ref={environmentRef}
                     value={drawer.environment}
                     onChange={(e) => setDrawer((c) => ({ ...c, environment: e.target.value as CarrierEnvironment }))}
                   >
@@ -889,6 +952,109 @@ function VerifiedChip({ account }: { account: CarrierAccountRef }) {
     )
   }
   return <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">⚠ Unverified</span>
+}
+
+/** Inline switch used in the Status cell to toggle account.active. */
+function ActiveToggle({
+  active,
+  busy,
+  onToggle,
+}: {
+  active: boolean
+  busy: boolean
+  onToggle: (event: React.MouseEvent<HTMLButtonElement>) => void
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={active}
+      aria-label={active ? 'Deactivate account' : 'Activate account'}
+      onClick={onToggle}
+      disabled={busy}
+      title={active ? 'Deactivate' : 'Activate'}
+      className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition disabled:opacity-50 ${
+        active ? 'bg-emerald-500' : 'bg-slate-300'
+      }`}
+    >
+      <span
+        className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition ${
+          active ? 'translate-x-3.5' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
+  )
+}
+
+/** Per-row kebab (Verify + Edit). Verify only shown when the account is
+ *  complete + active; Edit is always available. */
+function RowActionsMenu({
+  account,
+  busy,
+  onVerify,
+  onEdit,
+}: {
+  account: CarrierAccountRef
+  busy: boolean
+  onVerify: () => void
+  onEdit: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDocClick = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [open])
+
+  const verifiable = account.complete && account.active
+
+  return (
+    <div ref={ref} className="relative inline-block text-left">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setOpen((c) => !c) }}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Row actions"
+        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
+      >
+        <FiMoreVertical className="h-3.5 w-3.5" />
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          className="absolute right-0 z-20 mt-1 w-40 overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-lg"
+        >
+          {verifiable ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => { setOpen(false); onVerify() }}
+              disabled={busy}
+              className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+            >
+              <FiShield className="h-3.5 w-3.5 text-emerald-600" />
+              {account.verified === true ? 'Re-verify' : 'Verify'}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => { setOpen(false); onEdit() }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            <FiEdit2 className="h-3.5 w-3.5 text-[#412d15]" />
+            Edit
+          </button>
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 function DrawerStep({ n, title, children }: { n: string; title: string; children: ReactNode }) {

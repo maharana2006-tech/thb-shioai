@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import { FiExternalLink, FiFilter, FiGlobe, FiLink, FiPlus, FiTrash2, FiTruck, FiUser, FiX } from 'react-icons/fi'
 import type { ColumnDef } from '@tanstack/react-table'
 import {
@@ -117,7 +117,7 @@ function ClientEditor({
       await onSaveField(row, { clientCode: value || null })
       finish(dir)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to update mapping.')
+      notify.error(e instanceof Error ? e.message : 'Failed to update mapping.')
     } finally {
       setBusy(false)
     }
@@ -150,7 +150,7 @@ function ShipViaEditor({
     if (busy) return
     const trimmed = value.trim()
     if (!trimmed) {
-      toast.error('Order Ship Via cannot be empty.')
+      notify.error('Order Ship Via cannot be empty.')
       return
     }
     if (row.shipviaCd === trimmed) {
@@ -162,7 +162,7 @@ function ShipViaEditor({
       await onSaveField(row, { shipviaCd: trimmed })
       finish(dir)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to update mapping.')
+      notify.error(e instanceof Error ? e.message : 'Failed to update mapping.')
     } finally {
       setBusy(false)
     }
@@ -179,16 +179,22 @@ function ShipViaEditor({
   )
 }
 
-/** Inline editor for the Carrier Ship Via cell — Select of enabled services. */
+/** Inline editor for the Carrier Ship Via cell — Select of enabled services.
+ *  Services whose scope doesn't match the mapping's inferred scope are grayed
+ *  out (still selectable) so the user sees the whole catalog and picks with
+ *  awareness of fit. */
 function ServiceEditor({
   row,
   finish,
   cancel,
   services,
   onSaveField,
+  scopeMatch,
 }: EditCellProps<ShipMethodRule> & {
   services: ShippingServiceItem[]
   onSaveField: (row: ShipMethodRule, patch: Partial<ShipMethodRule>) => Promise<void>
+  /** Called per service to decide if it matches the row's mapping scope. */
+  scopeMatch: (svc: ShippingServiceItem) => boolean
 }) {
   const [value, setValue] = useState(String(row.serviceId))
   const [busy, setBusy] = useState(false)
@@ -196,7 +202,7 @@ function ServiceEditor({
     if (busy) return
     const nextId = Number(value)
     if (!nextId) {
-      toast.error('Pick a carrier service.')
+      notify.error('Pick a carrier service.')
       return
     }
     if (row.serviceId === nextId) {
@@ -208,7 +214,7 @@ function ServiceEditor({
       await onSaveField(row, { serviceId: nextId })
       finish(dir)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to update mapping.')
+      notify.error(e instanceof Error ? e.message : 'Failed to update mapping.')
     } finally {
       setBusy(false)
     }
@@ -216,11 +222,20 @@ function ServiceEditor({
   const handlers = useCellKeyHandlers(save, cancel)
   return (
     <Select autoFocus value={value} onChange={(e) => setValue(e.target.value)} {...handlers}>
-      {services.map((s) => (
-        <option key={s.id} value={s.id} disabled={!s.enabled}>
-          {s.carrier} — {s.name}{s.enabled ? '' : ' (disabled)'}
-        </option>
-      ))}
+      {services.map((s) => {
+        const fits = scopeMatch(s)
+        const scopeTag = s.scope === 'DOMESTIC' ? ' [D]' : s.scope === 'INTERNATIONAL' ? ' [I]' : ' [D+I]'
+        return (
+          <option
+            key={s.id}
+            value={s.id}
+            disabled={!s.enabled}
+            style={fits ? undefined : { color: '#94a3b8' }}
+          >
+            {s.carrier} — {s.name}{scopeTag}{s.enabled ? '' : ' (disabled)'}{fits ? '' : ' — scope mismatch'}
+          </option>
+        )
+      })}
     </Select>
   )
 }
@@ -248,35 +263,40 @@ export default function ShippingServiceMappingPage() {
   const [ruleRegionFilter, setRuleRegionFilter] = useState('')
   const [ruleCarrierFilter, setRuleCarrierFilter] = useState('')
   const [showRuleFilters, setShowRuleFilters] = useState(false)
+  const filtersRef = useRef<HTMLDivElement>(null)
   // Add-form visibility. `adding` toggles the inline strip inside the table.
   // `popout` promotes it into a full modal dialog.
   const [adding, setAdding] = useState(false)
   const [popout, setPopout] = useState(false)
-  const inlineFormRef = useRef<HTMLDivElement | null>(null)
 
+  // Close the Filters popover on outside click / Escape.
+  useEffect(() => {
+    if (!showRuleFilters) return
+    const onDocClick = (e: MouseEvent) => {
+      if (!filtersRef.current?.contains(e.target as Node)) setShowRuleFilters(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowRuleFilters(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [showRuleFilters])
+
+  /**
+   * Cancel/close the add-form. Only fires from an explicit user action
+   * (the X icon, popout Cancel button, or a successful save) — never from
+   * click-outside or Escape, so opening the Ships-to zone modal doesn't
+   * eat the add-row. Also clears the draft so reopening starts blank.
+   */
   const closeAddForm = useCallback(() => {
     setAdding(false)
     setPopout(false)
+    setNewRule({ ...blankRule, destCodes: [] })
   }, [])
-
-  // Click-outside + Escape to dismiss the inline form (but not while the popout modal is open —
-  // that modal handles its own dismiss and would otherwise auto-close on any click).
-  useEffect(() => {
-    if (!adding || popout) return
-    const clickAway = (e: MouseEvent) => {
-      if (!inlineFormRef.current) return
-      if (!inlineFormRef.current.contains(e.target as Node)) closeAddForm()
-    }
-    const escape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeAddForm()
-    }
-    document.addEventListener('mousedown', clickAway)
-    document.addEventListener('keydown', escape)
-    return () => {
-      document.removeEventListener('mousedown', clickAway)
-      document.removeEventListener('keydown', escape)
-    }
-  }, [adding, popout, closeAddForm])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -289,7 +309,7 @@ export default function ShippingServiceMappingPage() {
       setRules(catalog.rules)
       setClients(clientPage.data?.content ?? [])
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to load the mapping catalog.')
+      notify.error(e instanceof Error ? e.message : 'Failed to load the mapping catalog.')
     } finally {
       setLoading(false)
     }
@@ -308,6 +328,54 @@ export default function ShippingServiceMappingPage() {
   }, [registerRefresh, load])
 
   const serviceById = useMemo(() => new Map(services.map((s) => [s.id, s])), [services])
+  const clientByCode = useMemo(
+    () => new Map(clients.map((c) => [c.clientCode, c] as const)),
+    [clients],
+  )
+
+  /**
+   * Domestic country for a mapping = the client's ship-from country when a
+   * specific client is set. When the mapping targets "Any client", we don't
+   * know what "domestic" means from the page; the zone modal offers its own
+   * inline Ship-from picker so the user can pick a fallback for that session.
+   * Service-scope filtering also falls back to "ANY" when this is null.
+   */
+  const domesticFor = useCallback(
+    (clientCode?: string | null): string | null => {
+      const c = clientCode ? clientByCode.get(clientCode) : null
+      return c?.shipFrom?.country ? c.shipFrom.country.toUpperCase() : null
+    },
+    [clientByCode],
+  )
+
+  /**
+   * Whether a rule (or a draft) targets domestic-only, international, or a
+   * mix — inferred from the destination country codes vs the domestic country.
+   * Returns 'DOMESTIC' | 'INTERNATIONAL' | 'BOTH' | 'ANY' (no destination).
+   */
+  const inferScope = useCallback(
+    (destCodes: string[], domesticCountry: string | null): 'DOMESTIC' | 'INTERNATIONAL' | 'BOTH' | 'ANY' => {
+      if (!destCodes.length) return 'ANY'
+      if (!domesticCountry) return 'ANY'
+      const dom = domesticCountry.toUpperCase()
+      const hasDom = destCodes.some((c) => c.toUpperCase() === dom)
+      const hasIntl = destCodes.some((c) => c.toUpperCase() !== dom)
+      if (hasDom && hasIntl) return 'BOTH'
+      return hasDom ? 'DOMESTIC' : 'INTERNATIONAL'
+    },
+    [],
+  )
+
+  /** A service's scope is compatible with a mapping's inferred scope. */
+  const serviceMatchesScope = (
+    svc: ShippingServiceItem,
+    mappingScope: 'DOMESTIC' | 'INTERNATIONAL' | 'BOTH' | 'ANY',
+  ): boolean => {
+    if (mappingScope === 'ANY') return true
+    if (svc.scope === 'BOTH') return true
+    if (mappingScope === 'BOTH') return true // mixed mapping: any single-scope service is a partial fit
+    return svc.scope === mappingScope
+  }
 
   // Distinct order-method codes that actually appear — feeds the Method filter.
   const methodCodes = useMemo(
@@ -360,7 +428,7 @@ export default function ShippingServiceMappingPage() {
 
   const saveNewRule = async () => {
     if (!newRule.shipviaCd.trim() || !newRule.serviceId) {
-      toast.error('Enter the order ship-method code and pick a carrier service.')
+      notify.error('Enter the order ship-method code and pick a carrier service.')
       return
     }
     try {
@@ -371,12 +439,12 @@ export default function ShippingServiceMappingPage() {
         destValue: newRule.destCodes.length ? newRule.destCodes.join(' ') : null,
         serviceId: Number(newRule.serviceId),
       })
-      toast.success('Mapping added.')
+      notify.success('Mapping added.')
       setNewRule({ ...blankRule, destCodes: [] })
       closeAddForm()
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to save the mapping.')
+      notify.error(e instanceof Error ? e.message : 'Failed to save the mapping.')
     }
   }
 
@@ -398,11 +466,11 @@ export default function ShippingServiceMappingPage() {
         destType: zoneCodes.length ? 'COUNTRIES' : 'ANY',
         destValue: zoneCodes.length ? zoneCodes.join(' ') : null,
       })
-      toast.success('Destination zone updated.')
+      notify.success('Destination zone updated.')
       setZoneFor(null)
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to update the zone.')
+      notify.error(e instanceof Error ? e.message : 'Failed to update the zone.')
     }
   }
 
@@ -420,12 +488,16 @@ export default function ShippingServiceMappingPage() {
 
   const removeRule = async (rule: ShipMethodRule) => {
     if (!rule.id) return
-    if (!window.confirm(`Remove this ${rule.shipviaCd} mapping?`)) return
+    if (!(await notify.confirm(`Remove this ${rule.shipviaCd} mapping?`, {
+      title: 'Remove mapping',
+      confirmLabel: 'Remove',
+      danger: true,
+    }))) return
     try {
       await shippingConfigService.deleteRule(rule.id)
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to remove the mapping.')
+      notify.error(e instanceof Error ? e.message : 'Failed to remove the mapping.')
     }
   }
 
@@ -514,7 +586,15 @@ export default function ShippingServiceMappingPage() {
             return svc ? `${svc.carrier} — ${svc.name}` : ''
           },
           editCell: (p: EditCellProps<ShipMethodRule>) => (
-            <ServiceEditor {...p} services={services} onSaveField={saveRuleField} />
+            <ServiceEditor
+              {...p}
+              services={services}
+              onSaveField={saveRuleField}
+              scopeMatch={(svc) => {
+                const scope = inferScope(ruleCodes(p.row), domesticFor(p.row.clientCode))
+                return serviceMatchesScope(svc, scope)
+              }}
+            />
           ),
         },
       },
@@ -537,11 +617,11 @@ export default function ShippingServiceMappingPage() {
         meta: { headerLabel: 'Actions', hideable: false, exportable: false },
       },
     ],
-    // Editors close over services / clients / saveRuleField. openZone /
-    // removeRule are stable enough that we skip them; adding them would
-    // rebuild every render.
+    // Editors close over services / clients / saveRuleField / domesticFor.
+    // openZone / removeRule are stable enough that we skip them; adding them
+    // would rebuild every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [services, serviceById, clients, saveRuleField],
+    [services, serviceById, clients, saveRuleField, domesticFor, inferScope],
   )
 
   return (
@@ -560,103 +640,117 @@ export default function ShippingServiceMappingPage() {
               placeholder: 'Search ship via, client, carrier, country…',
             }}
             filterToggle={
-              <button
-                type="button"
-                onClick={() => setShowRuleFilters((cur) => !cur)}
-                aria-pressed={showRuleFilters}
-                className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-semibold transition ${
-                  showRuleFilters || ruleFilterCount
-                    ? 'bg-[#1f150c] text-white'
-                    : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                <FiFilter className="h-3.5 w-3.5" />
-                Filters
-                {ruleFilterCount ? (
-                  <span className="rounded-full bg-white/25 px-1.5 py-0.5 text-[10px] tabular-nums">{ruleFilterCount}</span>
-                ) : null}
-              </button>
-            }
-            filterPanel={
-              showRuleFilters ? (
-                <div className="mt-3 rounded-2xl border border-[#412d15]/15 bg-gradient-to-br from-[#412d15]/[0.04] to-sky-50/40 p-4">
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
-                    <div>
-                      <span className={filterLabelClass}><FiLink className="h-3 w-3 text-sky-600" />Order Ship Via</span>
-                      <Select
-                        value={ruleMethodFilter}
-                        onChange={(e) => setRuleMethodFilter(e.target.value)}
-                        aria-label="Filter by order ship via"
-                      >
-                        <option value="">All ship vias</option>
-                        {methodCodes.map((code) => (
-                          <option key={code} value={code}>
-                            {code}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                    <div>
-                      <span className={filterLabelClass}><FiUser className="h-3 w-3 text-[#412d15]" />Client</span>
-                      <Select
-                        value={ruleClientFilter}
-                        onChange={(e) => setRuleClientFilter(e.target.value)}
-                        aria-label="Filter by client"
-                      >
-                        <option value="">All clients</option>
-                        {clients.map((c) => (
-                          <option key={c.clientCode} value={c.clientCode}>
-                            {c.clientCode}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                    <div>
-                      <span className={filterLabelClass}><FiGlobe className="h-3 w-3 text-emerald-600" />Destination region</span>
-                      <Select
-                        value={ruleRegionFilter}
-                        onChange={(e) => setRuleRegionFilter(e.target.value)}
-                        aria-label="Filter by destination region"
-                      >
-                        <option value="">All regions</option>
-                        {REGIONS.map((region) => (
-                          <option key={region} value={region}>
-                            {region}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                    <div>
-                      <span className={filterLabelClass}><FiTruck className="h-3 w-3 text-violet-600" />Carrier Ship Via</span>
-                      <Select
-                        value={ruleCarrierFilter}
-                        onChange={(e) => setRuleCarrierFilter(e.target.value)}
-                        aria-label="Filter by carrier ship via"
-                      >
-                        <option value="">All carriers</option>
-                        {CARRIERS.map((carrier) => (
-                          <option key={carrier} value={carrier}>
-                            {carrier}
-                          </option>
-                        ))}
-                      </Select>
-                    </div>
-                  </div>
-
+              <div ref={filtersRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowRuleFilters((cur) => !cur)}
+                  aria-pressed={showRuleFilters}
+                  aria-expanded={showRuleFilters}
+                  aria-label="Filters"
+                  title="Filters"
+                  className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[12px] font-semibold transition md:px-3 ${
+                    showRuleFilters || ruleFilterCount
+                      ? 'bg-[#1f150c] text-white'
+                      : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <FiFilter className="h-3.5 w-3.5" />
+                  <span className="hidden md:inline">Filters</span>
                   {ruleFilterCount ? (
-                    <div className="mt-3.5 flex justify-end border-t border-slate-200 pt-3">
+                    <span className="rounded-full bg-white/25 px-1.5 py-0.5 text-[10px] tabular-nums">{ruleFilterCount}</span>
+                  ) : null}
+                </button>
+                {showRuleFilters ? (
+                  <div
+                    role="dialog"
+                    aria-label="Filter mappings"
+                    className="absolute left-0 top-full z-30 mt-1.5 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_20px_60px_rgba(15,23,42,0.15)]"
+                  >
+                    <div className="space-y-2.5">
+                      <div>
+                        <span className={filterLabelClass}><FiLink className="h-3 w-3 text-sky-600" />Order Ship Via</span>
+                        <Select
+                          value={ruleMethodFilter}
+                          onChange={(e) => setRuleMethodFilter(e.target.value)}
+                          aria-label="Filter by order ship via"
+                        >
+                          <option value="">All ship vias</option>
+                          {methodCodes.map((code) => (
+                            <option key={code} value={code}>
+                              {code}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div>
+                        <span className={filterLabelClass}><FiUser className="h-3 w-3 text-[#412d15]" />Client</span>
+                        <Select
+                          value={ruleClientFilter}
+                          onChange={(e) => setRuleClientFilter(e.target.value)}
+                          aria-label="Filter by client"
+                        >
+                          <option value="">All clients</option>
+                          {clients.map((c) => (
+                            <option key={c.clientCode} value={c.clientCode}>
+                              {c.clientCode}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div>
+                        <span className={filterLabelClass}><FiGlobe className="h-3 w-3 text-emerald-600" />Destination region</span>
+                        <Select
+                          value={ruleRegionFilter}
+                          onChange={(e) => setRuleRegionFilter(e.target.value)}
+                          aria-label="Filter by destination region"
+                        >
+                          <option value="">All regions</option>
+                          {REGIONS.map((region) => (
+                            <option key={region} value={region}>
+                              {region}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div>
+                        <span className={filterLabelClass}><FiTruck className="h-3 w-3 text-violet-600" />Carrier Ship Via</span>
+                        <Select
+                          value={ruleCarrierFilter}
+                          onChange={(e) => setRuleCarrierFilter(e.target.value)}
+                          aria-label="Filter by carrier ship via"
+                        >
+                          <option value="">All carriers</option>
+                          {CARRIERS.map((carrier) => (
+                            <option key={carrier} value={carrier}>
+                              {carrier}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2.5">
+                      {ruleFilterCount ? (
+                        <button
+                          type="button"
+                          onClick={clearRuleFilters}
+                          className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+                        >
+                          <FiX className="h-3.5 w-3.5" />
+                          Clear
+                        </button>
+                      ) : null}
                       <button
                         type="button"
-                        onClick={clearRuleFilters}
-                        className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+                        onClick={() => setShowRuleFilters(false)}
+                        className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
                       >
-                        <FiX className="h-3.5 w-3.5" />
-                        Clear all filters
+                        Done
                       </button>
                     </div>
-                  ) : null}
-                </div>
-              ) : null
+                  </div>
+                ) : null}
+              </div>
             }
             caption={
               <p className="text-[11.5px] text-slate-400">
@@ -676,8 +770,12 @@ export default function ShippingServiceMappingPage() {
             }
             inlineFormRow={
               adding && !popout ? (
-                <div ref={inlineFormRef} className="flex flex-wrap items-center gap-2">
-                  <div className="min-w-[150px]">
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Prominent "New" badge so the row reads as an add-strip, not a data row. */}
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sky-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.1em] text-white shadow-sm">
+                    <FiPlus className="h-3 w-3" /> New mapping
+                  </span>
+                  <div className="min-w-[140px] flex-1">
                     <Select value={newRule.clientCode} onChange={(e) => setNewRule((c) => ({ ...c, clientCode: e.target.value }))}>
                       <option value="">Any client</option>
                       {clients.map((c) => (<option key={c.clientCode} value={c.clientCode}>{c.clientCode}</option>))}
@@ -687,48 +785,57 @@ export default function ShippingServiceMappingPage() {
                     value={newRule.shipviaCd}
                     onChange={(e) => setNewRule((c) => ({ ...c, shipviaCd: e.target.value.toUpperCase() }))}
                     placeholder="Ship via (e.g. P80)"
-                    className="w-32 rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-[12px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
+                    className="w-32 shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-[12px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
                   />
                   <button
                     type="button"
                     onClick={() => openZone('new')}
-                    className="inline-flex min-w-[160px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-[12px] font-semibold text-slate-600 transition hover:border-[#412d15]/40"
+                    className="inline-flex min-w-[160px] flex-1 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-[12px] font-semibold text-slate-600 transition hover:border-[#412d15]/40"
                   >
                     <FiGlobe className="h-3.5 w-3.5 shrink-0 text-sky-600" />
                     {newRule.destCodes.length ? <ZoneChips codes={newRule.destCodes} /> : 'Ships to — anywhere'}
                   </button>
-                  <div className="min-w-[220px] max-w-[300px] flex-1">
+                  <div className="min-w-[200px] flex-1">
                     <Select value={newRule.serviceId} onChange={(e) => setNewRule((c) => ({ ...c, serviceId: e.target.value }))}>
                       <option value="">Carrier ship via…</option>
-                      {services.filter((s) => s.enabled).map((s) => (
-                        <option key={s.id} value={s.id}>{s.carrier} — {s.name}</option>
-                      ))}
+                      {services.filter((s) => s.enabled).map((s) => {
+                        const scope = inferScope(newRule.destCodes, domesticFor(newRule.clientCode))
+                        const fits = serviceMatchesScope(s, scope)
+                        const tag = s.scope === 'DOMESTIC' ? ' [D]' : s.scope === 'INTERNATIONAL' ? ' [I]' : ' [D+I]'
+                        return (
+                          <option key={s.id} value={s.id} style={fits ? undefined : { color: '#94a3b8' }}>
+                            {s.carrier} — {s.name}{tag}{fits ? '' : ' — scope mismatch'}
+                          </option>
+                        )
+                      })}
                     </Select>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void saveNewRule()}
-                    className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-2 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPopout(true)}
-                    aria-label="Open in dialog"
-                    title="Open in a larger form"
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
-                  >
-                    <FiExternalLink className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={closeAddForm}
-                    aria-label="Close"
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
-                  >
-                    <FiX className="h-3.5 w-3.5" />
-                  </button>
+                  <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => void saveNewRule()}
+                      className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-4 py-2 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15]"
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPopout(true)}
+                      aria-label="Open in dialog"
+                      title="Open in a larger form"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
+                    >
+                      <FiExternalLink className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={closeAddForm}
+                      aria-label="Close"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
+                    >
+                      <FiX className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
               ) : null
             }
@@ -751,20 +858,25 @@ export default function ShippingServiceMappingPage() {
           ) : undefined
         }
         saveLabel={zoneFor === 'new' ? 'Use this zone' : 'Save zone'}
+        domesticCountry={
+          zoneFor === 'new'
+            ? domesticFor(newRule.clientCode)
+            : zoneFor
+              ? domesticFor(zoneFor.clientCode)
+              : null
+        }
       />
 
-      {/* Popout — the same add-form promoted to a 2-column modal for extra room. */}
+      {/* Popout — the same add-form promoted to a 2-column modal for extra room.
+          Backdrop click intentionally does NOT dismiss — only Cancel / X / Save
+          close the flow, so the user can't accidentally lose their draft. */}
       {adding && popout ? (
         <div
           className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
-          onClick={closeAddForm}
         >
-          <div
-            className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
             <div className="mb-3 flex items-start justify-between">
               <div>
                 <h3 className="inline-flex items-center gap-2 text-[15px] font-semibold text-slate-950">
@@ -827,9 +939,16 @@ export default function ShippingServiceMappingPage() {
                 </span>
                 <Select value={newRule.serviceId} onChange={(e) => setNewRule((c) => ({ ...c, serviceId: e.target.value }))}>
                   <option value="">Pick a carrier service…</option>
-                  {services.filter((s) => s.enabled).map((s) => (
-                    <option key={s.id} value={s.id}>{s.carrier} — {s.name}</option>
-                  ))}
+                  {services.filter((s) => s.enabled).map((s) => {
+                    const scope = inferScope(newRule.destCodes, domesticFor(newRule.clientCode))
+                    const fits = serviceMatchesScope(s, scope)
+                    const tag = s.scope === 'DOMESTIC' ? ' [D]' : s.scope === 'INTERNATIONAL' ? ' [I]' : ' [D+I]'
+                    return (
+                      <option key={s.id} value={s.id} style={fits ? undefined : { color: '#94a3b8' }}>
+                        {s.carrier} — {s.name}{tag}{fits ? '' : ' — scope mismatch'}
+                      </option>
+                    )
+                  })}
                 </Select>
               </label>
             </div>

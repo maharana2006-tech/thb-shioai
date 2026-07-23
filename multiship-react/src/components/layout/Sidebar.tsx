@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import toast from 'react-hot-toast'
+import { notify } from '../../utils/notify'
 import { FiChevronsLeft, FiChevronsRight, FiLogOut } from 'react-icons/fi'
 import { authService } from '../../api/authService'
 import { clearAuthSession, useAppSession } from '../../hooks/useAppSession'
@@ -54,7 +54,7 @@ export default function Sidebar({ pinned, onTogglePin }: SidebarProps) {
     }
 
     clearAuthSession()
-    toast.success('Logged out')
+    notify.success('Logged out')
     navigate('/login')
   }
 

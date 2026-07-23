@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import {
   FiArrowDown,
   FiArrowUp,
@@ -215,7 +215,7 @@ export default function OrdersWorkspace() {
       })
       .catch((error) => {
         if (cancelled) return
-        toast.error(error instanceof Error ? error.message : 'Failed to load orders.')
+        notify.error(error instanceof Error ? error.message : 'Failed to load orders.')
         setRows([])
       })
       .finally(() => {
@@ -307,7 +307,7 @@ export default function OrdersWorkspace() {
           return
         }
       }
-      toast(`${needing} selected orders need carrier details first.`, { icon: '✏️' })
+      notify.info(`${needing} selected orders need carrier details first.`)
       return
     }
 
@@ -370,7 +370,7 @@ export default function OrdersWorkspace() {
           // the Clients page; nothing to do per-order.
           if (error instanceof ApiError && error.errorCode === 'CUSTOMS_REQUIRED') {
             if (orderNos.length === 1) {
-              toast.error(error.message || 'Set up this client’s Importer/Broker for the destination country (Settings › Clients).')
+              notify.error(error.message || 'Set up this client’s Importer/Broker for the destination country (Settings › Clients).')
             }
             return
           }
@@ -403,11 +403,11 @@ export default function OrdersWorkspace() {
     )
 
     if (failures.length) {
-      toast.error(`${ok} generated, ${failures.length} failed (${failures[0]}) — see the Failed tab.`)
+      notify.error(`${ok} generated, ${failures.length} failed (${failures[0]}) — see the Failed tab.`)
     } else if (ok) {
-      toast.success(`${ok} label${ok === 1 ? '' : 's'} generated.`)
+      notify.success(`${ok} label${ok === 1 ? '' : 's'} generated.`)
     }
-    if (needing) toast(`${needing} orders still need carrier details.`, { icon: '✏️' })
+    if (needing) notify.info(`${needing} orders still need carrier details.`)
     if (needsDetailsHits[0]) openFillDetails(needsDetailsHits[0].orderNo, needsDetailsHits[0].resolution)
 
     setSelectedOrderNos((cur) => cur.filter((n) => !orderNos.includes(n)))
@@ -428,14 +428,12 @@ export default function OrdersWorkspace() {
     const readyOrders = await fetchAllReadyOrders()
 
     if (!readyOrders.length) {
-      toast('The ready queue is already clear.', { icon: '🎉' })
+      notify.info('The ready queue is already clear.')
       return
     }
 
     if (readyCount > readyOrders.length) {
-      toast(`Generating the first ${readyOrders.length} of ${readyCount} ready orders — run again for the rest.`, {
-        icon: '⚡',
-      })
+      notify.info(`Generating the first ${readyOrders.length} of ${readyCount} ready orders — run again for the rest.`)
     }
 
     await generateForOrders(readyOrders)
@@ -446,21 +444,21 @@ export default function OrdersWorkspace() {
     let generated = false
     try {
       await orderService.generateLabel(orderNo)
-      toast.success(`Label generated for order #${orderNo}.`)
+      notify.success(`Label generated for order #${orderNo}.`)
       setRows((cur) => cur.filter((o) => o.orderDetails.orderNo !== orderNo))
       generated = true
     } catch (error) {
       if (error instanceof ApiError && error.errorCode === 'NEEDS_CARRIER_DETAILS') {
-        toast.error('The account is still incomplete — check the credentials.')
+        notify.error('The account is still incomplete — check the credentials.')
       } else if (error instanceof ApiError && error.errorCode === 'NO_DEFAULT_ACCOUNT') {
-        toast.error('No account could be resolved — ask an admin to set a company default on the Carrier page.')
+        notify.error('No account could be resolved — ask an admin to set a company default on the Carrier page.')
       } else if (error instanceof ApiError && error.errorCode === 'CUSTOMS_REQUIRED') {
-        toast.error(error.message || 'Set up this client’s Importer/Broker for the destination country (Settings › Clients).')
+        notify.error(error.message || 'Set up this client’s Importer/Broker for the destination country (Settings › Clients).')
       } else if (error instanceof ApiError && (error.errorCode === 'LABEL_ALREADY_GENERATED' || error.status === 409)) {
         setRows((cur) => cur.filter((o) => o.orderDetails.orderNo !== orderNo))
         generated = true
       } else {
-        toast.error(error instanceof Error ? error.message : `Order #${orderNo} failed — see the Failed tab.`)
+        notify.error(error instanceof Error ? error.message : `Order #${orderNo} failed — see the Failed tab.`)
       }
     } finally {
       setGeneratingOrderNos((cur) => cur.filter((n) => n !== orderNo))
@@ -478,7 +476,7 @@ export default function OrdersWorkspace() {
     setGeneratingOrderNos((cur) => [...new Set([...cur, orderNo])])
     try {
       await orderService.generateLabel(orderNo, account.id)
-      toast.success(`Label generated for #${orderNo} via ${account.accountNumber}.`)
+      notify.success(`Label generated for #${orderNo} via ${account.accountNumber}.`)
       navigate(`/label/${orderNo}`)
       return
     } catch (error) {
@@ -486,7 +484,7 @@ export default function OrdersWorkspace() {
         navigate(`/label/${orderNo}`)
         return
       }
-      toast.error(error instanceof Error ? error.message : `Order #${orderNo} failed — see the Failed tab.`)
+      notify.error(error instanceof Error ? error.message : `Order #${orderNo} failed — see the Failed tab.`)
     } finally {
       setGeneratingOrderNos((cur) => cur.filter((n) => n !== orderNo))
     }
@@ -1181,7 +1179,7 @@ export default function OrdersWorkspace() {
           onClose={() => setAddClientCode(null)}
           onSaved={(client) => {
             setAddClientCode(null)
-            toast.success(`Client ${client.clientCode} registered — its orders are ready to generate.`)
+            notify.success(`Client ${client.clientCode} registered — its orders are ready to generate.`)
             refreshQueues()
           }}
         />

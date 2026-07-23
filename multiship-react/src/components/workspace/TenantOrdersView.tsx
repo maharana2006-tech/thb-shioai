@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import toast from 'react-hot-toast'
+import { notify } from '../../utils/notify'
 import { FiExternalLink, FiFileText, FiRefreshCw, FiTag } from 'react-icons/fi'
 import { orderService, type Order } from '../../api/orderService'
 import { formatCarrierName } from '../../utils/carrierUtils'
@@ -65,7 +65,7 @@ export default function TenantOrdersView({ tenantId }: TenantOrdersViewProps) {
         setTotalPages(Math.max(response.data?.totalPages ?? 1, 1))
       } catch (error) {
         if (cancelled) return
-        toast.error(error instanceof Error ? error.message : 'Failed to load your orders.')
+        notify.error(error instanceof Error ? error.message : 'Failed to load your orders.')
         setOrders([])
       } finally {
         if (!cancelled) setLoading(false)

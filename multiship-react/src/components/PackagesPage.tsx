@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import { FiDownloadCloud, FiEdit3, FiGlobe, FiPlus, FiStar, FiTrash2, FiTruck, FiX } from 'react-icons/fi'
 import { dimWeightOf, oversizeOf, shippingConfigService, type PackagePreset } from '../api/shippingConfigService'
 import { countryName } from '../utils/countries'
@@ -134,7 +134,7 @@ export default function PackagesPage() {
     try {
       setPresets(await shippingConfigService.listPresets())
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to load packages.')
+      notify.error(e instanceof Error ? e.message : 'Failed to load packages.')
     } finally {
       setLoading(false)
     }
@@ -153,25 +153,25 @@ export default function PackagesPage() {
   const save = async () => {
     if (!editing) return
     if (!editing.name.trim()) {
-      toast.error('Give the package a name.')
+      notify.error('Give the package a name.')
       return
     }
     if (editing.kind === 'CUSTOM' && (!editing.length || !editing.width || !editing.height)) {
-      toast.error('A custom box needs length, width and height.')
+      notify.error('A custom box needs length, width and height.')
       return
     }
     if (editing.kind === 'CARRIER' && !editing.carrierPackageCode?.trim()) {
-      toast.error("Carrier packaging needs the carrier's package code.")
+      notify.error("Carrier packaging needs the carrier's package code.")
       return
     }
     setSaving(true)
     try {
       await shippingConfigService.savePreset(editing)
-      toast.success(`Package '${editing.name.trim()}' saved.`)
+      notify.success(`Package '${editing.name.trim()}' saved.`)
       setEditing(null)
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to save the package.')
+      notify.error(e instanceof Error ? e.message : 'Failed to save the package.')
     } finally {
       setSaving(false)
     }
@@ -181,22 +181,26 @@ export default function PackagesPage() {
     if (!p.id) return
     try {
       await shippingConfigService.setDefaultPreset(p.id)
-      toast.success(`'${p.name}' is now the default package.`)
+      notify.success(`'${p.name}' is now the default package.`)
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to set the default.')
+      notify.error(e instanceof Error ? e.message : 'Failed to set the default.')
     }
   }
 
   const remove = async (p: PackagePreset) => {
     if (!p.id) return
-    if (!window.confirm(`Delete package '${p.name}'?`)) return
+    if (!(await notify.confirm(`Delete package '${p.name}'?`, {
+      title: 'Delete package',
+      confirmLabel: 'Delete',
+      danger: true,
+    }))) return
     try {
       await shippingConfigService.deletePreset(p.id)
-      toast.success(`Package '${p.name}' removed.`)
+      notify.success(`Package '${p.name}' removed.`)
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to delete the package.')
+      notify.error(e instanceof Error ? e.message : 'Failed to delete the package.')
     }
   }
 
@@ -276,13 +280,13 @@ export default function PackagesPage() {
       }
 
       if (added || updated) {
-        toast.success(`Carrier packaging · ${countryName(origin)}: ${added} new, ${updated} refreshed.`)
+        notify.success(`Carrier packaging · ${countryName(origin)}: ${added} new, ${updated} refreshed.`)
       }
       for (const s of skipped) {
-        toast.error(`${s.carrier}: ${s.message}`)
+        notify.error(`${s.carrier}: ${s.message}`)
       }
       if (!added && !updated && !skipped.length) {
-        toast.success(`Carrier packaging · ${countryName(origin)}: nothing to sync.`)
+        notify.success(`Carrier packaging · ${countryName(origin)}: nothing to sync.`)
       }
       await load()
     } finally {

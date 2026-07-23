@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { toast } from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import type { CarrierConnectionPayload } from '../api/carrierService'
 import {
   clearError as clearCarrierErrorAction,
@@ -26,7 +26,7 @@ export const useCarriers = () => {
     try {
       return await dispatch(fetchCarriersThunk()).unwrap()
     } catch (error) {
-      toast.error(getErrorMessage(error, 'Failed to fetch available carriers'))
+      notify.error(getErrorMessage(error, 'Failed to fetch available carriers'))
       return []
     }
   }, [dispatch])
@@ -35,7 +35,7 @@ export const useCarriers = () => {
     try {
       return await dispatch(getCarrierStatusThunk()).unwrap()
     } catch (error) {
-      toast.error(getErrorMessage(error, 'Failed to fetch carrier status'))
+      notify.error(getErrorMessage(error, 'Failed to fetch carrier status'))
       return null
     }
   }, [dispatch])
@@ -45,7 +45,7 @@ export const useCarriers = () => {
       try {
         return await dispatch(connectCarrierThunk(payload)).unwrap()
       } catch (error) {
-        toast.error(getErrorMessage(error, `Failed to connect ${payload.carrierCode}`))
+        notify.error(getErrorMessage(error, `Failed to connect ${payload.carrierCode}`))
         return null
       }
     },
@@ -57,7 +57,7 @@ export const useCarriers = () => {
       try {
         return await dispatch(disconnectCarrierThunk(carrierCode)).unwrap()
       } catch (error) {
-        toast.error(getErrorMessage(error, 'Failed to disconnect carrier'))
+        notify.error(getErrorMessage(error, 'Failed to disconnect carrier'))
         return null
       }
     },

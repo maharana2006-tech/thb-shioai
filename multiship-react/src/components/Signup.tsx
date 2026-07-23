@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useFormik } from 'formik'
-import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import { FiArrowRight, FiShield, FiUserPlus } from 'react-icons/fi'
 import { authService } from '../api/authService'
 import AuthField from './auth/AuthField'
@@ -29,8 +29,7 @@ export default function Signup() {
     onSubmit: async (values) => {
       setLoading(true)
 
-      const toastId = toast.loading('Registering operator profile...')
-
+      // Button already shows a loading state; no interim modal needed.
       try {
         const response = await authService.signup({
           username: values.username,
@@ -40,13 +39,13 @@ export default function Signup() {
           role: 'USER',
         })
 
-        toast.success(response.message || 'Operator account registered successfully!', { id: toastId })
+        notify.success(response.message || 'Operator account registered successfully!')
 
         setTimeout(() => {
           navigate('/login')
         }, 1200)
       } catch (error) {
-        toast.error(getErrorMessage(error), { id: toastId })
+        notify.error(getErrorMessage(error))
       } finally {
         setLoading(false)
       }

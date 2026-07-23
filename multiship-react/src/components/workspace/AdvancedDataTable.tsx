@@ -95,10 +95,37 @@ export interface AdvancedDataTableProps<T> {
   initialPageSize?: number
   /** Filename base for the CSV export (no extension). */
   csvFilename?: string
+  /**
+   * Override the built-in CSV export. Provide this on server-side tables where
+   * the visible data is only one page: the callback should fetch every filtered
+   * row from the backend and trigger the download. When set, the Export menu
+   * item calls this instead of building CSV from the current table view.
+   */
+  onExport?: () => void | Promise<void>
   /** Optional caption above the table body (e.g. "Showing N of M …"). */
   caption?: React.ReactNode
   /** Cap the table body height and give it its own scroll region. `null` opts out. */
   maxBodyHeight?: string | null
+
+  // ===== Server-side (manual) mode =====
+  // When any of these are set, the corresponding row model runs on the server
+  // and the table only renders whatever data is fed in for the current page.
+  /** true → parent controls pagination (opt-in server-side pagination). */
+  manualPagination?: boolean
+  /** true → parent controls sort order (opt-in server-side sorting). */
+  manualSorting?: boolean
+  /** Controlled sort state — required alongside manualSorting. */
+  sorting?: SortingState
+  /** Fired when the user clicks a header to sort. Server should re-fetch. */
+  onSortingChange?: (next: SortingState) => void
+  /** 0-based current page — required alongside manualPagination. */
+  pageIndex?: number
+  /** Rows per page — required alongside manualPagination. */
+  pageSize?: number
+  /** Total pages known to the server — required alongside manualPagination. */
+  pageCount?: number
+  /** Fired when the user clicks prev/next or changes page size. */
+  onPaginationChange?: (state: { pageIndex: number; pageSize: number }) => void
 }
 
 const densityRowClass: Record<Density, string> = {
@@ -296,8 +323,17 @@ export default function AdvancedDataTable<T>({
   initialDensity = 'compact',
   initialPageSize = 25,
   csvFilename,
+  onExport,
   caption,
   maxBodyHeight = '70vh',
+  manualPagination = false,
+  manualSorting = false,
+  sorting: sortingProp,
+  onSortingChange: onSortingChangeProp,
+  pageIndex: pageIndexProp,
+  pageSize: pageSizeProp,
+  pageCount: pageCountProp,
+  onPaginationChange,
 }: AdvancedDataTableProps<T>) {
   const defaultOrder = useMemo(
     () => columns.map((c) => c.id!).filter(Boolean) as string[],
@@ -312,7 +348,14 @@ export default function AdvancedDataTable<T>({
   // update it after mount (and back to localStorage).
   const persisted = useMemo(() => loadLayout(tableKey), [tableKey])
 
-  const [sorting, setSorting] = useState<SortingState>([])
+  const [internalSorting, setInternalSorting] = useState<SortingState>([])
+  const [internalPageIndex, setInternalPageIndex] = useState(0)
+  const [internalPageSize, setInternalPageSize] = useState(initialPageSize)
+  // In manual mode, the parent owns sort + pagination; in default mode we
+  // keep our own state so existing pages don't have to change anything.
+  const sorting = manualSorting && sortingProp ? sortingProp : internalSorting
+  const currentPageIndex = manualPagination ? pageIndexProp ?? 0 : internalPageIndex
+  const currentPageSize = manualPagination ? pageSizeProp ?? initialPageSize : internalPageSize
   const [columnOrder, setColumnOrder] = useState<ColumnOrderState>(
     () => persisted?.columnOrder ?? defaultOrder,
   )
@@ -359,9 +402,25 @@ export default function AdvancedDataTable<T>({
       columnOrder,
       columnSizing,
       columnPinning,
-      pagination: { pageIndex: 0, pageSize: initialPageSize },
+      pagination: { pageIndex: currentPageIndex, pageSize: currentPageSize },
     },
-    onSortingChange: setSorting,
+    manualSorting,
+    manualPagination,
+    pageCount: manualPagination ? pageCountProp ?? -1 : undefined,
+    onSortingChange: (updater) => {
+      const next = typeof updater === 'function' ? updater(sorting) : updater
+      if (manualSorting && onSortingChangeProp) onSortingChangeProp(next)
+      else setInternalSorting(next)
+    },
+    onPaginationChange: (updater) => {
+      const cur = { pageIndex: currentPageIndex, pageSize: currentPageSize }
+      const next = typeof updater === 'function' ? updater(cur) : updater
+      if (manualPagination && onPaginationChange) onPaginationChange(next)
+      else {
+        setInternalPageIndex(next.pageIndex)
+        setInternalPageSize(next.pageSize)
+      }
+    },
     onColumnVisibilityChange: setColumnVisibility,
     onColumnOrderChange: setColumnOrder,
     onColumnSizingChange: setColumnSizing,
@@ -371,13 +430,19 @@ export default function AdvancedDataTable<T>({
     enableColumnPinning: true,
     defaultColumn: { size: 160, minSize: 60, maxSize: 800 },
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+    // Only wire the client-side row models when not in manual mode: in manual
+    // mode the server has already sorted / paginated the data we render.
+    ...(manualSorting ? {} : { getSortedRowModel: getSortedRowModel() }),
+    ...(manualPagination ? {} : { getPaginationRowModel: getPaginationRowModel() }),
   })
 
+  // Client-side mode: reset to page 1 when the data set changes (e.g. filters
+  // in the parent narrow rows). Skip in manual mode — the parent controls the
+  // page, and this reset would otherwise fight it and cause an infinite loop.
   useEffect(() => {
+    if (manualPagination) return
     table.setPageIndex(0)
-  }, [data, table])
+  }, [data, table, manualPagination])
 
   const pageCount = table.getPageCount()
   const pageIndex = table.getState().pagination.pageIndex
@@ -387,6 +452,14 @@ export default function AdvancedDataTable<T>({
   const visibleColumnCount = table.getVisibleLeafColumns().length
 
   const runExport = () => {
+    if (onExport) {
+      // Server-side export: parent owns fetching every filtered row and
+      // triggering the download. Close the menu immediately so the user gets
+      // feedback while the fetch runs.
+      setOpenMenu(null)
+      void onExport()
+      return
+    }
     const matrix = exportRowValues(table)
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     downloadCsv(`${csvFilename || tableKey}-${stamp}.csv`, matrix)
@@ -762,9 +835,15 @@ export default function AdvancedDataTable<T>({
             </thead>
             <tbody className="divide-y divide-dashed divide-slate-200">
               {inlineFormRow ? (
-                <tr className="bg-slate-50/60">
-                  <td colSpan={visibleColumnCount} className="px-2.5 py-2.5">
-                    {inlineFormRow}
+                <tr>
+                  <td colSpan={visibleColumnCount} className="p-0">
+                    {/* Add-row: visually distinct band that spans the full
+                        table width. Sky accent bar on the left + gradient
+                        background make it read as a "new record" strip,
+                        clearly separated from the read-only rows below. */}
+                    <div className="border-y-2 border-sky-400 border-l-4 bg-gradient-to-r from-sky-50 via-white to-sky-50/40 px-4 py-3 shadow-sm">
+                      {inlineFormRow}
+                    </div>
                   </td>
                 </tr>
               ) : null}

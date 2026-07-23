@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3 } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import {
@@ -189,7 +189,7 @@ export default function NewShipmentPage() {
         setPackages(presets)
         setClients(clientPage.data?.content ?? [])
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : 'Failed to load shipment options.')
+        notify.error(e instanceof Error ? e.message : 'Failed to load shipment options.')
       } finally {
         if (alive) setLoading(false)
       }
@@ -362,15 +362,15 @@ export default function NewShipmentPage() {
   const removeItem = (i: number) => setItems((rows) => (rows.length > 1 ? rows.filter((_, idx) => idx !== i) : rows))
 
   const submit = async () => {
-    if (!carrier) return toast.error('Pick a carrier you have a verified account with.')
-    if (!accountNumber.trim()) return toast.error('Enter the bill-to account number.')
+    if (!carrier) return notify.error('Pick a carrier you have a verified account with.')
+    if (!accountNumber.trim()) return notify.error('Enter the bill-to account number.')
     if (!recipient.name.trim() || !recipient.addressLine1.trim() || !recipient.city.trim() || !recipient.postalCode.trim()) {
-      return toast.error('Recipient name, address, city and postal code are required.')
+      return notify.error('Recipient name, address, city and postal code are required.')
     }
     const w = Number(weight)
-    if (!w || w <= 0) return toast.error('Enter a shipment weight greater than zero.')
+    if (!w || w <= 0) return notify.error('Enter a shipment weight greater than zero.')
     if (isCustomPkg && (!Number(length) || !Number(width) || !Number(height))) {
-      return toast.error('Custom packaging needs length, width and height.')
+      return notify.error('Custom packaging needs length, width and height.')
     }
 
     const cleanItems: ManualShipmentItem[] = items
@@ -385,10 +385,10 @@ export default function NewShipmentPage() {
       }))
     if (isInternational) {
       if (!cleanItems.length) {
-        return toast.error('International shipments need at least one commercial-invoice item.')
+        return notify.error('International shipments need at least one commercial-invoice item.')
       }
       if (cleanItems.some((it) => it.unitValue == null || it.unitValue <= 0)) {
-        return toast.error('Each commercial-invoice item needs a unit value greater than zero.')
+        return notify.error('Each commercial-invoice item needs a unit value greater than zero.')
       }
     }
 
@@ -425,11 +425,11 @@ export default function NewShipmentPage() {
     try {
       const res = await orderService.generateManualLabel(payload)
       const orderNo = res.data?.orderNo
-      toast.success(res.message || 'Shipment label generated.')
+      notify.success(res.message || 'Shipment label generated.')
       navigate(orderNo ? `/label/${orderNo}` : '/orders')
     } catch (e) {
-      if (e instanceof ApiError) toast.error(e.message)
-      else toast.error(e instanceof Error ? e.message : 'Failed to generate the label.')
+      if (e instanceof ApiError) notify.error(e.message)
+      else notify.error(e instanceof Error ? e.message : 'Failed to generate the label.')
     } finally {
       setSubmitting(false)
     }

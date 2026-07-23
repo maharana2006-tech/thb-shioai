@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import toast from 'react-hot-toast'
+import { notify } from '../../utils/notify'
 import { FiArrowRight, FiPlus, FiStar, FiX } from 'react-icons/fi'
 import { ApiError } from '../../api/apiClient'
 import { clientService, type Address, type Client, type ClientUpsertPayload } from '../../api/clientService'
@@ -91,7 +91,7 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
 
   const handleSave = async () => {
     if (!form.clientCode.trim() || !form.name.trim()) {
-      toast.error('Client code and name are required.')
+      notify.error('Client code and name are required.')
       return
     }
 
@@ -99,7 +99,7 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
     // must be complete.
     const wantsAccount = !isEdit && showAccountForm
     if (wantsAccount && (!accountForm.accountNumber.trim() || !accountForm.clientId.trim() || !accountForm.clientSecret.trim())) {
-      toast.error('Complete the carrier account (number, client ID, secret) or collapse that section.')
+      notify.error('Complete the carrier account (number, client ID, secret) or collapse that section.')
       return
     }
 
@@ -120,28 +120,28 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
             customerNo: response.data.clientCode,
             clientDefault: accountForm.clientDefault,
           })
-          toast.success(
+          notify.success(
             `Client ${response.data.clientCode} created with its ${formatCarrierName(accountForm.carrierCode)} account${
               accountForm.clientDefault ? ' (default)' : ''
             }.`
           )
         } catch (accountError) {
-          toast.error(
+          notify.error(
             `Client created, but the carrier account failed: ${
               accountError instanceof Error ? accountError.message : 'unknown error'
             }. Add it via Edit.`
           )
         }
       } else {
-        toast.success(`Client ${response.data.clientCode} ${isEdit ? 'updated' : 'created'}.`)
+        notify.success(`Client ${response.data.clientCode} ${isEdit ? 'updated' : 'created'}.`)
       }
 
       onSaved(response.data)
     } catch (error) {
       if (error instanceof ApiError && error.errorCode === 'CLIENT_CODE_TAKEN') {
-        toast.error(`Client code ${form.clientCode.toUpperCase()} is already registered.`)
+        notify.error(`Client code ${form.clientCode.toUpperCase()} is already registered.`)
       } else {
-        toast.error(error instanceof Error ? error.message : 'Failed to save the client.')
+        notify.error(error instanceof Error ? error.message : 'Failed to save the client.')
       }
     } finally {
       setSaving(false)

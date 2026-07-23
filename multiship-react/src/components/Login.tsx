@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useFormik } from 'formik'
-import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import { FiArrowRight, FiLock, FiShield, FiUser } from 'react-icons/fi'
 import { authService, type AuthResponse } from '../api/authService'
 import { carrierService } from '../api/carrierService'
@@ -36,8 +36,7 @@ export default function Login() {
     onSubmit: async (values) => {
       setLoading(true)
 
-      const toastId = toast.loading('Authenticating credentials...')
-
+      // Button already shows a loading state; no interim modal needed.
       try {
         const res = await authService.login({
           username: values.username,
@@ -72,9 +71,7 @@ export default function Login() {
             })
           }
 
-          toast.success(`Welcome back, ${authData.username || values.username}. Redirecting...`, {
-            id: toastId,
-          })
+          notify.success(`Welcome back, ${authData.username || values.username}. Redirecting...`)
 
           setTimeout(() => {
             navigate(getHomePathForRole(role, carrierConnected))
@@ -83,7 +80,7 @@ export default function Login() {
           throw new Error('Invalid authentication token payload format received.')
         }
       } catch (error) {
-        toast.error(getErrorMessage(error), { id: toastId })
+        notify.error(getErrorMessage(error))
       } finally {
         setLoading(false)
       }

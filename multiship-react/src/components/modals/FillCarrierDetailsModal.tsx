@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import toast from 'react-hot-toast'
+import { notify } from '../../utils/notify'
 import { FiX, FiZap } from 'react-icons/fi'
 import { accountRefService } from '../../api/accountRefService'
 import type { OrderAccountResolution } from '../../api/accountRefService'
@@ -60,7 +60,7 @@ export default function FillCarrierDetailsModal({
 
   const handleSaveAndGenerate = async () => {
     if (!accountNumber.trim() || !clientId.trim() || !clientSecret.trim()) {
-      toast.error('Account number, client ID, and client secret are required.')
+      notify.error('Account number, client ID, and client secret are required.')
       return
     }
 
@@ -76,11 +76,11 @@ export default function FillCarrierDetailsModal({
         environment,
       })
 
-      toast.success(`Account ${accountNumber.trim()} saved — future orders will use it automatically.`)
+      notify.success(`Account ${accountNumber.trim()} saved — future orders will use it automatically.`)
       onClose()
       await onSaved()
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save the carrier account.')
+      notify.error(error instanceof Error ? error.message : 'Failed to save the carrier account.')
     } finally {
       setSaving(false)
     }

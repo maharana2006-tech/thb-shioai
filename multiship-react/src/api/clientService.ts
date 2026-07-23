@@ -1,4 +1,4 @@
-import { apiClient } from './apiClient'
+import { apiClient, BASE_URL } from './apiClient'
 import type { ApiResponse } from './orderService'
 import type { CarrierAccountRef } from './accountRefService'
 
@@ -113,5 +113,40 @@ export const clientService = {
       `/clients/${encodeURIComponent(clientCode)}/carrier-accounts`
     )
     return Array.isArray(response.data) ? response.data : []
+  },
+
+  /**
+   * Download every filtered row as CSV. Bypasses the JSON apiClient because
+   * the backend returns text/csv; we build the auth-bearing request by hand
+   * and trigger a synthetic anchor click to save the file.
+   */
+  exportClientsCsv: async (params: ClientListParams = {}): Promise<void> => {
+    const query = new URLSearchParams()
+    // Same param wiring as listClients, minus page/size — the endpoint
+    // streams every filtered row.
+    query.set('sortBy', params.sortBy ?? 'code')
+    query.set('sortDirection', params.sortDirection ?? 'ASC')
+    if (params.search?.trim()) query.set('search', params.search.trim())
+    if (params.status) query.set('status', params.status)
+    if (params.carrier) query.set('carrier', params.carrier)
+    if (params.hasOrders) query.set('hasOrders', params.hasOrders)
+    if (params.code?.trim()) query.set('code', params.code.trim())
+    if (params.name?.trim()) query.set('name', params.name.trim())
+    if (params.city?.trim()) query.set('city', params.city.trim())
+
+    const token = localStorage.getItem('multiship_token')
+    const response = await fetch(`${BASE_URL}/clients/export.csv?${query.toString()}`, {
+      method: 'GET',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
+    if (!response.ok) throw new Error(`Export failed (HTTP ${response.status}).`)
+    const blob = await response.blob()
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `clients-${stamp}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
   },
 }
