@@ -708,7 +708,7 @@ export default function NewShipmentPage() {
             </div>
 
             {/* ── Carrier & package ── */}
-            <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+            <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-2">
               <SectionCard
                 icon={<FiTruck className="h-3.5 w-3.5" />}
                 title="Account & service"
@@ -718,8 +718,8 @@ export default function NewShipmentPage() {
                   </span>
                 }
               >
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <Field label="Account (bill to)" required className="sm:col-span-2">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <Field label="Account (bill to)" required>
                     <input
                       className={inputCls}
                       list="bill-to-accounts"
@@ -793,24 +793,24 @@ export default function NewShipmentPage() {
               }
             >
               <div className="space-y-3">
-                <Field label="Packaging" required>
-                  <select className={inputCls} value={packageChoice} onChange={(e) => setPackageChoice(e.target.value)}>
-                    <optgroup label={`${CARRIER_LABEL[carrier] || carrier} packaging`}>
-                      {packagesForCarrier.map((p) => (
-                        <option key={p.id} value={String(p.id)}>{p.name}</option>
-                      ))}
-                    </optgroup>
-                    {customBoxes.length ? (
-                      <optgroup label="Your boxes">
-                        {customBoxes.map((p) => (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <Field label="Packaging" required>
+                    <select className={inputCls} value={packageChoice} onChange={(e) => setPackageChoice(e.target.value)}>
+                      <optgroup label={`${CARRIER_LABEL[carrier] || carrier} packaging`}>
+                        {packagesForCarrier.map((p) => (
                           <option key={p.id} value={String(p.id)}>{p.name}</option>
                         ))}
                       </optgroup>
-                    ) : null}
-                    <option value={CUSTOM_PKG}>Custom package…</option>
-                  </select>
-                </Field>
-                <div className="grid grid-cols-2 gap-3">
+                      {customBoxes.length ? (
+                        <optgroup label="Your boxes">
+                          {customBoxes.map((p) => (
+                            <option key={p.id} value={String(p.id)}>{p.name}</option>
+                          ))}
+                        </optgroup>
+                      ) : null}
+                      <option value={CUSTOM_PKG}>Custom package…</option>
+                    </select>
+                  </Field>
                   <Field label={`Weight (${weightUnit.toLowerCase()})`} required>
                     <input className={inputCls} type="number" min="0" step="0.1" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="2.5" />
                   </Field>
