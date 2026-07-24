@@ -34,12 +34,12 @@ type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'gene
 
 /** Server-side query behind each view of the workspace. */
 const VIEW_QUERY: Record<View, { status?: string; resolution?: string; defaultDirection: 'ASC' | 'DESC' }> = {
-  all: { defaultDirection: 'ASC' },
-  ready: { status: 'PENDING', resolution: 'READY', defaultDirection: 'ASC' },
-  details: { status: 'PENDING', resolution: 'NEEDS_DETAILS', defaultDirection: 'ASC' },
-  client: { status: 'PENDING', resolution: 'CLIENT_MISSING', defaultDirection: 'ASC' },
-  choose: { status: 'PENDING', resolution: 'CHOOSE_ACCOUNT', defaultDirection: 'ASC' },
-  failed: { status: 'ERROR', defaultDirection: 'ASC' },
+  all: { defaultDirection: 'DESC' },
+  ready: { status: 'PENDING', resolution: 'READY', defaultDirection: 'DESC' },
+  details: { status: 'PENDING', resolution: 'NEEDS_DETAILS', defaultDirection: 'DESC' },
+  client: { status: 'PENDING', resolution: 'CLIENT_MISSING', defaultDirection: 'DESC' },
+  choose: { status: 'PENDING', resolution: 'CHOOSE_ACCOUNT', defaultDirection: 'DESC' },
+  failed: { status: 'ERROR', defaultDirection: 'DESC' },
   generated: { status: 'GENERATED', defaultDirection: 'DESC' },
 }
 
@@ -103,7 +103,7 @@ export default function OrdersWorkspace() {
   const [dateTo, setDateTo] = useState('')
   const [clientCodes, setClientCodes] = useState<string[]>([])
   const [sortBy, setSortBy] = useState('orderNo')
-  const [sortDirection, setSortDirection] = useState<'ASC' | 'DESC'>('ASC')
+  const [sortDirection, setSortDirection] = useState<'ASC' | 'DESC'>('DESC')
   const [showFilters, setShowFilters] = useState(false)
   const emptyColumnFilters = { orderNo: '', customer: '', city: '', status: '', tracking: '' }
   const [columnFilters, setColumnFilters] = useState(emptyColumnFilters)
