@@ -55,6 +55,13 @@ public class ManualShipmentRequest {
     /** Optional client/customer code to tag the shipment with. */
     private String clientCode;
 
+    /**
+     * Optional ship-from warehouse code (must be attached to
+     * {@link #clientCode}). When set, its address wins over the {@link #sender}
+     * block. Ignored for ad-hoc shipments with no client.
+     */
+    private String warehouseCode;
+
     /** Declared/customs value. */
     private BigDecimal declaredValue;
 

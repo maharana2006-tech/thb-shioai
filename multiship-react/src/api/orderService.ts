@@ -373,6 +373,9 @@ export interface ManualShipmentPayload {
   weight: number
   weightUnit?: string
   clientCode?: string
+  /** Ship-from warehouse (must be attached to clientCode). When set, its
+   *  address overrides the sender block. Ignored for ad-hoc shipments. */
+  warehouseCode?: string
   declaredValue?: number | null
   goodsDescription?: string
   reference?: string

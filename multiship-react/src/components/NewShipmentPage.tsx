@@ -651,6 +651,7 @@ export default function NewShipmentPage() {
       weight: w,
       weightUnit,
       clientCode: clientCode.trim() || undefined,
+      warehouseCode: warehouseCode || undefined,
       declaredValue: declaredValue ? Number(declaredValue) : null,
       ...(isInternational ? { items: cleanItems, reasonForExport, currency, incoterms } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
