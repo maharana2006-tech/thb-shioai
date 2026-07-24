@@ -7,6 +7,7 @@ import {
   FiGlobe,
   FiHome,
   FiSend,
+  FiUsers,
   FiX,
 } from 'react-icons/fi'
 import {
@@ -17,6 +18,7 @@ import {
   type ServicePackageLink,
   type ShippingServiceItem,
 } from '../api/shippingConfigService'
+import { allowlistUsageService, type ClientAllowedService } from '../api/clientCatalogService'
 import { countryName } from '../utils/countries'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 
@@ -84,6 +86,7 @@ export default function ShippingServicesPage() {
   const [services, setServices] = useState<ShippingServiceItem[]>([])
   const [links, setLinks] = useState<ServicePackageLink[]>([])
   const [presets, setPresets] = useState<PackagePreset[]>([])
+  const [assignments, setAssignments] = useState<ClientAllowedService[]>([])
   const [loading, setLoading] = useState(true)
   /** Service whose allowed-packages modal is open. */
   const [pkgService, setPkgService] = useState<ShippingServiceItem | null>(null)
@@ -97,14 +100,17 @@ export default function ShippingServicesPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [catalog, presetList] = await Promise.all([
+      const [catalog, presetList, usageResp] = await Promise.all([
         shippingConfigService.catalog(),
         shippingConfigService.listPresets(),
+        allowlistUsageService.services(),
       ])
       setServices(catalog.services)
       setLinks(catalog.links)
       setOriginCountries(catalog.originCountries)
       setPresets(presetList)
+      // Usage is decorative — a fetch failure shouldn't break the catalog view.
+      setAssignments(usageResp.data ?? [])
     } catch (e) {
       notify.error(e instanceof Error ? e.message : 'Failed to load the catalog.')
     } finally {
@@ -143,6 +149,12 @@ export default function ShippingServicesPage() {
     links.forEach((l) => m.set(l.serviceId, [...(m.get(l.serviceId) ?? []), l]))
     return m
   }, [links])
+  /** service id -> allowlist rows (each = one client using the service). */
+  const assignmentsByService = useMemo(() => {
+    const m = new Map<number, ClientAllowedService[]>()
+    assignments.forEach((a) => m.set(a.serviceId, [...(m.get(a.serviceId) ?? []), a]))
+    return m
+  }, [assignments])
   const enabledCount = visibleServices.filter((s) => s.enabled).length
 
   const syncCarrier = async (carrier: string) => {
@@ -328,6 +340,13 @@ export default function ShippingServicesPage() {
                 <ul className="divide-y divide-dashed divide-slate-200">
                   {list.map((s, i) => {
                     const pkgCount = (linksByService.get(s.id) ?? []).length
+                    const clientRows = assignmentsByService.get(s.id) ?? []
+                    const clientCount = clientRows.length
+                    const clientTooltip = clientRows.length
+                      ? clientRows
+                          .map((r) => `${r.clientCode}${r.isDefault ? ' ★' : ''}`)
+                          .join(', ')
+                      : 'No clients allowed yet.'
                     return (
                       <li key={s.id} className="flex items-center gap-2.5 px-4 py-2.5">
                         <span className="w-5 shrink-0 font-mono text-[9px] font-bold tracking-widest text-slate-300">
@@ -357,6 +376,16 @@ export default function ShippingServicesPage() {
                         >
                           <FiBox className="h-3 w-3" /> {pkgCount || '+'}
                         </button>
+                        <span
+                          title={`Assigned to: ${clientTooltip}`}
+                          className={`inline-flex items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
+                            clientCount
+                              ? 'border-[#412d15]/20 bg-[#412d15]/[0.06] text-[#412d15]'
+                              : 'border-slate-200 bg-white text-slate-400'
+                          }`}
+                        >
+                          <FiUsers className="h-3 w-3" /> {clientCount || 0}
+                        </span>
                         <span
                           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ring-1 ${
                             s.scope === 'INTERNATIONAL' ? 'bg-sky-50 text-sky-700 ring-sky-100' : 'bg-emerald-50 text-emerald-700 ring-emerald-100'

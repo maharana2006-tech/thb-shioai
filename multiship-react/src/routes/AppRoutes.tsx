@@ -13,6 +13,7 @@ import ShippingServiceMappingPage from '../components/ShippingServiceMappingPage
 import ApiKeysPage from '../components/ApiKeysPage'
 import ApiReferencePage from '../components/ApiReferencePage'
 import PackagesPage from '../components/PackagesPage'
+import WarehousesPage from '../components/WarehousesPage'
 import DashboardPage from '../pages/DashboardPage'
 import OrdersPage from '../pages/OrdersPage'
 import NewShipmentPage from '../components/NewShipmentPage'
@@ -39,6 +40,7 @@ export default function AppRoutes() {
             <Route path={workspacePaths.settings} element={<SettingsLayout />}>
               <Route index element={<Navigate to={settingsPaths.clients} replace />} />
               <Route path="clients" element={<ClientsPage />} />
+              <Route path="warehouses" element={<WarehousesPage />} />
               <Route path="shipping-services" element={<ShippingServicesPage />} />
               <Route path="shipping-service-mapping" element={<ShippingServiceMappingPage />} />
               <Route path="packages" element={<PackagesPage />} />

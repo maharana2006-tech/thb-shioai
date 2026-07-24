@@ -11,6 +11,12 @@ public class ExternalRateRequest {
     private String shipMethod;
     /** Optional explicit carrier to scope the options. */
     private String carrierCode;
+    /**
+     * Explicit ship-from warehouse code. When set, its country becomes the
+     * origin for domestic/international scope; also used to reject shipping
+     * from a warehouse not attached to the client (403).
+     */
+    private String warehouseCode;
     private ExternalAddress shipFrom;
     private ExternalAddress shipTo;
     private ExternalParcel parcel;

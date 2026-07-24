@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
-import { FiDownloadCloud, FiEdit3, FiGlobe, FiPlus, FiStar, FiTrash2, FiTruck, FiX } from 'react-icons/fi'
+import { FiDownloadCloud, FiEdit3, FiGlobe, FiPlus, FiStar, FiTrash2, FiTruck, FiUsers, FiX } from 'react-icons/fi'
 import { dimWeightOf, oversizeOf, shippingConfigService, type PackagePreset } from '../api/shippingConfigService'
+import { allowlistUsageService, type ClientAllowedPackage } from '../api/clientCatalogService'
 import { countryName } from '../utils/countries'
 import { useAppSession } from '../hooks/useAppSession'
 import { canManageCarriers, normalizeRole } from '../utils/roles'
@@ -118,6 +119,7 @@ export default function PackagesPage() {
   // carrier credentials on the backend, so gate the button to admins.
   const canSync = canManageCarriers(normalizeRole(role))
   const [presets, setPresets] = useState<PackagePreset[]>([])
+  const [assignments, setAssignments] = useState<ClientAllowedPackage[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<PackagePreset | null>(null)
   const [saving, setSaving] = useState(false)
@@ -132,13 +134,25 @@ export default function PackagesPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      setPresets(await shippingConfigService.listPresets())
+      const [presetList, usageResp] = await Promise.all([
+        shippingConfigService.listPresets(),
+        allowlistUsageService.packages(),
+      ])
+      setPresets(presetList)
+      setAssignments(usageResp.data ?? [])
     } catch (e) {
       notify.error(e instanceof Error ? e.message : 'Failed to load packages.')
     } finally {
       setLoading(false)
     }
   }, [])
+
+  /** preset id -> allowlist rows (one per client using this preset). */
+  const assignmentsByPreset = useMemo(() => {
+    const m = new Map<number, ClientAllowedPackage[]>()
+    assignments.forEach((a) => m.set(a.presetId, [...(m.get(a.presetId) ?? []), a]))
+    return m
+  }, [assignments])
 
   useEffect(() => {
     void load()
@@ -421,6 +435,24 @@ export default function PackagesPage() {
                         Flat rate
                       </span>
                     ) : null}
+                    {(() => {
+                      const rows = p.id != null ? assignmentsByPreset.get(p.id) ?? [] : []
+                      const tooltip = rows.length
+                        ? rows.map((r) => `${r.clientCode}${r.isDefault ? ' ★' : ''}`).join(', ')
+                        : 'No clients allowed yet.'
+                      return (
+                        <span
+                          title={`Assigned to: ${tooltip}`}
+                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wide ring-1 ${
+                            rows.length
+                              ? 'bg-[#412d15]/[0.06] text-[#412d15] ring-[#412d15]/20'
+                              : 'bg-white text-slate-400 ring-slate-200'
+                          }`}
+                        >
+                          <FiUsers className="h-2.5 w-2.5" /> {rows.length}
+                        </span>
+                      )
+                    })()}
                     {(() => {
                       const o = oversizeOf(p)
                       if (!o || o.status === 'OK') return null

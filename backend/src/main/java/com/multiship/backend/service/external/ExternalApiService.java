@@ -13,6 +13,7 @@ import com.multiship.backend.model.Order;
 import com.multiship.backend.model.OrderTracking;
 import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
+import com.multiship.backend.model.Warehouse;
 import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
@@ -20,6 +21,8 @@ import com.multiship.backend.repository.ShippingServiceRepository;
 import com.multiship.backend.service.CarrierService;
 import com.multiship.backend.service.ShippingConfigService;
 import com.multiship.backend.service.carriers.CarrierConnector;
+import com.multiship.backend.service.resolution.ShipmentResolutionException;
+import com.multiship.backend.service.resolution.ShipmentResolutionService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -31,6 +34,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -51,6 +55,7 @@ public class ExternalApiService {
     private final OrderTrackingRepository orderTrackingRepository;
     private final CarrierService carrierService;
     private final CarrierProperties carrierProperties;
+    private final ShipmentResolutionService resolutionService;
     private final Map<String, CarrierConnector> connectorsByCode;
 
     public ExternalApiService(ShippingConfigService shippingConfigService,
@@ -61,6 +66,7 @@ public class ExternalApiService {
                               OrderTrackingRepository orderTrackingRepository,
                               CarrierService carrierService,
                               CarrierProperties carrierProperties,
+                              ShipmentResolutionService resolutionService,
                               List<CarrierConnector> carrierConnectors) {
         this.shippingConfigService = shippingConfigService;
         this.serviceRepository = serviceRepository;
@@ -70,6 +76,7 @@ public class ExternalApiService {
         this.orderTrackingRepository = orderTrackingRepository;
         this.carrierService = carrierService;
         this.carrierProperties = carrierProperties;
+        this.resolutionService = resolutionService;
         this.connectorsByCode = carrierConnectors.stream()
                 .collect(Collectors.toMap(c -> c.getCarrierCode().toUpperCase(Locale.ROOT), Function.identity(), (a, b) -> a));
     }
@@ -86,11 +93,26 @@ public class ExternalApiService {
             throw new ExternalApiException(422, ErrorCode.VALIDATION_ERROR, "parcel.weight (> 0) is required.");
         }
 
-        // Ship-from: request → client's configured ship-from → warehouse default (downstream).
-        ExternalAddress from = req.getShipFrom();
-        if (from == null) {
-            from = clientShipFrom(clientCode);
+        // 3PL guardrail #1: destination allowed for this client?
+        try {
+            resolutionService.assertShipToAllowed(clientCode, req.getShipTo().getCountryCode());
+        } catch (ShipmentResolutionException e) {
+            throw toExternal(e);
         }
+
+        // Ship-from: warehouse (resolved via resolver) > request override > client's
+        // legacy shipFrom. The resolver throws when a supplied warehouseCode isn't
+        // attached to the client — surface that as a 422/403 immediately.
+        Warehouse resolvedWarehouse = null;
+        try {
+            resolvedWarehouse = resolutionService.resolveWarehouse(clientCode, req.getWarehouseCode()).orElse(null);
+        } catch (ShipmentResolutionException e) {
+            throw toExternal(e);
+        }
+        ExternalAddress from = resolvedWarehouse != null
+                ? warehouseToAddress(resolvedWarehouse)
+                : (req.getShipFrom() != null ? req.getShipFrom() : clientShipFrom(clientCode));
+
         String destCountry = req.getShipTo().getCountryCode();
         String originCountry = from != null ? from.getCountryCode() : carrierProperties.getShipper().getCountryCode();
         boolean international = StringUtils.hasText(destCountry) && StringUtils.hasText(originCountry)
@@ -115,6 +137,15 @@ public class ExternalApiService {
             serviceId = svc.get().getId();
             serviceCode = svc.get().getServiceCode();
             resolvedVia = "SHIPMETHOD_RULE";
+        }
+
+        // 3PL guardrail #2: service on the client's allowlist?
+        if (serviceId != null) {
+            try {
+                resolutionService.assertServiceAllowed(clientCode, serviceId);
+            } catch (ShipmentResolutionException e) {
+                throw toExternal(e);
+            }
         }
 
         // Bill-to account.
@@ -152,12 +183,25 @@ public class ExternalApiService {
         manual.setHeight(p.getHeight());
         manual.setDimUnit(p.getDimUnit());
         // packagingCode: resolve by preset name when supplied; otherwise the custom dims above are used.
+        Long resolvedPresetId = null;
         if (StringUtils.hasText(p.getPackagingCode())) {
-            shippingConfigService.listPresets().getData().stream()
+            Optional<Long> presetHit = shippingConfigService.listPresets().getData().stream()
                     .filter(pr -> p.getPackagingCode().equalsIgnoreCase(pr.getName())
                             || p.getPackagingCode().equalsIgnoreCase(pr.getCarrierPackageCode()))
                     .findFirst()
-                    .ifPresent(pr -> manual.setPackagePresetId(pr.getId()));
+                    .map(pr -> pr.getId());
+            if (presetHit.isPresent()) {
+                resolvedPresetId = presetHit.get();
+                manual.setPackagePresetId(resolvedPresetId);
+            }
+        }
+        // 3PL guardrail #3: package on the client's allowlist?
+        if (resolvedPresetId != null) {
+            try {
+                resolutionService.assertPackageAllowed(clientCode, resolvedPresetId);
+            } catch (ShipmentResolutionException e) {
+                throw toExternal(e);
+            }
         }
         if (req.getItems() != null && !req.getItems().isEmpty()) {
             manual.setItems(req.getItems().stream().map(this::toManualItem).collect(Collectors.toList()));
@@ -172,6 +216,12 @@ public class ExternalApiService {
         }
 
         LabelGenerationResponse label = resp.getData();
+
+        // 3PL snapshot: read straight off the label response. carrierService.
+        // generateManualLabel already ran applyMarkup + isPastCutoff and
+        // persisted the snapshot on OrderTracking (Phase 4d), so we don't
+        // re-run the resolver here — the values printed on the label and the
+        // values on the response are guaranteed to be the same row.
         return ExternalShipmentResponse.builder()
                 .shipmentId(label.getOrderNo())
                 .reference(req.getReference())
@@ -180,12 +230,21 @@ public class ExternalApiService {
                 .service(serviceCode)
                 .resolvedVia(resolvedVia)
                 .international(international)
+                .warehouseCode(label.getWarehouseCode() != null
+                        ? label.getWarehouseCode()
+                        : (resolvedWarehouse != null ? resolvedWarehouse.getCode() : null))
                 .trackingNumber(label.getTrackingNumber())
                 .trackingUrl(label.getTrackingUrl())
                 .labelUrl(label.getLabelUrl())
                 .labelPdf(label.getLabelPdf())
                 .labelDocumentUrl("/api/v1/orders/" + label.getOrderNo() + "/label")
                 .shippingCost(label.getShippingCost())
+                .carrierAmount(label.getCarrierAmount())
+                .billableAmount(label.getBillableAmount())
+                .markupKind(label.getMarkupKind())
+                .markupValue(label.getMarkupValue())
+                .markupCurrency(label.getMarkupCurrency())
+                .dispatchNextBusinessDay(label.getDispatchNextBusinessDay())
                 .estimatedDelivery(label.getEstimatedDelivery())
                 .status(label.getStatus())
                 .build();
@@ -196,8 +255,25 @@ public class ExternalApiService {
     public ExternalRateResponse rate(ApiKeyPrincipal caller, ExternalRateRequest req) {
         String clientCode = effectiveClient(caller, req.getClientCode());
         String destCountry = req.getShipTo() != null ? req.getShipTo().getCountryCode() : null;
-        String originCountry = req.getShipFrom() != null ? req.getShipFrom().getCountryCode()
-                : carrierProperties.getShipper().getCountryCode();
+
+        // 3PL guardrail: destination allowed for this client?
+        try {
+            resolutionService.assertShipToAllowed(clientCode, destCountry);
+        } catch (ShipmentResolutionException e) {
+            throw toExternal(e);
+        }
+
+        // Ship-from precedence: resolved warehouse > explicit shipFrom > platform default.
+        Warehouse resolvedWarehouse = null;
+        try {
+            resolvedWarehouse = resolutionService.resolveWarehouse(clientCode, req.getWarehouseCode()).orElse(null);
+        } catch (ShipmentResolutionException e) {
+            throw toExternal(e);
+        }
+        String originCountry = resolvedWarehouse != null && resolvedWarehouse.getAddress() != null
+                ? resolvedWarehouse.getAddress().getCountry()
+                : (req.getShipFrom() != null ? req.getShipFrom().getCountryCode()
+                        : carrierProperties.getShipper().getCountryCode());
         boolean international = StringUtils.hasText(destCountry) && StringUtils.hasText(originCountry)
                 && !destCountry.trim().equalsIgnoreCase(originCountry.trim());
         String neededScope = international ? "INTERNATIONAL" : "DOMESTIC";
@@ -217,6 +293,11 @@ public class ExternalApiService {
                     "Provide a shipMethod that resolves to a service, or a carrierCode to list its services.");
         }
 
+        // Tag options with allowlist status — return everything so the caller
+        // can see what's available, but flag the ones a shipment call would
+        // reject as SERVICE_NOT_ALLOWED.
+        Set<Long> allowed = resolutionService.allowedServiceIds(clientCode);
+        boolean noAllowlist = allowed.isEmpty();
         List<ExternalRateResponse.Option> options = services.stream()
                 .map(s -> ExternalRateResponse.Option.builder()
                         .carrier(s.getCarrier())
@@ -225,6 +306,7 @@ public class ExternalApiService {
                         .scope(s.getScope())
                         .estimatedAmount(null)
                         .currency("USD")
+                        .allowed(noAllowlist || allowed.contains(s.getId()))
                         .build())
                 .collect(Collectors.toList());
 
@@ -425,6 +507,41 @@ public class ExternalApiService {
             if (u.startsWith("USPS") || u.startsWith("STAMPS")) return "USPS";
         }
         return null;
+    }
+
+    /**
+     * Convert a resolver exception into the external API's exception shape.
+     * The 3PL 422s (SHIP_TO_DENIED, SERVICE_NOT_ALLOWED, PACKAGE_NOT_ALLOWED,
+     * MARKUP_INVALID, NO_DEFAULT_WAREHOUSE) map to 422; WAREHOUSE_ATTACH_FORBIDDEN
+     * is a 403 because it names a specific tenancy boundary the caller crossed.
+     */
+    private static ExternalApiException toExternal(ShipmentResolutionException e) {
+        int status = e.getErrorCode() == ErrorCode.WAREHOUSE_ATTACH_FORBIDDEN ? 403 : 422;
+        return new ExternalApiException(status, e.getErrorCode(), e.getMessage());
+    }
+
+    /**
+     * A resolved {@link Warehouse}'s address, in the external API shape.
+     * Returns null when the warehouse has no address (never expected at
+     * runtime — created via the UI which requires country).
+     */
+    private ExternalAddress warehouseToAddress(Warehouse w) {
+        if (w == null || w.getAddress() == null) return null;
+        com.multiship.backend.model.Address a = w.getAddress();
+        ExternalAddress ext = new ExternalAddress();
+        // Warehouse address doesn't carry a company field distinct from name;
+        // reuse name for both so labels look right regardless of which the
+        // carrier expects.
+        ext.setName(a.getName());
+        ext.setCompany(a.getName());
+        ext.setPhone(a.getPhone());
+        ext.setAddressLine1(a.getLine1());
+        ext.setAddressLine2(a.getLine2());
+        ext.setCity(a.getCity());
+        ext.setState(a.getState());
+        ext.setPostalCode(a.getZip());
+        ext.setCountryCode(a.getCountry());
+        return ext;
     }
 
     private ExternalAddress clientShipFrom(String clientCode) {

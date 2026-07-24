@@ -28,7 +28,10 @@ import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
 import com.multiship.backend.repository.ShipViaRepository;
 import com.multiship.backend.repository.UserRepository;
+import com.multiship.backend.model.Warehouse;
 import com.multiship.backend.service.carriers.CarrierConnector;
+import com.multiship.backend.service.resolution.ShipmentResolutionException;
+import com.multiship.backend.service.resolution.ShipmentResolutionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -69,6 +72,7 @@ public class CarrierServiceImpl implements CarrierService {
     private final com.multiship.backend.repository.ClientCustomsProfileRepository clientCustomsProfileRepository;
     private final ShippingConfigService shippingConfigService;
     private final CustomsService customsService;
+    private final ShipmentResolutionService resolutionService;
 
     @Override
     @Transactional(readOnly = true)
@@ -504,6 +508,35 @@ public class CarrierServiceImpl implements CarrierService {
                     "Enter the bill-to account number for the shipment.");
         }
 
+        // 3PL guardrails — clientCode may be empty for ad-hoc shipments, in
+        // which case every resolver call is a no-op (backward-compat).
+        String resolvedClient = req.getClientCode();
+        boolean hasClient = StringUtils.hasText(resolvedClient);
+
+        // Ship-to gate.
+        if (hasClient) {
+            try {
+                resolutionService.assertShipToAllowed(resolvedClient, to.getCountryCode());
+            } catch (ShipmentResolutionException e) {
+                return toResolutionFailure(e);
+            }
+        }
+
+        // Warehouse resolution. When a warehouse code is supplied (or the
+        // client has a default attached), override the `from` block with the
+        // warehouse address. Any override throws WAREHOUSE_ATTACH_FORBIDDEN
+        // when the caller borrowed a warehouse from another tenant.
+        String resolvedWarehouseCode = null;
+        if (hasClient && StringUtils.hasText(req.getWarehouseCode())) {
+            try {
+                Warehouse w = resolutionService.assertWarehouse(resolvedClient, req.getWarehouseCode());
+                from = mergeFromWarehouse(from, w);
+                resolvedWarehouseCode = w.getCode();
+            } catch (ShipmentResolutionException e) {
+                return toResolutionFailure(e);
+            }
+        }
+
         // Carrier: from the request, else inferred from the credential account.
         String carrier = resolveCanonicalCarrierCode(firstNonBlank(
                 req.getCarrierCode(),
@@ -541,6 +574,21 @@ public class CarrierServiceImpl implements CarrierService {
                 shippingConfigService.serviceById(req.getServiceId()).orElse(null);
         com.multiship.backend.model.PackagePreset preset =
                 shippingConfigService.presetById(req.getPackagePresetId()).orElse(null);
+
+        // Allowlist gates on the resolved service + preset. Ad-hoc shipments
+        // (no client) skip both — same rule as ship-to above.
+        if (hasClient) {
+            try {
+                if (service != null) {
+                    resolutionService.assertServiceAllowed(resolvedClient, service.getId());
+                }
+                if (preset != null) {
+                    resolutionService.assertPackageAllowed(resolvedClient, preset.getId());
+                }
+            } catch (ShipmentResolutionException e) {
+                return toResolutionFailure(e);
+            }
+        }
 
         String serviceType = service != null ? service.getServiceCode()
                 : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");
@@ -668,6 +716,22 @@ public class CarrierServiceImpl implements CarrierService {
             }
         }
 
+        // 3PL snapshot: applyMarkup + isPastCutoff so historical rows carry
+        // the config effective at label time (see the Phase-1 open decision).
+        // Ad-hoc shipments (empty clientCode) run through as no-ops: markup
+        // is 0% PERCENT, cutoff is false, warehouseCode is null.
+        com.multiship.backend.service.resolution.MarkupApplied markup;
+        try {
+            markup = resolutionService.applyMarkup(
+                    hasClient ? resolvedClient : "",
+                    result.shippingCost(),
+                    firstNonBlank(req.getCurrency(), "USD"));
+        } catch (ShipmentResolutionException e) {
+            return toResolutionFailure(e);
+        }
+        boolean nextBusinessDay = hasClient
+                && resolutionService.isPastCutoff(resolvedClient, java.time.Instant.now());
+
         OrderTracking tracking = new OrderTracking();
         tracking.setOrderNo(orderNo);
         tracking.setOrderSuffix(0);
@@ -679,6 +743,13 @@ public class CarrierServiceImpl implements CarrierService {
         tracking.setLabelGeneratedAt(LocalDateTime.now());
         tracking.setLabelFilePath(result.labelUrl());
         tracking.setStatus("GENERATED");
+        tracking.setWarehouseCode(resolvedWarehouseCode);
+        tracking.setCarrierAmount(markup.carrierRate());
+        tracking.setBillableAmount(markup.billable());
+        tracking.setMarkupKind(markup.kind());
+        tracking.setMarkupValue(markup.value());
+        tracking.setMarkupCurrency(markup.currency());
+        tracking.setDispatchNextBusinessDay(nextBusinessDay);
         tracking.setCreatedAt(LocalDateTime.now());
         tracking.setUpdatedAt(LocalDateTime.now());
         orderTrackingRepository.save(tracking);
@@ -694,9 +765,16 @@ public class CarrierServiceImpl implements CarrierService {
                 .labelUrl(result.labelUrl())
                 .labelPdf(result.labelPdf())
                 .status("GENERATED")
-                .shippingCost(result.shippingCost())
+                .shippingCost(markup.billable())
                 .estimatedDelivery(result.estimatedDelivery())
                 .accountSource("MANUAL")
+                .warehouseCode(resolvedWarehouseCode)
+                .carrierAmount(markup.carrierRate())
+                .billableAmount(markup.billable())
+                .markupKind(markup.kind())
+                .markupValue(markup.value())
+                .markupCurrency(markup.currency())
+                .dispatchNextBusinessDay(nextBusinessDay)
                 .message("Manual shipment #" + orderNo + " labelled on "
                         + billToNumber + ".")
                 .build();
@@ -1353,5 +1431,44 @@ public class CarrierServiceImpl implements CarrierService {
 
     private <T> T firstNonNull(T first, T second) {
         return first != null ? first : second;
+    }
+
+    /**
+     * Convert a resolver exception into the manual-shipment
+     * {@link ApiResponse} shape. WAREHOUSE_ATTACH_FORBIDDEN maps to 403
+     * (a specific tenancy boundary was crossed); everything else 422.
+     */
+    private <T> ApiResponse<T> toResolutionFailure(ShipmentResolutionException e) {
+        HttpStatus status = e.getErrorCode() == ErrorCode.WAREHOUSE_ATTACH_FORBIDDEN
+                ? HttpStatus.FORBIDDEN
+                : HttpStatus.UNPROCESSABLE_ENTITY;
+        return failure(status, e.getErrorCode(), e.getMessage());
+    }
+
+    /**
+     * Override the caller-supplied {@code from} block with a resolved
+     * warehouse's address. Preserves non-address fields (email) from the
+     * original when the warehouse doesn't provide them.
+     */
+    private com.multiship.backend.dto.ManualShipmentRequest.Address mergeFromWarehouse(
+            com.multiship.backend.dto.ManualShipmentRequest.Address original,
+            Warehouse warehouse) {
+        com.multiship.backend.model.Address a = warehouse.getAddress();
+        if (a == null) return original;
+        com.multiship.backend.dto.ManualShipmentRequest.Address merged =
+                new com.multiship.backend.dto.ManualShipmentRequest.Address();
+        merged.setName(firstNonBlank(a.getName(), original != null ? original.getName() : null));
+        // Warehouse address has no distinct company field — reuse name, then
+        // fall back to whatever the caller sent.
+        merged.setCompany(firstNonBlank(a.getName(), original != null ? original.getCompany() : null));
+        merged.setPhone(firstNonBlank(a.getPhone(), original != null ? original.getPhone() : null));
+        merged.setEmail(original != null ? original.getEmail() : null);
+        merged.setAddressLine1(firstNonBlank(a.getLine1(), original != null ? original.getAddressLine1() : null));
+        merged.setAddressLine2(firstNonBlank(a.getLine2(), original != null ? original.getAddressLine2() : null));
+        merged.setCity(firstNonBlank(a.getCity(), original != null ? original.getCity() : null));
+        merged.setState(firstNonBlank(a.getState(), original != null ? original.getState() : null));
+        merged.setPostalCode(firstNonBlank(a.getZip(), original != null ? original.getPostalCode() : null));
+        merged.setCountryCode(firstNonBlank(a.getCountry(), original != null ? original.getCountryCode() : null));
+        return merged;
     }
 }

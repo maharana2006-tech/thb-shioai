@@ -31,7 +31,16 @@ public class ExternalShipmentRequest {
     /** Optional bill-to account override; defaults to the client's account for the carrier. */
     private String accountNumber;
 
-    /** Ship-from. Optional — defaults to the client's configured ship-from, then the warehouse default. */
+    /**
+     * Explicit ship-from warehouse code (must be attached to the client).
+     * When set, its address becomes the ship-from and overrides
+     * {@link #shipFrom}. When null, the client's default attached warehouse
+     * is used; when the client has none, {@link #shipFrom} then the client's
+     * legacy shipFrom take over.
+     */
+    private String warehouseCode;
+
+    /** Ship-from override — see {@link #warehouseCode} for the resolution order. */
     private ExternalAddress shipFrom;
 
     /** Ship-to. Required. */

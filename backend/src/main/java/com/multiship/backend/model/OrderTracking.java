@@ -2,6 +2,8 @@ package com.multiship.backend.model;
 
 import jakarta.persistence.*;
 import lombok.Data;
+
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
@@ -54,6 +56,42 @@ public class OrderTracking {
 
     @Column(name = "error_message")
     private String errorMessage;
+
+    // ===== 3PL snapshot (populated at label time; stable if the client's
+    // config later changes). Rate-strategy = FIXED and markups are enforced
+    // by ShipmentResolutionService; these columns record what was actually
+    // applied so historical bills don't shift.
+
+    /** Warehouse the shipment shipped from — null for ad-hoc / no-client shipments. */
+    @Column(name = "warehouse_code", length = 50)
+    private String warehouseCode;
+
+    /** Amount the carrier billed us, before markup. Same currency as {@link #markupCurrency}. */
+    @Column(name = "carrier_amount", precision = 12, scale = 4)
+    private BigDecimal carrierAmount;
+
+    /** {@link #carrierAmount} + markup, rounded per shipment. This is what the client rebills at. */
+    @Column(name = "billable_amount", precision = 12, scale = 4)
+    private BigDecimal billableAmount;
+
+    /** PERCENT | FLAT — the kind of markup applied to this shipment. */
+    @Column(name = "markup_kind", length = 10)
+    private String markupKind;
+
+    /** The value snapshot — the % or flat amount that was applied. */
+    @Column(name = "markup_value", precision = 12, scale = 4)
+    private BigDecimal markupValue;
+
+    /** ISO-4217 of the amounts above. */
+    @Column(name = "markup_currency", length = 3)
+    private String markupCurrency;
+
+    /**
+     * True when the label was created past the client's local cutoff — soft
+     * flag for the WMS ("label valid; picked up next business day").
+     */
+    @Column(name = "dispatch_next_business_day")
+    private Boolean dispatchNextBusinessDay;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;

@@ -12,6 +12,7 @@ export type WorkspaceRouteKey = keyof typeof workspacePaths
 /** Settings sub-pages (the master-data hub). */
 export const settingsPaths = {
   clients: '/settings/clients',
+  warehouses: '/settings/warehouses',
   carriers: '/settings/carriers',
   shippingServices: '/settings/shipping-services',
   shippingServiceMapping: '/settings/shipping-service-mapping',
@@ -44,6 +45,9 @@ export const settingsNavItems: Array<{
 }> = [
   { key: 'clients', label: 'Clients', to: settingsPaths.clients, iconKey: 'clients',
     description: 'Customer master data — who you ship for, their carrier accounts, and defaults.',
+    roles: ['ADMIN', 'USER'] },
+  { key: 'warehouses', label: 'Warehouses', to: settingsPaths.warehouses, iconKey: 'warehouse',
+    description: 'Ship-from locations — first-class in a 3PL setup. Platform-owned or client-owned; each client picks a default.',
     roles: ['ADMIN', 'USER'] },
   { key: 'carriers', label: 'Carrier Accounts', to: settingsPaths.carriers, iconKey: 'carrier',
     description: 'Connect + verify live UPS / FedEx / USPS accounts (platform + client).',

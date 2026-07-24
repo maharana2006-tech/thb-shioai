@@ -22,6 +22,14 @@ export const navIcons: Record<string, ReactNode> = {
       <path d="M10 2.5 3 6v8l7 3.5L17 14V6l-7-3.5Zm0 1.12L14.66 6 10 8.34 5.34 6 10 3.62ZM4.5 7.2l4.75 2.37v6.01L4.5 13.2v-6Zm6.25 8.38V9.57L15.5 7.2v6l-4.75 2.38Z" />
     </svg>
   ),
+  // Building — a ship-from warehouse; the "roof + roll-up doors" glyph reads at 18px.
+  warehouse: (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-[18px] w-[18px]" aria-hidden="true">
+      <path d="M2.75 8.25 10 3.5l7.25 4.75V16.5H2.75V8.25Z" strokeLinejoin="round" />
+      <path d="M6.25 16.5V11h7.5v5.5" strokeLinejoin="round" />
+      <path d="M8.5 13.5h3" strokeLinecap="round" />
+    </svg>
+  ),
   settings: (
     <svg viewBox="0 0 20 20" fill="currentColor" className="h-[18px] w-[18px]" aria-hidden="true">
       <path fillRule="evenodd" clipRule="evenodd" d="M8.4 2.5a.9.9 0 0 0-.87.68l-.28 1.12a5.9 5.9 0 0 0-1.2.7l-1.1-.4a.9.9 0 0 0-1.08.4l-1.1 1.9a.9.9 0 0 0 .2 1.14l.88.72a5.9 5.9 0 0 0 0 1.38l-.88.72a.9.9 0 0 0-.2 1.14l1.1 1.9a.9.9 0 0 0 1.08.4l1.1-.4c.37.29.78.52 1.2.7l.28 1.12a.9.9 0 0 0 .87.68h2.2a.9.9 0 0 0 .87-.68l.28-1.12c.43-.18.83-.41 1.2-.7l1.1.4a.9.9 0 0 0 1.08-.4l1.1-1.9a.9.9 0 0 0-.2-1.14l-.88-.72a5.9 5.9 0 0 0 0-1.38l.88-.72a.9.9 0 0 0 .2-1.14l-1.1-1.9a.9.9 0 0 0-1.08-.4l-1.1.4a5.9 5.9 0 0 0-1.2-.7l-.28-1.12a.9.9 0 0 0-.87-.68H8.4ZM10 12.75a2.75 2.75 0 1 1 0-5.5 2.75 2.75 0 0 1 0 5.5Z" />

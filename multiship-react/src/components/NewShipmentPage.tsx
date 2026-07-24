@@ -14,6 +14,15 @@ import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
 import { shippingConfigService, type ShippingServiceItem, type PackagePreset } from '../api/shippingConfigService'
 import { addressService } from '../api/addressService'
+import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
+import {
+  clientAllowedPackagesService,
+  clientAllowedServicesService,
+} from '../api/clientCatalogService'
+import {
+  clientDestinationsService,
+  type ClientDestinationRules,
+} from '../api/clientPolicyService'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import ShipmentPartiesOverrideModal, { type Party } from './modals/ShipmentPartiesOverrideModal'
 
@@ -77,7 +86,7 @@ const defaultSender = (): ManualShipmentAddress => ({
 const inputCls =
   'w-full rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-4 focus:ring-[#f4eede] disabled:cursor-not-allowed disabled:bg-[#faf7f0] disabled:text-[#8a7959]'
 
-function Field({ label, required, children, className = '' }: { label: string; required?: boolean; children: ReactNode; className?: string }) {
+function Field({ label, required, hint, children, className = '' }: { label: string; required?: boolean; hint?: string; children: ReactNode; className?: string }) {
   return (
     <label className={`block space-y-1 ${className}`}>
       <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
@@ -85,6 +94,7 @@ function Field({ label, required, children, className = '' }: { label: string; r
         {required ? <span className="text-rose-500"> *</span> : null}
       </span>
       {children}
+      {hint ? <span className="mt-1 block text-[10.5px] normal-case tracking-normal text-slate-400">{hint}</span> : null}
     </label>
   )
 }
@@ -254,6 +264,17 @@ export default function NewShipmentPage() {
   const [declaredValue, setDeclaredValue] = useState('')
   const [clientCode, setClientCode] = useState('')
 
+  // 3PL guardrails: client's attached warehouses, allowlists, and destination
+  // rules. Fetched when clientCode changes; drive the warehouse picker,
+  // filtered dropdowns, and the ship-to warning banner.
+  const [clientWarehouses, setClientWarehouses] = useState<ClientWarehouse[]>([])
+  const [warehouseCode, setWarehouseCode] = useState('')
+  /** Set of service ids on the client's allowlist. null = client has no
+   *  allowlist yet, treat as unrestricted so shipments still ship. */
+  const [allowedServiceIds, setAllowedServiceIds] = useState<Set<number> | null>(null)
+  const [allowedPackageIds, setAllowedPackageIds] = useState<Set<number> | null>(null)
+  const [destRules, setDestRules] = useState<ClientDestinationRules | null>(null)
+
   // Recipient address validation result (from the Validate button).
   const [recipientCheck, setRecipientCheck] = useState<{ valid: boolean; issues: string[] } | null>(null)
   const [validating, setValidating] = useState(false)
@@ -319,6 +340,72 @@ export default function NewShipmentPage() {
     }
   }, [clientCode])
 
+  // Client-scoped 3PL config: warehouses, service/package allowlists, ship-to
+  // rules. Load in one round-trip; the page silently degrades on failure so a
+  // half-configured client still ships.
+  useEffect(() => {
+    if (!clientCode) {
+      setClientWarehouses([])
+      setWarehouseCode('')
+      setAllowedServiceIds(null)
+      setAllowedPackageIds(null)
+      setDestRules(null)
+      return
+    }
+    let alive = true
+    ;(async () => {
+      try {
+        const [whResp, svcResp, pkgResp, destResp] = await Promise.all([
+          clientWarehouseService.listForClient(clientCode),
+          clientAllowedServicesService.listForClient(clientCode),
+          clientAllowedPackagesService.listForClient(clientCode),
+          clientDestinationsService.get(clientCode),
+        ])
+        if (!alive) return
+        const warehouses = whResp.data ?? []
+        setClientWarehouses(warehouses)
+        // Auto-pick the default; else first available. Empty = keep whatever
+        // sender address applyClient already produced.
+        const def = warehouses.find((w) => w.isDefault) || warehouses[0] || null
+        setWarehouseCode(def?.warehouse?.code ?? '')
+        // Empty allowlists mean "not yet configured" — treat as unrestricted so
+        // shipping still works. Phase 4 flips this to strict once the backend
+        // resolver rejects on empty.
+        const svcs = svcResp.data ?? []
+        setAllowedServiceIds(svcs.length ? new Set(svcs.map((s) => s.serviceId)) : null)
+        const pkgs = pkgResp.data ?? []
+        setAllowedPackageIds(pkgs.length ? new Set(pkgs.map((p) => p.presetId)) : null)
+        setDestRules(destResp.data ?? null)
+      } catch {
+        // Silent degrade: same behaviour as before the 3PL settings existed.
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [clientCode])
+
+  // When the picked warehouse changes, overwrite the sender block with the
+  // warehouse's address. Only overwrites fields the warehouse actually has, so
+  // manual edits on unfilled columns aren't clobbered.
+  useEffect(() => {
+    if (!warehouseCode) return
+    const cw = clientWarehouses.find((w) => w.warehouse?.code === warehouseCode)
+    const a = cw?.warehouse?.address
+    if (!a) return
+    setSender((cur) => ({
+      ...cur,
+      ...(a.name ? { name: a.name } : {}),
+      ...(a.line1 ? { addressLine1: a.line1 } : {}),
+      ...(a.line2 != null ? { addressLine2: a.line2 || '' } : {}),
+      ...(a.city ? { city: a.city } : {}),
+      ...(a.state ? { state: a.state } : {}),
+      ...(a.zip ? { postalCode: a.zip } : {}),
+      ...(a.country ? { countryCode: a.country } : {}),
+      ...(a.phone ? { phone: a.phone } : {}),
+    }))
+  }, [warehouseCode, clientWarehouses])
+
   // Route: does this shipment cross a customs border? Drives which services/packages apply.
   const EU = new Set([
     'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT',
@@ -339,18 +426,43 @@ export default function NewShipmentPage() {
     const own = onCarrier.filter((a) => (a.customerNo || '').toUpperCase() === clientCode.toUpperCase())
     return own.length ? own : onCarrier
   }, [accounts, carrier, clientCode])
-  // Services offered on THIS route: right carrier, ship-from country, and domestic/international scope.
+  // Services offered on THIS route: right carrier, ship-from country, and
+  // domestic/international scope — then further filtered to the client's
+  // allowlist when one exists.
   const servicesForCarrier = useMemo(
-    () => services.filter((s) => canon(s.carrier) === carrier && originMatch(s.originCountry) && scopeFits(s.scope)),
+    () =>
+      services
+        .filter((s) => canon(s.carrier) === carrier && originMatch(s.originCountry) && scopeFits(s.scope))
+        .filter((s) => !allowedServiceIds || allowedServiceIds.has(s.id)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [services, carrier, sender.countryCode, neededScope],
+    [services, carrier, sender.countryCode, neededScope, allowedServiceIds],
   )
   const packagesForCarrier = useMemo(
-    () => packages.filter((p) => p.kind === 'CARRIER' && canon(p.carrier) === carrier && originMatch(p.originCountry) && scopeFits(p.scope)),
+    () =>
+      packages
+        .filter((p) => p.kind === 'CARRIER' && canon(p.carrier) === carrier && originMatch(p.originCountry) && scopeFits(p.scope))
+        .filter((p) => !allowedPackageIds || p.id == null || allowedPackageIds.has(p.id)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [packages, carrier, sender.countryCode, neededScope],
+    [packages, carrier, sender.countryCode, neededScope, allowedPackageIds],
   )
-  const customBoxes = useMemo(() => packages.filter((p) => p.kind !== 'CARRIER'), [packages])
+  const customBoxes = useMemo(
+    () =>
+      packages
+        .filter((p) => p.kind !== 'CARRIER')
+        .filter((p) => !allowedPackageIds || p.id == null || allowedPackageIds.has(p.id)),
+    [packages, allowedPackageIds],
+  )
+
+  // Ship-to gate. mode=null => no rule, everything allowed. ALLOW list =>
+  // country must be listed. DENY list => country must NOT be listed. Shown as
+  // an inline warning; submit is not blocked here — Phase 4 backend enforces
+  // the hard 422 SHIP_TO_DENIED.
+  const destAllowed = useMemo(() => {
+    const country = (recipient.countryCode || '').toUpperCase()
+    if (!destRules || !destRules.mode || !country) return true
+    const listed = destRules.countries.some((c) => (c || '').toUpperCase() === country)
+    return destRules.mode === 'ALLOW' ? listed : !listed
+  }, [destRules, recipient.countryCode])
 
   useEffect(() => {
     setAccountNumber((cur) =>
@@ -539,6 +651,7 @@ export default function NewShipmentPage() {
       weight: w,
       weightUnit,
       clientCode: clientCode.trim() || undefined,
+      warehouseCode: warehouseCode || undefined,
       declaredValue: declaredValue ? Number(declaredValue) : null,
       ...(isInternational ? { items: cleanItems, reasonForExport, currency, incoterms } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
@@ -623,13 +736,40 @@ export default function NewShipmentPage() {
               title="Shipment"
               note="Choosing a client fills its ship-from and auto-selects its default carrier account. Reason & currency remember your last choice."
             >
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 <Field label="Client">
                   <select className={inputCls} value={clientCode} onChange={(e) => applyClient(e.target.value)}>
                     <option value="">No client — ad-hoc</option>
                     {clients.map((c) => (
                       <option key={c.clientCode} value={c.clientCode}>
                         {c.clientCode} — {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field
+                  label={`Ship from${clientWarehouses.length ? ` · ${clientWarehouses.length}` : ''}`}
+                  hint={
+                    !clientCode
+                      ? 'Pick a client to load warehouses.'
+                      : clientWarehouses.length === 0
+                        ? 'No warehouses attached — the sender block below is manual.'
+                        : undefined
+                  }
+                >
+                  <select
+                    className={inputCls}
+                    value={warehouseCode}
+                    onChange={(e) => setWarehouseCode(e.target.value)}
+                    disabled={!clientCode || clientWarehouses.length === 0}
+                  >
+                    <option value="">
+                      {clientCode && clientWarehouses.length === 0 ? 'None attached' : 'Manual sender'}
+                    </option>
+                    {clientWarehouses.map((cw) => (
+                      <option key={cw.id} value={cw.warehouse?.code ?? ''}>
+                        {cw.warehouse?.code} — {cw.warehouse?.name}
+                        {cw.isDefault ? ' ★' : ''}
                       </option>
                     ))}
                   </select>
@@ -686,6 +826,19 @@ export default function NewShipmentPage() {
                 }
               >
                 <AddressBlock value={recipient} onChange={(patch) => setRecipient((r) => ({ ...r, ...patch }))} withEmail={!isReturn} />
+                {!destAllowed && destRules?.mode && recipient.countryCode ? (
+                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+                    <p className="flex items-center gap-2 font-semibold">
+                      <FiAlertTriangle className="h-4 w-4 shrink-0" />
+                      {destRules.mode === 'ALLOW'
+                        ? `${clientCode} is not configured to ship to ${recipient.countryCode.toUpperCase()}.`
+                        : `${clientCode} has ${recipient.countryCode.toUpperCase()} on its deny list.`}
+                    </p>
+                    <p className="mt-0.5 pl-6 text-[11.5px] text-amber-700">
+                      Update the client's Destinations tab, or pick a different country to proceed.
+                    </p>
+                  </div>
+                ) : null}
                 {recipientCheck ? (
                   recipientCheck.valid ? (
                     <div className="mt-3 flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12px] font-medium text-emerald-800">
