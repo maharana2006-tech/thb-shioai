@@ -30,6 +30,8 @@ import ClientAllowlistTab from './ClientAllowlistTab'
 import ClientDestinationsTab from './ClientDestinationsTab'
 import ClientPolicyTab from './ClientPolicyTab'
 import ClientMarkupTab from './ClientMarkupTab'
+import ServiceDestinationsDrawer from './ServiceDestinationsDrawer'
+import { FiMap } from 'react-icons/fi'
 
 type Tab =
   | 'details'
@@ -79,6 +81,9 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
   const isEdit = Boolean(client)
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<Tab>('details')
+  const [destinationsDrawer, setDestinationsDrawer] = useState<
+    { serviceId: number; label: string; nonce: number } | null
+  >(null)
 
   const emptyAddress: Address = { name: '', line1: '', line2: '', city: '', state: '', zip: '', country: 'US', phone: '' }
   const [form, setForm] = useState<ClientUpsertPayload>({
@@ -547,6 +552,35 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
             catalogKey={(s) => s.id}
             catalogLabel={(s) => `${formatCarrierName(s.carrier)} · ${s.serviceCode} — ${s.name}${s.originCountry ? ` (${s.originCountry.toUpperCase()})` : ''}`}
             catalogEligible={(s) => s.enabled}
+            renderRowExtras={(row) => (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setDestinationsDrawer({
+                    serviceId: row.serviceId,
+                    label: `${formatCarrierName(row.carrier || '—')} · ${row.serviceCode || '—'} — ${row.serviceName || '—'}`,
+                    nonce: Date.now(),
+                  })
+                }}
+                title="Destinations…"
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+              >
+                <FiMap className="h-3 w-3" />
+                Destinations…
+              </button>
+            )}
+          />
+        ) : null}
+
+        {destinationsDrawer && client ? (
+          <ServiceDestinationsDrawer
+            key={destinationsDrawer.nonce}
+            clientCode={client.clientCode}
+            serviceId={destinationsDrawer.serviceId}
+            serviceLabel={destinationsDrawer.label}
+            onClose={() => setDestinationsDrawer(null)}
+            onSaved={() => setDestinationsDrawer(null)}
           />
         ) : null}
 
