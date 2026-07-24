@@ -18,6 +18,7 @@ export const settingsPaths = {
   shippingServiceMapping: '/settings/shipping-service-mapping',
   packages: '/settings/packages',
   importerBroker: '/settings/importer-broker',
+  codeMaps: '/settings/code-maps',
   apiKeys: '/settings/api-keys',
   apiReference: '/settings/api-reference',
 } as const
@@ -64,6 +65,9 @@ export const settingsNavItems: Array<{
   { key: 'importer-broker', label: 'Importer / Broker', to: settingsPaths.importerBroker, iconKey: 'customs',
     description: 'Customs identities — importer/broker profiles applied per destination country.',
     roles: ['ADMIN', 'USER'] },
+  { key: 'code-maps', label: 'Code Maps', to: settingsPaths.codeMaps, iconKey: 'mapping',
+    description: "ERP↔platform aliases per client — how raw ERP codes translate into platform IDs on incoming orders.",
+    roles: ['ADMIN'] },
   { key: 'api-keys', label: 'API Keys', to: settingsPaths.apiKeys, iconKey: 'apiKey',
     description: 'Mint and revoke the msk_ tokens external systems use to call the public shipping API.',
     roles: ['ADMIN'] },
