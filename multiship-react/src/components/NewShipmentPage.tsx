@@ -273,6 +273,10 @@ export default function NewShipmentPage() {
    *  allowlist yet, treat as unrestricted so shipments still ship. */
   const [allowedServiceIds, setAllowedServiceIds] = useState<Set<number> | null>(null)
   const [allowedPackageIds, setAllowedPackageIds] = useState<Set<number> | null>(null)
+  /** Client's default from ClientAllowedService.isDefault — used to preselect
+   *  the picker on client change rather than falling back to sort-order first. */
+  const [defaultServiceId, setDefaultServiceId] = useState<number | null>(null)
+  const [defaultPackagePresetId, setDefaultPackagePresetId] = useState<number | null>(null)
   const [destRules, setDestRules] = useState<ClientDestinationRules | null>(null)
 
   // Recipient address validation result (from the Validate button).
@@ -349,6 +353,8 @@ export default function NewShipmentPage() {
       setWarehouseCode('')
       setAllowedServiceIds(null)
       setAllowedPackageIds(null)
+      setDefaultServiceId(null)
+      setDefaultPackagePresetId(null)
       setDestRules(null)
       return
     }
@@ -373,8 +379,10 @@ export default function NewShipmentPage() {
         // resolver rejects on empty.
         const svcs = svcResp.data ?? []
         setAllowedServiceIds(svcs.length ? new Set(svcs.map((s) => s.serviceId)) : null)
+        setDefaultServiceId(svcs.find((s) => s.isDefault)?.serviceId ?? null)
         const pkgs = pkgResp.data ?? []
         setAllowedPackageIds(pkgs.length ? new Set(pkgs.map((p) => p.presetId)) : null)
+        setDefaultPackagePresetId(pkgs.find((p) => p.isDefault)?.presetId ?? null)
         setDestRules(destResp.data ?? null)
       } catch {
         // Silent degrade: same behaviour as before the 3PL settings existed.
@@ -470,17 +478,32 @@ export default function NewShipmentPage() {
         ? cur
         : accountsForCarrier[0]?.accountNumber ?? cur,
     )
-    setServiceId((cur) => (servicesForCarrier.some((s) => s.id === cur) ? cur : servicesForCarrier[0]?.id ?? ''))
-    setPackageChoice((cur) =>
-      cur === CUSTOM_PKG || packagesForCarrier.some((p) => String(p.id) === cur)
-        ? cur
-        : packagesForCarrier[0]?.id != null
-          ? String(packagesForCarrier[0]?.id)
-          : CUSTOM_PKG,
-    )
+    // Phase 5f — prefer the client's default from ClientAllowedService.isDefault
+    // over "first available in filtered list". Falls back to first when the
+    // client has no default configured or the default isn't in the current
+    // carrier/scope filter.
+    setServiceId((cur) => {
+      if (servicesForCarrier.some((s) => s.id === cur)) return cur
+      if (defaultServiceId != null && servicesForCarrier.some((s) => s.id === defaultServiceId)) {
+        return defaultServiceId
+      }
+      return servicesForCarrier[0]?.id ?? ''
+    })
+    setPackageChoice((cur) => {
+      if (cur === CUSTOM_PKG || packagesForCarrier.some((p) => String(p.id) === cur)) return cur
+      if (
+        defaultPackagePresetId != null
+        && packagesForCarrier.some((p) => p.id === defaultPackagePresetId)
+      ) {
+        return String(defaultPackagePresetId)
+      }
+      return packagesForCarrier[0]?.id != null
+        ? String(packagesForCarrier[0]?.id)
+        : CUSTOM_PKG
+    })
     // Re-validate account/service/package whenever the carrier, client, or route changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [carrier, clientCode, accountsForCarrier, servicesForCarrier, packagesForCarrier])
+  }, [carrier, clientCode, accountsForCarrier, servicesForCarrier, packagesForCarrier, defaultServiceId, defaultPackagePresetId])
 
   /**
    * Select a client: fill YOUR address on the correct side and auto-pick its
