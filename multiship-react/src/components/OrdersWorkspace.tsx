@@ -818,6 +818,17 @@ export default function OrdersWorkspace() {
     })
   }
 
+  // Every data column shares one width so the grid reads as an even, tidy
+  // manifest. `table-fixed` + `w-full` scales equal widths proportionally to
+  // fill the container, so all columns line up at the same length. The narrow
+  // select-checkbox column is the only exception (it stays compact).
+  const UNIFORM_COL_WIDTH = 150
+  columns.forEach((col) => {
+    if (col.id === 'select') return
+    col.width = UNIFORM_COL_WIDTH
+    col.flex = false
+  })
+
   const actionsWidth = showTracking ? 248 : 200
   const alignClass = (align?: 'left' | 'right' | 'center') =>
     align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
