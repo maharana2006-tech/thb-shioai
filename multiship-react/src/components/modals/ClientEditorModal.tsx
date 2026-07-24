@@ -11,11 +11,23 @@ import {
   type ClientWarehouse,
   type Warehouse,
 } from '../../api/warehouseService'
+import {
+  clientAllowedPackagesService,
+  clientAllowedServicesService,
+  type ClientAllowedPackage,
+  type ClientAllowedService,
+} from '../../api/clientCatalogService'
+import {
+  shippingConfigService,
+  type PackagePreset,
+  type ShippingServiceItem,
+} from '../../api/shippingConfigService'
 import { formatCarrierName, carrierEnvironmentOptions, type CarrierEnvironment } from '../../utils/carrierUtils'
 import CarrierLogo from '../workspace/CarrierLogo'
 import Select from '../workspace/Select'
+import ClientAllowlistTab from './ClientAllowlistTab'
 
-type Tab = 'details' | 'warehouses'
+type Tab = 'details' | 'warehouses' | 'services' | 'packages'
 
 interface ClientEditorModalProps {
   /** Existing client to edit; omit to create a new one. */
@@ -306,6 +318,22 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
             disabled={!isEdit}
             disabledHint="Save the client first to manage warehouses."
           />
+          <TabButton
+            active={activeTab === 'services'}
+            onClick={() => setActiveTab('services')}
+            label="Services"
+            tabId="services"
+            disabled={!isEdit}
+            disabledHint="Save the client first to pick allowed services."
+          />
+          <TabButton
+            active={activeTab === 'packages'}
+            onClick={() => setActiveTab('packages')}
+            label="Packages"
+            tabId="packages"
+            disabled={!isEdit}
+            disabledHint="Save the client first to pick allowed packages."
+          />
         </div>
 
         {activeTab === 'details' ? (
@@ -440,6 +468,101 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
 
         {activeTab === 'warehouses' && client ? (
           <ClientWarehousesTab clientCode={client.clientCode} />
+        ) : null}
+
+        {activeTab === 'services' && client ? (
+          <ClientAllowlistTab<ClientAllowedService, ShippingServiceItem>
+            clientCode={client.clientCode}
+            panelId="client-editor-panel-services"
+            headline="Allowed services"
+            description="Only services on this list can be picked at label time. First allow auto-defaults."
+            emptyLabel="No services allowed yet — add the first one."
+            addLabel="Allow service"
+            fetchAllowed={async (code) => (await clientAllowedServicesService.listForClient(code)).data ?? []}
+            fetchCatalog={async () => (await shippingConfigService.catalog()).services}
+            allow={async (code, serviceId, makeDefault) => {
+              await clientAllowedServicesService.allow(code, { serviceId, makeDefault })
+            }}
+            remove={async (code, serviceId) => {
+              await clientAllowedServicesService.remove(code, serviceId)
+            }}
+            setDefault={async (code, serviceId) => {
+              await clientAllowedServicesService.setDefault(code, serviceId)
+            }}
+            allowedKey={(row) => row.serviceId}
+            allowedIsDefault={(row) => row.isDefault}
+            renderAllowed={(row) => (
+              <>
+                <p className="truncate text-[12px] font-semibold text-slate-800">
+                  {formatCarrierName(row.carrier || '—')}
+                  <span className="ml-1 font-normal text-slate-500">
+                    · {row.serviceCode || '—'} · {row.serviceName || '—'}
+                  </span>
+                </p>
+                <p className="text-[10.5px] text-slate-500">
+                  {row.scope ? `${row.scope}` : '—'}
+                  {row.originCountry ? ` · from ${row.originCountry.toUpperCase()}` : ''}
+                </p>
+              </>
+            )}
+            catalogKey={(s) => s.id}
+            catalogLabel={(s) => `${formatCarrierName(s.carrier)} · ${s.serviceCode} — ${s.name}${s.originCountry ? ` (${s.originCountry.toUpperCase()})` : ''}`}
+            catalogEligible={(s) => s.enabled}
+          />
+        ) : null}
+
+        {activeTab === 'packages' && client ? (
+          <ClientAllowlistTab<ClientAllowedPackage, PackagePreset>
+            clientCode={client.clientCode}
+            panelId="client-editor-panel-packages"
+            headline="Allowed packages"
+            description="Only packages on this list can be picked at label time. First allow auto-defaults."
+            emptyLabel="No packages allowed yet — add the first one."
+            addLabel="Allow package"
+            fetchAllowed={async (code) => (await clientAllowedPackagesService.listForClient(code)).data ?? []}
+            fetchCatalog={async () => shippingConfigService.listPresets()}
+            allow={async (code, presetId, makeDefault) => {
+              await clientAllowedPackagesService.allow(code, { presetId, makeDefault })
+            }}
+            remove={async (code, presetId) => {
+              await clientAllowedPackagesService.remove(code, presetId)
+            }}
+            setDefault={async (code, presetId) => {
+              await clientAllowedPackagesService.setDefault(code, presetId)
+            }}
+            allowedKey={(row) => row.presetId}
+            allowedIsDefault={(row) => row.isDefault}
+            renderAllowed={(row) => {
+              const dims = row.length && row.width && row.height
+                ? `${row.length}×${row.width}×${row.height} ${row.dimUnit?.toLowerCase() ?? 'in'}`
+                : null
+              return (
+                <>
+                  <p className="truncate text-[12px] font-semibold text-slate-800">
+                    {row.name || '—'}
+                    <span className="ml-1 font-normal text-slate-500">
+                      · {row.kind || 'CUSTOM'}
+                      {row.carrier ? ` · ${formatCarrierName(row.carrier)}` : ''}
+                    </span>
+                  </p>
+                  <p className="text-[10.5px] text-slate-500">
+                    {dims || 'no dims'}
+                    {row.maxWeight != null ? ` · up to ${row.maxWeight} ${row.weightUnit?.toLowerCase() ?? 'lb'}` : ''}
+                    {row.originCountry ? ` · from ${row.originCountry.toUpperCase()}` : ''}
+                  </p>
+                </>
+              )
+            }}
+            catalogKey={(p) => p.id ?? 0}
+            catalogLabel={(p) => {
+              const parts = [p.name]
+              if (p.kind) parts.push(p.kind)
+              if (p.carrier) parts.push(formatCarrierName(p.carrier))
+              if (p.originCountry) parts.push(p.originCountry.toUpperCase())
+              return parts.filter(Boolean).join(' · ')
+            }}
+            catalogEligible={(p) => !!p.enabled && p.id != null}
+          />
         ) : null}
 
         {activeTab === 'details' ? (
