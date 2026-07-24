@@ -30,12 +30,29 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 public class PackagePreset {
 
+    public static final String OWNER_PLATFORM = "PLATFORM";
+    public static final String OWNER_CLIENT = "CLIENT";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @Column(nullable = false, length = 80)
     private String name;
+
+    /**
+     * PLATFORM presets are visible to every client and gated by
+     * {@link ClientAllowedPackage}. CLIENT presets are private to the owning
+     * client and auto-allowed for them (no ClientAllowedPackage row needed).
+     * Mirrors the {@link Warehouse} ownership pattern.
+     */
+    @Column(name = "owner_type", nullable = false, length = 10)
+    @Builder.Default
+    private String ownerType = OWNER_PLATFORM;
+
+    /** Populated only when ownerType=CLIENT; null for PLATFORM presets. */
+    @Column(name = "owner_client_code", length = 50)
+    private String ownerClientCode;
 
     /** CARRIER (carrier-defined packaging) | CUSTOM (own box). */
     @Column(nullable = false, length = 10)
