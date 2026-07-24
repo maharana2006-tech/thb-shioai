@@ -26,8 +26,18 @@ import { formatCarrierName, carrierEnvironmentOptions, type CarrierEnvironment }
 import CarrierLogo from '../workspace/CarrierLogo'
 import Select from '../workspace/Select'
 import ClientAllowlistTab from './ClientAllowlistTab'
+import ClientDestinationsTab from './ClientDestinationsTab'
+import ClientPolicyTab from './ClientPolicyTab'
+import ClientMarkupTab from './ClientMarkupTab'
 
-type Tab = 'details' | 'warehouses' | 'services' | 'packages'
+type Tab =
+  | 'details'
+  | 'warehouses'
+  | 'services'
+  | 'packages'
+  | 'destinations'
+  | 'policy'
+  | 'markup'
 
 interface ClientEditorModalProps {
   /** Existing client to edit; omit to create a new one. */
@@ -334,6 +344,30 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
             disabled={!isEdit}
             disabledHint="Save the client first to pick allowed packages."
           />
+          <TabButton
+            active={activeTab === 'destinations'}
+            onClick={() => setActiveTab('destinations')}
+            label="Destinations"
+            tabId="destinations"
+            disabled={!isEdit}
+            disabledHint="Save the client first to set ship-to rules."
+          />
+          <TabButton
+            active={activeTab === 'policy'}
+            onClick={() => setActiveTab('policy')}
+            label="Policy"
+            tabId="policy"
+            disabled={!isEdit}
+            disabledHint="Save the client first to set the shipping policy."
+          />
+          <TabButton
+            active={activeTab === 'markup'}
+            onClick={() => setActiveTab('markup')}
+            label="Markup"
+            tabId="markup"
+            disabled={!isEdit}
+            disabledHint="Save the client first to set billing markup."
+          />
         </div>
 
         {activeTab === 'details' ? (
@@ -509,6 +543,18 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
             catalogLabel={(s) => `${formatCarrierName(s.carrier)} · ${s.serviceCode} — ${s.name}${s.originCountry ? ` (${s.originCountry.toUpperCase()})` : ''}`}
             catalogEligible={(s) => s.enabled}
           />
+        ) : null}
+
+        {activeTab === 'destinations' && client ? (
+          <ClientDestinationsTab clientCode={client.clientCode} />
+        ) : null}
+
+        {activeTab === 'policy' && client ? (
+          <ClientPolicyTab clientCode={client.clientCode} />
+        ) : null}
+
+        {activeTab === 'markup' && client ? (
+          <ClientMarkupTab clientCode={client.clientCode} />
         ) : null}
 
         {activeTab === 'packages' && client ? (

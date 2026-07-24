@@ -1,0 +1,196 @@
+import { useEffect, useState } from 'react'
+import { notify } from '../../utils/notify'
+import { ApiError } from '../../api/apiClient'
+import {
+  clientBillingMarkupService,
+  type MarkupKind,
+} from '../../api/clientPolicyService'
+
+const COMMON_CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'INR', 'JPY', 'SGD', 'AED']
+
+/**
+ * Markup tab — kind (PERCENT | FLAT) + non-negative value + ISO-4217
+ * currency. Absent row = zero markup, USD. The backend snapshots kind + value
+ * onto every shipment at label time so a later change here doesn't move
+ * historical bills.
+ */
+export default function ClientMarkupTab({ clientCode }: { clientCode: string }) {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  const [kind, setKind] = useState<MarkupKind>('PERCENT')
+  const [valueStr, setValueStr] = useState('0')
+  const [currency, setCurrency] = useState('USD')
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const r = await clientBillingMarkupService.get(clientCode)
+      const m = r.data
+      if (m) {
+        setKind((m.kind as MarkupKind) || 'PERCENT')
+        // Store the value as a string in local state so partial edits ("12.")
+        // don't fight the numeric parse.
+        setValueStr(m.value != null ? String(m.value) : '0')
+        setCurrency(m.currency || 'USD')
+      }
+    } catch (error) {
+      notify.error(error instanceof Error ? error.message : 'Failed to load billing markup.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientCode])
+
+  const save = async () => {
+    if (saving) return
+    const parsed = Number(valueStr)
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      notify.error('Value must be a non-negative number.')
+      return
+    }
+    if (!/^[A-Za-z]{3}$/.test(currency)) {
+      notify.error('Currency must be a 3-letter ISO code (e.g. USD).')
+      return
+    }
+    setSaving(true)
+    try {
+      await clientBillingMarkupService.update(clientCode, {
+        kind,
+        value: parsed,
+        currency: currency.toUpperCase(),
+      })
+      notify.success(`Markup saved for ${clientCode}.`)
+      await load()
+    } catch (error) {
+      if (error instanceof ApiError && error.errorCode === 'MARKUP_INVALID') {
+        notify.error(error.message)
+      } else {
+        notify.error(error instanceof Error ? error.message : 'Failed to save the markup.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const preview = () => {
+    const parsed = Number(valueStr)
+    if (!Number.isFinite(parsed) || parsed < 0) return null
+    // Reference rate for the preview (illustrative — the real bill uses the
+    // carrier's actual rate at label time).
+    const carrierRate = 25
+    const billable = kind === 'PERCENT'
+      ? carrierRate * (1 + parsed / 100)
+      : carrierRate + parsed
+    return { carrierRate, billable }
+  }
+
+  const p = preview()
+
+  return (
+    <div className="flex-1 overflow-y-auto px-5 py-4" role="tabpanel" id="client-editor-panel-markup">
+      <h4 className="text-[12.5px] font-semibold text-slate-950">Billing markup</h4>
+      <p className="text-[11px] leading-5 text-slate-500">
+        Applied on top of the carrier rate at label time. Kind + value are snapshotted onto the shipment so a later change here won't shift historical bills.
+      </p>
+
+      {loading ? (
+        <p className="mt-4 rounded-xl border border-dashed border-slate-200 bg-white px-3 py-3 text-center text-[11.5px] text-slate-500">
+          Loading…
+        </p>
+      ) : (
+        <>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {(['PERCENT', 'FLAT'] as const).map((k) => (
+              <label
+                key={k}
+                className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-semibold transition ${
+                  kind === k
+                    ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]'
+                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="markup-kind"
+                  value={k}
+                  checked={kind === k}
+                  onChange={() => setKind(k)}
+                  className="sr-only"
+                />
+                {k === 'PERCENT' ? 'Percent of rate' : 'Flat per shipment'}
+              </label>
+            ))}
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                Value {kind === 'PERCENT' ? '(%)' : ''}
+                <span className="ml-1 text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={valueStr}
+                onChange={(e) => setValueStr(e.target.value)}
+                placeholder={kind === 'PERCENT' ? '12.5' : '3.50'}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold text-slate-950 outline-none transition focus:border-[#412d15]"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                Currency <span className="text-rose-500">*</span>
+              </label>
+              <input
+                list="markup-currency-suggestions"
+                value={currency}
+                onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+                maxLength={3}
+                placeholder="USD"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold uppercase text-slate-950 outline-none transition focus:border-[#412d15]"
+              />
+              <datalist id="markup-currency-suggestions">
+                {COMMON_CURRENCIES.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+            </div>
+          </div>
+
+          {p ? (
+            <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50/60 p-3.5 text-[11.5px] text-slate-600">
+              <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                Preview
+              </p>
+              <p className="mt-1">
+                On a{' '}
+                <span className="font-semibold text-slate-800">{currency || 'USD'} {p.carrierRate.toFixed(2)}</span>{' '}
+                carrier rate, this markup produces a billable amount of{' '}
+                <span className="font-semibold text-slate-950">
+                  {currency || 'USD'} {p.billable.toFixed(2)}
+                </span>
+                .
+              </p>
+            </div>
+          ) : null}
+
+          <div className="mt-4 flex items-center justify-end">
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={saving}
+              className="rounded-xl bg-[#1f150c] px-4 py-2 text-[12.5px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {saving ? 'Saving…' : 'Save markup'}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
