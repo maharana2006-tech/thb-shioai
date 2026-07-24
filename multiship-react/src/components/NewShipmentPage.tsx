@@ -979,7 +979,7 @@ export default function NewShipmentPage() {
                     <Field label={`Width (${dimUnit.toLowerCase()})`} required>
                       <input className={inputCls} type="number" min="0" step="0.1" value={width} onChange={(e) => setWidth(e.target.value)} placeholder="9" />
                     </Field>
-                    <Field label={`Height (${dimUnit.toLowerCase()})`} required>
+                    <Field label={`Height/depth (${dimUnit.toLowerCase()})`} required>
                       <input className={inputCls} type="number" min="0" step="0.1" value={height} onChange={(e) => setHeight(e.target.value)} placeholder="4" />
                     </Field>
                   </div>
