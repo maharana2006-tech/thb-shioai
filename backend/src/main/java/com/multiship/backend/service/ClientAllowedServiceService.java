@@ -15,4 +15,11 @@ public interface ClientAllowedServiceService {
     ApiResponse<Void> remove(String clientCode, Long serviceId);
 
     ApiResponse<ClientAllowedServiceDTO> setDefault(String clientCode, Long serviceId);
+
+    /**
+     * Every service-allowlist row across all clients. Consumed by the
+     * Shipping Services settings page to render an "Assigned to (n)" column
+     * grouped by service id.
+     */
+    ApiResponse<List<ClientAllowedServiceDTO>> listAllAssignments();
 }

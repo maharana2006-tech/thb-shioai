@@ -100,6 +100,13 @@ public class ClientAllowedPackageServiceImpl implements ClientAllowedPackageServ
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<List<ClientAllowedPackageDTO>> listAllAssignments() {
+        List<ClientAllowedPackageDTO> rows = repo.findAll().stream().map(this::toDTO).toList();
+        return success("Package allowlist usage retrieved successfully.", rows);
+    }
+
+    @Override
     @Transactional
     public ApiResponse<ClientAllowedPackageDTO> setDefault(String clientCode, Long presetId) {
         String code = normalize(clientCode);

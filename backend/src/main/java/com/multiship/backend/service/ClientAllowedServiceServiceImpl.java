@@ -104,6 +104,13 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<List<ClientAllowedServiceDTO>> listAllAssignments() {
+        List<ClientAllowedServiceDTO> rows = repo.findAll().stream().map(this::toDTO).toList();
+        return success("Service allowlist usage retrieved successfully.", rows);
+    }
+
+    @Override
     @Transactional
     public ApiResponse<ClientAllowedServiceDTO> setDefault(String clientCode, Long serviceId) {
         String code = normalize(clientCode);

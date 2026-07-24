@@ -102,3 +102,17 @@ export const clientAllowedPackagesService = {
       {},
     ),
 }
+
+/**
+ * Cross-client usage reads for the settings catalog pages. Each endpoint
+ * returns every client's allowlist entry for the given catalog; the caller
+ * groups by service/preset id to render "Assigned to (n)" columns and
+ * drawers of the client codes.
+ */
+export const allowlistUsageService = {
+  services: () =>
+    apiClient.get<ApiResponse<ClientAllowedService[]>>('/allowlist-usage/services'),
+
+  packages: () =>
+    apiClient.get<ApiResponse<ClientAllowedPackage[]>>('/allowlist-usage/packages'),
+}
