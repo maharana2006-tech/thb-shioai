@@ -41,18 +41,21 @@ public class ApiKeyController {
     @PostMapping
     public ResponseEntity<ApiResponse<ApiKeyResponse>> issue(@Valid @RequestBody ApiKeyIssueRequest req,
                                                              @AuthenticationPrincipal UserDetails admin) {
-        // "*" mints a platform-wide key (e.g. for the WMS): it ships for ANY client,
-        // and each external call must then name the client in its body.
-        boolean allClients = com.multiship.backend.config.ApiKeyPrincipal.ALL_CLIENTS.equals(req.getClientCode().trim());
-        if (!allClients && !clientRepository.existsByClientCodeIgnoreCase(req.getClientCode().trim())) {
+        // A blank client (or "*") mints a platform-wide key: it ships for ANY client,
+        // and each external call must then name the client in its request body.
+        String clientCode = org.springframework.util.StringUtils.hasText(req.getClientCode())
+                ? req.getClientCode().trim()
+                : com.multiship.backend.config.ApiKeyPrincipal.ALL_CLIENTS;
+        boolean allClients = com.multiship.backend.config.ApiKeyPrincipal.ALL_CLIENTS.equals(clientCode);
+        if (!allClients && !clientRepository.existsByClientCodeIgnoreCase(clientCode)) {
             return ResponseEntity.status(404).body(ApiResponse.<ApiKeyResponse>builder()
                     .status("ERROR").code(404).timestamp(LocalDateTime.now())
-                    .message("Client " + req.getClientCode() + " was not found.")
+                    .message("Client " + clientCode + " was not found.")
                     .errorCode(ErrorCode.CLIENT_NOT_FOUND.name())
                     .build());
         }
         ApiKeyService.IssuedKey issued = apiKeyService.issue(
-                req.getName().trim(), req.getClientCode().trim(), req.getEnvironment(), req.getScopes(),
+                req.getName().trim(), clientCode, req.getEnvironment(), req.getScopes(),
                 admin != null ? admin.getUsername() : null);
 
         ApiKeyResponse body = ApiKeyResponse.of(issued.record(),

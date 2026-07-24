@@ -1,5 +1,6 @@
 package com.multiship.backend.model;
 
+import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
 import jakarta.persistence.Embedded;
 import jakarta.persistence.Entity;
@@ -57,8 +58,13 @@ public class Warehouse {
     @Column(nullable = false, length = 255)
     private String name;
 
-    /** Ship-from postal address. Uses Address's default column names. */
+    /**
+     * Ship-from postal address. The embedded Address's {@code name} column is
+     * remapped to {@code contact_name} so it doesn't collide with the warehouse's
+     * own {@code name} column; the rest use Address's default column names.
+     */
     @Embedded
+    @AttributeOverride(name = "name", column = @Column(name = "contact_name", length = 255))
     private Address address;
 
     /** PLATFORM | CLIENT. Determines visibility + who may attach it. */

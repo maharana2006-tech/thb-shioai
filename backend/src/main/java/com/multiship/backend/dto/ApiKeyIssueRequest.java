@@ -10,7 +10,7 @@ public class ApiKeyIssueRequest {
     @NotBlank(message = "A key name is required.")
     private String name;
 
-    @NotBlank(message = "The client code the key ships for is required.")
+    /** Optional. Blank (or "*") mints a platform-wide key that ships for ALL clients. */
     private String clientCode;
 
     /** live | test — defaults to live. */

@@ -11,7 +11,6 @@ import {
   FiX,
 } from 'react-icons/fi'
 import { apiKeyService, type ApiKey } from '../api/apiKeyService'
-import { clientService } from '../api/clientService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 
 /** Short relative time for the created / last-used columns. */
@@ -29,7 +28,7 @@ const relTime = (iso: string | null): string => {
 /** clientCode "*" mints a platform-wide (WMS) key that ships for any client. */
 const ALL_CLIENTS = '*'
 
-const emptyForm = { name: '', clientCode: '', environment: 'live', allClients: false }
+const emptyForm = { name: '', environment: 'live' }
 
 /**
  * External API Keys — mint the `msk_...` tokens client systems use to call the
@@ -40,7 +39,6 @@ const emptyForm = { name: '', clientCode: '', environment: 'live', allClients: f
 export default function ApiKeysPage() {
   const [keys, setKeys] = useState<ApiKey[]>([])
   const [loading, setLoading] = useState(true)
-  const [clientCodes, setClientCodes] = useState<string[]>([])
 
   /** Issue modal state. */
   const [issueOpen, setIssueOpen] = useState(false)
@@ -69,12 +67,6 @@ export default function ApiKeysPage() {
 
   useEffect(() => {
     void load()
-    // Client codes feed the issue form's picker; a failure only degrades the
-    // dropdown to free text, so it must not block the page.
-    clientService
-      .listClients({ size: 200, sortBy: 'code' })
-      .then((res) => setClientCodes((res.data?.content ?? []).map((c) => c.clientCode)))
-      .catch(() => setClientCodes([]))
   }, [load])
 
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
@@ -91,16 +83,15 @@ export default function ApiKeysPage() {
   }
 
   const submitIssue = async () => {
-    const clientCode = form.allClients ? ALL_CLIENTS : form.clientCode.trim()
-    if (!form.name.trim() || !clientCode) {
-      toast.error('A key name and client are required.')
+    if (!form.name.trim()) {
+      toast.error('A key name is required.')
       return
     }
     setIssuing(true)
     try {
       const res = await apiKeyService.issue({
         name: form.name.trim(),
-        clientCode,
+        clientCode: ALL_CLIENTS,
         environment: form.environment,
       })
       setIssueOpen(false)
@@ -320,8 +311,10 @@ export default function ApiKeysPage() {
               </button>
             </div>
             <p className="text-[12px] text-slate-500">
-              The key ships on behalf of one client — every shipment it creates is scoped to that client. The full
-              token is shown <span className="font-semibold text-slate-700">once</span>, right after issue.
+              The key works for <span className="font-semibold text-slate-700">all clients</span> — every external call
+              names the client it ships for via <span className="font-mono font-semibold text-slate-700">clientCode</span>{' '}
+              in the request body. The full token is shown{' '}
+              <span className="font-semibold text-slate-700">once</span>, right after issue.
             </p>
 
             <div className="mt-4 space-y-3">
@@ -336,61 +329,11 @@ export default function ApiKeysPage() {
                 />
               </label>
 
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Ships for</span>
-                <div className="mt-1 flex gap-2">
-                  {[
-                    { all: false, label: 'One client' },
-                    { all: true, label: 'All clients (WMS)' },
-                  ].map((opt) => (
-                    <button
-                      key={String(opt.all)}
-                      type="button"
-                      onClick={() => setForm((f) => ({ ...f, allClients: opt.all }))}
-                      className={`flex-1 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
-                        form.allClients === opt.all
-                          ? 'border-[#1f150c] bg-[#1f150c] text-white'
-                          : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-                {form.allClients ? (
-                  <p className="mt-1.5 text-[11px] text-slate-500">
-                    A platform-wide key: it can ship for <span className="font-semibold">any</span> client, and every
-                    external call must name the client via <span className="font-mono font-semibold">clientCode</span> in
-                    the request body.
-                  </p>
-                ) : null}
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] text-slate-500">
+                This key works for <span className="font-semibold text-slate-700">all clients</span>. Each external call
+                names the client it ships for via <span className="font-mono font-semibold text-slate-700">clientCode</span>{' '}
+                in the request body.
               </div>
-
-              <label className={`block ${form.allClients ? 'hidden' : ''}`}>
-                <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Client</span>
-                {clientCodes.length ? (
-                  <select
-                    value={form.clientCode}
-                    onChange={(e) => setForm((f) => ({ ...f, clientCode: e.target.value }))}
-                    className="mt-1 w-full cursor-pointer rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-900 outline-none transition focus:border-slate-400"
-                  >
-                    <option value="">Select a client…</option>
-                    {clientCodes.map((code) => (
-                      <option key={code} value={code}>
-                        {code}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    value={form.clientCode}
-                    onChange={(e) => setForm((f) => ({ ...f, clientCode: e.target.value }))}
-                    placeholder="Client code (e.g. ACME)"
-                    className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-[13px] text-slate-900 outline-none transition focus:border-slate-400"
-                  />
-                )}
-              </label>
 
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Environment</span>

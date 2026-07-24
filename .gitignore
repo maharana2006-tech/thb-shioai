@@ -1,3 +1,15 @@
+### macOS ###
+# AppleDouble / resource-fork files, created by macOS on FAT/exFAT volumes.
+._*
+.DS_Store
+.DS_Store?
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+
 HELP.md
 target/
 !.mvn/wrapper/maven-wrapper.jar
