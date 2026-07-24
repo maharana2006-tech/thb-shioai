@@ -52,6 +52,26 @@ public enum ErrorCode {
     WAREHOUSE_ALREADY_ATTACHED,
     CLIENT_WAREHOUSE_NOT_FOUND,
 
+    // ===== Client allowlists (services + packages) =====
+    /** Shipment named a service the client isn't allowed to use. */
+    SERVICE_NOT_ALLOWED,
+    /** Shipment named a package the client isn't allowed to use. */
+    PACKAGE_NOT_ALLOWED,
+    ALLOWLIST_ALREADY_EXISTS,
+    ALLOWLIST_ENTRY_NOT_FOUND,
+
+    // ===== Client destination rules =====
+    /** A client's rules must all share one mode (ALLOW or DENY). */
+    DESTINATION_MODE_MISMATCH,
+    /** Shipment destination is not permitted for this client. */
+    SHIP_TO_DENIED,
+
+    // ===== Client policy + markup =====
+    /** rate_strategy=FIXED requires fixed_service_id pointing to an allowed service. */
+    POLICY_FIXED_SERVICE_REQUIRED,
+    /** Markup value must be non-negative; currency must be 3 letters. */
+    MARKUP_INVALID,
+
     // ===== Fallback =====
     INTERNAL_ERROR
 }
