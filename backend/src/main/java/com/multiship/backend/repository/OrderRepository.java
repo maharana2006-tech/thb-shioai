@@ -57,7 +57,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             t.label_file_path,
             t.error_message,
             t.label_generated_at,
-            s.shipvia_desc
+            s.shipvia_desc,
+            COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'ERP' END) as order_source
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
@@ -213,7 +214,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             t.label_file_path,
             t.error_message,
             t.label_generated_at,
-            s.shipvia_desc
+            s.shipvia_desc,
+            COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'ERP' END) as order_source
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd

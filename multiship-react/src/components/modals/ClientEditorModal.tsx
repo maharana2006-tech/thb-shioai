@@ -24,6 +24,7 @@ import {
 } from '../../api/shippingConfigService'
 import { formatCarrierName, carrierEnvironmentOptions, type CarrierEnvironment } from '../../utils/carrierUtils'
 import CarrierLogo from '../workspace/CarrierLogo'
+import CountrySelect from '../workspace/CountrySelect'
 import Select from '../workspace/Select'
 import ClientAllowlistTab from './ClientAllowlistTab'
 import ClientDestinationsTab from './ClientDestinationsTab'
@@ -274,7 +275,11 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
           </Field>
         </div>
         <Field label="Country">
-          <input value={a.country ?? ''} onChange={setAddr(block, 'country')} className={`${inputClassName} uppercase`} placeholder="US" />
+          <CountrySelect
+            value={a.country}
+            onChange={(code) => setAddr(block, 'country')({ target: { value: code } })}
+            inputClassName={inputClassName}
+          />
         </Field>
         <Field label="Phone">
           <input value={a.phone ?? ''} onChange={setAddr(block, 'phone')} className={inputClassName} placeholder="555-123-4567" />

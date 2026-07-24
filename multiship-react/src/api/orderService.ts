@@ -10,6 +10,8 @@ export interface OrderDetails {
   customerCode: string
   goodsDescription: string
   createdDate: string
+  /** Where the order came from: MANUAL | WMS | API | ERP. */
+  source?: string | null
 }
 
 export interface ShippingDetails {

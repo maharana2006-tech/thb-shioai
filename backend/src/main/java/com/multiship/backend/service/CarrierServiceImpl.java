@@ -654,6 +654,7 @@ public class CarrierServiceImpl implements CarrierService {
         order.setOrderStatus("GENERATED");
         order.setIsManual("Y");
         order.setIsReturn(isReturn ? "Y" : "N");
+        order.setSource(firstNonBlank(req.getSource(), "MANUAL"));
         order.setCustNo(firstNonBlank(req.getClientCode(), "MANUAL"));
         order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : null);
         order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);

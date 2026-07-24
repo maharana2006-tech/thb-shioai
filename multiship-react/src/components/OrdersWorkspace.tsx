@@ -710,6 +710,26 @@ export default function OrdersWorkspace() {
   })
 
   columns.push({
+    id: 'source',
+    header: 'Source',
+    width: 96,
+    cell: (order) => {
+      const s = (order.orderDetails.source || 'ERP').toUpperCase()
+      const tone: Record<string, string> = {
+        MANUAL: 'bg-amber-50 text-amber-700 ring-amber-200',
+        API: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+        WMS: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
+        ERP: 'bg-slate-100 text-slate-600 ring-slate-200',
+      }
+      return (
+        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone[s] || tone.ERP}`}>
+          {s}
+        </span>
+      )
+    },
+  })
+
+  columns.push({
     id: 'destination',
     header: 'Destination',
     sortKey: 'city',

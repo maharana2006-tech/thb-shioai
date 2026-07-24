@@ -37,6 +37,8 @@ public class OrderResponseDTO {
         private String customerCode;
         private String goodsDescription;
         private LocalDate createdDate;
+        /** Where the order came from: MANUAL | WMS | API | ERP. */
+        private String source;
     }
 
     @Data

@@ -117,6 +117,10 @@ public class Order {
     @Column(name = "is_manual")
     private String isManual;
 
+    /** Where the order came from: MANUAL | WMS | API | ERP. Null on legacy rows (derived at read time). */
+    @Column(name = "order_source", length = 20)
+    private String source;
+
     /** 'Y' when this is a reverse/return label (customer ships back). */
     @Column(name = "is_return")
     private String isReturn;

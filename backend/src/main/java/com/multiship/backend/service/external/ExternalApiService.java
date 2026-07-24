@@ -169,6 +169,7 @@ public class ExternalApiService {
         manual.setAccountId(accountId);
         manual.setAccountNumber(accountNumber);
         manual.setClientCode(clientCode);
+        manual.setSource("API");
         manual.setReference(req.getReference());
         manual.setDeclaredValue(req.getDeclaredValue());
         manual.setCurrency(req.getCurrency());

@@ -55,6 +55,9 @@ public class ManualShipmentRequest {
     /** Optional client/customer code to tag the shipment with. */
     private String clientCode;
 
+    /** Where the order originated: MANUAL (default) | WMS | API. Recorded on the order. */
+    private String source;
+
     /**
      * Optional ship-from warehouse code (must be attached to
      * {@link #clientCode}). When set, its address wins over the {@link #sender}

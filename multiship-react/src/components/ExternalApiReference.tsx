@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import {
   FiBookOpen,
@@ -6,8 +6,15 @@ import {
   FiChevronDown,
   FiCopy,
   FiExternalLink,
+  FiKey,
+  FiPlay,
 } from 'react-icons/fi'
 import { BASE_URL } from '../api/apiClient'
+
+/** Remember the tester's API key between visits (never sent anywhere but the API). */
+const API_KEY_STORAGE = 'ms:externalApiKey'
+/** Pull the {param} tokens out of a path template. */
+const pathParamsOf = (path: string) => [...path.matchAll(/\{(\w+)\}/g)].map((m) => m[1])
 
 /** Base URL of the public shipping API, derived from the app's API client. */
 const EXTERNAL_BASE = `${BASE_URL}/external`
@@ -214,12 +221,169 @@ function CodeBlock({ code }: { code: string }) {
   )
 }
 
+interface TryResult {
+  status: number
+  ok: boolean
+  ms: number
+  text: string
+}
+
+/** Live "try it" console for one endpoint — fills path params + body, sends with the API key, shows the response. */
+function TryIt({ ep, apiKey }: { ep: Endpoint; apiKey: string }) {
+  const params = useMemo(() => pathParamsOf(ep.path), [ep.path])
+  const [pathValues, setPathValues] = useState<Record<string, string>>({})
+  const [body, setBody] = useState(ep.request ?? '')
+  const [sending, setSending] = useState(false)
+  const [result, setResult] = useState<TryResult | null>(null)
+
+  const resolvedPath = params.reduce(
+    (p, name) => p.replace(`{${name}}`, pathValues[name]?.trim() ? encodeURIComponent(pathValues[name].trim()) : `{${name}}`),
+    ep.path,
+  )
+  const url = `${EXTERNAL_BASE}${resolvedPath}`
+  const hasBody = ep.method === 'POST' && ep.request !== undefined
+
+  const send = async () => {
+    if (!apiKey.trim()) return toast.error('Enter your API key at the top first.')
+    for (const name of params) {
+      if (!pathValues[name]?.trim()) return toast.error(`Fill in "${name}".`)
+    }
+    let payload: string | undefined
+    if (hasBody) {
+      try {
+        JSON.parse(body || '{}')
+      } catch {
+        return toast.error('Request body is not valid JSON.')
+      }
+      payload = body
+    }
+    setSending(true)
+    setResult(null)
+    const started = performance.now()
+    try {
+      const res = await fetch(url, {
+        method: ep.method,
+        headers: {
+          'X-API-Key': apiKey.trim(),
+          ...(payload !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: payload,
+      })
+      const raw = await res.text()
+      let text = raw
+      try {
+        text = JSON.stringify(JSON.parse(raw), null, 2)
+      } catch {
+        /* non-JSON response — show raw */
+      }
+      setResult({ status: res.status, ok: res.ok, ms: Math.round(performance.now() - started), text })
+    } catch (e) {
+      setResult({ status: 0, ok: false, ms: Math.round(performance.now() - started), text: `Network error: ${e instanceof Error ? e.message : String(e)}` })
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2.5 rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex items-center gap-2">
+        <span className={`inline-flex w-14 shrink-0 justify-center rounded-full px-2 py-0.5 font-mono text-[10px] font-black ring-1 ${METHOD_BADGE[ep.method]}`}>
+          {ep.method}
+        </span>
+        <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-500" title={url}>
+          {url}
+        </code>
+        <button
+          type="button"
+          onClick={() => void send()}
+          disabled={sending}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+        >
+          {sending ? (
+            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+          ) : (
+            <FiPlay className="h-3 w-3" />
+          )}
+          {sending ? 'Sending…' : 'Send'}
+        </button>
+      </div>
+
+      {params.length ? (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {params.map((name) => (
+            <label key={name} className="block">
+              <span className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">{name}</span>
+              <input
+                value={pathValues[name] ?? ''}
+                onChange={(e) => setPathValues((v) => ({ ...v, [name]: e.target.value }))}
+                placeholder={name === 'shipmentId' ? 'e.g. 900123' : name}
+                className="mt-0.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-[12px] text-slate-800 outline-none focus:border-slate-400"
+              />
+            </label>
+          ))}
+        </div>
+      ) : null}
+
+      {hasBody ? (
+        <div>
+          <p className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">Request body (editable)</p>
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            spellCheck={false}
+            rows={Math.min(16, (body.match(/\n/g)?.length ?? 0) + 2)}
+            className="w-full resize-y rounded-lg border border-slate-200 bg-[#faf9f7] px-3 py-2 font-mono text-[11px] leading-relaxed text-slate-700 outline-none focus:border-slate-400"
+          />
+        </div>
+      ) : null}
+
+      {result ? (
+        <div>
+          <div className="mb-1 flex items-center gap-2">
+            <span className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">Response</span>
+            <span
+              className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-bold ${
+                result.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600'
+              }`}
+            >
+              {result.status || 'ERR'}
+            </span>
+            <span className="text-[10px] text-slate-400">{result.ms} ms</span>
+          </div>
+          <pre
+            className={`max-h-80 overflow-auto rounded-lg border px-3 py-2.5 font-mono text-[11px] leading-relaxed ${
+              result.ok ? 'border-emerald-100 bg-emerald-50/40 text-slate-700' : 'border-rose-100 bg-rose-50/40 text-slate-700'
+            }`}
+          >
+            {result.text}
+          </pre>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 /**
  * Reference card for the public shipping API (/api/v1/external) — rendered on
  * the API Keys settings page so the docs live next to where keys are minted.
  */
 export default function ExternalApiReference() {
   const [open, setOpen] = useState<string | null>(null)
+  const [apiKey, setApiKey] = useState(() => {
+    try {
+      return localStorage.getItem(API_KEY_STORAGE) || ''
+    } catch {
+      return ''
+    }
+  })
+  const updateKey = (v: string) => {
+    setApiKey(v)
+    try {
+      localStorage.setItem(API_KEY_STORAGE, v)
+    } catch {
+      /* ignore storage errors */
+    }
+  }
 
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -251,6 +415,23 @@ export default function ExternalApiReference() {
           <span className="font-mono font-semibold text-slate-700">Authorization: Bearer msk_…</span>. All responses use
           the envelope <span className="font-mono">{'{ status, code, message, data, errorCode }'}</span>.
         </p>
+        <label className="block">
+          <span className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">Your API key · used for “Try it”</span>
+          <div className="relative mt-1">
+            <FiKey className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-300" />
+            <input
+              value={apiKey}
+              onChange={(e) => updateKey(e.target.value)}
+              placeholder="msk_live_…"
+              spellCheck={false}
+              autoComplete="off"
+              className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-8 pr-3 font-mono text-[12px] text-slate-800 outline-none focus:border-slate-400"
+            />
+          </div>
+          <span className="mt-1 block text-[10.5px] text-slate-400">
+            Stays in your browser; sent only as the <span className="font-mono">X-API-Key</span> header when you press Send.
+          </span>
+        </label>
         <p className="flex flex-wrap items-center gap-1.5">
           <span className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">Base URL</span>
           <code className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
@@ -297,22 +478,16 @@ export default function ExternalApiReference() {
                       </li>
                     ))}
                   </ul>
-                  <div className={`grid gap-3 ${ep.request ? 'lg:grid-cols-2' : ''}`}>
-                    {ep.request ? (
-                      <div>
-                        <p className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
-                          Request body
-                        </p>
-                        <CodeBlock code={ep.request} />
-                      </div>
-                    ) : null}
-                    <div>
-                      <p className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
-                        Response
-                      </p>
+                  <TryIt ep={ep} apiKey={apiKey} />
+                  <details className="group">
+                    <summary className="cursor-pointer list-none text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400 transition hover:text-slate-600">
+                      <FiChevronDown className="mr-1 inline h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+                      Example response
+                    </summary>
+                    <div className="mt-1.5">
                       <CodeBlock code={ep.response} />
                     </div>
-                  </div>
+                  </details>
                 </div>
               ) : null}
             </li>

@@ -4,6 +4,7 @@ import {
   FiCalendar,
   FiCreditCard,
   FiFlag,
+  FiGitBranch,
   FiHash,
   FiLink2,
   FiMapPin,
@@ -45,6 +46,22 @@ function HeaderLabel({
   )
 }
 
+/** Colour-coded badge for where an order originated. */
+function SourceBadge({ source }: { source?: string | null }) {
+  const s = (source || 'ERP').toUpperCase()
+  const tone: Record<string, string> = {
+    MANUAL: 'bg-amber-50 text-amber-700 ring-amber-200',
+    API: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+    WMS: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
+    ERP: 'bg-slate-100 text-slate-600 ring-slate-200',
+  }
+  return (
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone[s] || tone.ERP}`}>
+      {s}
+    </span>
+  )
+}
+
 export default function OrdersTable({
   orders,
   loading,
@@ -65,6 +82,9 @@ export default function OrdersTable({
             </th>
             <th className={compact ? 'px-2.5 py-3' : 'px-3 py-3.5'}>
               <HeaderLabel icon={<FiUser className="h-3 w-3" />} label="Customer" />
+            </th>
+            <th className={compact ? 'px-2.5 py-3' : 'px-3 py-3.5'}>
+              <HeaderLabel icon={<FiGitBranch className="h-3 w-3" />} label="Source" />
             </th>
             {mode === 'labels' ? (
               <>
@@ -119,6 +139,9 @@ export default function OrdersTable({
             <tr key={order.orderDetails.orderNo} className="transition hover:bg-slate-50/80">
               <td className={`${compact ? 'px-2.5 py-3' : 'px-3 py-3.5'} font-semibold text-slate-950`}>{order.orderDetails.orderNo}</td>
               <td className={compact ? 'px-2.5 py-3' : 'px-3 py-3.5'}>{order.orderDetails.customerCode}</td>
+              <td className={compact ? 'px-2.5 py-3' : 'px-3 py-3.5'}>
+                <SourceBadge source={order.orderDetails.source} />
+              </td>
               {mode === 'labels' ? (
                 <>
                   <td className={compact ? 'px-2.5 py-3' : 'px-3 py-3.5'}>{order.shippingDetails.city}</td>
@@ -189,7 +212,7 @@ export default function OrdersTable({
 
           {!orders.length ? (
             <tr>
-              <td colSpan={mode === 'labels' ? 11 : 9} className={`${compact ? 'px-2.5 py-8 text-[13px]' : 'px-3 py-10 text-sm'} text-center text-slate-500`}>
+              <td colSpan={mode === 'labels' ? 12 : 10} className={`${compact ? 'px-2.5 py-8 text-[13px]' : 'px-3 py-10 text-sm'} text-center text-slate-500`}>
                 {loading ? 'Loading orders...' : emptyText}
               </td>
             </tr>
