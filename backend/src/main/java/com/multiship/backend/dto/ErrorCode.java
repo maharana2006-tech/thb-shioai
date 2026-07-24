@@ -51,6 +51,8 @@ public enum ErrorCode {
     WAREHOUSE_ATTACH_FORBIDDEN,
     WAREHOUSE_ALREADY_ATTACHED,
     CLIENT_WAREHOUSE_NOT_FOUND,
+    /** Client has no attached warehouses and the request didn't name one. */
+    NO_DEFAULT_WAREHOUSE,
 
     // ===== Client allowlists (services + packages) =====
     /** Shipment named a service the client isn't allowed to use. */
