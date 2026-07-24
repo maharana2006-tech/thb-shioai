@@ -19,17 +19,24 @@ import java.time.LocalDateTime;
 /**
  * A SHIP-METHOD RULE (the ShipStation "service mapping" pattern): an order's
  * ship method (the ERP shipvia/connect code) resolves to a carrier service,
- * optionally narrowed by CLIENT and DESTINATION (country or region). Multiple
- * rules may exist for one code; the most specific match wins:
- *   client+country > client+region > client+any > global+country > … > global.
+ * optionally narrowed by CLIENT, ORIGIN WAREHOUSE, and DESTINATION (country
+ * or region). Multiple rules may exist for one code; the most specific match
+ * wins:
+ *   client+warehouse+country > client+warehouse+any > client+any+country
+ *   > client+any+any > global+…+country > global+…+any.
  *
- * clientCode null = any client. destType ANY|REGION|COUNTRY (null = ANY);
- * destValue holds the region name or ISO country code.
+ * clientCode null = any client. warehouseId null = any warehouse (so a
+ * client's rules can be origin-agnostic when they only ship from one
+ * location). destType ANY|REGION|COUNTRY (null = ANY); destValue holds the
+ * region name or ISO country code.
  * (Table name kept from the original single-mapping version.)
  */
 @Entity
 @Table(name = "shipvia_service_mapping",
-        indexes = @Index(name = "idx_shipvia_rule_code", columnList = "shipvia_cd"))
+        indexes = {
+                @Index(name = "idx_shipvia_rule_code", columnList = "shipvia_cd"),
+                @Index(name = "idx_shipvia_rule_warehouse", columnList = "warehouse_id"),
+        })
 @Data
 @Builder
 @NoArgsConstructor
@@ -47,6 +54,10 @@ public class ShipViaMapping {
     /** Narrow to one client; null = applies to any client. */
     @Column(name = "client_code", length = 50)
     private String clientCode;
+
+    /** Narrow to one origin warehouse; null = applies to any warehouse. */
+    @Column(name = "warehouse_id")
+    private Long warehouseId;
 
     /**
      * ANY | COUNTRIES (null = ANY). Legacy values REGION/COUNTRY from the
