@@ -25,5 +25,12 @@ public class ExternalRateResponse {
         /** Null when live pricing is not available. */
         private BigDecimal estimatedAmount;
         private String currency;
+        /**
+         * True when the option is on the client's allowlist (or the client
+         * has no allowlist configured). False options are returned for
+         * transparency but a shipment call for them would 422 with
+         * SERVICE_NOT_ALLOWED.
+         */
+        private Boolean allowed;
     }
 }
