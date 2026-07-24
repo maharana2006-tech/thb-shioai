@@ -21,7 +21,6 @@ import com.multiship.backend.repository.ShippingServiceRepository;
 import com.multiship.backend.service.CarrierService;
 import com.multiship.backend.service.ShippingConfigService;
 import com.multiship.backend.service.carriers.CarrierConnector;
-import com.multiship.backend.service.resolution.MarkupApplied;
 import com.multiship.backend.service.resolution.ShipmentResolutionException;
 import com.multiship.backend.service.resolution.ShipmentResolutionService;
 import lombok.extern.slf4j.Slf4j;
@@ -29,7 +28,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -219,20 +217,11 @@ public class ExternalApiService {
 
         LabelGenerationResponse label = resp.getData();
 
-        // 3PL guardrail #4: markup + cutoff. Applied post-flight so the shipment
-        // row carries the effective config; a currency mismatch here 422s AFTER
-        // the label was actually cut. Better to fail-fast in Phase 4c once the
-        // internal path also runs the resolver up-front; for now this is the
-        // safer post-carrier point on the external path.
-        String carrierCurrency = firstNonBlank(req.getCurrency(), "USD");
-        MarkupApplied markup;
-        try {
-            markup = resolutionService.applyMarkup(clientCode, label.getShippingCost(), carrierCurrency);
-        } catch (ShipmentResolutionException e) {
-            throw toExternal(e);
-        }
-        boolean nextBusinessDay = resolutionService.isPastCutoff(clientCode, Instant.now());
-
+        // 3PL snapshot: read straight off the label response. carrierService.
+        // generateManualLabel already ran applyMarkup + isPastCutoff and
+        // persisted the snapshot on OrderTracking (Phase 4d), so we don't
+        // re-run the resolver here — the values printed on the label and the
+        // values on the response are guaranteed to be the same row.
         return ExternalShipmentResponse.builder()
                 .shipmentId(label.getOrderNo())
                 .reference(req.getReference())
@@ -241,19 +230,21 @@ public class ExternalApiService {
                 .service(serviceCode)
                 .resolvedVia(resolvedVia)
                 .international(international)
-                .warehouseCode(resolvedWarehouse != null ? resolvedWarehouse.getCode() : null)
+                .warehouseCode(label.getWarehouseCode() != null
+                        ? label.getWarehouseCode()
+                        : (resolvedWarehouse != null ? resolvedWarehouse.getCode() : null))
                 .trackingNumber(label.getTrackingNumber())
                 .trackingUrl(label.getTrackingUrl())
                 .labelUrl(label.getLabelUrl())
                 .labelPdf(label.getLabelPdf())
                 .labelDocumentUrl("/api/v1/orders/" + label.getOrderNo() + "/label")
-                .shippingCost(markup.billable())
-                .carrierAmount(markup.carrierRate())
-                .billableAmount(markup.billable())
-                .markupKind(markup.kind())
-                .markupValue(markup.value())
-                .markupCurrency(markup.currency())
-                .dispatchNextBusinessDay(nextBusinessDay)
+                .shippingCost(label.getShippingCost())
+                .carrierAmount(label.getCarrierAmount())
+                .billableAmount(label.getBillableAmount())
+                .markupKind(label.getMarkupKind())
+                .markupValue(label.getMarkupValue())
+                .markupCurrency(label.getMarkupCurrency())
+                .dispatchNextBusinessDay(label.getDispatchNextBusinessDay())
                 .estimatedDelivery(label.getEstimatedDelivery())
                 .status(label.getStatus())
                 .build();

@@ -526,10 +526,12 @@ public class CarrierServiceImpl implements CarrierService {
         // client has a default attached), override the `from` block with the
         // warehouse address. Any override throws WAREHOUSE_ATTACH_FORBIDDEN
         // when the caller borrowed a warehouse from another tenant.
+        String resolvedWarehouseCode = null;
         if (hasClient && StringUtils.hasText(req.getWarehouseCode())) {
             try {
                 Warehouse w = resolutionService.assertWarehouse(resolvedClient, req.getWarehouseCode());
                 from = mergeFromWarehouse(from, w);
+                resolvedWarehouseCode = w.getCode();
             } catch (ShipmentResolutionException e) {
                 return toResolutionFailure(e);
             }
@@ -714,6 +716,22 @@ public class CarrierServiceImpl implements CarrierService {
             }
         }
 
+        // 3PL snapshot: applyMarkup + isPastCutoff so historical rows carry
+        // the config effective at label time (see the Phase-1 open decision).
+        // Ad-hoc shipments (empty clientCode) run through as no-ops: markup
+        // is 0% PERCENT, cutoff is false, warehouseCode is null.
+        com.multiship.backend.service.resolution.MarkupApplied markup;
+        try {
+            markup = resolutionService.applyMarkup(
+                    hasClient ? resolvedClient : "",
+                    result.shippingCost(),
+                    firstNonBlank(req.getCurrency(), "USD"));
+        } catch (ShipmentResolutionException e) {
+            return toResolutionFailure(e);
+        }
+        boolean nextBusinessDay = hasClient
+                && resolutionService.isPastCutoff(resolvedClient, java.time.Instant.now());
+
         OrderTracking tracking = new OrderTracking();
         tracking.setOrderNo(orderNo);
         tracking.setOrderSuffix(0);
@@ -725,6 +743,13 @@ public class CarrierServiceImpl implements CarrierService {
         tracking.setLabelGeneratedAt(LocalDateTime.now());
         tracking.setLabelFilePath(result.labelUrl());
         tracking.setStatus("GENERATED");
+        tracking.setWarehouseCode(resolvedWarehouseCode);
+        tracking.setCarrierAmount(markup.carrierRate());
+        tracking.setBillableAmount(markup.billable());
+        tracking.setMarkupKind(markup.kind());
+        tracking.setMarkupValue(markup.value());
+        tracking.setMarkupCurrency(markup.currency());
+        tracking.setDispatchNextBusinessDay(nextBusinessDay);
         tracking.setCreatedAt(LocalDateTime.now());
         tracking.setUpdatedAt(LocalDateTime.now());
         orderTrackingRepository.save(tracking);
@@ -740,9 +765,16 @@ public class CarrierServiceImpl implements CarrierService {
                 .labelUrl(result.labelUrl())
                 .labelPdf(result.labelPdf())
                 .status("GENERATED")
-                .shippingCost(result.shippingCost())
+                .shippingCost(markup.billable())
                 .estimatedDelivery(result.estimatedDelivery())
                 .accountSource("MANUAL")
+                .warehouseCode(resolvedWarehouseCode)
+                .carrierAmount(markup.carrierRate())
+                .billableAmount(markup.billable())
+                .markupKind(markup.kind())
+                .markupValue(markup.value())
+                .markupCurrency(markup.currency())
+                .dispatchNextBusinessDay(nextBusinessDay)
                 .message("Manual shipment #" + orderNo + " labelled on "
                         + billToNumber + ".")
                 .build();

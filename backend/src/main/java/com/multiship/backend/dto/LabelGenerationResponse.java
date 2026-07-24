@@ -32,6 +32,22 @@ public class LabelGenerationResponse {
     /** Which source shipped this label: ORDER, REFERENCE, or DEFAULT. */
     private String accountSource;
 
+    // ===== 3PL snapshot (mirror of the columns stored on OrderTracking) =====
+
+    /** Warehouse the shipment shipped from — null for ad-hoc / no-client shipments. */
+    private String warehouseCode;
+    /** Carrier's rate before markup — mirrors {@link #shippingCost} when no markup applies. */
+    private BigDecimal carrierAmount;
+    /** {@link #carrierAmount} + client markup. */
+    private BigDecimal billableAmount;
+    /** PERCENT | FLAT. */
+    private String markupKind;
+    private BigDecimal markupValue;
+    /** ISO-4217 of {@link #carrierAmount} and {@link #billableAmount}. */
+    private String markupCurrency;
+    /** True when the label was created past the client's cutoff — see OrderTracking. */
+    private Boolean dispatchNextBusinessDay;
+
     // ===== Scenario 2: generation paused, order needs carrier details =====
 
     /** True when the order's carrier details are partial and must be completed first. */
