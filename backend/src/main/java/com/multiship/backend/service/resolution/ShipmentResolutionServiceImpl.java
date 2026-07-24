@@ -7,11 +7,13 @@ import com.multiship.backend.model.ClientShippingPolicy;
 import com.multiship.backend.model.ClientWarehouse;
 import com.multiship.backend.model.Warehouse;
 import com.multiship.backend.repository.ClientAllowedPackageRepository;
+import com.multiship.backend.repository.ClientAllowedServiceDestinationRepository;
 import com.multiship.backend.repository.ClientAllowedServiceRepository;
 import com.multiship.backend.repository.ClientBillingMarkupRepository;
 import com.multiship.backend.repository.ClientDestinationRuleRepository;
 import com.multiship.backend.repository.ClientShippingPolicyRepository;
 import com.multiship.backend.repository.ClientWarehouseRepository;
+import com.multiship.backend.repository.PackagePresetRepository;
 import com.multiship.backend.repository.WarehouseRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -37,10 +39,12 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     private final WarehouseRepository warehouseRepository;
     private final ClientWarehouseRepository clientWarehouseRepository;
     private final ClientAllowedServiceRepository allowedServiceRepository;
+    private final ClientAllowedServiceDestinationRepository destinationGateRepository;
     private final ClientAllowedPackageRepository allowedPackageRepository;
     private final ClientDestinationRuleRepository destinationRuleRepository;
     private final ClientShippingPolicyRepository policyRepository;
     private final ClientBillingMarkupRepository markupRepository;
+    private final PackagePresetRepository presetRepository;
 
     // ===== Warehouse =====
 
@@ -128,22 +132,50 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     }
 
     @Override
-    public void assertServiceAllowed(String clientCode, Long serviceId) {
+    public void assertServiceAllowed(String clientCode, Long serviceId, String destCountry) {
         if (serviceId == null) return; // caller validates presence separately
-        Set<Long> allowed = allowedServiceIds(clientCode);
-        // Backward-compat: no rows means "not configured", treat as unrestricted.
-        if (allowed.isEmpty() || allowed.contains(serviceId)) return;
-        throw new ShipmentResolutionException(ErrorCode.SERVICE_NOT_ALLOWED,
-                "Service " + serviceId + " is not on client " + normalize(clientCode) + "'s allowlist.");
+        String code = normalize(clientCode);
+        var allowedRow = allowedServiceRepository
+                .findByClientCodeIgnoreCaseAndServiceId(code, serviceId);
+        if (allowedRow.isEmpty()) {
+            // Backward-compat: no rows means "not configured", treat as
+            // unrestricted so onboarding doesn't wedge shipments.
+            if (allowedServiceIds(code).isEmpty()) return;
+            throw new ShipmentResolutionException(ErrorCode.SERVICE_NOT_ALLOWED,
+                    "Service " + serviceId + " is not on client " + code + "'s allowlist.");
+        }
+        // Destination gate (Phase 5d): row on the allowlist may restrict which
+        // destinations the client may use it for.
+        String dest = destCountry == null ? "" : destCountry.trim().toUpperCase(Locale.ROOT);
+        if (dest.isEmpty()) return;
+        var destinations = destinationGateRepository
+                .findByAllowedServiceIdOrderByCountryAsc(allowedRow.get().getId());
+        if (destinations.isEmpty()) return; // unrestricted
+        boolean listed = destinations.stream()
+                .anyMatch(d -> dest.equalsIgnoreCase(d.getCountry()));
+        if (!listed) {
+            throw new ShipmentResolutionException(ErrorCode.SERVICE_NOT_ALLOWED_FOR_DEST,
+                    "Client " + code + " may not ship on service " + serviceId
+                            + " to " + dest + " (destination not on the service's gate).");
+        }
     }
 
     @Override
     public void assertPackageAllowed(String clientCode, Long presetId) {
         if (presetId == null) return;
-        Set<Long> allowed = allowedPackageIds(clientCode);
+        String code = normalize(clientCode);
+        // Ownership cascade (Phase 5d): a CLIENT-owned preset is auto-allowed
+        // for its owner, no ClientAllowedPackage row required.
+        var preset = presetRepository.findById(presetId).orElse(null);
+        if (preset != null
+                && com.multiship.backend.model.PackagePreset.OWNER_CLIENT.equalsIgnoreCase(preset.getOwnerType())
+                && code.equalsIgnoreCase(preset.getOwnerClientCode())) {
+            return;
+        }
+        Set<Long> allowed = allowedPackageIds(code);
         if (allowed.isEmpty() || allowed.contains(presetId)) return;
         throw new ShipmentResolutionException(ErrorCode.PACKAGE_NOT_ALLOWED,
-                "Package " + presetId + " is not on client " + normalize(clientCode) + "'s allowlist.");
+                "Package " + presetId + " is not on client " + code + "'s allowlist.");
     }
 
     // ===== Policy + rate strategy =====

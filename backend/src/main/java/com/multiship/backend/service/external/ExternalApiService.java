@@ -181,7 +181,7 @@ public class ExternalApiService {
         // 3PL guardrail #2: service on the client's allowlist?
         if (serviceId != null) {
             try {
-                resolutionService.assertServiceAllowed(clientCode, serviceId);
+                resolutionService.assertServiceAllowed(clientCode, serviceId, destCountry);
             } catch (ShipmentResolutionException e) {
                 throw toExternal(e);
             }
