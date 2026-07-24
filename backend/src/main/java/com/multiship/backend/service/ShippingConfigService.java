@@ -401,6 +401,28 @@ public class ShippingConfigService {
                     "A package named '" + request.getName().trim() + "' already exists.");
         }
 
+        // Ownership invariants (Phase 5a): PLATFORM forbids owner_client_code,
+        // CLIENT requires it. Absent ownerType defaults to PLATFORM so existing
+        // callers that don't yet set it keep working.
+        String ownerType = StringUtils.hasText(request.getOwnerType())
+                ? request.getOwnerType().trim().toUpperCase(Locale.ROOT)
+                : PackagePreset.OWNER_PLATFORM;
+        String ownerClient = StringUtils.hasText(request.getOwnerClientCode())
+                ? request.getOwnerClientCode().trim().toUpperCase(Locale.ROOT)
+                : null;
+        if (!PackagePreset.OWNER_PLATFORM.equals(ownerType) && !PackagePreset.OWNER_CLIENT.equals(ownerType)) {
+            return failure(HttpStatus.BAD_REQUEST, ErrorCode.WAREHOUSE_OWNER_INVALID,
+                    "ownerType must be PLATFORM or CLIENT.");
+        }
+        if (PackagePreset.OWNER_CLIENT.equals(ownerType) && ownerClient == null) {
+            return failure(HttpStatus.BAD_REQUEST, ErrorCode.WAREHOUSE_OWNER_INVALID,
+                    "CLIENT-owned package requires ownerClientCode.");
+        }
+        if (PackagePreset.OWNER_PLATFORM.equals(ownerType) && ownerClient != null) {
+            return failure(HttpStatus.BAD_REQUEST, ErrorCode.WAREHOUSE_OWNER_INVALID,
+                    "PLATFORM package must not carry ownerClientCode.");
+        }
+
         PackagePreset p = id != null ? presetRepository.findById(id).orElse(null) : new PackagePreset();
         if (p == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.VALIDATION_ERROR, "Package preset not found.");
@@ -411,6 +433,8 @@ public class ShippingConfigService {
         if (id == null) {
             p.setSource("CUSTOM");
         }
+        p.setOwnerType(ownerType);
+        p.setOwnerClientCode(ownerClient);
         p.setName(request.getName().trim());
         p.setKind(carrierKind ? "CARRIER" : "CUSTOM");
         p.setCarrierPackageCode(carrierKind ? request.getCarrierPackageCode().trim() : null);

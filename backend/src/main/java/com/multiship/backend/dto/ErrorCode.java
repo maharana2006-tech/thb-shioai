@@ -74,6 +74,20 @@ public enum ErrorCode {
     /** Markup value must be non-negative; currency must be 3 letters. */
     MARKUP_INVALID,
 
+    // ===== Order intake code translation (Phase 5) =====
+    /** ERP shipvia code has no alias for this client. */
+    UNKNOWN_SHIPVIA_CODE,
+    /** ERP service-level code has no alias for this client. */
+    UNKNOWN_SERVICE_CODE,
+    /** ERP destination-country code has no alias for this client. */
+    UNKNOWN_DEST_CODE,
+    /** ERP package SKU has no alias for this client. */
+    UNKNOWN_PACKAGE_CODE,
+
+    // ===== Client allowlist × destination gate =====
+    /** Service is allowed for the client, but not for this destination country. */
+    SERVICE_NOT_ALLOWED_FOR_DEST,
+
     // ===== Fallback =====
     INTERNAL_ERROR
 }

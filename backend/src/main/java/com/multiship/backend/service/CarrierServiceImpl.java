@@ -580,7 +580,7 @@ public class CarrierServiceImpl implements CarrierService {
         if (hasClient) {
             try {
                 if (service != null) {
-                    resolutionService.assertServiceAllowed(resolvedClient, service.getId());
+                    resolutionService.assertServiceAllowed(resolvedClient, service.getId(), to.getCountryCode());
                 }
                 if (preset != null) {
                     resolutionService.assertPackageAllowed(resolvedClient, preset.getId());

@@ -71,14 +71,25 @@ public interface ShipmentResolutionService {
     Set<Long> allowedPackageIds(String clientCode);
 
     /**
-     * Assert the given service is on the client's allowlist (or the client
-     * has no allowlist configured yet).
+     * Assert the given service is on the client's allowlist and its
+     * destination-gate (if any) permits {@code destCountry}. When the row
+     * has no destination rows it's unrestricted; otherwise the target
+     * country must be listed.
      *
-     * @throws ShipmentResolutionException SERVICE_NOT_ALLOWED.
+     * @throws ShipmentResolutionException SERVICE_NOT_ALLOWED — the service
+     *         isn't on the allowlist at all;
+     *         SERVICE_NOT_ALLOWED_FOR_DEST — it's on the list but not for
+     *         this destination.
      */
-    void assertServiceAllowed(String clientCode, Long serviceId);
+    void assertServiceAllowed(String clientCode, Long serviceId, String destCountry);
 
-    /** {@link #assertServiceAllowed} for packages / PACKAGE_NOT_ALLOWED. */
+    /**
+     * Assert the given package is usable by the client. CLIENT-owned presets
+     * auto-pass when the owner matches; PLATFORM presets must be on
+     * {@link com.multiship.backend.model.ClientAllowedPackage}.
+     *
+     * @throws ShipmentResolutionException PACKAGE_NOT_ALLOWED.
+     */
     void assertPackageAllowed(String clientCode, Long presetId);
 
     // ===== Rate strategy =====

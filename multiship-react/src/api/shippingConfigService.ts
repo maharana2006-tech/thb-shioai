@@ -50,6 +50,11 @@ export interface PackagePreset {
   kind: 'CARRIER' | 'CUSTOM'
   carrierPackageCode?: string | null
   carrier?: string | null
+  /** PLATFORM (attachable to any client via allowlist) or CLIENT (private
+   *  to its owner, auto-allowed). Added in Phase 5a. */
+  ownerType?: 'PLATFORM' | 'CLIENT' | null
+  /** Owning client — populated only when ownerType=CLIENT. */
+  ownerClientCode?: string | null
   length?: number | null
   width?: number | null
   height?: number | null

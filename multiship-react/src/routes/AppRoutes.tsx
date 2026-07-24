@@ -14,6 +14,7 @@ import ApiKeysPage from '../components/ApiKeysPage'
 import ApiReferencePage from '../components/ApiReferencePage'
 import PackagesPage from '../components/PackagesPage'
 import WarehousesPage from '../components/WarehousesPage'
+import CodeMapsPage from '../components/CodeMapsPage'
 import DashboardPage from '../pages/DashboardPage'
 import OrdersPage from '../pages/OrdersPage'
 import NewShipmentPage from '../components/NewShipmentPage'
@@ -45,6 +46,7 @@ export default function AppRoutes() {
               <Route path="shipping-service-mapping" element={<ShippingServiceMappingPage />} />
               <Route path="packages" element={<PackagesPage />} />
               <Route path="importer-broker" element={<ImporterBrokerPage />} />
+              <Route path="code-maps" element={<CodeMapsPage />} />
               <Route element={<RequireRole roles={['ADMIN']} />}>
                 <Route path="carriers" element={<CarrierPage />} />
                 <Route path="api-keys" element={<ApiKeysPage />} />

@@ -30,6 +30,9 @@ import ClientAllowlistTab from './ClientAllowlistTab'
 import ClientDestinationsTab from './ClientDestinationsTab'
 import ClientPolicyTab from './ClientPolicyTab'
 import ClientMarkupTab from './ClientMarkupTab'
+import ServiceDestinationsDrawer from './ServiceDestinationsDrawer'
+import ClientOwnedPackagesPanel from './ClientOwnedPackagesPanel'
+import { FiMap } from 'react-icons/fi'
 
 type Tab =
   | 'details'
@@ -79,6 +82,9 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
   const isEdit = Boolean(client)
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<Tab>('details')
+  const [destinationsDrawer, setDestinationsDrawer] = useState<
+    { serviceId: number; label: string; nonce: number } | null
+  >(null)
 
   const emptyAddress: Address = { name: '', line1: '', line2: '', city: '', state: '', zip: '', country: 'US', phone: '' }
   const [form, setForm] = useState<ClientUpsertPayload>({
@@ -547,6 +553,35 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
             catalogKey={(s) => s.id}
             catalogLabel={(s) => `${formatCarrierName(s.carrier)} · ${s.serviceCode} — ${s.name}${s.originCountry ? ` (${s.originCountry.toUpperCase()})` : ''}`}
             catalogEligible={(s) => s.enabled}
+            renderRowExtras={(row) => (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setDestinationsDrawer({
+                    serviceId: row.serviceId,
+                    label: `${formatCarrierName(row.carrier || '—')} · ${row.serviceCode || '—'} — ${row.serviceName || '—'}`,
+                    nonce: Date.now(),
+                  })
+                }}
+                title="Destinations…"
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+              >
+                <FiMap className="h-3 w-3" />
+                Destinations…
+              </button>
+            )}
+          />
+        ) : null}
+
+        {destinationsDrawer && client ? (
+          <ServiceDestinationsDrawer
+            key={destinationsDrawer.nonce}
+            clientCode={client.clientCode}
+            serviceId={destinationsDrawer.serviceId}
+            serviceLabel={destinationsDrawer.label}
+            onClose={() => setDestinationsDrawer(null)}
+            onSaved={() => setDestinationsDrawer(null)}
           />
         ) : null}
 
@@ -563,57 +598,70 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
         ) : null}
 
         {activeTab === 'packages' && client ? (
-          <ClientAllowlistTab<ClientAllowedPackage, PackagePreset>
-            clientCode={client.clientCode}
-            panelId="client-editor-panel-packages"
-            headline="Allowed packages"
-            description="Only packages on this list can be picked at label time. First allow auto-defaults."
-            emptyLabel="No packages allowed yet — add the first one."
-            addLabel="Allow package"
-            fetchAllowed={async (code) => (await clientAllowedPackagesService.listForClient(code)).data ?? []}
-            fetchCatalog={async () => shippingConfigService.listPresets()}
-            allow={async (code, presetId, makeDefault) => {
-              await clientAllowedPackagesService.allow(code, { presetId, makeDefault })
-            }}
-            remove={async (code, presetId) => {
-              await clientAllowedPackagesService.remove(code, presetId)
-            }}
-            setDefault={async (code, presetId) => {
-              await clientAllowedPackagesService.setDefault(code, presetId)
-            }}
-            allowedKey={(row) => row.presetId}
-            allowedIsDefault={(row) => row.isDefault}
-            renderAllowed={(row) => {
-              const dims = row.length && row.width && row.height
-                ? `${row.length}×${row.width}×${row.height} ${row.dimUnit?.toLowerCase() ?? 'in'}`
-                : null
-              return (
-                <>
-                  <p className="truncate text-[12px] font-semibold text-slate-800">
-                    {row.name || '—'}
-                    <span className="ml-1 font-normal text-slate-500">
-                      · {row.kind || 'CUSTOM'}
-                      {row.carrier ? ` · ${formatCarrierName(row.carrier)}` : ''}
-                    </span>
-                  </p>
-                  <p className="text-[10.5px] text-slate-500">
-                    {dims || 'no dims'}
-                    {row.maxWeight != null ? ` · up to ${row.maxWeight} ${row.weightUnit?.toLowerCase() ?? 'lb'}` : ''}
-                    {row.originCountry ? ` · from ${row.originCountry.toUpperCase()}` : ''}
-                  </p>
-                </>
-              )
-            }}
-            catalogKey={(p) => p.id ?? 0}
-            catalogLabel={(p) => {
-              const parts = [p.name]
-              if (p.kind) parts.push(p.kind)
-              if (p.carrier) parts.push(formatCarrierName(p.carrier))
-              if (p.originCountry) parts.push(p.originCountry.toUpperCase())
-              return parts.filter(Boolean).join(' · ')
-            }}
-            catalogEligible={(p) => !!p.enabled && p.id != null}
-          />
+          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+            {/* Section 1: this client's OWN packages (auto-allowed) */}
+            <ClientOwnedPackagesPanel clientCode={client.clientCode} />
+
+            {/* Section 2: PLATFORM presets on this client's allowlist */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-1">
+              <ClientAllowlistTab<ClientAllowedPackage, PackagePreset>
+                clientCode={client.clientCode}
+                panelId="client-editor-panel-packages"
+                headline="Allowed platform packages"
+                description="Pick from the shared catalog. First allow auto-defaults; client-owned packages above are always usable."
+                emptyLabel="No platform packages allowed yet — add the first one."
+                addLabel="Allow package"
+                fetchAllowed={async (code) => (await clientAllowedPackagesService.listForClient(code)).data ?? []}
+                fetchCatalog={async () => {
+                  // Only PLATFORM presets need the allowlist step (Phase 5d
+                  // cascade auto-passes client-owned presets).
+                  const list = await shippingConfigService.listPresets()
+                  return list.filter((p) => (p.ownerType || 'PLATFORM').toUpperCase() === 'PLATFORM')
+                }}
+                allow={async (code, presetId, makeDefault) => {
+                  await clientAllowedPackagesService.allow(code, { presetId, makeDefault })
+                }}
+                remove={async (code, presetId) => {
+                  await clientAllowedPackagesService.remove(code, presetId)
+                }}
+                setDefault={async (code, presetId) => {
+                  await clientAllowedPackagesService.setDefault(code, presetId)
+                }}
+                allowedKey={(row) => row.presetId}
+                allowedIsDefault={(row) => row.isDefault}
+                renderAllowed={(row) => {
+                  const dims = row.length && row.width && row.height
+                    ? `${row.length}×${row.width}×${row.height} ${row.dimUnit?.toLowerCase() ?? 'in'}`
+                    : null
+                  return (
+                    <>
+                      <p className="truncate text-[12px] font-semibold text-slate-800">
+                        {row.name || '—'}
+                        <span className="ml-1 font-normal text-slate-500">
+                          · {row.kind || 'CUSTOM'}
+                          {row.carrier ? ` · ${formatCarrierName(row.carrier)}` : ''}
+                        </span>
+                      </p>
+                      <p className="text-[10.5px] text-slate-500">
+                        {dims || 'no dims'}
+                        {row.maxWeight != null ? ` · up to ${row.maxWeight} ${row.weightUnit?.toLowerCase() ?? 'lb'}` : ''}
+                        {row.originCountry ? ` · from ${row.originCountry.toUpperCase()}` : ''}
+                      </p>
+                    </>
+                  )
+                }}
+                catalogKey={(p) => p.id ?? 0}
+                catalogLabel={(p) => {
+                  const parts = [p.name]
+                  if (p.kind) parts.push(p.kind)
+                  if (p.carrier) parts.push(formatCarrierName(p.carrier))
+                  if (p.originCountry) parts.push(p.originCountry.toUpperCase())
+                  return parts.filter(Boolean).join(' · ')
+                }}
+                catalogEligible={(p) => !!p.enabled && p.id != null}
+              />
+            </div>
+          </div>
         ) : null}
 
         {activeTab === 'details' ? (

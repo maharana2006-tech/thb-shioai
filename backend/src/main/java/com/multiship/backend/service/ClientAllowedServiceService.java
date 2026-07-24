@@ -3,6 +3,8 @@ package com.multiship.backend.service;
 import com.multiship.backend.dto.AllowServiceRequest;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ClientAllowedServiceDTO;
+import com.multiship.backend.dto.ClientAllowedServiceDestinationsDTO;
+import com.multiship.backend.dto.ReplaceAllowedServiceDestinationsRequest;
 
 import java.util.List;
 
@@ -22,4 +24,14 @@ public interface ClientAllowedServiceService {
      * grouped by service id.
      */
     ApiResponse<List<ClientAllowedServiceDTO>> listAllAssignments();
+
+    /** Destination-gate on a single allowlist row. Empty = unrestricted. */
+    ApiResponse<ClientAllowedServiceDestinationsDTO> getDestinations(String clientCode, Long serviceId);
+
+    /** Atomic replace of the destination set (delete-all then insert). */
+    ApiResponse<ClientAllowedServiceDestinationsDTO> replaceDestinations(
+            String clientCode, Long serviceId, ReplaceAllowedServiceDestinationsRequest request);
+
+    /** Clear every destination row for the allowlist entry (back to unrestricted). */
+    ApiResponse<Void> clearDestinations(String clientCode, Long serviceId);
 }
