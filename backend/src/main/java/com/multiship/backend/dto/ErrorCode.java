@@ -42,6 +42,16 @@ public enum ErrorCode {
     CLIENT_CODE_TAKEN,
     CLIENT_HAS_ORDERS,
 
+    // ===== Warehouses =====
+    WAREHOUSE_NOT_FOUND,
+    WAREHOUSE_CODE_TAKEN,
+    /** ownerType=CLIENT requires ownerClientCode; PLATFORM forbids it. */
+    WAREHOUSE_OWNER_INVALID,
+    /** A CLIENT-owned warehouse can only be attached to its owner. */
+    WAREHOUSE_ATTACH_FORBIDDEN,
+    WAREHOUSE_ALREADY_ATTACHED,
+    CLIENT_WAREHOUSE_NOT_FOUND,
+
     // ===== Fallback =====
     INTERNAL_ERROR
 }
