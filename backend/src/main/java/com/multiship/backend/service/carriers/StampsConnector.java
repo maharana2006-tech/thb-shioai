@@ -21,6 +21,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -157,36 +158,126 @@ public class StampsConnector implements CarrierConnector {
 
     @Override
     public String getAccessToken(String clientId, String clientSecret) {
-        try {
-            MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-            form.add("grant_type", "client_credentials");
-            form.add("client_id", clientId);
-            form.add("client_secret", clientSecret);
+        return getAccessToken(clientId, clientSecret, null, null);
+    }
 
-            String tokenUrl = carrierProperties.getStamps().getAuthUrl();
-            RestClient restClient = RestClient.builder().baseUrl(tokenUrl).build();
-            String response = restClient.post()
-                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .body(form)
+    @Override
+    public String getAccessToken(String clientId, String clientSecret, String accountNumber) {
+        return getAccessToken(clientId, clientSecret, accountNumber, null);
+    }
+
+    /**
+     * Stamps.com uses SWSIM (SOAP), not REST/OAuth. Credential check calls
+     * {@code AuthenticateUser} on the SWSIM endpoint with:
+     * <ul>
+     *   <li>{@code IntegrationID} = the "Client ID" from the Stamps.com
+     *       developer portal (a GUID).</li>
+     *   <li>{@code Username} = the Stamps.com account number.</li>
+     *   <li>{@code Password} = the "Client Secret" from the developer portal.</li>
+     * </ul>
+     * SWSIM returns an {@code Authenticator} GUID that persists for a session
+     * and stands in as our "access token" — we cache it via the same path as
+     * every other connector. On failure SWSIM sends a SOAP Fault; we parse the
+     * {@code faultstring} and either throw (config errors like a bad URL) or
+     * fall back to a {@code -local-*} token (credential rejection surfaces via
+     * runCredentialCheck's "-local-" detection).
+     *
+     * <p>Environment routing: SANDBOX hits {@code swsim.testing.stamps.com},
+     * everything else hits production {@code swsim.stamps.com}.
+     */
+    @Override
+    public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
+        CarrierProperties.Stamps cfg = carrierProperties.getStamps();
+        String swsimUrl = isSandbox(environment) ? cfg.getSandboxAuthUrl() : cfg.getAuthUrl();
+
+        if (!StringUtils.hasText(accountNumber)) {
+            throw new CarrierConnectionException(
+                    "Stamps.com verification needs the account number as the SWSIM Username. "
+                            + "Enter the Stamps.com account number in the Account number field.");
+        }
+
+        String soap = buildAuthenticateUserEnvelope(clientId, accountNumber.trim(), clientSecret);
+
+        try {
+            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+                    .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
+                    .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/AuthenticateUser\"")
+                    .body(soap)
                     .retrieve()
                     .body(String.class);
 
-            JsonNode jsonNode = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
-            String accessToken = jsonNode.path("access_token").asText(null);
-            if (!StringUtils.hasText(accessToken)) {
-                log.warn("Stamps token response did not include an access token; using local fallback token.");
-                return buildFallbackToken(clientId, clientSecret);
+            String authenticator = extractAuthenticator(response);
+            if (StringUtils.hasText(authenticator)) {
+                return authenticator;
             }
-            return accessToken;
+            String fault = extractSoapFault(response);
+            log.warn("Stamps SWSIM AuthenticateUser succeeded (HTTP 200) but returned no Authenticator. Fault: {} · Response head: {}",
+                    fault, safeHead(response));
+            return buildFallbackToken(clientId, clientSecret);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            String body = ex.getResponseBodyAsString();
+            String fault = extractSoapFault(body);
+            if (status == 404) {
+                log.warn("Stamps SWSIM endpoint {} returned 404 — carrier.stamps.auth-url is wrong for this account. Body: {}",
+                        swsimUrl, safeHead(body));
+                throw new CarrierConnectionException(
+                        "Stamps.com SWSIM endpoint " + swsimUrl + " returned 404 — update carrier.stamps.auth-url.");
+            }
+            log.warn("Stamps SWSIM AuthenticateUser rejected by {} (HTTP {}): {} · body head: {}",
+                    swsimUrl, status, fault, safeHead(body));
+            return buildFallbackToken(clientId, clientSecret);
         } catch (Exception ex) {
-            log.warn("Stamps token request failed; using local fallback token. Reason: {}", ex.getMessage());
+            log.warn("Stamps SWSIM AuthenticateUser call to {} failed; using local fallback token. Reason: {}",
+                    swsimUrl, ex.getMessage());
             return buildFallbackToken(clientId, clientSecret);
         }
     }
 
-    /** SWSIM v135 namespace — must match the WSDL targetNamespace exactly. */
+    /** SWSIM namespace for v135 — matches the WSDL targetNamespace on the live
+     *  endpoint (verified against swsim.testing.stamps.com/swsim/swsimv135.asmx?wsdl).
+     *  Bumping the date here without checking the WSDL will trigger "Server did
+     *  not recognize the value of HTTP Header SOAPAction" 500s. Used by BOTH
+     *  AuthenticateUser (getAccessToken) AND CreateIndicium (createShipment). */
     private static final String SWSIM_NAMESPACE = "http://stamps.com/xml/namespace/2023/07/swsim/SwsimV135";
+
+    private String buildAuthenticateUserEnvelope(String integrationId, String username, String password) {
+        // Values are XML-escaped so a stray '&' in a password doesn't break the
+        // envelope. IntegrationID is a GUID in the wild but SWSIM accepts any
+        // string — we forward what the user typed.
+        return "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+                + "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">"
+                + "<soap:Body>"
+                + "<AuthenticateUser xmlns=\"" + SWSIM_NAMESPACE + "\">"
+                + "<Credentials>"
+                + "<IntegrationID>" + xmlEscape(integrationId) + "</IntegrationID>"
+                + "<Username>" + xmlEscape(username) + "</Username>"
+                + "<Password>" + xmlEscape(password) + "</Password>"
+                + "</Credentials>"
+                + "</AuthenticateUser>"
+                + "</soap:Body>"
+                + "</soap:Envelope>";
+    }
+
+    private static String extractAuthenticator(String responseXml) {
+        if (!StringUtils.hasText(responseXml)) return null;
+        int open = responseXml.indexOf("<Authenticator>");
+        if (open < 0) return null;
+        int close = responseXml.indexOf("</Authenticator>", open);
+        if (close < 0) return null;
+        String value = responseXml.substring(open + "<Authenticator>".length(), close).trim();
+        return value.isEmpty() ? null : value;
+    }
+
+    private static String safeHead(String body) {
+        if (body == null) return "";
+        return body.length() > 400 ? body.substring(0, 400) + "…" : body;
+    }
+
+    /** Case/whitespace-tolerant SANDBOX check — everything else is production. */
+    private static boolean isSandbox(String environment) {
+        return environment != null && "SANDBOX".equalsIgnoreCase(environment.trim());
+    }
 
     /**
      * SWSIM {@code CreateIndicium} — the SOAP call that produces the actual
