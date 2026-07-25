@@ -1126,41 +1126,71 @@ export default function CarrierConnections() {
               </DrawerStep>
 
               <DrawerStep n="4" title="Verify & save">
-                <div className="flex items-center justify-between gap-2">
-                  {drawerCheck.state === 'checking' ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10.5px] font-bold text-slate-500">
-                      <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
-                      Checking…
-                    </span>
-                  ) : drawerCheck.state === 'ok' ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-[10.5px] font-bold text-emerald-700">
-                      <FiCheckCircle className="h-3 w-3" />
-                      Verified
-                    </span>
-                  ) : drawerCheck.state === 'fail' ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-1 text-[10.5px] font-bold text-rose-700">
-                      <FiXCircle className="h-3 w-3" />
-                      Check failed
-                    </span>
-                  ) : (
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10.5px] font-bold text-slate-500">
-                      Not verified yet
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => void runDrawerCheck()}
-                    disabled={drawerCheck.state === 'checking'}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    Run verification
-                  </button>
-                </div>
-                {drawerCheck.message ? (
-                  <p className={`mt-2 text-[11px] leading-4 ${drawerCheck.state === 'ok' ? 'text-emerald-700' : 'text-rose-700'}`}>
-                    {drawerCheck.message}
-                  </p>
-                ) : null}
+                {(() => {
+                  const verifyTerms = credentialLabelsFor(drawer.carrierCode)
+                  const missing: string[] = []
+                  if (!drawer.accountNumber.trim()) missing.push('Account number')
+                  if (!drawer.clientId.trim()) missing.push(verifyTerms.idLong)
+                  if (!drawer.clientSecret.trim()) missing.push(verifyTerms.secretLong)
+                  const checking = drawerCheck.state === 'checking'
+                  const disabled = checking || missing.length > 0
+                  const tooltip = missing.length
+                    ? `Fill in ${missing.join(', ')} to run a live check.`
+                    : checking
+                      ? 'Verification in progress…'
+                      : undefined
+                  return (
+                    <>
+                      <div className="flex items-center justify-between gap-2">
+                        {checking ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10.5px] font-bold text-slate-500">
+                            <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
+                            Checking…
+                          </span>
+                        ) : drawerCheck.state === 'ok' ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-[10.5px] font-bold text-emerald-700">
+                            <FiCheckCircle className="h-3 w-3" />
+                            Verified
+                          </span>
+                        ) : drawerCheck.state === 'fail' ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-1 text-[10.5px] font-bold text-rose-700">
+                            <FiXCircle className="h-3 w-3" />
+                            Check failed
+                          </span>
+                        ) : (
+                          <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10.5px] font-bold text-slate-500">
+                            Not verified yet
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void runDrawerCheck()}
+                          disabled={disabled}
+                          aria-disabled={disabled}
+                          title={tooltip}
+                          className={
+                            disabled
+                              ? 'inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-100 px-3 py-1.5 text-[11px] font-semibold text-slate-400 cursor-not-allowed'
+                              : 'inline-flex items-center gap-1.5 rounded-xl border border-emerald-600 bg-white px-3 py-1.5 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-50 shadow-sm'
+                          }
+                        >
+                          <FiShield className="h-3 w-3" />
+                          Run verification
+                        </button>
+                      </div>
+                      {drawerCheck.message ? (
+                        <p className={`mt-2 text-[11px] leading-4 ${drawerCheck.state === 'ok' ? 'text-emerald-700' : 'text-rose-700'}`}>
+                          {drawerCheck.message}
+                        </p>
+                      ) : missing.length ? (
+                        <p className="mt-2 text-[10.5px] leading-4 text-slate-400">
+                          Fill in <span className="font-semibold text-slate-500">{missing.join(', ')}</span> to run a live check against{' '}
+                          {drawer.carrierCode === 'UPS' ? 'developer.ups.com' : formatCarrierName(drawer.carrierCode)}.
+                        </p>
+                      ) : null}
+                    </>
+                  )
+                })()}
                 {drawer.accountType === 'client' ? (
                   drawer.editingId !== null ? (
                     <div
