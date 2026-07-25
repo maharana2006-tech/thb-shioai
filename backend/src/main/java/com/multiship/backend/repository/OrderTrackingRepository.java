@@ -19,6 +19,9 @@ public interface OrderTrackingRepository extends JpaRepository<OrderTracking, Lo
     """, nativeQuery = true)
     List<Object[]> aggregateUsageByAccount();
 
+    /** Labels-generated count for a given carrier account (used by the delete guard). */
+    long countByAccountNumberIgnoreCaseAndIsLabelGeneratedTrue(String accountNumber);
+
     Optional<OrderTracking> findByOrderNo(Integer orderNo);
 
     Optional<OrderTracking> findByOrderNoAndOrderSuffix(Integer orderNo, Integer orderSuffix);

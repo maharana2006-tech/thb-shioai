@@ -134,13 +134,35 @@ public class AccountRefServiceImpl implements AccountRefService {
                 .or(() -> carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(accountNumber))
                 .orElseGet(CarrierAccountRef::new);
 
+        boolean isNewAccount = account.getId() == null;
         account.setAccountNumber(accountNumber);
         account.setCarrierCode(carrierCode);
-        account.setClientId(request.getClientId().trim());
-        account.setClientSecret(request.getClientSecret().trim());
-        // New credentials invalidate any previous verification result.
-        account.setVerified(null);
-        account.setLastVerifiedAt(null);
+
+        // Credentials are now optional on update — blank means "keep the
+        // persisted value". A CREATE with blank credentials still 422s.
+        String rawClientId = request.getClientId();
+        String rawClientSecret = request.getClientSecret();
+        boolean clientIdProvided = StringUtils.hasText(rawClientId);
+        boolean clientSecretProvided = StringUtils.hasText(rawClientSecret);
+        if (isNewAccount && (!clientIdProvided || !clientSecretProvided)) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                    "Client ID and Client Secret are required when creating a new carrier account.");
+        }
+        boolean credentialsChanged = false;
+        if (clientIdProvided) {
+            account.setClientId(rawClientId.trim());
+            credentialsChanged = true;
+        }
+        if (clientSecretProvided) {
+            account.setClientSecret(rawClientSecret.trim());
+            credentialsChanged = true;
+        }
+        // Fresh credentials invalidate any previous verification result;
+        // untouched credentials keep the verified/lastVerifiedAt stamps.
+        if (credentialsChanged) {
+            account.setVerified(null);
+            account.setLastVerifiedAt(null);
+        }
 
         if (StringUtils.hasText(request.getAccountName())) {
             account.setAccountName(request.getAccountName().trim());
@@ -281,6 +303,25 @@ public class AccountRefServiceImpl implements AccountRefService {
                         .build()))
                 .orElseGet(() -> success("No platform account for this carrier yet.",
                         PlatformCredentialsDTO.builder().carrierCode(canonical).found(false).build()));
+    }
+
+    @Override
+    @Transactional
+    public ApiResponse<Void> deleteAccount(Long accountId) {
+        CarrierAccountRef account = carrierAccountRefRepository.findById(accountId).orElse(null);
+        if (account == null) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.ACCOUNT_NOT_FOUND,
+                    "Carrier account " + accountId + " was not found.");
+        }
+        long labels = orderTrackingRepository
+                .countByAccountNumberIgnoreCaseAndIsLabelGeneratedTrue(account.getAccountNumber());
+        if (labels > 0) {
+            return failure(HttpStatus.CONFLICT, ErrorCode.ACCOUNT_HAS_LABELS,
+                    "Account " + account.getAccountNumber() + " has generated " + labels
+                            + " label(s) — deactivate it instead to preserve the audit trail.");
+        }
+        carrierAccountRefRepository.delete(account);
+        return success("Account " + account.getAccountNumber() + " removed from the account book.", null);
     }
 
     private <T> ApiResponse<T> success(String message, T data) {

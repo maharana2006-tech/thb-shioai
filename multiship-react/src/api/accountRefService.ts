@@ -35,11 +35,12 @@ export interface AccountRefUpsertPayload {
   accountNumber: string
   carrierCode: string
   accountName?: string
-  clientId: string
-  clientSecret: string
+  /** Blank/omitted on update = keep the persisted value. Required on create. */
+  clientId?: string
+  /** Blank/omitted on update = keep the persisted value. Required on create. */
+  clientSecret?: string
   environment?: string
   customerNo?: string
-  setAsDefault?: boolean
   /** Make this the linked client's default account. */
   clientDefault?: boolean
 }
@@ -93,6 +94,11 @@ export const accountRefService = {
 
   toggleActive: (accountId: number) => {
     return apiClient.post<ApiResponse<CarrierAccountRef>>(`/carrier-accounts/${accountId}/toggle-active`)
+  },
+
+  /** ADMIN-only hard delete; backend refuses (409) if any labels have been generated on the account. */
+  deleteAccount: (accountId: number) => {
+    return apiClient.delete<ApiResponse<void>>(`/carrier-accounts/${accountId}`)
   },
 
   /** Live OAuth check for a saved account; stamps verified + lastVerifiedAt on it. */

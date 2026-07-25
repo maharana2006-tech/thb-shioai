@@ -30,6 +30,8 @@ public enum ErrorCode {
     // ===== Carrier accounts =====
     ACCOUNT_NOT_FOUND,
     ACCOUNT_INCOMPLETE,
+    /** Delete refused — the account has already generated labels; deactivate instead. */
+    ACCOUNT_HAS_LABELS,
     TENANT_REQUIRED,
     TENANT_ACCOUNT_NOT_FOUND,
     CARRIER_CONNECTION_FAILED,

@@ -7,12 +7,15 @@ import {
   FiBox,
   FiCheckCircle,
   FiEdit2,
+  FiKey,
   FiMoreVertical,
   FiPlus,
+  FiRefreshCw,
   FiServer,
   FiStar,
   FiFilter,
   FiShield,
+  FiTrash2,
   FiTruck,
   FiUser,
   FiUsers,
@@ -35,6 +38,7 @@ import {
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import CarrierLogo from './workspace/CarrierLogo'
+import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'
 
 /** Which drawer input receives focus when opened via cell click. */
@@ -91,9 +95,17 @@ const inputClassName =
 
 const filterLabelClass = 'mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
 
+/** Client row rendered in dropdowns as `CODE — Name`. */
+interface ClientOption {
+  code: string
+  name: string
+}
+
+const formatClientOption = (c: ClientOption) => (c.name?.trim() ? `${c.code} — ${c.name}` : c.code)
+
 export default function CarrierConnections() {
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
-  const [clientCodes, setClientCodes] = useState<string[]>([])
+  const [clients, setClients] = useState<ClientOption[]>([])
   const [loading, setLoading] = useState(true)
   const [typeFilter, setTypeFilter] = useState('') // PLATFORM | CLIENT
   const [carrierFilter, setCarrierFilter] = useState('')
@@ -134,6 +146,9 @@ export default function CarrierConnections() {
   const environmentRef = useRef<HTMLSelectElement>(null)
   const [drawerCheck, setDrawerCheck] = useState<{ state: 'idle' | 'checking' | 'ok' | 'fail'; message?: string }>({ state: 'idle' })
   const [saving, setSaving] = useState(false)
+  // When true, credential fields become editable on edit; when false (default
+  // on edit), the drawer shows a masked read-only "credentials on file" note.
+  const [rotatingCredentials, setRotatingCredentials] = useState(false)
 
   const loadAccounts = useCallback(async () => {
     setLoading(true)
@@ -149,8 +164,12 @@ export default function CarrierConnections() {
   useEffect(() => {
     void loadAccounts()
     clientService
-      .listClients({ size: 100 })
-      .then((r) => setClientCodes((r.data?.content ?? []).map((c) => c.clientCode)))
+      .listClients({ size: 500 })
+      .then((r) =>
+        setClients(
+          (r.data?.content ?? []).map((c) => ({ code: c.clientCode, name: c.name || '' })),
+        ),
+      )
       .catch(() => {})
   }, [loadAccounts])
 
@@ -279,10 +298,17 @@ export default function CarrierConnections() {
   const openDrawer = (account?: CarrierAccountRef, focus: DrawerFocusField = null) => {
     setDrawerCheck({ state: 'idle' })
     if (account) {
+      // Preserve the stored carrier code even if we don't recognize it — the
+      // carrier selector will show a warning banner but the field itself stays
+      // truthful about what's persisted. (Silently rewriting to UPS was a
+      // longstanding bug that could corrupt rows on save.)
+      const knownCarrier = carrierOptions.find(
+        (c) => normalizeCarrierCode(c.code) === normalizeCarrierCode(account.carrierCode),
+      )?.code
       setDrawer({
         editingId: account.id,
         accountType: isPlatform(account) ? 'platform' : 'client',
-        carrierCode: carrierOptions.find((c) => normalizeCarrierCode(c.code) === normalizeCarrierCode(account.carrierCode))?.code || 'UPS',
+        carrierCode: knownCarrier || account.carrierCode || 'UPS',
         accountNumber: account.accountNumber,
         accountName: account.accountName || '',
         clientId: '',
@@ -291,8 +317,10 @@ export default function CarrierConnections() {
         environment: account.environment === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX',
         clientDefault: Boolean(account.clientDefault),
       })
+      setRotatingCredentials(false)
     } else {
       setDrawer(emptyDrawer)
+      setRotatingCredentials(true)
     }
     drawerFocusRef.current = focus
     setDrawerOpen(true)
@@ -328,8 +356,22 @@ export default function CarrierConnections() {
   }
 
   const handleSave = async () => {
-    if (!drawer.accountNumber.trim() || !drawer.clientId.trim() || !drawer.clientSecret.trim()) {
-      notify.error('Account number, client ID, and client secret are required.')
+    const isEdit = drawer.editingId !== null
+    const clientIdEntered = drawer.clientId.trim()
+    const clientSecretEntered = drawer.clientSecret.trim()
+
+    if (!drawer.accountNumber.trim()) {
+      notify.error('Account number is required.')
+      return
+    }
+    // On CREATE both credential fields are mandatory. On EDIT they're only
+    // required when the user has chosen to rotate them (either field entered).
+    if (!isEdit && (!clientIdEntered || !clientSecretEntered)) {
+      notify.error('Client ID and client secret are required for a new account.')
+      return
+    }
+    if (isEdit && rotatingCredentials && (!clientIdEntered || !clientSecretEntered)) {
+      notify.error('Enter both the new client ID and secret, or cancel the rotation.')
       return
     }
     if (drawer.accountType === 'client' && !drawer.customerNo.trim()) {
@@ -337,19 +379,37 @@ export default function CarrierConnections() {
       return
     }
 
+    // If the user ran the drawer check on brand-new credentials and it passed,
+    // persist that verification after saving so the row lands with verified=true
+    // instead of the transient null that upsertAccount sets on credential change.
+    const shouldPersistVerified =
+      drawerCheck.state === 'ok' && Boolean(clientIdEntered) && Boolean(clientSecretEntered)
+
     setSaving(true)
     try {
       const payload: AccountRefUpsertPayload = {
         accountNumber: drawer.accountNumber.trim(),
         carrierCode: drawer.carrierCode,
         accountName: drawer.accountName.trim() || undefined,
-        clientId: drawer.clientId.trim(),
-        clientSecret: drawer.clientSecret.trim(),
+        // Empty string on edit means "keep the persisted value" (backend
+        // treats blank as no-change). Send whatever the user typed on create.
+        clientId: clientIdEntered || undefined,
+        clientSecret: clientSecretEntered || undefined,
         environment: drawer.environment,
         customerNo: drawer.accountType === 'client' ? drawer.customerNo.trim() : undefined,
         clientDefault: drawer.accountType === 'client' ? drawer.clientDefault : undefined,
       }
-      await accountRefService.upsertAccount(payload)
+      const response = await accountRefService.upsertAccount(payload)
+      const savedId = response.data?.id
+      if (shouldPersistVerified && savedId) {
+        // Best-effort — verification failure here is non-fatal; the account
+        // simply lands in the "unverified" state and the user can re-run.
+        try {
+          await accountRefService.verifyAccount(savedId)
+        } catch {
+          // swallow — the row is saved, verification is a secondary signal.
+        }
+      }
       notify.success(`Account ${payload.accountNumber} saved to the account book.`)
       setDrawerOpen(false)
       await loadAccounts()
@@ -357,6 +417,26 @@ export default function CarrierConnections() {
       notify.error(error instanceof Error ? error.message : 'Failed to save the account.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleDelete = async (account: CarrierAccountRef) => {
+    if (
+      !window.confirm(
+        `Delete account ${account.accountNumber} (${formatCarrierName(account.carrierCode)})? This can't be undone.`,
+      )
+    ) {
+      return
+    }
+    setBusyId(account.id)
+    try {
+      await accountRefService.deleteAccount(account.id)
+      notify.success(`Account ${account.accountNumber} removed from the account book.`)
+      await loadAccounts()
+    } catch (error) {
+      notify.error(error instanceof Error ? error.message : 'Failed to delete the account.')
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -530,6 +610,7 @@ export default function CarrierConnections() {
               busy={busyId !== null}
               onVerify={() => void handleVerify(row.original)}
               onEdit={() => openDrawer(row.original)}
+              onDelete={() => void handleDelete(row.original)}
             />
           </div>
         ),
@@ -630,9 +711,9 @@ export default function CarrierConnections() {
                         <span className={filterLabelClass}><FiUser className="h-3 w-3 text-[#412d15]" />Client</span>
                         <Select value={clientFilter} onChange={(e) => setClientFilter(e.target.value)} aria-label="Filter by client">
                           <option value="">All clients</option>
-                          {clientCodes.map((code) => (
-                            <option key={code} value={code}>
-                              {code}
+                          {clients.map((c) => (
+                            <option key={c.code} value={c.code}>
+                              {formatClientOption(c)}
                             </option>
                           ))}
                         </Select>
@@ -766,19 +847,25 @@ export default function CarrierConnections() {
                 </div>
                 {drawer.accountType === 'client' ? (
                   <div className="mt-2.5">
-                    <Field label="Client">
+                    <Field label={drawer.editingId ? 'Client (locked once saved)' : 'Client'}>
                       <Select
                         value={drawer.customerNo}
                         onChange={(e) => setDrawer((c) => ({ ...c, customerNo: e.target.value }))}
+                        disabled={drawer.editingId !== null}
                       >
                         <option value="">Select a client…</option>
-                        {clientCodes.map((code) => (
-                          <option key={code} value={code}>
-                            {code}
+                        {clients.map((c) => (
+                          <option key={c.code} value={c.code}>
+                            {formatClientOption(c)}
                           </option>
                         ))}
                       </Select>
                     </Field>
+                    {drawer.editingId !== null ? (
+                      <p className="-mt-1 text-[10.5px] text-slate-400">
+                        Re-assigning an account to a different client isn't supported — delete and recreate.
+                      </p>
+                    ) : null}
                   </div>
                 ) : (
                   <p className="mt-2 text-[11px] text-slate-500">
@@ -787,24 +874,68 @@ export default function CarrierConnections() {
                 )}
               </DrawerStep>
 
-              <DrawerStep n="2" title="Carrier">
-                <div className="grid grid-cols-3 gap-2">
-                  {carrierOptions.map((option) => (
-                    <button
-                      key={option.code}
-                      type="button"
-                      onClick={() => setDrawer((c) => ({ ...c, carrierCode: option.code }))}
-                      className={`grid justify-items-center gap-1.5 rounded-2xl border px-2 py-2.5 text-[10.5px] font-bold transition ${
-                        drawer.carrierCode === option.code
-                          ? 'border-slate-950 bg-white text-slate-950'
-                          : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
-                      }`}
-                    >
-                      <CarrierLogo carrierId={option.id} size={18} className="rounded-sm" />
-                      {option.label}
-                    </button>
-                  ))}
+              <DrawerStep n="2" title={drawer.editingId ? 'Carrier (locked)' : 'Carrier'}>
+                <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Carrier">
+                  {carrierOptions.map((option) => {
+                    const selected = drawer.carrierCode === option.code
+                    const locked = drawer.editingId !== null
+                    // On edit the whole row is read-only. We render every
+                    // option so the picked carrier is still visible, but
+                    // disable clicks and mute the unselected ones so it's
+                    // obvious which one is locked in.
+                    return (
+                      <button
+                        key={option.code}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => {
+                          if (locked) return
+                          setDrawer((c) => ({ ...c, carrierCode: option.code }))
+                        }}
+                        disabled={locked}
+                        aria-disabled={locked}
+                        title={
+                          locked
+                            ? selected
+                              ? 'Carrier is locked once the account is saved.'
+                              : "Can't change carrier on an existing account — delete and recreate to switch."
+                            : undefined
+                        }
+                        className={`grid justify-items-center gap-1.5 rounded-2xl border px-2 py-2.5 text-[10.5px] font-bold transition ${
+                          selected
+                            ? locked
+                              ? 'cursor-not-allowed border-slate-300 bg-slate-100 text-slate-700'
+                              : 'border-slate-950 bg-white text-slate-950'
+                            : locked
+                              ? 'cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300 opacity-60'
+                              : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
+                        }`}
+                      >
+                        <CarrierLogo
+                          carrierId={option.id}
+                          size={18}
+                          className={`rounded-sm ${!selected && drawer.editingId ? 'opacity-50 grayscale' : ''}`}
+                        />
+                        {option.label}
+                      </button>
+                    )
+                  })}
                 </div>
+                {drawer.editingId !== null ? (
+                  <p className="mt-2 text-[10.5px] text-slate-400">
+                    Carrier is set at creation time. To move this account to a different carrier, delete it and add a new one.
+                  </p>
+                ) : null}
+                {!carrierOptions.some((o) => o.code === drawer.carrierCode) ? (
+                  <p className="mt-2 flex items-start gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+                    <FiAlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                    <span>
+                      Stored carrier code <span className="font-semibold">{drawer.carrierCode}</span> isn't in the
+                      supported list — delete and recreate to switch it.
+                    </span>
+                  </p>
+                ) : null}
               </DrawerStep>
 
               <DrawerStep n="3" title="Credentials">
@@ -817,34 +948,100 @@ export default function CarrierConnections() {
                     placeholder='Shown across the app, e.g. "Acme UPS"'
                   />
                 </Field>
-                <Field label="Account number">
+                <Field label={drawer.editingId ? 'Account number (locked)' : 'Account number'}>
                   <input
                     value={drawer.accountNumber}
                     onChange={(e) => setDrawer((c) => ({ ...c, accountNumber: e.target.value }))}
-                    className={inputClassName}
+                    className={`${inputClassName} ${
+                      drawer.editingId !== null
+                        ? 'cursor-not-allowed !bg-slate-100 text-slate-500'
+                        : ''
+                    }`}
                     placeholder="e.g. 740561111"
                     readOnly={drawer.editingId !== null}
                   />
                 </Field>
-                <Field label="Client ID">
-                  <input
-                    value={drawer.clientId}
-                    onChange={(e) => setDrawer((c) => ({ ...c, clientId: e.target.value }))}
-                    className={inputClassName}
-                    placeholder={drawer.editingId ? 'Re-enter to update' : 'OAuth client id'}
-                    autoComplete="off"
-                  />
-                </Field>
-                <Field label="Client Secret">
-                  <input
-                    type="password"
-                    value={drawer.clientSecret}
-                    onChange={(e) => setDrawer((c) => ({ ...c, clientSecret: e.target.value }))}
-                    className={inputClassName}
-                    placeholder={drawer.editingId ? 'Re-enter to update' : 'OAuth client secret'}
-                    autoComplete="off"
-                  />
-                </Field>
+
+                {drawer.editingId !== null && !rotatingCredentials ? (
+                  // Masked read-only view: credentials never come back from the
+                  // API, so we show what we DO know (the clientId preview stored
+                  // on the row) and expose an explicit Rotate button that
+                  // switches the fields into edit mode.
+                  <div className="mb-2.5 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-600">
+                        <FiKey className="h-3 w-3 text-emerald-600" />
+                        Credentials on file
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRotatingCredentials(true)
+                          setDrawer((c) => ({ ...c, clientId: '', clientSecret: '' }))
+                          setDrawerCheck({ state: 'idle' })
+                        }}
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10.5px] font-semibold text-slate-600 transition hover:bg-slate-100"
+                      >
+                        <FiRefreshCw className="h-3 w-3" />
+                        Rotate credentials
+                      </button>
+                    </div>
+                    <p className="font-mono text-[11.5px] tracking-tight text-slate-500">
+                      Client ID: {(() => {
+                        const preview = accounts.find((a) => a.id === drawer.editingId)?.clientIdPreview
+                        return preview ? `${preview}` : '••••••••'
+                      })()}
+                    </p>
+                    <p className="mt-0.5 font-mono text-[11.5px] tracking-tight text-slate-500">
+                      Client Secret: ••••••••••••
+                    </p>
+                    <p className="mt-2 text-[10.5px] leading-4 text-slate-400">
+                      Credentials never leave the backend. Rotate them here if the carrier reissued keys.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    {drawer.editingId !== null ? (
+                      <div className="mb-2.5 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+                        <span className="inline-flex items-center gap-1.5">
+                          <FiRefreshCw className="h-3 w-3" />
+                          Entering new credentials — the current ones stay until you save.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRotatingCredentials(false)
+                            setDrawer((c) => ({ ...c, clientId: '', clientSecret: '' }))
+                            setDrawerCheck({ state: 'idle' })
+                          }}
+                          className="text-[10.5px] font-semibold underline"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : null}
+                    <Field label="Client ID">
+                      <input
+                        value={drawer.clientId}
+                        onChange={(e) => setDrawer((c) => ({ ...c, clientId: e.target.value }))}
+                        className={inputClassName}
+                        placeholder="OAuth client id"
+                        autoComplete="off"
+                      />
+                    </Field>
+                    <Field label="Client Secret">
+                      <input
+                        type="password"
+                        value={drawer.clientSecret}
+                        onChange={(e) => setDrawer((c) => ({ ...c, clientSecret: e.target.value }))}
+                        className={inputClassName}
+                        placeholder="OAuth client secret"
+                        autoComplete="off"
+                      />
+                    </Field>
+                  </>
+                )}
+
                 <Field label="Environment">
                   <Select
                     ref={environmentRef}
@@ -986,36 +1183,39 @@ function ActiveToggle({
   )
 }
 
-/** Per-row kebab (Verify + Edit). Verify only shown when the account is
- *  complete + active; Edit is always available. */
+/**
+ * Per-row kebab (Verify + Edit + Delete). Verify only shown when the account
+ * is complete + active; Delete is available only when the account has never
+ * generated a label (labelsGenerated = 0) — otherwise deactivation is the
+ * right lever (preserves the audit trail).
+ *
+ * The popover is portaled to document.body because the enclosing
+ * AdvancedDataTable wraps its rows in an `overflow: auto` scroller that would
+ * otherwise clip a locally-positioned menu.
+ */
 function RowActionsMenu({
   account,
   busy,
   onVerify,
   onEdit,
+  onDelete,
 }: {
   account: CarrierAccountRef
   busy: boolean
   onVerify: () => void
   onEdit: () => void
+  onDelete: () => void
 }) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onDocClick = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDocClick)
-    return () => document.removeEventListener('mousedown', onDocClick)
-  }, [open])
+  const buttonRef = useRef<HTMLButtonElement>(null)
 
   const verifiable = account.complete && account.active
+  const deletable = (account.labelsGenerated || 0) === 0
 
   return (
-    <div ref={ref} className="relative inline-block text-left">
+    <>
       <button
+        ref={buttonRef}
         type="button"
         onClick={(e) => { e.stopPropagation(); setOpen((c) => !c) }}
         aria-haspopup="menu"
@@ -1025,35 +1225,45 @@ function RowActionsMenu({
       >
         <FiMoreVertical className="h-3.5 w-3.5" />
       </button>
-      {open ? (
-        <div
-          role="menu"
-          className="absolute right-0 z-20 mt-1 w-40 overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-lg"
-        >
-          {verifiable ? (
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => { setOpen(false); onVerify() }}
-              disabled={busy}
-              className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-            >
-              <FiShield className="h-3.5 w-3.5 text-emerald-600" />
-              {account.verified === true ? 'Re-verify' : 'Verify'}
-            </button>
-          ) : null}
+      <PortalMenu open={open} anchorRef={buttonRef} onClose={() => setOpen(false)}>
+        {verifiable ? (
           <button
             type="button"
             role="menuitem"
-            onClick={() => { setOpen(false); onEdit() }}
-            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
+            onClick={() => { setOpen(false); onVerify() }}
+            disabled={busy}
+            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
           >
-            <FiEdit2 className="h-3.5 w-3.5 text-[#412d15]" />
-            Edit
+            <FiShield className="h-3.5 w-3.5 text-emerald-600" />
+            {account.verified === true ? 'Re-verify' : 'Verify'}
           </button>
-        </div>
-      ) : null}
-    </div>
+        ) : null}
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => { setOpen(false); onEdit() }}
+          className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
+        >
+          <FiEdit2 className="h-3.5 w-3.5 text-[#412d15]" />
+          Edit
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => { setOpen(false); onDelete() }}
+          disabled={busy || !deletable}
+          title={
+            deletable
+              ? 'Delete this account (never used)'
+              : 'This account has generated labels — deactivate it instead to keep the audit trail.'
+          }
+          className="flex w-full items-center gap-2 border-t border-slate-100 px-3 py-2 text-[12px] font-semibold text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-transparent"
+        >
+          <FiTrash2 className="h-3.5 w-3.5" />
+          Delete
+        </button>
+      </PortalMenu>
+    </>
   )
 }
 
