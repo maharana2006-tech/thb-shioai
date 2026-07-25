@@ -102,6 +102,16 @@ public class CarrierProperties {
         @NotBlank
         private String authUrl;
 
+        /**
+         * UPS's CIE (customer integration environment) OAuth endpoint. UPS
+         * issues Consumer Keys for a specific environment — a key created on
+         * the CIE / sandbox side 401s ("ClientId is Invalid") against the
+         * production onlinetools host and vice versa. Selected when the
+         * caller's environment == SANDBOX.
+         */
+        @NotBlank
+        private String sandboxAuthUrl;
+
         @NotBlank
         private String apiVersion;
 

@@ -108,12 +108,16 @@ export const accountRefService = {
 
   /** Stateless credential check used by the add-account drawer before saving.
    *  `accountNumber` is optional but recommended for UPS (used as x-merchant-id
-   *  on the OAuth request; ignored by carriers that don't need it). */
+   *  on the OAuth request; ignored by carriers that don't need it).
+   *  `environment` (SANDBOX | PRODUCTION) routes UPS to the matching UPS OAuth
+   *  host — a CIE Consumer Key 401s against the production host and vice
+   *  versa. Ignored by carriers where the endpoint is env-agnostic. */
   verifyCredentials: (payload: {
     carrierCode: string
     clientId: string
     clientSecret: string
     accountNumber?: string
+    environment?: string
   }) => {
     return apiClient.post<ApiResponse<CredentialCheck>>('/carrier-accounts/verify-credentials', payload)
   },

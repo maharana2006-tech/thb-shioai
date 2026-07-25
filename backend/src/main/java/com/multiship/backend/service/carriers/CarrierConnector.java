@@ -49,6 +49,17 @@ public interface CarrierConnector {
         return getAccessToken(clientId, clientSecret);
     }
 
+    /**
+     * Same idea as the 3-arg overload but also carries the target
+     * {@code environment} (SANDBOX | PRODUCTION). UPS issues Consumer Keys
+     * per-environment: a CIE (sandbox) key 401s against the production host,
+     * so we route to the matching UPS OAuth endpoint. Default drops the
+     * environment and delegates.
+     */
+    default String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
+        return getAccessToken(clientId, clientSecret, accountNumber);
+    }
+
     ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken);
 
     boolean validateCredentials(String clientId, String clientSecret);
