@@ -874,30 +874,65 @@ export default function CarrierConnections() {
                 )}
               </DrawerStep>
 
-              <DrawerStep n="2" title="Carrier">
-                <div className="grid grid-cols-3 gap-2">
-                  {carrierOptions.map((option) => (
-                    <button
-                      key={option.code}
-                      type="button"
-                      onClick={() => setDrawer((c) => ({ ...c, carrierCode: option.code }))}
-                      className={`grid justify-items-center gap-1.5 rounded-2xl border px-2 py-2.5 text-[10.5px] font-bold transition ${
-                        drawer.carrierCode === option.code
-                          ? 'border-slate-950 bg-white text-slate-950'
-                          : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
-                      }`}
-                    >
-                      <CarrierLogo carrierId={option.id} size={18} className="rounded-sm" />
-                      {option.label}
-                    </button>
-                  ))}
+              <DrawerStep n="2" title={drawer.editingId ? 'Carrier (locked)' : 'Carrier'}>
+                <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Carrier">
+                  {carrierOptions.map((option) => {
+                    const selected = drawer.carrierCode === option.code
+                    const locked = drawer.editingId !== null
+                    // On edit the whole row is read-only. We render every
+                    // option so the picked carrier is still visible, but
+                    // disable clicks and mute the unselected ones so it's
+                    // obvious which one is locked in.
+                    return (
+                      <button
+                        key={option.code}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => {
+                          if (locked) return
+                          setDrawer((c) => ({ ...c, carrierCode: option.code }))
+                        }}
+                        disabled={locked}
+                        aria-disabled={locked}
+                        title={
+                          locked
+                            ? selected
+                              ? 'Carrier is locked once the account is saved.'
+                              : "Can't change carrier on an existing account — delete and recreate to switch."
+                            : undefined
+                        }
+                        className={`grid justify-items-center gap-1.5 rounded-2xl border px-2 py-2.5 text-[10.5px] font-bold transition ${
+                          selected
+                            ? locked
+                              ? 'cursor-not-allowed border-slate-300 bg-slate-100 text-slate-700'
+                              : 'border-slate-950 bg-white text-slate-950'
+                            : locked
+                              ? 'cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300 opacity-60'
+                              : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
+                        }`}
+                      >
+                        <CarrierLogo
+                          carrierId={option.id}
+                          size={18}
+                          className={`rounded-sm ${!selected && drawer.editingId ? 'opacity-50 grayscale' : ''}`}
+                        />
+                        {option.label}
+                      </button>
+                    )
+                  })}
                 </div>
+                {drawer.editingId !== null ? (
+                  <p className="mt-2 text-[10.5px] text-slate-400">
+                    Carrier is set at creation time. To move this account to a different carrier, delete it and add a new one.
+                  </p>
+                ) : null}
                 {!carrierOptions.some((o) => o.code === drawer.carrierCode) ? (
                   <p className="mt-2 flex items-start gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
                     <FiAlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                     <span>
                       Stored carrier code <span className="font-semibold">{drawer.carrierCode}</span> isn't in the
-                      supported list — pick UPS, FedEx, or USPS to change it.
+                      supported list — delete and recreate to switch it.
                     </span>
                   </p>
                 ) : null}
