@@ -318,13 +318,270 @@ public class UpsConnector implements CarrierConnector {
         );
     }
 
+    /**
+     * Full UPS Ship API 2205 shipment payload. Domestic shipments (no intl
+     * block) skip {@code ShipmentServiceOptions.InternationalForms} and
+     * {@code SoldTo}; international shipments get the paperless invoice +
+     * importer-of-record blocks so the carrier accepts customs declarations
+     * without printed paperwork.
+     *
+     * <p>Weight/dim units are passed through natively (UPS accepts KGS/LBS
+     * and CM/IN with a unit-of-measurement hint), so a parcel entered in KG
+     * lands at UPS as KG — no silent 2.2× reweigh surcharges.
+     *
+     * <p>Duty billing: SENDER pays freight + duties; RECIPIENT is the default
+     * (Type 01 freight only, no Type 02 — UPS bills consignee); THIRD_PARTY
+     * splits {@code BillShipper} (Type 01) and {@code BillThirdParty} (Type
+     * 02 with the payer's account number). See UPS Ship API "Payment
+     * Information" for the full type matrix.
+     */
     private Map<String, Object> buildShipmentPayload(ShipmentRequestDTO request) {
+        Map<String, Object> shipment = new LinkedHashMap<>();
+        shipment.put("Description", firstNonBlank(request.getSpecialInstructions(), "Shipment"));
+        shipment.put("Shipper", buildParty(
+                request.getShipperName(),
+                request.getShipperPhone(),
+                request.getShipperAddressLine1(), request.getShipperAddressLine2(),
+                request.getShipperCity(), request.getShipperState(),
+                request.getShipperPostalCode(), request.getShipperCountryCode(),
+                request.getAccountNumber(),
+                request.getIntl() != null ? request.getIntl().getImporterTaxId() : null));
+        shipment.put("ShipTo", buildParty(
+                request.getRecipientName(),
+                request.getRecipientPhone(),
+                request.getRecipientAddressLine1(), request.getRecipientAddressLine2(),
+                request.getRecipientCity(), request.getRecipientState(),
+                request.getRecipientPostalCode(), request.getRecipientCountryCode(),
+                null, null));
+        shipment.put("PaymentInformation", buildPaymentInformation(request));
+        shipment.put("Service", Map.of("Code", firstNonBlank(request.getServiceType(), "03")));
+
+        // Single-package payload today (Sprint 2 scope); multi-package lands
+        // with the Order model rework. UPS Package[] preserves the units.
+        shipment.put("Package", java.util.List.of(buildPackage(request)));
+
+        // International forms only when the request carries an intl block
+        // that's ready (all required fields present).
+        if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {
+            Map<String, Object> forms = buildInternationalForms(request);
+            Map<String, Object> serviceOptions = new LinkedHashMap<>();
+            serviceOptions.put("InternationalForms", forms);
+            shipment.put("ShipmentServiceOptions", serviceOptions);
+            // Importer of Record (SoldTo) is optional when it's the same as
+            // ShipTo — SoldTo.Option = "01" tells UPS "consignee IS importer".
+            // Only add a SoldTo block when the intl block names a different
+            // importer identity.
+            Map<String, Object> soldTo = buildSoldTo(request);
+            if (soldTo != null) shipment.put("SoldTo", soldTo);
+        }
+
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("serviceType", request.getServiceType());
-        payload.put("packageType", request.getPackageType());
-        payload.put("weight", request.getWeight());
-        payload.put("referenceNumber", request.getReferenceNumber());
+        Map<String, Object> shipmentRequest = new LinkedHashMap<>();
+        shipmentRequest.put("Request", Map.of(
+                "SubVersion", "2205",
+                "RequestOption", "nonvalidate",
+                "TransactionReference", Map.of(
+                        "CustomerContext", firstNonBlank(request.getReferenceNumber(), ""))));
+        shipmentRequest.put("Shipment", shipment);
+        shipmentRequest.put("LabelSpecification", Map.of(
+                "LabelImageFormat", Map.of("Code", "GIF"),
+                "HTTPUserAgent", "Mozilla/4.5"));
+        payload.put("ShipmentRequest", shipmentRequest);
         return payload;
+    }
+
+    /**
+     * UPS Party (Shipper / ShipTo). AttentionName defaults to Name when
+     * blank; UPS rejects Party blocks without an AttentionName on international
+     * shipments even when it duplicates Name. Tax id is only relevant on
+     * Shipper (EORI/VAT for the exporter).
+     */
+    private Map<String, Object> buildParty(String name, String phone,
+                                            String line1, String line2,
+                                            String city, String state,
+                                            String postal, String country,
+                                            String shipperNumber, String taxId) {
+        Map<String, Object> party = new LinkedHashMap<>();
+        party.put("Name", firstNonBlank(name, ""));
+        party.put("AttentionName", firstNonBlank(name, ""));
+        if (StringUtils.hasText(shipperNumber)) party.put("ShipperNumber", shipperNumber);
+        if (StringUtils.hasText(taxId)) party.put("TaxIdentificationNumber", taxId);
+        if (StringUtils.hasText(phone)) {
+            party.put("Phone", Map.of("Number", phone));
+        }
+        Map<String, Object> address = new LinkedHashMap<>();
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        if (StringUtils.hasText(line1)) lines.add(line1);
+        if (StringUtils.hasText(line2)) lines.add(line2);
+        address.put("AddressLine", lines);
+        address.put("City", firstNonBlank(city, ""));
+        address.put("StateProvinceCode", firstNonBlank(state, ""));
+        address.put("PostalCode", firstNonBlank(postal, ""));
+        address.put("CountryCode", firstNonBlank(country, "US"));
+        party.put("Address", address);
+        return party;
+    }
+
+    /**
+     * UPS Package block with unit-of-measurement hints so 1.5 KG in the
+     * request lands at UPS as 1.5 KG, not 1.5 LB.
+     */
+    private Map<String, Object> buildPackage(ShipmentRequestDTO request) {
+        Map<String, Object> pkg = new LinkedHashMap<>();
+        pkg.put("Description", firstNonBlank(request.getSpecialInstructions(), "Package"));
+        pkg.put("PackagingType", Map.of(
+                "Code", firstNonBlank(request.getPackageType(), "02")));
+
+        String weightUnitCode = "KG".equalsIgnoreCase(request.getWeightUnit()) ? "KGS" : "LBS";
+        Map<String, Object> weight = new LinkedHashMap<>();
+        weight.put("UnitOfMeasurement", Map.of("Code", weightUnitCode));
+        weight.put("Weight", request.getWeight() != null ? request.getWeight().toPlainString() : "0");
+        pkg.put("PackageWeight", weight);
+
+        if (request.getLength() != null || request.getWidth() != null || request.getHeight() != null) {
+            String dimUnitCode = "CM".equalsIgnoreCase(request.getDimUnit()) ? "CM" : "IN";
+            Map<String, Object> dims = new LinkedHashMap<>();
+            dims.put("UnitOfMeasurement", Map.of("Code", dimUnitCode));
+            dims.put("Length", request.getLength() != null ? request.getLength().toPlainString() : "0");
+            dims.put("Width", request.getWidth() != null ? request.getWidth().toPlainString() : "0");
+            dims.put("Height", request.getHeight() != null ? request.getHeight().toPlainString() : "0");
+            pkg.put("Dimensions", dims);
+        }
+        return pkg;
+    }
+
+    /**
+     * UPS PaymentInformation.ShipmentCharge[] — Type 01 = Transportation,
+     * Type 02 = Duties+Taxes. See UPS Ship API "Payment Information".
+     * <ul>
+     *   <li>SENDER (default / no intl / DDP): only Type 01 (BillShipper).
+     *       Duties fall to consignee unless we add Type 02 → covered below.</li>
+     *   <li>DDP + SENDER: adds a Type 02 BillShipper block so UPS bills the
+     *       shipper's account for duties too.</li>
+     *   <li>THIRD_PARTY: Type 01 BillShipper (freight) + Type 02
+     *       BillThirdParty (duties) with the payer's account number.</li>
+     *   <li>RECIPIENT / DAP / DDU: Type 01 only — UPS bills consignee for
+     *       duties per DAP default.</li>
+     * </ul>
+     */
+    private Map<String, Object> buildPaymentInformation(ShipmentRequestDTO request) {
+        String shipperAccount = firstNonBlank(request.getAccountNumber(), "");
+        java.util.List<Map<String, Object>> charges = new java.util.ArrayList<>();
+        // Freight always billed to shipper account.
+        charges.add(Map.of(
+                "Type", "01",
+                "BillShipper", Map.of("AccountNumber", shipperAccount)));
+
+        if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {
+            String dutyBillTo = request.getIntl().getDutyBillTo();
+            String dutyAccount = request.getIntl().getDutyAccount();
+            if ("SENDER".equalsIgnoreCase(dutyBillTo)
+                    || "DDP".equalsIgnoreCase(request.getIntl().getIncoterms())) {
+                charges.add(Map.of(
+                        "Type", "02",
+                        "BillShipper", Map.of("AccountNumber", shipperAccount)));
+            } else if ("THIRD_PARTY".equalsIgnoreCase(dutyBillTo) && StringUtils.hasText(dutyAccount)) {
+                charges.add(Map.of(
+                        "Type", "02",
+                        "BillThirdParty", Map.of(
+                                "AccountNumber", dutyAccount,
+                                "Address", Map.of(
+                                        "PostalCode", "",
+                                        "CountryCode", firstNonBlank(request.getIntl().getImporterCountry(), "US")))));
+            }
+            // RECIPIENT / DDU / DAP: no Type 02 — UPS bills consignee by default.
+        }
+
+        Map<String, Object> paymentInformation = new LinkedHashMap<>();
+        paymentInformation.put("ShipmentCharge", charges);
+        return paymentInformation;
+    }
+
+    /**
+     * UPS InternationalForms block. FormType "01" = Commercial Invoice —
+     * the standard for cross-border commercial shipments. Enable UPS Paperless
+     * Invoice on the account to have UPS transmit this electronically instead
+     * of requiring printed copies attached to the parcel.
+     */
+    private Map<String, Object> buildInternationalForms(ShipmentRequestDTO request) {
+        com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
+        Map<String, Object> forms = new LinkedHashMap<>();
+        forms.put("FormType", "01");
+        forms.put("InvoiceNumber", firstNonBlank(request.getReferenceNumber(), ""));
+        forms.put("InvoiceDate", java.time.LocalDate.now(java.time.ZoneOffset.UTC)
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")));
+        forms.put("PurchaseOrderNumber", firstNonBlank(request.getReferenceNumber(), ""));
+        forms.put("TermsOfShipment", firstNonBlank(intl.getIncoterms(), "DAP").toUpperCase());
+        String reason = firstNonBlank(intl.getReasonForExport(), "SALE").toUpperCase();
+        forms.put("ReasonForExport", reason);
+        forms.put("CurrencyCode", firstNonBlank(intl.getCustomsCurrency(), "USD").toUpperCase());
+
+        String weightUnitCode = "KG".equalsIgnoreCase(intl.getWeightUnit()) ? "KGS" : "LBS";
+        java.util.List<Map<String, Object>> products = new java.util.ArrayList<>();
+        for (com.multiship.backend.dto.CustomsCommodityDTO c : intl.getCommodities()) {
+            Map<String, Object> product = new LinkedHashMap<>();
+            product.put("Description", firstNonBlank(c.getDescription(), ""));
+            if (StringUtils.hasText(c.getHsCode())) product.put("CommodityCode", c.getHsCode());
+            if (StringUtils.hasText(c.getSku())) product.put("PartNumber", c.getSku());
+            product.put("OriginCountryCode", firstNonBlank(c.getCountryOfOrigin(), ""));
+            product.put("Unit", Map.of(
+                    "Number", c.getQuantity() != null ? c.getQuantity().toString() : "1",
+                    "Value", c.getUnitValue() != null ? c.getUnitValue().toPlainString() : "0",
+                    "UnitOfMeasurement", Map.of("Code", "EA")));
+            if (c.getUnitWeight() != null) {
+                product.put("ProductWeight", Map.of(
+                        "UnitOfMeasurement", Map.of("Code", weightUnitCode),
+                        "Weight", c.getUnitWeight().toPlainString()));
+            }
+            products.add(product);
+        }
+        forms.put("Product", products);
+        return forms;
+    }
+
+    /**
+     * UPS SoldTo (Importer of Record) — added only when the intl block names
+     * a different importer than the consignee. When the importer is the
+     * consignee UPS accepts the shipment without SoldTo (implicit).
+     */
+    private Map<String, Object> buildSoldTo(ShipmentRequestDTO request) {
+        com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
+        if (intl == null) return null;
+        boolean hasImporterIdentity = StringUtils.hasText(intl.getImporterName())
+                || StringUtils.hasText(intl.getImporterCompany())
+                || StringUtils.hasText(intl.getImporterAddressLine1());
+        if (!hasImporterIdentity) return null;
+
+        Map<String, Object> soldTo = new LinkedHashMap<>();
+        String name = firstNonBlank(intl.getImporterCompany(), intl.getImporterName(), "");
+        soldTo.put("Option", "02"); // 02 = importer differs from consignee
+        soldTo.put("Name", name);
+        soldTo.put("AttentionName", firstNonBlank(intl.getImporterContact(), intl.getImporterName(), name));
+        if (StringUtils.hasText(intl.getImporterTaxId())) {
+            soldTo.put("TaxIdentificationNumber", intl.getImporterTaxId());
+        }
+        if (StringUtils.hasText(intl.getImporterPhone())) {
+            soldTo.put("Phone", Map.of("Number", intl.getImporterPhone()));
+        }
+        Map<String, Object> addr = new LinkedHashMap<>();
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        if (StringUtils.hasText(intl.getImporterAddressLine1())) lines.add(intl.getImporterAddressLine1());
+        if (StringUtils.hasText(intl.getImporterAddressLine2())) lines.add(intl.getImporterAddressLine2());
+        addr.put("AddressLine", lines);
+        addr.put("City", firstNonBlank(intl.getImporterCity(), ""));
+        addr.put("StateProvinceCode", firstNonBlank(intl.getImporterState(), ""));
+        addr.put("PostalCode", firstNonBlank(intl.getImporterPostcode(), ""));
+        addr.put("CountryCode", firstNonBlank(intl.getImporterCountry(), ""));
+        soldTo.put("Address", addr);
+        return soldTo;
+    }
+
+    private static String firstNonBlank(String... candidates) {
+        if (candidates == null) return "";
+        for (String s : candidates) {
+            if (s != null && !s.trim().isEmpty()) return s;
+        }
+        return "";
     }
 
     private ShipmentResult parseShipmentResult(String response) throws Exception {
