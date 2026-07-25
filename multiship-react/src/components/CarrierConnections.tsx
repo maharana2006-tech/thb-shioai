@@ -51,15 +51,21 @@ const carrierOptions = [
 ]
 
 /**
- * OAuth credential terminology by carrier. UPS's Developer Portal calls the
- * two OAuth values "Consumer Key" and "Consumer Secret"; using the standard
- * OAuth names ("Client ID" / "Client Secret") for UPS confuses users hunting
- * on developer.ups.com, so the drawer relabels dynamically.
+ * Credential terminology varies wildly per carrier and mismatched labels
+ * derail users hunting on developer portals. The drawer relabels the three
+ * credential fields (account number, ID, secret) based on carrier so the
+ * words match what the carrier's portal calls them:
+ * - UPS Developer Portal: "Consumer Key" / "Consumer Secret".
+ * - Stamps.com SWSIM (USPS): "IntegrationID" (GUID assigned to the
+ *   integrator) + "Username" + "Password" (the end-user's Stamps.com login).
+ * - Everything else: standard OAuth "Client ID" / "Client Secret".
  */
 const credentialLabelsFor = (carrierCode: string) => {
   const normalized = carrierCode?.trim().toUpperCase()
   if (normalized === 'UPS') {
     return {
+      accountNumberLabel: 'Account number',
+      accountNumberPlaceholder: 'e.g. 740561111',
       idLong: 'Consumer Key',
       secretLong: 'Consumer Secret',
       idShort: 'Consumer Key',
@@ -67,7 +73,21 @@ const credentialLabelsFor = (carrierCode: string) => {
       helper: 'Find these on developer.ups.com under your app — "Consumer Key" and "Consumer Secret".',
     }
   }
+  if (normalized === 'USPS') {
+    return {
+      accountNumberLabel: 'Username',
+      accountNumberPlaceholder: 'Your Stamps.com account username',
+      idLong: 'IntegrationID',
+      secretLong: 'Password',
+      idShort: 'IntegrationID',
+      secretShort: 'password',
+      helper:
+        'Stamps.com SWSIM: IntegrationID is a GUID assigned to the integrator on developer.stamps.com. Username + Password are the end-user\'s Stamps.com account login.',
+    }
+  }
   return {
+    accountNumberLabel: 'Account number',
+    accountNumberPlaceholder: 'Carrier account number',
     idLong: 'Client ID',
     secretLong: 'Client Secret',
     idShort: 'client ID',
@@ -397,7 +417,7 @@ export default function CarrierConnections() {
     const credentialTerms = credentialLabelsFor(drawer.carrierCode)
 
     if (!drawer.accountNumber.trim()) {
-      notify.error('Account number is required.')
+      notify.error(`${credentialTerms.accountNumberLabel} is required.`)
       return
     }
     // On CREATE both credential fields are mandatory. On EDIT they're only
@@ -1011,7 +1031,13 @@ export default function CarrierConnections() {
                     placeholder='Shown across the app, e.g. "Acme UPS"'
                   />
                 </Field>
-                <Field label={drawer.editingId ? 'Account number (locked)' : 'Account number'}>
+                <Field
+                  label={
+                    drawer.editingId
+                      ? `${credentialLabelsFor(drawer.carrierCode).accountNumberLabel} (locked)`
+                      : credentialLabelsFor(drawer.carrierCode).accountNumberLabel
+                  }
+                >
                   <input
                     value={drawer.accountNumber}
                     onChange={(e) => setDrawer((c) => ({ ...c, accountNumber: e.target.value }))}
@@ -1020,7 +1046,7 @@ export default function CarrierConnections() {
                         ? 'cursor-not-allowed !bg-slate-100 text-slate-500'
                         : ''
                     }`}
-                    placeholder="e.g. 740561111"
+                    placeholder={credentialLabelsFor(drawer.carrierCode).accountNumberPlaceholder}
                     readOnly={drawer.editingId !== null}
                   />
                 </Field>
@@ -1129,7 +1155,7 @@ export default function CarrierConnections() {
                 {(() => {
                   const verifyTerms = credentialLabelsFor(drawer.carrierCode)
                   const missing: string[] = []
-                  if (!drawer.accountNumber.trim()) missing.push('Account number')
+                  if (!drawer.accountNumber.trim()) missing.push(verifyTerms.accountNumberLabel)
                   if (!drawer.clientId.trim()) missing.push(verifyTerms.idLong)
                   if (!drawer.clientSecret.trim()) missing.push(verifyTerms.secretLong)
                   const checking = drawerCheck.state === 'checking'
