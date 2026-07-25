@@ -788,6 +788,18 @@ public class CarrierServiceImpl implements CarrierService {
         connector.validateCredentials(res.clientId(), res.clientSecret());
         String accessToken = connector.getAccessToken(res.clientId(), res.clientSecret(), res.accountNumber());
         ShipmentRequestDTO shipmentRequest = buildShipmentRequest(order, res.accountNumber(), connector);
+
+        // Fail fast on incomplete customs before the carrier call — the
+        // carriers' own errors are terse ("Invalid commodity") and don't
+        // name the missing field. IntlShipmentValidator concatenates every
+        // gap into one actionable message.
+        java.util.List<IntlShipmentValidator.ValidationError> intlErrors =
+                IntlShipmentValidator.validate(shipmentRequest);
+        if (!intlErrors.isEmpty()) {
+            throw new com.multiship.backend.exception.CarrierConnectionException(
+                    IntlShipmentValidator.toMessage(intlErrors));
+        }
+
         return connector.createShipment(shipmentRequest, accessToken);
     }
 
@@ -1255,7 +1267,15 @@ public class CarrierServiceImpl implements CarrierService {
                                 .findByClientAndCountry(orderClient, order.getShiptoCountryCd())
                                 .orElse(null)
                         : null;
-        com.multiship.backend.dto.IntlShipmentBlockDTO intlBlock = buildIntlBlock(international, customs, profile);
+        // Customs boundary: a country mismatch alone isn't enough — customs
+        // unions (EU, EAEU, GCC, SACU) treat their members as one territory,
+        // so a FR→DE parcel crosses a country border but NOT a customs
+        // border. CustomsTerritories.sameTerritory() suppresses the intl
+        // block for those pairs so we don't build an unnecessary invoice.
+        boolean sameCustomsTerritory = com.multiship.backend.util.CustomsTerritories
+                .sameTerritory(shipper.getCountryCode(), order.getShiptoCountryCd());
+        boolean customsRequired = international && !sameCustomsTerritory;
+        com.multiship.backend.dto.IntlShipmentBlockDTO intlBlock = buildIntlBlock(customsRequired, customs, profile);
 
         // Currency for declared value: prefer customs currency (OrderCustoms /
         // profile default), fall back to null → FedEx defaults to USD, matching
