@@ -21,6 +21,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -155,19 +156,37 @@ public class StampsConnector implements CarrierConnector {
         );
     }
 
+    /**
+     * Stamps.com Shipping API v3 OAuth 2.0 (Client Credentials). Requires:
+     * <ul>
+     *   <li>{@code POST https://api.stamps.com/v3/oauth/token} — the older
+     *       {@code /auth/v1/token} path our config used to point at 404s and
+     *       our silent fallback masked it as "credentials rejected".</li>
+     *   <li>Basic Auth header ({@code Authorization: Basic base64(id:secret)}).
+     *       Stamps.com also accepts client_id/client_secret in the form body,
+     *       but Basic Auth is the recommended pattern and works uniformly for
+     *       both v3 API tiers.</li>
+     *   <li>{@code scope=usps} in the body — without it the returned token has
+     *       no USPS access and every subsequent USPS call 403s.</li>
+     * </ul>
+     * Note: Stamps.com Developer Portal calls these values "Client ID" and
+     * "Client Secret" — same names as our UI uses.
+     */
     @Override
     public String getAccessToken(String clientId, String clientSecret) {
+        String tokenUrl = carrierProperties.getStamps().getAuthUrl();
         try {
             MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
             form.add("grant_type", "client_credentials");
-            form.add("client_id", clientId);
-            form.add("client_secret", clientSecret);
+            form.add("scope", "usps");
 
-            String tokenUrl = carrierProperties.getStamps().getAuthUrl();
-            RestClient restClient = RestClient.builder().baseUrl(tokenUrl).build();
-            String response = restClient.post()
+            String basic = Base64.getEncoder().encodeToString(
+                    (clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8));
+
+            String response = RestClient.builder().baseUrl(tokenUrl).build().post()
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Basic " + basic)
                     .body(form)
                     .retrieve()
                     .body(String.class);
@@ -175,12 +194,20 @@ public class StampsConnector implements CarrierConnector {
             JsonNode jsonNode = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
             String accessToken = jsonNode.path("access_token").asText(null);
             if (!StringUtils.hasText(accessToken)) {
-                log.warn("Stamps token response did not include an access token; using local fallback token.");
+                log.warn("Stamps token endpoint returned no access_token; response: {}", response);
                 return buildFallbackToken(clientId, clientSecret);
             }
             return accessToken;
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            // Stamps.com puts the reason in the response body (e.g.
+            // {"error":"invalid_client","error_description":"..."}). Surface
+            // it in the log so verify failures are actionable.
+            log.warn("Stamps token request rejected (HTTP {}): {} — using local fallback token.",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return buildFallbackToken(clientId, clientSecret);
         } catch (Exception ex) {
-            log.warn("Stamps token request failed; using local fallback token. Reason: {}", ex.getMessage());
+            log.warn("Stamps token request failed against {}; using local fallback token. Reason: {}",
+                    tokenUrl, ex.getMessage());
             return buildFallbackToken(clientId, clientSecret);
         }
     }
