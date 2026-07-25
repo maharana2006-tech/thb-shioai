@@ -860,23 +860,50 @@ export default function CarrierConnections() {
 
             <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
               {/* Account type toggle */}
-              <DrawerStep n="1" title="Account type">
-                <div className="grid grid-cols-2 gap-2">
-                  {(['platform', 'client'] as const).map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setDrawer((c) => ({ ...c, accountType: t }))}
-                      className={`rounded-xl border px-3 py-2.5 text-[12px] font-semibold transition ${
-                        drawer.accountType === t
-                          ? 'border-[#1f150c] bg-white text-[#1f150c]'
-                          : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
-                      }`}
-                    >
-                      {t === 'platform' ? 'Platform account' : 'Client account'}
-                    </button>
-                  ))}
+              <DrawerStep n="1" title={drawer.editingId ? 'Account type (locked)' : 'Account type'}>
+                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Account type">
+                  {(['platform', 'client'] as const).map((t) => {
+                    const selected = drawer.accountType === t
+                    const locked = drawer.editingId !== null
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => {
+                          if (locked) return
+                          setDrawer((c) => ({ ...c, accountType: t }))
+                        }}
+                        disabled={locked}
+                        aria-disabled={locked}
+                        title={
+                          locked
+                            ? selected
+                              ? 'Account type is locked once the account is saved.'
+                              : "Can't switch account type on an existing account — delete and recreate to change."
+                            : undefined
+                        }
+                        className={`rounded-xl border px-3 py-2.5 text-[12px] font-semibold transition ${
+                          selected
+                            ? locked
+                              ? 'cursor-not-allowed border-slate-300 bg-slate-100 text-slate-700'
+                              : 'border-[#1f150c] bg-white text-[#1f150c]'
+                            : locked
+                              ? 'cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300 opacity-60'
+                              : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'
+                        }`}
+                      >
+                        {t === 'platform' ? 'Platform account' : 'Client account'}
+                      </button>
+                    )
+                  })}
                 </div>
+                {drawer.editingId !== null ? (
+                  <p className="mt-2 text-[10.5px] text-slate-400">
+                    Account type is set at creation time. To switch, delete this account and add a new one.
+                  </p>
+                ) : null}
                 {drawer.accountType === 'client' ? (
                   <div className="mt-2.5">
                     <Field label={drawer.editingId ? 'Client (locked once saved)' : 'Client'}>
@@ -1131,15 +1158,40 @@ export default function CarrierConnections() {
                   </p>
                 ) : null}
                 {drawer.accountType === 'client' ? (
-                  <label className="mt-3 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[12.5px] text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={drawer.clientDefault}
-                      onChange={(e) => setDrawer((c) => ({ ...c, clientDefault: e.target.checked }))}
-                      className="h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
-                    />
-                    Make this the client's default account
-                  </label>
+                  drawer.editingId !== null ? (
+                    <div
+                      className="mt-3 flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[12.5px] text-slate-500"
+                      title="Change the client default from the star button on the row."
+                    >
+                      <input
+                        type="checkbox"
+                        checked={drawer.clientDefault}
+                        disabled
+                        aria-disabled
+                        className="mt-0.5 h-4 w-4 cursor-not-allowed rounded border-slate-300 opacity-70"
+                      />
+                      <div>
+                        <div>
+                          {drawer.clientDefault
+                            ? "This is the client's default account."
+                            : "Not the client's default account."}
+                        </div>
+                        <div className="mt-0.5 text-[10.5px] text-slate-400">
+                          Change the default from the star button on the row.
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <label className="mt-3 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[12.5px] text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={drawer.clientDefault}
+                        onChange={(e) => setDrawer((c) => ({ ...c, clientDefault: e.target.checked }))}
+                        className="h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
+                      />
+                      Make this the client's default account
+                    </label>
+                  )
                 ) : null}
               </DrawerStep>
             </div>
