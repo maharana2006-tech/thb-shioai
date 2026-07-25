@@ -271,7 +271,8 @@ public class ShippingConfigService {
             return null;
         }
         try {
-            return connector.getAccessToken(account.getClientId(), account.getClientSecret());
+            return connector.getAccessToken(account.getClientId(), account.getClientSecret(),
+                    account.getAccountNumber());
         } catch (Exception ex) {
             return null;
         }

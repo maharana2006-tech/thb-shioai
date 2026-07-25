@@ -76,7 +76,8 @@ public class AccountRefServiceImpl implements AccountRefService {
                     "Account " + account.getAccountNumber() + " has no credentials to verify.");
         }
 
-        CredentialCheckDTO check = runCredentialCheck(account.getCarrierCode(), account.getClientId(), account.getClientSecret());
+        CredentialCheckDTO check = runCredentialCheck(account.getCarrierCode(), account.getClientId(),
+                account.getClientSecret(), account.getAccountNumber());
         account.setVerified(check.getVerified());
         account.setLastVerifiedAt(check.getCheckedAt());
         carrierAccountRefRepository.save(account);
@@ -86,7 +87,8 @@ public class AccountRefServiceImpl implements AccountRefService {
 
     @Override
     public ApiResponse<CredentialCheckDTO> verifyCredentials(VerifyCredentialsRequest request) {
-        CredentialCheckDTO check = runCredentialCheck(request.getCarrierCode(), request.getClientId(), request.getClientSecret());
+        CredentialCheckDTO check = runCredentialCheck(request.getCarrierCode(), request.getClientId(),
+                request.getClientSecret(), request.getAccountNumber());
         return success(check.getMessage(), check);
     }
 
@@ -94,14 +96,19 @@ public class AccountRefServiceImpl implements AccountRefService {
      * Requests a live OAuth token from the carrier. Connectors fall back to a
      * local token when the carrier rejects the credentials, so a "-local-"
      * token means the check failed even though no exception was thrown.
+     *
+     * <p>{@code accountNumber} is forwarded to the connector's 3-arg
+     * {@code getAccessToken} — UPS uses it as {@code x-merchant-id} on the
+     * OAuth call; other carriers ignore it via the interface default.
      */
-    private CredentialCheckDTO runCredentialCheck(String carrierCode, String clientId, String clientSecret) {
+    private CredentialCheckDTO runCredentialCheck(String carrierCode, String clientId, String clientSecret,
+                                                  String accountNumber) {
         LocalDateTime now = LocalDateTime.now();
 
         try {
             CarrierConnector connector = carrierService.getCarrierConnector(carrierCode);
             connector.validateCredentials(clientId, clientSecret);
-            String token = connector.getAccessToken(clientId, clientSecret);
+            String token = connector.getAccessToken(clientId, clientSecret, accountNumber);
             boolean realToken = StringUtils.hasText(token) && !token.contains("-local-");
 
             return CredentialCheckDTO.builder()
