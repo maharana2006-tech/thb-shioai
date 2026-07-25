@@ -633,7 +633,8 @@ public class CarrierServiceImpl implements CarrierService {
         CarrierConnector.ShipmentResult result;
         try {
             connector.validateCredentials(account.getClientId(), account.getClientSecret());
-            String token = connector.getAccessToken(account.getClientId(), account.getClientSecret());
+            String token = connector.getAccessToken(account.getClientId(), account.getClientSecret(),
+                    account.getAccountNumber());
             result = connector.createShipment(shipmentRequest, token);
         } catch (Exception ex) {
             log.warn("Manual shipment failed at carrier {}: {}", carrier, ex.getMessage());
@@ -785,7 +786,7 @@ public class CarrierServiceImpl implements CarrierService {
     /** One shipment attempt against a resolved account; throws on carrier failure. */
     private CarrierConnector.ShipmentResult attemptShipment(Order order, AccountResolution res, CarrierConnector connector) {
         connector.validateCredentials(res.clientId(), res.clientSecret());
-        String accessToken = connector.getAccessToken(res.clientId(), res.clientSecret());
+        String accessToken = connector.getAccessToken(res.clientId(), res.clientSecret(), res.accountNumber());
         ShipmentRequestDTO shipmentRequest = buildShipmentRequest(order, res.accountNumber(), connector);
         return connector.createShipment(shipmentRequest, accessToken);
     }
@@ -1061,7 +1062,7 @@ public class CarrierServiceImpl implements CarrierService {
         String accountNumber = firstNonBlank(user.getCarrierAccountNumber(), config.getAccountNumber());
         connector.validateCredentials(clientId, clientSecret);
 
-        String token = connector.getAccessToken(clientId, clientSecret);
+        String token = connector.getAccessToken(clientId, clientSecret, accountNumber);
         LocalDateTime expiresAt = LocalDateTime.now().plusHours(1);
 
         persistCarrierDetails(
@@ -1292,7 +1293,7 @@ public class CarrierServiceImpl implements CarrierService {
         }
 
         connector.validateCredentials(clientId, clientSecret);
-        String token = connector.getAccessToken(clientId, clientSecret);
+        String token = connector.getAccessToken(clientId, clientSecret, config.getAccountNumber());
         LocalDateTime expiresAt = LocalDateTime.now().plusHours(1);
         config.setAccessToken(token);
         config.setTokenExpiresAt(expiresAt);

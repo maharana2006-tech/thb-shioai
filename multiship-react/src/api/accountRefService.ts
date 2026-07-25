@@ -106,8 +106,15 @@ export const accountRefService = {
     return apiClient.post<ApiResponse<CarrierAccountRef>>(`/carrier-accounts/${accountId}/verify`)
   },
 
-  /** Stateless credential check used by the add-account drawer before saving. */
-  verifyCredentials: (payload: { carrierCode: string; clientId: string; clientSecret: string }) => {
+  /** Stateless credential check used by the add-account drawer before saving.
+   *  `accountNumber` is optional but recommended for UPS (used as x-merchant-id
+   *  on the OAuth request; ignored by carriers that don't need it). */
+  verifyCredentials: (payload: {
+    carrierCode: string
+    clientId: string
+    clientSecret: string
+    accountNumber?: string
+  }) => {
     return apiClient.post<ApiResponse<CredentialCheck>>('/carrier-accounts/verify-credentials', payload)
   },
 

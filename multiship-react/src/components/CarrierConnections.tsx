@@ -50,6 +50,32 @@ const carrierOptions = [
   { code: 'USPS', id: 'usps', label: 'USPS' },
 ]
 
+/**
+ * OAuth credential terminology by carrier. UPS's Developer Portal calls the
+ * two OAuth values "Consumer Key" and "Consumer Secret"; using the standard
+ * OAuth names ("Client ID" / "Client Secret") for UPS confuses users hunting
+ * on developer.ups.com, so the drawer relabels dynamically.
+ */
+const credentialLabelsFor = (carrierCode: string) => {
+  const normalized = carrierCode?.trim().toUpperCase()
+  if (normalized === 'UPS') {
+    return {
+      idLong: 'Consumer Key',
+      secretLong: 'Consumer Secret',
+      idShort: 'Consumer Key',
+      secretShort: 'Consumer Secret',
+      helper: 'Find these on developer.ups.com under your app — "Consumer Key" and "Consumer Secret".',
+    }
+  }
+  return {
+    idLong: 'Client ID',
+    secretLong: 'Client Secret',
+    idShort: 'client ID',
+    secretShort: 'client secret',
+    helper: null as string | null,
+  }
+}
+
 const isPlatform = (a: CarrierAccountRef) => !a.customerNo || !a.customerNo.trim()
 
 const relativeTime = (value?: string | null) => {
@@ -338,8 +364,9 @@ export default function CarrierConnections() {
   }, [drawerOpen])
 
   const runDrawerCheck = async () => {
+    const credentialTerms = credentialLabelsFor(drawer.carrierCode)
     if (!drawer.clientId.trim() || !drawer.clientSecret.trim()) {
-      notify.error('Enter the client ID and secret first.')
+      notify.error(`Enter the ${credentialTerms.idShort} and ${credentialTerms.secretShort} first.`)
       return
     }
     setDrawerCheck({ state: 'checking' })
@@ -348,6 +375,10 @@ export default function CarrierConnections() {
         carrierCode: drawer.carrierCode,
         clientId: drawer.clientId.trim(),
         clientSecret: drawer.clientSecret.trim(),
+        // UPS uses this as x-merchant-id on the OAuth call; other carriers
+        // ignore it. Only send when the user has typed one so we don't
+        // pre-empt validation on a half-filled form.
+        accountNumber: drawer.accountNumber.trim() || undefined,
       })
       setDrawerCheck({ state: response.data?.verified ? 'ok' : 'fail', message: response.message })
     } catch (error) {
@@ -359,6 +390,7 @@ export default function CarrierConnections() {
     const isEdit = drawer.editingId !== null
     const clientIdEntered = drawer.clientId.trim()
     const clientSecretEntered = drawer.clientSecret.trim()
+    const credentialTerms = credentialLabelsFor(drawer.carrierCode)
 
     if (!drawer.accountNumber.trim()) {
       notify.error('Account number is required.')
@@ -367,11 +399,11 @@ export default function CarrierConnections() {
     // On CREATE both credential fields are mandatory. On EDIT they're only
     // required when the user has chosen to rotate them (either field entered).
     if (!isEdit && (!clientIdEntered || !clientSecretEntered)) {
-      notify.error('Client ID and client secret are required for a new account.')
+      notify.error(`${credentialTerms.idLong} and ${credentialTerms.secretLong} are required for a new account.`)
       return
     }
     if (isEdit && rotatingCredentials && (!clientIdEntered || !clientSecretEntered)) {
-      notify.error('Enter both the new client ID and secret, or cancel the rotation.')
+      notify.error(`Enter both the new ${credentialTerms.idShort} and ${credentialTerms.secretShort}, or cancel the rotation.`)
       return
     }
     if (drawer.accountType === 'client' && !drawer.customerNo.trim()) {
@@ -987,13 +1019,13 @@ export default function CarrierConnections() {
                       </button>
                     </div>
                     <p className="font-mono text-[11.5px] tracking-tight text-slate-500">
-                      Client ID: {(() => {
+                      {credentialLabelsFor(drawer.carrierCode).idLong}: {(() => {
                         const preview = accounts.find((a) => a.id === drawer.editingId)?.clientIdPreview
                         return preview ? `${preview}` : '••••••••'
                       })()}
                     </p>
                     <p className="mt-0.5 font-mono text-[11.5px] tracking-tight text-slate-500">
-                      Client Secret: ••••••••••••
+                      {credentialLabelsFor(drawer.carrierCode).secretLong}: ••••••••••••
                     </p>
                     <p className="mt-2 text-[10.5px] leading-4 text-slate-400">
                       Credentials never leave the backend. Rotate them here if the carrier reissued keys.
@@ -1020,25 +1052,30 @@ export default function CarrierConnections() {
                         </button>
                       </div>
                     ) : null}
-                    <Field label="Client ID">
+                    <Field label={credentialLabelsFor(drawer.carrierCode).idLong}>
                       <input
                         value={drawer.clientId}
                         onChange={(e) => setDrawer((c) => ({ ...c, clientId: e.target.value }))}
                         className={inputClassName}
-                        placeholder="OAuth client id"
+                        placeholder={credentialLabelsFor(drawer.carrierCode).idLong}
                         autoComplete="off"
                       />
                     </Field>
-                    <Field label="Client Secret">
+                    <Field label={credentialLabelsFor(drawer.carrierCode).secretLong}>
                       <input
                         type="password"
                         value={drawer.clientSecret}
                         onChange={(e) => setDrawer((c) => ({ ...c, clientSecret: e.target.value }))}
                         className={inputClassName}
-                        placeholder="OAuth client secret"
+                        placeholder={credentialLabelsFor(drawer.carrierCode).secretLong}
                         autoComplete="off"
                       />
                     </Field>
+                    {credentialLabelsFor(drawer.carrierCode).helper ? (
+                      <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
+                        {credentialLabelsFor(drawer.carrierCode).helper}
+                      </p>
+                    ) : null}
                   </>
                 )}
 

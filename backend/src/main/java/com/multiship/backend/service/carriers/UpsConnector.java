@@ -21,6 +21,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -158,7 +159,7 @@ public class UpsConnector implements CarrierConnector {
     @Override
     public CarrierConnectionResult connect(String clientId, String clientSecret, String accountNumber) {
         validateCredentials(clientId, clientSecret);
-        String accessToken = getAccessToken(clientId, clientSecret);
+        String accessToken = getAccessToken(clientId, clientSecret, accountNumber);
         LocalDateTime tokenExpiresAt = LocalDateTime.now(ZoneOffset.UTC).plusHours(1);
         return new CarrierConnectionResult(
                 CARRIER_CODE,
@@ -174,28 +175,58 @@ public class UpsConnector implements CarrierConnector {
 
     @Override
     public String getAccessToken(String clientId, String clientSecret) {
+        return getAccessToken(clientId, clientSecret, null);
+    }
+
+    /**
+     * UPS OAuth 2.0 (Client Credentials) requires Basic Auth on the token
+     * endpoint — {@code Authorization: Basic base64(clientId:clientSecret)} —
+     * with only {@code grant_type=client_credentials} in the form body. The
+     * previous implementation put client_id/client_secret in the body (the
+     * FedEx pattern), which UPS rejects with {@code invalid_client}; the
+     * exception was swallowed and a fake {@code -local-*} token was returned,
+     * so verify silently reported "credentials rejected" for CORRECT UPS keys.
+     *
+     * <p>The {@code x-merchant-id} header (UPS shipper number) is optional but
+     * recommended — UPS attaches quota / rate-limit counters to the merchant.
+     *
+     * <p>Note: the "Consumer Key" and "Consumer Secret" values from the UPS
+     * Developer Portal ARE the OAuth client_id / client_secret used here.
+     */
+    @Override
+    public String getAccessToken(String clientId, String clientSecret, String accountNumber) {
+        String tokenUrl = carrierProperties.getUps().getAuthUrl();
         try {
             MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
             form.add("grant_type", "client_credentials");
-            form.add("client_id", clientId);
-            form.add("client_secret", clientSecret);
 
-            String tokenUrl = carrierProperties.getUps().getAuthUrl();
+            String basic = Base64.getEncoder().encodeToString(
+                    (clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8));
+
             RestClient restClient = RestClient.builder().baseUrl(tokenUrl).build();
-            String response = restClient.post()
+            RestClient.RequestBodySpec request = restClient.post()
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .accept(MediaType.APPLICATION_JSON)
-                    .body(form)
-                    .retrieve()
-                    .body(String.class);
+                    .header("Authorization", "Basic " + basic);
+            if (StringUtils.hasText(accountNumber)) {
+                request = request.header("x-merchant-id", accountNumber.trim());
+            }
+
+            String response = request.body(form).retrieve().body(String.class);
 
             JsonNode jsonNode = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
             String accessToken = jsonNode.path("access_token").asText(null);
             if (!StringUtils.hasText(accessToken)) {
-                log.warn("UPS token response did not contain an access token; using local fallback token.");
+                log.warn("UPS token endpoint returned no access_token; response: {}", response);
                 return buildFallbackToken(clientId, clientSecret);
             }
             return accessToken;
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            // UPS puts the reason ({"response":{"errors":[{"code":"...","message":"..."}]}})
+            // in the response body. Surface it in the log so verify failures are actionable.
+            log.warn("UPS token request rejected (HTTP {}): {} — using local fallback token.",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return buildFallbackToken(clientId, clientSecret);
         } catch (Exception ex) {
             log.warn("UPS token request failed; using local fallback token. Reason: {}", ex.getMessage());
             return buildFallbackToken(clientId, clientSecret);

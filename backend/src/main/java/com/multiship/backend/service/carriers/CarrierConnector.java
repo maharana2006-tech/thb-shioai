@@ -37,6 +37,18 @@ public interface CarrierConnector {
 
     String getAccessToken(String clientId, String clientSecret);
 
+    /**
+     * Some carriers (UPS) want the shipper number sent as a token-request
+     * header — {@code x-merchant-id} — so quotas and rate limits attach to the
+     * merchant, not just the app credentials. Callers that know the shipper
+     * account number should prefer this overload; the default just drops the
+     * merchant id and delegates, so connectors that don't need it inherit the
+     * existing behaviour.
+     */
+    default String getAccessToken(String clientId, String clientSecret, String accountNumber) {
+        return getAccessToken(clientId, clientSecret);
+    }
+
     ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken);
 
     boolean validateCredentials(String clientId, String clientSecret);
