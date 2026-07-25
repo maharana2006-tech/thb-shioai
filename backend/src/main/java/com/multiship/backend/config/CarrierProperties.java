@@ -156,6 +156,13 @@ public class CarrierProperties {
         @NotBlank
         private String authUrl;
 
+        /**
+         * SWSIM staging endpoint. Selected when the caller's environment is
+         * SANDBOX so testing credentials aren't sent to production.
+         */
+        @NotBlank
+        private String sandboxAuthUrl;
+
         @NotBlank
         private String apiVersion;
 
