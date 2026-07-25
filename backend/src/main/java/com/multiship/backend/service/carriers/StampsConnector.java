@@ -234,8 +234,11 @@ public class StampsConnector implements CarrierConnector {
         }
     }
 
-    /** SWSIM namespace for v135 (matches the WSDL targetNamespace). */
-    private static final String SWSIM_NAMESPACE = "http://stamps.com/xml/namespace/2022/12/swsim/SwsimV135";
+    /** SWSIM namespace for v135 — matches the WSDL targetNamespace on the
+     *  live endpoint (verified against swsim.testing.stamps.com/swsim/swsimv135.asmx?wsdl).
+     *  Bumping the date here without checking the WSDL will trigger
+     *  "Server did not recognize the value of HTTP Header SOAPAction" 500s. */
+    private static final String SWSIM_NAMESPACE = "http://stamps.com/xml/namespace/2023/07/swsim/SwsimV135";
 
     private String buildAuthenticateUserEnvelope(String integrationId, String username, String password) {
         // Values are XML-escaped so a stray '&' in a password doesn't break
