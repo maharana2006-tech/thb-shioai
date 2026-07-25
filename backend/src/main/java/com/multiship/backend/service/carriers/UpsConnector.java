@@ -156,6 +156,11 @@ public class UpsConnector implements CarrierConnector {
         return new BigDecimal(v);
     }
 
+    /** Case/whitespace-tolerant SANDBOX check — everything else is production. */
+    private static boolean isSandbox(String environment) {
+        return environment != null && "SANDBOX".equalsIgnoreCase(environment.trim());
+    }
+
     @Override
     public CarrierConnectionResult connect(String clientId, String clientSecret, String accountNumber) {
         validateCredentials(clientId, clientSecret);
@@ -175,7 +180,12 @@ public class UpsConnector implements CarrierConnector {
 
     @Override
     public String getAccessToken(String clientId, String clientSecret) {
-        return getAccessToken(clientId, clientSecret, null);
+        return getAccessToken(clientId, clientSecret, null, null);
+    }
+
+    @Override
+    public String getAccessToken(String clientId, String clientSecret, String accountNumber) {
+        return getAccessToken(clientId, clientSecret, accountNumber, null);
     }
 
     /**
@@ -190,12 +200,20 @@ public class UpsConnector implements CarrierConnector {
      * <p>The {@code x-merchant-id} header (UPS shipper number) is optional but
      * recommended — UPS attaches quota / rate-limit counters to the merchant.
      *
+     * <p>Environment routing: UPS issues Consumer Keys per-environment. A CIE
+     * (sandbox) key 401s with error 10401 "ClientId is Invalid" against the
+     * production {@code onlinetools.ups.com} host, and a production key does
+     * the same in reverse. We route to the matching endpoint based on the
+     * {@code environment} argument ("SANDBOX" → wwwcie, otherwise production).
+     *
      * <p>Note: the "Consumer Key" and "Consumer Secret" values from the UPS
      * Developer Portal ARE the OAuth client_id / client_secret used here.
      */
     @Override
-    public String getAccessToken(String clientId, String clientSecret, String accountNumber) {
-        String tokenUrl = carrierProperties.getUps().getAuthUrl();
+    public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
+        String tokenUrl = isSandbox(environment)
+                ? carrierProperties.getUps().getSandboxAuthUrl()
+                : carrierProperties.getUps().getAuthUrl();
         try {
             MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
             form.add("grant_type", "client_credentials");

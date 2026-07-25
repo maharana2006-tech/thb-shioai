@@ -28,4 +28,11 @@ public class VerifyCredentialsRequest {
      * Ignored for carriers that don't need it.
      */
     private String accountNumber;
+
+    /**
+     * SANDBOX | PRODUCTION. UPS routes Consumer Keys to different token
+     * endpoints per environment — a CIE key 401s against the production host.
+     * Ignored for carriers where the endpoint is env-agnostic.
+     */
+    private String environment;
 }

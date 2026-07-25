@@ -379,6 +379,10 @@ export default function CarrierConnections() {
         // ignore it. Only send when the user has typed one so we don't
         // pre-empt validation on a half-filled form.
         accountNumber: drawer.accountNumber.trim() || undefined,
+        // UPS routes SANDBOX to wwwcie.ups.com and PRODUCTION to
+        // onlinetools.ups.com — a Consumer Key issued for one 401s at the
+        // other. Non-UPS carriers ignore this.
+        environment: drawer.environment,
       })
       setDrawerCheck({ state: response.data?.verified ? 'ok' : 'fail', message: response.message })
     } catch (error) {
