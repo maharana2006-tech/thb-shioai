@@ -25,6 +25,9 @@ import {
 } from '../api/clientPolicyService'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import ShipmentPartiesOverrideModal, { type Party } from './modals/ShipmentPartiesOverrideModal'
+import CustomsWizard from './shipment/CustomsWizard'
+import type { CustomsItem, OrderCustomsPayload } from '../api/customsService'
+import { parseIntlValidationMessage } from '../utils/intlValidationErrors'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -290,6 +293,12 @@ export default function NewShipmentPage() {
   // Reason of export + currency are sticky — they prefill from the last shipment.
   const [reasonForExport, setReasonForExport] = useState(() => readSticky('ms:lastReason', 'SALE'))
   const [currency, setCurrency] = useState(() => readSticky('ms:lastCurrency', 'USD'))
+
+  // Optional guided-wizard for the customs section. Off by default; users
+  // click "Open guided wizard" to enter a 4-step flow that maps onto the
+  // same state as the inline form. Closing without Save preserves the
+  // inline form's current values.
+  const [wizardOpen, setWizardOpen] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -615,6 +624,49 @@ export default function NewShipmentPage() {
     }
   }
 
+  // Wizard payload = a snapshot of the current inline state in the shape
+  // CustomsWizard expects (OrderCustomsPayload). Rebuilt each time the
+  // wizard opens so it starts from whatever the user last typed inline.
+  const wizardPayload = useMemo<OrderCustomsPayload>(() => ({
+    items: items
+      .filter((it) => it.description.trim() || it.hsCode.trim())
+      .map<CustomsItem>((it) => ({
+        description: it.description.trim(),
+        hsCode: it.hsCode.trim() || null,
+        countryOfOrigin: it.countryOfOrigin.trim().toUpperCase() || null,
+        quantity: Number(it.quantity) || 1,
+        unitValue: Number(it.unitValue) || 0,
+        sku: it.sku.trim() || null,
+      })),
+    incoterms,
+    reasonForExport,
+    currency,
+    weightUnit,
+  }), [items, incoterms, reasonForExport, currency, weightUnit])
+
+  /** Copy wizard-side state back into the inline form state so both stay in sync. */
+  const acceptWizardPayload = (payload: OrderCustomsPayload) => {
+    const rows: ItemRow[] = (payload.items ?? []).map((it) => ({
+      description: it.description ?? '',
+      sku: it.sku ?? '',
+      hsCode: it.hsCode ?? '',
+      countryOfOrigin: it.countryOfOrigin ?? '',
+      quantity: String(it.quantity ?? 1),
+      unitValue: it.unitValue != null ? String(it.unitValue) : '',
+    }))
+    // Keep at least one row so the inline form isn't blank after a Save
+    // with zero items entered in the wizard.
+    setItems(rows.length ? rows : [blankItem()])
+    if (payload.incoterms) setIncoterms(payload.incoterms)
+    if (payload.reasonForExport) setReasonForExport(payload.reasonForExport)
+    if (payload.currency) setCurrency(payload.currency)
+    if (payload.weightUnit && (payload.weightUnit === 'LB' || payload.weightUnit === 'KG')) {
+      setWeightUnit(payload.weightUnit)
+    }
+    setWizardOpen(false)
+    notify.success('Customs details saved to this shipment.')
+  }
+
   const patchItem = (i: number, patch: Partial<ItemRow>) =>
     setItems((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
   const addItem = () => setItems((rows) => [blankItem(), ...rows])
@@ -687,8 +739,21 @@ export default function NewShipmentPage() {
       notify.success(res.message || 'Shipment label generated.')
       navigate(orderNo ? `/label/${orderNo}` : '/orders')
     } catch (e) {
-      if (e instanceof ApiError) notify.error(e.message)
-      else notify.error(e instanceof Error ? e.message : 'Failed to generate the label.')
+      const raw = e instanceof ApiError
+        ? e.message
+        : e instanceof Error
+          ? e.message
+          : 'Failed to generate the label.'
+      // Backend's IntlShipmentValidator concatenates every gap into a single
+      // message with a stable prefix. Parse it back into a structured
+      // notify.error so the user sees a title + bullet list instead of a
+      // wall of text.
+      const parsed = parseIntlValidationMessage(raw)
+      if (parsed) {
+        notify.error({ title: parsed.title, body: parsed.body })
+      } else {
+        notify.error(raw)
+      }
     } finally {
       setSubmitting(false)
     }
@@ -1132,6 +1197,14 @@ export default function NewShipmentPage() {
                     </span>
                     <button
                       type="button"
+                      onClick={() => setWizardOpen(true)}
+                      title="Step through the customs declaration with per-carrier hints"
+                      className="inline-flex items-center gap-1 rounded-lg border border-emerald-600 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-50 shadow-sm"
+                    >
+                      <FiGlobe className="h-3.5 w-3.5" /> Guided wizard
+                    </button>
+                    <button
+                      type="button"
                       onClick={addItem}
                       className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
                     >
@@ -1252,6 +1325,34 @@ export default function NewShipmentPage() {
             setOverrideEditorOpen(false)
           }}
         />
+      ) : null}
+
+      {/* Customs wizard — full-screen modal overlay. Owns its own scroll +
+          keyboard trap; the parent form stays mounted so state is preserved
+          if the user cancels. */}
+      {wizardOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Customs declaration wizard"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
+        >
+          <div className="flex h-[min(720px,90vh)] w-full max-w-[720px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
+            <CustomsWizard
+              carrierCode={carrier}
+              originCountry={sender.countryCode}
+              destinationCountry={recipient.countryCode}
+              value={wizardPayload}
+              onChange={() => {
+                // No-op: the wizard renders from wizardPayload but writes
+                // back only on Complete. We don't mirror in-progress edits
+                // to the inline form because the user might cancel.
+              }}
+              onComplete={acceptWizardPayload}
+              onCancel={() => setWizardOpen(false)}
+            />
+          </div>
+        </div>
       ) : null}
     </div>
   )
