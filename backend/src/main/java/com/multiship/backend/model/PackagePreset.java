@@ -45,8 +45,15 @@ public class PackagePreset {
      * {@link ClientAllowedPackage}. CLIENT presets are private to the owning
      * client and auto-allowed for them (no ClientAllowedPackage row needed).
      * Mirrors the {@link Warehouse} ownership pattern.
+     *
+     * <p>Column is nullable at the DB level: a NULL value is treated as
+     * {@code PLATFORM} everywhere (readers use {@code equals} which returns
+     * false for null; writers default null → PLATFORM in savePreset). This
+     * lets Hibernate {@code ddl-auto=update} add the column to an existing
+     * populated table without a data migration — pre-Phase-5 rows land with
+     * NULL, which is exactly the PLATFORM they always were.
      */
-    @Column(name = "owner_type", nullable = false, length = 10)
+    @Column(name = "owner_type", length = 10)
     @Builder.Default
     private String ownerType = OWNER_PLATFORM;
 
