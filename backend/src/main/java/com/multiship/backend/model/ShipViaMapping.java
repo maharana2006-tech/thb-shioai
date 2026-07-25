@@ -7,6 +7,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -76,6 +77,14 @@ public class ShipViaMapping {
 
     @Column(name = "service_id", nullable = false)
     private Long serviceId;
+
+    /**
+     * Phase 6: the presets this rule may ship in. Persisted in
+     * {@link ShipMethodRulePackage}; here it's a Jackson round-trip field
+     * for the API only. Empty = unrestricted at the rule level.
+     */
+    @Transient
+    private java.util.List<Long> allowedPresetIds;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)

@@ -14,6 +14,8 @@ import AdvancedDataTable, { type EditCellProps, type EditNav } from './workspace
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import Select from './workspace/Select'
 import ZoneEditorModal from './workspace/ZoneEditorModal'
+import RulePackagesDrawer from './modals/RulePackagesDrawer'
+import { FiPackage } from 'react-icons/fi'
 
 /** Supported carriers — matches the ShippingServicesPage catalog. */
 const CARRIERS = ['UPS', 'FEDEX', 'USPS'] as const
@@ -255,6 +257,10 @@ export default function ShippingServiceMappingPage() {
   /** Zone modal target: 'new' = the add-row, otherwise the rule being edited. */
   const [zoneFor, setZoneFor] = useState<'new' | ShipMethodRule | null>(null)
   const [zoneCodes, setZoneCodes] = useState<string[]>([])
+  /** Phase 6: allowed presets per rule id — read from catalog.rulePackages. */
+  const [ruleIdToPresets, setRuleIdToPresets] = useState<Map<number, number[]>>(new Map())
+  /** Packages drawer target — the rule whose allowed set is being edited. */
+  const [pkgFor, setPkgFor] = useState<ShipMethodRule | null>(null)
 
   // Advanced toolbar state (search + collapsible filter panel).
   const [ruleQuery, setRuleQuery] = useState('')
@@ -308,6 +314,14 @@ export default function ShippingServiceMappingPage() {
       setServices(catalog.services)
       setRules(catalog.rules)
       setClients(clientPage.data?.content ?? [])
+      // Phase 6 — group flat rulePackages by ruleId for chip rendering.
+      const grouped = new Map<number, number[]>()
+      for (const l of catalog.rulePackages ?? []) {
+        const cur = grouped.get(l.ruleId) ?? []
+        cur.push(l.presetId)
+        grouped.set(l.ruleId, cur)
+      }
+      setRuleIdToPresets(grouped)
     } catch (e) {
       notify.error(e instanceof Error ? e.message : 'Failed to load the mapping catalog.')
     } finally {
@@ -599,6 +613,32 @@ export default function ShippingServiceMappingPage() {
         },
       },
       {
+        id: 'packages',
+        header: 'Packages',
+        enableSorting: false,
+        cell: ({ row }) => {
+          const count = (ruleIdToPresets.get(row.original.id ?? -1) ?? []).length
+          const svc = serviceById.get(row.original.serviceId)
+          return (
+            <button
+              type="button"
+              onClick={() => setPkgFor(row.original)}
+              disabled={!svc || row.original.id == null}
+              title={count > 0 ? `${count} package${count === 1 ? '' : 's'} allowed` : 'No package restriction'}
+              className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10.5px] font-bold transition ${
+                count
+                  ? 'border-[#412d15]/25 bg-[#412d15]/[0.06] text-[#412d15] hover:bg-[#412d15]/10'
+                  : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+              } disabled:cursor-not-allowed disabled:opacity-40`}
+            >
+              <FiPackage className="h-3 w-3" />
+              {count || '+'}
+            </button>
+          )
+        },
+        meta: { headerLabel: 'Packages', hideable: true, exportable: false },
+      },
+      {
         id: 'actions',
         header: '',
         enableSorting: false,
@@ -621,7 +661,7 @@ export default function ShippingServiceMappingPage() {
     // openZone / removeRule are stable enough that we skip them; adding them
     // would rebuild every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [services, serviceById, clients, saveRuleField, domesticFor, inferScope],
+    [services, serviceById, clients, saveRuleField, domesticFor, inferScope, ruleIdToPresets],
   )
 
   return (
@@ -842,6 +882,28 @@ export default function ShippingServiceMappingPage() {
           />
         )}
       </section>
+
+      {pkgFor && pkgFor.id != null ? (() => {
+        const svc = serviceById.get(pkgFor.serviceId)
+        if (!svc) return null
+        return (
+          <RulePackagesDrawer
+            rule={pkgFor}
+            service={svc}
+            initialPresetIds={ruleIdToPresets.get(pkgFor.id) ?? []}
+            onClose={() => setPkgFor(null)}
+            onSaved={(nextIds) => {
+              // Update local map so the chip count refreshes without a full reload.
+              setRuleIdToPresets((cur) => {
+                const next = new Map(cur)
+                next.set(pkgFor.id!, nextIds)
+                return next
+              })
+              setPkgFor(null)
+            }}
+          />
+        )
+      })() : null}
 
       <ZoneEditorModal
         open={Boolean(zoneFor)}
