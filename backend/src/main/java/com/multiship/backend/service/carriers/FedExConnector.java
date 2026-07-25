@@ -322,6 +322,35 @@ public class FedExConnector implements CarrierConnector {
         );
     }
 
+    /** €150 = the IOSS threshold for EU B2C low-value goods. */
+    private static final BigDecimal IOSS_EUR_THRESHOLD = new BigDecimal("150.00");
+    /** Loose FX guardrails so the threshold isn't off by an order of magnitude
+     *  for the common invoice currencies. Real FX conversion lands in a
+     *  future sprint (gap 15). */
+    private static final Map<String, BigDecimal> IOSS_LOCAL_THRESHOLD = Map.of(
+            "USD", new BigDecimal("165.00"),
+            "GBP", new BigDecimal("128.00"),
+            "EUR", IOSS_EUR_THRESHOLD);
+
+    /**
+     * Full FedEx Ship API v1 shipment payload. Domestic shipments skip the
+     * customsClearanceDetail + tins + etdDetail blocks; international
+     * shipments get them so FedEx accepts the declaration without printed
+     * paperwork (assuming the shipper account has ETD enrolled).
+     *
+     * <p>Weight/dim units pass through natively — 1.5 KG on the DTO lands
+     * at FedEx as {@code {units: "KG", value: 1.5}}, not silently as LB.
+     *
+     * <p>Duty billing paymentType maps our dutyBillTo enum 1:1 to FedEx's:
+     * SENDER / RECIPIENT / THIRD_PARTY. When our intl block leaves
+     * dutyBillTo blank we infer from incoterms: DDP → SENDER, else
+     * RECIPIENT (DAP/DDU default).
+     *
+     * <p>IOSS: emitted on Shipper.tins[] only when destination is in the EU
+     * AND invoice total ≤ €150 (currency-aware threshold) AND the profile
+     * has an IOSS number. Belongs on Shipper because we're the IOSS
+     * registrant (the seller); FedEx propagates it to EU customs.
+     */
     private Map<String, Object> buildShipmentPayload(ShipmentRequestDTO request) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("labelResponseOptions", carrierProperties.getFedEx().getLabelResponseOption());
@@ -338,7 +367,7 @@ public class FedExConnector implements CarrierConnector {
         requestedShipment.put("packagingType", request.getPackageType());
         requestedShipment.put("pickupType", "USE_SCHEDULED_PICKUP");
 
-        requestedShipment.put("shipper", buildParty(
+        Map<String, Object> shipper = buildParty(
                 request.getShipperName(),
                 request.getShipperPhone(),
                 request.getShipperAddressLine1(),
@@ -347,7 +376,12 @@ public class FedExConnector implements CarrierConnector {
                 request.getShipperState(),
                 request.getShipperPostalCode(),
                 request.getShipperCountryCode()
-        ));
+        );
+        // Shipper-side tax IDs (VAT/EORI for the exporter, IOSS for EU
+        // low-value B2C when applicable).
+        java.util.List<Map<String, Object>> shipperTins = buildShipperTins(request);
+        if (!shipperTins.isEmpty()) shipper.put("tins", shipperTins);
+        requestedShipment.put("shipper", shipper);
 
         requestedShipment.put("recipients", new Object[]{buildParty(
                 request.getRecipientName(),
@@ -360,12 +394,18 @@ public class FedExConnector implements CarrierConnector {
                 request.getRecipientCountryCode()
         )});
 
+        // Freight billed to the shipper account by default. Customs / duty
+        // billing is a separate paymentType on customsClearanceDetail below.
+        requestedShipment.put("shippingChargesPayment", Map.of(
+                "paymentType", "SENDER",
+                "payor", Map.of("responsibleParty", Map.of(
+                        "accountNumber", Map.of("value", firstNonBlank(request.getAccountNumber(), ""))))));
+
         Map<String, Object> packageLineItem = new LinkedHashMap<>();
         // FedEx accepts LB or KG on the wire via the units field. Route the
         // caller's unit through as-is so KG entered by EU operators isn't
         // silently treated as LB by FedEx's rating engine.
-        String fedexWeightUnit = request.getWeightUnit() != null && "KG".equalsIgnoreCase(request.getWeightUnit())
-                ? "KG" : "LB";
+        String fedexWeightUnit = "KG".equalsIgnoreCase(request.getWeightUnit()) ? "KG" : "LB";
         packageLineItem.put("weight", Map.of(
                 "units", fedexWeightUnit,
                 "value", request.getWeight()
@@ -374,8 +414,7 @@ public class FedExConnector implements CarrierConnector {
             // Currency comes from the shipment (customs) declaration when set;
             // legacy callers that don't populate it get USD, matching pre-fix
             // behavior for US-domestic accounts.
-            String declaredCurrency = request.getDeclaredValueCurrency() != null
-                    && !request.getDeclaredValueCurrency().isBlank()
+            String declaredCurrency = StringUtils.hasText(request.getDeclaredValueCurrency())
                     ? request.getDeclaredValueCurrency().trim().toUpperCase()
                     : "USD";
             packageLineItem.put("declaredValue", Map.of(
@@ -385,8 +424,268 @@ public class FedExConnector implements CarrierConnector {
         }
 
         requestedShipment.put("requestedPackageLineItems", new Object[]{packageLineItem});
+
+        // International customs + ETD only when the request carries a
+        // ready-to-carrier intl block. Domestic shipments never see these.
+        if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {
+            requestedShipment.put("customsClearanceDetail", buildCustomsClearanceDetail(request));
+            requestedShipment.put("shipmentSpecialServicesRequested", buildEtdSpecialServices());
+        }
+
         payload.put("requestedShipment", requestedShipment);
         return payload;
+    }
+
+    /**
+     * Build the shipper.tins array. VAT and EORI are always emitted when
+     * present (they belong to the exporter regardless of destination). IOSS
+     * is gated: emitted only when destination is in the EU AND invoice total
+     * is below the currency's ~€150 threshold — that's the ONLY case where
+     * IOSS applies. Outside those bounds an IOSS number is either
+     * irrelevant (non-EU destination) or wrong (goods above the low-value
+     * threshold pay VAT on delivery, not via IOSS).
+     */
+    private java.util.List<Map<String, Object>> buildShipperTins(ShipmentRequestDTO request) {
+        java.util.List<Map<String, Object>> tins = new java.util.ArrayList<>();
+        com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
+        if (intl == null) return tins;
+
+        if (StringUtils.hasText(intl.getImporterVat())) {
+            tins.add(Map.of("number", intl.getImporterVat(), "tinType", "BUSINESS_NATIONAL", "usage", "shipping"));
+        }
+        if (StringUtils.hasText(intl.getImporterEori())) {
+            tins.add(Map.of("number", intl.getImporterEori(), "tinType", "BUSINESS_UNION", "usage", "shipping"));
+        }
+        if (StringUtils.hasText(intl.getImporterIoss()) && iossApplies(request)) {
+            tins.add(Map.of("number", intl.getImporterIoss(), "tinType", "IOSS", "usage", "shipping"));
+        }
+        return tins;
+    }
+
+    /**
+     * True when this shipment is subject to IOSS (EU destination + goods
+     * ≤ €150 or FX-equivalent). Loose currency threshold via
+     * {@link #IOSS_LOCAL_THRESHOLD}; other currencies fall back to the EUR
+     * limit which slightly under-triggers rather than over-triggers IOSS.
+     */
+    private boolean iossApplies(ShipmentRequestDTO request) {
+        String dest = request.getRecipientCountryCode();
+        if (!"EU".equals(com.multiship.backend.util.CustomsTerritories.territoryOf(dest))) return false;
+        com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
+        BigDecimal total = intl.getCustomsTotalValue();
+        if (total == null) return false;
+        String cur = intl.getCustomsCurrency() == null ? "EUR" : intl.getCustomsCurrency().toUpperCase();
+        BigDecimal limit = IOSS_LOCAL_THRESHOLD.getOrDefault(cur, IOSS_EUR_THRESHOLD);
+        return total.compareTo(limit) <= 0;
+    }
+
+    /**
+     * FedEx customsClearanceDetail. Groups duties payment, invoice total,
+     * commercial invoice (incoterms + purpose), commodities, importer of
+     * record, and broker into one block. FedEx's rating engine reads this
+     * once and shares the values across the invoice, the manifest, and the
+     * shipping label.
+     */
+    private Map<String, Object> buildCustomsClearanceDetail(ShipmentRequestDTO request) {
+        com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
+        Map<String, Object> detail = new LinkedHashMap<>();
+
+        // NON_DOCUMENTS covers commercial goods; DOCUMENTS is a rare
+        // sub-case for paper-only shipments (contracts, blueprints).
+        boolean documentsOnly = "DOCUMENTS".equalsIgnoreCase(intl.getReasonForExport());
+        detail.put("documentContent", documentsOnly ? "DOCUMENTS" : "NON_DOCUMENTS");
+        detail.put("dutiesPayment", buildDutiesPayment(intl, request));
+
+        BigDecimal total = intl.getCustomsTotalValue() != null
+                ? intl.getCustomsTotalValue() : BigDecimal.ZERO;
+        String currency = StringUtils.hasText(intl.getCustomsCurrency())
+                ? intl.getCustomsCurrency().toUpperCase() : "USD";
+        detail.put("customsValue", Map.of("amount", total, "currency", currency));
+
+        detail.put("commercialInvoice", Map.of(
+                "termsOfSale", firstNonBlank(intl.getIncoterms(), "DAP").toUpperCase(),
+                "purpose", mapFedExPurpose(intl.getReasonForExport())));
+
+        detail.put("commodities", buildCommodities(intl, currency));
+
+        Map<String, Object> importer = buildImporterOfRecord(intl);
+        if (importer != null) detail.put("importerOfRecord", importer);
+
+        java.util.List<Map<String, Object>> brokers = buildBrokers(intl);
+        if (!brokers.isEmpty()) detail.put("brokers", brokers);
+
+        return detail;
+    }
+
+    /**
+     * dutiesPayment.paymentType maps our dutyBillTo 1:1. When our block
+     * leaves it blank we infer from incoterms: DDP → SENDER (seller pays);
+     * anything else → RECIPIENT (DAP/DDU default: consignee pays).
+     */
+    private Map<String, Object> buildDutiesPayment(com.multiship.backend.dto.IntlShipmentBlockDTO intl,
+                                                    ShipmentRequestDTO request) {
+        String paymentType = firstNonBlank(intl.getDutyBillTo(),
+                "DDP".equalsIgnoreCase(intl.getIncoterms()) ? "SENDER" : "RECIPIENT").toUpperCase();
+
+        Map<String, Object> duties = new LinkedHashMap<>();
+        duties.put("paymentType", paymentType);
+        if ("SENDER".equals(paymentType)) {
+            duties.put("payor", Map.of("responsibleParty", Map.of(
+                    "accountNumber", Map.of("value", firstNonBlank(request.getAccountNumber(), "")))));
+        } else if ("THIRD_PARTY".equals(paymentType) && StringUtils.hasText(intl.getDutyAccount())) {
+            duties.put("payor", Map.of("responsibleParty", Map.of(
+                    "accountNumber", Map.of("value", intl.getDutyAccount()))));
+        }
+        // RECIPIENT: no payor block; FedEx bills the consignee at delivery.
+        return duties;
+    }
+
+    /** Commodity → FedEx line. */
+    private java.util.List<Map<String, Object>> buildCommodities(
+            com.multiship.backend.dto.IntlShipmentBlockDTO intl, String currency) {
+        String weightUnit = "KG".equalsIgnoreCase(intl.getWeightUnit()) ? "KG" : "LB";
+        java.util.List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (com.multiship.backend.dto.CustomsCommodityDTO c : intl.getCommodities()) {
+            Map<String, Object> line = new LinkedHashMap<>();
+            line.put("description", firstNonBlank(c.getDescription(), ""));
+            if (StringUtils.hasText(c.getHsCode())) line.put("harmonizedCode", c.getHsCode());
+            if (StringUtils.hasText(c.getCountryOfOrigin())) {
+                line.put("countryOfManufacture", c.getCountryOfOrigin());
+            }
+            line.put("quantity", c.getQuantity() != null ? c.getQuantity() : 1);
+            line.put("quantityUnits", "PCS");
+            if (c.getUnitValue() != null) {
+                line.put("unitPrice", Map.of("amount", c.getUnitValue(), "currency", currency));
+            }
+            BigDecimal lineTotal = c.lineTotalValue();
+            if (lineTotal != null) {
+                line.put("customsValue", Map.of("amount", lineTotal, "currency", currency));
+            }
+            if (c.getUnitWeight() != null) {
+                line.put("weight", Map.of("units", weightUnit, "value", c.getUnitWeight()));
+            }
+            if (StringUtils.hasText(c.getSku())) line.put("partNumber", c.getSku());
+            out.add(line);
+        }
+        return out;
+    }
+
+    /**
+     * FedEx importerOfRecord — emitted only when the intl block names a
+     * different importer than the consignee. When the importer is the
+     * consignee the block stays null and FedEx defaults to the recipient.
+     */
+    private Map<String, Object> buildImporterOfRecord(com.multiship.backend.dto.IntlShipmentBlockDTO intl) {
+        boolean hasIdentity = StringUtils.hasText(intl.getImporterName())
+                || StringUtils.hasText(intl.getImporterCompany())
+                || StringUtils.hasText(intl.getImporterAddressLine1());
+        if (!hasIdentity) return null;
+        Map<String, Object> importer = new LinkedHashMap<>();
+
+        Map<String, Object> contact = new LinkedHashMap<>();
+        contact.put("personName", firstNonBlank(intl.getImporterContact(), intl.getImporterName(), ""));
+        if (StringUtils.hasText(intl.getImporterCompany())) contact.put("companyName", intl.getImporterCompany());
+        if (StringUtils.hasText(intl.getImporterPhone())) contact.put("phoneNumber", intl.getImporterPhone());
+        importer.put("contact", contact);
+
+        importer.put("address", buildAddress(
+                intl.getImporterAddressLine1(), intl.getImporterAddressLine2(),
+                intl.getImporterCity(), intl.getImporterState(),
+                intl.getImporterPostcode(), intl.getImporterCountry()));
+
+        java.util.List<Map<String, Object>> tins = new java.util.ArrayList<>();
+        if (StringUtils.hasText(intl.getImporterTaxId())) {
+            tins.add(Map.of("number", intl.getImporterTaxId(),
+                    "tinType", firstNonBlank(intl.getImporterTaxIdType(), "BUSINESS_NATIONAL")));
+        }
+        if (StringUtils.hasText(intl.getImporterVat())) {
+            tins.add(Map.of("number", intl.getImporterVat(), "tinType", "BUSINESS_NATIONAL"));
+        }
+        if (!tins.isEmpty()) importer.put("tins", tins);
+        return importer;
+    }
+
+    /**
+     * FedEx brokers[] — one entry with type IMPORT when a broker is
+     * configured on the intl block. Empty list when no broker (FedEx falls
+     * back to its own clearance agents).
+     */
+    private java.util.List<Map<String, Object>> buildBrokers(com.multiship.backend.dto.IntlShipmentBlockDTO intl) {
+        boolean hasBroker = StringUtils.hasText(intl.getBrokerName())
+                || StringUtils.hasText(intl.getBrokerCompany())
+                || StringUtils.hasText(intl.getBrokerAddressLine1());
+        if (!hasBroker) return java.util.List.of();
+
+        Map<String, Object> contact = new LinkedHashMap<>();
+        contact.put("personName", firstNonBlank(intl.getBrokerName(), ""));
+        if (StringUtils.hasText(intl.getBrokerCompany())) contact.put("companyName", intl.getBrokerCompany());
+        if (StringUtils.hasText(intl.getBrokerPhone())) contact.put("phoneNumber", intl.getBrokerPhone());
+
+        Map<String, Object> broker = new LinkedHashMap<>();
+        broker.put("contact", contact);
+        broker.put("address", buildAddress(
+                intl.getBrokerAddressLine1(), intl.getBrokerAddressLine2(),
+                intl.getBrokerCity(), intl.getBrokerState(),
+                intl.getBrokerPostcode(), intl.getBrokerCountry()));
+        if (StringUtils.hasText(intl.getBrokerId())) {
+            broker.put("tins", java.util.List.of(
+                    Map.of("number", intl.getBrokerId(), "tinType", "BUSINESS_NATIONAL")));
+        }
+
+        return java.util.List.of(Map.of("broker", broker, "type", "IMPORT"));
+    }
+
+    /**
+     * FedEx ETD (Electronic Trade Documents) special-service block. Tells
+     * FedEx we want the commercial invoice transmitted electronically —
+     * requires the shipper account to be enrolled in the ETD program
+     * (operations-side setup, not code). Without ETD FedEx expects three
+     * printed invoice copies attached to the parcel.
+     */
+    private Map<String, Object> buildEtdSpecialServices() {
+        return Map.of(
+                "specialServiceTypes", java.util.List.of("ELECTRONIC_TRADE_DOCUMENTS"),
+                "etdDetail", Map.of(
+                        "documentReferences", java.util.List.of(
+                                Map.of("documentType", "COMMERCIAL_INVOICE",
+                                        "customerReference", "COMMERCIAL_INVOICE"))));
+    }
+
+    /** Reusable address block matching FedEx's Address schema. */
+    private Map<String, Object> buildAddress(String line1, String line2, String city,
+                                              String state, String postal, String country) {
+        Map<String, Object> address = new LinkedHashMap<>();
+        java.util.List<String> streetLines = new java.util.ArrayList<>();
+        if (StringUtils.hasText(line1)) streetLines.add(line1);
+        if (StringUtils.hasText(line2)) streetLines.add(line2);
+        address.put("streetLines", streetLines);
+        address.put("city", firstNonBlank(city, ""));
+        address.put("stateOrProvinceCode", firstNonBlank(state, ""));
+        address.put("postalCode", firstNonBlank(postal, ""));
+        address.put("countryCode", firstNonBlank(country, ""));
+        return address;
+    }
+
+    /** Our reason-for-export enum → FedEx commercialInvoice.purpose. */
+    private static String mapFedExPurpose(String reason) {
+        if (reason == null) return "SOLD";
+        return switch (reason.trim().toUpperCase()) {
+            case "SALE" -> "SOLD";
+            case "GIFT" -> "GIFT";
+            case "SAMPLE" -> "SAMPLE";
+            case "RETURN" -> "RETURN";
+            case "REPAIR" -> "REPAIR_AND_RETURN";
+            case "DOCUMENTS" -> "NOT_SOLD";
+            default -> "SOLD";
+        };
+    }
+
+    private static String firstNonBlank(String... candidates) {
+        if (candidates == null) return "";
+        for (String s : candidates) {
+            if (s != null && !s.trim().isEmpty()) return s;
+        }
+        return "";
     }
 
     private Map<String, Object> buildParty(
