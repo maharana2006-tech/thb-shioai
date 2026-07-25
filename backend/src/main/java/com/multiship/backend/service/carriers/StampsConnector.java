@@ -201,9 +201,27 @@ public class StampsConnector implements CarrierConnector {
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             // Stamps.com puts the reason in the response body (e.g.
             // {"error":"invalid_client","error_description":"..."}). Surface
-            // it in the log so verify failures are actionable.
-            log.warn("Stamps token request rejected (HTTP {}): {} — using local fallback token.",
-                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            // it in the log so verify failures are actionable. A 404 here is
+            // usually the auth URL pointing at the wrong Stamps.com tier —
+            // call that out explicitly so ops doesn't hunt "credentials
+            // rejected" when the real problem is config.
+            int status = ex.getStatusCode().value();
+            if (status == 404) {
+                // 404 means the URL is wrong for this account's Stamps.com tier —
+                // NOT that the credentials are bad. Throw so the verify flow's
+                // catch reports the real reason to the UI instead of the generic
+                // "credentials rejected" fallback message.
+                log.warn("Stamps token endpoint {} returned 404 — the Stamps.com auth URL for your tier " +
+                        "is probably different. Set carrier.stamps.auth-url in application(-local).properties " +
+                        "to the URL from your Stamps.com developer portal. Response body: {}",
+                        tokenUrl, ex.getResponseBodyAsString());
+                throw new CarrierConnectionException(
+                        "Stamps.com token endpoint " + tokenUrl + " returned 404 — the configured URL "
+                                + "doesn't match your Stamps.com tier. Update carrier.stamps.auth-url to the "
+                                + "OAuth token URL from your Stamps.com developer portal.");
+            }
+            log.warn("Stamps token request rejected by {} (HTTP {}): {} — using local fallback token.",
+                    tokenUrl, status, ex.getResponseBodyAsString());
             return buildFallbackToken(clientId, clientSecret);
         } catch (Exception ex) {
             log.warn("Stamps token request failed against {}; using local fallback token. Reason: {}",
