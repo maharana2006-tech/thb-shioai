@@ -1241,6 +1241,32 @@ public class CarrierServiceImpl implements CarrierService {
         // carrier actually charges for; flat-rate packaging skips DIM.
         BigDecimal weight = com.multiship.backend.util.PackageMath.billableWeight(preset, order.getWeight());
 
+        // International metadata: look up the order's customs declaration and
+        // the client's customs profile for this destination. Both are optional;
+        // when both are absent we skip the intl block (domestic shipment). The
+        // populator merges order values over profile values so per-shipment
+        // overrides win — profile values only fill blanks.
+        com.multiship.backend.model.OrderCustoms customs = order.getOrderNo() == null
+                ? null
+                : orderCustomsRepository.findByOrderNoIgnoreCase(String.valueOf(order.getOrderNo())).orElse(null);
+        com.multiship.backend.model.ClientCustomsProfile profile =
+                orderClient != null && order.getShiptoCountryCd() != null
+                        ? clientCustomsProfileRepository
+                                .findByClientAndCountry(orderClient, order.getShiptoCountryCd())
+                                .orElse(null)
+                        : null;
+        com.multiship.backend.dto.IntlShipmentBlockDTO intlBlock = buildIntlBlock(international, customs, profile);
+
+        // Currency for declared value: prefer customs currency (OrderCustoms /
+        // profile default), fall back to null → FedEx defaults to USD, matching
+        // the pre-fix behavior for domestic-only accounts.
+        String declaredValueCurrency = intlBlock != null ? intlBlock.getCustomsCurrency() : null;
+
+        // Weight/dim unit: from the customs declaration when available, else
+        // LB/IN (the historical default the connectors assumed).
+        String weightUnit = customs != null && customs.getWeightUnit() != null ? customs.getWeightUnit() : "LB";
+        String dimUnit = "IN"; // Package presets standardize on inches; a per-preset unit lands with the address model rework.
+
         return ShipmentRequestDTO.builder()
                 .carrierCode(connector.getCarrierCode())
                 .accountNumber(firstNonBlank(accountNumber, "ACCOUNT"))
@@ -1250,6 +1276,8 @@ public class CarrierServiceImpl implements CarrierService {
                 .width(preset != null ? preset.getWidth() : null)
                 .height(preset != null ? preset.getHeight() : null)
                 .weight(weight)
+                .weightUnit(weightUnit)
+                .dimUnit(dimUnit)
                 .shipperName(shipper.getName())
                 .shipperPhone(shipper.getPhone())
                 .shipperAddressLine1(shipper.getAddressLine1())
@@ -1269,6 +1297,110 @@ public class CarrierServiceImpl implements CarrierService {
                 .referenceNumber(order.getOrderNo() != null ? String.valueOf(order.getOrderNo()) : null)
                 .specialInstructions(firstNonBlank(order.getGoodsDesc(), order.getShipVia()))
                 .declaredValue(order.getPrice())
+                .declaredValueCurrency(declaredValueCurrency)
+                .intl(intlBlock)
+                .build();
+    }
+
+    /**
+     * Build the international shipment block from the order's customs
+     * declaration and the client's customs profile. Returns null when the
+     * shipment is domestic OR there's no customs data on either side.
+     *
+     * <p>Merge order: {@code customs} (order-level) → {@code profile}
+     * (client-level default) → null. First non-null wins. Commodity list
+     * comes only from the order (profile can't hold line items).
+     */
+    private com.multiship.backend.dto.IntlShipmentBlockDTO buildIntlBlock(
+            boolean international,
+            com.multiship.backend.model.OrderCustoms customs,
+            com.multiship.backend.model.ClientCustomsProfile profile) {
+        if (!international) return null;
+        if (customs == null && profile == null) return null;
+
+        java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> commodities =
+                customs == null || customs.getItems() == null
+                        ? java.util.List.of()
+                        : customs.getItems().stream()
+                                .map(i -> com.multiship.backend.dto.CustomsCommodityDTO.builder()
+                                        .description(i.getDescription())
+                                        .hsCode(i.getHsCode())
+                                        .countryOfOrigin(i.getCountryOfOrigin())
+                                        .quantity(i.getQuantity())
+                                        .unitValue(i.getUnitValue())
+                                        .unitWeight(i.getWeight())
+                                        .sku(i.getSku())
+                                        .build())
+                                .toList();
+
+        BigDecimal customsTotal = commodities.stream()
+                .map(com.multiship.backend.dto.CustomsCommodityDTO::lineTotalValue)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        return com.multiship.backend.dto.IntlShipmentBlockDTO.builder()
+                .international(true)
+                .incoterms(firstNonBlank(customs == null ? null : customs.getIncoterms(),
+                        profile == null ? null : profile.getIncoterms()))
+                .reasonForExport(firstNonBlank(customs == null ? null : customs.getReasonForExport(),
+                        profile == null ? null : profile.getReasonForExport()))
+                .customsCurrency(firstNonBlank(customs == null ? null : customs.getCurrency(),
+                        profile == null ? null : profile.getCurrency()))
+                .customsTotalValue(customsTotal.signum() == 0 ? null : customsTotal)
+                .weightUnit(customs == null ? null : customs.getWeightUnit())
+                .dimUnit(null)
+                .importerType(profile == null ? null : profile.getImporterType())
+                .importerName(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getName() : null,
+                        profile == null ? null : profile.getImporterName()))
+                .importerContact(profile == null ? null : profile.getImporterContact())
+                .importerCompany(firstNonBlank(customs == null ? null : customs.getImporterCompany(),
+                        profile == null ? null : profile.getImporterName()))
+                .importerAddressLine1(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getLine1() : null,
+                        profile == null ? null : profile.getImporterAddress1()))
+                .importerAddressLine2(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getLine2() : null,
+                        profile == null ? null : profile.getImporterAddress2()))
+                .importerCity(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getCity() : null,
+                        profile == null ? null : profile.getImporterCity()))
+                .importerState(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getState() : null,
+                        profile == null ? null : profile.getImporterState()))
+                .importerPostcode(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getZip() : null,
+                        profile == null ? null : profile.getImporterPostcode()))
+                .importerCountry(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getCountry() : null,
+                        profile == null ? null : profile.getImporterCountry()))
+                .importerPhone(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getPhone() : null,
+                        profile == null ? null : profile.getImporterPhone()))
+                .importerTaxId(firstNonBlank(customs == null ? null : customs.getImporterTaxId(),
+                        profile == null ? null : profile.getImporterTaxId()))
+                .importerTaxIdType(profile == null ? null : profile.getImporterTaxIdType())
+                .importerVat(customs == null ? null : customs.getImporterVat())
+                .importerEori(firstNonBlank(customs == null ? null : customs.getImporterEori(),
+                        profile == null ? null : profile.getImporterEori()))
+                .importerIoss(profile == null ? null : profile.getImporterIoss())
+                .importerCompanyReg(profile == null ? null : profile.getImporterCompanyReg())
+                .importerIec(profile == null ? null : profile.getImporterIec())
+                .importerGstin(profile == null ? null : profile.getImporterGstin())
+                .brokerName(profile == null ? null : profile.getBrokerName())
+                .brokerCompany(profile == null ? null : profile.getBrokerCompany())
+                .brokerAddressLine1(profile == null ? null : profile.getBrokerAddress1())
+                .brokerAddressLine2(profile == null ? null : profile.getBrokerAddress2())
+                .brokerCity(profile == null ? null : profile.getBrokerCity())
+                .brokerState(profile == null ? null : profile.getBrokerState())
+                .brokerPostcode(profile == null ? null : profile.getBrokerPostcode())
+                .brokerCountry(profile == null ? null : profile.getBrokerCountry())
+                .brokerPhone(profile == null ? null : profile.getBrokerPhone())
+                .brokerId(profile == null ? null : profile.getBrokerId())
+                .brokerLicense(profile == null ? null : profile.getBrokerLicense())
+                .dutyBillTo(profile == null ? null : profile.getDutiesBillTo())
+                .dutyAccount(profile == null ? null : profile.getDutiesAccount())
+                .commodities(commodities)
                 .build();
     }
 

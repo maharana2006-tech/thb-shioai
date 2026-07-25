@@ -361,14 +361,26 @@ public class FedExConnector implements CarrierConnector {
         )});
 
         Map<String, Object> packageLineItem = new LinkedHashMap<>();
+        // FedEx accepts LB or KG on the wire via the units field. Route the
+        // caller's unit through as-is so KG entered by EU operators isn't
+        // silently treated as LB by FedEx's rating engine.
+        String fedexWeightUnit = request.getWeightUnit() != null && "KG".equalsIgnoreCase(request.getWeightUnit())
+                ? "KG" : "LB";
         packageLineItem.put("weight", Map.of(
-                "units", "LB",
+                "units", fedexWeightUnit,
                 "value", request.getWeight()
         ));
         if (request.getDeclaredValue() != null) {
+            // Currency comes from the shipment (customs) declaration when set;
+            // legacy callers that don't populate it get USD, matching pre-fix
+            // behavior for US-domestic accounts.
+            String declaredCurrency = request.getDeclaredValueCurrency() != null
+                    && !request.getDeclaredValueCurrency().isBlank()
+                    ? request.getDeclaredValueCurrency().trim().toUpperCase()
+                    : "USD";
             packageLineItem.put("declaredValue", Map.of(
                     "amount", request.getDeclaredValue(),
-                    "currency", "USD"
+                    "currency", declaredCurrency
             ));
         }
 

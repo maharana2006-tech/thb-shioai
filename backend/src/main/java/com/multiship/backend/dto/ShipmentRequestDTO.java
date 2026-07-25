@@ -89,4 +89,34 @@ public class ShipmentRequestDTO {
     private String referenceNumber;
     private String specialInstructions;
     private BigDecimal declaredValue;
+
+    /**
+     * ISO-4217 currency for {@link #declaredValue}. Also the default currency
+     * when {@link #intl} has commodities without their own currency. Nullable
+     * for backwards compat — callers that don't set it get USD downstream,
+     * mirroring the pre-existing FedEx hardcoded default. New callers should
+     * always populate this (Sprint 1 populator does, from OrderCustoms.currency).
+     */
+    private String declaredValueCurrency;
+
+    /**
+     * Unit for {@link #weight}. LB | KG. Null means "assume LB" so legacy
+     * callers still work. Connectors that speak the unit natively (UPS,
+     * FedEx) pass it as-is; USPS via SWSIM must convert to ounces.
+     */
+    private String weightUnit;
+
+    /**
+     * Unit for {@link #length}, {@link #width}, {@link #height}. IN | CM.
+     * Null means "assume IN". Same conversion rules as weightUnit.
+     */
+    private String dimUnit;
+
+    /**
+     * International customs / importer / broker / duties block. Null on
+     * domestic shipments. When non-null, connectors are expected to add the
+     * customs declaration to their carrier payload; Sprint 1 populates it but
+     * connectors haven't wired it up yet (see feature/intl-sprint-N branches).
+     */
+    private IntlShipmentBlockDTO intl;
 }
