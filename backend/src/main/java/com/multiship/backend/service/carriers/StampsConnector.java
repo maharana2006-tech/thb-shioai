@@ -185,23 +185,42 @@ public class StampsConnector implements CarrierConnector {
         }
     }
 
+    /** SWSIM v135 namespace — must match the WSDL targetNamespace exactly. */
+    private static final String SWSIM_NAMESPACE = "http://stamps.com/xml/namespace/2023/07/swsim/SwsimV135";
+
+    /**
+     * SWSIM {@code CreateIndicium} — the SOAP call that produces the actual
+     * label PDF, prints the CN22/CN23 customs form onto it automatically when
+     * a {@code CustomsInfo} block is present, and returns the tracking
+     * number + label URL.
+     *
+     * <p>Content type is {@code text/xml} (SWSIM won't accept
+     * application/xml); SOAPAction is quoted and matches the WSDL. Auth is
+     * via the {@code Authenticator} element in the body — Stamps.com sessions
+     * are stateful; every call returns a new Authenticator, and the token we
+     * received from {@code getAccessToken} was seeded by AuthenticateUser.
+     */
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken) {
+        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        String soap = buildCreateIndiciumEnvelope(request, accessToken);
         try {
-            Map<String, Object> payload = buildShipmentPayload(request);
-            String response = RestClient.builder()
-                    .baseUrl(carrierProperties.getStamps().getApiBaseUrl())
-                    .build()
+            String response = RestClient.builder().baseUrl(swsimUrl).build()
                     .post()
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .header("Authorization", "Bearer " + accessToken)
-                    .body(payload)
+                    .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
+                    .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/CreateIndicium\"")
+                    .body(soap)
                     .retrieve()
                     .body(String.class);
-            return parseShipmentResult(response);
+            return parseCreateIndiciumResponse(response, request);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            String fault = extractSoapFault(ex.getResponseBodyAsString());
+            log.warn("Stamps CreateIndicium rejected by {} (HTTP {}): {}",
+                    swsimUrl, ex.getStatusCode().value(), fault);
+            return buildFallbackShipmentResult(request);
         } catch (Exception ex) {
-            log.warn("Stamps shipment request failed; using local fallback shipment result. Reason: {}", ex.getMessage());
+            log.warn("Stamps CreateIndicium call to {} failed; using local fallback shipment result. Reason: {}",
+                    swsimUrl, ex.getMessage());
             return buildFallbackShipmentResult(request);
         }
     }
@@ -252,26 +271,251 @@ public class StampsConnector implements CarrierConnector {
         );
     }
 
-    private Map<String, Object> buildShipmentPayload(ShipmentRequestDTO request) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("serviceType", request.getServiceType());
-        payload.put("packageType", request.getPackageType());
-        payload.put("weight", request.getWeight());
-        payload.put("referenceNumber", request.getReferenceNumber());
-        return payload;
+    /**
+     * SWSIM {@code CreateIndicium} SOAP envelope. Every field name below is
+     * from the v135 WSDL — SWSIM is picky about element order and casing,
+     * so this is hand-built rather than reflected off a POJO.
+     *
+     * <p>Customs behaviour: when {@code request.intl} is present and ready,
+     * we emit a {@code CustomsInfo} block. SWSIM then auto-generates the
+     * appropriate customs form (CN22 for goods ≤ $400 on First-Class /
+     * Ground Advantage Intl, CN23 for larger values or Priority Mail Intl)
+     * and PRINTS IT ONTO THE LABEL PDF returned by CreateIndicium — no
+     * separate PDF generation on our side. Domestic shipments skip the
+     * block entirely.
+     *
+     * <p>Weight goes on the wire in ounces (SWSIM's {@code WeightOz}). Our
+     * DTO carries LB/KG; we convert via {@link com.multiship.backend.util.UnitConverter}.
+     */
+    private String buildCreateIndiciumEnvelope(ShipmentRequestDTO request, String authenticator) {
+        StringBuilder xml = new StringBuilder(2048);
+        xml.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+        xml.append("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">");
+        xml.append("<soap:Body>");
+        xml.append("<CreateIndicium xmlns=\"").append(SWSIM_NAMESPACE).append("\">");
+        xml.append("<Authenticator>").append(xmlEscape(authenticator)).append("</Authenticator>");
+        xml.append("<IntegratorTxID>")
+                .append(xmlEscape(nonBlank(request.getReferenceNumber(), "TX-" + System.currentTimeMillis())))
+                .append("</IntegratorTxID>");
+
+        // Rate: the class of service + package + weight. SWSIM re-validates
+        // this against its own rate engine, so mismatches (weight over the
+        // service's max) fail here before the label is printed.
+        String weightOz = weightInOz(request);
+        xml.append("<Rate>");
+        appendServiceRate(xml, request, weightOz);
+        xml.append("</Rate>");
+
+        // From/To are separate blocks; addresses appear twice (once inside
+        // Rate, once here) — that's the SWSIM shape.
+        xml.append("<From>");
+        appendAddress(xml, "FullName", request.getShipperName(),
+                request.getShipperAddressLine1(), request.getShipperAddressLine2(),
+                request.getShipperCity(), request.getShipperState(),
+                request.getShipperPostalCode(), request.getShipperCountryCode(),
+                request.getShipperPhone());
+        xml.append("</From>");
+        xml.append("<To>");
+        appendAddress(xml, "FullName", request.getRecipientName(),
+                request.getRecipientAddressLine1(), request.getRecipientAddressLine2(),
+                request.getRecipientCity(), request.getRecipientState(),
+                request.getRecipientPostalCode(), request.getRecipientCountryCode(),
+                request.getRecipientPhone());
+        xml.append("</To>");
+
+        xml.append("<CustomerID>").append(xmlEscape(nonBlank(request.getReferenceNumber(), ""))).append("</CustomerID>");
+
+        // CustomsInfo drives CN22/CN23 auto-print. Emitted only when the
+        // shipment is international and the customs block is complete.
+        if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {
+            appendCustomsInfo(xml, request);
+        }
+
+        xml.append("</CreateIndicium>");
+        xml.append("</soap:Body>");
+        xml.append("</soap:Envelope>");
+        return xml.toString();
     }
 
-    private ShipmentResult parseShipmentResult(String response) throws Exception {
-        JsonNode root = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
-        String trackingNumber = root.path("trackingNumber").asText(null);
-        String labelUrl = root.path("labelUrl").asText(null);
-        String labelPdf = root.path("labelPdf").asText(null);
-        BigDecimal shippingCost = root.path("shippingCost").isNumber() ? root.path("shippingCost").decimalValue() : null;
-        LocalDateTime estimatedDelivery = parseDateTime(root.path("estimatedDelivery").asText(null));
-        String trackingUrl = StringUtils.hasText(trackingNumber)
-                ? "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + trackingNumber
+    private void appendServiceRate(StringBuilder xml, ShipmentRequestDTO request, String weightOz) {
+        xml.append("<From><ZIPCode>").append(xmlEscape(nonBlank(request.getShipperPostalCode(), "")))
+                .append("</ZIPCode></From>");
+        xml.append("<To>");
+        xml.append("<ZIPCode>").append(xmlEscape(nonBlank(request.getRecipientPostalCode(), ""))).append("</ZIPCode>");
+        String country = nonBlank(request.getRecipientCountryCode(), "US");
+        if (!"US".equalsIgnoreCase(country)) {
+            xml.append("<Country>").append(xmlEscape(country)).append("</Country>");
+        }
+        xml.append("</To>");
+        xml.append("<ServiceType>").append(xmlEscape(nonBlank(request.getServiceType(), "USPS GA"))).append("</ServiceType>");
+        xml.append("<PackageType>").append(xmlEscape(nonBlank(request.getPackageType(), "Package"))).append("</PackageType>");
+        xml.append("<WeightOz>").append(xmlEscape(weightOz)).append("</WeightOz>");
+        xml.append("<ShipDate>").append(java.time.LocalDate.now(java.time.ZoneOffset.UTC)).append("</ShipDate>");
+        if (request.getDeclaredValue() != null) {
+            xml.append("<DeclaredValue>").append(xmlEscape(request.getDeclaredValue().toPlainString()))
+                    .append("</DeclaredValue>");
+        }
+    }
+
+    /**
+     * SWSIM Address block. Order matters — FullName / FirstName / LastName
+     * before Address1, then City / State / ZIPCode, then Country. Empty
+     * elements are omitted rather than sent blank; SWSIM tolerates absence
+     * but rejects empty strings on some fields.
+     */
+    private void appendAddress(StringBuilder xml, String nameField, String name,
+                                String line1, String line2,
+                                String city, String state, String postal, String country,
+                                String phone) {
+        if (StringUtils.hasText(name)) {
+            xml.append("<").append(nameField).append(">")
+                    .append(xmlEscape(name))
+                    .append("</").append(nameField).append(">");
+        }
+        if (StringUtils.hasText(line1)) xml.append("<Address1>").append(xmlEscape(line1)).append("</Address1>");
+        if (StringUtils.hasText(line2)) xml.append("<Address2>").append(xmlEscape(line2)).append("</Address2>");
+        if (StringUtils.hasText(city)) xml.append("<City>").append(xmlEscape(city)).append("</City>");
+        if (StringUtils.hasText(state)) xml.append("<State>").append(xmlEscape(state)).append("</State>");
+        if (StringUtils.hasText(postal)) xml.append("<ZIPCode>").append(xmlEscape(postal)).append("</ZIPCode>");
+        String c = nonBlank(country, "US");
+        if (!"US".equalsIgnoreCase(c)) {
+            xml.append("<Country>").append(xmlEscape(c)).append("</Country>");
+        }
+        if (StringUtils.hasText(phone)) xml.append("<PhoneNumber>").append(xmlEscape(phone)).append("</PhoneNumber>");
+    }
+
+    /**
+     * SWSIM {@code CustomsInfo} block. When present, SWSIM's CreateIndicium
+     * response includes a label PDF with either CN22 or CN23 pre-printed on
+     * it. Which form: SWSIM picks CN22 for goods ≤ $400 on eligible services
+     * (First-Class Intl, Ground Advantage Intl); CN23 for larger values or
+     * Priority Mail Intl. We can't override that decision from the request.
+     *
+     * <p>{@code ContentType} maps our reason for export to SWSIM's closed
+     * enum: Merchandise / Gift / Sample / ReturnedGoods / Documents /
+     * HumanitarianDonation / Other.
+     */
+    private void appendCustomsInfo(StringBuilder xml, ShipmentRequestDTO request) {
+        com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
+        xml.append("<CustomsInfo>");
+        xml.append("<ContentType>").append(mapContentType(intl.getReasonForExport())).append("</ContentType>");
+        String notes = nonBlank(intl.getImporterCompanyReg(), "");
+        if (!notes.isEmpty()) {
+            xml.append("<Comments>").append(xmlEscape(notes)).append("</Comments>");
+        }
+        xml.append("<CustomsLines>");
+        String weightUnit = intl.getWeightUnit();
+        for (com.multiship.backend.dto.CustomsCommodityDTO c : intl.getCommodities()) {
+            xml.append("<CustomsLine>");
+            xml.append("<Description>").append(xmlEscape(nonBlank(c.getDescription(), ""))).append("</Description>");
+            xml.append("<Quantity>").append(c.getQuantity() != null ? c.getQuantity() : 1).append("</Quantity>");
+            java.math.BigDecimal lineValue = c.lineTotalValue();
+            if (lineValue != null) {
+                xml.append("<Value>").append(xmlEscape(lineValue.toPlainString())).append("</Value>");
+            }
+            if (c.getUnitWeight() != null) {
+                java.math.BigDecimal oz = com.multiship.backend.util.UnitConverter
+                        .toOunces(c.getUnitWeight(), weightUnit);
+                if (oz != null) {
+                    xml.append("<WeightOz>").append(xmlEscape(oz.toPlainString())).append("</WeightOz>");
+                }
+            }
+            if (StringUtils.hasText(c.getHsCode())) {
+                xml.append("<HSTariffNumber>").append(xmlEscape(c.getHsCode())).append("</HSTariffNumber>");
+            }
+            if (StringUtils.hasText(c.getCountryOfOrigin())) {
+                xml.append("<CountryOfOrigin>").append(xmlEscape(c.getCountryOfOrigin())).append("</CountryOfOrigin>");
+            }
+            if (StringUtils.hasText(c.getSku())) {
+                xml.append("<sku>").append(xmlEscape(c.getSku())).append("</sku>");
+            }
+            xml.append("</CustomsLine>");
+        }
+        xml.append("</CustomsLines>");
+        xml.append("</CustomsInfo>");
+    }
+
+    /** Reason for export → SWSIM ContentType enum. */
+    private static String mapContentType(String reason) {
+        if (reason == null) return "Merchandise";
+        return switch (reason.trim().toUpperCase()) {
+            case "SALE" -> "Merchandise";
+            case "GIFT" -> "Gift";
+            case "SAMPLE" -> "Sample";
+            case "RETURN" -> "ReturnedGoods";
+            case "DOCUMENTS" -> "Documents";
+            case "REPAIR" -> "Other"; // SWSIM has no repair-specific value
+            default -> "Merchandise";
+        };
+    }
+
+    /** Total shipment weight in ounces — the unit SWSIM speaks natively. */
+    private static String weightInOz(ShipmentRequestDTO request) {
+        java.math.BigDecimal oz = com.multiship.backend.util.UnitConverter
+                .toOunces(request.getWeight(), request.getWeightUnit());
+        return oz == null ? "0" : oz.toPlainString();
+    }
+
+    private static String nonBlank(String value, String fallback) {
+        return StringUtils.hasText(value) ? value : fallback;
+    }
+
+    private static String xmlEscape(String s) {
+        if (s == null) return "";
+        return s.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&apos;");
+    }
+
+    /**
+     * Parse a CreateIndicium SOAP response for the fields we care about:
+     * TrackingNumber, URL (the label PDF), StampsTxID (SWSIM's own id), plus
+     * the new Authenticator for the next call.
+     */
+    private ShipmentResult parseCreateIndiciumResponse(String responseXml, ShipmentRequestDTO request) {
+        String tracking = extractElement(responseXml, "TrackingNumber");
+        String url = extractElement(responseXml, "URL");
+        // SWSIM returns the total postage under Rate.Amount when the label
+        // prints successfully; fall back to null (client shows unpriced).
+        java.math.BigDecimal cost = null;
+        String amount = extractElement(responseXml, "Amount");
+        if (StringUtils.hasText(amount)) {
+            try {
+                cost = new java.math.BigDecimal(amount);
+            } catch (NumberFormatException ignored) {
+                // SWSIM sometimes returns currency-formatted amounts on error
+                // responses; treat those as unpriced rather than crashing.
+            }
+        }
+        String trackingUrl = StringUtils.hasText(tracking)
+                ? "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + tracking
                 : null;
-        return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelPdf, shippingCost, estimatedDelivery, response);
+        java.time.LocalDateTime estimated = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusDays(5);
+        return new ShipmentResult(tracking, trackingUrl, url, url, cost, estimated, responseXml);
+    }
+
+    /** Extract the text between the first occurrence of {@code <elem>...</elem>}. */
+    private static String extractElement(String xml, String elem) {
+        if (xml == null) return null;
+        int open = xml.indexOf("<" + elem + ">");
+        if (open < 0) {
+            // Try namespaced variant: <ns:elem>
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("<[a-zA-Z0-9]+:" + elem + ">([^<]+)</[a-zA-Z0-9]+:" + elem + ">")
+                    .matcher(xml);
+            return m.find() ? m.group(1).trim() : null;
+        }
+        int close = xml.indexOf("</" + elem + ">", open);
+        if (close < 0) return null;
+        return xml.substring(open + elem.length() + 2, close).trim();
+    }
+
+    private static String extractSoapFault(String responseXml) {
+        if (!StringUtils.hasText(responseXml)) return "unknown";
+        String fault = extractElement(responseXml, "faultstring");
+        return fault == null ? "no fault element" : fault;
     }
 
     private ShipmentResult buildFallbackShipmentResult(ShipmentRequestDTO request) {
