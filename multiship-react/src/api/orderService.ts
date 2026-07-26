@@ -1,5 +1,6 @@
 import { apiClient, BASE_URL } from './apiClient'
 import type { OrderAccountResolution } from './accountRefService'
+import type { DangerousGoodsBlock } from './dgService'
 
 // ===== Request/Response Types =====
 
@@ -395,6 +396,10 @@ export interface ManualShipmentPayload {
   importer?: Record<string, string>
   broker?: Record<string, string>
   currency?: string
+  /** Sprint 27 — dangerous goods declaration. Backend threads this into
+   *  the ShipmentRequestDTO.dangerousGoods field which every connector's
+   *  wire format keys off. Null on non-hazmat shipments. */
+  dangerousGoods?: DangerousGoodsBlock | null
 }
 
 /** One scan / status update on a carrier's timeline. Timestamps are ISO-8601

@@ -89,6 +89,14 @@ public class ManualShipmentRequest {
     /** Per-shipment customs-broker override — overrides the client profile for THIS label only. */
     private java.util.Map<String, Object> broker;
 
+    /**
+     * Sprint 27 — dangerous goods declaration. When present + ready,
+     * connectors emit their carrier-specific hazmat wire format (UPS
+     * HazMatPackageInformation, FedEx dangerousGoodsDetail, DHL
+     * content.dangerousGoods, SWSIM HazardousMaterials).
+     */
+    private DangerousGoodsBlockDTO dangerousGoods;
+
     @Data
     public static class Address {
         private String name;

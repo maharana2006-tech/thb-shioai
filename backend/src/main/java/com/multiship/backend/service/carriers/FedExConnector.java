@@ -715,11 +715,19 @@ public class FedExConnector implements CarrierConnector {
 
         requestedShipment.put("requestedPackageLineItems", new Object[]{packageLineItem});
 
-        // International customs + ETD only when the request carries a
-        // ready-to-carrier intl block. Domestic shipments never see these.
+        // International customs only when the request carries a
+        // ready-to-carrier intl block. Domestic shipments never see this.
         if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {
             requestedShipment.put("customsClearanceDetail", buildCustomsClearanceDetail(request));
-            requestedShipment.put("shipmentSpecialServicesRequested", buildEtdSpecialServices());
+        }
+
+        // Sprint 27 — consolidate special services (ETD + Dangerous Goods).
+        // Both hang off requestedShipment.shipmentSpecialServicesRequested
+        // and each pushes its own entry into specialServiceTypes[]. Emit a
+        // single merged block instead of overwriting each other.
+        Map<String, Object> specialServices = buildShipmentSpecialServices(request);
+        if (!specialServices.isEmpty()) {
+            requestedShipment.put("shipmentSpecialServicesRequested", specialServices);
         }
 
         // Sprint 25 — Print Return Label. FedEx wants:
@@ -966,13 +974,111 @@ public class FedExConnector implements CarrierConnector {
      * (operations-side setup, not code). Without ETD FedEx expects three
      * printed invoice copies attached to the parcel.
      */
-    private Map<String, Object> buildEtdSpecialServices() {
-        return Map.of(
-                "specialServiceTypes", java.util.List.of("ELECTRONIC_TRADE_DOCUMENTS"),
-                "etdDetail", Map.of(
-                        "documentReferences", java.util.List.of(
-                                Map.of("documentType", "COMMERCIAL_INVOICE",
-                                        "customerReference", "COMMERCIAL_INVOICE"))));
+    /**
+     * Assemble the {@code shipmentSpecialServicesRequested} block. FedEx
+     * puts every special service (ETD, dangerous goods, dry ice, ...) under
+     * a single block with a shared {@code specialServiceTypes} enum array
+     * plus one detail sub-block per service. Emit whichever apply and
+     * return an empty map when neither does — the caller then omits the
+     * top-level key so plain domestic non-hazmat shipments have no extra
+     * bytes on the wire.
+     */
+    private Map<String, Object> buildShipmentSpecialServices(ShipmentRequestDTO request) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        java.util.List<String> types = new java.util.ArrayList<>();
+        boolean intlReady = request.getIntl() != null && request.getIntl().isReadyForCarrier();
+        boolean dgReady = request.getDangerousGoods() != null
+                && request.getDangerousGoods().isReadyForCarrier();
+
+        if (intlReady) {
+            types.add("ELECTRONIC_TRADE_DOCUMENTS");
+            out.put("etdDetail", Map.of(
+                    "documentReferences", java.util.List.of(
+                            Map.of("documentType", "COMMERCIAL_INVOICE",
+                                    "customerReference", "COMMERCIAL_INVOICE"))));
+        }
+        if (dgReady) {
+            types.add("DANGEROUS_GOODS");
+            out.put("dangerousGoodsDetail", buildFedExDangerousGoodsDetail(request));
+        }
+        if (types.isEmpty()) return out;
+        out.put("specialServiceTypes", types);
+        return out;
+    }
+
+    /**
+     * FedEx {@code dangerousGoodsDetail} block. Follows the Ship API v1
+     * schema — accessibility flag, optional cargo-aircraft-only,
+     * emergency contact + signatory at the top, then a
+     * {@code hazardousCommodities[]} array with one entry per commodity.
+     *
+     * <p>Per-commodity mapping:
+     * <ul>
+     *   <li>{@code description.id} = UN number (with UN prefix).</li>
+     *   <li>{@code description.packingGroup, hazardClass, properShippingName}
+     *       — straight passthrough.</li>
+     *   <li>{@code quantity.{amount, units}} — units go on the wire in
+     *       lowercase ("kg", "l", "pcs") per FedEx schema.</li>
+     *   <li>{@code innerReceptacles[]} — required by FedEx for
+     *       package-level accounting; we emit one receptacle mirroring
+     *       the outer quantity.</li>
+     * </ul>
+     *
+     * <p>Emergency contact number is normalised into FedEx's
+     * {@code areaCode / personalNumber} split: everything before the
+     * first hyphen becomes area code, the rest is personal number. Not
+     * strictly accurate for international numbers, but FedEx accepts the
+     * full string in {@code personalNumber} too so the shipment doesn't
+     * fail.
+     */
+    Map<String, Object> buildFedExDangerousGoodsDetail(ShipmentRequestDTO request) {
+        com.multiship.backend.dto.DangerousGoodsBlockDTO dg = request.getDangerousGoods();
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("accessibility", firstNonBlank(
+                dg.getAccessibility() == null ? null : dg.getAccessibility().toUpperCase(Locale.ROOT),
+                "INACCESSIBLE"));
+        if (Boolean.TRUE.equals(dg.getCargoAircraftOnly())) {
+            detail.put("cargoAircraftOnly", true);
+        }
+        detail.put("emergencyContactNumber", Map.of(
+                "personalNumber", firstNonBlank(dg.getEmergencyContactPhone(), "")));
+        Map<String, Object> signatory = new LinkedHashMap<>();
+        signatory.put("contactName", firstNonBlank(dg.getSignatoryName(), ""));
+        if (StringUtils.hasText(dg.getSignatoryTitle())) {
+            signatory.put("title", dg.getSignatoryTitle().trim());
+        }
+        detail.put("signatory", signatory);
+
+        java.util.List<Map<String, Object>> commodities = new java.util.ArrayList<>();
+        for (com.multiship.backend.dto.DangerousCommodityDTO c : dg.getCommodities()) {
+            Map<String, Object> commodity = new LinkedHashMap<>();
+
+            Map<String, Object> description = new LinkedHashMap<>();
+            if (StringUtils.hasText(c.getUnNumber())) {
+                description.put("id", c.getUnNumber().trim().toUpperCase(Locale.ROOT));
+            }
+            if (StringUtils.hasText(c.getPackingGroup())) {
+                description.put("packingGroup", c.getPackingGroup().trim().toUpperCase(Locale.ROOT));
+            }
+            if (StringUtils.hasText(c.getHazardClass())) {
+                description.put("hazardClass", c.getHazardClass().trim());
+            }
+            if (StringUtils.hasText(c.getProperShippingName())) {
+                description.put("properShippingName", c.getProperShippingName().trim());
+            }
+            commodity.put("description", description);
+
+            if (c.getQuantity() != null && StringUtils.hasText(c.getQuantityUnit())) {
+                Map<String, Object> qty = Map.of(
+                        "amount", c.getQuantity(),
+                        "units", c.getQuantityUnit().trim().toLowerCase(Locale.ROOT));
+                commodity.put("quantity", qty);
+                commodity.put("innerReceptacles", java.util.List.of(Map.of("quantity", qty)));
+            }
+            commodities.add(commodity);
+        }
+        detail.put("hazardousCommodities", commodities);
+        return detail;
     }
 
     /** Reusable address block matching FedEx's Address schema. */
