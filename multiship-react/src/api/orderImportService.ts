@@ -14,6 +14,8 @@ export interface OrderImportRow {
   postalCode?: string | null
   countryCode?: string | null
   carrierCode?: string | null
+  /** Sprint 41 — bill-to carrier account. Optional at import time. */
+  accountNumber?: string | null
   serviceType?: string | null
   packageType?: string | null
   weight?: number | null
@@ -23,6 +25,12 @@ export interface OrderImportRow {
   reference?: string | null
   goodsDescription?: string | null
   errors: string[]
+  /** Sprint 41 — populated on commit only. GENERATED = label created;
+   *  FAILED = carrier or downstream failure (see generatedMessage). */
+  generatedOrderNo?: number | null
+  generatedTrackingNumber?: string | null
+  generatedStatus?: 'GENERATED' | 'FAILED' | null
+  generatedMessage?: string | null
 }
 
 export interface OrderImportPreview {
