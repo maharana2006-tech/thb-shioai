@@ -62,6 +62,21 @@ public interface CarrierConnector {
 
     ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken);
 
+    /**
+     * Rate shopping — ask the carrier what its services would cost for the
+     * given shipment shape. Sprint 18 introduces the default (empty list)
+     * so connectors that don't have a live Rate API yet keep compiling.
+     * FedEx overrides in Sprint 18; UPS, DHL, USPS in follow-up sprints.
+     *
+     * <p>Return an EMPTY list rather than throwing when the request can't
+     * be rated (unauthenticated, connectivity failure, carrier down). The
+     * fan-out service treats empty as "no options from this carrier" — it
+     * merges results across every configured carrier before returning.
+     */
+    default List<RateOption> getRates(ShipmentRequestDTO request, String accessToken) {
+        return List.of();
+    }
+
     boolean validateCredentials(String clientId, String clientSecret);
 
     TrackingResult trackShipment(String trackingNumber);
@@ -125,6 +140,38 @@ public interface CarrierConnector {
             BigDecimal shippingCost,
             LocalDateTime estimatedDelivery,
             String rawResponse
+    ) {
+    }
+
+    /**
+     * One priced service option returned by a carrier's Rate API.
+     * Carrier-neutral so FedEx {@code rateReplyDetails}, UPS RatedShipment,
+     * DHL {@code products}, and future carriers all serialize into the same
+     * shape. The fan-out service (Sprint 19+) can then merge and sort across
+     * carriers without knowing per-carrier response shapes.
+     *
+     * @param carrierCode        Canonical carrier code (UPS/FEDEX/USPS/DHL).
+     * @param serviceCode        Carrier-specific service code (e.g. FEDEX_GROUND,
+     *                           "03" for UPS Ground, P for DHL Express Worldwide).
+     * @param serviceName        Human-readable service label.
+     * @param totalAmount        Total charge in {@code currency}. Amount before
+     *                           optional discounts / promos; carriers can also
+     *                           return an ACCOUNT rate (post-discount) which the
+     *                           connector should prefer.
+     * @param currency           ISO-4217 code.
+     * @param estimatedDelivery  Carrier's estimated arrival time; null when
+     *                           not exposed.
+     * @param transitDays        Approximate transit business days; null when
+     *                           the carrier only exposes a delivery date.
+     */
+    record RateOption(
+            String carrierCode,
+            String serviceCode,
+            String serviceName,
+            java.math.BigDecimal totalAmount,
+            String currency,
+            LocalDateTime estimatedDelivery,
+            Integer transitDays
     ) {
     }
 
