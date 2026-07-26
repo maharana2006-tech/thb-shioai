@@ -625,6 +625,8 @@ public class CarrierServiceImpl implements CarrierService {
                 .recipientState(firstNonBlank(to.getState(), ""))
                 .recipientPostalCode(to.getPostalCode())
                 .recipientCountryCode(to.getCountryCode())
+                .recipientResidential(to.getResidential())
+                .recipientPhoneCountryCode(to.getPhoneCountryCode())
                 .referenceNumber(firstNonBlank(req.getReference(), "MANUAL"))
                 .specialInstructions(req.getGoodsDescription())
                 .declaredValue(req.getDeclaredValue())

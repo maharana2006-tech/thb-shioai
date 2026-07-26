@@ -119,4 +119,25 @@ public class ShipmentRequestDTO {
      * connectors haven't wired it up yet (see feature/intl-sprint-N branches).
      */
     private IntlShipmentBlockDTO intl;
+
+    /**
+     * True when the recipient address is a residence (not a business).
+     * Affects UPS ({@code Address.ResidentialAddressIndicator}) and FedEx
+     * ({@code contact.residential}) — both carriers charge a residential
+     * delivery surcharge on international shipments. Sending the flag
+     * upfront eliminates the back-bill; not sending defaults to commercial
+     * rating and lets the carrier reclassify at delivery.
+     *
+     * <p>Null = "unknown, use carrier default" (both UPS and FedEx default to
+     * commercial when the flag is absent).
+     */
+    private Boolean recipientResidential;
+
+    /**
+     * ISO country dial code without the plus, e.g. {@code "1"} for US,
+     * {@code "44"} for GB, {@code "91"} for IN. When present, connectors
+     * prepend it to {@link #recipientPhone} before sending to the carrier.
+     * Null keeps the legacy behaviour (phone sent unchanged).
+     */
+    private String recipientPhoneCountryCode;
 }

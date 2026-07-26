@@ -216,6 +216,16 @@ function AddressBlock({
       <Field label="Country" required>
         <CountrySelect value={value.countryCode} onChange={(code) => onChange({ countryCode: code })} />
       </Field>
+      <Field label="Phone country code" title="ISO dial code without the plus — e.g. 1 for US, 44 for GB, 91 for IN">
+        <input
+          className={inputCls}
+          value={value.phoneCountryCode ?? ''}
+          onChange={(e) => onChange({ phoneCountryCode: e.target.value.replace(/[^\d]/g, '') })}
+          placeholder="44"
+          inputMode="numeric"
+          maxLength={4}
+        />
+      </Field>
       <Field label="Phone">
         <input className={inputCls} value={value.phone} onChange={(e) => onChange({ phone: e.target.value })} placeholder="2125550100" />
       </Field>
@@ -224,6 +234,18 @@ function AddressBlock({
           <input className={inputCls} value={value.email} onChange={(e) => onChange({ email: e.target.value })} placeholder="jane@acme.com" />
         </Field>
       ) : null}
+      <label className="col-span-2 mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] font-semibold text-slate-700">
+        <input
+          type="checkbox"
+          checked={Boolean(value.residential)}
+          onChange={(e) => onChange({ residential: e.target.checked })}
+          className="h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
+        />
+        <span>Residential address</span>
+        <span className="ml-auto text-[10.5px] font-normal text-slate-400">
+          UPS + FedEx charge a residential surcharge on international to homes
+        </span>
+      </label>
     </div>
   )
 }

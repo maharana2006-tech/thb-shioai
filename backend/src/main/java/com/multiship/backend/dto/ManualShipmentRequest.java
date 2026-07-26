@@ -101,6 +101,10 @@ public class ManualShipmentRequest {
         private String state;
         private String postalCode;
         private String countryCode;
+        /** True when this is a residence — flips carrier residential rating. */
+        private Boolean residential;
+        /** ISO dial code (no plus) — "1", "44", "91". Prepended to phone at carrier time. */
+        private String phoneCountryCode;
     }
 
     /** One commercial-invoice line. */

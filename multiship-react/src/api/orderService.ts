@@ -339,6 +339,10 @@ export interface ManualShipmentAddress {
   state?: string
   postalCode: string
   countryCode: string
+  /** True when this is a residence — carriers apply a residential surcharge on international. */
+  residential?: boolean
+  /** ISO dial code (no plus): "1", "44", "91". Prepended to phone at carrier time. */
+  phoneCountryCode?: string
 }
 
 /** One commercial-invoice line on an international manual shipment. */

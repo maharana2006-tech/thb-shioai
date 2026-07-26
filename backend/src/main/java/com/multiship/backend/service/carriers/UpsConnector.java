@@ -346,13 +346,27 @@ public class UpsConnector implements CarrierConnector {
                 request.getShipperPostalCode(), request.getShipperCountryCode(),
                 request.getAccountNumber(),
                 request.getIntl() != null ? request.getIntl().getImporterTaxId() : null));
-        shipment.put("ShipTo", buildParty(
+        // Recipient phone: prepend the country dial code when the DTO
+        // carries one (Sprint 6). UPS wire format accepts "+44 20 ..." and
+        // "4420..." both; we use the plus-prefixed form for readability.
+        String recipientPhone = joinPhone(request.getRecipientPhoneCountryCode(), request.getRecipientPhone());
+        Map<String, Object> shipTo = buildParty(
                 request.getRecipientName(),
-                request.getRecipientPhone(),
+                recipientPhone,
                 request.getRecipientAddressLine1(), request.getRecipientAddressLine2(),
                 request.getRecipientCity(), request.getRecipientState(),
                 request.getRecipientPostalCode(), request.getRecipientCountryCode(),
-                null, null));
+                null, null);
+        // ResidentialAddressIndicator is a UPS convention — the ELEMENT'S
+        // PRESENCE signals residential, its value is ignored. Absence =
+        // commercial (UPS default), which avoids surprise back-billing at
+        // delivery when we know the recipient is a residence.
+        if (Boolean.TRUE.equals(request.getRecipientResidential())) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> address = (Map<String, Object>) shipTo.get("Address");
+            if (address != null) address.put("ResidentialAddressIndicator", "");
+        }
+        shipment.put("ShipTo", shipTo);
         shipment.put("PaymentInformation", buildPaymentInformation(request));
         shipment.put("Service", Map.of("Code", firstNonBlank(request.getServiceType(), "03")));
 
@@ -582,6 +596,20 @@ public class UpsConnector implements CarrierConnector {
             if (s != null && !s.trim().isEmpty()) return s;
         }
         return "";
+    }
+
+    /**
+     * Prepend a country dial code to a phone number when both are non-blank.
+     * Idempotent — if the number already starts with "+" or the dial code,
+     * pass it through unchanged so we don't double-prefix.
+     */
+    static String joinPhone(String countryCode, String phone) {
+        if (phone == null || phone.trim().isEmpty()) return "";
+        String p = phone.trim();
+        if (countryCode == null || countryCode.trim().isEmpty()) return p;
+        String code = countryCode.trim().replaceFirst("^\\+", "");
+        if (p.startsWith("+") || p.startsWith(code) || p.startsWith("00" + code)) return p;
+        return "+" + code + " " + p;
     }
 
     private ShipmentResult parseShipmentResult(String response) throws Exception {
