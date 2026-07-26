@@ -202,6 +202,93 @@ public interface CarrierConnector {
                 null);
     }
 
+    /**
+     * Estimate landed cost — duties + taxes + fees on top of freight — for
+     * a cross-border shipment. Sprint 32. Every carrier that ships
+     * internationally exposes some form of duties/taxes estimator:
+     * <ul>
+     *   <li>UPS: Rate/Shop with {@code LandedCostRequestIndicator}
+     *       returns {@code EstimatedDuties} + {@code EstimatedTaxes}.</li>
+     *   <li>FedEx: Rate with {@code edtRequestType=ALL} returns
+     *       {@code shipmentRateDetail.dutiesAndTaxes} per commodity.</li>
+     *   <li>DHL: Rate with {@code content.exportDeclaration} returns
+     *       {@code detailedPriceBreakdown} entries typed
+     *       {@code TAX} + {@code DUTY}.</li>
+     *   <li>USPS: domestic-only; never a landed cost path.</li>
+     * </ul>
+     *
+     * <p>Default returns {@code NOT_SUPPORTED} — USPS + any future
+     * carrier that doesn't offer an estimator inherits this cleanly.
+     */
+    default LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken) {
+        return new LandedCostResult(
+                getCarrierCode(),
+                "NOT_SUPPORTED",
+                null, null, null, null, null,
+                null,
+                List.of(),
+                List.of("Landed cost isn't offered by " + getCarrierCode() + " on this lane."),
+                "Landed cost isn't implemented for " + getCarrierCode() + " on this instance.",
+                null);
+    }
+
+    /**
+     * One commodity's landed cost breakdown — freight is a shipment-level
+     * charge so it lives on the parent, not the line.
+     */
+    record LandedCostLineItem(
+            String description,
+            String hsCode,
+            Integer quantity,
+            java.math.BigDecimal declaredValue,
+            java.math.BigDecimal dutyAmount,
+            java.math.BigDecimal taxAmount,
+            String currency
+    ) {
+    }
+
+    /**
+     * Landed cost estimate returned by the carrier's duty engine.
+     *
+     * @param carrierCode     Carrier that produced the estimate.
+     * @param source          LIVE | NOT_SUPPORTED | ERROR. Drives the UI badge.
+     * @param freightAmount   Freight (shipping) charge included in the quote;
+     *                        matches the same carrier's rate-shop price for
+     *                        the requested service.
+     * @param dutyTotal       Total duties across all commodities.
+     * @param taxTotal        Total taxes (VAT, GST, sales) across all
+     *                        commodities.
+     * @param otherTotal      Broker fees, insurance, disbursement fees —
+     *                        carrier-specific.
+     * @param grandTotal      freight + duty + tax + other, in {@code currency}.
+     * @param currency        ISO-4217 of every amount above. Carriers may
+     *                        emit multiple currencies per response; we
+     *                        normalise to the shipment's declared currency
+     *                        when possible.
+     * @param lineItems       Per-commodity breakdown. Empty when the carrier
+     *                        returned only aggregated totals.
+     * @param warnings        Human-readable notes ("VAT not calculated —
+     *                        recipient will pay on delivery", "duty
+     *                        de-minimis exceeded, ...").
+     * @param message         Operator-facing summary sentence.
+     * @param rawResponse     Full carrier response for the audit trail.
+     */
+    record LandedCostResult(
+            String carrierCode,
+            String source,
+            java.math.BigDecimal freightAmount,
+            java.math.BigDecimal dutyTotal,
+            java.math.BigDecimal taxTotal,
+            java.math.BigDecimal otherTotal,
+            java.math.BigDecimal grandTotal,
+            String currency,
+            List<LandedCostLineItem> lineItems,
+            List<String> warnings,
+            String message,
+            String rawResponse
+    ) {
+    }
+
     CarrierConfiguration getConfiguration();
 
     /** One available service level for a lane: the carrier's code, name, scope. */

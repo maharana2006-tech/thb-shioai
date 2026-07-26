@@ -32,6 +32,8 @@ import RatePickerModal from './shipment/RatePickerModal'
 import type { RateOption, RateShopRequest } from '../api/rateShopService'
 import DangerousGoodsWizard from './shipment/DangerousGoodsWizard'
 import type { DangerousGoodsBlock } from '../api/dgService'
+import LandedCostModal from './shipment/LandedCostModal'
+import type { LandedCostRequest } from '../api/landedCostService'
 import type { CustomsItem, OrderCustomsPayload } from '../api/customsService'
 import { parseIntlValidationMessage } from '../utils/intlValidationErrors'
 
@@ -316,6 +318,10 @@ export default function NewShipmentPage() {
   // shipment payload as dangerousGoods.
   const [dgBlock, setDgBlock] = useState<DangerousGoodsBlock | null>(null)
   const [dgWizardOpen, setDgWizardOpen] = useState(false)
+  // Sprint 32 — landed cost modal. Opens on demand for cross-border
+  // shipments; backend routes to UPS Landed Cost / FedEx EDT / DHL
+  // Duties + Taxes based on the carrier the operator picked.
+  const [landedCostOpen, setLandedCostOpen] = useState(false)
   // Sprint 29 — multi-package. The first box uses the existing top-level
   // weight/dims/packaging fields; extraPackages holds boxes 2..N. When
   // non-empty the payload emits packages[] (backend keys off effective-
@@ -547,6 +553,28 @@ export default function NewShipmentPage() {
     rateShopRequest.shipment.weight > 0
     && rateShopRequest.shipment.shipperPostalCode
     && rateShopRequest.shipment.recipientPostalCode,
+  )
+
+  /**
+   * Sprint 32 — landed cost request built from the current form. Requires
+   * a picked carrier, a cross-border lane, and a customs block (declared
+   * value + items) — USPS returns NOT_SUPPORTED regardless, and domestic
+   * lanes come back with source=NOT_SUPPORTED from every carrier.
+   */
+  const landedCostRequest = useMemo<LandedCostRequest>(() => ({
+    carrierCode: carrier || '',
+    customerNo: clientCode || null,
+    shipment: {
+      ...rateShopRequest.shipment,
+      declaredValueCurrency: currency,
+    },
+  }), [carrier, clientCode, rateShopRequest.shipment, currency])
+
+  const canEstimateLandedCost = Boolean(
+    canOpenRatePicker
+    && carrier
+    && isInternational
+    && Number(declaredValue) > 0,
   )
 
   /**
@@ -1585,6 +1613,17 @@ export default function NewShipmentPage() {
                     </button>
                     <button
                       type="button"
+                      disabled={!canEstimateLandedCost}
+                      onClick={() => setLandedCostOpen(true)}
+                      title={canEstimateLandedCost
+                        ? `Ask ${carrier} for freight + duty + tax estimate`
+                        : 'Pick a carrier + fill weight + declared value first'}
+                      className="inline-flex items-center gap-1 rounded-lg border border-[#1f150c] bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <FiZap className="h-3.5 w-3.5" /> Landed cost
+                    </button>
+                    <button
+                      type="button"
                       onClick={addItem}
                       className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
                     >
@@ -1724,6 +1763,13 @@ export default function NewShipmentPage() {
             )
           }}
           onCancel={() => setDgWizardOpen(false)}
+        />
+      ) : null}
+
+      {landedCostOpen ? (
+        <LandedCostModal
+          request={landedCostRequest}
+          onClose={() => setLandedCostOpen(false)}
         />
       ) : null}
 
