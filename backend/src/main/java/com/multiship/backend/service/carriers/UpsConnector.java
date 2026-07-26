@@ -849,6 +849,147 @@ public class UpsConnector implements CarrierConnector {
 
     private static java.math.BigDecimal zero() { return java.math.BigDecimal.ZERO; }
 
+    /**
+     * UPS Pickup Creation — {@code POST /api/shipments/v1/pickup} with a
+     * Bearer token. Body carries the origin address, pickup date + window,
+     * per-service piece counts, and the shipper account number for
+     * billing. Response includes a PRN (Pickup Request Number) that
+     * confirms the pickup and can be used to cancel later.
+     *
+     * <p>{@code -local-*} fallback tokens short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public PickupResult schedulePickup(PickupRequest request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new PickupResult("UPS", null, null, null, null, "NOT_SUPPORTED",
+                    "UPS pickup needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        try {
+            Map<String, Object> body = buildUpsPickupRequest(request);
+            String response = RestClient.builder()
+                    .baseUrl(carrierProperties.getUps().getApiBaseUrl()).build()
+                    .post()
+                    .uri("/api/shipments/v1/pickup")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("transId", java.util.UUID.randomUUID().toString())
+                    .header("transactionSrc", "multiship")
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            return parseUpsPickupResponse(request, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("UPS pickup rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return new PickupResult("UPS", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "UPS pickup rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("UPS pickup call failed: {}", ex.getMessage());
+            return new PickupResult("UPS", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "UPS pickup call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** Build the UPS PickupCreationRequest body. */
+    Map<String, Object> buildUpsPickupRequest(PickupRequest req) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        Map<String, Object> pcr = new LinkedHashMap<>();
+        pcr.put("RatePickupIndicator", "N");
+        pcr.put("Shipper", Map.of("Account", Map.of(
+                "AccountNumber", firstNonBlank(req.address() == null ? null : req.address().name(), ""),
+                "AccountCountryCode", firstNonBlank(
+                        req.address() == null ? null : req.address().countryCode(), "US"))));
+        Map<String, Object> pickupDateInfo = new LinkedHashMap<>();
+        String date = req.pickupDate() == null ? "" : req.pickupDate().toString().replace("-", "");
+        pickupDateInfo.put("CloseTime", formatUpsTime(req.pickupWindowEnd()));
+        pickupDateInfo.put("ReadyTime", formatUpsTime(req.pickupWindowStart()));
+        pickupDateInfo.put("PickupDate", date);
+        pcr.put("PickupDateInfo", pickupDateInfo);
+
+        AddressToValidate a = req.address();
+        if (a != null) {
+            Map<String, Object> address = new LinkedHashMap<>();
+            java.util.List<String> lines = new java.util.ArrayList<>();
+            if (StringUtils.hasText(a.addressLine1())) lines.add(a.addressLine1());
+            if (StringUtils.hasText(a.addressLine2())) lines.add(a.addressLine2());
+            address.put("AddressLine", lines);
+            address.put("City", firstNonBlank(a.city(), ""));
+            address.put("StateProvince", firstNonBlank(a.state(), ""));
+            address.put("PostalCode", firstNonBlank(a.postalCode(), ""));
+            address.put("CountryCode", firstNonBlank(a.countryCode(), "US"));
+            address.put("ResidentialIndicator", "N");
+            Map<String, Object> contactInformation = new LinkedHashMap<>();
+            contactInformation.put("CompanyName", firstNonBlank(req.contactName(), ""));
+            contactInformation.put("ContactName", firstNonBlank(req.contactName(), ""));
+            contactInformation.put("Phone", Map.of("Number",
+                    firstNonBlank(req.contactPhone(), "")));
+            pcr.put("PickupAddress", Map.of(
+                    "CompanyName", firstNonBlank(req.contactName(), ""),
+                    "ContactName", firstNonBlank(req.contactName(), ""),
+                    "Address", address,
+                    "Phone", Map.of("Number", firstNonBlank(req.contactPhone(), ""))));
+        }
+
+        // PickupPiece — total quantity + weight; service defaults to 03 (Ground).
+        Map<String, Object> piece = new LinkedHashMap<>();
+        piece.put("ServiceCode", "003");
+        piece.put("Quantity", String.valueOf(Math.max(1, req.packageCount())));
+        piece.put("DestinationCountryCode", firstNonBlank(
+                a == null ? null : a.countryCode(), "US"));
+        piece.put("ContainerCode", "01");
+        pcr.put("PickupPiece", java.util.List.of(piece));
+
+        String weightUnitCode = "KG".equalsIgnoreCase(req.weightUnit()) ? "KGS" : "LBS";
+        pcr.put("TotalWeight", Map.of(
+                "Weight", req.totalWeight() != null ? req.totalWeight().toPlainString() : "0",
+                "UnitOfMeasurement", weightUnitCode));
+
+        if (StringUtils.hasText(req.specialInstructions())) {
+            pcr.put("SpecialInstruction", req.specialInstructions());
+        }
+
+        body.put("PickupCreationRequest", pcr);
+        return body;
+    }
+
+    /** UPS wants HHmm (24h) times. Null → empty. */
+    private static String formatUpsTime(java.time.LocalTime t) {
+        if (t == null) return "";
+        return String.format("%02d%02d", t.getHour(), t.getMinute());
+    }
+
+    /**
+     * Parse a UPS pickup response. Success carries
+     * {@code PickupCreationResponse.PRN} — the confirmation number
+     * customers use to cancel. Package-visible for tests.
+     */
+    PickupResult parseUpsPickupResponse(PickupRequest req, String response) {
+        try {
+            JsonNode root = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
+            JsonNode confirmation = root.at("/PickupCreationResponse");
+            String prn = confirmation.path("PRN").asText(null);
+            String status = StringUtils.hasText(prn) ? "SCHEDULED" : "ERROR";
+            String message = StringUtils.hasText(prn)
+                    ? "UPS confirmed pickup — PRN " + prn
+                    : "UPS pickup response missing PRN.";
+            return new PickupResult("UPS", prn,
+                    req.pickupDate(), req.pickupWindowStart(), req.pickupWindowEnd(),
+                    status, message, response);
+        } catch (Exception ex) {
+            return new PickupResult("UPS", null,
+                    req.pickupDate(), req.pickupWindowStart(), req.pickupWindowEnd(),
+                    "ERROR",
+                    "UPS pickup parse failed: " + ex.getMessage(), response);
+        }
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.Ups ups = carrierProperties.getUps();
