@@ -288,16 +288,26 @@ function CarrierStatusFooter({ carrierResults }: { carrierResults: CarrierRateSt
       <ul className="mt-1.5 space-y-1">
         {carrierResults.map((c) => (
           <li key={c.carrierCode} className="flex items-center justify-between gap-2 text-[11.5px]">
-            <span className="font-mono uppercase tracking-[0.1em] text-slate-500">
+            <span className="inline-flex items-center gap-1.5 font-mono uppercase tracking-[0.1em] text-slate-500">
               {c.carrierCode}
+              {c.source === 'CACHE' ? (
+                <span
+                  title="Served from the rate cache — refresh to hit the carrier"
+                  className="rounded-full bg-sky-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.14em] text-sky-700"
+                >
+                  Cached
+                </span>
+              ) : null}
             </span>
             <span
               className={
                 c.source === 'LIVE'
                   ? 'text-emerald-700'
-                  : c.source === 'ERROR'
-                    ? 'text-rose-700'
-                    : 'text-slate-500'
+                  : c.source === 'CACHE'
+                    ? 'text-sky-700'
+                    : c.source === 'ERROR'
+                      ? 'text-rose-700'
+                      : 'text-slate-500'
               }
             >
               {c.message}

@@ -63,7 +63,14 @@ class RateShopServiceImplTest {
         when(carrierService.getCarrierConnector("DHL")).thenReturn(dhlConn);
         // Single-thread pool so ordering is stable across CI runners.
         executor = Executors.newSingleThreadExecutor();
-        service = new RateShopServiceImpl(carrierService, accountRepo, fxRateService, executor);
+        // Sprint 39 — no-op cache so existing tests skip the cache path.
+        RateCacheService noCache = new RateCacheService() {
+            @Override public java.util.Optional<CachedRates> lookup(String c, com.multiship.backend.dto.ShipmentRequestDTO s) { return java.util.Optional.empty(); }
+            @Override public void store(String c, com.multiship.backend.dto.ShipmentRequestDTO s, java.util.List<com.multiship.backend.service.carriers.CarrierConnector.RateOption> o) {}
+            @Override public int invalidate(String c) { return 0; }
+            @Override public CacheStats stats() { return new CacheStats(0, 0, 0, 0, 0); }
+        };
+        service = new RateShopServiceImpl(carrierService, accountRepo, fxRateService, noCache, executor);
     }
 
     @AfterEach

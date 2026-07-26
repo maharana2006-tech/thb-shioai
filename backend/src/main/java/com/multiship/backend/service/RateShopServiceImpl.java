@@ -71,15 +71,18 @@ public class RateShopServiceImpl implements RateShopService {
     private final CarrierService carrierService;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     private final FxRateService fxRateService;
+    private final RateCacheService rateCacheService;
     private final ExecutorService executor;
 
     @Autowired
     public RateShopServiceImpl(CarrierService carrierService,
                                 CarrierAccountRefRepository carrierAccountRefRepository,
-                                FxRateService fxRateService) {
+                                FxRateService fxRateService,
+                                RateCacheService rateCacheService) {
         this.carrierService = carrierService;
         this.carrierAccountRefRepository = carrierAccountRefRepository;
         this.fxRateService = fxRateService;
+        this.rateCacheService = rateCacheService;
         // Bounded pool — fan-out is at most CARRIER_ORDER.size() calls, so
         // 8 threads is comfortably enough to run every carrier concurrently
         // for a couple of overlapping requests.
@@ -91,15 +94,17 @@ public class RateShopServiceImpl implements RateShopService {
     }
 
     /** Package-private constructor for tests — inject a custom executor
-     *  (e.g. a synchronous same-thread runner) and FX service (usually an
-     *  inert stub that returns empty for every conversion). */
+     *  (e.g. a synchronous same-thread runner), FX service (usually an
+     *  inert stub), and RateCacheService (usually an inert no-op stub). */
     RateShopServiceImpl(CarrierService carrierService,
                         CarrierAccountRefRepository carrierAccountRefRepository,
                         FxRateService fxRateService,
+                        RateCacheService rateCacheService,
                         ExecutorService executor) {
         this.carrierService = carrierService;
         this.carrierAccountRefRepository = carrierAccountRefRepository;
         this.fxRateService = fxRateService;
+        this.rateCacheService = rateCacheService;
         this.executor = executor;
     }
 
@@ -153,6 +158,21 @@ public class RateShopServiceImpl implements RateShopService {
      * it in the per-carrier status list.
      */
     CarrierFanoutResult quoteOne(String carrierCode, ShipmentRequestDTO shipment, String customerNo) {
+        // Sprint 39 — cache lookup FIRST, before any credential resolution
+        // or network I/O. On hit we return LIVE options tagged as CACHE
+        // so the UI can render a "cached Xs ago" badge.
+        java.util.Optional<RateCacheService.CachedRates> cached =
+                rateCacheService.lookup(carrierCode, shipment);
+        if (cached.isPresent()) {
+            long seconds = java.time.Duration.between(
+                    cached.get().cachedAt(),
+                    java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)).getSeconds();
+            return new CarrierFanoutResult(carrierCode, cached.get().options(), "CACHE",
+                    cached.get().options().size() + " option"
+                            + (cached.get().options().size() == 1 ? "" : "s")
+                            + " from " + carrierCode + " (cached " + seconds + "s ago)");
+        }
+
         CarrierConnector connector;
         try {
             connector = carrierService.getCarrierConnector(carrierCode);
@@ -188,6 +208,11 @@ public class RateShopServiceImpl implements RateShopService {
         try {
             List<CarrierConnector.RateOption> raw = connector.getRates(scoped, accessToken);
             if (raw == null) raw = List.of();
+            // Sprint 39 — cache non-empty results. Empty lists skip the
+            // cache so a transient miss retries the carrier next time.
+            if (!raw.isEmpty()) {
+                rateCacheService.store(carrierCode, shipment, raw);
+            }
             return new CarrierFanoutResult(carrierCode, raw,
                     raw.isEmpty() ? "STUB" : "LIVE",
                     raw.isEmpty()
