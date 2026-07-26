@@ -1,0 +1,60 @@
+[
+  { "code": "610910", "description": "T-shirts, singlets and other vests — cotton, knitted or crocheted", "category": "Apparel" },
+  { "code": "610990", "description": "T-shirts, singlets and other vests — other textile materials", "category": "Apparel" },
+  { "code": "610462", "description": "Women's or girls' trousers, breeches — cotton, knitted", "category": "Apparel" },
+  { "code": "610463", "description": "Women's or girls' trousers — synthetic fibres, knitted", "category": "Apparel" },
+  { "code": "620342", "description": "Men's or boys' trousers, breeches — cotton, not knitted", "category": "Apparel" },
+  { "code": "620520", "description": "Men's or boys' shirts — cotton, not knitted", "category": "Apparel" },
+  { "code": "620443", "description": "Women's or girls' dresses — synthetic fibres, not knitted", "category": "Apparel" },
+  { "code": "610510", "description": "Men's or boys' shirts — cotton, knitted or crocheted", "category": "Apparel" },
+  { "code": "611020", "description": "Sweaters, pullovers, sweatshirts — cotton, knitted", "category": "Apparel" },
+  { "code": "620113", "description": "Men's overcoats, raincoats — man-made fibres, not knitted", "category": "Apparel" },
+
+  { "code": "640299", "description": "Other footwear with outer soles and uppers of rubber or plastics", "category": "Footwear" },
+  { "code": "640399", "description": "Other footwear with outer soles of rubber, uppers of leather", "category": "Footwear" },
+  { "code": "640419", "description": "Sports footwear, other footwear with textile uppers", "category": "Footwear" },
+
+  { "code": "847130", "description": "Portable digital automatic data-processing machines (laptops) ≤ 10 kg", "category": "Electronics" },
+  { "code": "851712", "description": "Telephones for cellular networks or other wireless networks (smartphones)", "category": "Electronics" },
+  { "code": "851762", "description": "Machines for the reception, conversion and transmission of data (networking)", "category": "Electronics" },
+  { "code": "851830", "description": "Headphones and earphones, whether or not combined with a microphone", "category": "Electronics" },
+  { "code": "852351", "description": "Solid-state non-volatile storage devices (SSDs, flash drives)", "category": "Electronics" },
+  { "code": "852872", "description": "Television reception apparatus, colour, other", "category": "Electronics" },
+  { "code": "854442", "description": "Electric conductors for a voltage ≤ 1,000 V, fitted with connectors", "category": "Electronics" },
+
+  { "code": "420222", "description": "Handbags with outer surface of plastic sheeting or of textile materials", "category": "Bags & luggage" },
+  { "code": "420212", "description": "Trunks, suitcases with outer surface of plastic or textile materials", "category": "Bags & luggage" },
+  { "code": "420292", "description": "Bags, cases with outer surface of plastic sheeting or textile — other", "category": "Bags & luggage" },
+  { "code": "420211", "description": "Trunks, suitcases with outer surface of leather or composition leather", "category": "Bags & luggage" },
+
+  { "code": "330510", "description": "Shampoos", "category": "Cosmetics & personal care" },
+  { "code": "330499", "description": "Beauty or make-up preparations, skin care — other", "category": "Cosmetics & personal care" },
+  { "code": "330430", "description": "Manicure or pedicure preparations", "category": "Cosmetics & personal care" },
+  { "code": "330300", "description": "Perfumes and toilet waters", "category": "Cosmetics & personal care" },
+  { "code": "330610", "description": "Dentifrices (toothpaste)", "category": "Cosmetics & personal care" },
+
+  { "code": "490199", "description": "Printed books, brochures — other", "category": "Books & paper" },
+  { "code": "491110", "description": "Trade advertising material, catalogues and the like", "category": "Books & paper" },
+  { "code": "482010", "description": "Registers, account books, notebooks, diaries", "category": "Books & paper" },
+
+  { "code": "950300", "description": "Tricycles, scooters, dolls, toys, puzzles of all kinds", "category": "Toys & sports" },
+  { "code": "950699", "description": "Articles and equipment for general physical exercise, gymnastics — other", "category": "Toys & sports" },
+  { "code": "950450", "description": "Video game consoles and machines, other than those of subheading 9504.30", "category": "Toys & sports" },
+
+  { "code": "392610", "description": "Office or school supplies of plastic", "category": "Household & general" },
+  { "code": "392690", "description": "Other articles of plastic — miscellaneous", "category": "Household & general" },
+  { "code": "732393", "description": "Table, kitchen or household articles — stainless steel", "category": "Household & general" },
+  { "code": "701337", "description": "Drinking glasses, other than of glass-ceramics", "category": "Household & general" },
+  { "code": "392410", "description": "Tableware and kitchenware of plastic", "category": "Household & general" },
+
+  { "code": "900410", "description": "Sunglasses", "category": "Optics" },
+  { "code": "900311", "description": "Spectacle frames and mountings of plastics", "category": "Optics" },
+
+  { "code": "911320", "description": "Watch straps, watch bands — base metal", "category": "Watches & jewellery" },
+  { "code": "711319", "description": "Articles of jewellery of other precious metal, whether or not plated", "category": "Watches & jewellery" },
+  { "code": "711711", "description": "Cuff-links and studs of base metal (imitation jewellery)", "category": "Watches & jewellery" },
+
+  { "code": "210690", "description": "Food preparations not elsewhere specified or included — other", "category": "Food & beverage" },
+  { "code": "090121", "description": "Coffee, roasted, not decaffeinated", "category": "Food & beverage" },
+  { "code": "180620", "description": "Chocolate and other food preparations containing cocoa — other", "category": "Food & beverage" }
+]
