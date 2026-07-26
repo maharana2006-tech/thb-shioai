@@ -36,7 +36,26 @@ class FedExConnectorPayloadTest {
         CarrierProperties props = new CarrierProperties();
         props.getFedEx().setLabelResponseOption("URL_ONLY");
 
-        connector = new FedExConnector(props, new ObjectMapper());
+        // FxRateService stub that always returns empty — forces the IOSS
+        // threshold check to use the fixed local table, which the pre-Sprint
+        // 5.5 assertions were written against. Sprint 5.5 tests explicitly
+        // wire the live path via FedExConnectorFxIossTest.
+        com.multiship.backend.service.fx.FxRateService noFx =
+                new com.multiship.backend.service.fx.FxRateService() {
+                    @Override
+                    public java.util.Optional<java.math.BigDecimal> rate(String from, String to) {
+                        return java.util.Optional.empty();
+                    }
+                    @Override
+                    public java.util.Optional<java.math.BigDecimal> convert(java.math.BigDecimal amount, String from, String to) {
+                        return java.util.Optional.empty();
+                    }
+                    @Override
+                    public boolean supports(String currency) {
+                        return false;
+                    }
+                };
+        connector = new FedExConnector(props, new ObjectMapper(), noFx);
         buildShipmentPayload = FedExConnector.class.getDeclaredMethod("buildShipmentPayload", ShipmentRequestDTO.class);
         buildShipmentPayload.setAccessible(true);
     }

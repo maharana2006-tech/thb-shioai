@@ -31,6 +31,7 @@ public class FedExConnector implements CarrierConnector {
 
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
+    private final com.multiship.backend.service.fx.FxRateService fxRateService;
 
     @Override
     public String getCarrierCode() {
@@ -464,9 +465,17 @@ public class FedExConnector implements CarrierConnector {
 
     /**
      * True when this shipment is subject to IOSS (EU destination + goods
-     * ≤ €150 or FX-equivalent). Loose currency threshold via
-     * {@link #IOSS_LOCAL_THRESHOLD}; other currencies fall back to the EUR
-     * limit which slightly under-triggers rather than over-triggers IOSS.
+     * ≤ €150 after FX conversion).
+     *
+     * <p>Preferred path: convert the invoice total to EUR via
+     * {@link com.multiship.backend.service.fx.FxRateService} and compare
+     * against the €150 threshold directly. When the FX feed is down or
+     * doesn't cover the invoice currency we fall back to
+     * {@link #IOSS_LOCAL_THRESHOLD} — a fixed table close enough to
+     * yesterday's spot rates for the common invoice currencies. Both paths
+     * intentionally under-trigger rather than over-trigger IOSS: a false
+     * negative just leaves VAT to the delivery-time invoice; a false
+     * positive attaches an IOSS number where it doesn't apply.
      */
     private boolean iossApplies(ShipmentRequestDTO request) {
         String dest = request.getRecipientCountryCode();
@@ -475,6 +484,16 @@ public class FedExConnector implements CarrierConnector {
         BigDecimal total = intl.getCustomsTotalValue();
         if (total == null) return false;
         String cur = intl.getCustomsCurrency() == null ? "EUR" : intl.getCustomsCurrency().toUpperCase();
+
+        // Live FX first — captures small currencies (INR, JPY, BRL, ...)
+        // that our fixed table doesn't cover.
+        java.util.Optional<BigDecimal> totalEur = fxRateService == null
+                ? java.util.Optional.empty()
+                : fxRateService.convert(total, cur, "EUR");
+        if (totalEur.isPresent()) {
+            return totalEur.get().compareTo(IOSS_EUR_THRESHOLD) <= 0;
+        }
+        // Fallback: fixed table for the common invoice currencies.
         BigDecimal limit = IOSS_LOCAL_THRESHOLD.getOrDefault(cur, IOSS_EUR_THRESHOLD);
         return total.compareTo(limit) <= 0;
     }
