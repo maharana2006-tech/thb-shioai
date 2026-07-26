@@ -401,7 +401,7 @@ public class StampsConnector implements CarrierConnector {
         // Rate, once here) — that's the SWSIM shape.
         xml.append("<From>");
         appendAddress(xml, "FullName", request.getShipperName(),
-                request.getShipperAddressLine1(), request.getShipperAddressLine2(),
+                request.getShipperAddressLine1(), request.getShipperAddressLine2(), null,
                 request.getShipperCity(), request.getShipperState(),
                 request.getShipperPostalCode(), request.getShipperCountryCode(),
                 request.getShipperPhone());
@@ -409,6 +409,7 @@ public class StampsConnector implements CarrierConnector {
         xml.append("<To>");
         appendAddress(xml, "FullName", request.getRecipientName(),
                 request.getRecipientAddressLine1(), request.getRecipientAddressLine2(),
+                request.getRecipientAddressLine3(),
                 request.getRecipientCity(), request.getRecipientState(),
                 request.getRecipientPostalCode(), request.getRecipientCountryCode(),
                 request.getRecipientPhone());
@@ -453,9 +454,16 @@ public class StampsConnector implements CarrierConnector {
      * before Address1, then City / State / ZIPCode, then Country. Empty
      * elements are omitted rather than sent blank; SWSIM tolerates absence
      * but rejects empty strings on some fields.
+     *
+     * <p>SWSIM {@code CreateIndicium} only exposes Address1 + Address2 — no
+     * Address3 element on the schema. When {@code line3} is non-blank the
+     * caller passes it and we concatenate onto Address2 with a space
+     * separator ({@code "Apt 42 Chiyoda-ku"}). This is the standard USPS
+     * workaround; USPS delivery agents parse the compound line just fine.
+     * A non-blank line3 with a blank line2 goes into Address2 by itself.
      */
     private void appendAddress(StringBuilder xml, String nameField, String name,
-                                String line1, String line2,
+                                String line1, String line2, String line3,
                                 String city, String state, String postal, String country,
                                 String phone) {
         if (StringUtils.hasText(name)) {
@@ -464,7 +472,8 @@ public class StampsConnector implements CarrierConnector {
                     .append("</").append(nameField).append(">");
         }
         if (StringUtils.hasText(line1)) xml.append("<Address1>").append(xmlEscape(line1)).append("</Address1>");
-        if (StringUtils.hasText(line2)) xml.append("<Address2>").append(xmlEscape(line2)).append("</Address2>");
+        String address2 = joinSwsimAddress2(line2, line3);
+        if (StringUtils.hasText(address2)) xml.append("<Address2>").append(xmlEscape(address2)).append("</Address2>");
         if (StringUtils.hasText(city)) xml.append("<City>").append(xmlEscape(city)).append("</City>");
         if (StringUtils.hasText(state)) xml.append("<State>").append(xmlEscape(state)).append("</State>");
         if (StringUtils.hasText(postal)) xml.append("<ZIPCode>").append(xmlEscape(postal)).append("</ZIPCode>");
@@ -549,6 +558,20 @@ public class StampsConnector implements CarrierConnector {
 
     private static String nonBlank(String value, String fallback) {
         return StringUtils.hasText(value) ? value : fallback;
+    }
+
+    /**
+     * Compose SWSIM's Address2 element from our optional line2 + line3.
+     * Both blank → empty string (caller skips the element). Only one set →
+     * that value alone. Both set → concatenate with a single space so USPS
+     * delivery gets both bits of context onto the printed label.
+     */
+    static String joinSwsimAddress2(String line2, String line3) {
+        boolean has2 = StringUtils.hasText(line2);
+        boolean has3 = StringUtils.hasText(line3);
+        if (!has2 && !has3) return "";
+        if (has2 && has3) return line2.trim() + " " + line3.trim();
+        return has2 ? line2.trim() : line3.trim();
     }
 
     private static String xmlEscape(String s) {
