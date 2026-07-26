@@ -74,6 +74,15 @@ public class ShipmentRequestDTO {
 
     private String recipientAddressLine2;
 
+    /**
+     * Third recipient address line — needed for JP / CN / IN and other
+     * countries where the postal format routinely spans three street lines
+     * (building, apartment, district). Optional; null on the vast majority
+     * of shipments. Carriers that only accept two lines (SWSIM Address1 /
+     * Address2) will concatenate lines 2 + 3 with a space.
+     */
+    private String recipientAddressLine3;
+
     @NotBlank
     private String recipientCity;
 

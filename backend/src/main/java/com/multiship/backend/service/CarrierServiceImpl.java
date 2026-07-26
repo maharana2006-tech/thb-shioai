@@ -621,6 +621,7 @@ public class CarrierServiceImpl implements CarrierService {
                 .recipientPhone(firstNonBlank(to.getPhone(), "0000000000"))
                 .recipientAddressLine1(to.getAddressLine1())
                 .recipientAddressLine2(to.getAddressLine2())
+                .recipientAddressLine3(to.getAddressLine3())
                 .recipientCity(to.getCity())
                 .recipientState(firstNonBlank(to.getState(), ""))
                 .recipientPostalCode(to.getPostalCode())

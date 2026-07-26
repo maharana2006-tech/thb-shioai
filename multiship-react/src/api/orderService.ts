@@ -335,6 +335,8 @@ export interface ManualShipmentAddress {
   email?: string
   addressLine1: string
   addressLine2?: string
+  /** Third street line — JP/CN/IN long addresses. Optional; carriers accept 3+. */
+  addressLine3?: string
   city: string
   state?: string
   postalCode: string
