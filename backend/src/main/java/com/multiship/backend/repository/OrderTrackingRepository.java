@@ -29,4 +29,6 @@ public interface OrderTrackingRepository extends JpaRepository<OrderTracking, Lo
     List<OrderTracking> findByStatus(String status);
 
     List<OrderTracking> findByIsLabelGeneratedFalse();
+
+    Optional<OrderTracking> findByTrackingNumberIgnoreCase(String trackingNumber);
 }

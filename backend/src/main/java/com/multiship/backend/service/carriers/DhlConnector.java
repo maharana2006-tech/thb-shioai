@@ -849,6 +849,73 @@ public class DhlConnector implements CarrierConnector {
         }
     }
 
+    /**
+     * DHL Push Notification — HMAC-SHA256(body, secret) in the
+     * {@code X-DHL-Signature} header.
+     */
+    @Override
+    public boolean verifyWebhookSignature(String rawPayload,
+                                           java.util.Map<String, String> headers,
+                                           String secret) {
+        String provided = pickWebhookHeader(headers, "X-DHL-Signature");
+        String expected = WebhookHmacUtil.hmacSha256Hex(rawPayload, secret);
+        return provided != null && expected != null
+                && WebhookHmacUtil.constantTimeEquals(provided, expected);
+    }
+
+    /**
+     * Parse a DHL push-tracking webhook. DHL pushes:
+     * <pre>
+     * {
+     *   "awb": "JD...",
+     *   "event": "Delivered",
+     *   "eventCode": "OK",
+     *   "eventTimestamp": "2026-07-26T14:30:00Z",
+     *   "location": {"cityName": "London", "countryCode": "GB"}
+     * }
+     * </pre>
+     */
+    @Override
+    public TrackingWebhookEvent parseWebhookEvent(String rawPayload,
+                                                   java.util.Map<String, String> headers) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    Optional.ofNullable(rawPayload).orElse("{}"));
+            String tracking = root.path("awb").asText(null);
+            if (!StringUtils.hasText(tracking)) return null;
+            String eventCode = root.path("eventCode").asText(null);
+            String description = root.path("event").asText("");
+            LocalDateTime occurred = null;
+            String rawTs = root.path("eventTimestamp").asText(null);
+            if (StringUtils.hasText(rawTs)) {
+                try { occurred = LocalDateTime.parse(rawTs.replace("Z", "")); }
+                catch (Exception ignored) {}
+            }
+            com.fasterxml.jackson.databind.JsonNode loc = root.path("location");
+            String city = loc.path("cityName").asText("");
+            String country = loc.path("countryCode").asText("");
+            String location = null;
+            if (!city.isEmpty() || !country.isEmpty()) {
+                location = (city + (city.isEmpty() ? "" : " ") + country).trim();
+            }
+            boolean delivered = "OK".equalsIgnoreCase(eventCode)
+                    || "DELIVERED".equalsIgnoreCase(description);
+            return new TrackingWebhookEvent(tracking, eventCode, eventCode,
+                    occurred, location, delivered, description);
+        } catch (Exception ex) {
+            log.warn("DHL webhook parse failed: {}", ex.getMessage());
+            return null;
+        }
+    }
+
+    private static String pickWebhookHeader(java.util.Map<String, String> headers, String name) {
+        if (headers == null || name == null) return null;
+        for (var e : headers.entrySet()) {
+            if (name.equalsIgnoreCase(e.getKey())) return e.getValue();
+        }
+        return null;
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.Dhl dhl = carrierProperties.getDhl();

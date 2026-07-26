@@ -1062,6 +1062,65 @@ public class StampsConnector implements CarrierConnector {
     }
 
     /**
+     * SWSIM delivery notification webhook — HMAC-SHA256(body, secret) in
+     * the {@code X-Stamps-Signature} header. SWSIM pushes delivery events
+     * to a URL registered with the account.
+     */
+    @Override
+    public boolean verifyWebhookSignature(String rawPayload,
+                                           java.util.Map<String, String> headers,
+                                           String secret) {
+        String provided = pickWebhookHeader(headers, "X-Stamps-Signature");
+        String expected = WebhookHmacUtil.hmacSha256Hex(rawPayload, secret);
+        return provided != null && expected != null
+                && WebhookHmacUtil.constantTimeEquals(provided, expected);
+    }
+
+    /**
+     * Parse a SWSIM delivery notification webhook. SWSIM pushes JSON:
+     * <pre>
+     * {
+     *   "TrackingNumber": "9400...",
+     *   "EventType": "Delivered",
+     *   "EventTimestamp": "2026-07-26T14:30:00",
+     *   "City": "Louisville",
+     *   "State": "KY",
+     *   "Country": "US"
+     * }
+     * </pre>
+     */
+    @Override
+    public TrackingWebhookEvent parseWebhookEvent(String rawPayload,
+                                                   java.util.Map<String, String> headers) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    java.util.Optional.ofNullable(rawPayload).orElse("{}"));
+            String tracking = root.path("TrackingNumber").asText(null);
+            if (!StringUtils.hasText(tracking)) return null;
+            String eventType = root.path("EventType").asText(null);
+            LocalDateTime occurred = parseSwsimTimestamp(root.path("EventTimestamp").asText(null));
+            String location = buildSwsimLocation(
+                    root.path("City").asText(null),
+                    root.path("State").asText(null),
+                    root.path("Country").asText(null));
+            boolean delivered = "Delivered".equalsIgnoreCase(eventType);
+            return new TrackingWebhookEvent(tracking, eventType, null, occurred,
+                    location, delivered, eventType == null ? "" : eventType);
+        } catch (Exception ex) {
+            log.warn("Stamps webhook parse failed: {}", ex.getMessage());
+            return null;
+        }
+    }
+
+    private static String pickWebhookHeader(java.util.Map<String, String> headers, String name) {
+        if (headers == null || name == null) return null;
+        for (var e : headers.entrySet()) {
+            if (name.equalsIgnoreCase(e.getKey())) return e.getValue();
+        }
+        return null;
+    }
+
+    /**
      * Build the SWSIM GetRates SOAP envelope. No {@code ServiceType} — omitting
      * it asks SWSIM for the full rate ladder. Country only when non-US (SWSIM
      * treats absent Country as US and errors when both are set).
