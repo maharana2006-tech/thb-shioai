@@ -384,16 +384,27 @@ public class FedExConnector implements CarrierConnector {
         if (!shipperTins.isEmpty()) shipper.put("tins", shipperTins);
         requestedShipment.put("shipper", shipper);
 
-        requestedShipment.put("recipients", new Object[]{buildParty(
+        // Recipient phone: prepend the country dial code when present.
+        String recipientPhone = com.multiship.backend.service.carriers.UpsConnector.joinPhone(
+                request.getRecipientPhoneCountryCode(), request.getRecipientPhone());
+        Map<String, Object> recipientParty = buildParty(
                 request.getRecipientName(),
-                request.getRecipientPhone(),
+                recipientPhone,
                 request.getRecipientAddressLine1(),
                 request.getRecipientAddressLine2(),
                 request.getRecipientCity(),
                 request.getRecipientState(),
                 request.getRecipientPostalCode(),
                 request.getRecipientCountryCode()
-        )});
+        );
+        // FedEx flags residential on the address block, not on contact. When
+        // null we leave the field off entirely — FedEx defaults to commercial.
+        if (Boolean.TRUE.equals(request.getRecipientResidential())) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> address = (Map<String, Object>) recipientParty.get("address");
+            if (address != null) address.put("residential", true);
+        }
+        requestedShipment.put("recipients", new Object[]{recipientParty});
 
         // Freight billed to the shipper account by default. Customs / duty
         // billing is a separate paymentType on customsClearanceDetail below.
