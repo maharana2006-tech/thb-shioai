@@ -631,6 +631,11 @@ public class CarrierServiceImpl implements CarrierService {
                 .referenceNumber(firstNonBlank(req.getReference(), "MANUAL"))
                 .specialInstructions(req.getGoodsDescription())
                 .declaredValue(req.getDeclaredValue())
+                // Sprint 25 — thread the RETURN mode into the ShipmentRequestDTO
+                // so connectors emit each carrier's return-label wire flag
+                // (UPS ReturnService.Code=8, FedEx returnedShipmentDetail,
+                // SWSIM IsReturnLabel=true, DHL pickup.isRequested=true).
+                .isReturn(req.getIsReturn())
                 .build();
 
         CarrierConnector.ShipmentResult result;
@@ -1322,6 +1327,13 @@ public class CarrierServiceImpl implements CarrierService {
                 .declaredValue(order.getPrice())
                 .declaredValueCurrency(declaredValueCurrency)
                 .intl(intlBlock)
+                // Sprint 25 — thread the Order entity's isReturn flag so
+                // ERP-side return orders get the carrier return-label wire
+                // format on the automatic label path too (not just manual).
+                // Order.isReturn is a legacy 'Y'/'N' column; anything starting
+                // with Y (case-insensitive) counts as a return.
+                .isReturn("Y".equalsIgnoreCase(
+                        order.getIsReturn() == null ? "" : order.getIsReturn().trim()))
                 .build();
     }
 

@@ -722,6 +722,22 @@ public class FedExConnector implements CarrierConnector {
             requestedShipment.put("shipmentSpecialServicesRequested", buildEtdSpecialServices());
         }
 
+        // Sprint 25 — Print Return Label. FedEx wants:
+        //   pickupType=CONTACT_FEDEX_TO_SCHEDULE (so the return recipient
+        //     doesn't need a scheduled pickup),
+        //   plus returnedShipmentDetail.returnType=PRINT_RETURN_LABEL
+        //     (paper label; the customer prints and drops off).
+        // The shipper/recipient roles are kept as-is on the payload — the
+        // caller is expected to populate shipper as the RETURN destination
+        // (retailer / return depot) and recipient as the customer sending
+        // the parcel back.
+        if (Boolean.TRUE.equals(request.getIsReturn())) {
+            requestedShipment.put("pickupType", "CONTACT_FEDEX_TO_SCHEDULE");
+            Map<String, Object> returnDetail = new LinkedHashMap<>();
+            returnDetail.put("returnType", "PRINT_RETURN_LABEL");
+            requestedShipment.put("returnedShipmentDetail", returnDetail);
+        }
+
         payload.put("requestedShipment", requestedShipment);
         return payload;
     }

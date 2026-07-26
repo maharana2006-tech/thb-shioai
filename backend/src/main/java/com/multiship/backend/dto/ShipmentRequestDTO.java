@@ -149,4 +149,26 @@ public class ShipmentRequestDTO {
      * Null keeps the legacy behaviour (phone sent unchanged).
      */
     private String recipientPhoneCountryCode;
+
+    /**
+     * True when this is a RETURN label — the recipient (customer) is
+     * shipping the parcel back to the shipper (retailer / 3PL). Each
+     * carrier has its own wire-format switch:
+     * <ul>
+     *   <li>UPS: {@code ShipmentServiceOptions.LabelDelivery.EMailMessage}
+     *       + {@code ShipmentCharge.Type=01/BillReceiver} isn't required;
+     *       we set {@code ReturnService.Code} on the shipment.</li>
+     *   <li>FedEx: {@code requestedShipment.pickupType=USE_SCHEDULED_PICKUP}
+     *       + {@code returnedShipmentDetail.returnType=PRINT_RETURN_LABEL}.</li>
+     *   <li>USPS/Stamps SWSIM: {@code CreateIndicium.IsReturnLabel=true}
+     *       on the Rate block.</li>
+     *   <li>DHL Express: {@code accounts[].typeCode=receiver} +
+     *       {@code outputImageProperties.imageOptions[].typeCode=label}
+     *       (DHL treats it as any other label when the sender/receiver
+     *       are swapped; the flag primarily controls billing).</li>
+     * </ul>
+     * Null is treated as false — existing callers keep printing normal
+     * outbound labels.
+     */
+    private Boolean isReturn;
 }
