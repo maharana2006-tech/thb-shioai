@@ -712,6 +712,143 @@ public class DhlConnector implements CarrierConnector {
                 && !from.trim().equalsIgnoreCase(to.trim());
     }
 
+    /**
+     * DHL Express Pickup Request — {@code POST /pickups} with Basic Auth.
+     * Body carries {@code plannedPickupDateAndTime} + accounts +
+     * customerDetails + shipmentDetails (piece count, weight). Response
+     * includes {@code dispatchConfirmationNumbers[]}.
+     *
+     * <p>{@code -local-*} fallback tokens short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public PickupResult schedulePickup(PickupRequest request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new PickupResult("DHL", null, null, null, null, "NOT_SUPPORTED",
+                    "DHL pickup needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        try {
+            Map<String, Object> body = buildDhlPickupRequest(request);
+            String response = RestClient.builder()
+                    .baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build()
+                    .post()
+                    .uri("/pickups")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Basic " + accessToken)
+                    .header("Message-Reference", java.util.UUID.randomUUID().toString())
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            return parseDhlPickupResponse(request, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("DHL pickup rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return new PickupResult("DHL", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "DHL pickup rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("DHL pickup call failed: {}", ex.getMessage());
+            return new PickupResult("DHL", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "DHL pickup call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** Build the DHL pickup request body. */
+    Map<String, Object> buildDhlPickupRequest(PickupRequest req) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("plannedPickupDateAndTime", formatDhlPickupTimestamp(req));
+        payload.put("closeTime", req.pickupWindowEnd() == null
+                ? "17:00" : req.pickupWindowEnd().toString());
+        payload.put("accounts", List.of(Map.of(
+                "typeCode", "shipper",
+                "number", "")));
+
+        AddressToValidate a = req.address();
+        Map<String, Object> shipper = new LinkedHashMap<>();
+        if (a != null) {
+            Map<String, Object> postal = new LinkedHashMap<>();
+            postal.put("cityName", firstNonBlank(a.city(), ""));
+            postal.put("countryCode", firstNonBlank(a.countryCode(), "US"));
+            postal.put("postalCode", firstNonBlank(a.postalCode(), ""));
+            if (StringUtils.hasText(a.addressLine1())) postal.put("addressLine1", a.addressLine1());
+            if (StringUtils.hasText(a.addressLine2())) postal.put("addressLine2", a.addressLine2());
+            if (StringUtils.hasText(a.state())) postal.put("provinceCode", a.state());
+            shipper.put("postalAddress", postal);
+        }
+        shipper.put("contactInformation", Map.of(
+                "phone", firstNonBlank(req.contactPhone(), ""),
+                "companyName", firstNonBlank(req.contactName(), ""),
+                "fullName", firstNonBlank(req.contactName(), "")));
+        payload.put("customerDetails", Map.of("shipperDetails", shipper));
+
+        payload.put("shipmentDetails", List.of(Map.of(
+                "productCode", "P",
+                "packages", generateDhlPickupPackages(req))));
+
+        if (StringUtils.hasText(req.specialInstructions())) {
+            payload.put("specialInstructions", List.of(Map.of(
+                    "value", req.specialInstructions(),
+                    "typeCode", "TXT")));
+        }
+        return payload;
+    }
+
+    private static List<Map<String, Object>> generateDhlPickupPackages(PickupRequest req) {
+        int count = Math.max(1, req.packageCount());
+        java.math.BigDecimal perPackage = req.totalWeight() != null && count > 0
+                ? req.totalWeight().divide(java.math.BigDecimal.valueOf(count),
+                        2, java.math.RoundingMode.HALF_UP)
+                : java.math.BigDecimal.ONE;
+        List<Map<String, Object>> pkgs = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            pkgs.add(Map.of(
+                    "weight", perPackage,
+                    "dimensions", Map.of("length", 30, "width", 20, "height", 10)));
+        }
+        return pkgs;
+    }
+
+    private static String formatDhlPickupTimestamp(PickupRequest req) {
+        java.time.LocalDate date = req.pickupDate() != null
+                ? req.pickupDate() : java.time.LocalDate.now();
+        java.time.LocalTime time = req.pickupWindowStart() != null
+                ? req.pickupWindowStart() : java.time.LocalTime.of(13, 0);
+        return date + "T" + time + " GMT+00:00";
+    }
+
+    /**
+     * Parse a DHL pickup response. Success = a non-empty
+     * {@code dispatchConfirmationNumbers[]}. Package-visible for tests.
+     */
+    PickupResult parseDhlPickupResponse(PickupRequest req, String response) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    Optional.ofNullable(response).orElse("{}"));
+            com.fasterxml.jackson.databind.JsonNode ids = root.path("dispatchConfirmationNumbers");
+            String number = null;
+            if (ids.isArray() && ids.size() > 0) {
+                number = ids.get(0).asText();
+            }
+            String status = StringUtils.hasText(number) ? "SCHEDULED" : "ERROR";
+            String message = StringUtils.hasText(number)
+                    ? "DHL confirmed pickup — " + number
+                    : "DHL pickup response missing dispatchConfirmationNumbers.";
+            return new PickupResult("DHL", number,
+                    req.pickupDate(), req.pickupWindowStart(), req.pickupWindowEnd(),
+                    status, message, response);
+        } catch (Exception ex) {
+            return new PickupResult("DHL", null,
+                    req.pickupDate(), req.pickupWindowStart(), req.pickupWindowEnd(),
+                    "ERROR",
+                    "DHL pickup parse failed: " + ex.getMessage(), response);
+        }
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.Dhl dhl = carrierProperties.getDhl();

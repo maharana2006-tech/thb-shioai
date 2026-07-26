@@ -11,6 +11,7 @@ import {
   FiFilter,
   FiRefreshCw,
   FiRotateCw,
+  FiCalendar,
   FiSearch,
   FiTruck,
   FiX,
@@ -31,6 +32,7 @@ import ClientEditorModal from './modals/ClientEditorModal'
 import AccountPickerModal from './modals/AccountPickerModal'
 import OrderDetailsModal from './modals/OrderDetailsModal'
 import TrackingTimelineModal from './tracking/TrackingTimelineModal'
+import SchedulePickupModal from './modals/SchedulePickupModal'
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
 
@@ -131,6 +133,8 @@ export default function OrdersWorkspace() {
   // Sprint 30 — Void action: currently-voiding orderNo (for spinner);
   // handler confirms with the user before calling the carrier.
   const [voidingOrderNo, setVoidingOrderNo] = useState<number | null>(null)
+  // Sprint 33 — schedule pickup modal (bulk action from the header).
+  const [pickupOpen, setPickupOpen] = useState(false)
 
   // The header's global search lands here as /orders?q=…
   useEffect(() => {
@@ -887,6 +891,11 @@ export default function OrdersWorkspace() {
               <FiZap className="h-3.5 w-3.5" />
               Generate all ready ({readyCount})
             </button>
+            <button type="button" onClick={() => setPickupOpen(true)} className={BTN_GHOST}
+                    title="Book a driver to collect labelled parcels">
+              <FiCalendar className="h-3.5 w-3.5" />
+              Schedule pickup
+            </button>
             <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY}>
               <FiPlus className="h-3.5 w-3.5" />
               New shipment
@@ -1277,6 +1286,10 @@ export default function OrdersWorkspace() {
 
       {trackingOrderNo !== null ? (
         <TrackingTimelineModal orderNo={trackingOrderNo} onClose={() => setTrackingOrderNo(null)} />
+      ) : null}
+
+      {pickupOpen ? (
+        <SchedulePickupModal onClose={() => setPickupOpen(false)} />
       ) : null}
     </div>
   )

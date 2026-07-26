@@ -220,6 +220,83 @@ public interface CarrierConnector {
      * <p>Default returns {@code NOT_SUPPORTED} — USPS + any future
      * carrier that doesn't offer an estimator inherits this cleanly.
      */
+    /**
+     * Schedule a courier pickup. Sprint 33. Every carrier lets a shipper
+     * request that a driver come collect N labelled parcels at a given
+     * address on a given date within a time window:
+     * <ul>
+     *   <li>UPS: {@code POST /api/shipments/{v}/pickup} with Bearer.</li>
+     *   <li>FedEx: {@code POST /pickup/v1/pickups} with Bearer.</li>
+     *   <li>DHL: {@code POST /pickups} with Basic Auth.</li>
+     *   <li>USPS/SWSIM: {@code SchedulePickup} SOAP call.</li>
+     * </ul>
+     * Default returns {@code NOT_SUPPORTED} so any future carrier without a
+     * live pickup API stays additive.
+     */
+    default PickupResult schedulePickup(PickupRequest request, String accessToken) {
+        return new PickupResult(
+                getCarrierCode(),
+                null,
+                null, null, null,
+                "NOT_SUPPORTED",
+                "Pickup scheduling isn't implemented for " + getCarrierCode() + " on this instance.",
+                null);
+    }
+
+    /**
+     * Pickup request payload. Sprint 33.
+     *
+     * @param pickupDate         Local date on which to schedule the pickup.
+     * @param pickupWindowStart  Local start time of the window (e.g. 13:00).
+     * @param pickupWindowEnd    Local end time of the window (e.g. 17:00).
+     * @param address            Pickup / origin address.
+     * @param contactName        Name of the person the driver will look for.
+     * @param contactPhone       Phone the driver can reach at pickup time.
+     * @param packageCount       Number of parcels to collect.
+     * @param totalWeight        Total weight across all parcels.
+     * @param weightUnit         LB | KG. Null = LB.
+     * @param specialInstructions Free-form notes (e.g. "ring apartment 5B").
+     */
+    record PickupRequest(
+            java.time.LocalDate pickupDate,
+            java.time.LocalTime pickupWindowStart,
+            java.time.LocalTime pickupWindowEnd,
+            AddressToValidate address,
+            String contactName,
+            String contactPhone,
+            int packageCount,
+            java.math.BigDecimal totalWeight,
+            String weightUnit,
+            String specialInstructions
+    ) {
+    }
+
+    /**
+     * Result of a pickup scheduling call.
+     *
+     * @param carrierCode         Carrier that produced the confirmation.
+     * @param confirmationNumber  UPS PRN / FedEx pickupConfirmationCode /
+     *                            DHL dispatchConfirmationNumber / SWSIM
+     *                            ConfirmationNumber. Null on ERROR / NOT_SUPPORTED.
+     * @param scheduledDate       Echoed pickup date from the carrier.
+     * @param pickupWindowStart   Echoed window start.
+     * @param pickupWindowEnd     Echoed window end.
+     * @param status              SCHEDULED | ERROR | NOT_SUPPORTED.
+     * @param message             Operator-facing summary sentence.
+     * @param rawResponse         Full carrier response for the audit trail.
+     */
+    record PickupResult(
+            String carrierCode,
+            String confirmationNumber,
+            java.time.LocalDate scheduledDate,
+            java.time.LocalTime pickupWindowStart,
+            java.time.LocalTime pickupWindowEnd,
+            String status,
+            String message,
+            String rawResponse
+    ) {
+    }
+
     default LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken) {
         return new LandedCostResult(
                 getCarrierCode(),

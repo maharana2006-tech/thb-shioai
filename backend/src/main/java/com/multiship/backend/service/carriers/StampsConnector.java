@@ -809,6 +809,139 @@ public class StampsConnector implements CarrierConnector {
     }
 
     /**
+     * SWSIM {@code SchedulePickup} — SOAP call to book a USPS carrier
+     * pickup at the shipper's address. USPS accepts Package Pickup
+     * (free, for domestic Priority Mail / Ground Advantage / etc.);
+     * the driver picks up during the regular mail delivery window.
+     *
+     * <p>{@code -local-*} authenticators short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public PickupResult schedulePickup(PickupRequest request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new PickupResult("USPS", null, null, null, null, "NOT_SUPPORTED",
+                    "USPS pickup needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        String soap = buildSchedulePickupEnvelope(request, accessToken);
+        try {
+            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+                    .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
+                    .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/SchedulePickup\"")
+                    .body(soap)
+                    .retrieve()
+                    .body(String.class);
+            return parseSchedulePickupResponse(request, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            String fault = extractSoapFault(ex.getResponseBodyAsString());
+            log.warn("Stamps SchedulePickup rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), fault);
+            return new PickupResult("USPS", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "SWSIM SchedulePickup rejected: " + fault,
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps SchedulePickup failed: {}", ex.getMessage());
+            return new PickupResult("USPS", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "SWSIM SchedulePickup call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** Build the SWSIM SchedulePickup envelope. */
+    String buildSchedulePickupEnvelope(PickupRequest req, String authenticator) {
+        StringBuilder xml = new StringBuilder(1536);
+        xml.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+        xml.append("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">");
+        xml.append("<soap:Body>");
+        xml.append("<SchedulePickup xmlns=\"").append(SWSIM_NAMESPACE).append("\">");
+        xml.append("<Authenticator>").append(xmlEscape(authenticator)).append("</Authenticator>");
+        xml.append("<PickupDate>")
+                .append(req.pickupDate() == null ? "" : req.pickupDate().toString())
+                .append("</PickupDate>");
+        xml.append("<PackageCount>").append(Math.max(1, req.packageCount())).append("</PackageCount>");
+        // SWSIM PackageLocation values: MailRoom | Other | FrontDoor | BackDoor | KnockOnDoor | InMailBox
+        xml.append("<PackageLocation>Other</PackageLocation>");
+        if (StringUtils.hasText(req.specialInstructions())) {
+            xml.append("<SpecialInstructions>")
+                    .append(xmlEscape(req.specialInstructions()))
+                    .append("</SpecialInstructions>");
+        }
+
+        // PickupAddress block.
+        CarrierConnector.AddressToValidate a = req.address();
+        xml.append("<PickupAddress>");
+        if (StringUtils.hasText(req.contactName())) {
+            xml.append("<FullName>").append(xmlEscape(req.contactName())).append("</FullName>");
+        }
+        if (a != null) {
+            if (StringUtils.hasText(a.addressLine1())) {
+                xml.append("<Address1>").append(xmlEscape(a.addressLine1())).append("</Address1>");
+            }
+            if (StringUtils.hasText(a.addressLine2())) {
+                xml.append("<Address2>").append(xmlEscape(a.addressLine2())).append("</Address2>");
+            }
+            if (StringUtils.hasText(a.city())) {
+                xml.append("<City>").append(xmlEscape(a.city())).append("</City>");
+            }
+            if (StringUtils.hasText(a.state())) {
+                xml.append("<State>").append(xmlEscape(a.state())).append("</State>");
+            }
+            if (StringUtils.hasText(a.postalCode())) {
+                xml.append("<ZIPCode>").append(xmlEscape(a.postalCode())).append("</ZIPCode>");
+            }
+        }
+        if (StringUtils.hasText(req.contactPhone())) {
+            xml.append("<PhoneNumber>").append(xmlEscape(req.contactPhone())).append("</PhoneNumber>");
+        }
+        xml.append("</PickupAddress>");
+
+        // TotalWeight in ounces — USPS convention.
+        java.math.BigDecimal ozTotal = com.multiship.backend.util.UnitConverter
+                .toOunces(req.totalWeight(), req.weightUnit());
+        xml.append("<EstimatedWeight>")
+                .append(ozTotal == null ? "0" : ozTotal.toPlainString())
+                .append("</EstimatedWeight>");
+
+        xml.append("</SchedulePickup>");
+        xml.append("</soap:Body>");
+        xml.append("</soap:Envelope>");
+        return xml.toString();
+    }
+
+    /**
+     * Parse the SWSIM SchedulePickup response. Success carries
+     * {@code ConfirmationNumber}; absence of {@code faultstring}
+     * counts as success even when the number is absent.
+     */
+    PickupResult parseSchedulePickupResponse(PickupRequest req, String responseXml) {
+        if (!StringUtils.hasText(responseXml)) {
+            return new PickupResult("USPS", null,
+                    req.pickupDate(), req.pickupWindowStart(), req.pickupWindowEnd(),
+                    "ERROR",
+                    "SWSIM returned an empty SchedulePickup response.", null);
+        }
+        String fault = extractElement(responseXml, "faultstring");
+        if (StringUtils.hasText(fault)) {
+            return new PickupResult("USPS", null,
+                    req.pickupDate(), req.pickupWindowStart(), req.pickupWindowEnd(),
+                    "ERROR",
+                    "USPS pickup rejected: " + fault, responseXml);
+        }
+        String number = extractElement(responseXml, "ConfirmationNumber");
+        String status = StringUtils.hasText(number) ? "SCHEDULED" : "ERROR";
+        String message = StringUtils.hasText(number)
+                ? "USPS confirmed pickup — " + number
+                : "SWSIM response missing ConfirmationNumber.";
+        return new PickupResult("USPS", number,
+                req.pickupDate(), req.pickupWindowStart(), req.pickupWindowEnd(),
+                status, message, responseXml);
+    }
+
+    /**
      * Build the SWSIM GetRates SOAP envelope. No {@code ServiceType} — omitting
      * it asks SWSIM for the full rate ladder. Country only when non-US (SWSIM
      * treats absent Country as US and errors when both are set).

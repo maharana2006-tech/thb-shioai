@@ -946,6 +946,135 @@ public class FedExConnector implements CarrierConnector {
         return null;
     }
 
+    /**
+     * FedEx Create Pickup — {@code POST /pickup/v1/pickups} with a Bearer
+     * token. Body carries {@code originDetail} (address + ready time +
+     * customer close time), total package count + weight, carrier code
+     * (FDXE = Express, FDXG = Ground; we send FDXG as the operational
+     * default), and a pickup confirmation. Response includes
+     * {@code pickupConfirmationCode} and location.
+     *
+     * <p>{@code -local-*} fallback tokens short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public PickupResult schedulePickup(PickupRequest request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new PickupResult("FEDEX", null, null, null, null, "NOT_SUPPORTED",
+                    "FedEx pickup needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        try {
+            Map<String, Object> body = buildFedExPickupRequest(request);
+            String response = RestClient.builder().baseUrl(getBaseUrl()).build()
+                    .post()
+                    .uri("/pickup/v1/pickups")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("X-locale", "en_US")
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            return parseFedExPickupResponse(request, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("FedEx pickup rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return new PickupResult("FEDEX", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "FedEx pickup rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("FedEx pickup call failed: {}", ex.getMessage());
+            return new PickupResult("FEDEX", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "FedEx pickup call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** Build the FedEx CreatePickupRequest body. */
+    Map<String, Object> buildFedExPickupRequest(PickupRequest req) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("associatedAccountNumber", Map.of("value", "ACCOUNT"));
+
+        Map<String, Object> originDetail = new LinkedHashMap<>();
+        AddressToValidate a = req.address();
+        Map<String, Object> pickupLocation = new LinkedHashMap<>();
+        Map<String, Object> contact = new LinkedHashMap<>();
+        contact.put("companyName", firstNonBlank(req.contactName(), ""));
+        contact.put("personName", firstNonBlank(req.contactName(), ""));
+        contact.put("phoneNumber", firstNonBlank(req.contactPhone(), ""));
+        pickupLocation.put("contact", contact);
+        if (a != null) {
+            Map<String, Object> address = new LinkedHashMap<>();
+            java.util.List<String> lines = new java.util.ArrayList<>();
+            if (StringUtils.hasText(a.addressLine1())) lines.add(a.addressLine1());
+            if (StringUtils.hasText(a.addressLine2())) lines.add(a.addressLine2());
+            address.put("streetLines", lines);
+            if (StringUtils.hasText(a.city())) address.put("city", a.city());
+            if (StringUtils.hasText(a.state())) address.put("stateOrProvinceCode", a.state());
+            if (StringUtils.hasText(a.postalCode())) address.put("postalCode", a.postalCode());
+            if (StringUtils.hasText(a.countryCode())) address.put("countryCode", a.countryCode());
+            address.put("residential", false);
+            pickupLocation.put("address", address);
+        }
+        originDetail.put("pickupLocation", pickupLocation);
+        originDetail.put("readyDateTimestamp", formatFedExPickupTimestamp(req));
+        originDetail.put("customerCloseTime", req.pickupWindowEnd() == null
+                ? "17:00:00" : req.pickupWindowEnd().toString() + ":00");
+        originDetail.put("pickupDateType", "SAME_DAY");
+        body.put("originDetail", originDetail);
+
+        // FDXG = FedEx Ground; FDXE = FedEx Express. Ground is the safe
+        // operational default — most manual-label flows are Ground.
+        body.put("carrierCode", "FDXG");
+
+        body.put("totalPackageCount", req.packageCount());
+        String fedexWeightUnit = "KG".equalsIgnoreCase(req.weightUnit()) ? "KG" : "LB";
+        body.put("totalWeight", Map.of(
+                "units", fedexWeightUnit,
+                "value", req.totalWeight() != null ? req.totalWeight() : java.math.BigDecimal.ONE));
+
+        if (StringUtils.hasText(req.specialInstructions())) {
+            body.put("remarks", req.specialInstructions());
+        }
+        return body;
+    }
+
+    /** Produce a FedEx-compatible ISO-8601 timestamp for readyDateTimestamp. */
+    private static String formatFedExPickupTimestamp(PickupRequest req) {
+        java.time.LocalDate date = req.pickupDate() != null
+                ? req.pickupDate() : java.time.LocalDate.now();
+        java.time.LocalTime time = req.pickupWindowStart() != null
+                ? req.pickupWindowStart() : java.time.LocalTime.of(9, 0);
+        return date.toString() + "T" + time.toString();
+    }
+
+    /**
+     * Parse a FedEx pickup response. Success = {@code output.pickupConfirmationCode}
+     * is non-blank. Package-visible for tests.
+     */
+    PickupResult parseFedExPickupResponse(PickupRequest req, String response) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    Optional.ofNullable(response).orElse("{}"));
+            String code = root.at("/output/pickupConfirmationCode").asText(null);
+            String status = StringUtils.hasText(code) ? "SCHEDULED" : "ERROR";
+            String message = StringUtils.hasText(code)
+                    ? "FedEx confirmed pickup — " + code
+                    : "FedEx pickup response missing pickupConfirmationCode.";
+            return new PickupResult("FEDEX", code,
+                    req.pickupDate(), req.pickupWindowStart(), req.pickupWindowEnd(),
+                    status, message, response);
+        } catch (Exception ex) {
+            return new PickupResult("FEDEX", null,
+                    req.pickupDate(), req.pickupWindowStart(), req.pickupWindowEnd(),
+                    "ERROR",
+                    "FedEx pickup parse failed: " + ex.getMessage(), response);
+        }
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.FedEx fedEx = carrierProperties.getFedEx();
