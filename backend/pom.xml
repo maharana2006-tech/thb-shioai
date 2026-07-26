@@ -90,6 +90,19 @@
             <version>0.12.6</version>
             <scope>runtime</scope>
         </dependency>
+
+        <!-- Sprint 40 — CSV + Excel order import. Apache Commons CSV for
+             .csv parsing, Apache POI for .xlsx. -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+            <version>1.11.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.3.0</version>
+        </dependency>
 	</dependencies>
 
 	<build>

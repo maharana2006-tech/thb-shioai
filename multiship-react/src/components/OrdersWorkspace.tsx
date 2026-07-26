@@ -14,6 +14,7 @@ import {
   FiCalendar,
   FiPackage,
   FiSearch,
+  FiUpload,
   FiTruck,
   FiX,
   FiXCircle,
@@ -36,6 +37,7 @@ import TrackingTimelineModal from './tracking/TrackingTimelineModal'
 import SchedulePickupModal from './modals/SchedulePickupModal'
 import CloseOutModal from './modals/CloseOutModal'
 import BulkLabelModal from './modals/BulkLabelModal'
+import OrderImportModal from './modals/OrderImportModal'
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
 
@@ -142,6 +144,8 @@ export default function OrdersWorkspace() {
   const [closeOutOpen, setCloseOutOpen] = useState(false)
   // Sprint 37 — bulk-label modal.
   const [bulkLabelOpen, setBulkLabelOpen] = useState(false)
+  // Sprint 40 — CSV / XLSX import modal.
+  const [importOpen, setImportOpen] = useState(false)
 
   // The header's global search lands here as /orders?q=…
   useEffect(() => {
@@ -916,6 +920,13 @@ export default function OrdersWorkspace() {
               <FiPackage className="h-3.5 w-3.5" />
               Bulk labels ({rows.length})
             </button>
+            <button type="button"
+                    onClick={() => setImportOpen(true)}
+                    className={BTN_GHOST}
+                    title="Upload a CSV or Excel with one order per row">
+              <FiUpload className="h-3.5 w-3.5" />
+              Import CSV/Excel
+            </button>
             <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY}>
               <FiPlus className="h-3.5 w-3.5" />
               New shipment
@@ -1326,6 +1337,10 @@ export default function OrdersWorkspace() {
           onClose={() => setBulkLabelOpen(false)}
           orderNumbers={rows.map((o) => o.orderDetails.orderNo)}
         />
+      ) : null}
+
+      {importOpen ? (
+        <OrderImportModal onClose={() => setImportOpen(false)} />
       ) : null}
     </div>
   )
