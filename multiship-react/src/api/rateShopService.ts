@@ -27,7 +27,10 @@ export interface RateOption {
 export interface CarrierRateStatus {
   carrierCode: string
   optionCount: number
-  source: 'LIVE' | 'STUB' | 'ERROR'
+  /** Sprint 39 adds CACHE — options served from the backend rate cache
+   *  (5-min TTL). The message field says "cached Xs ago" so the UI can
+   *  render freshness. */
+  source: 'LIVE' | 'CACHE' | 'STUB' | 'ERROR'
   message: string
 }
 
