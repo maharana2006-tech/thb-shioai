@@ -43,6 +43,10 @@ public class CarrierProperties {
 
     @Valid
     @NestedConfigurationProperty
+    private final Dhl dhl = new Dhl();
+
+    @Valid
+    @NestedConfigurationProperty
     private final ShipperDefaults shipper = new ShipperDefaults();
 
     @Getter
@@ -160,6 +164,54 @@ public class CarrierProperties {
          * SWSIM staging endpoint. Selected when the caller's environment is
          * SANDBOX so testing credentials aren't sent to production.
          */
+        @NotBlank
+        private String sandboxAuthUrl;
+
+        @NotBlank
+        private String apiVersion;
+
+        @NotBlank
+        private String shipmentPath;
+
+        @NotBlank
+        private String trackingPath;
+
+        @NotBlank
+        private String tokenPath;
+
+        @NotBlank
+        private String logoUrl;
+
+        @NotBlank
+        private String documentationUrl;
+
+        @NotBlank
+        private String connectionGuide;
+
+        @NotBlank
+        private String defaultServiceType;
+
+        @NotBlank
+        private String defaultPackageType;
+
+        @NotBlank
+        private String labelResponseOption;
+    }
+
+    @Getter
+    @Setter
+    public static class Dhl {
+
+        @NotBlank
+        private String apiBaseUrl;
+
+        @NotBlank
+        private String sandboxUrl;
+
+        @NotBlank
+        private String authUrl;
+
+        /** Sandbox endpoint — DHL uses a /test suffix, same host as production. */
         @NotBlank
         private String sandboxAuthUrl;
 

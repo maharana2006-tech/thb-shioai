@@ -48,6 +48,7 @@ const carrierOptions = [
   { code: 'UPS', id: 'ups', label: 'UPS' },
   { code: 'FEDEX', id: 'fedex', label: 'FedEx' },
   { code: 'USPS', id: 'usps', label: 'USPS' },
+  { code: 'DHL', id: 'dhl', label: 'DHL Express' },
 ]
 
 /**
@@ -83,6 +84,18 @@ const credentialLabelsFor = (carrierCode: string) => {
       secretShort: 'password',
       helper:
         'Stamps.com SWSIM: IntegrationID is a GUID assigned to the integrator on developer.stamps.com. Username + Password are the end-user\'s Stamps.com account login.',
+    }
+  }
+  if (normalized === 'DHL') {
+    return {
+      accountNumberLabel: 'Account number',
+      accountNumberPlaceholder: 'e.g. 123456789 (your DHL Express account)',
+      idLong: 'API Key',
+      secretLong: 'API Secret',
+      idShort: 'API Key',
+      secretShort: 'API Secret',
+      helper:
+        'Get these on developer.dhl.com under your MyDHL API application. DHL uses HTTP Basic Auth on every call — no OAuth token exchange.',
     }
   }
   return {
