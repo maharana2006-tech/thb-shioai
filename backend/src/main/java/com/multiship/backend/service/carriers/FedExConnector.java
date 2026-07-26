@@ -637,6 +637,144 @@ public class FedExConnector implements CarrierConnector {
         }
     }
 
+    /**
+     * FedEx Address Validation — {@code POST /address/v1/addresses/resolve}
+     * with a Bearer token. Body carries {@code addressesToValidate[]} with
+     * one {@code address} per entry. Response gives per-address
+     * {@code attributes} (Residential/Commercial), {@code classification}
+     * (BUSINESS/RESIDENTIAL/UNKNOWN), {@code state} (STANDARDIZED for
+     * corrected, INVALID for not found), and a resolved {@code address}.
+     *
+     * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new AddressValidationResult(false, "NOT_SUPPORTED", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "FedEx AV needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        try {
+            java.util.List<String> streetLines = new java.util.ArrayList<>();
+            if (StringUtils.hasText(address.addressLine1())) streetLines.add(address.addressLine1());
+            if (StringUtils.hasText(address.addressLine2())) streetLines.add(address.addressLine2());
+            if (StringUtils.hasText(address.addressLine3())) streetLines.add(address.addressLine3());
+
+            Map<String, Object> addr = new LinkedHashMap<>();
+            addr.put("streetLines", streetLines);
+            if (StringUtils.hasText(address.city())) addr.put("city", address.city());
+            if (StringUtils.hasText(address.state())) addr.put("stateOrProvinceCode", address.state());
+            if (StringUtils.hasText(address.postalCode())) addr.put("postalCode", address.postalCode());
+            if (StringUtils.hasText(address.countryCode())) addr.put("countryCode", address.countryCode());
+
+            Map<String, Object> body = Map.of(
+                    "addressesToValidate", java.util.List.of(
+                            Map.of("address", addr)));
+
+            String response = RestClient.builder().baseUrl(getBaseUrl()).build().post()
+                    .uri("/address/v1/addresses/resolve")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("X-locale", "en_US")
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            return parseFedExAvResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("FedEx AV rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "FedEx AV rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("FedEx AV call failed: {}", ex.getMessage());
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "FedEx AV call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse a FedEx AV response. Package-visible for tests.
+     * Response shape (only the fields we use):
+     * <pre>
+     * output.resolvedAddresses[0].
+     *   classification            (BUSINESS / RESIDENTIAL / UNKNOWN / MIXED)
+     *   attributes.Residential    (boolean-as-string)
+     *   state                     (STANDARDIZED / INVALID / NORMALIZED)
+     *   parsedPostalCode          (present when corrected)
+     *   streetLinesToken[]        (corrected street lines)
+     *   city / stateOrProvinceCode / postalCode / countryCode
+     * </pre>
+     */
+    AddressValidationResult parseFedExAvResponse(String response) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    Optional.ofNullable(response).orElse("{}"));
+            com.fasterxml.jackson.databind.JsonNode resolved = root.at("/output/resolvedAddresses/0");
+            if (resolved.isMissingNode()) {
+                return new AddressValidationResult(false, "NOT_FOUND", "UNKNOWN", null,
+                        java.util.List.of(),
+                        "FedEx AV returned no resolved address.", response);
+            }
+
+            String state = resolved.path("state").asText("");
+            String classification = mapFedExClassification(resolved.path("classification").asText("UNKNOWN"));
+
+            AddressToValidate suggested = readFedExResolvedAddress(resolved);
+
+            switch (state.toUpperCase()) {
+                case "STANDARDIZED":
+                    return new AddressValidationResult(true, "EXACT", classification, null,
+                            java.util.List.of(),
+                            "FedEx confirmed this address is deliverable.", response);
+                case "NORMALIZED":
+                    return new AddressValidationResult(true, "CORRECTED", classification, suggested,
+                            java.util.List.of("FedEx corrected the address; review before shipping."),
+                            "FedEx suggested a corrected address.", response);
+                case "INVALID":
+                    return new AddressValidationResult(false, "NOT_FOUND", classification, null,
+                            java.util.List.of("FedEx couldn't find this address."),
+                            "FedEx address not found.", response);
+                default:
+                    return new AddressValidationResult(false, "ERROR", classification, suggested,
+                            java.util.List.of(),
+                            "FedEx AV returned unrecognized state: " + state, response);
+            }
+        } catch (Exception ex) {
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "FedEx AV response parse failed: " + ex.getMessage(), response);
+        }
+    }
+
+    private static AddressToValidate readFedExResolvedAddress(com.fasterxml.jackson.databind.JsonNode resolved) {
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        com.fasterxml.jackson.databind.JsonNode tokens = resolved.path("streetLinesToken");
+        if (tokens.isArray()) tokens.forEach(n -> lines.add(n.asText()));
+        return new AddressToValidate(
+                null, null,
+                lines.size() > 0 ? lines.get(0) : null,
+                lines.size() > 1 ? lines.get(1) : null,
+                lines.size() > 2 ? lines.get(2) : null,
+                resolved.path("city").asText(null),
+                resolved.path("stateOrProvinceCode").asText(null),
+                resolved.path("postalCode").asText(null),
+                resolved.path("countryCode").asText(null));
+    }
+
+    private static String mapFedExClassification(String raw) {
+        if (raw == null) return "UNKNOWN";
+        return switch (raw.trim().toUpperCase()) {
+            case "BUSINESS" -> "COMMERCIAL";
+            case "RESIDENTIAL" -> "RESIDENTIAL";
+            default -> "UNKNOWN";
+        };
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.FedEx fedEx = carrierProperties.getFedEx();

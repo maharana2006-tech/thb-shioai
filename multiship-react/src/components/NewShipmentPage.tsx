@@ -14,6 +14,7 @@ import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
 import { shippingConfigService, type ShippingServiceItem, type PackagePreset } from '../api/shippingConfigService'
 import { addressService } from '../api/addressService'
+import { addressValidationService, type AddressValidationResponse } from '../api/addressValidationService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
 import {
   clientAllowedPackagesService,
@@ -350,6 +351,9 @@ export default function NewShipmentPage() {
 
   // Recipient address validation result (from the Validate button).
   const [recipientCheck, setRecipientCheck] = useState<{ valid: boolean; issues: string[] } | null>(null)
+  // Sprint 31 — carrier-side address validation result (from the Validate with carrier button).
+  const [carrierAddressResult, setCarrierAddressResult] = useState<AddressValidationResponse | null>(null)
+  const [carrierValidating, setCarrierValidating] = useState(false)
   const [validating, setValidating] = useState(false)
 
   // International commercial-invoice line items (shown only for cross-border lanes).
@@ -763,6 +767,64 @@ export default function NewShipmentPage() {
     }
   }
 
+  /**
+   * Sprint 31 — validate the ship-to address against the SELECTED carrier's
+   * own database (UPS AVS / FedEx AV / DHL address-validate / SWSIM
+   * CleanseAddress). Complements the platform-side check by confirming the
+   * carrier can actually deliver the parcel + returning residential/commercial
+   * classification.
+   */
+  const validateRecipientWithCarrier = async () => {
+    if (!carrier) {
+      notify.error('Pick a carrier first — validation is carrier-specific.')
+      return
+    }
+    setCarrierValidating(true)
+    try {
+      const res = await addressValidationService.validate({
+        carrierCode: carrier,
+        customerNo: clientCode.trim() || null,
+        name: recipient.name || undefined,
+        addressLine1: recipient.addressLine1,
+        addressLine2: recipient.addressLine2 || undefined,
+        addressLine3: recipient.addressLine3 || undefined,
+        city: recipient.city,
+        state: recipient.state || undefined,
+        postalCode: recipient.postalCode,
+        countryCode: recipient.countryCode,
+      })
+      const d = res.data
+      setCarrierAddressResult(d ?? null)
+      if (d?.valid) {
+        notify.success(`${carrier}: ${d.matchLevel} match.`)
+      } else if (d) {
+        notify.error(`${carrier}: ${d.message}`)
+      }
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Carrier address validation failed.')
+    } finally {
+      setCarrierValidating(false)
+    }
+  }
+
+  /** Apply the carrier's suggested address to the recipient block. */
+  const applyCarrierSuggestion = () => {
+    const s = carrierAddressResult?.suggested
+    if (!s) return
+    setRecipient((cur) => ({
+      ...cur,
+      addressLine1: s.addressLine1 ?? cur.addressLine1,
+      addressLine2: s.addressLine2 ?? cur.addressLine2,
+      addressLine3: s.addressLine3 ?? cur.addressLine3,
+      city: s.city ?? cur.city,
+      state: s.state ?? cur.state,
+      postalCode: s.postalCode ?? cur.postalCode,
+      countryCode: s.countryCode ?? cur.countryCode,
+    }))
+    setCarrierAddressResult(null)
+    notify.success('Applied carrier-suggested address.')
+  }
+
   // Wizard payload = a snapshot of the current inline state in the shape
   // CustomsWizard expects (OrderCustomsPayload). Rebuilt each time the
   // wizard opens so it starts from whatever the user last typed inline.
@@ -1072,19 +1134,38 @@ export default function NewShipmentPage() {
                 icon={<FiMapPin className="h-3.5 w-3.5" />}
                 title={isReturn ? 'Return to · your address' : 'Ship to · recipient'}
                 badge={
-                  <button
-                    type="button"
-                    onClick={() => void validateRecipient()}
-                    disabled={validating}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
-                  >
-                    {validating ? (
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
-                    ) : (
-                      <FiCheckCircle className="h-3.5 w-3.5" />
-                    )}
-                    Validate address
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => void validateRecipient()}
+                      disabled={validating}
+                      title="Platform-side check — postal format, address components"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                    >
+                      {validating ? (
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+                      ) : (
+                        <FiCheckCircle className="h-3.5 w-3.5" />
+                      )}
+                      Validate address
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void validateRecipientWithCarrier()}
+                      disabled={carrierValidating || !carrier}
+                      title={carrier
+                        ? `Carrier-side check — ask ${carrier} whether they can deliver here + residential/commercial classification`
+                        : 'Pick a carrier first'}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#1f150c] bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {carrierValidating ? (
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#8a7959] border-t-[#f4eede]" />
+                      ) : (
+                        <FiSearch className="h-3 w-3" />
+                      )}
+                      Check with {carrier || 'carrier'}
+                    </button>
+                  </div>
                 }
               >
                 <AddressBlock value={recipient} onChange={(patch) => setRecipient((r) => ({ ...r, ...patch }))} withEmail={!isReturn} />
@@ -1118,6 +1199,13 @@ export default function NewShipmentPage() {
                       </ul>
                     </div>
                   )
+                ) : null}
+                {carrierAddressResult ? (
+                  <CarrierAddressBanner
+                    result={carrierAddressResult}
+                    onApply={applyCarrierSuggestion}
+                    onDismiss={() => setCarrierAddressResult(null)}
+                  />
                 ) : null}
               </SectionCard>
             </div>
@@ -1678,6 +1766,85 @@ export default function NewShipmentPage() {
             />
           </div>
         </div>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Sprint 31 — inline banner for carrier-side address validation results.
+ * Colour by matchLevel; when the carrier returned a suggested address,
+ * show the diff + an Apply button that overwrites the recipient block.
+ */
+function CarrierAddressBanner({
+  result,
+  onApply,
+  onDismiss,
+}: {
+  result: AddressValidationResponse
+  onApply: () => void
+  onDismiss: () => void
+}) {
+  const level = result.matchLevel
+  const palette =
+    level === 'EXACT'
+      ? { border: 'border-emerald-200', bg: 'bg-emerald-50', text: 'text-emerald-800' }
+      : level === 'CORRECTED' || level === 'AMBIGUOUS'
+        ? { border: 'border-amber-200', bg: 'bg-amber-50', text: 'text-amber-800' }
+        : level === 'NOT_SUPPORTED'
+          ? { border: 'border-slate-200', bg: 'bg-slate-50', text: 'text-slate-700' }
+          : { border: 'border-rose-200', bg: 'bg-rose-50', text: 'text-rose-800' }
+  const s = result.suggested
+  return (
+    <div className={`mt-3 rounded-xl border ${palette.border} ${palette.bg} px-3 py-2 text-[12px] ${palette.text}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="flex items-center gap-1.5 font-semibold">
+            <span className="rounded-full bg-white/60 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.14em]">
+              {result.carrierCode} · {level}
+            </span>
+            {result.classification && result.classification !== 'UNKNOWN' ? (
+              <span className="rounded-full bg-white/60 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.14em]">
+                {result.classification}
+              </span>
+            ) : null}
+          </p>
+          <p className="mt-1">{result.message}</p>
+          {s ? (
+            <div className="mt-2 rounded-lg bg-white/60 px-2.5 py-1.5 font-mono text-[10.5px]">
+              <p>{s.addressLine1}</p>
+              {s.addressLine2 ? <p>{s.addressLine2}</p> : null}
+              {s.addressLine3 ? <p>{s.addressLine3}</p> : null}
+              <p>
+                {s.city}, {s.state} {s.postalCode} {s.countryCode}
+              </p>
+            </div>
+          ) : null}
+          {result.warnings && result.warnings.length > 0 ? (
+            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px]">
+              {result.warnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          className="shrink-0 rounded p-1 hover:bg-white/40"
+        >
+          <FiX className="h-3 w-3" />
+        </button>
+      </div>
+      {s ? (
+        <button
+          type="button"
+          onClick={onApply}
+          className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-current bg-white/60 px-2.5 py-1 text-[11px] font-semibold hover:bg-white/80"
+        >
+          Apply suggested address
+        </button>
       ) : null}
     </div>
   )
