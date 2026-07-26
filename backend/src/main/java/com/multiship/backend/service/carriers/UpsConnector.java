@@ -990,6 +990,87 @@ public class UpsConnector implements CarrierConnector {
         }
     }
 
+    /**
+     * UPS End of Day — {@code POST /api/shipments/v1/endofday} with a
+     * Bearer token. Body carries the list of tracking numbers to
+     * manifest. Response includes a BOL (Bill of Lading) number and a
+     * base64 manifest PDF the driver signs at pickup.
+     *
+     * <p>{@code -local-*} fallback tokens short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new CloseOutResult("UPS", null, null, null, 0, "NOT_SUPPORTED",
+                    "UPS close-out needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        java.util.List<String> tracking = request.trackingNumbers();
+        if (tracking == null || tracking.isEmpty()) {
+            return new CloseOutResult("UPS", null, null, null, 0, "ERROR",
+                    "UPS close-out requires at least one tracking number.", null);
+        }
+        try {
+            java.util.List<Map<String, Object>> shipments = new java.util.ArrayList<>();
+            for (String t : tracking) shipments.add(Map.of("TrackingNumber", t));
+
+            Map<String, Object> eodRequest = new LinkedHashMap<>();
+            eodRequest.put("Request", Map.of(
+                    "TransactionReference", Map.of("CustomerContext", "eod-" + java.util.UUID.randomUUID())));
+            eodRequest.put("Shipments", shipments);
+
+            Map<String, Object> body = Map.of("EndOfDayRequest", eodRequest);
+            String response = RestClient.builder()
+                    .baseUrl(carrierProperties.getUps().getApiBaseUrl()).build()
+                    .post()
+                    .uri("/api/shipments/v1/endofday")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("transId", java.util.UUID.randomUUID().toString())
+                    .header("transactionSrc", "multiship")
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            return parseUpsCloseOutResponse(request, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("UPS end-of-day rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return new CloseOutResult("UPS", null, null, null, tracking.size(), "ERROR",
+                    "UPS end-of-day rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("UPS end-of-day call failed: {}", ex.getMessage());
+            return new CloseOutResult("UPS", null, null, null, tracking.size(), "ERROR",
+                    "UPS end-of-day call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse a UPS End of Day response. Success = presence of
+     * {@code EndOfDayResponse.BOLNumber}. The base64 PDF (when returned)
+     * lives at {@code Manifest.ManifestImage.GraphicImage}.
+     */
+    CloseOutResult parseUpsCloseOutResponse(CloseOutRequest request, String response) {
+        try {
+            JsonNode root = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
+            JsonNode eod = root.at("/EndOfDayResponse");
+            String bolNumber = eod.path("BOLNumber").asText(null);
+            String pdfBase64 = eod.at("/Manifest/ManifestImage/GraphicImage").asText(null);
+            int count = request.trackingNumbers() == null ? 0 : request.trackingNumbers().size();
+            String status = StringUtils.hasText(bolNumber) ? "MANIFESTED" : "ERROR";
+            String message = StringUtils.hasText(bolNumber)
+                    ? "UPS manifested " + count + " shipment(s) · BOL " + bolNumber
+                    : "UPS end-of-day response missing BOLNumber.";
+            return new CloseOutResult("UPS", bolNumber, null, pdfBase64, count,
+                    status, message, response);
+        } catch (Exception ex) {
+            int count = request.trackingNumbers() == null ? 0 : request.trackingNumbers().size();
+            return new CloseOutResult("UPS", null, null, null, count, "ERROR",
+                    "UPS end-of-day parse failed: " + ex.getMessage(), response);
+        }
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.Ups ups = carrierProperties.getUps();

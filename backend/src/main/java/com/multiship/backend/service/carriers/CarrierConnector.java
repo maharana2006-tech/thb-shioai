@@ -233,6 +233,86 @@ public interface CarrierConnector {
      * Default returns {@code NOT_SUPPORTED} so any future carrier without a
      * live pickup API stays additive.
      */
+    /**
+     * Close out the day's shipments — Sprint 34. Every carrier expects
+     * an end-of-day manifest listing the tracking numbers that will be
+     * handed to the driver at pickup. Without it, drivers may refuse to
+     * scan parcels because the labels haven't been reported to the
+     * carrier's central system.
+     * <ul>
+     *   <li>UPS: End of Day API — {@code POST /api/shipments/v1/endofday}
+     *       with the tracking numbers list.</li>
+     *   <li>FedEx: {@code POST /ship/v1/shipments/endofday} — returns a
+     *       manifest PDF for the driver.</li>
+     *   <li>USPS/SWSIM: {@code CreateScanForm} SOAP — USPS's SCAN Form
+     *       barcode acknowledges every included Priority Mail / Ground
+     *       Advantage label in one scan.</li>
+     *   <li>DHL: no explicit endpoint — DHL manifests are implicit via
+     *       the pickup request (Sprint 33). Returns NOT_SUPPORTED.</li>
+     * </ul>
+     */
+    default CloseOutResult closeOutDay(CloseOutRequest request, String accessToken) {
+        return new CloseOutResult(
+                getCarrierCode(),
+                null,
+                null,
+                null,
+                0,
+                "NOT_SUPPORTED",
+                "Close-out isn't implemented for " + getCarrierCode() + " on this instance.",
+                null);
+    }
+
+    /**
+     * Close-out request. Sprint 34.
+     *
+     * @param trackingNumbers The list of tracking numbers to include on
+     *                        the manifest. Never null, never empty
+     *                        (caller-side check).
+     * @param closeDate       The date the manifest applies to. Defaults
+     *                        to today when null.
+     * @param address         The ship-from address the driver will
+     *                        collect from — some carriers include this
+     *                        on the manifest for the driver's route.
+     */
+    record CloseOutRequest(
+            List<String> trackingNumbers,
+            java.time.LocalDate closeDate,
+            AddressToValidate address
+    ) {
+    }
+
+    /**
+     * Result of an end-of-day close-out.
+     *
+     * @param carrierCode      Carrier that produced the manifest.
+     * @param manifestId       Carrier's manifest identifier (UPS BOL
+     *                         number, FedEx group number, SWSIM
+     *                         SubmissionID). Null on ERROR / NOT_SUPPORTED.
+     * @param manifestPdfUrl   Direct URL to the manifest PDF when the
+     *                         carrier gives us one. Some carriers embed
+     *                         the PDF inline (see next field) instead.
+     * @param manifestPdfBase64 Base64-encoded manifest PDF when the
+     *                          carrier returns it inline. Null when the
+     *                          carrier only gives a URL.
+     * @param trackingCount    How many tracking numbers were included on
+     *                         this manifest.
+     * @param status           MANIFESTED | ERROR | NOT_SUPPORTED.
+     * @param message          Operator-facing summary sentence.
+     * @param rawResponse      Full carrier response for the audit trail.
+     */
+    record CloseOutResult(
+            String carrierCode,
+            String manifestId,
+            String manifestPdfUrl,
+            String manifestPdfBase64,
+            int trackingCount,
+            String status,
+            String message,
+            String rawResponse
+    ) {
+    }
+
     default PickupResult schedulePickup(PickupRequest request, String accessToken) {
         return new PickupResult(
                 getCarrierCode(),
