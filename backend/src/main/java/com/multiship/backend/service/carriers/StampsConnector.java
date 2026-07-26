@@ -726,6 +726,16 @@ public class StampsConnector implements CarrierConnector {
 
         xml.append("<CustomerID>").append(xmlEscape(nonBlank(request.getReferenceNumber(), ""))).append("</CustomerID>");
 
+        // Sprint 25 — Print Return Label. SWSIM's CreateIndicium accepts
+        // {@code IsReturnLabel=true} at the top level; USPS then prints a
+        // return-format label with the addresses interpreted as the
+        // recipient (customer) sending BACK to the sender (retailer).
+        // Callers should still populate From = return depot / retailer and
+        // To = customer's return-from address.
+        if (Boolean.TRUE.equals(request.getIsReturn())) {
+            xml.append("<IsReturnLabel>true</IsReturnLabel>");
+        }
+
         // CustomsInfo drives CN22/CN23 auto-print. Emitted only when the
         // shipment is international and the customs block is complete.
         if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {

@@ -517,6 +517,15 @@ public class UpsConnector implements CarrierConnector {
         // with the Order model rework. UPS Package[] preserves the units.
         shipment.put("Package", java.util.List.of(buildPackage(request)));
 
+        // Sprint 25 — Print Return Label. UPS ReturnService.Code "8" =
+        // "Print Return Label" (the paper-based variant; PDF returned to
+        // us, we forward to the customer). Code "9" = Electronic Return
+        // Label (UPS emails the label direct to the customer). We use 8
+        // because our label PDF flow already handles operator delivery.
+        if (Boolean.TRUE.equals(request.getIsReturn())) {
+            shipment.put("ReturnService", Map.of("Code", "8"));
+        }
+
         // International forms only when the request carries an intl block
         // that's ready (all required fields present).
         if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {

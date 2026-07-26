@@ -395,10 +395,16 @@ public class DhlConnector implements CarrierConnector {
      * holds the billing party.
      */
     Map<String, Object> buildShipmentPayload(ShipmentRequestDTO request) {
+        boolean isReturn = Boolean.TRUE.equals(request.getIsReturn());
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("productCode", firstNonBlank(request.getServiceType(), "P"));
         payload.put("plannedShippingDateAndTime", plannedShipDate());
-        payload.put("pickup", Map.of("isRequested", false));
+        // Sprint 25 — Print Return Label. DHL Express treats return labels
+        // as normal shipments with the customer as receiver and the return
+        // depot as shipper (billing is on the shipper's account); we flip
+        // pickup.isRequested=true so DHL Express Global Return schedules
+        // collection from the customer.
+        payload.put("pickup", Map.of("isRequested", isReturn));
         payload.put("outputImageProperties", Map.of(
                 "encodingFormat", "pdf",
                 "imageOptions", List.of(Map.of(
