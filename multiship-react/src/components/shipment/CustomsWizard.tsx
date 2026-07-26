@@ -88,6 +88,11 @@ const CARRIER_HINTS: Record<string, { title: string; body: string; docsUrl: stri
     body: 'Stamps.com auto-prints CN22 (goods ≤ $400) or CN23 (goods > $400 or Priority Mail Intl) on the label PDF once customs data is present. No extra step for operators.',
     docsUrl: 'https://about.usps.com/postal-bulletin/2019/pb22515/html/updt_003.htm',
   },
+  DHL: {
+    title: 'DHL Express Paperless Trade',
+    body: 'DHL auto-transmits the electronic commercial invoice when customs data is present — no printed paperwork attached to the parcel. Requires Paperless Trade enrolment on your MyDHL account.',
+    docsUrl: 'https://mydhl.express.dhl/us/en/help-and-support/shipping-advice/paperless-trade.html',
+  },
 }
 
 type StepId = 'shipment-type' | 'commodities' | 'duties' | 'review'
