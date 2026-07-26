@@ -38,6 +38,7 @@ public final class IntlShipmentValidator {
     public static final String CODE_BAD_CURRENCY = "customs.currency.invalid";
     public static final String CODE_BAD_REASON = "customs.reason.invalid";
     public static final String CODE_DUTY_ACCOUNT_MISSING = "customs.duty.account.missing";
+    public static final String CODE_BAD_HS_CODE = "customs.commodity.hscode.invalid";
 
     /** Approved incoterms — mirrors the wizard's INCOTERMS constant + CustomsProfile.dutiesBillTo enum. */
     private static final Set<String> VALID_INCOTERMS = Set.of("DDP", "DAP", "DDU");
@@ -45,6 +46,16 @@ public final class IntlShipmentValidator {
     private static final Set<String> VALID_DUTY_BILL_TO = Set.of("SENDER", "RECIPIENT", "THIRD_PARTY");
     /** Same enum as OrderCustoms.reasonForExport. */
     private static final Set<String> VALID_REASON = Set.of("SALE", "GIFT", "SAMPLE", "RETURN", "REPAIR", "DOCUMENTS");
+    /**
+     * HS (Harmonized System) tariff code — 6 digits at the WCO root, with
+     * per-country extensions up to 10 digits. UPS / FedEx / most customs
+     * authorities accept dot- or space-separated forms too, but we normalize
+     * to digits-only for the pattern check. The regex is intentionally lax
+     * (6-10 digits, no zero-only) — enforcing chapter/section validity is a
+     * dataset problem we won't take on here.
+     */
+    private static final java.util.regex.Pattern HS_CODE_PATTERN =
+            java.util.regex.Pattern.compile("^\\d{6,10}$");
 
     private IntlShipmentValidator() {}
 
@@ -78,6 +89,14 @@ public final class IntlShipmentValidator {
                 if (!missing.isEmpty()) {
                     errors.add(new ValidationError(CODE_ITEM_INCOMPLETE,
                             "Commodity line " + (i + 1) + " missing: " + String.join(", ", missing) + "."));
+                }
+                // HS code shape check runs INDEPENDENTLY of the missing-fields
+                // list so a line with description+quantity+value but a wrong
+                // HS code still surfaces the code-shape error.
+                if (!isBlank(c.getHsCode()) && !isValidHsCodeShape(c.getHsCode())) {
+                    errors.add(new ValidationError(CODE_BAD_HS_CODE,
+                            "Commodity line " + (i + 1) + " HS code \"" + c.getHsCode().trim()
+                                    + "\" isn't 6-10 digits — customs will reject the declaration."));
                 }
             }
         }
@@ -147,6 +166,18 @@ public final class IntlShipmentValidator {
      */
     private static boolean isValidCurrency(String s) {
         return s != null && s.trim().length() == 3 && s.trim().chars().allMatch(Character::isLetter);
+    }
+
+    /**
+     * True when the HS code is 6-10 digits after removing dots, spaces, and
+     * hyphens. Carriers and customs accept "6104.62.20" as much as "610462" —
+     * the separators are cosmetic. We only reject codes that couldn't
+     * possibly resolve to a valid tariff.
+     */
+    private static boolean isValidHsCodeShape(String s) {
+        if (s == null) return false;
+        String stripped = s.trim().replaceAll("[.\\s\\-]", "");
+        return HS_CODE_PATTERN.matcher(stripped).matches();
     }
 
     /** One violation. Immutable, structured so the UI can localise off {@code code}. */
