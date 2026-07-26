@@ -14,6 +14,7 @@ import {
   FiSearch,
   FiTruck,
   FiX,
+  FiXCircle,
   FiZap,
   FiPlus,
 } from 'react-icons/fi'
@@ -127,6 +128,9 @@ export default function OrdersWorkspace() {
   // Sprint 23 — Track column: opens the TrackingTimelineModal with live
   // scan events from the connector's authenticated tracking API.
   const [trackingOrderNo, setTrackingOrderNo] = useState<number | null>(null)
+  // Sprint 30 — Void action: currently-voiding orderNo (for spinner);
+  // handler confirms with the user before calling the carrier.
+  const [voidingOrderNo, setVoidingOrderNo] = useState<number | null>(null)
 
   // The header's global search lands here as /orders?q=…
   useEffect(() => {
@@ -232,6 +236,40 @@ export default function OrdersWorkspace() {
   }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sortBy, sortDirection, debouncedFilters, reloadToken])
 
   const refreshQueues = () => setReloadToken((token) => token + 1)
+
+  /**
+   * Sprint 30 — void a label at the carrier. Confirms first (irreversible
+   * at the carrier), then calls POST /orders/{n}/void. Refreshes the queue
+   * on success so the row moves out of "generated" state.
+   */
+  const handleVoid = async (orderNo: number, trackingNumber: string | null) => {
+    if (!trackingNumber) return
+    const ok = window.confirm(
+      `Void tracking ${trackingNumber} at the carrier?\n\n`
+      + 'This calls the carrier\'s void / cancel endpoint (UPS, FedEx, USPS, DHL). '
+      + 'Postage is refunded only if the label hasn\'t been scanned in transit yet — '
+      + 'post-scan voids succeed but no refund is issued.',
+    )
+    if (!ok) return
+    setVoidingOrderNo(orderNo)
+    try {
+      const response = await orderService.voidLabel(orderNo)
+      const data = response.data
+      if (data?.voided || data?.status === 'ALREADY_VOIDED') {
+        notify.success(`Order ${orderNo}: ${data.message}`)
+        refreshQueues()
+      } else {
+        notify.error(`Void failed: ${data?.message ?? 'Unknown error.'}`)
+      }
+    } catch (e) {
+      const msg = e instanceof ApiError ? (e.payload?.message ?? e.message)
+        : e instanceof Error ? e.message
+        : 'Void call failed.'
+      notify.error(msg)
+    } finally {
+      setVoidingOrderNo(null)
+    }
+  }
 
   const readyCount = stats?.ready ?? 0
   const detailsCount = stats?.needsDetails ?? 0
@@ -1068,6 +1106,20 @@ export default function OrdersWorkspace() {
                           >
                             <FiTruck className="h-3 w-3" />
                             Track
+                          </button>
+                        ) : null}
+                        {order.labelDetails.trackingNumber
+                          && (order.labelDetails.status || '').toUpperCase() !== 'VOIDED' ? (
+                          <button
+                            type="button"
+                            disabled={voidingOrderNo === orderNo}
+                            onClick={() => void handleVoid(orderNo, order.labelDetails.trackingNumber)}
+                            title={`Void ${order.labelDetails.trackingNumber} at the carrier`}
+                            aria-label={`Void order ${orderNo}`}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px] font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:opacity-40"
+                          >
+                            <FiXCircle className="h-3 w-3" />
+                            {voidingOrderNo === orderNo ? 'Voiding…' : 'Void'}
                           </button>
                         ) : null}
                         <button

@@ -557,6 +557,86 @@ public class FedExConnector implements CarrierConnector {
         return List.copyOf(events);
     }
 
+    /**
+     * FedEx Cancel Shipment — {@code PUT /ship/v1/shipments/cancel} with
+     * a Bearer token and body containing {@code accountNumber},
+     * {@code trackingNumber}, {@code senderCountryCode}, and
+     * {@code deletionControl}. FedEx refunds postage when the label
+     * hasn't been scanned yet; post-scan cancels still succeed but no
+     * refund is issued.
+     *
+     * <p>{@code -local-*} fallback tokens short-circuit to
+     * {@code NOT_SUPPORTED}. The account number defaults to
+     * {@code "ACCOUNT"} (the platform account placeholder) when not
+     * derivable from the request context; FedEx will reject that but
+     * we surface the ERROR clearly instead of silently attempting.
+     */
+    @Override
+    public VoidResult voidShipment(String trackingNumber, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
+                    "FedEx void needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        try {
+            java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+            // Account number placeholder — FedEx cancel needs the shipper
+            // account number to match the label. Improve by threading the
+            // stored account from OrderTracking through the void call.
+            body.put("accountNumber", java.util.Map.of("value", "ACCOUNT"));
+            body.put("emailShipment", false);
+            body.put("senderCountryCode", "US");
+            body.put("deletionControl", "DELETE_ALL_PACKAGES");
+            body.put("trackingNumber", trackingNumber);
+
+            String response = RestClient.builder().baseUrl(getBaseUrl()).build()
+                    .put()
+                    .uri("/ship/v1/shipments/cancel")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("X-locale", "en_US")
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            return parseFedExVoidResponse(trackingNumber, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("FedEx cancel rejected for {} (HTTP {}): {}",
+                    trackingNumber, ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "FedEx cancel rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("FedEx cancel call failed for {}: {}", trackingNumber, ex.getMessage());
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "FedEx cancel call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse the FedEx cancel response. FedEx returns {@code output.cancelledShipment}
+     * boolean plus a message. When {@code cancelledShipment=true} the void
+     * was accepted.
+     */
+    VoidResult parseFedExVoidResponse(String trackingNumber, String response) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    Optional.ofNullable(response).orElse("{}"));
+            com.fasterxml.jackson.databind.JsonNode output = root.path("output");
+            boolean cancelled = output.path("cancelledShipment").asBoolean(false);
+            String reason = output.path("message").asText(
+                    output.path("cancelledHistory").asText(""));
+            String status = cancelled ? "VOIDED" : "ERROR";
+            String message = cancelled
+                    ? "FedEx confirmed cancel." + (reason.isEmpty() ? "" : " " + reason)
+                    : "FedEx cancel rejected. " + reason;
+            return new VoidResult(trackingNumber, cancelled, status, message, response);
+        } catch (Exception ex) {
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "FedEx cancel response parse failed: " + ex.getMessage(), response);
+        }
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.FedEx fedEx = carrierProperties.getFedEx();

@@ -94,6 +94,53 @@ public interface CarrierConnector {
         return trackShipment(trackingNumber);
     }
 
+    /**
+     * Void / cancel a previously-issued label. Sprint 30. Every carrier
+     * exposes a "cancel this shipment" endpoint — UPS Void Shipment,
+     * FedEx Cancel Shipment, SWSIM CancelIndicium, DHL Delete Shipment.
+     * Semantics differ slightly:
+     * <ul>
+     *   <li>Refunds the postage IF the carrier hasn't scanned the label
+     *       in transit yet. Post-scan requests still succeed but no
+     *       refund happens.</li>
+     *   <li>Idempotent — voiding an already-voided label returns the
+     *       same success response.</li>
+     * </ul>
+     *
+     * <p>The default returns {@code NOT_SUPPORTED} so carriers we don't
+     * have void wire for yet keep compiling. {@code -local-*} tokens
+     * short-circuit here too — a fallback token from an unverified
+     * account can't authenticate a void call, so the connector returns
+     * NOT_SUPPORTED with a message.
+     */
+    default VoidResult voidShipment(String trackingNumber, String accessToken) {
+        return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
+                "Void isn't implemented for " + getCarrierCode() + " on this instance.", null);
+    }
+
+    /**
+     * Void result — success flag + status enum + human-readable
+     * message + raw carrier response for the audit trail.
+     *
+     * @param trackingNumber Same tracking number the caller passed in.
+     * @param voided         True when the carrier confirmed the void /
+     *                       cancel. False when the request was rejected
+     *                       (already picked up, unknown tracking, auth
+     *                       failure).
+     * @param status         VOIDED | ALREADY_VOIDED | NOT_SUPPORTED | ERROR.
+     * @param message        Operator-facing explanation.
+     * @param rawResponse    Full carrier response for debugging; null on
+     *                       NOT_SUPPORTED (no call was made).
+     */
+    record VoidResult(
+            String trackingNumber,
+            boolean voided,
+            String status,
+            String message,
+            String rawResponse
+    ) {
+    }
+
     CarrierConfiguration getConfiguration();
 
     /** One available service level for a lane: the carrier's code, name, scope. */

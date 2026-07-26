@@ -426,6 +426,74 @@ public class UpsConnector implements CarrierConnector {
         return sb.length() == 0 ? null : sb.toString();
     }
 
+    /**
+     * UPS Void Shipment — {@code DELETE /api/shipments/{version}/void/cancel/{tracking}}
+     * with a Bearer token. Response body carries a {@code SummaryResult}
+     * with a {@code Status.Code} of "1" on success. UPS refunds the
+     * postage IF the label hasn't been scanned; post-scan void requests
+     * still return 200 but no refund is issued (that's carrier policy,
+     * not something we can gate here).
+     *
+     * <p>{@code -local-*} fallback tokens short-circuit to
+     * {@code NOT_SUPPORTED} — the account never actually authenticated.
+     */
+    @Override
+    public VoidResult voidShipment(String trackingNumber, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
+                    "UPS void needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        String url = "/api/shipments/" + carrierProperties.getUps().getApiVersion()
+                + "/void/cancel/" + trackingNumber;
+        try {
+            String response = RestClient.builder()
+                    .baseUrl(carrierProperties.getUps().getApiBaseUrl()).build()
+                    .method(org.springframework.http.HttpMethod.DELETE)
+                    .uri(url)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("transId", java.util.UUID.randomUUID().toString())
+                    .header("transactionSrc", "multiship")
+                    .retrieve()
+                    .body(String.class);
+            return parseUpsVoidResponse(trackingNumber, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            String body = ex.getResponseBodyAsString();
+            log.warn("UPS void rejected for {} (HTTP {}): {}",
+                    trackingNumber, ex.getStatusCode().value(), body);
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "UPS void rejected: HTTP " + ex.getStatusCode().value(), body);
+        } catch (Exception ex) {
+            log.warn("UPS void call failed for {}: {}", trackingNumber, ex.getMessage());
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "UPS void call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse UPS void response. Success = {@code VoidShipmentResponse.
+     * SummaryResult.Status.Code = "1"}. Any other code is a soft failure
+     * that we surface with the carrier's description.
+     */
+    VoidResult parseUpsVoidResponse(String trackingNumber, String response) {
+        try {
+            JsonNode root = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
+            JsonNode summary = root.at("/VoidShipmentResponse/SummaryResult/Status");
+            String code = summary.path("Code").asText("");
+            String description = summary.path("Description").asText("");
+            boolean voided = "1".equals(code);
+            String status = voided ? "VOIDED" : "ERROR";
+            String message = voided
+                    ? "UPS confirmed void." + (description.isEmpty() ? "" : " " + description)
+                    : "UPS void rejected. " + description;
+            return new VoidResult(trackingNumber, voided, status, message, response);
+        } catch (Exception ex) {
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "UPS void response parse failed: " + ex.getMessage(), response);
+        }
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.Ups ups = carrierProperties.getUps();

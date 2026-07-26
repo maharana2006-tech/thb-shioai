@@ -376,6 +376,52 @@ public class DhlConnector implements CarrierConnector {
         }
     }
 
+    /**
+     * DHL Delete Shipment — {@code DELETE /shipments/{shipmentTrackingNumber}}
+     * with Basic Auth. DHL only allows deletion of shipments that
+     * haven't been picked up yet — once the courier collects the parcel
+     * the DELETE returns a 400 with a clear reason. HTTP 204 No Content
+     * on success.
+     *
+     * <p>{@code -local-*} tokens short-circuit to {@code NOT_SUPPORTED}.
+     */
+    @Override
+    public VoidResult voidShipment(String trackingNumber, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
+                    "DHL void needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        try {
+            org.springframework.http.ResponseEntity<String> response = RestClient.builder()
+                    .baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build()
+                    .delete()
+                    .uri("/shipments/" + trackingNumber)
+                    .header("Authorization", "Basic " + accessToken)
+                    .header("Message-Reference", java.util.UUID.randomUUID().toString())
+                    .retrieve()
+                    .toEntity(String.class);
+
+            boolean voided = response.getStatusCode().is2xxSuccessful();
+            String status = voided ? "VOIDED" : "ERROR";
+            String message = voided
+                    ? "DHL confirmed shipment deletion."
+                    : "DHL delete rejected: HTTP " + response.getStatusCode().value();
+            return new VoidResult(trackingNumber, voided, status, message,
+                    response.getBody());
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("DHL delete rejected for {} (HTTP {}): {}",
+                    trackingNumber, ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "DHL delete rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("DHL delete call failed for {}: {}", trackingNumber, ex.getMessage());
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "DHL delete call failed: " + ex.getMessage(), null);
+        }
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.Dhl dhl = carrierProperties.getDhl();
