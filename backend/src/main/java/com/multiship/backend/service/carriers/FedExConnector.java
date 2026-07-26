@@ -775,6 +775,177 @@ public class FedExConnector implements CarrierConnector {
         };
     }
 
+    /**
+     * FedEx Estimated Duties & Taxes (EDT) — {@code POST /rate/v1/rates/quotes}
+     * with {@code edtRequestType=ALL} + a {@code customsClearanceDetail}
+     * block. FedEx returns freight in {@code totalNetCharge} and duty +
+     * tax as separate entries in {@code ancillaryFeesAndTaxes[]} typed
+     * {@code ESTIMATED_DUTIES_TAXES} + {@code TAXES}.
+     *
+     * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new LandedCostResult("FEDEX", "NOT_SUPPORTED",
+                    null, null, null, null, null, null,
+                    java.util.List.of(), java.util.List.of(),
+                    "FedEx EDT needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        if (!isInternational(request)) {
+            return new LandedCostResult("FEDEX", "NOT_SUPPORTED",
+                    null, null, null, null, null, null,
+                    java.util.List.of(),
+                    java.util.List.of("FedEx EDT is only supported for international shipments."),
+                    "Not an international lane; FedEx EDT skipped.", null);
+        }
+        try {
+            String fedexWeightUnit = "KG".equalsIgnoreCase(request.getWeightUnit()) ? "KG" : "LB";
+            java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+            body.put("accountNumber", java.util.Map.of("value",
+                    firstNonBlank(request.getAccountNumber(), "")));
+
+            java.util.Map<String, Object> requestedShipment = new java.util.LinkedHashMap<>();
+            requestedShipment.put("shipper", java.util.Map.of("address", java.util.Map.of(
+                    "postalCode", firstNonBlank(request.getShipperPostalCode(), ""),
+                    "countryCode", firstNonBlank(request.getShipperCountryCode(), "US"))));
+            requestedShipment.put("recipient", java.util.Map.of("address", java.util.Map.of(
+                    "postalCode", firstNonBlank(request.getRecipientPostalCode(), ""),
+                    "countryCode", firstNonBlank(request.getRecipientCountryCode(), "US"),
+                    "residential", Boolean.TRUE.equals(request.getRecipientResidential()))));
+            requestedShipment.put("pickupType", "USE_SCHEDULED_PICKUP");
+            requestedShipment.put("rateRequestType", java.util.List.of("ACCOUNT", "LIST"));
+            requestedShipment.put("edtRequestType", "ALL");
+
+            requestedShipment.put("requestedPackageLineItems", java.util.List.of(java.util.Map.of(
+                    "weight", java.util.Map.of("units", fedexWeightUnit, "value",
+                            request.getWeight() != null ? request.getWeight() : java.math.BigDecimal.ONE))));
+
+            if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {
+                requestedShipment.put("customsClearanceDetail", buildCustomsClearanceDetail(request));
+            }
+
+            body.put("requestedShipment", requestedShipment);
+
+            String response = RestClient.builder().baseUrl(getBaseUrl()).build().post()
+                    .uri("/rate/v1/rates/quotes")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("X-locale", "en_US")
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            return parseFedExLandedCostResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("FedEx EDT rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return new LandedCostResult("FEDEX", "ERROR",
+                    null, null, null, null, null, null,
+                    java.util.List.of(), java.util.List.of(),
+                    "FedEx EDT rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("FedEx EDT failed: {}", ex.getMessage());
+            return new LandedCostResult("FEDEX", "ERROR",
+                    null, null, null, null, null, null,
+                    java.util.List.of(), java.util.List.of(),
+                    "FedEx EDT call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse a FedEx Rate response with EDT extensions. Freight comes from
+     * the preferred rate (Sprint 18); duties + taxes come from
+     * {@code ancillaryFeesAndTaxes[]} in the same {@code ratedShipmentDetails}
+     * entry. Package-visible for tests.
+     */
+    LandedCostResult parseFedExLandedCostResponse(String response) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    Optional.ofNullable(response).orElse("{}"));
+            com.fasterxml.jackson.databind.JsonNode details = root.at("/output/rateReplyDetails/0");
+            if (details.isMissingNode()) {
+                return new LandedCostResult("FEDEX", "ERROR",
+                        null, null, null, null, null, null,
+                        java.util.List.of(), java.util.List.of(),
+                        "FedEx returned no rateReplyDetails.", response);
+            }
+            com.fasterxml.jackson.databind.JsonNode preferredRate =
+                    pickPreferredFedExRate(details.at("/ratedShipmentDetails"));
+            if (preferredRate == null || preferredRate.isMissingNode()) {
+                return new LandedCostResult("FEDEX", "ERROR",
+                        null, null, null, null, null, null,
+                        java.util.List.of(), java.util.List.of(),
+                        "FedEx returned no ratedShipmentDetails.", response);
+            }
+
+            java.math.BigDecimal freight = readFedExAmount(preferredRate);
+            String currency = readFedExCurrency(preferredRate);
+
+            java.math.BigDecimal duty = null;
+            java.math.BigDecimal tax = null;
+            com.fasterxml.jackson.databind.JsonNode ancillary =
+                    preferredRate.at("/shipmentRateDetail/ancillaryFeesAndTaxes");
+            if (!ancillary.isArray()) {
+                ancillary = preferredRate.at("/ancillaryFeesAndTaxes");
+            }
+            if (ancillary.isArray()) {
+                for (com.fasterxml.jackson.databind.JsonNode fee : ancillary) {
+                    String type = fee.path("type").asText("").toUpperCase();
+                    java.math.BigDecimal amount = readFedExAncillaryAmount(fee);
+                    if (amount == null) continue;
+                    if (type.contains("DUTY") || type.contains("DUTIES")) {
+                        duty = duty == null ? amount : duty.add(amount);
+                    } else if (type.contains("TAX")) {
+                        tax = tax == null ? amount : tax.add(amount);
+                    }
+                }
+            }
+
+            java.math.BigDecimal grand = java.math.BigDecimal.ZERO;
+            if (freight != null) grand = grand.add(freight);
+            if (duty != null) grand = grand.add(duty);
+            if (tax != null) grand = grand.add(tax);
+            if (grand.signum() == 0) grand = null;
+
+            return new LandedCostResult("FEDEX", "LIVE",
+                    freight, duty, tax, null, grand, currency,
+                    java.util.List.of(), java.util.List.of(),
+                    "FedEx returned an EDT estimate.", response);
+        } catch (Exception ex) {
+            return new LandedCostResult("FEDEX", "ERROR",
+                    null, null, null, null, null, null,
+                    java.util.List.of(), java.util.List.of(),
+                    "FedEx EDT parse failed: " + ex.getMessage(), response);
+        }
+    }
+
+    private static boolean isInternational(ShipmentRequestDTO r) {
+        String from = r.getShipperCountryCode();
+        String to = r.getRecipientCountryCode();
+        return StringUtils.hasText(from) && StringUtils.hasText(to)
+                && !from.trim().equalsIgnoreCase(to.trim());
+    }
+
+    /**
+     * Read one entry from FedEx's {@code ancillaryFeesAndTaxes[]}. Each
+     * entry has a flat {@code amount} field (unlike the freight
+     * {@code totalNetCharge} shape that {@link #readFedExAmount} handles).
+     */
+    private static java.math.BigDecimal readFedExAncillaryAmount(
+            com.fasterxml.jackson.databind.JsonNode fee) {
+        com.fasterxml.jackson.databind.JsonNode amount = fee.path("amount");
+        if (amount.isNumber()) return amount.decimalValue();
+        if (amount.isTextual()) {
+            try { return new java.math.BigDecimal(amount.asText()); }
+            catch (NumberFormatException ignored) {}
+        }
+        return null;
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.FedEx fedEx = carrierProperties.getFedEx();

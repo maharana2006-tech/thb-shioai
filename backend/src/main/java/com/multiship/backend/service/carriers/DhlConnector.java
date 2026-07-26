@@ -538,6 +538,180 @@ public class DhlConnector implements CarrierConnector {
         }
     }
 
+    /**
+     * DHL Duties + Taxes — POST /rates with
+     * {@code getAllValueAddedServices=true} and a
+     * {@code content.exportDeclaration} on the payload. DHL then returns
+     * a {@code products[0].detailedPriceBreakdown} listing per-price
+     * breakdowns keyed by {@code typeCode}: {@code SPRQT} freight,
+     * {@code DUTY}, {@code TAX}, and various fees.
+     *
+     * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new LandedCostResult("DHL", "NOT_SUPPORTED",
+                    null, null, null, null, null, null,
+                    List.of(), List.of(),
+                    "DHL landed cost needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        if (!isInternational(request)) {
+            return new LandedCostResult("DHL", "NOT_SUPPORTED",
+                    null, null, null, null, null, null,
+                    List.of(),
+                    List.of("DHL landed cost is only supported for international shipments."),
+                    "Not an international lane; DHL landed cost skipped.", null);
+        }
+        try {
+            Map<String, Object> payload = buildRatePayload(request);
+            payload = new LinkedHashMap<>(payload);
+            payload.put("getAllValueAddedServices", true);
+            payload.put("returnStandardProductsOnly", false);
+            // DHL uses the content block to price landed cost; we re-attach
+            // an exportDeclaration derived from the intl block when present.
+            if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> content = payload.get("customerDetails") != null
+                        ? new LinkedHashMap<>() : new LinkedHashMap<>();
+                content.put("isCustomsDeclarable", true);
+                content.put("declaredValue", request.getDeclaredValue());
+                content.put("declaredValueCurrency", firstNonBlank(
+                        request.getDeclaredValueCurrency(),
+                        request.getIntl().getCustomsCurrency()).toUpperCase());
+                content.put("exportDeclaration", buildExportDeclaration(request));
+                payload.put("content", content);
+            }
+
+            String response = RestClient.builder()
+                    .baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build()
+                    .post()
+                    .uri("/rates")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Basic " + accessToken)
+                    .body(payload)
+                    .retrieve()
+                    .body(String.class);
+            return parseDhlLandedCostResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("DHL landed cost rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return new LandedCostResult("DHL", "ERROR",
+                    null, null, null, null, null, null,
+                    List.of(), List.of(),
+                    "DHL landed cost rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("DHL landed cost failed: {}", ex.getMessage());
+            return new LandedCostResult("DHL", "ERROR",
+                    null, null, null, null, null, null,
+                    List.of(), List.of(),
+                    "DHL landed cost call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse a DHL /rates response with detailed price breakdown. Reads
+     * {@code products[0].detailedPriceBreakdown[0].breakdown[]} entries
+     * and sums by {@code typeCode}:
+     * <ul>
+     *   <li>{@code SPRQT} (or price without a type) → freight</li>
+     *   <li>{@code DTP} / {@code DUTY} → duty</li>
+     *   <li>{@code TAX} / {@code VAT} → tax</li>
+     * </ul>
+     * Package-visible for tests.
+     */
+    LandedCostResult parseDhlLandedCostResponse(String response) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    Optional.ofNullable(response).orElse("{}"));
+            com.fasterxml.jackson.databind.JsonNode product = root.at("/products/0");
+            if (product.isMissingNode()) {
+                return new LandedCostResult("DHL", "ERROR",
+                        null, null, null, null, null, null,
+                        List.of(), List.of(),
+                        "DHL returned no products.", response);
+            }
+
+            String currency = firstNonBlank(
+                    product.at("/totalPrice/0/priceCurrency").asText(null),
+                    "USD");
+
+            java.math.BigDecimal freight = null;
+            java.math.BigDecimal duty = java.math.BigDecimal.ZERO;
+            java.math.BigDecimal tax = java.math.BigDecimal.ZERO;
+            java.math.BigDecimal other = java.math.BigDecimal.ZERO;
+
+            // Freight from totalPrice[] (Sprint 19 pattern — prefer BILLC).
+            for (com.fasterxml.jackson.databind.JsonNode price : product.path("totalPrice")) {
+                if ("BILLC".equalsIgnoreCase(price.path("typeCode").asText(""))) {
+                    freight = readDhlDecimal(price.path("price"));
+                    break;
+                }
+            }
+            if (freight == null && product.path("totalPrice").isArray()
+                    && product.path("totalPrice").size() > 0) {
+                freight = readDhlDecimal(product.at("/totalPrice/0/price"));
+            }
+
+            // Duty + tax from detailedPriceBreakdown[].breakdown[].
+            for (com.fasterxml.jackson.databind.JsonNode dpb : product.path("detailedPriceBreakdown")) {
+                for (com.fasterxml.jackson.databind.JsonNode line : dpb.path("breakdown")) {
+                    String type = line.path("typeCode").asText("").toUpperCase();
+                    java.math.BigDecimal price = readDhlDecimal(line.path("price"));
+                    if (price == null) continue;
+                    if (type.contains("DUTY") || "DTP".equals(type)) {
+                        duty = duty.add(price);
+                    } else if (type.contains("TAX") || type.contains("VAT")) {
+                        tax = tax.add(price);
+                    } else if (!type.isEmpty() && !"SPRQT".equals(type)) {
+                        other = other.add(price);
+                    }
+                }
+            }
+
+            if (duty.signum() == 0) duty = null;
+            if (tax.signum() == 0) tax = null;
+            if (other.signum() == 0) other = null;
+
+            java.math.BigDecimal grand = java.math.BigDecimal.ZERO;
+            if (freight != null) grand = grand.add(freight);
+            if (duty != null) grand = grand.add(duty);
+            if (tax != null) grand = grand.add(tax);
+            if (other != null) grand = grand.add(other);
+            if (grand.signum() == 0) grand = null;
+
+            return new LandedCostResult("DHL", "LIVE",
+                    freight, duty, tax, other, grand, currency,
+                    List.of(), List.of(),
+                    "DHL returned a landed cost estimate.", response);
+        } catch (Exception ex) {
+            return new LandedCostResult("DHL", "ERROR",
+                    null, null, null, null, null, null,
+                    List.of(), List.of(),
+                    "DHL landed cost parse failed: " + ex.getMessage(), response);
+        }
+    }
+
+    private static java.math.BigDecimal readDhlDecimal(com.fasterxml.jackson.databind.JsonNode node) {
+        if (node == null || node.isMissingNode()) return null;
+        if (node.isNumber()) return node.decimalValue();
+        if (node.isTextual()) {
+            try { return new java.math.BigDecimal(node.asText()); }
+            catch (NumberFormatException ignored) {}
+        }
+        return null;
+    }
+
+    private static boolean isInternational(ShipmentRequestDTO r) {
+        String from = r.getShipperCountryCode();
+        String to = r.getRecipientCountryCode();
+        return StringUtils.hasText(from) && StringUtils.hasText(to)
+                && !from.trim().equalsIgnoreCase(to.trim());
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.Dhl dhl = carrierProperties.getDhl();

@@ -655,6 +655,200 @@ public class UpsConnector implements CarrierConnector {
         };
     }
 
+    /**
+     * UPS Landed Cost — extends {@link #getRates} with a landed-cost
+     * request. UPS accepts the flag inline on the Rate/Shop payload:
+     * add {@code LandedCostRequestIndicator} + {@code CustomsValue} +
+     * per-commodity {@code CustomsLineItems} and the response includes
+     * {@code EstimatedDuties} / {@code EstimatedTaxes} / {@code
+     * MerchandiseTotal} alongside the freight quote. Sprint 32.
+     *
+     * <p>The route to the endpoint reuses the Sprint 19 Rate/Shop path;
+     * only the request body grows. Requires an international lane
+     * (shipper country ≠ recipient country) — UPS rejects landed cost
+     * requests on domestic shipments.
+     *
+     * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new LandedCostResult("UPS", "NOT_SUPPORTED",
+                    null, null, null, null, null, null,
+                    java.util.List.of(), java.util.List.of(),
+                    "UPS landed cost needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        if (!isInternational(request)) {
+            return new LandedCostResult("UPS", "NOT_SUPPORTED",
+                    null, null, null, null, null, null,
+                    java.util.List.of(),
+                    java.util.List.of("UPS landed cost is only supported for international shipments."),
+                    "Not an international lane; UPS landed cost skipped.",
+                    null);
+        }
+        try {
+            Map<String, Object> shipment = buildRateShopShipment(request);
+            appendLandedCostToShipment(shipment, request);
+            Map<String, Object> body = new LinkedHashMap<>();
+            Map<String, Object> rateRequest = new LinkedHashMap<>();
+            rateRequest.put("Request", Map.of(
+                    "SubVersion", "2205",
+                    "TransactionReference", Map.of("CustomerContext",
+                            firstNonBlank(request.getReferenceNumber(), ""))));
+            rateRequest.put("CustomerClassification", Map.of("Code", "00"));
+            rateRequest.put("Shipment", shipment);
+            body.put("RateRequest", rateRequest);
+
+            String url = "/api/rating/" + carrierProperties.getUps().getApiVersion() + "/Rate";
+            String response = RestClient.builder()
+                    .baseUrl(carrierProperties.getUps().getApiBaseUrl()).build()
+                    .post()
+                    .uri(url)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("transId", java.util.UUID.randomUUID().toString())
+                    .header("transactionSrc", "multiship")
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            return parseUpsLandedCostResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("UPS landed cost rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return new LandedCostResult("UPS", "ERROR",
+                    null, null, null, null, null, null,
+                    java.util.List.of(), java.util.List.of(),
+                    "UPS landed cost rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("UPS landed cost failed: {}", ex.getMessage());
+            return new LandedCostResult("UPS", "ERROR",
+                    null, null, null, null, null, null,
+                    java.util.List.of(), java.util.List.of(),
+                    "UPS landed cost call failed: " + ex.getMessage(),
+                    null);
+        }
+    }
+
+    /** Sprint 32 — bolt the Landed Cost blocks onto a Rate/Shop shipment map. */
+    @SuppressWarnings("unchecked")
+    private void appendLandedCostToShipment(Map<String, Object> shipment, ShipmentRequestDTO request) {
+        Map<String, Object> ratingOptions = (Map<String, Object>) shipment.get("ShipmentRatingOptions");
+        if (ratingOptions == null) {
+            ratingOptions = new LinkedHashMap<>();
+            shipment.put("ShipmentRatingOptions", ratingOptions);
+        } else {
+            ratingOptions = new LinkedHashMap<>(ratingOptions);
+            shipment.put("ShipmentRatingOptions", ratingOptions);
+        }
+        ratingOptions.put("LandedCostRequestIndicator", "");
+
+        String currency = firstNonBlank(request.getDeclaredValueCurrency(), "USD").toUpperCase();
+        if (request.getDeclaredValue() != null) {
+            shipment.put("InvoiceLineTotal", Map.of(
+                    "CurrencyCode", currency,
+                    "MonetaryValue", request.getDeclaredValue().toPlainString()));
+        }
+
+        if (request.getIntl() != null
+                && request.getIntl().getCommodities() != null
+                && !request.getIntl().getCommodities().isEmpty()) {
+            java.util.List<Map<String, Object>> commodities = new java.util.ArrayList<>();
+            for (com.multiship.backend.dto.CustomsCommodityDTO c : request.getIntl().getCommodities()) {
+                Map<String, Object> line = new LinkedHashMap<>();
+                if (StringUtils.hasText(c.getDescription())) line.put("Description", c.getDescription());
+                if (StringUtils.hasText(c.getHsCode())) {
+                    line.put("CommodityCode", c.getHsCode());
+                }
+                if (c.getUnitValue() != null) {
+                    line.put("MonetaryValue", c.getUnitValue().toPlainString());
+                }
+                if (StringUtils.hasText(c.getCountryOfOrigin())) {
+                    line.put("OriginCountryCode", c.getCountryOfOrigin());
+                }
+                if (c.getQuantity() != null) line.put("Quantity", String.valueOf(c.getQuantity()));
+                commodities.add(line);
+            }
+            shipment.put("CustomsLineItem", commodities);
+        }
+    }
+
+    /** True for lanes whose shipper country ≠ recipient country. */
+    private static boolean isInternational(ShipmentRequestDTO r) {
+        String from = r.getShipperCountryCode();
+        String to = r.getRecipientCountryCode();
+        return StringUtils.hasText(from) && StringUtils.hasText(to)
+                && !from.trim().equalsIgnoreCase(to.trim());
+    }
+
+    /**
+     * Parse a UPS Rate response with Landed Cost extensions.
+     * Response shape (only fields we use):
+     * <pre>
+     * RateResponse.RatedShipment[0].
+     *   TotalCharges.MonetaryValue          (freight)
+     *   EstimatedDuties.TotalAmount.MonetaryValue
+     *   EstimatedTaxes.TotalAmount.MonetaryValue
+     *   TransportationCharges + ServiceOptionsCharges  (individually)
+     *   EstimatedDuties.CurrencyCode
+     * </pre>
+     * Package-visible so tests can assert against canned JSON.
+     */
+    LandedCostResult parseUpsLandedCostResponse(String response) {
+        try {
+            JsonNode rated = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"))
+                    .at("/RateResponse/RatedShipment");
+            if (rated.isArray()) rated = rated.get(0);
+            if (rated.isMissingNode() || rated.isNull()) {
+                return new LandedCostResult("UPS", "ERROR",
+                        null, null, null, null, null, null,
+                        java.util.List.of(), java.util.List.of(),
+                        "UPS didn't return a RatedShipment.", response);
+            }
+
+            java.math.BigDecimal freight = readUpsMoney(rated.at("/TotalCharges/MonetaryValue"));
+            java.math.BigDecimal duty = readUpsMoney(rated.at("/EstimatedDuties/TotalAmount/MonetaryValue"));
+            java.math.BigDecimal tax = readUpsMoney(rated.at("/EstimatedTaxes/TotalAmount/MonetaryValue"));
+            String currency = firstNonBlank(
+                    rated.at("/EstimatedDuties/TotalAmount/CurrencyCode").asText(null),
+                    rated.at("/TotalCharges/CurrencyCode").asText(null),
+                    "USD");
+
+            java.math.BigDecimal grand = zero();
+            if (freight != null) grand = grand.add(freight);
+            if (duty != null) grand = grand.add(duty);
+            if (tax != null) grand = grand.add(tax);
+            if (grand.signum() == 0) grand = null;
+
+            return new LandedCostResult("UPS", "LIVE",
+                    freight, duty, tax, null, grand, currency,
+                    java.util.List.of(), java.util.List.of(),
+                    "UPS returned a landed cost estimate.",
+                    response);
+        } catch (Exception ex) {
+            return new LandedCostResult("UPS", "ERROR",
+                    null, null, null, null, null, null,
+                    java.util.List.of(), java.util.List.of(),
+                    "UPS landed cost parse failed: " + ex.getMessage(),
+                    response);
+        }
+    }
+
+    private static java.math.BigDecimal readUpsMoney(JsonNode node) {
+        if (node == null || node.isMissingNode()) return null;
+        if (node.isNumber()) return node.decimalValue();
+        if (node.isTextual()) {
+            try { return new java.math.BigDecimal(node.asText()); }
+            catch (NumberFormatException ignored) {}
+        }
+        return null;
+    }
+
+    private static java.math.BigDecimal zero() { return java.math.BigDecimal.ZERO; }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.Ups ups = carrierProperties.getUps();
