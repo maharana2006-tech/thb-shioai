@@ -942,6 +942,126 @@ public class StampsConnector implements CarrierConnector {
     }
 
     /**
+     * SWSIM {@code CreateScanForm} — end-of-day USPS SCAN Form generation.
+     * The SCAN Form (USPS Form 5630) carries a single master barcode that
+     * driver scans; USPS then acknowledges every included Priority Mail /
+     * Ground Advantage / Priority Mail Express label at once instead of
+     * scanning each individually. Sprint 34.
+     *
+     * <p>{@code -local-*} authenticators short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new CloseOutResult("USPS", null, null, null, 0, "NOT_SUPPORTED",
+                    "USPS SCAN Form needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        java.util.List<String> tracking = request.trackingNumbers();
+        if (tracking == null || tracking.isEmpty()) {
+            return new CloseOutResult("USPS", null, null, null, 0, "ERROR",
+                    "USPS SCAN Form requires at least one tracking number.", null);
+        }
+        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        String soap = buildCreateScanFormEnvelope(request, accessToken);
+        try {
+            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+                    .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
+                    .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/CreateScanForm\"")
+                    .body(soap)
+                    .retrieve()
+                    .body(String.class);
+            return parseCreateScanFormResponse(request, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            String fault = extractSoapFault(ex.getResponseBodyAsString());
+            log.warn("Stamps CreateScanForm rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), fault);
+            return new CloseOutResult("USPS", null, null, null, tracking.size(), "ERROR",
+                    "SWSIM CreateScanForm rejected: " + fault,
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps CreateScanForm failed: {}", ex.getMessage());
+            return new CloseOutResult("USPS", null, null, null, tracking.size(), "ERROR",
+                    "SWSIM CreateScanForm call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** Build the SWSIM CreateScanForm envelope. */
+    String buildCreateScanFormEnvelope(CloseOutRequest req, String authenticator) {
+        StringBuilder xml = new StringBuilder(1536);
+        xml.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+        xml.append("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">");
+        xml.append("<soap:Body>");
+        xml.append("<CreateScanForm xmlns=\"").append(SWSIM_NAMESPACE).append("\">");
+        xml.append("<Authenticator>").append(xmlEscape(authenticator)).append("</Authenticator>");
+        xml.append("<TransactionId>").append(xmlEscape(
+                "eod-" + java.util.UUID.randomUUID())).append("</TransactionId>");
+
+        // TrackingNumbers block — one <TrackingNumber> per label.
+        xml.append("<StampsTxIDs>");
+        for (String t : req.trackingNumbers()) {
+            xml.append("<string>").append(xmlEscape(t)).append("</string>");
+        }
+        xml.append("</StampsTxIDs>");
+
+        CarrierConnector.AddressToValidate a = req.address();
+        if (a != null) {
+            xml.append("<FromAddress>");
+            if (StringUtils.hasText(a.name())) {
+                xml.append("<FullName>").append(xmlEscape(a.name())).append("</FullName>");
+            }
+            if (StringUtils.hasText(a.addressLine1())) {
+                xml.append("<Address1>").append(xmlEscape(a.addressLine1())).append("</Address1>");
+            }
+            if (StringUtils.hasText(a.city())) {
+                xml.append("<City>").append(xmlEscape(a.city())).append("</City>");
+            }
+            if (StringUtils.hasText(a.state())) {
+                xml.append("<State>").append(xmlEscape(a.state())).append("</State>");
+            }
+            if (StringUtils.hasText(a.postalCode())) {
+                xml.append("<ZIPCode>").append(xmlEscape(a.postalCode())).append("</ZIPCode>");
+            }
+            xml.append("</FromAddress>");
+        }
+
+        xml.append("<ImageType>Pdf</ImageType>");
+        xml.append("<PrintInstructions>false</PrintInstructions>");
+
+        xml.append("</CreateScanForm>");
+        xml.append("</soap:Body>");
+        xml.append("</soap:Envelope>");
+        return xml.toString();
+    }
+
+    /**
+     * Parse the SWSIM CreateScanForm response. Success carries
+     * {@code ScanFormUrl} (or {@code ScanFormBase64}) + a
+     * {@code SubmissionID} identifier.
+     */
+    CloseOutResult parseCreateScanFormResponse(CloseOutRequest req, String responseXml) {
+        int count = req.trackingNumbers() == null ? 0 : req.trackingNumbers().size();
+        if (!StringUtils.hasText(responseXml)) {
+            return new CloseOutResult("USPS", null, null, null, count, "ERROR",
+                    "SWSIM returned an empty CreateScanForm response.", null);
+        }
+        String fault = extractElement(responseXml, "faultstring");
+        if (StringUtils.hasText(fault)) {
+            return new CloseOutResult("USPS", null, null, null, count, "ERROR",
+                    "USPS SCAN Form rejected: " + fault, responseXml);
+        }
+        String submissionId = extractElement(responseXml, "SubmissionID");
+        String scanFormUrl = extractElement(responseXml, "ScanFormUrl");
+        String pdfBase64 = extractElement(responseXml, "ScanFormBase64");
+        String status = StringUtils.hasText(submissionId) ? "MANIFESTED" : "ERROR";
+        String message = StringUtils.hasText(submissionId)
+                ? "USPS SCAN Form " + submissionId + " covers " + count + " shipment(s)"
+                : "SWSIM response missing SubmissionID.";
+        return new CloseOutResult("USPS", submissionId, scanFormUrl, pdfBase64, count,
+                status, message, responseXml);
+    }
+
+    /**
      * Build the SWSIM GetRates SOAP envelope. No {@code ServiceType} — omitting
      * it asks SWSIM for the full rate ladder. Country only when non-US (SWSIM
      * treats absent Country as US and errors when both are set).

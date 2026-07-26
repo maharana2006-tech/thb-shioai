@@ -1075,6 +1075,89 @@ public class FedExConnector implements CarrierConnector {
         }
     }
 
+    /**
+     * FedEx End of Day / CloseShipment —
+     * {@code POST /ship/v1/shipments/endofday} with a Bearer token.
+     * Body carries the carrier code (FDXE Express, FDXG Ground) and the
+     * account. Response includes an alerts array, a groupID that groups
+     * the closed shipments, and a base64 close-out PDF.
+     *
+     * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new CloseOutResult("FEDEX", null, null, null, 0, "NOT_SUPPORTED",
+                    "FedEx close-out needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        java.util.List<String> tracking = request.trackingNumbers();
+        if (tracking == null || tracking.isEmpty()) {
+            return new CloseOutResult("FEDEX", null, null, null, 0, "ERROR",
+                    "FedEx close-out requires at least one tracking number.", null);
+        }
+        try {
+            java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+            body.put("accountNumber", java.util.Map.of("value", "ACCOUNT"));
+            body.put("carrierCode", "FDXG");
+
+            String response = RestClient.builder().baseUrl(getBaseUrl()).build()
+                    .post()
+                    .uri("/ship/v1/shipments/endofday")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("X-locale", "en_US")
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            return parseFedExCloseOutResponse(request, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("FedEx end-of-day rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return new CloseOutResult("FEDEX", null, null, null, tracking.size(), "ERROR",
+                    "FedEx end-of-day rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("FedEx end-of-day call failed: {}", ex.getMessage());
+            return new CloseOutResult("FEDEX", null, null, null, tracking.size(), "ERROR",
+                    "FedEx end-of-day call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse a FedEx end-of-day response. Success = presence of
+     * {@code output.transactionShipments[0].alerts} without an error-typed
+     * alert AND either a {@code groupID} or a manifest PDF. Response
+     * body sometimes puts a base64 close-out at
+     * {@code output.transactionShipments[0].pieceResponses[0].deliveryDocumentTokens[0].image}.
+     */
+    CloseOutResult parseFedExCloseOutResponse(CloseOutRequest request, String response) {
+        int count = request.trackingNumbers() == null ? 0 : request.trackingNumbers().size();
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    Optional.ofNullable(response).orElse("{}"));
+            com.fasterxml.jackson.databind.JsonNode ts = root.at("/output/transactionShipments/0");
+            String groupID = ts.path("groupID").asText(null);
+            if (!StringUtils.hasText(groupID)) {
+                groupID = root.at("/output/manifestData/groupID").asText(null);
+            }
+            String pdfBase64 = ts.at("/pieceResponses/0/deliveryDocumentTokens/0/image").asText(null);
+            if (!StringUtils.hasText(pdfBase64)) {
+                pdfBase64 = root.at("/output/manifestData/manifestImage").asText(null);
+            }
+            String status = StringUtils.hasText(groupID) ? "MANIFESTED" : "ERROR";
+            String message = StringUtils.hasText(groupID)
+                    ? "FedEx closed out " + count + " shipment(s) · group " + groupID
+                    : "FedEx end-of-day response missing groupID.";
+            return new CloseOutResult("FEDEX", groupID, null, pdfBase64, count,
+                    status, message, response);
+        } catch (Exception ex) {
+            return new CloseOutResult("FEDEX", null, null, null, count, "ERROR",
+                    "FedEx end-of-day parse failed: " + ex.getMessage(), response);
+        }
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.FedEx fedEx = carrierProperties.getFedEx();

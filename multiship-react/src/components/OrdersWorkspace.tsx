@@ -33,6 +33,7 @@ import AccountPickerModal from './modals/AccountPickerModal'
 import OrderDetailsModal from './modals/OrderDetailsModal'
 import TrackingTimelineModal from './tracking/TrackingTimelineModal'
 import SchedulePickupModal from './modals/SchedulePickupModal'
+import CloseOutModal from './modals/CloseOutModal'
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
 
@@ -135,6 +136,8 @@ export default function OrdersWorkspace() {
   const [voidingOrderNo, setVoidingOrderNo] = useState<number | null>(null)
   // Sprint 33 — schedule pickup modal (bulk action from the header).
   const [pickupOpen, setPickupOpen] = useState(false)
+  // Sprint 34 — end-of-day close-out modal.
+  const [closeOutOpen, setCloseOutOpen] = useState(false)
 
   // The header's global search lands here as /orders?q=…
   useEffect(() => {
@@ -896,6 +899,11 @@ export default function OrdersWorkspace() {
               <FiCalendar className="h-3.5 w-3.5" />
               Schedule pickup
             </button>
+            <button type="button" onClick={() => setCloseOutOpen(true)} className={BTN_GHOST}
+                    title="Close out today's shipments so the driver can scan the manifest">
+              <FiFileText className="h-3.5 w-3.5" />
+              Close out day
+            </button>
             <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY}>
               <FiPlus className="h-3.5 w-3.5" />
               New shipment
@@ -1290,6 +1298,15 @@ export default function OrdersWorkspace() {
 
       {pickupOpen ? (
         <SchedulePickupModal onClose={() => setPickupOpen(false)} />
+      ) : null}
+
+      {closeOutOpen ? (
+        <CloseOutModal
+          onClose={() => setCloseOutOpen(false)}
+          trackingNumbers={rows
+            .map((o) => o.labelDetails.trackingNumber)
+            .filter((t): t is string => Boolean(t))}
+        />
       ) : null}
     </div>
   )
