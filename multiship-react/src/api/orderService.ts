@@ -407,6 +407,15 @@ export interface ManualShipmentPayload {
    *  Null / omitted → backend synthesises a single-package list from the
    *  top-level weight/length/width/height fields (existing behavior). */
   packages?: PackageDetail[]
+  /** Sprint 35 — signature at delivery. NONE | INDIRECT | DIRECT | ADULT.
+   *  Null / omitted → carrier default (usually no signature on domestic
+   *  ground, indirect on air). */
+  signatureOption?: 'NONE' | 'INDIRECT' | 'DIRECT' | 'ADULT' | null
+  /** Sprint 35 — insured value beyond the carrier's free tier ($100 UPS
+   *  / FedEx / USPS Priority Ground). Null / 0 → no explicit insurance
+   *  requested; the free tier still applies. */
+  insuredValue?: number | null
+  insuredValueCurrency?: string | null
 }
 
 /** One box in a multi-package shipment — mirrors backend PackageDetailDTO. */

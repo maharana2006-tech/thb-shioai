@@ -195,6 +195,52 @@ public class ShipmentRequestDTO {
     private java.util.List<PackageDetailDTO> packages;
 
     /**
+     * Signature required at delivery — carriers charge extra for a
+     * signed proof-of-delivery. Sprint 35.
+     * <ul>
+     *   <li>{@code null} — carrier default (usually no signature required
+     *       on domestic ground, indirect signature on air).</li>
+     *   <li>{@code NONE} — explicitly waive signature (may not be allowed
+     *       on high-value shipments).</li>
+     *   <li>{@code INDIRECT} — anyone at the address can sign; parcel can
+     *       be left with a neighbour or on the porch depending on carrier
+     *       + location.</li>
+     *   <li>{@code DIRECT} — only someone at the delivery address may sign.</li>
+     *   <li>{@code ADULT} — 21+ ID required. Higher fee. Some jurisdictions
+     *       mandate ADULT signature for alcohol or firearms.</li>
+     * </ul>
+     * Every carrier that supports signature levels normalises to this
+     * enum in the connector; carriers that don't support one of the
+     * values downgrade transparently (e.g. USPS domestic ADULT →
+     * SignatureConfirmation).
+     */
+    private String signatureOption;
+
+    /**
+     * Insured value for the shipment — dollars beyond the free tier the
+     * carrier will refund if the parcel is lost or damaged. Sprint 35.
+     * <ul>
+     *   <li>{@code null} — no explicit insurance requested; carriers still
+     *       provide their free tier ($100 UPS / FedEx / USPS Priority
+     *       Ground; DHL varies by product).</li>
+     *   <li>&gt; 0 — insured for this amount. UPS + FedEx charge based
+     *       on declared value beyond the free tier; USPS + DHL treat this
+     *       as a separate insurance rider.</li>
+     * </ul>
+     * Distinct from {@link #declaredValue} (which is the customs value)
+     * — a domestic shipment can have insurance without any customs
+     * declaration.
+     */
+    private java.math.BigDecimal insuredValue;
+
+    /**
+     * ISO-4217 for {@link #insuredValue}. Null defaults to
+     * {@link #declaredValueCurrency}; if that's also null, defaults to
+     * USD at the connector.
+     */
+    private String insuredValueCurrency;
+
+    /**
      * Return the packages list connectors should iterate. Guarantees a
      * non-empty list so per-connector code doesn't have to fork on
      * null/empty:

@@ -641,6 +641,15 @@ public class CarrierServiceImpl implements CarrierService {
                 // dangerousGoodsDetail, DHL content.dangerousGoods, SWSIM
                 // HazardousMaterials).
                 .dangerousGoods(req.getDangerousGoods())
+                // Sprint 35 — signature + insurance. Each connector
+                // normalises the enum and emits its carrier-specific wire
+                // format (UPS DeliveryConfirmation.DCISType, FedEx
+                // packageSpecialServices.signatureOptionType, DHL
+                // valueAddedServices SF/SI/II, SWSIM SignatureConfirmation
+                // / AdultSignatureRequired + InsuredValue).
+                .signatureOption(req.getSignatureOption())
+                .insuredValue(req.getInsuredValue())
+                .insuredValueCurrency(req.getInsuredValueCurrency())
                 .build();
 
         CarrierConnector.ShipmentResult result;

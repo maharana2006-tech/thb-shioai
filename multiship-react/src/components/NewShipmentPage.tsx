@@ -310,6 +310,11 @@ export default function NewShipmentPage() {
   const [weightUnit, setWeightUnit] = useState<'LB' | 'KG'>('LB')
   const [declaredValue, setDeclaredValue] = useState('')
   const [clientCode, setClientCode] = useState('')
+  // Sprint 35 — signature at delivery + insured value beyond the
+  // carrier's free tier. Signature is a per-shipment enum; insured
+  // value is a separate money amount from declared/customs value.
+  const [signatureOption, setSignatureOption] = useState<'NONE' | 'INDIRECT' | 'DIRECT' | 'ADULT'>('NONE')
+  const [insuredValue, setInsuredValue] = useState('')
   // Sprint 22 — rate picker: opens the RatePickerModal with current form
   // state; on select we populate carrier + serviceId + accountNumber.
   const [ratePickerOpen, setRatePickerOpen] = useState(false)
@@ -961,6 +966,13 @@ export default function NewShipmentPage() {
       // it into ShipmentRequestDTO.dangerousGoods and every connector's
       // hazmat wire format keys off it.
       ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
+      // Sprint 35 — signature + insurance. NONE → omit so the backend
+      // uses the carrier default; explicit values flow through to each
+      // connector's per-carrier wire format.
+      ...(signatureOption !== 'NONE' ? { signatureOption } : {}),
+      ...(insuredValue && Number(insuredValue) > 0
+        ? { insuredValue: Number(insuredValue), insuredValueCurrency: currency }
+        : {}),
       // Sprint 29 — multi-package. When extra boxes are present, build
       // a packages[] array with box 1 mirroring the top-level fields and
       // boxes 2..N from extraPackages. Backend's effectivePackages() also
@@ -1386,6 +1398,32 @@ export default function NewShipmentPage() {
                   </Field>
                   <Field label={`Declared value (${currency})`}>
                     <input className={inputCls} type="number" min="0" step="0.01" value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value)} placeholder="100.00" />
+                  </Field>
+                </div>
+                {/* Sprint 35 — signature at delivery + insured value.
+                    NONE = carrier default (usually no signature domestic,
+                    indirect on air); ADULT = 21+ ID required (higher fee).
+                    Insured value beyond the carrier's free $100 tier
+                    incurs an insurance surcharge on UPS/FedEx; USPS +
+                    DHL treat it as a separate rider. */}
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Signature at delivery"
+                         hint="Adult signature = 21+ ID; higher fee">
+                    <select className={inputCls}
+                            value={signatureOption}
+                            onChange={(e) => setSignatureOption(e.target.value as typeof signatureOption)}>
+                      <option value="NONE">Carrier default</option>
+                      <option value="INDIRECT">Indirect (anyone at address)</option>
+                      <option value="DIRECT">Direct (someone at address)</option>
+                      <option value="ADULT">Adult signature (21+)</option>
+                    </select>
+                  </Field>
+                  <Field label={`Insured value (${currency})`}
+                         hint="Beyond the carrier's free $100 tier">
+                    <input className={inputCls} type="number" min="0" step="0.01"
+                           value={insuredValue}
+                           onChange={(e) => setInsuredValue(e.target.value)}
+                           placeholder="0.00" />
                   </Field>
                 </div>
                 {isCustomPkg ? (

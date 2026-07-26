@@ -970,7 +970,56 @@ public class DhlConnector implements CarrierConnector {
                 && request.getDangerousGoods().isReadyForCarrier()) {
             content.put("dangerousGoods", buildDhlDangerousGoods(request));
         }
+
+        // Sprint 35 — signature + insurance via valueAddedServices[].
+        // DHL codes: SF=Signature On Delivery, SI=Signature Adult,
+        // II=Shipment Insurance (with monetary value + currency).
+        List<Map<String, Object>> vas = buildDhlValueAddedServices(request);
+        if (!vas.isEmpty()) {
+            content.put("valueAddedServices", vas);
+        }
         return content;
+    }
+
+    /**
+     * Sprint 35 — DHL valueAddedServices[] block. One entry per requested
+     * add-on:
+     * <ul>
+     *   <li>{@code SF} — Signature On Delivery (indirect / direct).</li>
+     *   <li>{@code SI} — Signature Adult (18+ ID).</li>
+     *   <li>{@code II} — Shipment Insurance with {@code value} +
+     *       {@code currency}.</li>
+     * </ul>
+     */
+    List<Map<String, Object>> buildDhlValueAddedServices(ShipmentRequestDTO request) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        String sig = normaliseSignatureOption(request.getSignatureOption());
+        if (sig != null) {
+            String code = "ADULT".equals(sig) ? "SI" : "SF";
+            out.add(Map.of("serviceCode", code));
+        }
+        if (request.getInsuredValue() != null && request.getInsuredValue().signum() > 0) {
+            String currency = firstNonBlank(
+                    firstNonBlank(request.getInsuredValueCurrency(), request.getDeclaredValueCurrency()),
+                    "USD").toUpperCase();
+            out.add(Map.of(
+                    "serviceCode", "II",
+                    "value", request.getInsuredValue(),
+                    "currency", currency));
+        }
+        return out;
+    }
+
+    /** Normalise signatureOption enum to INDIRECT / DIRECT / ADULT; blank
+     *  / unknown / NONE → null (carrier default). */
+    private static String normaliseSignatureOption(String raw) {
+        if (raw == null) return null;
+        String v = raw.trim().toUpperCase();
+        if (v.isEmpty() || "NONE".equals(v)) return null;
+        return switch (v) {
+            case "INDIRECT", "DIRECT", "ADULT" -> v;
+            default -> null;
+        };
     }
 
     /**
