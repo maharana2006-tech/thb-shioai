@@ -433,6 +433,19 @@ export interface TrackingEventDTO {
   location: string | null
 }
 
+/** Sprint 30 response for POST /api/v1/orders/{n}/void. Status is the
+ *  enum from the connector's VoidResult: VOIDED (carrier confirmed),
+ *  ALREADY_VOIDED (idempotent no-op), NOT_SUPPORTED (no live credentials
+ *  or no wire implementation), ERROR (carrier rejected or call failed). */
+export interface VoidLabelResponse {
+  orderNo: number
+  trackingNumber: string | null
+  carrierCode: string | null
+  voided: boolean
+  status: 'VOIDED' | 'ALREADY_VOIDED' | 'NOT_SUPPORTED' | 'ERROR'
+  message: string
+}
+
 /** Backend response for /api/v1/orders/{n}/tracking/live. Source flag drives
  *  the freshness badge — LIVE (just checked) / CACHE (served from memory) /
  *  STUB (no live credentials, only the tracking URL is available). */
@@ -606,6 +619,17 @@ export const orderService = {
   getLiveTracking: (orderNo: number | string) =>
     apiClient.get<ApiResponse<TrackingResponseDTO>>(
       `/orders/${encodeURIComponent(String(orderNo))}/tracking/live`,
+    ),
+
+  /**
+   * Sprint 30 — void / cancel a previously-issued label at the carrier.
+   * Idempotent — voiding an already-VOIDED order returns 200 without a
+   * carrier round-trip.
+   */
+  voidLabel: (orderNo: number | string) =>
+    apiClient.post<ApiResponse<VoidLabelResponse>>(
+      `/orders/${encodeURIComponent(String(orderNo))}/void`,
+      {},
     ),
 
   /**

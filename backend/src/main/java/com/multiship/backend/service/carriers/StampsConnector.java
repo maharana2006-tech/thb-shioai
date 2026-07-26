@@ -582,6 +582,79 @@ public class StampsConnector implements CarrierConnector {
     }
 
     /**
+     * SWSIM {@code CancelIndicium} — SOAP call to void a previously-issued
+     * label. USPS refunds postage when the label hasn't been scanned in
+     * transit; post-scan cancels still succeed but no refund is issued.
+     *
+     * <p>{@code -local-*} tokens short-circuit to {@code NOT_SUPPORTED}.
+     */
+    @Override
+    public VoidResult voidShipment(String trackingNumber, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
+                    "USPS void needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        String soap = buildCancelIndiciumEnvelope(trackingNumber, accessToken);
+        try {
+            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+                    .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
+                    .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/CancelIndicium\"")
+                    .body(soap)
+                    .retrieve()
+                    .body(String.class);
+            return parseCancelIndiciumResponse(trackingNumber, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            String fault = extractSoapFault(ex.getResponseBodyAsString());
+            log.warn("Stamps CancelIndicium rejected for {} (HTTP {}): {}",
+                    trackingNumber, ex.getStatusCode().value(), fault);
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "SWSIM CancelIndicium rejected: " + fault, ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps CancelIndicium failed for {}: {}", trackingNumber, ex.getMessage());
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "SWSIM CancelIndicium call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** Build the SWSIM CancelIndicium SOAP envelope. */
+    String buildCancelIndiciumEnvelope(String trackingNumber, String authenticator) {
+        StringBuilder xml = new StringBuilder(512);
+        xml.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+        xml.append("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">");
+        xml.append("<soap:Body>");
+        xml.append("<CancelIndicium xmlns=\"").append(SWSIM_NAMESPACE).append("\">");
+        xml.append("<Authenticator>").append(xmlEscape(authenticator)).append("</Authenticator>");
+        xml.append("<StampsTxID>").append(xmlEscape(nonBlank(trackingNumber, ""))).append("</StampsTxID>");
+        xml.append("</CancelIndicium>");
+        xml.append("</soap:Body>");
+        xml.append("</soap:Envelope>");
+        return xml.toString();
+    }
+
+    /**
+     * Parse a CancelIndicium response. SWSIM returns a rotated
+     * Authenticator on success + no fault. Presence of a {@code <faultstring>}
+     * element in the body indicates rejection.
+     */
+    VoidResult parseCancelIndiciumResponse(String trackingNumber, String responseXml) {
+        if (!StringUtils.hasText(responseXml)) {
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "SWSIM returned an empty CancelIndicium response.", null);
+        }
+        String fault = extractElement(responseXml, "faultstring");
+        if (StringUtils.hasText(fault)) {
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "USPS void rejected: " + fault, responseXml);
+        }
+        // Any 200 without a fault is a success — SWSIM does not surface a
+        // dedicated confirmation code beyond the rotated Authenticator.
+        return new VoidResult(trackingNumber, true, "VOIDED",
+                "SWSIM confirmed void.", responseXml);
+    }
+
+    /**
      * Build the SWSIM GetRates SOAP envelope. No {@code ServiceType} — omitting
      * it asks SWSIM for the full rate ladder. Country only when non-US (SWSIM
      * treats absent Country as US and errors when both are set).
