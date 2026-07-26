@@ -280,18 +280,150 @@ public class UpsConnector implements CarrierConnector {
         return true;
     }
 
+    /**
+     * URL-only tracking. UPS's Track API requires OAuth so this 1-arg
+     * variant only returns a public tracking link (like FedEx in Sprint 12).
+     * The authenticated variant below does the real work.
+     */
     @Override
     public TrackingResult trackShipment(String trackingNumber) {
         String trackingUrl = "https://www.ups.com/track?tracknum=" + trackingNumber;
-        return new TrackingResult(
-                trackingNumber,
-                "IN_TRANSIT",
-                trackingUrl,
-                null,
-                null,
-                false,
-                null
-        );
+        return new TrackingResult(trackingNumber, "UNKNOWN", trackingUrl, null, null, false, null);
+    }
+
+    /**
+     * UPS Track API v1 — {@code GET /api/track/v1/details/{trackingNumber}}
+     * with the Bearer token. Two required headers beyond auth:
+     * {@code transId} (unique per request; UPS uses it for idempotency
+     * troubleshooting) and {@code transactionSrc} (client identifier).
+     *
+     * <p>Response shape (only the fields we care about):
+     * <pre>
+     * trackResponse.shipment[0].package[0].{
+     *   currentStatus.description,
+     *   activity[] (newest-first) — reversed to oldest-first,
+     *   deliveryDate[] with type=DEL for the actual delivery date,
+     * }
+     * </pre>
+     *
+     * <p>UPS activity dates come in as YYYYMMDD + HHMMSS separately; we
+     * merge to a proper LocalDateTime. Status code {@code D} =
+     * Delivered; any other code passes through in the event.status field.
+     *
+     * <p>{@code -local-*} tokens short-circuit to the URL-only stub — same
+     * convention Sprint 12 established for FedEx.
+     */
+    @Override
+    public TrackingResult trackShipment(String trackingNumber, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return trackShipment(trackingNumber);
+        }
+        String trackingUrl = "https://www.ups.com/track?tracknum=" + trackingNumber;
+        try {
+            String response = RestClient.builder().baseUrl(carrierProperties.getUps().getApiBaseUrl()).build().get()
+                    .uri("/api/track/v1/details/" + trackingNumber)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("transId", java.util.UUID.randomUUID().toString())
+                    .header("transactionSrc", "multiship")
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode pkg = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"))
+                    .at("/trackResponse/shipment/0/package/0");
+
+            String status = pkg.at("/currentStatus/description").asText("UNKNOWN");
+            String statusCode = pkg.at("/currentStatus/code").asText(null);
+            boolean delivered = "D".equalsIgnoreCase(statusCode)
+                    || "DELIVERED".equalsIgnoreCase(status);
+
+            java.util.List<TrackingEvent> events = parseUpsActivity(pkg.at("/activity"));
+            String currentLocation = events.isEmpty() ? null : events.get(events.size() - 1).location();
+            LocalDateTime estimatedDelivery = parseUpsDeliveryDate(pkg.at("/deliveryDate"));
+
+            return new TrackingResult(trackingNumber, status, trackingUrl, currentLocation,
+                    estimatedDelivery, delivered, response, events);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("UPS track rejected (HTTP {}): {}", ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+            return trackShipment(trackingNumber);
+        } catch (Exception ex) {
+            log.warn("UPS track failed for {}; falling back to URL-only. Reason: {}",
+                    trackingNumber, ex.getMessage());
+            return trackShipment(trackingNumber);
+        }
+    }
+
+    /**
+     * Parse UPS activity[] → TrackingEvent list. UPS returns newest-first;
+     * we reverse for oldest-first (matches FedEx / DHL convention set in
+     * Sprint 12). Empty when the field is absent or an empty array.
+     */
+    java.util.List<TrackingEvent> parseUpsActivity(JsonNode activity) {
+        if (activity == null || !activity.isArray() || activity.isEmpty()) return java.util.List.of();
+        java.util.List<TrackingEvent> events = new java.util.ArrayList<>();
+        for (JsonNode a : activity) {
+            LocalDateTime ts = joinUpsDateTime(
+                    a.path("date").asText(null),
+                    a.path("time").asText(null));
+            String status = a.at("/status/code").asText(null);
+            if (status == null || status.isEmpty()) status = a.at("/status/type").asText(null);
+            String description = a.at("/status/description").asText("");
+            String location = buildUpsLocation(a.at("/location/address"));
+            events.add(new TrackingEvent(ts, status, description, location));
+        }
+        java.util.Collections.reverse(events);
+        return java.util.List.copyOf(events);
+    }
+
+    /**
+     * UPS deliveryDate[] carries typed entries — DEL for the actual delivery
+     * date, RDD for rescheduled, etc. We pick the first DEL entry as the
+     * estimated/actual delivery timestamp.
+     */
+    private LocalDateTime parseUpsDeliveryDate(JsonNode deliveryDate) {
+        if (deliveryDate == null || !deliveryDate.isArray()) return null;
+        for (JsonNode entry : deliveryDate) {
+            if ("DEL".equalsIgnoreCase(entry.path("type").asText(""))) {
+                return joinUpsDateTime(entry.path("date").asText(null), null);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * UPS date/time formats are {@code YYYYMMDD} + {@code HHMMSS}. Merges to
+     * a LocalDateTime; missing time defaults to 00:00:00.
+     */
+    static LocalDateTime joinUpsDateTime(String yyyymmdd, String hhmmss) {
+        if (yyyymmdd == null || yyyymmdd.length() != 8) return null;
+        try {
+            int y = Integer.parseInt(yyyymmdd.substring(0, 4));
+            int mo = Integer.parseInt(yyyymmdd.substring(4, 6));
+            int d = Integer.parseInt(yyyymmdd.substring(6, 8));
+            int hr = 0, mn = 0, sec = 0;
+            if (hhmmss != null && hhmmss.length() == 6) {
+                hr = Integer.parseInt(hhmmss.substring(0, 2));
+                mn = Integer.parseInt(hhmmss.substring(2, 4));
+                sec = Integer.parseInt(hhmmss.substring(4, 6));
+            }
+            return LocalDateTime.of(y, mo, d, hr, mn, sec);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /** Build a "City, ST US" location string from a UPS address node. */
+    static String buildUpsLocation(JsonNode addr) {
+        if (addr == null || addr.isMissingNode() || addr.isNull()) return null;
+        String city = addr.path("city").asText("");
+        String state = addr.path("stateProvince").asText("");
+        String country = addr.path("country").asText("");
+        StringBuilder sb = new StringBuilder();
+        if (!city.isEmpty()) sb.append(city);
+        if (!state.isEmpty()) sb.append(sb.length() > 0 ? ", " : "").append(state);
+        if (!country.isEmpty()) sb.append(sb.length() > 0 ? " " : "").append(country);
+        return sb.length() == 0 ? null : sb.toString();
     }
 
     @Override
