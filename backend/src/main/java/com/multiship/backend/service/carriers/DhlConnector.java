@@ -490,7 +490,62 @@ public class DhlConnector implements CarrierConnector {
         if (isIntl) {
             content.put("exportDeclaration", buildExportDeclaration(request));
         }
+        // Sprint 27 — DHL dangerousGoods[] array. DHL Express treats DG
+        // as a content-level attribute (per-shipment, not per-package),
+        // so it hangs off content{} alongside packages[] and exportDeclaration.
+        if (request.getDangerousGoods() != null
+                && request.getDangerousGoods().isReadyForCarrier()) {
+            content.put("dangerousGoods", buildDhlDangerousGoods(request));
+        }
         return content;
+    }
+
+    /**
+     * DHL MyDHL API v2 {@code dangerousGoods[]} array. One entry per
+     * commodity. Field mapping:
+     * <ul>
+     *   <li>{@code contentId} — sequence for cross-referencing.</li>
+     *   <li>{@code unCode} — UN number WITHOUT the {@code UN} prefix
+     *       (DHL's schema wants "3480" not "UN3480").</li>
+     *   <li>{@code properShippingName, hazardClass, packagingGroup} —
+     *       direct passthrough (packagingGroup is spelled with an 'a',
+     *       not FedEx's 'i' — 'packingGroup').</li>
+     *   <li>{@code netWeight.value / .unit} — mass in KG only; DHL
+     *       doesn't accept LB or L on the DG block, so we hard-map non-KG
+     *       units to KG (weight equivalent for volume) with the caller's
+     *       amount unchanged. Downstream FX conversion is out of scope.</li>
+     * </ul>
+     */
+    List<Map<String, Object>> buildDhlDangerousGoods(ShipmentRequestDTO request) {
+        com.multiship.backend.dto.DangerousGoodsBlockDTO dg = request.getDangerousGoods();
+        List<Map<String, Object>> out = new ArrayList<>();
+        int seq = 1;
+        for (com.multiship.backend.dto.DangerousCommodityDTO c : dg.getCommodities()) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("contentId", String.valueOf(seq++));
+            if (StringUtils.hasText(c.getUnNumber())) {
+                // Strip UN prefix — DHL wants digits only.
+                entry.put("unCode",
+                        c.getUnNumber().trim().toUpperCase().replaceFirst("^UN", ""));
+            }
+            if (StringUtils.hasText(c.getProperShippingName())) {
+                entry.put("properShippingName", c.getProperShippingName().trim());
+            }
+            if (StringUtils.hasText(c.getHazardClass())) {
+                entry.put("hazardClass", c.getHazardClass().trim());
+            }
+            if (StringUtils.hasText(c.getPackingGroup())) {
+                // DHL spells this differently to FedEx — packAGINGroup, not packINGgroup.
+                entry.put("packagingGroup", c.getPackingGroup().trim().toUpperCase());
+            }
+            if (c.getQuantity() != null) {
+                entry.put("netWeight", Map.of(
+                        "value", c.getQuantity(),
+                        "unit", "KG"));
+            }
+            out.add(entry);
+        }
+        return out;
     }
 
     /** DHL Package — typeCode + weight + dimensions in metric or imperial. */

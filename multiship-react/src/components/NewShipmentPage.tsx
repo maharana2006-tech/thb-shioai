@@ -29,6 +29,8 @@ import CustomsWizard from './shipment/CustomsWizard'
 import HsCodeCombobox from './shipment/HsCodeCombobox'
 import RatePickerModal from './shipment/RatePickerModal'
 import type { RateOption, RateShopRequest } from '../api/rateShopService'
+import DangerousGoodsWizard from './shipment/DangerousGoodsWizard'
+import type { DangerousGoodsBlock } from '../api/dgService'
 import type { CustomsItem, OrderCustomsPayload } from '../api/customsService'
 import { parseIntlValidationMessage } from '../utils/intlValidationErrors'
 
@@ -308,6 +310,11 @@ export default function NewShipmentPage() {
   // Sprint 22 — rate picker: opens the RatePickerModal with current form
   // state; on select we populate carrier + serviceId + accountNumber.
   const [ratePickerOpen, setRatePickerOpen] = useState(false)
+  // Sprint 27 — dangerous goods declaration. Null on non-hazmat shipments;
+  // populated by DangerousGoodsWizard and threaded into the manual
+  // shipment payload as dangerousGoods.
+  const [dgBlock, setDgBlock] = useState<DangerousGoodsBlock | null>(null)
+  const [dgWizardOpen, setDgWizardOpen] = useState(false)
 
   // 3PL guardrails: client's attached warehouses, allowlists, and destination
   // rules. Fetched when clientCode changes; drive the warehouse picker,
@@ -843,6 +850,10 @@ export default function NewShipmentPage() {
       clientCode: clientCode.trim() || undefined,
       warehouseCode: warehouseCode || undefined,
       declaredValue: declaredValue ? Number(declaredValue) : null,
+      // Sprint 27 — attach the DG block when populated; backend threads
+      // it into ShipmentRequestDTO.dangerousGoods and every connector's
+      // hazmat wire format keys off it.
+      ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
       ...(isInternational ? { items: cleanItems, reasonForExport, currency, incoterms } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
     }
@@ -1113,6 +1124,31 @@ export default function NewShipmentPage() {
                         Compare rates
                       </button>
                     </div>
+                  </Field>
+                  <Field label="Dangerous goods">
+                    <button
+                      type="button"
+                      onClick={() => setDgWizardOpen(true)}
+                      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition ${
+                        dgBlock
+                          ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <FiAlertTriangle className="h-3 w-3" />
+                      {dgBlock
+                        ? `Hazmat attached · ${dgBlock.commodities.length} commodity(ies)`
+                        : 'Declare dangerous goods'}
+                    </button>
+                    {dgBlock ? (
+                      <button
+                        type="button"
+                        onClick={() => setDgBlock(null)}
+                        className="ml-2 text-[10.5px] font-semibold text-rose-600 hover:underline"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
                   </Field>
                   <Field label="Incoterms">
                     <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
@@ -1458,6 +1494,21 @@ export default function NewShipmentPage() {
           request={rateShopRequest}
           onClose={() => setRatePickerOpen(false)}
           onSelect={handleRateSelected}
+        />
+      ) : null}
+
+      {dgWizardOpen ? (
+        <DangerousGoodsWizard
+          value={dgBlock}
+          onChange={(next) => setDgBlock(next)}
+          onComplete={(next) => {
+            setDgBlock(next)
+            setDgWizardOpen(false)
+            notify.success(
+              `Dangerous goods block attached · ${next.commodities.length} commodity(ies).`,
+            )
+          }}
+          onCancel={() => setDgWizardOpen(false)}
         />
       ) : null}
 

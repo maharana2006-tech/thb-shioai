@@ -636,6 +636,11 @@ public class CarrierServiceImpl implements CarrierService {
                 // (UPS ReturnService.Code=8, FedEx returnedShipmentDetail,
                 // SWSIM IsReturnLabel=true, DHL pickup.isRequested=true).
                 .isReturn(req.getIsReturn())
+                // Sprint 27 — thread the DG block so connectors emit their
+                // hazmat wire format (UPS HazMatPackageInformation, FedEx
+                // dangerousGoodsDetail, DHL content.dangerousGoods, SWSIM
+                // HazardousMaterials).
+                .dangerousGoods(req.getDangerousGoods())
                 .build();
 
         CarrierConnector.ShipmentResult result;

@@ -766,6 +766,16 @@ public class StampsConnector implements CarrierConnector {
             xml.append("<DeclaredValue>").append(xmlEscape(request.getDeclaredValue().toPlainString()))
                     .append("</DeclaredValue>");
         }
+        // Sprint 27 — SWSIM Rate block accepts a HazardousMaterials boolean.
+        // USPS heavily restricts DG (most air services are refused, ground
+        // services accept a limited set — ORM-D-style small quantities).
+        // The flag is mostly for operator visibility + carrier acceptance
+        // routing; SWSIM validates the rest server-side and rejects when
+        // the class/service combination isn't allowed.
+        if (request.getDangerousGoods() != null
+                && request.getDangerousGoods().isReadyForCarrier()) {
+            xml.append("<HazardousMaterials>true</HazardousMaterials>");
+        }
     }
 
     /**
