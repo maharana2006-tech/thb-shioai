@@ -776,6 +776,202 @@ public class UpsConnector implements CarrierConnector {
         return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelPdf, shippingCost, estimatedDelivery, null);
     }
 
+    /**
+     * UPS Rate Shop — POST {@code /api/rating/{version}/Shop} with a Bearer
+     * token returns rates for EVERY available service on the lane in a single
+     * call (versus {@code /Rate} which prices one specific service). Perfect
+     * for rate shopping.
+     *
+     * <p>Response shape (only fields we care about):
+     * <pre>
+     * RateResponse.RatedShipment[]  → one entry per service level
+     *   .Service.{Code, Description}
+     *   .TotalCharges.{MonetaryValue, CurrencyCode}
+     *   .NegotiatedRateCharges.TotalCharge.{MonetaryValue, CurrencyCode}   [account rate — prefer over TotalCharges]
+     *   .GuaranteedDelivery.{BusinessDaysInTransit, DeliveryByTime}
+     * </pre>
+     *
+     * <p>{@code NegotiatedRateCharges} is only returned when the account has
+     * negotiated rates AND the {@code CustomerClassification.Code} field
+     * requests them; we always ask for classification "00" (rates as
+     * negotiated) so account rates come back when they exist.
+     *
+     * <p>Reuses the shipment payload builder for Shipper / ShipTo / Package
+     * so the rate quote mirrors what the label would actually charge — same
+     * residential flag, same units, same address block.
+     *
+     * <p>{@code -local-*} fallback tokens short-circuit to an empty list —
+     * same auth-degraded convention Sprint 12 established for tracking and
+     * Sprint 18 for FedEx rating.
+     */
+    @Override
+    public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return java.util.List.of();
+        }
+        try {
+            Map<String, Object> shipment = buildRateShopShipment(request);
+            Map<String, Object> body = new LinkedHashMap<>();
+            Map<String, Object> rateRequest = new LinkedHashMap<>();
+            rateRequest.put("Request", Map.of(
+                    "SubVersion", "2205",
+                    "TransactionReference", Map.of("CustomerContext",
+                            firstNonBlank(request.getReferenceNumber(), ""))));
+            rateRequest.put("CustomerClassification", Map.of("Code", "00"));
+            rateRequest.put("Shipment", shipment);
+            body.put("RateRequest", rateRequest);
+
+            String url = "/api/rating/" + carrierProperties.getUps().getApiVersion() + "/Shop";
+            String response = RestClient.builder()
+                    .baseUrl(carrierProperties.getUps().getApiBaseUrl()).build()
+                    .post()
+                    .uri(url)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("transId", java.util.UUID.randomUUID().toString())
+                    .header("transactionSrc", "multiship")
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            return parseUpsRateResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("UPS rate shop rejected (HTTP {}): {}", ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+            return java.util.List.of();
+        } catch (Exception ex) {
+            log.warn("UPS rate shop failed; returning empty rate list. Reason: {}", ex.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    /**
+     * Minimal Shipment block for the Rate API. We reuse the full shipment
+     * payload builder (buildParty, buildPackage) so the rate quote is
+     * against the same envelope as the label would be — no drift between
+     * "what UPS quoted" and "what UPS billed".
+     */
+    private Map<String, Object> buildRateShopShipment(ShipmentRequestDTO request) {
+        Map<String, Object> shipment = new LinkedHashMap<>();
+        shipment.put("Shipper", buildParty(
+                request.getShipperName(), request.getShipperPhone(),
+                request.getShipperAddressLine1(), request.getShipperAddressLine2(),
+                request.getShipperCity(), request.getShipperState(),
+                request.getShipperPostalCode(), request.getShipperCountryCode(),
+                request.getAccountNumber(), null));
+        String recipientPhone = joinPhone(request.getRecipientPhoneCountryCode(), request.getRecipientPhone());
+        Map<String, Object> shipTo = buildParty(
+                request.getRecipientName(), recipientPhone,
+                request.getRecipientAddressLine1(), request.getRecipientAddressLine2(),
+                request.getRecipientCity(), request.getRecipientState(),
+                request.getRecipientPostalCode(), request.getRecipientCountryCode(),
+                null, null);
+        if (Boolean.TRUE.equals(request.getRecipientResidential())) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> address = (Map<String, Object>) shipTo.get("Address");
+            if (address != null) address.put("ResidentialAddressIndicator", "");
+        }
+        shipment.put("ShipTo", shipTo);
+        shipment.put("ShipmentRatingOptions", Map.of("NegotiatedRatesIndicator", ""));
+        shipment.put("Package", java.util.List.of(buildPackage(request)));
+        return shipment;
+    }
+
+    /**
+     * Parse the UPS Rate response into carrier-neutral RateOptions.
+     * Package-visible so tests can assert against canned response JSON.
+     */
+    java.util.List<RateOption> parseUpsRateResponse(String response) {
+        try {
+            JsonNode rated = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"))
+                    .at("/RateResponse/RatedShipment");
+            if (rated.isMissingNode()) return java.util.List.of();
+            // UPS returns a single object OR an array depending on whether
+            // one or multiple services matched; normalise to iterable.
+            Iterable<JsonNode> entries = rated.isArray()
+                    ? rated
+                    : java.util.List.of(rated);
+
+            java.util.List<RateOption> out = new java.util.ArrayList<>();
+            for (JsonNode entry : entries) {
+                String serviceCode = entry.at("/Service/Code").asText(null);
+                if (serviceCode == null || serviceCode.isEmpty()) continue;
+                String serviceName = entry.at("/Service/Description").asText(null);
+                if (serviceName == null || serviceName.isEmpty()) {
+                    // UPS often omits Description; fall back to the service
+                    // matrix label we already ship (via serviceCode → name).
+                    serviceName = upsServiceName(serviceCode);
+                }
+
+                BigDecimal amount = readUpsAmount(entry);
+                if (amount == null) continue;
+                String currency = readUpsCurrency(entry);
+
+                Integer transitDays = null;
+                String txt = entry.at("/GuaranteedDelivery/BusinessDaysInTransit").asText(null);
+                if (StringUtils.hasText(txt)) {
+                    try { transitDays = Integer.parseInt(txt.trim()); }
+                    catch (NumberFormatException ignored) {}
+                }
+                LocalDateTime estimatedDelivery = parseDateTime(
+                        entry.at("/GuaranteedDelivery/DeliveryByTime").asText(null));
+
+                out.add(new RateOption("UPS", serviceCode, serviceName, amount, currency,
+                        estimatedDelivery, transitDays));
+            }
+            return java.util.List.copyOf(out);
+        } catch (Exception ex) {
+            log.warn("UPS rate response parse failed: {}", ex.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    /**
+     * Prefer {@code NegotiatedRateCharges.TotalCharge} (post-discount) over
+     * {@code TotalCharges} (rack rate) — matches how UPS actually bills.
+     */
+    private static BigDecimal readUpsAmount(JsonNode entry) {
+        JsonNode negotiated = entry.at("/NegotiatedRateCharges/TotalCharge/MonetaryValue");
+        if (negotiated.isTextual()) {
+            try { return new BigDecimal(negotiated.asText()); } catch (NumberFormatException ignored) {}
+        }
+        if (negotiated.isNumber()) return negotiated.decimalValue();
+        JsonNode total = entry.at("/TotalCharges/MonetaryValue");
+        if (total.isTextual()) {
+            try { return new BigDecimal(total.asText()); } catch (NumberFormatException ignored) {}
+        }
+        if (total.isNumber()) return total.decimalValue();
+        return null;
+    }
+
+    private static String readUpsCurrency(JsonNode entry) {
+        String currency = entry.at("/NegotiatedRateCharges/TotalCharge/CurrencyCode").asText(null);
+        if (!StringUtils.hasText(currency)) {
+            currency = entry.at("/TotalCharges/CurrencyCode").asText(null);
+        }
+        return StringUtils.hasText(currency) ? currency : "USD";
+    }
+
+    /**
+     * Map a UPS service code back to its human-readable name from the built-in
+     * matrix. Used when the Rate response omits Service.Description.
+     */
+    private String upsServiceName(String code) {
+        return switch (code) {
+            case "01" -> "UPS Next Day Air";
+            case "02" -> "UPS 2nd Day Air";
+            case "03" -> "UPS Ground";
+            case "07" -> "UPS Worldwide Express";
+            case "08" -> "UPS Worldwide Expedited";
+            case "11" -> "UPS Standard";
+            case "12" -> "UPS 3 Day Select";
+            case "54" -> "UPS Worldwide Express Plus";
+            case "65" -> "UPS Worldwide Saver";
+            default -> "UPS " + code;
+        };
+    }
+
     private String buildFallbackToken(String clientId, String clientSecret) {
         return "ups-local-" + hashShort(clientId + ":" + clientSecret + ":" + LocalDateTime.now(ZoneOffset.UTC));
     }
