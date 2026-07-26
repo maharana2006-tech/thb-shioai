@@ -400,6 +400,28 @@ export interface ManualShipmentPayload {
    *  the ShipmentRequestDTO.dangerousGoods field which every connector's
    *  wire format keys off. Null on non-hazmat shipments. */
   dangerousGoods?: DangerousGoodsBlock | null
+  /** Sprint 29 — multi-package. When present, connectors iterate this
+   *  list and emit one carrier-specific package block per entry
+   *  (Shipment.Package[] on UPS, requestedPackageLineItems[] on FedEx,
+   *  content.packages[] on DHL, N CreateIndicium calls on USPS/Stamps).
+   *  Null / omitted → backend synthesises a single-package list from the
+   *  top-level weight/length/width/height fields (existing behavior). */
+  packages?: PackageDetail[]
+}
+
+/** One box in a multi-package shipment — mirrors backend PackageDetailDTO. */
+export interface PackageDetail {
+  sequenceNumber?: number
+  packageType?: string
+  weight: number
+  weightUnit?: 'LB' | 'KG'
+  length?: number
+  width?: number
+  height?: number
+  dimUnit?: 'IN' | 'CM'
+  declaredValue?: number
+  description?: string
+  reference?: string
 }
 
 /** One scan / status update on a carrier's timeline. Timestamps are ISO-8601
