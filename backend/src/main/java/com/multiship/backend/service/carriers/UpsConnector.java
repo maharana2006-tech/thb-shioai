@@ -357,6 +357,17 @@ public class UpsConnector implements CarrierConnector {
                 request.getRecipientCity(), request.getRecipientState(),
                 request.getRecipientPostalCode(), request.getRecipientCountryCode(),
                 null, null);
+        // Line 3 (JP/CN/IN long addresses). UPS ShipTo.Address.AddressLine is
+        // an array; append when non-blank so we don't emit an empty element.
+        if (StringUtils.hasText(request.getRecipientAddressLine3())) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> address = (Map<String, Object>) shipTo.get("Address");
+            if (address != null) {
+                @SuppressWarnings("unchecked")
+                java.util.List<String> lines = (java.util.List<String>) address.get("AddressLine");
+                if (lines != null) lines.add(request.getRecipientAddressLine3());
+            }
+        }
         // ResidentialAddressIndicator is a UPS convention — the ELEMENT'S
         // PRESENCE signals residential, its value is ignored. Absence =
         // commercial (UPS default), which avoids surprise back-billing at

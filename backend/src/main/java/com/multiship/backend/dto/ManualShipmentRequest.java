@@ -97,6 +97,8 @@ public class ManualShipmentRequest {
         private String email;
         private String addressLine1;
         private String addressLine2;
+        /** Third street line — JP/CN/IN often need this. */
+        private String addressLine3;
         private String city;
         private String state;
         private String postalCode;

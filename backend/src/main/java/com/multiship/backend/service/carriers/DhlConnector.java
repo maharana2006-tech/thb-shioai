@@ -274,7 +274,7 @@ public class DhlConnector implements CarrierConnector {
         payload.put("customerDetails", Map.of(
                 "shipperDetails", buildParty(
                         request.getShipperName(), request.getShipperPhone(),
-                        request.getShipperAddressLine1(), request.getShipperAddressLine2(),
+                        request.getShipperAddressLine1(), request.getShipperAddressLine2(), null,
                         request.getShipperCity(), request.getShipperState(),
                         request.getShipperPostalCode(), request.getShipperCountryCode(), null),
                 "receiverDetails", buildParty(
@@ -282,6 +282,7 @@ public class DhlConnector implements CarrierConnector {
                         com.multiship.backend.service.carriers.UpsConnector.joinPhone(
                                 request.getRecipientPhoneCountryCode(), request.getRecipientPhone()),
                         request.getRecipientAddressLine1(), request.getRecipientAddressLine2(),
+                        request.getRecipientAddressLine3(),
                         request.getRecipientCity(), request.getRecipientState(),
                         request.getRecipientPostalCode(), request.getRecipientCountryCode(),
                         request.getRecipientResidential())));
@@ -290,9 +291,11 @@ public class DhlConnector implements CarrierConnector {
         return payload;
     }
 
-    /** DHL Party — postalAddress + contactInformation grouped. */
+    /** DHL Party — postalAddress + contactInformation grouped.
+     *  Line 3 is optional and comes through as {@code addressLine3} in the
+     *  postal address block; DHL supports up to three street lines. */
     private Map<String, Object> buildParty(String name, String phone,
-                                            String line1, String line2,
+                                            String line1, String line2, String line3,
                                             String city, String state,
                                             String postal, String country,
                                             Boolean residential) {
@@ -303,8 +306,10 @@ public class DhlConnector implements CarrierConnector {
         List<String> streetLines = new ArrayList<>();
         if (StringUtils.hasText(line1)) streetLines.add(line1);
         if (StringUtils.hasText(line2)) streetLines.add(line2);
+        if (StringUtils.hasText(line3)) streetLines.add(line3);
         address.put("addressLine1", streetLines.isEmpty() ? "" : streetLines.get(0));
         if (streetLines.size() > 1) address.put("addressLine2", streetLines.get(1));
+        if (streetLines.size() > 2) address.put("addressLine3", streetLines.get(2));
         if (StringUtils.hasText(state)) address.put("provinceCode", state);
         if (Boolean.TRUE.equals(residential)) address.put("addressType", "residential");
 

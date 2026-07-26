@@ -204,6 +204,20 @@ function AddressBlock({
       <Field label="Address line 2" className="col-span-2">
         <input className={inputCls} value={value.addressLine2} onChange={(e) => onChange({ addressLine2: e.target.value })} placeholder="Suite 400" />
       </Field>
+      {value.addressLine2 || value.addressLine3 ? (
+        <Field
+          label="Address line 3"
+          title="Needed for some JP / CN / IN addresses that span three street lines"
+          className="col-span-2"
+        >
+          <input
+            className={inputCls}
+            value={value.addressLine3 ?? ''}
+            onChange={(e) => onChange({ addressLine3: e.target.value })}
+            placeholder="Chiyoda-ku, Nihonbashi"
+          />
+        </Field>
+      ) : null}
       <Field label="City" required>
         <input className={inputCls} value={value.city} onChange={(e) => onChange({ city: e.target.value })} placeholder="Buffalo" />
       </Field>

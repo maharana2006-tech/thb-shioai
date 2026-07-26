@@ -399,10 +399,27 @@ public class FedExConnector implements CarrierConnector {
         );
         // FedEx flags residential on the address block, not on contact. When
         // null we leave the field off entirely — FedEx defaults to commercial.
-        if (Boolean.TRUE.equals(request.getRecipientResidential())) {
+        // Append line3 (JP/CN/IN long addresses) to streetLines[] when present —
+        // FedEx accepts up to 3 lines.
+        {
             @SuppressWarnings("unchecked")
             Map<String, Object> address = (Map<String, Object>) recipientParty.get("address");
-            if (address != null) address.put("residential", true);
+            if (address != null) {
+                if (StringUtils.hasText(request.getRecipientAddressLine3())) {
+                    Object existing = address.get("streetLines");
+                    java.util.List<String> lines = new java.util.ArrayList<>();
+                    if (existing instanceof String[]) {
+                        for (String s : (String[]) existing) if (StringUtils.hasText(s)) lines.add(s);
+                    } else if (existing instanceof java.util.List<?> l) {
+                        for (Object o : l) if (o instanceof String s && StringUtils.hasText(s)) lines.add(s);
+                    }
+                    lines.add(request.getRecipientAddressLine3());
+                    address.put("streetLines", lines);
+                }
+                if (Boolean.TRUE.equals(request.getRecipientResidential())) {
+                    address.put("residential", true);
+                }
+            }
         }
         requestedShipment.put("recipients", new Object[]{recipientParty});
 
