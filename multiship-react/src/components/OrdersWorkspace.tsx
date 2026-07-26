@@ -12,6 +12,7 @@ import {
   FiRefreshCw,
   FiRotateCw,
   FiCalendar,
+  FiPackage,
   FiSearch,
   FiTruck,
   FiX,
@@ -34,6 +35,7 @@ import OrderDetailsModal from './modals/OrderDetailsModal'
 import TrackingTimelineModal from './tracking/TrackingTimelineModal'
 import SchedulePickupModal from './modals/SchedulePickupModal'
 import CloseOutModal from './modals/CloseOutModal'
+import BulkLabelModal from './modals/BulkLabelModal'
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
 
@@ -138,6 +140,8 @@ export default function OrdersWorkspace() {
   const [pickupOpen, setPickupOpen] = useState(false)
   // Sprint 34 — end-of-day close-out modal.
   const [closeOutOpen, setCloseOutOpen] = useState(false)
+  // Sprint 37 — bulk-label modal.
+  const [bulkLabelOpen, setBulkLabelOpen] = useState(false)
 
   // The header's global search lands here as /orders?q=…
   useEffect(() => {
@@ -904,6 +908,14 @@ export default function OrdersWorkspace() {
               <FiFileText className="h-3.5 w-3.5" />
               Close out day
             </button>
+            <button type="button"
+                    onClick={() => setBulkLabelOpen(true)}
+                    disabled={rows.length === 0}
+                    className={BTN_GHOST}
+                    title="Generate labels for every visible row and download a ZIP">
+              <FiPackage className="h-3.5 w-3.5" />
+              Bulk labels ({rows.length})
+            </button>
             <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY}>
               <FiPlus className="h-3.5 w-3.5" />
               New shipment
@@ -1306,6 +1318,13 @@ export default function OrdersWorkspace() {
           trackingNumbers={rows
             .map((o) => o.labelDetails.trackingNumber)
             .filter((t): t is string => Boolean(t))}
+        />
+      ) : null}
+
+      {bulkLabelOpen ? (
+        <BulkLabelModal
+          onClose={() => setBulkLabelOpen(false)}
+          orderNumbers={rows.map((o) => o.orderDetails.orderNo)}
         />
       ) : null}
     </div>
