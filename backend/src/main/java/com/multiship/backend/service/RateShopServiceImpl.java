@@ -10,6 +10,7 @@ import com.multiship.backend.dto.ShipmentRequestDTO;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
+import com.multiship.backend.service.fx.FxRateService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -18,9 +19,9 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -62,15 +63,23 @@ public class RateShopServiceImpl implements RateShopService {
      *  choice on this platform). */
     static final List<String> CARRIER_ORDER = List.of("UPS", "FEDEX", "USPS", "DHL");
 
+    /** Sort currency — every priced option is USD-normalised through
+     *  {@link FxRateService} before the comparator runs, so the merged list
+     *  is truly cheapest-first regardless of what each carrier quoted in. */
+    private static final String SORT_CURRENCY = "USD";
+
     private final CarrierService carrierService;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
+    private final FxRateService fxRateService;
     private final ExecutorService executor;
 
     @Autowired
     public RateShopServiceImpl(CarrierService carrierService,
-                                CarrierAccountRefRepository carrierAccountRefRepository) {
+                                CarrierAccountRefRepository carrierAccountRefRepository,
+                                FxRateService fxRateService) {
         this.carrierService = carrierService;
         this.carrierAccountRefRepository = carrierAccountRefRepository;
+        this.fxRateService = fxRateService;
         // Bounded pool — fan-out is at most CARRIER_ORDER.size() calls, so
         // 8 threads is comfortably enough to run every carrier concurrently
         // for a couple of overlapping requests.
@@ -82,12 +91,15 @@ public class RateShopServiceImpl implements RateShopService {
     }
 
     /** Package-private constructor for tests — inject a custom executor
-     *  (e.g. a synchronous same-thread runner). */
+     *  (e.g. a synchronous same-thread runner) and FX service (usually an
+     *  inert stub that returns empty for every conversion). */
     RateShopServiceImpl(CarrierService carrierService,
                         CarrierAccountRefRepository carrierAccountRefRepository,
+                        FxRateService fxRateService,
                         ExecutorService executor) {
         this.carrierService = carrierService;
         this.carrierAccountRefRepository = carrierAccountRefRepository;
+        this.fxRateService = fxRateService;
         this.executor = executor;
     }
 
@@ -293,19 +305,46 @@ public class RateShopServiceImpl implements RateShopService {
     }
 
     /**
-     * Sort by {@code totalAmount} ascending — cheapest first. Nulls sink to
-     * the bottom (a null price shouldn't be highlighted as the deal). We
-     * do NOT currency-normalise here — a follow-up sprint will thread
-     * {@code FxRateService} through so mixed-currency options sort
-     * correctly by USD-normalised value.
+     * Sort by USD-normalised {@code totalAmount} ascending — cheapest first
+     * regardless of the native currency each carrier quoted in. Nulls sink
+     * to the bottom (a null price shouldn't be highlighted as the deal).
+     *
+     * <p>Normalisation goes through {@link FxRateService}; when the rate
+     * is unavailable (unsupported currency, feed outage, transient failure)
+     * we fall through to the RAW amount so the option still sorts against
+     * anything else at its face value. This is slightly wrong when mixed
+     * currencies land in the fallback path, but the option still shows the
+     * carrier's native currency + amount so operators can spot the mix and
+     * decide manually.
+     *
+     * <p>The DTO's {@code totalAmount} + {@code currency} are the carrier's
+     * native values — the USD conversion is used ONLY for the sort key,
+     * not surfaced back to the caller.
      */
     int compareRateOptions(RateOptionDTO a, RateOptionDTO b) {
-        BigDecimal aAmt = a.getTotalAmount();
-        BigDecimal bAmt = b.getTotalAmount();
-        if (aAmt == null && bAmt == null) return 0;
-        if (aAmt == null) return 1;
-        if (bAmt == null) return -1;
-        return aAmt.compareTo(bAmt);
+        BigDecimal aKey = sortKey(a);
+        BigDecimal bKey = sortKey(b);
+        if (aKey == null && bKey == null) return 0;
+        if (aKey == null) return 1;
+        if (bKey == null) return -1;
+        return aKey.compareTo(bKey);
+    }
+
+    /**
+     * USD-normalised sort key for one option. USD passes through as-is; any
+     * other currency is converted via the FX service. When conversion isn't
+     * possible (blank currency, feed outage) we return the raw amount as
+     * the fallback — see {@link #compareRateOptions} for the trade-off.
+     */
+    private BigDecimal sortKey(RateOptionDTO option) {
+        BigDecimal amount = option.getTotalAmount();
+        if (amount == null) return null;
+        String currency = option.getCurrency();
+        if (!StringUtils.hasText(currency) || SORT_CURRENCY.equalsIgnoreCase(currency)) {
+            return amount;
+        }
+        Optional<BigDecimal> converted = fxRateService.convert(amount, currency, SORT_CURRENCY);
+        return converted.orElse(amount);
     }
 
     private static RateOptionDTO toDto(CarrierConnector.RateOption r) {

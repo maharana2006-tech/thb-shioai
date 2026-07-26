@@ -6,12 +6,14 @@ import com.multiship.backend.dto.ShipmentRequestDTO;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
+import com.multiship.backend.service.fx.FxRateService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -34,6 +36,7 @@ class RateShopServiceImplTest {
 
     private CarrierService carrierService;
     private CarrierAccountRefRepository accountRepo;
+    private FxRateService fxRateService;
     private CarrierConnector upsConn;
     private CarrierConnector fedexConn;
     private CarrierConnector uspsConn;
@@ -45,6 +48,11 @@ class RateShopServiceImplTest {
     void setUp() {
         carrierService = mock(CarrierService.class);
         accountRepo = mock(CarrierAccountRefRepository.class);
+        fxRateService = mock(FxRateService.class);
+        // Default: no FX conversion succeeds — the comparator falls back to
+        // raw amounts, so all Sprint 21 tests behave identically.
+        when(fxRateService.convert(any(), anyString(), anyString()))
+                .thenReturn(Optional.empty());
         upsConn = mock(CarrierConnector.class);
         fedexConn = mock(CarrierConnector.class);
         uspsConn = mock(CarrierConnector.class);
@@ -55,7 +63,7 @@ class RateShopServiceImplTest {
         when(carrierService.getCarrierConnector("DHL")).thenReturn(dhlConn);
         // Single-thread pool so ordering is stable across CI runners.
         executor = Executors.newSingleThreadExecutor();
-        service = new RateShopServiceImpl(carrierService, accountRepo, executor);
+        service = new RateShopServiceImpl(carrierService, accountRepo, fxRateService, executor);
     }
 
     @AfterEach
@@ -330,5 +338,88 @@ class RateShopServiceImplTest {
         assertEquals(
                 List.of("UPS", "FEDEX"),
                 service.resolveCarriers(List.of("ups", "FEDEX", "UPS", "MYSTERY_CARRIER")));
+    }
+
+    /* -------------------------- FX-normalised sort -------------------------- */
+
+    @Test
+    void mixedCurrencyOptionsSortByUsdNormalisedValue() {
+        // EUR 20 @ 1.10 USD/EUR = 22 USD → beats USD 25, loses to USD 20.
+        when(fxRateService.convert(new BigDecimal("20"), "EUR", "USD"))
+                .thenReturn(Optional.of(new BigDecimal("22.00")));
+        when(accountRepo.findPlatformAccountsByCarrier(anyString()))
+                .thenReturn(List.of(acct("_")));
+        when(upsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(uspsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(dhlConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(upsConn.getRates(any(), anyString())).thenReturn(List.of(
+                new CarrierConnector.RateOption("UPS", "07", "UPS Express",
+                        new BigDecimal("25"), "USD", null, 3)));
+        when(fedexConn.getRates(any(), anyString())).thenReturn(List.of(
+                new CarrierConnector.RateOption("FEDEX", "INTL_ECON", "FedEx Intl Econ",
+                        new BigDecimal("20"), "EUR", null, 5)));
+        when(uspsConn.getRates(any(), anyString())).thenReturn(List.of(
+                new CarrierConnector.RateOption("USPS", "USPS PMI", "USPS PMI",
+                        new BigDecimal("20"), "USD", null, 4)));
+        when(dhlConn.getRates(any(), anyString())).thenReturn(List.of());
+
+        var response = service.rateShop(req());
+        var options = response.getData().getOptions();
+        assertEquals(3, options.size());
+        // USPS 20 USD → cheapest, FEDEX 20 EUR (22 USD) → middle, UPS 25 USD → last
+        assertEquals("USPS", options.get(0).getCarrierCode());
+        assertEquals("FEDEX", options.get(1).getCarrierCode());
+        assertEquals("UPS", options.get(2).getCarrierCode());
+        // Native amount + currency NOT rewritten — we only normalise for
+        // the sort key; the response carries the carrier's native quote.
+        assertEquals("EUR", options.get(1).getCurrency());
+        assertEquals(0, new BigDecimal("20").compareTo(options.get(1).getTotalAmount()));
+    }
+
+    @Test
+    void unavailableFxRateFallsBackToRawAmountForSort() {
+        // No FX rate is set on the mock (default empty). The comparator
+        // should fall through to raw amounts — so USD 15 sorts before
+        // EUR 20 even though EUR is nominally more valuable per unit.
+        when(accountRepo.findPlatformAccountsByCarrier(anyString()))
+                .thenReturn(List.of(acct("_")));
+        when(upsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(uspsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(dhlConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(upsConn.getRates(any(), anyString())).thenReturn(List.of(
+                new CarrierConnector.RateOption("UPS", "03", "UPS Ground",
+                        new BigDecimal("15"), "USD", null, 3)));
+        when(fedexConn.getRates(any(), anyString())).thenReturn(List.of(
+                new CarrierConnector.RateOption("FEDEX", "INTL", "FedEx Intl",
+                        new BigDecimal("20"), "EUR", null, 5)));
+        when(uspsConn.getRates(any(), anyString())).thenReturn(List.of());
+        when(dhlConn.getRates(any(), anyString())).thenReturn(List.of());
+
+        var response = service.rateShop(req());
+        var options = response.getData().getOptions();
+        assertEquals(2, options.size());
+        assertEquals("UPS", options.get(0).getCarrierCode());
+        assertEquals("FEDEX", options.get(1).getCarrierCode());
+    }
+
+    @Test
+    void usdOptionsSkipFxServiceEntirely() {
+        // Every option in USD → FX service should never be called.
+        when(accountRepo.findPlatformAccountsByCarrier(anyString()))
+                .thenReturn(List.of(acct("_")));
+        when(upsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(uspsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(dhlConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(upsConn.getRates(any(), anyString())).thenReturn(List.of(option("UPS", "03", "12.50")));
+        when(fedexConn.getRates(any(), anyString())).thenReturn(List.of());
+        when(uspsConn.getRates(any(), anyString())).thenReturn(List.of());
+        when(dhlConn.getRates(any(), anyString())).thenReturn(List.of());
+
+        service.rateShop(req());
+        org.mockito.Mockito.verify(fxRateService, org.mockito.Mockito.never())
+                .convert(any(), anyString(), anyString());
     }
 }

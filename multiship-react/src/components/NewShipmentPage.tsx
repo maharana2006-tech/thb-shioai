@@ -27,6 +27,8 @@ import PageSectionHeader from './workspace/PageSectionHeader'
 import ShipmentPartiesOverrideModal, { type Party } from './modals/ShipmentPartiesOverrideModal'
 import CustomsWizard from './shipment/CustomsWizard'
 import HsCodeCombobox from './shipment/HsCodeCombobox'
+import RatePickerModal from './shipment/RatePickerModal'
+import type { RateOption, RateShopRequest } from '../api/rateShopService'
 import type { CustomsItem, OrderCustomsPayload } from '../api/customsService'
 import { parseIntlValidationMessage } from '../utils/intlValidationErrors'
 
@@ -303,6 +305,9 @@ export default function NewShipmentPage() {
   const [weightUnit, setWeightUnit] = useState<'LB' | 'KG'>('LB')
   const [declaredValue, setDeclaredValue] = useState('')
   const [clientCode, setClientCode] = useState('')
+  // Sprint 22 — rate picker: opens the RatePickerModal with current form
+  // state; on select we populate carrier + serviceId + accountNumber.
+  const [ratePickerOpen, setRatePickerOpen] = useState(false)
 
   // 3PL guardrails: client's attached warehouses, allowlists, and destination
   // rules. Fetched when clientCode changes; drive the warehouse picker,
@@ -474,6 +479,79 @@ export default function NewShipmentPage() {
   const scopeFits = (scope?: string | null) => !scope || scope === 'BOTH' || scope === neededScope
 
   const originMatch = (o?: string | null) => (o ?? 'US').toUpperCase() === (sender.countryCode || 'US').toUpperCase()
+
+  // Sprint 22 — build a rate-shop request from the current form state.
+  // Postal codes + weight are the minimum required set; the picker disables
+  // its trigger button when they're missing.
+  const rateShopRequest = useMemo<RateShopRequest>(() => ({
+    shipment: {
+      carrierCode: carrier || undefined,
+      accountNumber: accountNumber || undefined,
+      packageType: packageChoice || undefined,
+      weight: Number(weight) || 0,
+      weightUnit,
+      length: length ? Number(length) : undefined,
+      width: width ? Number(width) : undefined,
+      height: height ? Number(height) : undefined,
+      dimUnit,
+      shipperPostalCode: sender.postalCode || '',
+      shipperCountryCode: sender.countryCode || 'US',
+      shipperCity: sender.city || undefined,
+      shipperState: sender.state || undefined,
+      shipperName: sender.name || undefined,
+      shipperAddressLine1: sender.addressLine1 || undefined,
+      recipientPostalCode: recipient.postalCode || '',
+      recipientCountryCode: recipient.countryCode || 'US',
+      recipientCity: recipient.city || undefined,
+      recipientState: recipient.state || undefined,
+      recipientName: recipient.name || undefined,
+      recipientAddressLine1: recipient.addressLine1 || undefined,
+      recipientResidential: recipient.residential,
+      declaredValue: declaredValue ? Number(declaredValue) : undefined,
+    },
+    customerNo: clientCode || null,
+    // No carriers whitelist — let the backend fan out to every configured
+    // carrier so the picker can compare across the tenant's full inventory.
+  }), [carrier, accountNumber, packageChoice, weight, weightUnit, length, width, height, dimUnit,
+        sender, recipient, declaredValue, clientCode])
+
+  const canOpenRatePicker = Boolean(
+    rateShopRequest.shipment.weight > 0
+    && rateShopRequest.shipment.shipperPostalCode
+    && rateShopRequest.shipment.recipientPostalCode,
+  )
+
+  /**
+   * Handle a picker selection: switch the carrier, look up the numeric
+   * serviceId from the catalog, and pick a matching account. Ignores the
+   * option's currency + price — those are informational for the operator;
+   * the actual bill still comes from the carrier's own rate engine at
+   * label time.
+   */
+  const handleRateSelected = (option: RateOption) => {
+    const nextCarrier = canon(option.carrierCode)
+    if (nextCarrier && nextCarrier !== carrier) setCarrier(nextCarrier)
+    // Look up the numeric serviceId that matches the carrier's service code.
+    // If the tenant hasn't loaded that service into their catalog yet we
+    // clear the picker so they know to add it — a stale value would silently
+    // ship on the wrong service.
+    const match = services.find(
+      (s) => canon(s.carrier) === nextCarrier && s.serviceCode === option.serviceCode,
+    )
+    setServiceId(match?.id ?? '')
+    // Prefer the account associated with the credentials that produced this
+    // quote; fall back to the current selection if we can't identify it.
+    const preferredAccount = accounts.find(
+      (a) => canon(a.carrierCode) === nextCarrier
+        && (!clientCode || (a.customerNo || '').toUpperCase() === clientCode.toUpperCase()),
+    )
+    if (preferredAccount?.accountNumber) setAccountNumber(preferredAccount.accountNumber)
+    notify.success(
+      `Picked ${option.carrierCode} ${option.serviceName ?? option.serviceCode}${
+        match ? '' : ' — service not in your catalog; add it before generating a label.'
+      }`,
+    )
+  }
   const accountsForCarrier = useMemo(() => {
     const onCarrier = accounts.filter((a) => canon(a.carrierCode) === carrier)
     if (!clientCode) return onCarrier
@@ -1015,12 +1093,26 @@ export default function NewShipmentPage() {
                     </datalist>
                   </Field>
                   <Field label="Service level">
-                    <select className={inputCls} value={serviceId} onChange={(e) => setServiceId(e.target.value ? Number(e.target.value) : '')}>
-                      {servicesForCarrier.length === 0 ? <option value="">Carrier default</option> : null}
-                      {servicesForCarrier.map((s) => (
-                        <option key={s.id} value={s.id}>{s.name}</option>
-                      ))}
-                    </select>
+                    <div className="flex items-center gap-1.5">
+                      <select className={inputCls} value={serviceId} onChange={(e) => setServiceId(e.target.value ? Number(e.target.value) : '')}>
+                        {servicesForCarrier.length === 0 ? <option value="">Carrier default</option> : null}
+                        {servicesForCarrier.map((s) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={!canOpenRatePicker}
+                        onClick={() => setRatePickerOpen(true)}
+                        title={canOpenRatePicker
+                          ? 'Fetch live rates across every configured carrier'
+                          : 'Enter postal codes and weight first'}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[#1f150c] bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <FiSearch className="h-2.5 w-2.5" />
+                        Compare rates
+                      </button>
+                    </div>
                   </Field>
                   <Field label="Incoterms">
                     <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
@@ -1359,6 +1451,14 @@ export default function NewShipmentPage() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {ratePickerOpen ? (
+        <RatePickerModal
+          request={rateShopRequest}
+          onClose={() => setRatePickerOpen(false)}
+          onSelect={handleRateSelected}
+        />
       ) : null}
 
       {overrideEditorOpen ? (
