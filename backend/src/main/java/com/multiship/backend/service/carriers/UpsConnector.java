@@ -557,6 +557,99 @@ public class UpsConnector implements CarrierConnector {
     }
 
     /**
+     * UPS HazMatPackageInformation block — package-scoped hazmat wire
+     * format for the Ship API. UPS scopes hazmat AT THE PACKAGE (each
+     * package can declare its own chemicals), so this hangs off
+     * {@code Package}, not {@code Shipment}.
+     *
+     * <p>Layout:
+     * <pre>
+     * HazMatPackageInformation {
+     *   AllPackedInOneIndicator     (presence-only; empty string when all commodities in one package)
+     *   OverPackedIndicator         (presence-only; empty string when using an overpack)
+     *   HazMatChemicalRecord[]      (one per commodity):
+     *     ChemicalRecordIdentifier  (sequence)
+     *     ClassDivisionNumber       (hazard class, "9" or "4.1")
+     *     IDNumber                  (UN number, "UN3480")
+     *     TransportationMode        (Ground | Air | Vessel — inferred from RegulationSet)
+     *     RegulationSet             (IATA | ADR | DOT)
+     *     EmergencyPhone            (24/7)
+     *     EmergencyContact          (24/7 name)
+     *     ProperShippingName
+     *     PackagingGroupType        (I | II | III)
+     *     Quantity + UOM            (mass / volume per package)
+     *     PackagingType             (fixed "CTN" for cartons — future work: preset lookup)
+     *     PackagingTypeQuantity     (package count for this commodity)
+     * }
+     * </pre>
+     *
+     * <p>Caller is expected to have populated the DG block AND to have
+     * run {@link com.multiship.backend.service.DangerousGoodsValidator} —
+     * this method assumes the fields are present.
+     */
+    private Map<String, Object> buildUpsHazMatPackage(ShipmentRequestDTO request) {
+        com.multiship.backend.dto.DangerousGoodsBlockDTO dg = request.getDangerousGoods();
+        Map<String, Object> hazmat = new LinkedHashMap<>();
+        // Presence-only flags; UPS wants an empty string when applicable.
+        if (dg.getCommodities().size() > 1) {
+            hazmat.put("AllPackedInOneIndicator", "");
+        }
+
+        String regulation = dg.getRegulationSet() == null ? "IATA"
+                : dg.getRegulationSet().trim().toUpperCase(Locale.ROOT);
+        String transportMode = mapTransportMode(regulation);
+
+        java.util.List<Map<String, Object>> records = new java.util.ArrayList<>();
+        int seq = 1;
+        for (com.multiship.backend.dto.DangerousCommodityDTO c : dg.getCommodities()) {
+            Map<String, Object> record = new LinkedHashMap<>();
+            record.put("ChemicalRecordIdentifier", String.valueOf(seq++));
+            if (StringUtils.hasText(c.getHazardClass())) {
+                record.put("ClassDivisionNumber", c.getHazardClass().trim());
+            }
+            if (StringUtils.hasText(c.getUnNumber())) {
+                record.put("IDNumber", c.getUnNumber().trim().toUpperCase(Locale.ROOT));
+            }
+            record.put("TransportationMode", transportMode);
+            record.put("RegulationSet", regulation);
+            record.put("EmergencyPhone", firstNonBlank(dg.getEmergencyContactPhone(), ""));
+            record.put("EmergencyContact", firstNonBlank(dg.getEmergencyContactName(), ""));
+            if (StringUtils.hasText(c.getProperShippingName())) {
+                record.put("ProperShippingName", c.getProperShippingName().trim());
+            }
+            if (StringUtils.hasText(c.getPackingGroup())) {
+                record.put("PackagingGroupType", c.getPackingGroup().trim().toUpperCase(Locale.ROOT));
+            }
+            if (c.getQuantity() != null) {
+                record.put("Quantity", c.getQuantity().toPlainString());
+            }
+            if (StringUtils.hasText(c.getQuantityUnit())) {
+                record.put("UOM", c.getQuantityUnit().trim().toUpperCase(Locale.ROOT));
+            }
+            record.put("PackagingType", "CTN");
+            record.put("PackagingTypeQuantity",
+                    String.valueOf(c.getPackageCount() == null || c.getPackageCount() < 1 ? 1 : c.getPackageCount()));
+            records.add(record);
+        }
+        hazmat.put("HazMatChemicalRecord", records);
+        return hazmat;
+    }
+
+    /**
+     * Map our regulation set enum to UPS's transportation mode string:
+     *   IATA → Air, ADR → Ground, DOT → Ground.
+     * Vessel mode is out of scope — no maritime carriers in our matrix.
+     */
+    private static String mapTransportMode(String regulationSet) {
+        if (regulationSet == null) return "Ground";
+        return switch (regulationSet.trim().toUpperCase(Locale.ROOT)) {
+            case "IATA" -> "Air";
+            case "ADR", "DOT" -> "Ground";
+            default -> "Ground";
+        };
+    }
+
+    /**
      * UPS Party (Shipper / ShipTo). AttentionName defaults to Name when
      * blank; UPS rejects Party blocks without an AttentionName on international
      * shipments even when it duplicates Name. Tax id is only relevant on
@@ -612,6 +705,20 @@ public class UpsConnector implements CarrierConnector {
             dims.put("Width", request.getWidth() != null ? request.getWidth().toPlainString() : "0");
             dims.put("Height", request.getHeight() != null ? request.getHeight().toPlainString() : "0");
             pkg.put("Dimensions", dims);
+        }
+
+        // Sprint 26 — HazMatPackageInformation. UPS scopes hazmat at the
+        // Package level (each package can declare its own commodities),
+        // so the wire block hangs off Package here, not off Shipment.
+        // Sub-block layout follows the UPS Ship API "HazMat" schema:
+        //   PackageIdentifier / QValue / OverPackedIndicator / AllPackedInOneIndicator
+        //   ShipmentServiceOptions block (transport mode + emergency contact + signatory)
+        //   ChemicalRecord[] — one per commodity
+        // We emit the minimum required set — connector defers to the DG
+        // block for content, no local computation.
+        if (request.getDangerousGoods() != null
+                && request.getDangerousGoods().isReadyForCarrier()) {
+            pkg.put("HazMatPackageInformation", buildUpsHazMatPackage(request));
         }
         return pkg;
     }

@@ -1,0 +1,177 @@
+[
+  {
+    "unNumber": "UN3480",
+    "properShippingName": "Lithium ion batteries",
+    "hazardClass": "9",
+    "defaultPackingGroup": "II",
+    "notes": "Standalone Li-ion cells / batteries. Special Provision 188 covers ≤ 100 Wh; PI 965 governs air. Common consumer electronics."
+  },
+  {
+    "unNumber": "UN3481",
+    "properShippingName": "Lithium ion batteries contained in equipment",
+    "hazardClass": "9",
+    "defaultPackingGroup": "II",
+    "notes": "Li-ion INSIDE the device (phones, laptops). PI 967. Ships as ORM-D by many carriers when limits met."
+  },
+  {
+    "unNumber": "UN3090",
+    "properShippingName": "Lithium metal batteries",
+    "hazardClass": "9",
+    "defaultPackingGroup": "II",
+    "notes": "Non-rechargeable Li metal (button cells, some watches). PI 968. Air restrictions tighter than Li-ion."
+  },
+  {
+    "unNumber": "UN3091",
+    "properShippingName": "Lithium metal batteries contained in equipment",
+    "hazardClass": "9",
+    "defaultPackingGroup": "II",
+    "notes": "Li metal INSIDE the device. PI 970. Includes hearing aids, calculators."
+  },
+  {
+    "unNumber": "UN1950",
+    "properShippingName": "Aerosols",
+    "hazardClass": "2.1",
+    "defaultPackingGroup": null,
+    "notes": "Aerosol cans — flammable propellant. Non-flammable variants ship under 2.2. Common in cosmetics, cleaning."
+  },
+  {
+    "unNumber": "UN1993",
+    "properShippingName": "Flammable liquid, n.o.s.",
+    "hazardClass": "3",
+    "defaultPackingGroup": "II",
+    "notes": "Generic flammable liquid — needs the technical name in parentheses (e.g. 'contains xylene'). Common shipping industrial solvents."
+  },
+  {
+    "unNumber": "UN1266",
+    "properShippingName": "Perfumery products",
+    "hazardClass": "3",
+    "defaultPackingGroup": "III",
+    "notes": "Perfumes, colognes, essential oils with flammable solvents. Widely shipped B2C — check LQ limits."
+  },
+  {
+    "unNumber": "UN3082",
+    "properShippingName": "Environmentally hazardous substance, liquid, n.o.s.",
+    "hazardClass": "9",
+    "defaultPackingGroup": "III",
+    "notes": "Marine pollutants and other environmentally hazardous liquids. Often paired with a class 3 or 6.1 label."
+  },
+  {
+    "unNumber": "UN3077",
+    "properShippingName": "Environmentally hazardous substance, solid, n.o.s.",
+    "hazardClass": "9",
+    "defaultPackingGroup": "III",
+    "notes": "Solid form of UN3082 — includes some chemicals, powders."
+  },
+  {
+    "unNumber": "UN2794",
+    "properShippingName": "Batteries, wet, filled with acid",
+    "hazardClass": "8",
+    "defaultPackingGroup": null,
+    "notes": "Lead-acid car batteries. Corrosive. Freight-only for most carriers."
+  },
+  {
+    "unNumber": "UN2795",
+    "properShippingName": "Batteries, wet, filled with alkali",
+    "hazardClass": "8",
+    "defaultPackingGroup": null,
+    "notes": "NiCd / NiMH industrial. Corrosive alkali electrolyte."
+  },
+  {
+    "unNumber": "UN2800",
+    "properShippingName": "Batteries, wet, non-spillable",
+    "hazardClass": "8",
+    "defaultPackingGroup": null,
+    "notes": "Sealed lead-acid (SLA), gel batteries. Excepted from many DG rules when leak-tested."
+  },
+  {
+    "unNumber": "UN2809",
+    "properShippingName": "Mercury",
+    "hazardClass": "8",
+    "defaultPackingGroup": "III",
+    "notes": "Elemental mercury and mercury-containing devices. Air-restricted."
+  },
+  {
+    "unNumber": "UN2814",
+    "properShippingName": "Infectious substance, affecting humans",
+    "hazardClass": "6.2",
+    "defaultPackingGroup": null,
+    "notes": "Category A pathogens. Special packaging + notification requirements. Not for general commerce."
+  },
+  {
+    "unNumber": "UN3373",
+    "properShippingName": "Biological substance, category B",
+    "hazardClass": "6.2",
+    "defaultPackingGroup": null,
+    "notes": "Category B (lower-risk) biological samples. Ships as UN3373 with triple packaging. Common lab courier."
+  },
+  {
+    "unNumber": "UN1170",
+    "properShippingName": "Ethanol solution",
+    "hazardClass": "3",
+    "defaultPackingGroup": "II",
+    "notes": "Ethanol > 24% ABV. Distilleries, hand sanitizer B2B."
+  },
+  {
+    "unNumber": "UN1219",
+    "properShippingName": "Isopropanol",
+    "hazardClass": "3",
+    "defaultPackingGroup": "II",
+    "notes": "Isopropyl alcohol. Cleaning products, medical wipes bulk."
+  },
+  {
+    "unNumber": "UN1263",
+    "properShippingName": "Paint",
+    "hazardClass": "3",
+    "defaultPackingGroup": "II",
+    "notes": "Solvent-based paint / thinner / varnish. Includes lacquers, enamels."
+  },
+  {
+    "unNumber": "UN1210",
+    "properShippingName": "Printing ink, flammable",
+    "hazardClass": "3",
+    "defaultPackingGroup": "III",
+    "notes": "Flammable inks + related materials. Printing supply shipments."
+  },
+  {
+    "unNumber": "UN1230",
+    "properShippingName": "Methanol",
+    "hazardClass": "3",
+    "defaultPackingGroup": "II",
+    "notes": "Methanol / methyl alcohol. Also a 6.1 toxin — dual placarding may apply."
+  },
+  {
+    "unNumber": "UN1075",
+    "properShippingName": "Petroleum gases, liquefied",
+    "hazardClass": "2.1",
+    "defaultPackingGroup": null,
+    "notes": "LPG, propane, butane cylinders. Ground-only for most consumer carriers."
+  },
+  {
+    "unNumber": "UN1978",
+    "properShippingName": "Propane",
+    "hazardClass": "2.1",
+    "defaultPackingGroup": null,
+    "notes": "Refined propane. Camping cylinders, torch fuel."
+  },
+  {
+    "unNumber": "UN1044",
+    "properShippingName": "Fire extinguishers",
+    "hazardClass": "2.2",
+    "defaultPackingGroup": null,
+    "notes": "Compressed gas, non-flammable. Common in commercial replenishment shipments."
+  },
+  {
+    "unNumber": "UN1005",
+    "properShippingName": "Ammonia, anhydrous",
+    "hazardClass": "2.3",
+    "defaultPackingGroup": null,
+    "notes": "Toxic gas. Freight-only, restricted lanes."
+  },
+  {
+    "unNumber": "UN3363",
+    "properShippingName": "Dangerous goods in machinery",
+    "hazardClass": "9",
+    "defaultPackingGroup": null,
+    "notes": "Machines containing small quantities of DG (e.g. fuel-line traces in generators)."
+  }
+]

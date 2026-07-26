@@ -171,4 +171,15 @@ public class ShipmentRequestDTO {
      * outbound labels.
      */
     private Boolean isReturn;
+
+    /**
+     * Optional dangerous goods declaration. When present + ready for
+     * carrier (see {@link DangerousGoodsBlockDTO#isReadyForCarrier}),
+     * connectors emit the carrier-specific hazmat wire format on top of
+     * the normal payload. Domestic-non-hazmat shipments leave this null.
+     *
+     * <p>Sprint 26 wires this into the UPS connector; FedEx / DHL / USPS
+     * land in Sprint 27.
+     */
+    private DangerousGoodsBlockDTO dangerousGoods;
 }
