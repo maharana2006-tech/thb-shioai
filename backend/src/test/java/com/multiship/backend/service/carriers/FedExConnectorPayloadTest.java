@@ -135,9 +135,10 @@ class FedExConnectorPayloadTest {
         r.setWeightUnit("KG");
         r.setWeight(new BigDecimal("1.5"));
         Map<String, Object> rs = requestedShipment(r);
-        // requestedPackageLineItems is serialized as Object[] (pre-existing code).
-        Object[] pkgs = (Object[]) rs.get("requestedPackageLineItems");
-        Map<String, Object> pkg = (Map<String, Object>) pkgs[0];
+        // Sprint 28 — requestedPackageLineItems is now a List<Map> for multi-package iteration.
+        java.util.List<Map<String, Object>> pkgs =
+                (java.util.List<Map<String, Object>>) rs.get("requestedPackageLineItems");
+        Map<String, Object> pkg = pkgs.get(0);
         Map<String, Object> weight = (Map<String, Object>) pkg.get("weight");
         assertEquals("KG", weight.get("units"));
     }

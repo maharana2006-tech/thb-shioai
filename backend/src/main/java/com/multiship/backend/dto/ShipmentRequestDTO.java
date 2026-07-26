@@ -182,4 +182,41 @@ public class ShipmentRequestDTO {
      * land in Sprint 27.
      */
     private DangerousGoodsBlockDTO dangerousGoods;
+
+    /**
+     * Multi-package shipment — one entry per physical box. When populated
+     * connectors iterate this list to build their carrier-specific
+     * packages array; when null / empty the connectors fall back to the
+     * top-level {@code weight}, {@code length}, {@code width},
+     * {@code height}, {@code weightUnit}, {@code dimUnit}, {@code packageType},
+     * {@code declaredValue} fields — see {@link #effectivePackages()} for
+     * the canonicalisation.
+     */
+    private java.util.List<PackageDetailDTO> packages;
+
+    /**
+     * Return the packages list connectors should iterate. Guarantees a
+     * non-empty list so per-connector code doesn't have to fork on
+     * null/empty:
+     * <ul>
+     *   <li>Non-empty {@link #packages} → returned as-is.</li>
+     *   <li>Null or empty → synthesised single-package list mirroring
+     *       the top-level fields. Sequence number = 1.</li>
+     * </ul>
+     */
+    public java.util.List<PackageDetailDTO> effectivePackages() {
+        if (packages != null && !packages.isEmpty()) return packages;
+        PackageDetailDTO synthetic = PackageDetailDTO.builder()
+                .sequenceNumber(1)
+                .packageType(packageType)
+                .weight(weight)
+                .weightUnit(weightUnit)
+                .length(length).width(width).height(height)
+                .dimUnit(dimUnit)
+                .declaredValue(declaredValue)
+                .description(specialInstructions)
+                .reference(referenceNumber)
+                .build();
+        return java.util.List.of(synthetic);
+    }
 }
