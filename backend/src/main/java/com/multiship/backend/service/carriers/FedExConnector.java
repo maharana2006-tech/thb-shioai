@@ -260,6 +260,180 @@ public class FedExConnector implements CarrierConnector {
     }
 
     /**
+     * FedEx Rate API v1 — {@code POST /rate/v1/rates/quotes} with the OAuth
+     * Bearer token. Body carries the shipper + recipient postal codes,
+     * pickupType, and a single package weight; response includes one
+     * {@code rateReplyDetails} entry per service level. We flatten each into
+     * a {@link RateOption} preferring the ACCOUNT rate (post-discount)
+     * when available, falling back to LIST otherwise. Non-authenticated
+     * tokens ({@code -local-*}) short-circuit to an empty list — same
+     * convention the tracking overrides established.
+     *
+     * <p>Response parsing:
+     * <ul>
+     *   <li>{@code serviceType} + {@code serviceName} → serviceCode +
+     *       serviceName.</li>
+     *   <li>{@code ratedShipmentDetails[]} — pick the ACCOUNT rate if
+     *       present, else the LIST rate.</li>
+     *   <li>{@code operationalDetail.deliveryDate} → estimatedDelivery.</li>
+     *   <li>{@code operationalDetail.transitTime} → transitDays via a
+     *       simple word→number mapping (ONE_DAY → 1, etc.).</li>
+     * </ul>
+     */
+    @Override
+    public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return java.util.List.of();
+        }
+        try {
+            String fedexWeightUnit = "KG".equalsIgnoreCase(request.getWeightUnit()) ? "KG" : "LB";
+            java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+            body.put("accountNumber", java.util.Map.of("value",
+                    firstNonBlank(request.getAccountNumber(), "")));
+            java.util.Map<String, Object> requestedShipment = new java.util.LinkedHashMap<>();
+            requestedShipment.put("shipper", java.util.Map.of("address", java.util.Map.of(
+                    "postalCode", firstNonBlank(request.getShipperPostalCode(), ""),
+                    "countryCode", firstNonBlank(request.getShipperCountryCode(), "US"))));
+            requestedShipment.put("recipient", java.util.Map.of("address", java.util.Map.of(
+                    "postalCode", firstNonBlank(request.getRecipientPostalCode(), ""),
+                    "countryCode", firstNonBlank(request.getRecipientCountryCode(), "US"))));
+            requestedShipment.put("pickupType", "USE_SCHEDULED_PICKUP");
+            requestedShipment.put("rateRequestType", java.util.List.of("ACCOUNT", "LIST"));
+            requestedShipment.put("requestedPackageLineItems", java.util.List.of(java.util.Map.of(
+                    "weight", java.util.Map.of(
+                            "units", fedexWeightUnit,
+                            "value", request.getWeight() != null ? request.getWeight() : BigDecimal.ONE))));
+            body.put("requestedShipment", requestedShipment);
+
+            String response = RestClient.builder().baseUrl(getBaseUrl()).build().post()
+                    .uri("/rate/v1/rates/quotes")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("X-locale", "en_US")
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            return parseFedExRateResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("FedEx rate quote rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return java.util.List.of();
+        } catch (Exception ex) {
+            log.warn("FedEx rate quote failed; returning empty rate list. Reason: {}",
+                    ex.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    /**
+     * Parse the FedEx rate-quote response into carrier-neutral RateOptions.
+     * Package-visible so tests can assert against canned response JSON.
+     */
+    java.util.List<RateOption> parseFedExRateResponse(String response) {
+        try {
+            JsonNode details = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"))
+                    .at("/output/rateReplyDetails");
+            if (!details.isArray()) return java.util.List.of();
+
+            java.util.List<RateOption> out = new java.util.ArrayList<>();
+            for (JsonNode detail : details) {
+                String serviceCode = detail.path("serviceType").asText(null);
+                if (serviceCode == null || serviceCode.isEmpty()) continue;
+                String serviceName = detail.path("serviceName").asText(serviceCode);
+
+                // Prefer ACCOUNT rate (post-discount) over LIST — matches how
+                // FedEx bills the shipment, not the rack rate.
+                JsonNode preferredRate = pickPreferredFedExRate(detail.at("/ratedShipmentDetails"));
+                if (preferredRate == null || preferredRate.isMissingNode()) continue;
+                BigDecimal amount = readFedExAmount(preferredRate);
+                String currency = readFedExCurrency(preferredRate);
+                if (amount == null) continue;
+
+                LocalDateTime estimatedDelivery = parseDateTime(
+                        detail.at("/operationalDetail/deliveryDate").asText(null));
+                Integer transitDays = parseFedExTransitTime(
+                        detail.at("/operationalDetail/transitTime").asText(null));
+
+                out.add(new RateOption("FEDEX", serviceCode, serviceName, amount, currency,
+                        estimatedDelivery, transitDays));
+            }
+            return java.util.List.copyOf(out);
+        } catch (Exception ex) {
+            log.warn("FedEx rate response parse failed: {}", ex.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    /**
+     * Choose the best-matching entry from ratedShipmentDetails[]. Prefer
+     * {@code rateType=ACCOUNT} (the negotiated rate) over LIST (rack rate).
+     * Falls through to the first entry when neither type is set.
+     */
+    private JsonNode pickPreferredFedExRate(JsonNode ratedShipmentDetails) {
+        if (!ratedShipmentDetails.isArray() || ratedShipmentDetails.isEmpty()) return null;
+        JsonNode fallback = ratedShipmentDetails.get(0);
+        for (JsonNode entry : ratedShipmentDetails) {
+            if ("ACCOUNT".equalsIgnoreCase(entry.path("rateType").asText(""))) return entry;
+        }
+        for (JsonNode entry : ratedShipmentDetails) {
+            if ("LIST".equalsIgnoreCase(entry.path("rateType").asText(""))) return entry;
+        }
+        return fallback;
+    }
+
+    /** FedEx totalNetCharge is exposed in two places; try both. */
+    private static BigDecimal readFedExAmount(JsonNode entry) {
+        JsonNode direct = entry.path("totalNetCharge");
+        if (direct.isNumber()) return direct.decimalValue();
+        JsonNode nested = entry.at("/shipmentRateDetail/totalNetCharge/amount");
+        if (nested.isNumber()) return nested.decimalValue();
+        if (nested.isTextual()) {
+            try { return new BigDecimal(nested.asText()); } catch (NumberFormatException ignored) {}
+        }
+        return null;
+    }
+
+    private static String readFedExCurrency(JsonNode entry) {
+        String currency = entry.at("/shipmentRateDetail/totalNetCharge/currency").asText(null);
+        if (currency == null || currency.isEmpty()) currency = entry.path("currency").asText(null);
+        return currency == null || currency.isEmpty() ? "USD" : currency;
+    }
+
+    /**
+     * FedEx transitTime is a word enum ({@code ONE_DAY}, {@code TWO_DAYS},
+     * ..., {@code TEN_DAYS}). Return the integer day count, or null when
+     * the value is absent / unrecognized.
+     */
+    static Integer parseFedExTransitTime(String value) {
+        if (value == null || value.isEmpty()) return null;
+        return switch (value.toUpperCase(java.util.Locale.ROOT)) {
+            case "ONE_DAY" -> 1;
+            case "TWO_DAYS" -> 2;
+            case "THREE_DAYS" -> 3;
+            case "FOUR_DAYS" -> 4;
+            case "FIVE_DAYS" -> 5;
+            case "SIX_DAYS" -> 6;
+            case "SEVEN_DAYS" -> 7;
+            case "EIGHT_DAYS" -> 8;
+            case "NINE_DAYS" -> 9;
+            case "TEN_DAYS" -> 10;
+            case "ELEVEN_DAYS" -> 11;
+            case "TWELVE_DAYS" -> 12;
+            case "THIRTEEN_DAYS" -> 13;
+            case "FOURTEEN_DAYS" -> 14;
+            case "FIFTEEN_DAYS" -> 15;
+            case "SIXTEEN_DAYS" -> 16;
+            case "SEVENTEEN_DAYS" -> 17;
+            case "EIGHTEEN_DAYS" -> 18;
+            case "NINETEEN_DAYS" -> 19;
+            case "TWENTY_DAYS" -> 20;
+            default -> null;
+        };
+    }
+
+    /**
      * URL-only tracking. FedEx's Track API requires OAuth so this 1-arg
      * variant returns a public tracking link and an UNKNOWN status. The
      * authenticated variant below does the real work; callers that have
