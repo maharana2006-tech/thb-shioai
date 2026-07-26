@@ -53,13 +53,27 @@ import java.util.Map;
 @Service
 public class OrderImportServiceImpl implements OrderImportService {
 
+    private final CarrierService carrierService;
+
+    // Constructor with @Autowired handles the CarrierService injection.
+    // Second no-arg constructor kept for the Sprint 40 test suite that
+    // exercises parsing / validation in isolation.
+    @org.springframework.beans.factory.annotation.Autowired
+    public OrderImportServiceImpl(CarrierService carrierService) {
+        this.carrierService = carrierService;
+    }
+
+    public OrderImportServiceImpl() {
+        this.carrierService = null;
+    }
+
     /** Canonical header ordering used for the template + parser column
      *  discovery. Column names are normalised to lowercase on match. */
     static final List<String> HEADERS = List.of(
             "recipientName", "recipientCompany", "recipientPhone", "recipientEmail",
             "addressLine1", "addressLine2",
             "city", "state", "postalCode", "countryCode",
-            "carrierCode", "serviceType", "packageType",
+            "carrierCode", "accountNumber", "serviceType", "packageType",
             "weight", "weightUnit",
             "declaredValue", "currency",
             "reference", "goodsDescription");
@@ -95,31 +109,105 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
         }
-        List<OrderImportRowDTO> valid = new ArrayList<>();
-        List<OrderImportRowDTO> invalid = new ArrayList<>();
+
+        int valid = 0;
+        int invalid = 0;
+        int generated = 0;
+
         for (OrderImportRowDTO row : rows) {
-            // Re-validate on commit — the frontend may have edited rows.
+            // Re-validate — the frontend may have edited rows.
             List<String> errors = validateRow(row);
             row.setErrors(errors);
-            if (errors.isEmpty()) valid.add(row);
-            else invalid.add(row);
+            if (!errors.isEmpty()) {
+                invalid++;
+                continue;
+            }
+            valid++;
+
+            // Sprint 41 — actually generate the label via the manual
+            // shipment path. When carrierService isn't wired (test-only
+            // no-arg constructor), fall through and just report the
+            // "would commit" summary.
+            if (carrierService == null) continue;
+
+            try {
+                com.multiship.backend.dto.ManualShipmentRequest req = toManualShipmentRequest(row);
+                ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
+                        carrierService.generateManualLabel(req, null);
+                com.multiship.backend.dto.LabelGenerationResponse data =
+                        resp == null ? null : resp.getData();
+                if (resp != null && "success".equalsIgnoreCase(resp.getStatus()) && data != null
+                        && StringUtils.hasText(data.getTrackingNumber())) {
+                    row.setGeneratedOrderNo(data.getOrderNo() == null ? null : data.getOrderNo().intValue());
+                    row.setGeneratedTrackingNumber(data.getTrackingNumber());
+                    row.setGeneratedStatus("GENERATED");
+                    row.setGeneratedMessage(data.getMessage());
+                    generated++;
+                } else {
+                    row.setGeneratedStatus("FAILED");
+                    row.setGeneratedMessage(resp == null ? "no response"
+                            : resp.getMessage());
+                }
+            } catch (Exception ex) {
+                log.warn("Order import row {} failed at label generation: {}",
+                        row.getRowNumber(), ex.getMessage());
+                row.setGeneratedStatus("FAILED");
+                row.setGeneratedMessage(ex.getMessage() == null
+                        ? ex.getClass().getSimpleName() : ex.getMessage());
+            }
         }
-        // Sprint 40 MVP: persistence is out of scope — the commit
-        // endpoint validates + reports. A follow-up sprint wires each
-        // valid row into the manual-shipment path so the labels are
-        // actually generated. For now we return the same preview
-        // shape with the accepted/rejected split so the UI can show a
-        // "would commit N, reject M" summary.
-        log.info("Order import commit ({}): {} valid, {} invalid",
-                requestedBy, valid.size(), invalid.size());
+
+        log.info("Order import commit ({}): {} valid, {} invalid, {} labels generated",
+                requestedBy, valid, invalid, generated);
         return success(OrderImportPreviewDTO.builder()
                 .totalRows(rows.size())
-                .validRows(valid.size())
-                .invalidRows(invalid.size())
+                .validRows(valid)
+                .invalidRows(invalid)
                 .rows(rows)
                 .build(),
-                valid.size() + " row(s) would be committed; "
-                        + invalid.size() + " have errors.");
+                generated > 0
+                        ? generated + " label(s) generated"
+                                + (invalid > 0 ? " · " + invalid + " row(s) skipped" : "")
+                        : (invalid > 0
+                                ? invalid + " row(s) skipped — none committed"
+                                : "0 label(s) generated"));
+    }
+
+    /**
+     * Sprint 41 — convert an import row to a ManualShipmentRequest.
+     * Recipient block from the row's address fields; sender left null
+     * so the CarrierService cascade uses the tenant's default ship-from.
+     * accountNumber / accountId → row's accountNumber; when the row
+     * doesn't carry one, the manual-shipment path errors clearly and
+     * the row is marked FAILED.
+     */
+    static com.multiship.backend.dto.ManualShipmentRequest toManualShipmentRequest(OrderImportRowDTO row) {
+        com.multiship.backend.dto.ManualShipmentRequest req =
+                new com.multiship.backend.dto.ManualShipmentRequest();
+        com.multiship.backend.dto.ManualShipmentRequest.Address recipient =
+                new com.multiship.backend.dto.ManualShipmentRequest.Address();
+        recipient.setName(row.getRecipientName());
+        recipient.setCompany(row.getRecipientCompany());
+        recipient.setPhone(row.getRecipientPhone());
+        recipient.setEmail(row.getRecipientEmail());
+        recipient.setAddressLine1(row.getAddressLine1());
+        recipient.setAddressLine2(row.getAddressLine2());
+        recipient.setCity(row.getCity());
+        recipient.setState(row.getState());
+        recipient.setPostalCode(row.getPostalCode());
+        recipient.setCountryCode(row.getCountryCode());
+        req.setRecipient(recipient);
+
+        req.setCarrierCode(row.getCarrierCode());
+        req.setAccountNumber(row.getAccountNumber());
+        req.setWeight(row.getWeight());
+        req.setWeightUnit(row.getWeightUnit());
+        req.setDeclaredValue(row.getDeclaredValue());
+        req.setCurrency(row.getCurrency());
+        req.setReference(row.getReference());
+        req.setGoodsDescription(row.getGoodsDescription());
+        req.setSource("API");
+        return req;
     }
 
     @Override
@@ -129,7 +217,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Sample row — realistic domestic US shipment.
         sb.append("Acme Warehouse,Acme Ltd,5551234567,ops@acme.com,")
                 .append("1 Warehouse Way,,Louisville,KY,40209,US,")
-                .append("UPS,03,02,2.5,LB,100.00,USD,PO-1001,General merchandise\n");
+                .append("UPS,A12345,03,02,2.5,LB,100.00,USD,PO-1001,General merchandise\n");
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }
 
@@ -245,6 +333,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         out.setPostalCode(r.read("postalCode"));
         out.setCountryCode(upper(r.read("countryCode")));
         out.setCarrierCode(upper(r.read("carrierCode")));
+        out.setAccountNumber(r.read("accountNumber"));
         out.setServiceType(r.read("serviceType"));
         out.setPackageType(r.read("packageType"));
         out.setWeight(parseDecimal(r.read("weight")));

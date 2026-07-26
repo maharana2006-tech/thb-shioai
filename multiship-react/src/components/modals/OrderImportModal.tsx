@@ -255,6 +255,7 @@ function PreviewStep({ preview }: { preview: OrderImportPreview }) {
                   </td>
                   <td className="p-2">
                     {r.carrierCode ?? '—'}
+                    {r.accountNumber ? ` · ${r.accountNumber}` : ''}
                     {r.serviceType ? ` · ${r.serviceType}` : ''}
                   </td>
                   <td className="p-2 text-right">
@@ -284,21 +285,82 @@ function PreviewStep({ preview }: { preview: OrderImportPreview }) {
 }
 
 function CommittedStep({ summary }: { summary: OrderImportPreview }) {
+  const generated = summary.rows.filter((r) => r.generatedStatus === 'GENERATED')
+  const failed = summary.rows.filter((r) => r.generatedStatus === 'FAILED')
   return (
-    <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-5 text-center">
-      <FiCheckCircle className="mx-auto h-6 w-6 text-emerald-600" />
-      <p className="mt-2 text-[13px] font-semibold text-slate-950">
-        {summary.validRows} row(s) queued for import
-      </p>
-      {summary.invalidRows > 0 ? (
-        <p className="mt-1 text-[11.5px] text-rose-700">
-          {summary.invalidRows} row(s) skipped — errors reported above.
+    <div className="space-y-3">
+      <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-5 text-center">
+        <FiCheckCircle className="mx-auto h-6 w-6 text-emerald-600" />
+        <p className="mt-2 text-[13px] font-semibold text-slate-950">
+          {generated.length} label(s) generated
         </p>
-      ) : (
-        <p className="mt-1 text-[11.5px] text-slate-600">
-          All rows accepted.
-        </p>
-      )}
+        {failed.length > 0 || summary.invalidRows > 0 ? (
+          <p className="mt-1 text-[11.5px] text-rose-700">
+            {failed.length} label(s) failed at the carrier
+            {summary.invalidRows > 0
+              ? ` · ${summary.invalidRows} row(s) skipped (validation)`
+              : ''}
+          </p>
+        ) : (
+          <p className="mt-1 text-[11.5px] text-slate-600">
+            All rows accepted.
+          </p>
+        )}
+      </div>
+
+      {generated.length > 0 ? (
+        <div className="rounded-xl border border-slate-200">
+          <p className="px-3 py-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500">
+            Generated labels
+          </p>
+          <table className="w-full text-left text-[11.5px] text-slate-700">
+            <thead className="border-t border-slate-100 bg-slate-50 text-[9.5px] uppercase tracking-[0.14em] text-slate-500">
+              <tr>
+                <th className="p-2">#</th>
+                <th className="p-2">Order</th>
+                <th className="p-2">Recipient</th>
+                <th className="p-2">Tracking</th>
+              </tr>
+            </thead>
+            <tbody>
+              {generated.map((r) => (
+                <tr key={r.rowNumber} className="border-t border-slate-100">
+                  <td className="p-2 font-mono text-[10.5px]">{r.rowNumber}</td>
+                  <td className="p-2 font-semibold">{r.generatedOrderNo ?? '—'}</td>
+                  <td className="p-2">{r.recipientName ?? '—'}</td>
+                  <td className="p-2 font-mono text-[10.5px]">{r.generatedTrackingNumber ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {failed.length > 0 ? (
+        <div className="rounded-xl border border-rose-200 bg-rose-50/60">
+          <p className="px-3 py-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-rose-800">
+            Failed at the carrier
+          </p>
+          <table className="w-full text-left text-[11.5px] text-slate-700">
+            <thead className="border-t border-rose-100 bg-rose-50 text-[9.5px] uppercase tracking-[0.14em] text-rose-700">
+              <tr>
+                <th className="p-2">#</th>
+                <th className="p-2">Recipient</th>
+                <th className="p-2">Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {failed.map((r) => (
+                <tr key={r.rowNumber} className="border-t border-rose-100">
+                  <td className="p-2 font-mono text-[10.5px]">{r.rowNumber}</td>
+                  <td className="p-2">{r.recipientName ?? '—'}</td>
+                  <td className="p-2 text-rose-800">{r.generatedMessage ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </div>
   )
 }

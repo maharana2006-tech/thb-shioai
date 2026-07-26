@@ -40,6 +40,10 @@ public class OrderImportRowDTO {
 
     // Shipment
     private String carrierCode;
+    /** Sprint 41 — bill-to carrier account number (matches the credential
+     *  book row that will pay for the label). Optional at import time;
+     *  when absent, commit needs {@code accountId} or the default cascade. */
+    private String accountNumber;
     private String serviceType;
     private String packageType;
     private BigDecimal weight;
@@ -52,4 +56,16 @@ public class OrderImportRowDTO {
     /** Per-row validation errors. Empty when the row is valid. */
     @Builder.Default
     private List<String> errors = List.of();
+
+    // ===== Sprint 41 — populated on successful commit only. Null on
+    //       preview and on rows that failed to generate a label. =====
+
+    /** Order number the label was generated against. */
+    private Integer generatedOrderNo;
+    /** Carrier tracking number on the generated label. */
+    private String generatedTrackingNumber;
+    /** GENERATED | FAILED. Present only after a commit call. */
+    private String generatedStatus;
+    /** Carrier's failure message when {@code generatedStatus=FAILED}. */
+    private String generatedMessage;
 }
