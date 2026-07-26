@@ -397,6 +397,30 @@ export interface ManualShipmentPayload {
   currency?: string
 }
 
+/** One scan / status update on a carrier's timeline. Timestamps are ISO-8601
+ *  strings on the wire; the timeline component parses to Date for display. */
+export interface TrackingEventDTO {
+  timestamp: string | null
+  status: string | null
+  description: string
+  location: string | null
+}
+
+/** Backend response for /api/v1/orders/{n}/tracking/live. Source flag drives
+ *  the freshness badge — LIVE (just checked) / CACHE (served from memory) /
+ *  STUB (no live credentials, only the tracking URL is available). */
+export interface TrackingResponseDTO {
+  trackingNumber: string
+  carrierCode: string | null
+  status: string | null
+  delivered: boolean | null
+  trackingUrl: string | null
+  currentLocation: string | null
+  estimatedDelivery: string | null
+  events: TrackingEventDTO[]
+  source: 'LIVE' | 'CACHE' | 'STUB'
+}
+
 // ===== Order Service =====
 
 /** Session-stable Idempotency-Keys, one per order (see generateLabel). */
@@ -543,6 +567,19 @@ export const orderService = {
   /** One-shot manual shipment: create + purchase the label in a single call. */
   generateManualLabel: (payload: ManualShipmentPayload) =>
     apiClient.post<ApiResponse<LabelGenerationResponse>>('/orders/manual-label', payload),
+
+  /**
+   * Live tracking for an order — status, events, estimated delivery. Backend
+   * caches for 5 min (in-flight) / 24 h (delivered), so calling this on a
+   * quick UI refresh is safe. Every failure mode falls back to a URL-only
+   * stub (source === 'STUB'); callers should render the timeline when
+   * events[] is non-empty and fall back to the trackingUrl link when it's
+   * empty.
+   */
+  getLiveTracking: (orderNo: number | string) =>
+    apiClient.get<ApiResponse<TrackingResponseDTO>>(
+      `/orders/${encodeURIComponent(String(orderNo))}/tracking/live`,
+    ),
 
   /**
    * Get city distribution (using stats endpoint)
