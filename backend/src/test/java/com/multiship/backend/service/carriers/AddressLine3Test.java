@@ -182,19 +182,88 @@ class AddressLine3Test {
                 "Squashed layout should collapse the gap, not preserve line3 slot");
     }
 
+    /* -------------------------- USPS/Stamps (Sprint 11) -------------------------- */
+
+    /** Build a SWSIM envelope and return the {@code <To>...</To>} section as raw XML. */
+    private String uspsRecipientBlock(ShipmentRequestDTO r) throws Exception {
+        StampsConnector c = new StampsConnector(new CarrierProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper());
+        java.lang.reflect.Method m = StampsConnector.class.getDeclaredMethod(
+                "buildCreateIndiciumEnvelope", ShipmentRequestDTO.class, String.class);
+        m.setAccessible(true);
+        String soap = (String) m.invoke(c, r, "AUTH-TOKEN");
+        // Return the first <To>...</To> block AFTER the Rate block (the Rate
+        // block has its own <To> with just ZIP + Country).
+        int rateEnd = soap.indexOf("</Rate>");
+        int toOpen = soap.indexOf("<To>", rateEnd);
+        int toClose = soap.indexOf("</To>", toOpen);
+        return soap.substring(toOpen, toClose + "</To>".length());
+    }
+
+    @Test
+    void uspsConcatenatesLine3IntoAddress2() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientAddressLine3("Chiyoda-ku");
+        String toBlock = uspsRecipientBlock(r);
+        assertTrue(toBlock.contains("<Address1>Building 3-15</Address1>"),
+                "line1 → Address1");
+        assertTrue(toBlock.contains("<Address2>Apt 42 Chiyoda-ku</Address2>"),
+                "line2 + line3 concatenated with a single space into Address2");
+    }
+
+    @Test
+    void uspsEmitsLine2AloneWhenNoLine3() throws Exception {
+        String toBlock = uspsRecipientBlock(baseRequest());
+        assertTrue(toBlock.contains("<Address2>Apt 42</Address2>"),
+                "line2 alone survives unchanged");
+    }
+
+    @Test
+    void uspsBlankLine2WithLine3EmitsLine3AsAddress2() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientAddressLine2(null);
+        r.setRecipientAddressLine3("Chiyoda-ku");
+        String toBlock = uspsRecipientBlock(r);
+        assertTrue(toBlock.contains("<Address2>Chiyoda-ku</Address2>"),
+                "blank line2 + line3 puts line3 alone into Address2");
+    }
+
+    @Test
+    void uspsBothLine2AndLine3BlankOmitsAddress2() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientAddressLine2(null);
+        String toBlock = uspsRecipientBlock(r);
+        assertFalse(toBlock.contains("<Address2>"),
+                "blank line2 + blank line3 should omit Address2 entirely");
+    }
+
+    @Test
+    void joinSwsimAddress2CoversAllFourCases() {
+        assertEquals("Apt 42 Chiyoda-ku", StampsConnector.joinSwsimAddress2("Apt 42", "Chiyoda-ku"));
+        assertEquals("Apt 42", StampsConnector.joinSwsimAddress2("Apt 42", null));
+        assertEquals("Chiyoda-ku", StampsConnector.joinSwsimAddress2(null, "Chiyoda-ku"));
+        assertEquals("", StampsConnector.joinSwsimAddress2(null, null));
+        assertEquals("", StampsConnector.joinSwsimAddress2("  ", "  "));
+        // Trim both sides so the space between them is exactly one.
+        assertEquals("Apt 42 Chiyoda-ku",
+                StampsConnector.joinSwsimAddress2("  Apt 42  ", "  Chiyoda-ku  "));
+    }
+
     /* -------------------------- Cross-carrier consistency -------------------------- */
 
     @Test
-    void allThreeCarriersEmitLine3ForTheSameRequest() throws Exception {
+    void allFourCarriersEmitLine3ForTheSameRequest() throws Exception {
         ShipmentRequestDTO r = baseRequest();
         r.setRecipientAddressLine3("Chiyoda-ku");
 
         assertTrue(upsRecipientLines(r).contains("Chiyoda-ku"),
-                "UPS payload should carry line3");
+                "UPS payload should carry line3 as an AddressLine[] entry");
         assertTrue(fedexRecipientLines(r).contains("Chiyoda-ku"),
-                "FedEx payload should carry line3");
+                "FedEx payload should carry line3 as a streetLines[] entry");
         assertEquals("Chiyoda-ku", dhlReceiverAddress(r).get("addressLine3"),
-                "DHL payload should carry line3 as its own field");
+                "DHL payload should carry line3 as its own addressLine3 field");
+        assertTrue(uspsRecipientBlock(r).contains("Chiyoda-ku"),
+                "USPS/SWSIM should carry line3 concatenated into Address2");
     }
 
     @Test
