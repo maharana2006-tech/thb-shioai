@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { notify } from '../../utils/notify'
-import { FiExternalLink, FiFileText, FiRefreshCw, FiTag } from 'react-icons/fi'
+import { FiFileText, FiRefreshCw, FiTag, FiTruck } from 'react-icons/fi'
 import { orderService, type Order } from '../../api/orderService'
 import { formatCarrierName } from '../../utils/carrierUtils'
 import OrderDetailsModal from '../modals/OrderDetailsModal'
+import TrackingTimelineModal from '../tracking/TrackingTimelineModal'
 import OrdersTable from './OrdersTable'
 import PageSectionHeader from './PageSectionHeader'
 import TablePagination from './TablePagination'
@@ -31,6 +32,7 @@ export default function TenantOrdersView({ tenantId }: TenantOrdersViewProps) {
   const [totalElements, setTotalElements] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [detailsOrderNo, setDetailsOrderNo] = useState<number | null>(null)
+  const [trackingOrderNo, setTrackingOrderNo] = useState<number | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
 
   // Debounce the search box so we don't hit the server per keystroke.
@@ -169,16 +171,16 @@ export default function TenantOrdersView({ tenantId }: TenantOrdersViewProps) {
                   Label
                 </button>
               ) : null}
-              {order.labelDetails.trackingUrl ? (
-                <a
-                  href={order.labelDetails.trackingUrl}
-                  target="_blank"
-                  rel="noreferrer"
+              {order.labelDetails.trackingNumber ? (
+                <button
+                  type="button"
+                  onClick={() => setTrackingOrderNo(order.orderDetails.orderNo)}
+                  title={`Live tracking for ${order.labelDetails.trackingNumber}`}
                   className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50"
                 >
-                  <FiExternalLink className="h-3 w-3" />
+                  <FiTruck className="h-3 w-3" />
                   Track
-                </a>
+                </button>
               ) : null}
               <button
                 type="button"
@@ -209,6 +211,10 @@ export default function TenantOrdersView({ tenantId }: TenantOrdersViewProps) {
 
       {detailsOrderNo !== null ? (
         <OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} />
+      ) : null}
+
+      {trackingOrderNo !== null ? (
+        <TrackingTimelineModal orderNo={trackingOrderNo} onClose={() => setTrackingOrderNo(null)} />
       ) : null}
     </div>
   )
