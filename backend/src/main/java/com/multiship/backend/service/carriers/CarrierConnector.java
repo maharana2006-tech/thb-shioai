@@ -66,6 +66,19 @@ public interface CarrierConnector {
 
     TrackingResult trackShipment(String trackingNumber);
 
+    /**
+     * Same idea as the token-overload chain: adding an authenticated
+     * variant that carriers can override to make a real API call, without
+     * forcing the connectors that only speak public trackers to change.
+     * Default falls back to the 1-arg (URL-only) implementation. Where
+     * {@code accessToken} is a fallback ({@code -local-*}) — see the
+     * carrier's own token flow for that convention — the caller should
+     * expect the same URL-only result the default returns.
+     */
+    default TrackingResult trackShipment(String trackingNumber, String accessToken) {
+        return trackShipment(trackingNumber);
+    }
+
     CarrierConfiguration getConfiguration();
 
     /** One available service level for a lane: the carrier's code, name, scope. */
@@ -115,6 +128,20 @@ public interface CarrierConnector {
     ) {
     }
 
+    /**
+     * One scan / status update along the shipment's journey. Carrier-neutral
+     * so a FedEx {@code scanEvent}, UPS {@code ActivityDetails} entry, or DHL
+     * {@code events[]} entry all serialize into the same shape. Nulls are
+     * fine — not every carrier reports location or a coded status per event.
+     */
+    record TrackingEvent(
+            LocalDateTime timestamp,
+            String status,
+            String description,
+            String location
+    ) {
+    }
+
     record TrackingResult(
             String trackingNumber,
             String status,
@@ -122,8 +149,20 @@ public interface CarrierConnector {
             String currentLocation,
             LocalDateTime estimatedDelivery,
             boolean delivered,
-            String rawResponse
+            String rawResponse,
+            /** Ordered oldest → newest. Empty when the connector only knows
+             *  how to build a tracking URL (URL-only stub / no live API). */
+            List<TrackingEvent> events
     ) {
+        /** Convenience constructor for the pre-Sprint-12 callers — same
+         *  seven fields, empty events list. Kept so no existing carrier
+         *  connector needs to change its constructor call. */
+        public TrackingResult(String trackingNumber, String status, String trackingUrl,
+                              String currentLocation, LocalDateTime estimatedDelivery,
+                              boolean delivered, String rawResponse) {
+            this(trackingNumber, status, trackingUrl, currentLocation, estimatedDelivery,
+                    delivered, rawResponse, List.of());
+        }
     }
 
     record CarrierConfiguration(
