@@ -232,11 +232,148 @@ public class DhlConnector implements CarrierConnector {
         return true;
     }
 
+    /**
+     * URL-only tracking. DHL's Track API requires Basic Auth so this 1-arg
+     * variant only returns a public tracking link (like FedEx in Sprint 12
+     * and UPS in Sprint 13 established). The authenticated variant below
+     * does the real work.
+     */
     @Override
     public TrackingResult trackShipment(String trackingNumber) {
-        return new TrackingResult(trackingNumber, "IN_TRANSIT",
-                "https://www.dhl.com/en/express/tracking.html?AWB=" + trackingNumber,
-                null, null, false, null);
+        String trackingUrl = "https://www.dhl.com/en/express/tracking.html?AWB=" + trackingNumber;
+        return new TrackingResult(trackingNumber, "UNKNOWN", trackingUrl, null, null, false, null);
+    }
+
+    /**
+     * DHL MyDHL API v2 tracking — {@code GET /tracking?shipmentTrackingNumber=...}
+     * with the Basic Auth token that {@code getAccessToken} returned (DHL
+     * doesn't do OAuth so the accessToken IS the Base64-encoded
+     * apiKey:apiSecret pair — the connector prefixes "Basic " when sending).
+     *
+     * <p>Response shape (only the fields we care about):
+     * <pre>
+     * shipments[0].{
+     *   status,                        // DHL status enum: pre-transit,
+     *                                  // transit, delivered, failure, unknown.
+     *   estimatedTimeOfDelivery,       // ISO-8601 timestamp.
+     *   events[] (newest-first)        // Reversed to oldest-first here.
+     * }
+     * </pre>
+     *
+     * <p>Events carry {@code date + time} as separate ISO-8601 fields;
+     * {@code joinDhlDateTime} merges them. Location is DHL's
+     * {@code serviceArea[0].description} — the airport / hub description
+     * ("London Heathrow", "Louisville KY").
+     *
+     * <p>{@code -local-*} tokens short-circuit to the URL-only stub — same
+     * convention Sprints 12 and 13 established.
+     */
+    @Override
+    public TrackingResult trackShipment(String trackingNumber, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return trackShipment(trackingNumber);
+        }
+        String trackingUrl = "https://www.dhl.com/en/express/tracking.html?AWB=" + trackingNumber;
+        try {
+            String response = RestClient.builder().baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build().get()
+                    .uri(u -> u.path("/tracking")
+                            .queryParam("shipmentTrackingNumber", trackingNumber)
+                            .build())
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Basic " + accessToken)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode shipment = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"))
+                    .at("/shipments/0");
+
+            String status = shipment.path("status").asText("UNKNOWN");
+            boolean delivered = "delivered".equalsIgnoreCase(status);
+
+            java.util.List<TrackingEvent> events = parseDhlEvents(shipment.at("/events"));
+            String currentLocation = events.isEmpty() ? null : events.get(events.size() - 1).location();
+            LocalDateTime estimatedDelivery = parseIsoDateTime(shipment.path("estimatedTimeOfDelivery").asText(null));
+
+            // Normalize DHL's lowercase status enum to Title Case for UI display
+            // so the timeline reads "Delivered" not "delivered" — matches the
+            // FedEx / UPS convention from Sprints 12/13.
+            String displayStatus = status == null || status.isEmpty()
+                    ? "UNKNOWN"
+                    : Character.toUpperCase(status.charAt(0)) + status.substring(1).toLowerCase();
+
+            return new TrackingResult(trackingNumber, displayStatus, trackingUrl, currentLocation,
+                    estimatedDelivery, delivered, response, events);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("DHL track rejected (HTTP {}): {}", ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+            return trackShipment(trackingNumber);
+        } catch (Exception ex) {
+            log.warn("DHL track failed for {}; falling back to URL-only. Reason: {}",
+                    trackingNumber, ex.getMessage());
+            return trackShipment(trackingNumber);
+        }
+    }
+
+    /**
+     * Parse DHL {@code events[]} → TrackingEvent list, ordered oldest-first.
+     * DHL returns newest-first; we reverse to match the Sprint 12/13
+     * convention. Empty when the field is absent or an empty array.
+     */
+    java.util.List<TrackingEvent> parseDhlEvents(JsonNode events) {
+        if (events == null || !events.isArray() || events.isEmpty()) return java.util.List.of();
+        java.util.List<TrackingEvent> out = new java.util.ArrayList<>();
+        for (JsonNode ev : events) {
+            LocalDateTime ts = joinDhlDateTime(
+                    ev.path("date").asText(null),
+                    ev.path("time").asText(null));
+            String description = ev.path("description").asText("");
+            String status = ev.path("typeCode").asText(null);
+            String location = ev.at("/serviceArea/0/description").asText(null);
+            if (location == null || location.isEmpty()) {
+                location = ev.at("/serviceArea/0/code").asText(null);
+            }
+            out.add(new TrackingEvent(ts, status, description, location));
+        }
+        java.util.Collections.reverse(out);
+        return java.util.List.copyOf(out);
+    }
+
+    /**
+     * DHL splits event timestamps into ISO date ({@code 2024-01-15}) + time
+     * ({@code 14:30:00}). Merges them into a LocalDateTime; missing time
+     * defaults to midnight (same lenient handling UPS's helper uses).
+     */
+    static LocalDateTime joinDhlDateTime(String isoDate, String isoTime) {
+        if (isoDate == null || isoDate.isEmpty()) return null;
+        try {
+            java.time.LocalDate d = java.time.LocalDate.parse(isoDate);
+            if (isoTime != null && !isoTime.isEmpty()) {
+                try {
+                    return d.atTime(java.time.LocalTime.parse(isoTime));
+                } catch (Exception ignored) {
+                    // Malformed time — fall through to midnight.
+                }
+            }
+            return d.atStartOfDay();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /** Parse a raw ISO-8601 timestamp; returns null on any failure. */
+    static LocalDateTime parseIsoDateTime(String value) {
+        if (value == null || value.isEmpty()) return null;
+        try {
+            // First try full LocalDateTime.
+            return LocalDateTime.parse(value);
+        } catch (Exception first) {
+            try {
+                // DHL sometimes includes an offset (e.g. "2024-01-15T14:00:00Z").
+                return OffsetDateTime.parse(value).toLocalDateTime();
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
     }
 
     @Override
