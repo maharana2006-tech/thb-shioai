@@ -471,6 +471,182 @@ public class StampsConnector implements CarrierConnector {
         return "";
     }
 
+    /**
+     * SWSIM {@code GetRates} — SOAP call that quotes every USPS class of
+     * service the lane supports in one round-trip. No {@code ServiceType} on
+     * the Rate block → SWSIM returns the full ladder (Priority Mail, Ground
+     * Advantage, Priority Mail Express, plus the international variants for
+     * non-US destinations). SOAPAction + envelope shape follow the same
+     * pattern the Sprint 4 CreateIndicium and Sprint 14 TrackShipment
+     * connectors established.
+     *
+     * <p>Response shape:
+     * <pre>
+     * GetRatesResponse.
+     *   Authenticator (rotated — SWSIM sessions are stateful),
+     *   Rates.Rate[] (one per service):
+     *     ServiceType         → USPS code ("USPS PM", "USPS GA", ...)
+     *     ServiceDescription  → "USPS Priority Mail" (sometimes missing)
+     *     Amount              → total postage, always USD for USPS
+     *     DeliverDays         → integer days ("2") or range ("1-3") or absent
+     *     DeliveryDate        → optional ISO date
+     * </pre>
+     *
+     * <p>Fallback tokens ({@code -local-*}) short-circuit to an empty list —
+     * same auth-degraded convention Sprints 12/13/14/18 established.
+     */
+    @Override
+    public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return java.util.List.of();
+        }
+        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        String soap = buildGetRatesEnvelope(request, accessToken);
+        try {
+            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+                    .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
+                    .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/GetRates\"")
+                    .body(soap)
+                    .retrieve()
+                    .body(String.class);
+            return parseGetRatesResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            String fault = extractSoapFault(ex.getResponseBodyAsString());
+            log.warn("Stamps SWSIM GetRates rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), fault);
+            return java.util.List.of();
+        } catch (Exception ex) {
+            log.warn("Stamps SWSIM GetRates failed; returning empty rate list. Reason: {}",
+                    ex.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    /**
+     * Build the SWSIM GetRates SOAP envelope. No {@code ServiceType} — omitting
+     * it asks SWSIM for the full rate ladder. Country only when non-US (SWSIM
+     * treats absent Country as US and errors when both are set).
+     */
+    String buildGetRatesEnvelope(ShipmentRequestDTO request, String authenticator) {
+        StringBuilder xml = new StringBuilder(768);
+        xml.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+        xml.append("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">");
+        xml.append("<soap:Body>");
+        xml.append("<GetRates xmlns=\"").append(SWSIM_NAMESPACE).append("\">");
+        xml.append("<Authenticator>").append(xmlEscape(authenticator)).append("</Authenticator>");
+        xml.append("<Rate>");
+        xml.append("<From><ZIPCode>")
+                .append(xmlEscape(nonBlank(request.getShipperPostalCode(), "")))
+                .append("</ZIPCode></From>");
+        xml.append("<To>");
+        xml.append("<ZIPCode>")
+                .append(xmlEscape(nonBlank(request.getRecipientPostalCode(), "")))
+                .append("</ZIPCode>");
+        String country = nonBlank(request.getRecipientCountryCode(), "US");
+        if (!"US".equalsIgnoreCase(country)) {
+            xml.append("<Country>").append(xmlEscape(country)).append("</Country>");
+        }
+        xml.append("</To>");
+        xml.append("<WeightOz>").append(xmlEscape(weightInOz(request))).append("</WeightOz>");
+        xml.append("<PackageType>")
+                .append(xmlEscape(nonBlank(request.getPackageType(), "Package")))
+                .append("</PackageType>");
+        xml.append("<ShipDate>")
+                .append(java.time.LocalDate.now(java.time.ZoneOffset.UTC))
+                .append("</ShipDate>");
+        if (request.getDeclaredValue() != null) {
+            xml.append("<DeclaredValue>")
+                    .append(xmlEscape(request.getDeclaredValue().toPlainString()))
+                    .append("</DeclaredValue>");
+        }
+        xml.append("</Rate>");
+        xml.append("</GetRates>");
+        xml.append("</soap:Body>");
+        xml.append("</soap:Envelope>");
+        return xml.toString();
+    }
+
+    /**
+     * Parse a GetRates SOAP response into carrier-neutral RateOptions.
+     * Regex-based (same approach as parseSwsimTrackingEvents) — the response
+     * is well-formed, small, and we only need a handful of fields per rate.
+     * Package-visible so tests can assert against canned response XML.
+     */
+    java.util.List<RateOption> parseGetRatesResponse(String responseXml) {
+        if (!StringUtils.hasText(responseXml)) return java.util.List.of();
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("<Rate>([\\s\\S]*?)</Rate>")
+                .matcher(responseXml);
+        java.util.List<RateOption> out = new java.util.ArrayList<>();
+        while (m.find()) {
+            String body = m.group(1);
+            String serviceCode = extractElement(body, "ServiceType");
+            if (!StringUtils.hasText(serviceCode)) continue;
+            String serviceName = extractElement(body, "ServiceDescription");
+            if (!StringUtils.hasText(serviceName)) serviceName = uspsServiceName(serviceCode);
+
+            String amount = extractElement(body, "Amount");
+            java.math.BigDecimal totalAmount = parseSwsimAmount(amount);
+            if (totalAmount == null) continue;
+
+            Integer transitDays = parseSwsimDeliverDays(extractElement(body, "DeliverDays"));
+            LocalDateTime estimatedDelivery = parseSwsimTimestamp(
+                    extractElement(body, "DeliveryDate"));
+
+            // USPS bills in USD; SWSIM has no currency element on rates, so
+            // we hard-code USD rather than defaulting via a helper.
+            out.add(new RateOption("USPS", serviceCode, serviceName, totalAmount,
+                    "USD", estimatedDelivery, transitDays));
+        }
+        return java.util.List.copyOf(out);
+    }
+
+    /** SWSIM Amount is a decimal string ("10.20"); tolerate money-formatted
+     *  values ("$10.20") that SWSIM occasionally emits on error responses. */
+    private static java.math.BigDecimal parseSwsimAmount(String value) {
+        if (!StringUtils.hasText(value)) return null;
+        String cleaned = value.trim().replace("$", "").replace(",", "");
+        try {
+            return new java.math.BigDecimal(cleaned);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    /** SWSIM {@code DeliverDays} is usually an integer ("2") but sometimes a
+     *  range ("1-3"). For a range we return the LOWER bound (matches how
+     *  most carrier UIs display "as fast as N days"). Null when absent or
+     *  unparseable. */
+    static Integer parseSwsimDeliverDays(String value) {
+        if (!StringUtils.hasText(value)) return null;
+        String v = value.trim();
+        int dash = v.indexOf('-');
+        String head = dash >= 0 ? v.substring(0, dash).trim() : v;
+        try {
+            return Integer.parseInt(head);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    /** Map a USPS service code to its human-readable name. Used when the
+     *  GetRates response omits ServiceDescription (occasional on error paths). */
+    private static String uspsServiceName(String code) {
+        return switch (code == null ? "" : code.trim().toUpperCase()) {
+            case "USPS PM" -> "USPS Priority Mail";
+            case "USPS PME" -> "USPS Priority Mail Express";
+            case "USPS GA" -> "USPS Ground Advantage";
+            case "USPS FCM" -> "USPS First-Class Mail";
+            case "USPS MM" -> "USPS Media Mail";
+            case "USPS PMI" -> "USPS Priority Mail International";
+            case "USPS PMEI" -> "USPS Priority Mail Express International";
+            case "USPS GXG" -> "USPS Global Express Guaranteed";
+            case "USPS FCMI" -> "USPS First-Class Mail International";
+            case "USPS FCPIS" -> "USPS First-Class Package International Service";
+            default -> "USPS " + (code == null ? "" : code);
+        };
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.Stamps stamps = carrierProperties.getStamps();
