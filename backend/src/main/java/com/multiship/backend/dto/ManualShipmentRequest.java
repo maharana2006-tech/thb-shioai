@@ -97,6 +97,26 @@ public class ManualShipmentRequest {
      */
     private DangerousGoodsBlockDTO dangerousGoods;
 
+    /**
+     * Sprint 35 — signature at delivery. NONE | INDIRECT | DIRECT | ADULT.
+     * Null = carrier default. Every connector normalises + emits the
+     * carrier-specific wire format.
+     */
+    private String signatureOption;
+
+    /**
+     * Sprint 35 — insured value beyond the free tier ($100 UPS/FedEx/USPS
+     * Priority Ground). Null / 0 = no explicit insurance requested; the
+     * carrier's free tier still applies.
+     */
+    private BigDecimal insuredValue;
+
+    /**
+     * ISO-4217 for {@link #insuredValue}. Null defaults to
+     * {@link #currency} on the wire, then to USD at the connector.
+     */
+    private String insuredValueCurrency;
+
     @Data
     public static class Address {
         private String name;

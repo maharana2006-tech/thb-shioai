@@ -1376,7 +1376,65 @@ public class UpsConnector implements CarrierConnector {
                 && request.getDangerousGoods().isReadyForCarrier()) {
             pkg.put("HazMatPackageInformation", buildUpsHazMatPackage(request));
         }
+
+        // Sprint 35 — signature + insurance are per-package on UPS
+        // (PackageServiceOptions block).
+        Map<String, Object> serviceOptions = buildUpsPackageServiceOptions(request);
+        if (!serviceOptions.isEmpty()) {
+            pkg.put("PackageServiceOptions", serviceOptions);
+        }
         return pkg;
+    }
+
+    /**
+     * Sprint 35 — UPS PackageServiceOptions block.
+     *
+     * <p>DeliveryConfirmation.DCISType:
+     * <ul>
+     *   <li>{@code 1} — Delivery Confirmation (no signature).</li>
+     *   <li>{@code 2} — Signature Required.</li>
+     *   <li>{@code 3} — Adult Signature Required.</li>
+     * </ul>
+     *
+     * <p>DeclaredValue insures the package for its full value; UPS
+     * refunds the declared amount on loss/damage claims. Free tier is
+     * $100; anything above that is billed.
+     */
+    private Map<String, Object> buildUpsPackageServiceOptions(ShipmentRequestDTO request) {
+        Map<String, Object> options = new LinkedHashMap<>();
+        String sig = normaliseSignatureOption(request.getSignatureOption());
+        if (sig != null) {
+            String dcisType = switch (sig) {
+                case "INDIRECT" -> "2";
+                case "DIRECT" -> "2";
+                case "ADULT" -> "3";
+                default -> null;
+            };
+            if (dcisType != null) {
+                options.put("DeliveryConfirmation", Map.of("DCISType", dcisType));
+            }
+        }
+        if (request.getInsuredValue() != null && request.getInsuredValue().signum() > 0) {
+            String currency = firstNonBlank(
+                    firstNonBlank(request.getInsuredValueCurrency(), request.getDeclaredValueCurrency()),
+                    "USD").toUpperCase();
+            options.put("DeclaredValue", Map.of(
+                    "CurrencyCode", currency,
+                    "MonetaryValue", request.getInsuredValue().toPlainString()));
+        }
+        return options;
+    }
+
+    /** Normalise the DTO's freeform signatureOption to the enum values
+     *  the connectors switch on. Blank / unknown → null. */
+    private static String normaliseSignatureOption(String raw) {
+        if (raw == null) return null;
+        String v = raw.trim().toUpperCase(Locale.ROOT);
+        if (v.isEmpty() || "NONE".equals(v)) return null;
+        return switch (v) {
+            case "INDIRECT", "DIRECT", "ADULT" -> v;
+            default -> null;
+        };
     }
 
     /**

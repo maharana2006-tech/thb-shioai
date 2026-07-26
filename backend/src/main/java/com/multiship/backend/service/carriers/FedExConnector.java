@@ -776,6 +776,39 @@ public class FedExConnector implements CarrierConnector {
     }
 
     /**
+     * Sprint 35 — FedEx {@code packageSpecialServices} block. Currently
+     * emits signature only ({@code signatureOptionType} + optional
+     * {@code signatureOptionDetail} sub-block); FedEx's insurance is
+     * handled inline via the line item's {@code declaredValue}.
+     *
+     * <p>signatureOptionType values (FedEx enum):
+     * NO_SIGNATURE_REQUIRED | INDIRECT | DIRECT | ADULT.
+     */
+    private Map<String, Object> buildFedExPackageSpecialServices(ShipmentRequestDTO request) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        String sig = normaliseSignatureOption(request.getSignatureOption());
+        if (sig != null) {
+            java.util.List<String> types = new java.util.ArrayList<>();
+            types.add("SIGNATURE_OPTION");
+            out.put("specialServiceTypes", types);
+            out.put("signatureOptionType", sig);
+        }
+        return out;
+    }
+
+    /** Normalise the DTO's freeform signatureOption to the FedEx enum
+     *  values. Blank / unknown / NONE → null (carrier default). */
+    private static String normaliseSignatureOption(String raw) {
+        if (raw == null) return null;
+        String v = raw.trim().toUpperCase(Locale.ROOT);
+        if (v.isEmpty() || "NONE".equals(v)) return null;
+        return switch (v) {
+            case "INDIRECT", "DIRECT", "ADULT" -> v;
+            default -> null;
+        };
+    }
+
+    /**
      * FedEx Estimated Duties & Taxes (EDT) — {@code POST /rate/v1/rates/quotes}
      * with {@code edtRequestType=ALL} + a {@code customsClearanceDetail}
      * block. FedEx returns freight in {@code totalNetCharge} and duty +
@@ -1308,18 +1341,34 @@ public class FedExConnector implements CarrierConnector {
             item.put("weight", Map.of(
                     "units", fedexWeightUnit,
                     "value", p.getWeight() != null ? p.getWeight() : java.math.BigDecimal.ZERO));
+            // FedEx uses declaredValue on the line item BOTH for customs
+            // and for insurance beyond the free $100 tier. Sprint 35 —
+            // insuredValue wins when set, else fall back to the customs
+            // declared value on package 1 (Sprint 28 semantics).
             java.math.BigDecimal declared = p.getDeclaredValue() != null
                     ? p.getDeclaredValue()
                     : (seq == 1 ? request.getDeclaredValue() : null);
+            if (request.getInsuredValue() != null
+                    && request.getInsuredValue().signum() > 0) {
+                declared = request.getInsuredValue();
+            }
             if (declared != null) {
+                String currencyForLine = request.getInsuredValue() != null
+                        ? firstNonBlank(request.getInsuredValueCurrency(), declaredCurrency)
+                        : declaredCurrency;
                 item.put("declaredValue", Map.of(
                         "amount", declared,
-                        "currency", declaredCurrency));
+                        "currency", currencyForLine.trim().toUpperCase()));
             }
             if (StringUtils.hasText(p.getReference())) {
                 item.put("customerReferences", java.util.List.of(Map.of(
                         "customerReferenceType", "CUSTOMER_REFERENCE",
                         "value", p.getReference())));
+            }
+            // Sprint 35 — signature + insurance are per-package on FedEx.
+            Map<String, Object> packageSpecialServices = buildFedExPackageSpecialServices(request);
+            if (!packageSpecialServices.isEmpty()) {
+                item.put("packageSpecialServices", packageSpecialServices);
             }
             lineItems.add(item);
             seq++;

@@ -1346,6 +1346,35 @@ public class StampsConnector implements CarrierConnector {
                 && request.getDangerousGoods().isReadyForCarrier()) {
             xml.append("<HazardousMaterials>true</HazardousMaterials>");
         }
+        // Sprint 35 — signature + insurance. SWSIM's Rate block accepts
+        // <ServiceType> add-ons via boolean flags AND a separate
+        // <InsuredValue> element. USPS domestic signature levels:
+        //   SignatureConfirmation — anyone at address can sign (~$2.85).
+        //   AdultSignatureRequired — 21+ ID at address (~$5.90).
+        // NONE / null → neither flag emitted (carrier default).
+        String sig = normaliseSignatureOption(request.getSignatureOption());
+        if ("ADULT".equals(sig)) {
+            xml.append("<AdultSignatureRequired>true</AdultSignatureRequired>");
+        } else if ("INDIRECT".equals(sig) || "DIRECT".equals(sig)) {
+            xml.append("<SignatureConfirmation>true</SignatureConfirmation>");
+        }
+        if (request.getInsuredValue() != null && request.getInsuredValue().signum() > 0) {
+            xml.append("<InsuredValue>")
+                    .append(xmlEscape(request.getInsuredValue().toPlainString()))
+                    .append("</InsuredValue>");
+        }
+    }
+
+    /** Normalise signatureOption to INDIRECT / DIRECT / ADULT; blank /
+     *  unknown / NONE → null (carrier default). */
+    private static String normaliseSignatureOption(String raw) {
+        if (raw == null) return null;
+        String v = raw.trim().toUpperCase();
+        if (v.isEmpty() || "NONE".equals(v)) return null;
+        return switch (v) {
+            case "INDIRECT", "DIRECT", "ADULT" -> v;
+            default -> null;
+        };
     }
 
     /**
