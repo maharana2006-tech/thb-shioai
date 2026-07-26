@@ -15,6 +15,7 @@ import { customsProfileService, type CustomsProfile } from '../api/customsProfil
 import { shippingConfigService, type ShippingServiceItem, type PackagePreset } from '../api/shippingConfigService'
 import { addressService } from '../api/addressService'
 import { addressValidationService, type AddressValidationResponse } from '../api/addressValidationService'
+import { recipientBookService, type SavedRecipient } from '../api/recipientBookService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
 import {
   clientAllowedPackagesService,
@@ -365,6 +366,11 @@ export default function NewShipmentPage() {
   // Sprint 31 — carrier-side address validation result (from the Validate with carrier button).
   const [carrierAddressResult, setCarrierAddressResult] = useState<AddressValidationResponse | null>(null)
   const [carrierValidating, setCarrierValidating] = useState(false)
+  // Sprint 38 — saved recipients: address-book search + save UI.
+  const [recipientSearch, setRecipientSearch] = useState('')
+  const [recipientSuggestions, setRecipientSuggestions] = useState<SavedRecipient[]>([])
+  const [recipientDropdownOpen, setRecipientDropdownOpen] = useState(false)
+  const [savingRecipient, setSavingRecipient] = useState(false)
   const [validating, setValidating] = useState(false)
 
   // International commercial-invoice line items (shown only for cross-border lanes).
@@ -840,6 +846,89 @@ export default function NewShipmentPage() {
     }
   }
 
+  /**
+   * Sprint 38 — search the address book. Fires on every input change
+   * (debounce-free — the endpoint caps at 25 hits and returns fast).
+   * Empty / < 2 chars → clear suggestions.
+   */
+  const runRecipientSearch = async (q: string) => {
+    setRecipientSearch(q)
+    if (!q || q.trim().length < 2) {
+      setRecipientSuggestions([])
+      setRecipientDropdownOpen(false)
+      return
+    }
+    try {
+      const hits = await recipientBookService.search(q, clientCode || null)
+      setRecipientSuggestions(hits)
+      setRecipientDropdownOpen(hits.length > 0)
+    } catch {
+      setRecipientSuggestions([])
+      setRecipientDropdownOpen(false)
+    }
+  }
+
+  /** Apply a saved recipient — overwrites the current recipient block. */
+  const applySavedRecipient = (r: SavedRecipient) => {
+    setRecipient((cur) => ({
+      ...cur,
+      name: r.name ?? cur.name,
+      company: r.company ?? cur.company,
+      phone: r.phone ?? cur.phone,
+      phoneCountryCode: r.phoneCountryCode ?? cur.phoneCountryCode,
+      email: r.email ?? cur.email,
+      addressLine1: r.addressLine1 ?? cur.addressLine1,
+      addressLine2: r.addressLine2 ?? cur.addressLine2,
+      addressLine3: r.addressLine3 ?? cur.addressLine3,
+      city: r.city ?? cur.city,
+      state: r.state ?? cur.state,
+      postalCode: r.postalCode ?? cur.postalCode,
+      countryCode: r.countryCode ?? cur.countryCode,
+      residential: r.residential ?? cur.residential,
+    }))
+    setRecipientSearch(r.name)
+    setRecipientSuggestions([])
+    setRecipientDropdownOpen(false)
+    notify.success(`Loaded ${r.name} from the address book.`)
+  }
+
+  /**
+   * Save the current recipient to the address book. Idempotent —
+   * backend returns the existing row if it's a duplicate.
+   */
+  const saveCurrentRecipient = async () => {
+    if (!recipient.name?.trim() || !recipient.addressLine1?.trim()
+        || !recipient.city?.trim() || !recipient.postalCode?.trim()
+        || !recipient.countryCode?.trim()) {
+      notify.error('Fill name + address + city + postal code + country before saving.')
+      return
+    }
+    setSavingRecipient(true)
+    try {
+      const response = await recipientBookService.save({
+        ownerCustomerNo: clientCode || null,
+        name: recipient.name,
+        company: recipient.company ?? null,
+        phone: recipient.phone ?? null,
+        phoneCountryCode: recipient.phoneCountryCode ?? null,
+        email: recipient.email ?? null,
+        addressLine1: recipient.addressLine1,
+        addressLine2: recipient.addressLine2 ?? null,
+        addressLine3: recipient.addressLine3 ?? null,
+        city: recipient.city,
+        state: recipient.state ?? null,
+        postalCode: recipient.postalCode,
+        countryCode: recipient.countryCode,
+        residential: recipient.residential ?? null,
+      })
+      notify.success(response.message ?? 'Recipient saved.')
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Save failed.')
+    } finally {
+      setSavingRecipient(false)
+    }
+  }
+
   /** Apply the carrier's suggested address to the recipient block. */
   const applyCarrierSuggestion = () => {
     const s = carrierAddressResult?.suggested
@@ -1205,9 +1294,65 @@ export default function NewShipmentPage() {
                       )}
                       Check with {carrier || 'carrier'}
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => void saveCurrentRecipient()}
+                      disabled={savingRecipient}
+                      title="Save this recipient to the address book"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                    >
+                      <FiPlus className="h-3 w-3" />
+                      {savingRecipient ? 'Saving…' : 'Save recipient'}
+                    </button>
                   </div>
                 }
               >
+                {/* Sprint 38 — address-book combobox. Type ≥ 2 chars to
+                    search; picking a suggestion overwrites every field
+                    in the recipient block below. */}
+                <div className="relative mb-3">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={recipientSearch}
+                      onChange={(e) => void runRecipientSearch(e.target.value)}
+                      onFocus={() => recipientSuggestions.length > 0 && setRecipientDropdownOpen(true)}
+                      onBlur={() => setTimeout(() => setRecipientDropdownOpen(false), 150)}
+                      placeholder="Search address book (name, city, postal code)…"
+                      className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 pl-8 text-[12px] outline-none focus:border-[#1f150c]"
+                    />
+                    <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[#8a7959]" />
+                  </div>
+                  {recipientDropdownOpen && recipientSuggestions.length > 0 ? (
+                    <ul className="absolute z-10 mt-0.5 max-h-64 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                      {recipientSuggestions.map((s) => (
+                        <li key={s.id}>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => applySavedRecipient(s)}
+                            className="flex w-full items-start justify-between gap-2 px-2.5 py-1.5 text-left text-[11.5px] hover:bg-slate-50"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold text-slate-950">{s.name}</p>
+                              <p className="truncate text-[10.5px] text-slate-500">
+                                {s.addressLine1}
+                                {s.city ? `, ${s.city}` : ''}
+                                {s.state ? `, ${s.state}` : ''}
+                                {' '}{s.postalCode} {s.countryCode}
+                              </p>
+                            </div>
+                            {s.tag ? (
+                              <span className="whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-500">
+                                {s.tag}
+                              </span>
+                            ) : null}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
                 <AddressBlock value={recipient} onChange={(patch) => setRecipient((r) => ({ ...r, ...patch }))} withEmail={!isReturn} />
                 {!destAllowed && destRules?.mode && recipient.countryCode ? (
                   <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
