@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   FiAlertCircle,
   FiCheckCircle,
@@ -33,19 +33,41 @@ import { notify } from '../../utils/notify'
 export interface TrackingTimelineModalProps {
   orderNo: number
   onClose: () => void
+  /**
+   * Auto-refresh cadence in seconds. Poll pauses on delivered shipments
+   * and while the tab is hidden. Pass 0 to disable polling entirely
+   * (manual refresh button still works). Default 60s — backend caches
+   * for 5 min anyway, so every fifth poll is a real check while the
+   * others hit the cache cheaply.
+   */
+  refreshIntervalSeconds?: number
 }
 
-export default function TrackingTimelineModal({ orderNo, onClose }: TrackingTimelineModalProps) {
+const DEFAULT_REFRESH_INTERVAL = 60
+
+export default function TrackingTimelineModal({
+  orderNo,
+  onClose,
+  refreshIntervalSeconds = DEFAULT_REFRESH_INTERVAL,
+}: TrackingTimelineModalProps) {
   const [data, setData] = useState<TrackingResponseDTO | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Seconds until the next auto-refresh. Null when polling is paused
+  // (delivered, tab hidden, or interval=0). Drives the countdown badge.
+  const [secondsUntilRefresh, setSecondsUntilRefresh] = useState<number | null>(null)
 
-  const load = async () => {
+  // Track the latest delivered flag inside a ref so the tick loop can
+  // freeze immediately without waiting for its closure to update.
+  const deliveredRef = useRef(false)
+
+  const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
       const response = await orderService.getLiveTracking(orderNo)
       setData(response.data ?? null)
+      deliveredRef.current = Boolean(response.data?.delivered)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to load tracking.'
       setError(msg)
@@ -53,12 +75,11 @@ export default function TrackingTimelineModal({ orderNo, onClose }: TrackingTime
     } finally {
       setLoading(false)
     }
-  }
+  }, [orderNo])
 
   useEffect(() => {
     void load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderNo])
+  }, [load])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -67,6 +88,61 @@ export default function TrackingTimelineModal({ orderNo, onClose }: TrackingTime
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  /**
+   * Auto-refresh loop. Ticks every second so the countdown badge decays
+   * visibly, and fires a refresh when the countdown hits zero. Pauses
+   * (secondsUntilRefresh = null) when:
+   *   - the shipment is delivered (terminal state, carrier won't publish
+   *     new scans)
+   *   - the browser tab is hidden (no point refreshing what nobody sees)
+   *   - refreshIntervalSeconds is 0 or negative
+   * On resume we reset the countdown so the user sees a full interval
+   * before the next fetch.
+   */
+  useEffect(() => {
+    if (refreshIntervalSeconds <= 0) {
+      setSecondsUntilRefresh(null)
+      return
+    }
+
+    const shouldPoll = () =>
+      !deliveredRef.current
+      && !document.hidden
+      && refreshIntervalSeconds > 0
+
+    // Kick off the countdown when polling should start.
+    setSecondsUntilRefresh(shouldPoll() ? refreshIntervalSeconds : null)
+
+    const tick = () => {
+      setSecondsUntilRefresh((remaining) => {
+        if (!shouldPoll()) return null
+        if (remaining == null) return refreshIntervalSeconds
+        if (remaining <= 1) {
+          void load()
+          return refreshIntervalSeconds
+        }
+        return remaining - 1
+      })
+    }
+    const id = window.setInterval(tick, 1000)
+
+    // Re-check visibility on tab focus so the countdown resumes when
+    // the user comes back — no wasted requests while the tab was hidden.
+    const onVisibility = () => {
+      if (shouldPoll()) {
+        setSecondsUntilRefresh(refreshIntervalSeconds)
+      } else {
+        setSecondsUntilRefresh(null)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [refreshIntervalSeconds, load])
 
   const hasEvents = (data?.events ?? []).length > 0
 
@@ -100,9 +176,22 @@ export default function TrackingTimelineModal({ orderNo, onClose }: TrackingTime
             ) : null}
           </div>
           <div className="flex items-center gap-2">
+            {secondsUntilRefresh != null ? (
+              <span
+                title={`Auto-refresh in ${secondsUntilRefresh}s. Delivered shipments stop polling automatically.`}
+                className="hidden items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-500 sm:inline-flex"
+              >
+                Next {secondsUntilRefresh}s
+              </span>
+            ) : null}
             <button
               type="button"
-              onClick={() => void load()}
+              onClick={() => {
+                setSecondsUntilRefresh((cur) =>
+                  cur == null ? cur : refreshIntervalSeconds,
+                )
+                void load()
+              }}
               disabled={loading}
               aria-label="Refresh"
               title="Refresh tracking"
