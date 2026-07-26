@@ -28,6 +28,7 @@ import ShipmentPartiesOverrideModal, { type Party } from './modals/ShipmentParti
 import CustomsWizard from './shipment/CustomsWizard'
 import type { CustomsItem, OrderCustomsPayload } from '../api/customsService'
 import { parseIntlValidationMessage } from '../utils/intlValidationErrors'
+import { checkHsCode, hsCodeHint } from '../utils/hsCode'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -1231,14 +1232,19 @@ export default function NewShipmentPage() {
 
                   {items.map((it, i) => {
                     const amount = (Number(it.quantity) || 0) * (Number(it.unitValue) || 0)
+                    const hsStatus = checkHsCode(it.hsCode)
+                    const hsWarn = hsCodeHint(hsStatus)
+                    const hsClass = hsStatus === 'malformed'
+                      ? `${inputCls} !border-amber-400`
+                      : inputCls
                     return (
+                      <div key={i} className="space-y-1">
                       <div
-                        key={i}
                         className="grid min-w-[760px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_44px] items-center gap-2"
                       >
                         <input className={inputCls} value={it.description} onChange={(e) => patchItem(i, { description: e.target.value })} placeholder="Cotton t-shirt" />
                         <input className={inputCls} value={it.sku} onChange={(e) => patchItem(i, { sku: e.target.value })} placeholder="SKU-001" />
-                        <input className={inputCls} value={it.hsCode} onChange={(e) => patchItem(i, { hsCode: e.target.value })} placeholder="6109.10" />
+                        <input className={hsClass} value={it.hsCode} onChange={(e) => patchItem(i, { hsCode: e.target.value })} placeholder="6109.10" />
                         <input className={`${inputCls} uppercase`} value={it.countryOfOrigin} onChange={(e) => patchItem(i, { countryOfOrigin: e.target.value })} placeholder="US" maxLength={2} />
                         <input className={inputCls} type="number" min="1" step="1" value={it.quantity} onChange={(e) => patchItem(i, { quantity: e.target.value })} placeholder="1" />
                         <input className={inputCls} type="number" min="0" step="0.01" value={it.unitValue} onChange={(e) => patchItem(i, { unitValue: e.target.value })} placeholder="20.00" />
@@ -1256,6 +1262,12 @@ export default function NewShipmentPage() {
                             <FiTrash2 className="h-3.5 w-3.5" />
                           </button>
                         </div>
+                      </div>
+                      {hsWarn ? (
+                        <p className="min-w-[760px] text-[10.5px] leading-4 text-amber-700">
+                          <span className="font-semibold">HS code · </span>{hsWarn}
+                        </p>
+                      ) : null}
                       </div>
                     )
                   })}

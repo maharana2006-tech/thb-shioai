@@ -11,6 +11,7 @@ import {
   FiTrash2,
 } from 'react-icons/fi'
 import type { CustomsItem, OrderCustomsPayload } from '../../api/customsService'
+import { checkHsCode, hsCodeHint } from '../../utils/hsCode'
 
 /**
  * Four-step customs wizard for the label creation flow. Sprint-1 scaffold —
@@ -357,11 +358,16 @@ function CommoditiesStep({
         </div>
       ) : (
         <div className="space-y-2">
-          {items.map((item, idx) => (
+          {items.map((item, idx) => {
+            const hsStatus = checkHsCode(item.hsCode)
+            const hsHint = hsCodeHint(hsStatus)
+            const hsBorder = hsStatus === 'malformed' ? 'border-amber-400' : 'border-slate-200'
+            return (
             <div
               key={idx}
-              className="grid grid-cols-12 gap-2 rounded-xl border border-slate-200 bg-white p-2.5"
+              className="rounded-xl border border-slate-200 bg-white p-2.5 space-y-1.5"
             >
+              <div className="grid grid-cols-12 gap-2">
               <input
                 className="col-span-4 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px]"
                 placeholder="Description"
@@ -369,7 +375,7 @@ function CommoditiesStep({
                 onChange={(e) => onUpdate(idx, { description: e.target.value })}
               />
               <input
-                className="col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px]"
+                className={`col-span-2 rounded-lg border bg-slate-50 px-2.5 py-1.5 text-[12px] ${hsBorder}`}
                 placeholder="HS code"
                 value={item.hsCode ?? ''}
                 onChange={(e) => onUpdate(idx, { hsCode: e.target.value })}
@@ -404,8 +410,15 @@ function CommoditiesStep({
               >
                 <FiTrash2 className="h-3.5 w-3.5" />
               </button>
+              </div>
+              {hsHint ? (
+                <p className="text-[10.5px] leading-4 text-amber-700">
+                  <span className="font-semibold">HS code · </span>{hsHint}
+                </p>
+              ) : null}
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
