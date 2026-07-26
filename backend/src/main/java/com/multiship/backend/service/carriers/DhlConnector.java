@@ -597,6 +597,192 @@ public class DhlConnector implements CarrierConnector {
                 LocalDateTime.now(ZoneOffset.UTC).plusDays(2), null);
     }
 
+    /**
+     * DHL Express Rate quote — POST {@code /rates} with Basic Auth returns
+     * the {@code products[]} array; every entry is a priced product for the
+     * lane. Perfect for rate shopping.
+     *
+     * <p>Request shape mirrors DHL's rating-only payload — {@code customerDetails}
+     * with shipper + receiver, {@code accounts} to lock in negotiated
+     * pricing, and a slim {@code packages[]} with weight + dims. No customs
+     * invoice needed for rating (the {@code isCustomsDeclarable} flag alone
+     * is sufficient to nudge DHL into international pricing).
+     *
+     * <p>Response shape (only fields we care about):
+     * <pre>
+     * products[]  → one entry per priced product
+     *   productCode        → "P", "N", "U", "T", ...
+     *   productName
+     *   totalPrice[]       → array — pick BILLC (customer's billing currency)
+     *     price
+     *     priceCurrency
+     *     typeCode         → BILLC | PULCL | STDRT
+     *   deliveryCapabilities.totalTransitDays
+     *   deliveryCapabilities.estimatedDeliveryDateAndTime
+     * </pre>
+     *
+     * <p>{@code -local-*} fallback tokens short-circuit to an empty list.
+     */
+    @Override
+    public List<RateOption> getRates(ShipmentRequestDTO request, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return List.of();
+        }
+        try {
+            Map<String, Object> body = buildRatePayload(request);
+            String response = RestClient.builder()
+                    .baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build()
+                    .post()
+                    .uri("/rates")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Basic " + accessToken)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            return parseDhlRateResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("DHL rate quote rejected (HTTP {}): {}", ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+            return List.of();
+        } catch (Exception ex) {
+            log.warn("DHL rate quote failed; returning empty rate list. Reason: {}", ex.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Slimmed-down {@code /rates} payload (no customs invoice, no label
+     * options). DHL rates require the origin+destination address and the
+     * package spec; everything else is optional for rating.
+     */
+    Map<String, Object> buildRatePayload(ShipmentRequestDTO request) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("customerDetails", Map.of(
+                "shipperDetails", buildParty(
+                        request.getShipperName(), request.getShipperPhone(),
+                        request.getShipperAddressLine1(), request.getShipperAddressLine2(), null,
+                        request.getShipperCity(), request.getShipperState(),
+                        request.getShipperPostalCode(), request.getShipperCountryCode(), null),
+                "receiverDetails", buildParty(
+                        request.getRecipientName(),
+                        UpsConnector.joinPhone(request.getRecipientPhoneCountryCode(), request.getRecipientPhone()),
+                        request.getRecipientAddressLine1(), request.getRecipientAddressLine2(),
+                        request.getRecipientAddressLine3(),
+                        request.getRecipientCity(), request.getRecipientState(),
+                        request.getRecipientPostalCode(), request.getRecipientCountryCode(),
+                        request.getRecipientResidential())));
+        payload.put("accounts", List.of(Map.of(
+                "typeCode", "shipper",
+                "number", firstNonBlank(request.getAccountNumber(), ""))));
+        payload.put("plannedShippingDateAndTime", plannedShipDate());
+        payload.put("unitOfMeasurement",
+                "KG".equalsIgnoreCase(request.getWeightUnit()) ? "metric" : "imperial");
+        boolean isIntl = request.getIntl() != null && request.getIntl().isReadyForCarrier();
+        payload.put("isCustomsDeclarable", isIntl);
+        payload.put("packages", List.of(buildPackage(request)));
+        return payload;
+    }
+
+    /**
+     * Parse the DHL rate response into carrier-neutral RateOptions.
+     * Package-visible so tests can assert against canned response JSON.
+     */
+    List<RateOption> parseDhlRateResponse(String response) {
+        try {
+            JsonNode products = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"))
+                    .path("products");
+            if (!products.isArray()) return List.of();
+
+            List<RateOption> out = new ArrayList<>();
+            for (JsonNode product : products) {
+                String productCode = product.path("productCode").asText(null);
+                if (productCode == null || productCode.isEmpty()) continue;
+                String productName = product.path("productName").asText(productCode);
+
+                BigDecimal amount = pickDhlPrice(product.path("totalPrice"));
+                String currency = pickDhlCurrency(product.path("totalPrice"));
+                if (amount == null) continue;
+
+                Integer transitDays = null;
+                JsonNode transit = product.at("/deliveryCapabilities/totalTransitDays");
+                if (transit.isNumber()) transitDays = transit.asInt();
+                else if (transit.isTextual()) {
+                    try { transitDays = Integer.parseInt(transit.asText().trim()); }
+                    catch (NumberFormatException ignored) {}
+                }
+
+                LocalDateTime estimatedDelivery = parseDhlEstimated(
+                        product.at("/deliveryCapabilities/estimatedDeliveryDateAndTime").asText(null));
+
+                out.add(new RateOption("DHL", productCode, productName, amount, currency,
+                        estimatedDelivery, transitDays));
+            }
+            return List.copyOf(out);
+        } catch (Exception ex) {
+            log.warn("DHL rate response parse failed: {}", ex.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Prefer {@code typeCode=BILLC} (billable / negotiated price shown in the
+     * customer's billing currency) over PULCL / STDRT. Falls through to the
+     * first entry when no BILLC is present.
+     */
+    private static BigDecimal pickDhlPrice(JsonNode totalPrice) {
+        if (!totalPrice.isArray() || totalPrice.isEmpty()) return null;
+        JsonNode fallback = totalPrice.get(0);
+        for (JsonNode entry : totalPrice) {
+            if ("BILLC".equalsIgnoreCase(entry.path("priceCurrency").isTextual()
+                    ? entry.path("priceCurrency").asText() : "")) {
+                // BILLC is sometimes signalled via priceCurrency, other times
+                // via typeCode; treat either match as billable.
+            }
+            if ("BILLC".equalsIgnoreCase(entry.path("typeCode").asText(""))) {
+                return readDhlAmount(entry);
+            }
+        }
+        return readDhlAmount(fallback);
+    }
+
+    private static String pickDhlCurrency(JsonNode totalPrice) {
+        if (!totalPrice.isArray() || totalPrice.isEmpty()) return "USD";
+        for (JsonNode entry : totalPrice) {
+            if ("BILLC".equalsIgnoreCase(entry.path("typeCode").asText(""))) {
+                String c = entry.path("priceCurrency").asText(null);
+                return StringUtils.hasText(c) ? c : "USD";
+            }
+        }
+        String c = totalPrice.get(0).path("priceCurrency").asText(null);
+        return StringUtils.hasText(c) ? c : "USD";
+    }
+
+    private static BigDecimal readDhlAmount(JsonNode entry) {
+        JsonNode price = entry.path("price");
+        if (price.isNumber()) return price.decimalValue();
+        if (price.isTextual()) {
+            try { return new BigDecimal(price.asText()); }
+            catch (NumberFormatException ignored) {}
+        }
+        return null;
+    }
+
+    /**
+     * DHL {@code estimatedDeliveryDateAndTime} arrives as "2024-01-18T10:30:00 GMT+00:00"
+     * — LocalDateTime.parse chokes on the trailing timezone marker, so strip
+     * it before parsing. Returns null on any parse failure.
+     */
+    private LocalDateTime parseDhlEstimated(String value) {
+        if (!StringUtils.hasText(value)) return null;
+        String cleaned = value.contains(" ") ? value.substring(0, value.indexOf(' ')) : value;
+        try {
+            return LocalDateTime.parse(cleaned);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
     private String buildFallbackToken(String clientId, String clientSecret) {
         return "dhl-local-" + hashShort(clientId + ":" + clientSecret + ":" + LocalDateTime.now(ZoneOffset.UTC));
     }
