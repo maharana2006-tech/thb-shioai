@@ -494,6 +494,167 @@ public class UpsConnector implements CarrierConnector {
         }
     }
 
+    /**
+     * UPS Address Validation Street Level (AVS) —
+     * {@code POST /api/addressvalidation/{v}/1} with a Bearer token.
+     * URL path suffix {@code /1} = request type "Address Validation Street
+     * Level" (v2 has {@code /2} for basic city+state, {@code /3} for full
+     * street match). Response body:
+     * <pre>
+     * XAVResponse.
+     *   Response.ResponseStatus.Code (1 = success)
+     *   ValidAddressIndicator     (presence = valid, no correction needed)
+     *   AmbiguousAddressIndicator (presence = multiple matches)
+     *   NoCandidatesIndicator     (presence = address not found)
+     *   Candidate[] with AddressKeyFormat + AddressClassification
+     * </pre>
+     *
+     * <p>Classification codes:
+     *   0 = Unknown, 1 = Commercial, 2 = Residential.
+     *
+     * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new AddressValidationResult(false, "NOT_SUPPORTED", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "UPS AVS needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        String url = "/api/addressvalidation/" + carrierProperties.getUps().getApiVersion() + "/1";
+        try {
+            Map<String, Object> body = buildUpsAvsRequest(address);
+            String response = RestClient.builder()
+                    .baseUrl(carrierProperties.getUps().getApiBaseUrl()).build()
+                    .post()
+                    .uri(url + "?regionalrequestindicator=false&maximumcandidatelistsize=5")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("transId", java.util.UUID.randomUUID().toString())
+                    .header("transactionSrc", "multiship")
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            return parseUpsAvsResponse(address, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("UPS AVS rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "UPS AVS rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("UPS AVS call failed: {}", ex.getMessage());
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "UPS AVS call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** Build the UPS XAV request body. Only ShipTo.Address is sent. */
+    private Map<String, Object> buildUpsAvsRequest(AddressToValidate a) {
+        Map<String, Object> address = new LinkedHashMap<>();
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        if (StringUtils.hasText(a.addressLine1())) lines.add(a.addressLine1());
+        if (StringUtils.hasText(a.addressLine2())) lines.add(a.addressLine2());
+        if (StringUtils.hasText(a.addressLine3())) lines.add(a.addressLine3());
+        address.put("AddressLine", lines);
+        if (StringUtils.hasText(a.city())) address.put("PoliticalDivision2", a.city());
+        if (StringUtils.hasText(a.state())) address.put("PoliticalDivision1", a.state());
+        if (StringUtils.hasText(a.postalCode())) address.put("PostcodePrimaryLow", a.postalCode());
+        if (StringUtils.hasText(a.countryCode())) address.put("CountryCode", a.countryCode());
+
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("XAVRequest", Map.of(
+                "AddressKeyFormat", address));
+        return request;
+    }
+
+    /**
+     * Parse a UPS AVS response into an AddressValidationResult.
+     * Package-visible so tests can assert against canned response JSON.
+     */
+    AddressValidationResult parseUpsAvsResponse(AddressToValidate input, String response) {
+        try {
+            JsonNode root = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
+            JsonNode xav = root.path("XAVResponse");
+
+            if (!xav.path("NoCandidatesIndicator").isMissingNode()) {
+                return new AddressValidationResult(false, "NOT_FOUND", "UNKNOWN", null,
+                        java.util.List.of(),
+                        "UPS couldn't find this address.", response);
+            }
+
+            boolean exact = !xav.path("ValidAddressIndicator").isMissingNode();
+            boolean ambiguous = !xav.path("AmbiguousAddressIndicator").isMissingNode();
+
+            JsonNode candidatesNode = xav.path("Candidate");
+            java.util.List<JsonNode> candidates = new java.util.ArrayList<>();
+            if (candidatesNode.isArray()) {
+                candidatesNode.forEach(candidates::add);
+            } else if (!candidatesNode.isMissingNode()) {
+                candidates.add(candidatesNode);
+            }
+
+            AddressToValidate suggested = null;
+            String classification = "UNKNOWN";
+            if (!candidates.isEmpty()) {
+                JsonNode first = candidates.get(0);
+                suggested = readUpsCandidateAddress(first);
+                classification = readUpsClassification(first);
+            }
+
+            if (exact) {
+                return new AddressValidationResult(true, "EXACT", classification, null,
+                        java.util.List.of(),
+                        "UPS confirmed this address is deliverable.", response);
+            }
+            if (ambiguous) {
+                return new AddressValidationResult(false, "AMBIGUOUS", classification, suggested,
+                        java.util.List.of("UPS returned multiple candidate addresses; pick one to proceed."),
+                        "UPS found multiple candidates.", response);
+            }
+            // Candidates present but no explicit valid flag → treat as
+            // CORRECTED (UPS suggested a correction).
+            return new AddressValidationResult(true, "CORRECTED", classification, suggested,
+                    java.util.List.of("UPS suggested a corrected address; review before shipping."),
+                    "UPS suggested a corrected address.", response);
+        } catch (Exception ex) {
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "UPS AVS response parse failed: " + ex.getMessage(), response);
+        }
+    }
+
+    private static AddressToValidate readUpsCandidateAddress(JsonNode candidate) {
+        JsonNode key = candidate.path("AddressKeyFormat");
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        JsonNode addrLines = key.path("AddressLine");
+        if (addrLines.isArray()) addrLines.forEach(n -> lines.add(n.asText()));
+        else if (addrLines.isTextual()) lines.add(addrLines.asText());
+        return new AddressToValidate(
+                null, null,
+                lines.size() > 0 ? lines.get(0) : null,
+                lines.size() > 1 ? lines.get(1) : null,
+                lines.size() > 2 ? lines.get(2) : null,
+                key.path("PoliticalDivision2").asText(null),
+                key.path("PoliticalDivision1").asText(null),
+                key.path("PostcodePrimaryLow").asText(null),
+                key.path("CountryCode").asText(null));
+    }
+
+    /** UPS Classification.Code: "1" Commercial, "2" Residential, "0" Unknown. */
+    private static String readUpsClassification(JsonNode candidate) {
+        String code = candidate.at("/AddressClassification/Code").asText("0");
+        return switch (code) {
+            case "1" -> "COMMERCIAL";
+            case "2" -> "RESIDENTIAL";
+            default -> "UNKNOWN";
+        };
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.Ups ups = carrierProperties.getUps();

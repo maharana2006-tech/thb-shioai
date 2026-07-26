@@ -422,6 +422,122 @@ public class DhlConnector implements CarrierConnector {
         }
     }
 
+    /**
+     * DHL Express Address Validation —
+     * {@code GET /address-validate?type=delivery&countryCode=...&postalCode=...&cityName=...}
+     * with Basic Auth. DHL's endpoint is postal-level (matches the postal
+     * code + city + country combo) rather than street-level; a match means
+     * the destination is a valid delivery location, though DHL can't
+     * confirm the specific building.
+     *
+     * <p>Response:
+     * <pre>
+     * address[] with:
+     *   countryCode, postalCode, cityName, cityType (COUNTY | CITY | ...)
+     *   serviceArea.code
+     * warnings[]
+     * </pre>
+     * A non-empty {@code address[]} array = valid combination; empty +
+     * warnings = NOT_FOUND.
+     *
+     * <p>DHL doesn't return residential/commercial classification (it
+     * would need street-level data). We leave that field as UNKNOWN.
+     *
+     * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
+     */
+    @Override
+    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new AddressValidationResult(false, "NOT_SUPPORTED", "UNKNOWN", null,
+                    List.of(),
+                    "DHL address validation needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        try {
+            org.springframework.web.util.UriComponentsBuilder uri = org.springframework.web.util.UriComponentsBuilder
+                    .fromPath("/address-validate")
+                    .queryParam("type", "delivery");
+            if (StringUtils.hasText(address.countryCode())) uri.queryParam("countryCode", address.countryCode());
+            if (StringUtils.hasText(address.postalCode())) uri.queryParam("postalCode", address.postalCode());
+            if (StringUtils.hasText(address.city())) uri.queryParam("cityName", address.city());
+
+            String response = RestClient.builder()
+                    .baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build()
+                    .get()
+                    .uri(uri.build().toUriString())
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Basic " + accessToken)
+                    .header("Message-Reference", java.util.UUID.randomUUID().toString())
+                    .retrieve()
+                    .body(String.class);
+            return parseDhlAvResponse(address, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("DHL address-validate rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            // DHL returns 404 when nothing matches — treat as NOT_FOUND, not an error.
+            if (ex.getStatusCode().value() == 404) {
+                return new AddressValidationResult(false, "NOT_FOUND", "UNKNOWN", null,
+                        List.of(),
+                        "DHL couldn't find this address in its delivery network.",
+                        ex.getResponseBodyAsString());
+            }
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    List.of(),
+                    "DHL address-validate rejected: HTTP " + ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("DHL address-validate call failed: {}", ex.getMessage());
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    List.of(),
+                    "DHL address-validate call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse a DHL address-validate response. Package-visible for tests.
+     * A non-empty {@code address[]} = valid combo; DHL doesn't return
+     * "corrected" — the caller's exact input either matches a delivery
+     * zone or doesn't.
+     */
+    AddressValidationResult parseDhlAvResponse(AddressToValidate input, String response) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    Optional.ofNullable(response).orElse("{}"));
+            com.fasterxml.jackson.databind.JsonNode addresses = root.path("address");
+            if (!addresses.isArray() || addresses.isEmpty()) {
+                return new AddressValidationResult(false, "NOT_FOUND", "UNKNOWN", null,
+                        List.of(),
+                        "DHL couldn't find this address in its delivery network.", response);
+            }
+
+            java.util.List<String> warnings = new ArrayList<>();
+            com.fasterxml.jackson.databind.JsonNode warningsNode = root.path("warnings");
+            if (warningsNode.isArray()) warningsNode.forEach(n -> warnings.add(n.asText()));
+
+            // DHL echoes the normalised address back — if the city differs
+            // from the input, treat as CORRECTED.
+            com.fasterxml.jackson.databind.JsonNode first = addresses.get(0);
+            String matchedCity = first.path("cityName").asText("");
+            boolean cityDiffers = StringUtils.hasText(input.city())
+                    && !input.city().equalsIgnoreCase(matchedCity);
+            if (cityDiffers) {
+                AddressToValidate suggested = new AddressToValidate(
+                        null, null, input.addressLine1(), input.addressLine2(), input.addressLine3(),
+                        matchedCity, input.state(), first.path("postalCode").asText(input.postalCode()),
+                        first.path("countryCode").asText(input.countryCode()));
+                return new AddressValidationResult(true, "CORRECTED", "UNKNOWN", suggested,
+                        warnings, "DHL normalised the city to '" + matchedCity + "'.", response);
+            }
+            return new AddressValidationResult(true, "EXACT", "UNKNOWN", null, warnings,
+                    "DHL confirmed this is a valid delivery combination.", response);
+        } catch (Exception ex) {
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    List.of(),
+                    "DHL address-validate response parse failed: " + ex.getMessage(),
+                    response);
+        }
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.Dhl dhl = carrierProperties.getDhl();

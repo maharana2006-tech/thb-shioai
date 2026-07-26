@@ -141,6 +141,67 @@ public interface CarrierConnector {
     ) {
     }
 
+    /**
+     * Address to hand off to a carrier's validation API. Sprint 31. The
+     * caller-side surface — connectors accept these fields; each carrier
+     * maps them into its wire format.
+     */
+    record AddressToValidate(
+            String name,
+            String company,
+            String addressLine1,
+            String addressLine2,
+            String addressLine3,
+            String city,
+            String state,
+            String postalCode,
+            String countryCode
+    ) {
+    }
+
+    /**
+     * Result of an address validation call. Sprint 31.
+     *
+     * @param valid          True when the carrier confirmed the address is
+     *                       deliverable (EXACT match, or CORRECTED with a
+     *                       suggested address).
+     * @param matchLevel     EXACT | CORRECTED | AMBIGUOUS | NOT_FOUND | NOT_SUPPORTED
+     *                       | ERROR. Drives the UI badge.
+     * @param classification RESIDENTIAL | COMMERCIAL | UNKNOWN. Set when
+     *                       the carrier reports it (UPS + FedEx do; USPS
+     *                       + DHL don't).
+     * @param suggested      The carrier's suggested corrected address when
+     *                       {@code matchLevel=CORRECTED}. Null otherwise.
+     * @param warnings       Human-readable warnings (unusual state format,
+     *                       missing apt number, ...). Empty when everything's
+     *                       clean.
+     * @param message        Operator-facing summary — one sentence.
+     * @param rawResponse    Full carrier response for debugging; null on
+     *                       NOT_SUPPORTED (no call was made).
+     */
+    record AddressValidationResult(
+            boolean valid,
+            String matchLevel,
+            String classification,
+            AddressToValidate suggested,
+            List<String> warnings,
+            String message,
+            String rawResponse
+    ) {
+    }
+
+    /**
+     * Validate an address against the carrier's own address database.
+     * Sprint 31 wires each connector to its real endpoint; the default
+     * returns NOT_SUPPORTED so this stays additive over past sprints.
+     */
+    default AddressValidationResult validateAddress(AddressToValidate address, String accessToken) {
+        return new AddressValidationResult(
+                false, "NOT_SUPPORTED", "UNKNOWN", null, List.of(),
+                "Address validation isn't implemented for " + getCarrierCode() + " on this instance.",
+                null);
+    }
+
     CarrierConfiguration getConfiguration();
 
     /** One available service level for a lane: the carrier's code, name, scope. */

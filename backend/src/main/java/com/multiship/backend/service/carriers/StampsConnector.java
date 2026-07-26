@@ -655,6 +655,160 @@ public class StampsConnector implements CarrierConnector {
     }
 
     /**
+     * SWSIM {@code CleanseAddress} — validates + normalises a US address
+     * against USPS's own database. Foreign addresses go through a separate
+     * {@code ValidateForeignAddress} call; we route to the right one
+     * based on {@code address.countryCode()}.
+     *
+     * <p>Response gives {@code CleanseHash}, {@code AddressMatch} (true =
+     * exact), {@code CityStateZipOK} (true when at least the postal
+     * region is valid), and echoes a normalised address block.
+     *
+     * <p>USPS doesn't return residential/commercial classification —
+     * that requires the paid Residential Delivery Indicator (RDI)
+     * add-on we don't wire here.
+     */
+    @Override
+    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new AddressValidationResult(false, "NOT_SUPPORTED", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "SWSIM address validation needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        boolean domestic = !StringUtils.hasText(address.countryCode())
+                || "US".equalsIgnoreCase(address.countryCode().trim());
+        String operation = domestic ? "CleanseAddress" : "ValidateForeignAddress";
+        String soap = buildCleanseAddressEnvelope(address, accessToken, domestic);
+        try {
+            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+                    .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
+                    .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/" + operation + "\"")
+                    .body(soap)
+                    .retrieve()
+                    .body(String.class);
+            return parseCleanseAddressResponse(address, response, domestic);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            String fault = extractSoapFault(ex.getResponseBodyAsString());
+            log.warn("Stamps {} rejected (HTTP {}): {}",
+                    operation, ex.getStatusCode().value(), fault);
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "SWSIM " + operation + " rejected: " + fault,
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps {} failed: {}", operation, ex.getMessage());
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "SWSIM " + operation + " call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** Build the SWSIM CleanseAddress / ValidateForeignAddress envelope. */
+    String buildCleanseAddressEnvelope(AddressToValidate address, String authenticator,
+                                        boolean domestic) {
+        String op = domestic ? "CleanseAddress" : "ValidateForeignAddress";
+        StringBuilder xml = new StringBuilder(1024);
+        xml.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+        xml.append("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">");
+        xml.append("<soap:Body>");
+        xml.append("<").append(op).append(" xmlns=\"").append(SWSIM_NAMESPACE).append("\">");
+        xml.append("<Authenticator>").append(xmlEscape(authenticator)).append("</Authenticator>");
+        xml.append("<Address>");
+        if (StringUtils.hasText(address.name())) {
+            xml.append("<FullName>").append(xmlEscape(address.name())).append("</FullName>");
+        }
+        if (StringUtils.hasText(address.addressLine1())) {
+            xml.append("<Address1>").append(xmlEscape(address.addressLine1())).append("</Address1>");
+        }
+        String line2 = joinSwsimAddress2(address.addressLine2(), address.addressLine3());
+        if (StringUtils.hasText(line2)) {
+            xml.append("<Address2>").append(xmlEscape(line2)).append("</Address2>");
+        }
+        if (StringUtils.hasText(address.city())) {
+            xml.append("<City>").append(xmlEscape(address.city())).append("</City>");
+        }
+        if (StringUtils.hasText(address.state())) {
+            xml.append("<State>").append(xmlEscape(address.state())).append("</State>");
+        }
+        if (StringUtils.hasText(address.postalCode())) {
+            xml.append("<ZIPCode>").append(xmlEscape(address.postalCode())).append("</ZIPCode>");
+        }
+        if (!domestic && StringUtils.hasText(address.countryCode())) {
+            xml.append("<Country>").append(xmlEscape(address.countryCode())).append("</Country>");
+        }
+        xml.append("</Address>");
+        xml.append("</").append(op).append(">");
+        xml.append("</soap:Body>");
+        xml.append("</soap:Envelope>");
+        return xml.toString();
+    }
+
+    /**
+     * Parse a SWSIM CleanseAddress / ValidateForeignAddress response.
+     * Domestic: {@code AddressMatch=true} = EXACT; {@code CityStateZipOK=true}
+     * + AddressMatch=false = CORRECTED (USPS suggested a change);
+     * else NOT_FOUND. Foreign: presence of a normalised response with
+     * no fault = EXACT (SWSIM's foreign validator is coarser).
+     */
+    AddressValidationResult parseCleanseAddressResponse(AddressToValidate input, String responseXml,
+                                                        boolean domestic) {
+        if (!StringUtils.hasText(responseXml)) {
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "SWSIM returned an empty address-validation response.", null);
+        }
+        String fault = extractElement(responseXml, "faultstring");
+        if (StringUtils.hasText(fault)) {
+            return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "SWSIM address validation rejected: " + fault, responseXml);
+        }
+
+        if (!domestic) {
+            // Foreign path — no AddressMatch flag, just a normalised echo.
+            AddressToValidate suggested = readSwsimAddressEcho(responseXml, input);
+            return new AddressValidationResult(true, "EXACT", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "SWSIM validated the foreign address.", responseXml);
+        }
+
+        boolean addressMatch = "true".equalsIgnoreCase(
+                extractElement(responseXml, "AddressMatch"));
+        boolean cityStateZipOk = "true".equalsIgnoreCase(
+                extractElement(responseXml, "CityStateZipOK"));
+
+        if (addressMatch) {
+            return new AddressValidationResult(true, "EXACT", "UNKNOWN", null,
+                    java.util.List.of(),
+                    "USPS confirmed this address is deliverable.", responseXml);
+        }
+        if (cityStateZipOk) {
+            AddressToValidate suggested = readSwsimAddressEcho(responseXml, input);
+            return new AddressValidationResult(true, "CORRECTED", "UNKNOWN", suggested,
+                    java.util.List.of("USPS normalised the street address; review before shipping."),
+                    "USPS suggested a corrected address.", responseXml);
+        }
+        return new AddressValidationResult(false, "NOT_FOUND", "UNKNOWN", null,
+                java.util.List.of(),
+                "USPS couldn't find this address.", responseXml);
+    }
+
+    private static AddressToValidate readSwsimAddressEcho(String xml, AddressToValidate input) {
+        return new AddressToValidate(
+                extractElement(xml, "FullName"),
+                null,
+                extractElement(xml, "Address1"),
+                extractElement(xml, "Address2"),
+                null,
+                extractElement(xml, "City"),
+                extractElement(xml, "State"),
+                extractElement(xml, "ZIPCode"),
+                nonBlank(extractElement(xml, "Country"), input.countryCode()));
+    }
+
+    /**
      * Build the SWSIM GetRates SOAP envelope. No {@code ServiceType} — omitting
      * it asks SWSIM for the full rate ladder. Country only when non-US (SWSIM
      * treats absent Country as US and errors when both are set).
