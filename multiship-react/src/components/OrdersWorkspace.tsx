@@ -6,13 +6,13 @@ import {
   FiArrowUp,
   FiCheckCircle,
   FiEdit3,
-  FiExternalLink,
   FiEye,
   FiFileText,
   FiFilter,
   FiRefreshCw,
   FiRotateCw,
   FiSearch,
+  FiTruck,
   FiX,
   FiZap,
   FiPlus,
@@ -29,6 +29,7 @@ import FillCarrierDetailsModal from './modals/FillCarrierDetailsModal'
 import ClientEditorModal from './modals/ClientEditorModal'
 import AccountPickerModal from './modals/AccountPickerModal'
 import OrderDetailsModal from './modals/OrderDetailsModal'
+import TrackingTimelineModal from './tracking/TrackingTimelineModal'
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
 
@@ -123,6 +124,9 @@ export default function OrdersWorkspace() {
   const [pickerCarrier, setPickerCarrier] = useState<string | null>(null)
   const [pickerSuggested, setPickerSuggested] = useState<string | null>(null)
   const [detailsOrderNo, setDetailsOrderNo] = useState<number | null>(null)
+  // Sprint 23 — Track column: opens the TrackingTimelineModal with live
+  // scan events from the connector's authenticated tracking API.
+  const [trackingOrderNo, setTrackingOrderNo] = useState<number | null>(null)
 
   // The header's global search lands here as /orders?q=…
   useEffect(() => {
@@ -1054,16 +1058,17 @@ export default function OrdersWorkspace() {
                     ))}
                     <td className="sticky right-0 z-10 bg-white px-2.5 py-3 text-right align-middle shadow-[-10px_0_12px_-10px_rgba(31,21,12,0.14)] transition group-hover:bg-[#faf7f0]">
                       <span className="inline-flex items-center justify-end gap-1.5">
-                        {view === 'generated' && order.labelDetails.trackingUrl ? (
-                          <a
-                            href={order.labelDetails.trackingUrl}
-                            target="_blank"
-                            rel="noreferrer"
+                        {order.labelDetails.trackingNumber ? (
+                          <button
+                            type="button"
+                            onClick={() => setTrackingOrderNo(orderNo)}
+                            title={`Live tracking for ${order.labelDetails.trackingNumber}`}
+                            aria-label={`Track order ${orderNo}`}
                             className="inline-flex items-center gap-1.5 rounded-lg border border-[#e6dcc7] bg-[#faf7f0] px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#dccfb4] hover:bg-[#f2ebda]"
                           >
-                            <FiExternalLink className="h-3 w-3" />
+                            <FiTruck className="h-3 w-3" />
                             Track
-                          </a>
+                          </button>
                         ) : null}
                         <button
                           type="button"
@@ -1216,6 +1221,10 @@ export default function OrdersWorkspace() {
 
       {detailsOrderNo !== null ? (
         <OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} />
+      ) : null}
+
+      {trackingOrderNo !== null ? (
+        <TrackingTimelineModal orderNo={trackingOrderNo} onClose={() => setTrackingOrderNo(null)} />
       ) : null}
     </div>
   )
