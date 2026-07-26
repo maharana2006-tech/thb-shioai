@@ -482,7 +482,7 @@ public class DhlConnector implements CarrierConnector {
                     request.getDeclaredValueCurrency(),
                     isIntl ? request.getIntl().getCustomsCurrency() : "USD").toUpperCase());
         }
-        content.put("packages", List.of(buildPackage(request)));
+        content.put("packages", buildPackages(request));
         content.put("unitOfMeasurement", "KG".equalsIgnoreCase(request.getWeightUnit()) ? "metric" : "imperial");
         content.put("description", firstNonBlank(request.getSpecialInstructions(), "General merchandise"));
         content.put("incoterm", firstNonBlank(
@@ -548,18 +548,31 @@ public class DhlConnector implements CarrierConnector {
         return out;
     }
 
-    /** DHL Package — typeCode + weight + dimensions in metric or imperial. */
-    private Map<String, Object> buildPackage(ShipmentRequestDTO request) {
+    /** DHL Package — typeCode + weight + dimensions in metric or imperial.
+     *  Sprint 28 — takes a PackageDetailDTO so per-box shape overrides
+     *  the shipment-level top-level fields. */
+    private Map<String, Object> buildPackage(ShipmentRequestDTO request,
+                                              com.multiship.backend.dto.PackageDetailDTO p) {
         Map<String, Object> pkg = new LinkedHashMap<>();
-        pkg.put("typeCode", firstNonBlank(request.getPackageType(), "3BX"));
-        pkg.put("weight", request.getWeight());
-        if (request.getLength() != null && request.getWidth() != null && request.getHeight() != null) {
+        pkg.put("typeCode", firstNonBlank(
+                firstNonBlank(p.getPackageType(), request.getPackageType()), "3BX"));
+        pkg.put("weight", p.getWeight());
+        if (p.getLength() != null && p.getWidth() != null && p.getHeight() != null) {
             pkg.put("dimensions", Map.of(
-                    "length", request.getLength(),
-                    "width", request.getWidth(),
-                    "height", request.getHeight()));
+                    "length", p.getLength(),
+                    "width", p.getWidth(),
+                    "height", p.getHeight()));
         }
         return pkg;
+    }
+
+    /** Iterate every package on the shipment into DHL's packages[]. */
+    private List<Map<String, Object>> buildPackages(ShipmentRequestDTO request) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (com.multiship.backend.dto.PackageDetailDTO p : request.effectivePackages()) {
+            out.add(buildPackage(request, p));
+        }
+        return out;
     }
 
     /**
@@ -741,7 +754,7 @@ public class DhlConnector implements CarrierConnector {
                 "KG".equalsIgnoreCase(request.getWeightUnit()) ? "metric" : "imperial");
         boolean isIntl = request.getIntl() != null && request.getIntl().isReadyForCarrier();
         payload.put("isCustomsDeclarable", isIntl);
-        payload.put("packages", List.of(buildPackage(request)));
+        payload.put("packages", buildPackages(request));
         return payload;
     }
 

@@ -547,9 +547,12 @@ public class StampsConnector implements CarrierConnector {
             xml.append("<Country>").append(xmlEscape(country)).append("</Country>");
         }
         xml.append("</To>");
-        xml.append("<WeightOz>").append(xmlEscape(weightInOz(request))).append("</WeightOz>");
+        // SWSIM GetRates is single-package; use the first for the quote.
+        com.multiship.backend.dto.PackageDetailDTO firstPkg = request.effectivePackages().get(0);
+        xml.append("<WeightOz>").append(xmlEscape(weightInOz(firstPkg))).append("</WeightOz>");
         xml.append("<PackageType>")
-                .append(xmlEscape(nonBlank(request.getPackageType(), "Package")))
+                .append(xmlEscape(nonBlank(
+                        nonBlank(firstPkg.getPackageType(), request.getPackageType()), "Package")))
                 .append("</PackageType>");
         xml.append("<ShipDate>")
                 .append(java.time.LocalDate.now(java.time.ZoneOffset.UTC))
@@ -701,9 +704,20 @@ public class StampsConnector implements CarrierConnector {
         // Rate: the class of service + package + weight. SWSIM re-validates
         // this against its own rate engine, so mismatches (weight over the
         // service's max) fail here before the label is printed.
-        String weightOz = weightInOz(request);
+        //
+        // Sprint 28 — SWSIM's CreateIndicium is fundamentally single-package
+        // (one label per SOAP call). We emit the FIRST package's shape and
+        // log a warning when more are supplied; multi-package USPS labels
+        // require N separate CreateIndicium calls, tracked in a follow-up.
+        java.util.List<com.multiship.backend.dto.PackageDetailDTO> packages = request.effectivePackages();
+        if (packages.size() > 1) {
+            log.warn("Stamps CreateIndicium is single-package; got {} packages — emitting the first only. " +
+                    "Multi-package USPS labels need N SOAP calls (future work).", packages.size());
+        }
+        com.multiship.backend.dto.PackageDetailDTO firstPkg = packages.get(0);
+        String weightOz = weightInOz(firstPkg);
         xml.append("<Rate>");
-        appendServiceRate(xml, request, weightOz);
+        appendServiceRate(xml, request, firstPkg, weightOz);
         xml.append("</Rate>");
 
         // From/To are separate blocks; addresses appear twice (once inside
@@ -748,7 +762,8 @@ public class StampsConnector implements CarrierConnector {
         return xml.toString();
     }
 
-    private void appendServiceRate(StringBuilder xml, ShipmentRequestDTO request, String weightOz) {
+    private void appendServiceRate(StringBuilder xml, ShipmentRequestDTO request,
+                                    com.multiship.backend.dto.PackageDetailDTO p, String weightOz) {
         xml.append("<From><ZIPCode>").append(xmlEscape(nonBlank(request.getShipperPostalCode(), "")))
                 .append("</ZIPCode></From>");
         xml.append("<To>");
@@ -759,11 +774,14 @@ public class StampsConnector implements CarrierConnector {
         }
         xml.append("</To>");
         xml.append("<ServiceType>").append(xmlEscape(nonBlank(request.getServiceType(), "USPS GA"))).append("</ServiceType>");
-        xml.append("<PackageType>").append(xmlEscape(nonBlank(request.getPackageType(), "Package"))).append("</PackageType>");
+        xml.append("<PackageType>").append(xmlEscape(
+                nonBlank(nonBlank(p.getPackageType(), request.getPackageType()), "Package"))).append("</PackageType>");
         xml.append("<WeightOz>").append(xmlEscape(weightOz)).append("</WeightOz>");
         xml.append("<ShipDate>").append(java.time.LocalDate.now(java.time.ZoneOffset.UTC)).append("</ShipDate>");
-        if (request.getDeclaredValue() != null) {
-            xml.append("<DeclaredValue>").append(xmlEscape(request.getDeclaredValue().toPlainString()))
+        java.math.BigDecimal declared = p.getDeclaredValue() != null
+                ? p.getDeclaredValue() : request.getDeclaredValue();
+        if (declared != null) {
+            xml.append("<DeclaredValue>").append(xmlEscape(declared.toPlainString()))
                     .append("</DeclaredValue>");
         }
         // Sprint 27 — SWSIM Rate block accepts a HazardousMaterials boolean.
@@ -879,9 +897,9 @@ public class StampsConnector implements CarrierConnector {
     }
 
     /** Total shipment weight in ounces — the unit SWSIM speaks natively. */
-    private static String weightInOz(ShipmentRequestDTO request) {
+    private static String weightInOz(com.multiship.backend.dto.PackageDetailDTO p) {
         java.math.BigDecimal oz = com.multiship.backend.util.UnitConverter
-                .toOunces(request.getWeight(), request.getWeightUnit());
+                .toOunces(p.getWeight(), p.getWeightUnit());
         return oz == null ? "0" : oz.toPlainString();
     }
 

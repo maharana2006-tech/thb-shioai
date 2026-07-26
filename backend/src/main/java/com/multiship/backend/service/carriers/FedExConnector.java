@@ -691,29 +691,40 @@ public class FedExConnector implements CarrierConnector {
                 "payor", Map.of("responsibleParty", Map.of(
                         "accountNumber", Map.of("value", firstNonBlank(request.getAccountNumber(), ""))))));
 
-        Map<String, Object> packageLineItem = new LinkedHashMap<>();
-        // FedEx accepts LB or KG on the wire via the units field. Route the
-        // caller's unit through as-is so KG entered by EU operators isn't
-        // silently treated as LB by FedEx's rating engine.
-        String fedexWeightUnit = "KG".equalsIgnoreCase(request.getWeightUnit()) ? "KG" : "LB";
-        packageLineItem.put("weight", Map.of(
-                "units", fedexWeightUnit,
-                "value", request.getWeight()
-        ));
-        if (request.getDeclaredValue() != null) {
-            // Currency comes from the shipment (customs) declaration when set;
-            // legacy callers that don't populate it get USD, matching pre-fix
-            // behavior for US-domestic accounts.
-            String declaredCurrency = StringUtils.hasText(request.getDeclaredValueCurrency())
-                    ? request.getDeclaredValueCurrency().trim().toUpperCase()
-                    : "USD";
-            packageLineItem.put("declaredValue", Map.of(
-                    "amount", request.getDeclaredValue(),
-                    "currency", declaredCurrency
-            ));
+        // Sprint 28 — multi-package. FedEx wants requestedPackageLineItems[]
+        // with one entry per box AND totalPackageCount at the parent.
+        java.util.List<com.multiship.backend.dto.PackageDetailDTO> packages = request.effectivePackages();
+        java.util.List<Map<String, Object>> lineItems = new java.util.ArrayList<>();
+        String declaredCurrency = StringUtils.hasText(request.getDeclaredValueCurrency())
+                ? request.getDeclaredValueCurrency().trim().toUpperCase() : "USD";
+        int seq = 1;
+        for (com.multiship.backend.dto.PackageDetailDTO p : packages) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("sequenceNumber", String.valueOf(
+                    p.getSequenceNumber() == null ? seq : p.getSequenceNumber()));
+            String fedexWeightUnit = "KG".equalsIgnoreCase(
+                    firstNonBlank(p.getWeightUnit(), request.getWeightUnit())) ? "KG" : "LB";
+            item.put("weight", Map.of(
+                    "units", fedexWeightUnit,
+                    "value", p.getWeight() != null ? p.getWeight() : java.math.BigDecimal.ZERO));
+            java.math.BigDecimal declared = p.getDeclaredValue() != null
+                    ? p.getDeclaredValue()
+                    : (seq == 1 ? request.getDeclaredValue() : null);
+            if (declared != null) {
+                item.put("declaredValue", Map.of(
+                        "amount", declared,
+                        "currency", declaredCurrency));
+            }
+            if (StringUtils.hasText(p.getReference())) {
+                item.put("customerReferences", java.util.List.of(Map.of(
+                        "customerReferenceType", "CUSTOMER_REFERENCE",
+                        "value", p.getReference())));
+            }
+            lineItems.add(item);
+            seq++;
         }
-
-        requestedShipment.put("requestedPackageLineItems", new Object[]{packageLineItem});
+        requestedShipment.put("totalPackageCount", String.valueOf(packages.size()));
+        requestedShipment.put("requestedPackageLineItems", lineItems);
 
         // International customs only when the request carries a
         // ready-to-carrier intl block. Domestic shipments never see this.

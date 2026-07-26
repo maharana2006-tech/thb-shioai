@@ -513,9 +513,14 @@ public class UpsConnector implements CarrierConnector {
         shipment.put("PaymentInformation", buildPaymentInformation(request));
         shipment.put("Service", Map.of("Code", firstNonBlank(request.getServiceType(), "03")));
 
-        // Single-package payload today (Sprint 2 scope); multi-package lands
-        // with the Order model rework. UPS Package[] preserves the units.
-        shipment.put("Package", java.util.List.of(buildPackage(request)));
+        // Sprint 28 — multi-package. effectivePackages() returns
+        // ShipmentRequestDTO.packages when populated, else a single-
+        // package synthetic list from the top-level fields.
+        java.util.List<Map<String, Object>> packageBlocks = new java.util.ArrayList<>();
+        for (com.multiship.backend.dto.PackageDetailDTO p : request.effectivePackages()) {
+            packageBlocks.add(buildPackage(request, p));
+        }
+        shipment.put("Package", packageBlocks);
 
         // Sprint 25 — Print Return Label. UPS ReturnService.Code "8" =
         // "Print Return Label" (the paper-based variant; PDF returned to
@@ -683,39 +688,45 @@ public class UpsConnector implements CarrierConnector {
 
     /**
      * UPS Package block with unit-of-measurement hints so 1.5 KG in the
-     * request lands at UPS as 1.5 KG, not 1.5 LB.
+     * request lands at UPS as 1.5 KG, not 1.5 LB. Sprint 28 — takes a
+     * {@link com.multiship.backend.dto.PackageDetailDTO} so multi-package
+     * shipments can supply per-box weight, dims, packaging type. The DG
+     * block still lives at the shipment level; the same hazmat wire is
+     * duplicated onto every package (UPS wants it per-package).
      */
-    private Map<String, Object> buildPackage(ShipmentRequestDTO request) {
+    private Map<String, Object> buildPackage(ShipmentRequestDTO request,
+                                              com.multiship.backend.dto.PackageDetailDTO p) {
         Map<String, Object> pkg = new LinkedHashMap<>();
-        pkg.put("Description", firstNonBlank(request.getSpecialInstructions(), "Package"));
+        pkg.put("Description", firstNonBlank(p.getDescription(),
+                firstNonBlank(request.getSpecialInstructions(), "Package")));
         pkg.put("PackagingType", Map.of(
-                "Code", firstNonBlank(request.getPackageType(), "02")));
+                "Code", firstNonBlank(
+                        firstNonBlank(p.getPackageType(), request.getPackageType()),
+                        "02")));
 
-        String weightUnitCode = "KG".equalsIgnoreCase(request.getWeightUnit()) ? "KGS" : "LBS";
+        String weightUnitCode = "KG".equalsIgnoreCase(
+                firstNonBlank(p.getWeightUnit(), request.getWeightUnit())) ? "KGS" : "LBS";
         Map<String, Object> weight = new LinkedHashMap<>();
         weight.put("UnitOfMeasurement", Map.of("Code", weightUnitCode));
-        weight.put("Weight", request.getWeight() != null ? request.getWeight().toPlainString() : "0");
+        weight.put("Weight", p.getWeight() != null ? p.getWeight().toPlainString() : "0");
         pkg.put("PackageWeight", weight);
 
-        if (request.getLength() != null || request.getWidth() != null || request.getHeight() != null) {
-            String dimUnitCode = "CM".equalsIgnoreCase(request.getDimUnit()) ? "CM" : "IN";
+        if (p.getLength() != null || p.getWidth() != null || p.getHeight() != null) {
+            String dimUnitCode = "CM".equalsIgnoreCase(
+                    firstNonBlank(p.getDimUnit(), request.getDimUnit())) ? "CM" : "IN";
             Map<String, Object> dims = new LinkedHashMap<>();
             dims.put("UnitOfMeasurement", Map.of("Code", dimUnitCode));
-            dims.put("Length", request.getLength() != null ? request.getLength().toPlainString() : "0");
-            dims.put("Width", request.getWidth() != null ? request.getWidth().toPlainString() : "0");
-            dims.put("Height", request.getHeight() != null ? request.getHeight().toPlainString() : "0");
+            dims.put("Length", p.getLength() != null ? p.getLength().toPlainString() : "0");
+            dims.put("Width", p.getWidth() != null ? p.getWidth().toPlainString() : "0");
+            dims.put("Height", p.getHeight() != null ? p.getHeight().toPlainString() : "0");
             pkg.put("Dimensions", dims);
         }
 
         // Sprint 26 — HazMatPackageInformation. UPS scopes hazmat at the
         // Package level (each package can declare its own commodities),
         // so the wire block hangs off Package here, not off Shipment.
-        // Sub-block layout follows the UPS Ship API "HazMat" schema:
-        //   PackageIdentifier / QValue / OverPackedIndicator / AllPackedInOneIndicator
-        //   ShipmentServiceOptions block (transport mode + emergency contact + signatory)
-        //   ChemicalRecord[] — one per commodity
-        // We emit the minimum required set — connector defers to the DG
-        // block for content, no local computation.
+        // In multi-package shipments each package repeats the DG block —
+        // per-package hazmat overrides land in a future sprint.
         if (request.getDangerousGoods() != null
                 && request.getDangerousGoods().isReadyForCarrier()) {
             pkg.put("HazMatPackageInformation", buildUpsHazMatPackage(request));
@@ -990,7 +1001,13 @@ public class UpsConnector implements CarrierConnector {
         }
         shipment.put("ShipTo", shipTo);
         shipment.put("ShipmentRatingOptions", Map.of("NegotiatedRatesIndicator", ""));
-        shipment.put("Package", java.util.List.of(buildPackage(request)));
+        // Rate-shop against every package the caller supplied so the
+        // returned rate matches what the actual label would cost.
+        java.util.List<Map<String, Object>> packages = new java.util.ArrayList<>();
+        for (com.multiship.backend.dto.PackageDetailDTO p : request.effectivePackages()) {
+            packages.add(buildPackage(request, p));
+        }
+        shipment.put("Package", packages);
         return shipment;
     }
 
