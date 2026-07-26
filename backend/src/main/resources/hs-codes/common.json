@@ -56,5 +56,32 @@
 
   { "code": "210690", "description": "Food preparations not elsewhere specified or included — other", "category": "Food & beverage" },
   { "code": "090121", "description": "Coffee, roasted, not decaffeinated", "category": "Food & beverage" },
-  { "code": "180620", "description": "Chocolate and other food preparations containing cocoa — other", "category": "Food & beverage" }
+  { "code": "180620", "description": "Chocolate and other food preparations containing cocoa — other", "category": "Food & beverage" },
+  { "code": "090230", "description": "Black tea (fermented), packed, immediate packagings ≤ 3 kg", "category": "Food & beverage" },
+  { "code": "220300", "description": "Beer made from malt", "category": "Food & beverage" },
+  { "code": "220421", "description": "Wine of fresh grapes, in containers holding 2 litres or less", "category": "Food & beverage" },
+
+  { "code": "300490", "description": "Medicaments consisting of mixed or unmixed products for therapeutic use — other", "category": "Pharma & health" },
+  { "code": "300450", "description": "Medicaments containing vitamins or other Ch 29.36 provitamins", "category": "Pharma & health" },
+  { "code": "902110", "description": "Orthopaedic or fracture appliances", "category": "Pharma & health" },
+  { "code": "300510", "description": "Adhesive dressings and other articles having an adhesive layer", "category": "Pharma & health" },
+
+  { "code": "870880", "description": "Suspension systems and parts thereof (motor vehicles)", "category": "Automotive & parts" },
+  { "code": "401110", "description": "New pneumatic tyres of rubber — of a kind used on motor cars", "category": "Automotive & parts" },
+  { "code": "870829", "description": "Parts and accessories of bodies for motor vehicles — other", "category": "Automotive & parts" },
+  { "code": "851140", "description": "Starter motors and dual purpose starter-generators (motor vehicles)", "category": "Automotive & parts" },
+
+  { "code": "820760", "description": "Tools for reaming, cutting, drilling, boring or broaching", "category": "Tools & industrial" },
+  { "code": "846599", "description": "Machine tools for working wood, cork, bone — other", "category": "Tools & industrial" },
+  { "code": "820730", "description": "Tools for pressing, stamping or punching", "category": "Tools & industrial" },
+  { "code": "820510", "description": "Drilling, threading or tapping tools, hand-held", "category": "Tools & industrial" },
+
+  { "code": "841810", "description": "Combined refrigerator-freezers, fitted with separate external doors", "category": "Home appliances" },
+  { "code": "845011", "description": "Fully-automatic household washing machines, capacity ≤ 10 kg", "category": "Home appliances" },
+  { "code": "850811", "description": "Vacuum cleaners with self-contained electric motor, power ≤ 1500 W", "category": "Home appliances" },
+  { "code": "851640", "description": "Electric smoothing irons", "category": "Home appliances" },
+
+  { "code": "440710", "description": "Coniferous wood sawn or chipped lengthwise, > 6 mm thick", "category": "Wood & paper" },
+  { "code": "441810", "description": "Windows, French-windows and their frames — of wood", "category": "Wood & paper" },
+  { "code": "480255", "description": "Uncoated paper for writing, printing or graphic purposes — > 40 g/m²", "category": "Wood & paper" }
 ]
