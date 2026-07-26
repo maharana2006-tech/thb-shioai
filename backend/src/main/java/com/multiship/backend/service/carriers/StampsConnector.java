@@ -294,26 +294,85 @@ public class StampsConnector implements CarrierConnector {
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken) {
         String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
-        String soap = buildCreateIndiciumEnvelope(request, accessToken);
-        try {
-            String response = RestClient.builder().baseUrl(swsimUrl).build()
-                    .post()
-                    .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
-                    .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/CreateIndicium\"")
-                    .body(soap)
-                    .retrieve()
-                    .body(String.class);
-            return parseCreateIndiciumResponse(response, request);
-        } catch (org.springframework.web.client.RestClientResponseException ex) {
-            String fault = extractSoapFault(ex.getResponseBodyAsString());
-            log.warn("Stamps CreateIndicium rejected by {} (HTTP {}): {}",
-                    swsimUrl, ex.getStatusCode().value(), fault);
-            return buildFallbackShipmentResult(request);
-        } catch (Exception ex) {
-            log.warn("Stamps CreateIndicium call to {} failed; using local fallback shipment result. Reason: {}",
-                    swsimUrl, ex.getMessage());
-            return buildFallbackShipmentResult(request);
+        java.util.List<com.multiship.backend.dto.PackageDetailDTO> packages = request.effectivePackages();
+
+        // Sprint 29 — multi-package USPS. SWSIM CreateIndicium is single-
+        // package by design (one label PDF per call), so a shipment with N
+        // packages issues N SOAP calls. We aggregate the results:
+        //   trackingNumber  — comma-joined tracking numbers, package 1 first
+        //   trackingUrl     — first package's URL (all N are the same lane)
+        //   labelUrl/PDF    — first package's label (operator can click
+        //                     through per-package via rawResponse if needed)
+        //   shippingCost    — sum across all packages
+        //   rawResponse     — every response envelope concatenated with
+        //                     "<!-- pkg N -->" separators, so debugging can
+        //                     see each SWSIM reply.
+        java.util.List<ShipmentResult> perPackage = new java.util.ArrayList<>();
+        for (int i = 0; i < packages.size(); i++) {
+            String soap = buildCreateIndiciumEnvelope(request, packages.get(i),
+                    i + 1, packages.size(), accessToken);
+            try {
+                String response = RestClient.builder().baseUrl(swsimUrl).build()
+                        .post()
+                        .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
+                        .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/CreateIndicium\"")
+                        .body(soap)
+                        .retrieve()
+                        .body(String.class);
+                perPackage.add(parseCreateIndiciumResponse(response, request));
+            } catch (org.springframework.web.client.RestClientResponseException ex) {
+                String fault = extractSoapFault(ex.getResponseBodyAsString());
+                log.warn("Stamps CreateIndicium rejected by {} for package {}/{} (HTTP {}): {}",
+                        swsimUrl, i + 1, packages.size(), ex.getStatusCode().value(), fault);
+                perPackage.add(buildFallbackShipmentResult(request));
+            } catch (Exception ex) {
+                log.warn("Stamps CreateIndicium call to {} failed for package {}/{}; using local fallback shipment result. Reason: {}",
+                        swsimUrl, i + 1, packages.size(), ex.getMessage());
+                perPackage.add(buildFallbackShipmentResult(request));
+            }
         }
+
+        return aggregateStampsShipmentResults(perPackage);
+    }
+
+    /**
+     * Aggregate per-package CreateIndicium results into a single
+     * {@link ShipmentResult}. See {@link #createShipment} for the fields'
+     * combination strategy.
+     */
+    ShipmentResult aggregateStampsShipmentResults(java.util.List<ShipmentResult> perPackage) {
+        if (perPackage.isEmpty()) {
+            return new ShipmentResult(null, null, null, null, null, null, null);
+        }
+        if (perPackage.size() == 1) return perPackage.get(0);
+
+        String trackingJoined = perPackage.stream()
+                .map(ShipmentResult::trackingNumber)
+                .filter(StringUtils::hasText)
+                .collect(java.util.stream.Collectors.joining(","));
+
+        java.math.BigDecimal totalCost = perPackage.stream()
+                .map(ShipmentResult::shippingCost)
+                .filter(java.util.Objects::nonNull)
+                .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+        if (totalCost.signum() == 0) totalCost = null;
+
+        StringBuilder raw = new StringBuilder(perPackage.size() * 2048);
+        for (int i = 0; i < perPackage.size(); i++) {
+            raw.append("<!-- pkg ").append(i + 1).append(" -->\n")
+                    .append(perPackage.get(i).rawResponse() == null ? "" : perPackage.get(i).rawResponse())
+                    .append('\n');
+        }
+
+        ShipmentResult first = perPackage.get(0);
+        return new ShipmentResult(
+                StringUtils.hasText(trackingJoined) ? trackingJoined : first.trackingNumber(),
+                first.trackingUrl(),
+                first.labelUrl(),
+                first.labelPdf(),
+                totalCost,
+                first.estimatedDelivery(),
+                raw.toString());
     }
 
     @Override
@@ -690,31 +749,44 @@ public class StampsConnector implements CarrierConnector {
      * <p>Weight goes on the wire in ounces (SWSIM's {@code WeightOz}). Our
      * DTO carries LB/KG; we convert via {@link com.multiship.backend.util.UnitConverter}.
      */
-    private String buildCreateIndiciumEnvelope(ShipmentRequestDTO request, String authenticator) {
+    /**
+     * Build a {@code CreateIndicium} envelope for ONE specific package on
+     * the shipment. Sprint 28 refactored the signature to take a package
+     * explicitly (SWSIM is single-package per SOAP call); Sprint 29's
+     * {@link #createShipment} loops effectivePackages() and issues one
+     * call per package, aggregating tracking numbers into the returned
+     * {@code ShipmentResult}.
+     *
+     * <p>Reference numbers get a {@code -pN} suffix for multi-package
+     * shipments so SWSIM's IntegratorTxID (which must be unique per call)
+     * doesn't collide across N calls on the same shipment.
+     */
+    String buildCreateIndiciumEnvelope(ShipmentRequestDTO request, String authenticator) {
+        return buildCreateIndiciumEnvelope(request, request.effectivePackages().get(0), 1,
+                request.effectivePackages().size(), authenticator);
+    }
+
+    private String buildCreateIndiciumEnvelope(ShipmentRequestDTO request,
+                                                com.multiship.backend.dto.PackageDetailDTO packageDetail,
+                                                int packageIndex, int packageTotal,
+                                                String authenticator) {
         StringBuilder xml = new StringBuilder(2048);
         xml.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
         xml.append("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">");
         xml.append("<soap:Body>");
         xml.append("<CreateIndicium xmlns=\"").append(SWSIM_NAMESPACE).append("\">");
         xml.append("<Authenticator>").append(xmlEscape(authenticator)).append("</Authenticator>");
+        String baseTxId = nonBlank(request.getReferenceNumber(), "TX-" + System.currentTimeMillis());
+        // Multi-package: suffix -pN so SWSIM's per-call uniqueness holds.
+        String txId = packageTotal > 1 ? baseTxId + "-p" + packageIndex : baseTxId;
         xml.append("<IntegratorTxID>")
-                .append(xmlEscape(nonBlank(request.getReferenceNumber(), "TX-" + System.currentTimeMillis())))
+                .append(xmlEscape(txId))
                 .append("</IntegratorTxID>");
 
         // Rate: the class of service + package + weight. SWSIM re-validates
         // this against its own rate engine, so mismatches (weight over the
         // service's max) fail here before the label is printed.
-        //
-        // Sprint 28 — SWSIM's CreateIndicium is fundamentally single-package
-        // (one label per SOAP call). We emit the FIRST package's shape and
-        // log a warning when more are supplied; multi-package USPS labels
-        // require N separate CreateIndicium calls, tracked in a follow-up.
-        java.util.List<com.multiship.backend.dto.PackageDetailDTO> packages = request.effectivePackages();
-        if (packages.size() > 1) {
-            log.warn("Stamps CreateIndicium is single-package; got {} packages — emitting the first only. " +
-                    "Multi-package USPS labels need N SOAP calls (future work).", packages.size());
-        }
-        com.multiship.backend.dto.PackageDetailDTO firstPkg = packages.get(0);
+        com.multiship.backend.dto.PackageDetailDTO firstPkg = packageDetail;
         String weightOz = weightInOz(firstPkg);
         xml.append("<Rate>");
         appendServiceRate(xml, request, firstPkg, weightOz);

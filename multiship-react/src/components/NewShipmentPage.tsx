@@ -315,6 +315,23 @@ export default function NewShipmentPage() {
   // shipment payload as dangerousGoods.
   const [dgBlock, setDgBlock] = useState<DangerousGoodsBlock | null>(null)
   const [dgWizardOpen, setDgWizardOpen] = useState(false)
+  // Sprint 29 — multi-package. The first box uses the existing top-level
+  // weight/dims/packaging fields; extraPackages holds boxes 2..N. When
+  // non-empty the payload emits packages[] (backend keys off effective-
+  // Packages()); when empty the existing single-package payload is sent.
+  type ExtraPackage = {
+    weight: string
+    length: string
+    width: string
+    height: string
+    packageType: string  // may be empty → falls back to shipment-level
+    declaredValue: string
+  }
+  const blankExtraPackage = (): ExtraPackage => ({
+    weight: '', length: '', width: '', height: '',
+    packageType: '', declaredValue: '',
+  })
+  const [extraPackages, setExtraPackages] = useState<ExtraPackage[]>([])
 
   // 3PL guardrails: client's attached warehouses, allowlists, and destination
   // rules. Fetched when clientCode changes; drive the warehouse picker,
@@ -854,6 +871,37 @@ export default function NewShipmentPage() {
       // it into ShipmentRequestDTO.dangerousGoods and every connector's
       // hazmat wire format keys off it.
       ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
+      // Sprint 29 — multi-package. When extra boxes are present, build
+      // a packages[] array with box 1 mirroring the top-level fields and
+      // boxes 2..N from extraPackages. Backend's effectivePackages() also
+      // handles the null case, so empty extraPackages leaves the payload
+      // untouched (existing single-package behavior).
+      ...(extraPackages.length > 0 ? {
+        packages: [
+          {
+            sequenceNumber: 1,
+            packageType: isCustomPkg ? undefined : String(packageChoice),
+            weight: w,
+            weightUnit,
+            length: isCustomPkg ? Number(length) : undefined,
+            width: isCustomPkg ? Number(width) : undefined,
+            height: isCustomPkg ? Number(height) : undefined,
+            dimUnit,
+            declaredValue: declaredValue ? Number(declaredValue) : undefined,
+          },
+          ...extraPackages.map((p, i) => ({
+            sequenceNumber: i + 2,
+            packageType: p.packageType || undefined,
+            weight: Number(p.weight),
+            weightUnit,
+            length: p.length ? Number(p.length) : undefined,
+            width: p.width ? Number(p.width) : undefined,
+            height: p.height ? Number(p.height) : undefined,
+            dimUnit,
+            declaredValue: p.declaredValue ? Number(p.declaredValue) : undefined,
+          })),
+        ],
+      } : {}),
       ...(isInternational ? { items: cleanItems, reasonForExport, currency, incoterms } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
     }
@@ -1237,6 +1285,85 @@ export default function NewShipmentPage() {
                     </Field>
                   </div>
                 ) : null}
+
+                {/* Sprint 29 — additional boxes. First box uses the fields
+                    above; extra rows collect per-box weight + dims. */}
+                {extraPackages.map((p, idx) => (
+                  <div key={idx} className="rounded-xl border border-dashed border-[#e3d9c4] bg-[#faf7f0]/60 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
+                        Box {idx + 2}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setExtraPackages((cur) => cur.filter((_, i) => i !== idx))}
+                        aria-label={`Remove box ${idx + 2}`}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#8a7959] hover:bg-rose-50 hover:text-rose-600"
+                      >
+                        <FiTrash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label={`Weight (${weightUnit.toLowerCase()})`} required>
+                        <input
+                          className={inputCls}
+                          type="number" min="0" step="0.1"
+                          value={p.weight}
+                          onChange={(e) => setExtraPackages((cur) =>
+                            cur.map((x, i) => (i === idx ? { ...x, weight: e.target.value } : x)))}
+                          placeholder="2.5"
+                        />
+                      </Field>
+                      <Field label={`Declared value (${currency})`}>
+                        <input
+                          className={inputCls}
+                          type="number" min="0" step="0.01"
+                          value={p.declaredValue}
+                          onChange={(e) => setExtraPackages((cur) =>
+                            cur.map((x, i) => (i === idx ? { ...x, declaredValue: e.target.value } : x)))}
+                          placeholder="100.00"
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      <Field label={`L (${dimUnit.toLowerCase()})`}>
+                        <input
+                          className={inputCls}
+                          type="number" min="0" step="0.1"
+                          value={p.length}
+                          onChange={(e) => setExtraPackages((cur) =>
+                            cur.map((x, i) => (i === idx ? { ...x, length: e.target.value } : x)))}
+                        />
+                      </Field>
+                      <Field label={`W (${dimUnit.toLowerCase()})`}>
+                        <input
+                          className={inputCls}
+                          type="number" min="0" step="0.1"
+                          value={p.width}
+                          onChange={(e) => setExtraPackages((cur) =>
+                            cur.map((x, i) => (i === idx ? { ...x, width: e.target.value } : x)))}
+                        />
+                      </Field>
+                      <Field label={`H (${dimUnit.toLowerCase()})`}>
+                        <input
+                          className={inputCls}
+                          type="number" min="0" step="0.1"
+                          value={p.height}
+                          onChange={(e) => setExtraPackages((cur) =>
+                            cur.map((x, i) => (i === idx ? { ...x, height: e.target.value } : x)))}
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setExtraPackages((cur) => [...cur, blankExtraPackage()])}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                >
+                  <FiPlus className="h-3 w-3" />
+                  {extraPackages.length === 0 ? 'Add another box (multi-package shipment)' : 'Add another box'}
+                </button>
               </div>
               </SectionCard>
             </div>
