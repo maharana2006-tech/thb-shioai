@@ -251,6 +251,66 @@ public interface CarrierConnector {
      *       the pickup request (Sprint 33). Returns NOT_SUPPORTED.</li>
      * </ul>
      */
+    /**
+     * Parse a push-tracking webhook payload from the carrier. Sprint 36.
+     * Rather than polling {@code /tracking/live} every 60s, carriers can
+     * push status updates to our webhook URL. Each carrier has its own
+     * JSON / XML shape — this method normalises to a common
+     * {@link TrackingWebhookEvent} record.
+     *
+     * <p>Returns {@code null} when the payload doesn't parse (malformed,
+     * unrecognised shape). The {@link WebhookService} then persists an
+     * unverified audit row without touching the tracking cache.
+     */
+    default TrackingWebhookEvent parseWebhookEvent(String rawPayload, java.util.Map<String, String> headers) {
+        return null;
+    }
+
+    /**
+     * Verify a webhook signature. Sprint 36. Each carrier signs the
+     * payload with HMAC-SHA256 (or similar) using a shared secret we
+     * registered with them. The signature lives in a carrier-specific
+     * header; we compute the expected signature and compare in
+     * constant time.
+     *
+     * <p>Returns {@code false} when the signature is invalid or missing
+     * — the {@link WebhookService} then returns 401 to the carrier and
+     * the row is persisted with {@code verified=false} for audit.
+     */
+    default boolean verifyWebhookSignature(String rawPayload,
+                                            java.util.Map<String, String> headers,
+                                            String secret) {
+        return false;
+    }
+
+    /**
+     * Carrier-neutral webhook event. Sprint 36.
+     *
+     * @param trackingNumber  The tracking number this event references.
+     * @param eventType       Carrier's status enum (DL delivered,
+     *                        OF out for delivery, IN in transit, ...).
+     *                        Passed through — the UI displays it.
+     * @param statusCode      Numeric/short status code when the carrier
+     *                        gives one. Null when they don't.
+     * @param occurredAt      When the scan happened.
+     * @param location        "City, ST US" or similar. Null when the
+     *                        carrier didn't include one (e.g. arrivals
+     *                        at unstaffed depots).
+     * @param delivered       True on final delivery scans (freezes
+     *                        tracking polls in the timeline modal).
+     * @param description     Human-readable event description.
+     */
+    record TrackingWebhookEvent(
+            String trackingNumber,
+            String eventType,
+            String statusCode,
+            LocalDateTime occurredAt,
+            String location,
+            boolean delivered,
+            String description
+    ) {
+    }
+
     default CloseOutResult closeOutDay(CloseOutRequest request, String accessToken) {
         return new CloseOutResult(
                 getCarrierCode(),

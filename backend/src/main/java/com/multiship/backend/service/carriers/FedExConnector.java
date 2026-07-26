@@ -1191,6 +1191,77 @@ public class FedExConnector implements CarrierConnector {
         }
     }
 
+    /**
+     * FedEx Push Tracking Notification — HMAC-SHA256(body, secret) in
+     * the {@code X-FedEx-Signature} header, hex-encoded.
+     */
+    @Override
+    public boolean verifyWebhookSignature(String rawPayload,
+                                           java.util.Map<String, String> headers,
+                                           String secret) {
+        String provided = pickWebhookHeader(headers, "X-FedEx-Signature");
+        String expected = WebhookHmacUtil.hmacSha256Hex(rawPayload, secret);
+        return provided != null && expected != null
+                && WebhookHmacUtil.constantTimeEquals(provided, expected);
+    }
+
+    /**
+     * Parse a FedEx push-tracking webhook. FedEx pushes:
+     * <pre>
+     * {
+     *   "trackingNumber": "794...",
+     *   "shipmentStatusEventLocalTimeStamp": "2026-07-26T14:30:00-04:00",
+     *   "eventType": "DL",
+     *   "eventDescription": "Delivered",
+     *   "eventLocation": {
+     *     "city": "Louisville", "stateOrProvinceCode": "KY", "countryCode": "US"
+     *   }
+     * }
+     * </pre>
+     */
+    @Override
+    public TrackingWebhookEvent parseWebhookEvent(String rawPayload,
+                                                   java.util.Map<String, String> headers) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    Optional.ofNullable(rawPayload).orElse("{}"));
+            String tracking = root.path("trackingNumber").asText(null);
+            if (!StringUtils.hasText(tracking)) return null;
+            String eventType = root.path("eventType").asText(null);
+            String description = root.path("eventDescription").asText("");
+            LocalDateTime occurred = parseDateTime(root.path("shipmentStatusEventLocalTimeStamp").asText(null));
+            com.fasterxml.jackson.databind.JsonNode loc = root.path("eventLocation");
+            String location = buildFedExLocation(loc);
+            boolean delivered = "DL".equalsIgnoreCase(eventType)
+                    || "DELIVERED".equalsIgnoreCase(description);
+            return new TrackingWebhookEvent(tracking, eventType, eventType,
+                    occurred, location, delivered, description);
+        } catch (Exception ex) {
+            log.warn("FedEx webhook parse failed: {}", ex.getMessage());
+            return null;
+        }
+    }
+
+    private static String buildFedExLocation(com.fasterxml.jackson.databind.JsonNode loc) {
+        if (loc == null || loc.isMissingNode()) return null;
+        String city = loc.path("city").asText("");
+        String state = loc.path("stateOrProvinceCode").asText("");
+        String country = loc.path("countryCode").asText("");
+        StringBuilder sb = new StringBuilder();
+        if (!city.isEmpty()) sb.append(city);
+        if (!state.isEmpty()) sb.append(sb.length() > 0 ? ", " : "").append(state);
+        if (!country.isEmpty()) sb.append(sb.length() > 0 ? " " : "").append(country);
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    private static String pickWebhookHeader(java.util.Map<String, String> headers, String name) {
+        if (headers == null || name == null) return null;
+        for (var e : headers.entrySet()) {
+            if (name.equalsIgnoreCase(e.getKey())) return e.getValue();
+        }
+        return null;
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.FedEx fedEx = carrierProperties.getFedEx();

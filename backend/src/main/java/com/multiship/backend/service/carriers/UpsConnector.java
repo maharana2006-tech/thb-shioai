@@ -1071,6 +1071,66 @@ public class UpsConnector implements CarrierConnector {
         }
     }
 
+    /**
+     * UPS Track Webhook — HMAC-SHA256(body, secret) in the
+     * {@code X-UPS-Signature} header, hex-encoded. UPS registers the
+     * secret at webhook subscription time.
+     */
+    @Override
+    public boolean verifyWebhookSignature(String rawPayload,
+                                           java.util.Map<String, String> headers,
+                                           String secret) {
+        String provided = pickHeader(headers, "X-UPS-Signature");
+        String expected = WebhookHmacUtil.hmacSha256Hex(rawPayload, secret);
+        return provided != null && expected != null
+                && WebhookHmacUtil.constantTimeEquals(provided, expected);
+    }
+
+    /**
+     * Parse a UPS push-tracking webhook payload. UPS pushes:
+     * <pre>
+     * {
+     *   "trackNumber": "1Z...",
+     *   "localActivityDate": "20260726",
+     *   "localActivityTime": "143000",
+     *   "activityLocation": {"city": "Louisville", "stateProvince": "KY", "country": "US"},
+     *   "activityStatus": {"code": "DL", "description": "Delivered", "type": "DL"}
+     * }
+     * </pre>
+     */
+    @Override
+    public TrackingWebhookEvent parseWebhookEvent(String rawPayload,
+                                                   java.util.Map<String, String> headers) {
+        try {
+            JsonNode root = objectMapper.readTree(Optional.ofNullable(rawPayload).orElse("{}"));
+            String tracking = root.path("trackNumber").asText(null);
+            if (!StringUtils.hasText(tracking)) return null;
+            LocalDateTime occurred = joinUpsDateTime(
+                    root.path("localActivityDate").asText(null),
+                    root.path("localActivityTime").asText(null));
+            String location = buildUpsLocation(root.path("activityLocation"));
+            String statusCode = root.at("/activityStatus/code").asText(null);
+            String description = root.at("/activityStatus/description").asText("");
+            String type = root.at("/activityStatus/type").asText(statusCode);
+            boolean delivered = "DL".equalsIgnoreCase(statusCode)
+                    || "DELIVERED".equalsIgnoreCase(description);
+            return new TrackingWebhookEvent(tracking, type, statusCode, occurred,
+                    location, delivered, description);
+        } catch (Exception ex) {
+            log.warn("UPS webhook parse failed: {}", ex.getMessage());
+            return null;
+        }
+    }
+
+    /** Case-insensitive header lookup — HTTP headers are case-agnostic. */
+    private static String pickHeader(java.util.Map<String, String> headers, String name) {
+        if (headers == null || name == null) return null;
+        for (var e : headers.entrySet()) {
+            if (name.equalsIgnoreCase(e.getKey())) return e.getValue();
+        }
+        return null;
+    }
+
     @Override
     public CarrierConfiguration getConfiguration() {
         CarrierProperties.Ups ups = carrierProperties.getUps();

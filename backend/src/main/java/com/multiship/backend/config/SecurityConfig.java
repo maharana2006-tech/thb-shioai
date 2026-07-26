@@ -42,6 +42,10 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/auth/**").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+                        // Sprint 36 — carrier webhook receiver: no JWT (carriers can't
+                        // produce our tokens). Signature verification per carrier via
+                        // HMAC-SHA256 in the request header.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/webhooks/carrier/**").permitAll()
                         // Admin-only credential management, decided before the
                         // request body is even parsed (403 beats 400).
                         .requestMatchers("/api/v1/carriers/connect", "/api/v1/carriers/disconnect",
