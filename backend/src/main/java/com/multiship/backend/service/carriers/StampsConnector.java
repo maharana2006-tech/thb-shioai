@@ -324,18 +324,151 @@ public class StampsConnector implements CarrierConnector {
         return true;
     }
 
+    /**
+     * URL-only tracking. SWSIM's TrackShipment requires a valid Authenticator
+     * so this 1-arg variant only returns the public USPS tracking link.
+     * Matches the honest stub Sprints 12/13/14 established for FedEx / UPS /
+     * DHL — the 2-arg authenticated variant does the real work.
+     */
     @Override
     public TrackingResult trackShipment(String trackingNumber) {
         String trackingUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + trackingNumber;
-        return new TrackingResult(
-                trackingNumber,
-                "IN_TRANSIT",
-                trackingUrl,
-                null,
-                null,
-                false,
-                null
-        );
+        return new TrackingResult(trackingNumber, "UNKNOWN", trackingUrl, null, null, false, null);
+    }
+
+    /**
+     * SWSIM {@code TrackShipment} — SOAP call following the Sprint 4 scaffold.
+     * The Authenticator returned by getAccessToken (via AuthenticateUser) is
+     * threaded in the SOAP body. TrackingNumber goes in the request; Carrier
+     * defaults to USPS. Response shape:
+     * <pre>
+     * TrackShipmentResponse.
+     *   Authenticator (rotated — future SWSIM calls should use this),
+     *   TrackingEvents.TrackingEvent[] (oldest-first per SWSIM convention).
+     * </pre>
+     * Each TrackingEvent carries TrackingEventType (Delivered / OutForDelivery
+     * / ...), Timestamp, Event (description), and address fields (City,
+     * State, Zip, Country) that we compose into a "City, ST" location.
+     *
+     * <p>SWSIM already returns oldest-first, so no reversal (unlike
+     * FedEx / UPS / DHL). Any {@code -local-*} authenticator short-circuits
+     * to the URL-only stub — same convention Sprints 12/13/14 established.
+     */
+    @Override
+    public TrackingResult trackShipment(String trackingNumber, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return trackShipment(trackingNumber);
+        }
+        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        String soap = buildTrackShipmentEnvelope(trackingNumber, accessToken);
+        String trackingUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + trackingNumber;
+        try {
+            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+                    .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
+                    .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/TrackShipment\"")
+                    .body(soap)
+                    .retrieve()
+                    .body(String.class);
+
+            java.util.List<TrackingEvent> events = parseSwsimTrackingEvents(response);
+            String status = events.isEmpty()
+                    ? "UNKNOWN"
+                    : firstNonBlankStr(events.get(events.size() - 1).status(),
+                            events.get(events.size() - 1).description(), "UNKNOWN");
+            String currentLocation = events.isEmpty() ? null : events.get(events.size() - 1).location();
+            boolean delivered = events.stream().anyMatch(e ->
+                    "Delivered".equalsIgnoreCase(e.status())
+                    || (e.description() != null && e.description().toLowerCase().contains("delivered")));
+
+            return new TrackingResult(trackingNumber, status, trackingUrl, currentLocation,
+                    null, delivered, response, events);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            String fault = extractSoapFault(ex.getResponseBodyAsString());
+            log.warn("Stamps SWSIM TrackShipment rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), fault);
+            return trackShipment(trackingNumber);
+        } catch (Exception ex) {
+            log.warn("Stamps SWSIM TrackShipment failed for {}; falling back to URL-only. Reason: {}",
+                    trackingNumber, ex.getMessage());
+            return trackShipment(trackingNumber);
+        }
+    }
+
+    /** Build the SWSIM TrackShipment SOAP envelope. */
+    String buildTrackShipmentEnvelope(String trackingNumber, String authenticator) {
+        StringBuilder xml = new StringBuilder(512);
+        xml.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+        xml.append("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">");
+        xml.append("<soap:Body>");
+        xml.append("<TrackShipment xmlns=\"").append(SWSIM_NAMESPACE).append("\">");
+        xml.append("<Authenticator>").append(xmlEscape(authenticator)).append("</Authenticator>");
+        xml.append("<TrackingNumber>").append(xmlEscape(nonBlank(trackingNumber, ""))).append("</TrackingNumber>");
+        xml.append("<Carrier>USPS</Carrier>");
+        xml.append("</TrackShipment>");
+        xml.append("</soap:Body>");
+        xml.append("</soap:Envelope>");
+        return xml.toString();
+    }
+
+    /**
+     * Parse SWSIM's TrackingEvents block into our neutral TrackingEvent list.
+     * SWSIM already emits oldest-first so no reversal. Regex-based rather
+     * than a full XML parse — the response is well-formed, small, and we
+     * only want a handful of fields per event.
+     */
+    java.util.List<TrackingEvent> parseSwsimTrackingEvents(String responseXml) {
+        if (!StringUtils.hasText(responseXml)) return java.util.List.of();
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("<TrackingEvent>([\\s\\S]*?)</TrackingEvent>")
+                .matcher(responseXml);
+        java.util.List<TrackingEvent> out = new java.util.ArrayList<>();
+        while (m.find()) {
+            String body = m.group(1);
+            String type = extractElement(body, "TrackingEventType");
+            String desc = extractElement(body, "Event");
+            LocalDateTime ts = parseSwsimTimestamp(extractElement(body, "Timestamp"));
+            String location = buildSwsimLocation(
+                    extractElement(body, "City"),
+                    extractElement(body, "State"),
+                    extractElement(body, "Country"));
+            out.add(new TrackingEvent(ts, type, desc == null ? "" : desc, location));
+        }
+        return java.util.List.copyOf(out);
+    }
+
+    /**
+     * SWSIM timestamps look like {@code 2024-01-15T14:30:00} or
+     * {@code 2024-01-15T14:30:00-05:00}. Try LocalDateTime first, then
+     * OffsetDateTime as a fallback — same pattern the DHL helper uses.
+     */
+    static LocalDateTime parseSwsimTimestamp(String value) {
+        if (!StringUtils.hasText(value)) return null;
+        try {
+            return LocalDateTime.parse(value);
+        } catch (Exception ignored) {
+            try {
+                return OffsetDateTime.parse(value).toLocalDateTime();
+            } catch (Exception ignored2) {
+                return null;
+            }
+        }
+    }
+
+    /** Build a "City, ST US" location string from SWSIM's split fields. */
+    static String buildSwsimLocation(String city, String state, String country) {
+        StringBuilder sb = new StringBuilder();
+        if (StringUtils.hasText(city)) sb.append(city);
+        if (StringUtils.hasText(state)) sb.append(sb.length() > 0 ? ", " : "").append(state);
+        if (StringUtils.hasText(country)) sb.append(sb.length() > 0 ? " " : "").append(country);
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    private static String firstNonBlankStr(String... candidates) {
+        if (candidates == null) return "";
+        for (String s : candidates) {
+            if (s != null && !s.isBlank()) return s;
+        }
+        return "";
     }
 
     @Override
