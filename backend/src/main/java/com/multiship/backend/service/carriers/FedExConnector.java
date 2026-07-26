@@ -259,41 +259,128 @@ public class FedExConnector implements CarrierConnector {
         return true;
     }
 
+    /**
+     * URL-only tracking. FedEx's Track API requires OAuth so this 1-arg
+     * variant returns a public tracking link and an UNKNOWN status. The
+     * authenticated variant below does the real work; callers that have
+     * credentials should use it.
+     */
     @Override
     public TrackingResult trackShipment(String trackingNumber) {
+        String trackingLink = "https://www.fedex.com/fedextrack/?trknbr=" + trackingNumber;
+        return new TrackingResult(trackingNumber, "UNKNOWN", trackingLink, null, null, false, null);
+    }
+
+    /**
+     * FedEx Track API v1 — {@code POST /track/v1/trackingnumbers} with the
+     * OAuth Bearer token. Body carries the tracking number and
+     * {@code includeDetailedScans: true} so we get the full scan history.
+     *
+     * <p>Response parsing:
+     * <ul>
+     *   <li>{@code latestStatusDetail.description} → summary status.</li>
+     *   <li>{@code latestStatusDetail.code} → structured status code (e.g. DL).</li>
+     *   <li>{@code latestStatusDetail.scanLocation} → current city / state.</li>
+     *   <li>{@code dateAndTimes} with type {@code ESTIMATED_DELIVERY} → estimatedDelivery.</li>
+     *   <li>{@code scanEvents[]} → TrackingEvent list, ordered oldest first
+     *       (FedEx returns newest-first; we reverse before returning).</li>
+     * </ul>
+     *
+     * <p>Non-OAuth-fallback tokens ({@code -local-*}) skip the API call and
+     * fall through to the URL-only stub — same convention every other
+     * connector uses.
+     */
+    @Override
+    public TrackingResult trackShipment(String trackingNumber, String accessToken) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return trackShipment(trackingNumber);
+        }
+        String trackingLink = "https://www.fedex.com/fedextrack/?trknbr=" + trackingNumber;
         try {
-            String trackingUrl = getTrackingUrl();
-            RestClient restClient = RestClient.builder().baseUrl(trackingUrl).build();
-            String response = restClient.get()
-                    .uri(uriBuilder -> uriBuilder.path("/" + trackingNumber).build())
+            String response = RestClient.builder().baseUrl(getBaseUrl()).build().post()
+                    .uri("/track/v1/trackingnumbers")
+                    .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("X-locale", "en_US")
+                    .body(java.util.Map.of(
+                            "includeDetailedScans", true,
+                            "trackingInfo", java.util.List.of(java.util.Map.of(
+                                    "trackingNumberInfo", java.util.Map.of(
+                                            "trackingNumber", trackingNumber)))))
                     .retrieve()
                     .body(String.class);
 
             JsonNode root = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
-            String status = root.at("/output/completeTrackResults/0/trackResults/0/latestStatusDetail/description")
-                    .asText("UNKNOWN");
-            String currentLocation = root.at("/output/completeTrackResults/0/trackResults/0/latestStatusDetail/location/address/city")
-                    .asText(null);
-            String trackingLink = "https://www.fedex.com/fedextrack/?trknbr=" + trackingNumber;
-            boolean delivered = "DELIVERED".equalsIgnoreCase(status);
-            LocalDateTime estimatedDelivery = parseDateTime(
-                    root.at("/output/completeTrackResults/0/trackResults/0/dateAndTimes/0/dateTime").asText(null)
-            );
+            JsonNode trackResult = root.at("/output/completeTrackResults/0/trackResults/0");
 
-            return new TrackingResult(
-                    trackingNumber,
-                    status,
-                    trackingLink,
-                    currentLocation,
-                    estimatedDelivery,
-                    delivered,
-                    response
-            );
+            String status = trackResult.at("/latestStatusDetail/description").asText("UNKNOWN");
+            String code = trackResult.at("/latestStatusDetail/code").asText(null);
+            boolean delivered = "DL".equalsIgnoreCase(code) || "DELIVERED".equalsIgnoreCase(status);
+
+            String currentLocation = buildLocation(trackResult.at("/latestStatusDetail/scanLocation"));
+            LocalDateTime estimatedDelivery = findDateAndTime(trackResult.at("/dateAndTimes"), "ESTIMATED_DELIVERY");
+            List<TrackingEvent> events = parseScanEvents(trackResult.at("/scanEvents"));
+
+            return new TrackingResult(trackingNumber, status, trackingLink, currentLocation,
+                    estimatedDelivery, delivered, response, events);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            log.warn("FedEx track rejected (HTTP {}): {}", ex.getStatusCode().value(),
+                    ex.getResponseBodyAsString());
+            return trackShipment(trackingNumber);
         } catch (Exception ex) {
-            log.error("FedEx tracking failed for tracking number {}", trackingNumber, ex);
-            throw new CarrierConnectionException("Unable to track FedEx shipment.", ex);
+            log.warn("FedEx track failed for {}; falling back to URL-only. Reason: {}",
+                    trackingNumber, ex.getMessage());
+            return trackShipment(trackingNumber);
         }
+    }
+
+    /** Build a "City, ST US" location string from a FedEx scanLocation node. */
+    private static String buildLocation(JsonNode loc) {
+        if (loc == null || loc.isMissingNode() || loc.isNull()) return null;
+        String city = loc.path("city").asText("");
+        String state = loc.path("stateOrProvinceCode").asText("");
+        String country = loc.path("countryCode").asText("");
+        StringBuilder sb = new StringBuilder();
+        if (!city.isEmpty()) sb.append(city);
+        if (!state.isEmpty()) sb.append(sb.length() > 0 ? ", " : "").append(state);
+        if (!country.isEmpty()) sb.append(sb.length() > 0 ? " " : "").append(country);
+        return sb.length() == 0 ? null : sb.toString();
+    }
+
+    /**
+     * FedEx returns {@code dateAndTimes[]} with typed entries — pick the one
+     * matching the requested type (e.g. ESTIMATED_DELIVERY, ACTUAL_DELIVERY).
+     */
+    private LocalDateTime findDateAndTime(JsonNode dateAndTimes, String type) {
+        if (dateAndTimes == null || !dateAndTimes.isArray()) return null;
+        for (JsonNode entry : dateAndTimes) {
+            if (type.equalsIgnoreCase(entry.path("type").asText(""))) {
+                return parseDateTime(entry.path("dateTime").asText(null));
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Parse FedEx scanEvents[] → TrackingEvent list, ordered oldest first.
+     * FedEx returns them newest first (matches their UI); we reverse for
+     * chronological ordering so the UI can show a natural timeline without
+     * client-side sorting.
+     */
+    private List<TrackingEvent> parseScanEvents(JsonNode scanEvents) {
+        if (scanEvents == null || !scanEvents.isArray() || scanEvents.isEmpty()) return java.util.List.of();
+        List<TrackingEvent> events = new java.util.ArrayList<>();
+        for (JsonNode ev : scanEvents) {
+            LocalDateTime ts = parseDateTime(ev.path("date").asText(null));
+            String description = ev.path("eventDescription").asText("");
+            String status = ev.path("eventType").asText(null);
+            String location = buildLocation(ev.path("scanLocation"));
+            events.add(new TrackingEvent(ts, status, description, location));
+        }
+        // Reverse to oldest-first.
+        java.util.Collections.reverse(events);
+        return List.copyOf(events);
     }
 
     @Override
