@@ -8,6 +8,7 @@ import SettingsLayout from '../components/layout/SettingsLayout'
 import CarrierPage from '../pages/CarrierPage'
 import ClientsPage from '../pages/ClientsPage'
 import ImporterBrokerPage from '../components/ImporterBrokerPage'
+import LabelTemplatesPage from '../components/LabelTemplatesPage'
 import ShippingServicesPage from '../components/ShippingServicesPage'
 import ShippingServiceMappingPage from '../components/ShippingServiceMappingPage'
 import ApiKeysPage from '../components/ApiKeysPage'
@@ -46,6 +47,7 @@ export default function AppRoutes() {
               <Route path="shipping-service-mapping" element={<ShippingServiceMappingPage />} />
               <Route path="packages" element={<PackagesPage />} />
               <Route path="importer-broker" element={<ImporterBrokerPage />} />
+              <Route path="label-templates" element={<LabelTemplatesPage />} />
               <Route path="code-maps" element={<CodeMapsPage />} />
               <Route element={<RequireRole roles={['ADMIN']} />}>
                 <Route path="carriers" element={<CarrierPage />} />
