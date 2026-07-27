@@ -52,6 +52,9 @@ export interface Order {
   carrierAccount?: CarrierAccountInfo | null
   /** Cascade result for this order; present when listed with includeResolution=true. */
   accountResolution?: OrderAccountResolution | null
+  /** Sprint 43 — tenant-defined custom field values (fieldKey -> value).
+   *  Populated on single-order reads only; omitted from list responses. */
+  customFields?: Record<string, string> | null
 }
 
 export interface OrderSummary {
