@@ -22,42 +22,37 @@ export interface LabelTemplate {
 const BASE = '/label-templates'
 
 export const labelTemplateService = {
-  /** Resolve tenant + fallback platform default. Returns null on 404. */
+  /**
+   * Resolve the effective template for a tenant, falling back to the platform
+   * default (tenantId=null). Returns null when neither exists — the endpoint
+   * always answers 200 (see LabelTemplateController).
+   */
   resolve: async (
     tenantId?: string | null,
     templateType: string = 'PACKING_SLIP',
   ): Promise<LabelTemplate | null> => {
     const params = new URLSearchParams({ templateType })
     if (tenantId) params.set('tenantId', tenantId)
-    try {
-      const response = await apiClient.get<ApiResponse<LabelTemplate>>(
-        `${BASE}/resolve?${params.toString()}`,
-      )
-      return response.data ?? null
-    } catch (err: any) {
-      // apiClient throws ApiError with status on `.status` (not `.response.status`).
-      if (err?.status === 404) return null
-      throw err
-    }
+    const response = await apiClient.get<ApiResponse<LabelTemplate>>(
+      `${BASE}/resolve?${params.toString()}`,
+    )
+    return response.data ?? null
   },
 
-  /** Fetch the tenant's own template only (no platform fallback). */
+  /**
+   * The tenant's own template only (no platform fallback). Returns null when
+   * the tenant hasn't saved one yet — always 200.
+   */
   forTenant: async (
     tenantId?: string | null,
     templateType: string = 'PACKING_SLIP',
   ): Promise<LabelTemplate | null> => {
     const params = new URLSearchParams({ templateType })
     if (tenantId) params.set('tenantId', tenantId)
-    try {
-      const response = await apiClient.get<ApiResponse<LabelTemplate>>(
-        `${BASE}/tenant?${params.toString()}`,
-      )
-      return response.data ?? null
-    } catch (err: any) {
-      // apiClient throws ApiError with status on `.status` (not `.response.status`).
-      if (err?.status === 404) return null
-      throw err
-    }
+    const response = await apiClient.get<ApiResponse<LabelTemplate>>(
+      `${BASE}/tenant?${params.toString()}`,
+    )
+    return response.data ?? null
   },
 
   save: (template: LabelTemplate) =>
