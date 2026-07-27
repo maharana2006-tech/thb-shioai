@@ -35,7 +35,8 @@ export const labelTemplateService = {
       )
       return response.data ?? null
     } catch (err: any) {
-      if (err?.response?.status === 404) return null
+      // apiClient throws ApiError with status on `.status` (not `.response.status`).
+      if (err?.status === 404) return null
       throw err
     }
   },
@@ -53,7 +54,8 @@ export const labelTemplateService = {
       )
       return response.data ?? null
     } catch (err: any) {
-      if (err?.response?.status === 404) return null
+      // apiClient throws ApiError with status on `.status` (not `.response.status`).
+      if (err?.status === 404) return null
       throw err
     }
   },
