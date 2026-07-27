@@ -37,6 +37,14 @@ public class SchemaHealer implements CommandLineRunner {
         // available FROM multiple origin countries. The old too-narrow
         // constraint makes any second-origin sync throw duplicate-key.
         dropConstraintIfExists("shipping_service", "uq_shipping_service_code");
+
+        // package_preset used to be uniquely keyed on name (single admin-owned
+        // catalog). The current entity has no unique on name — presets are
+        // scoped per (carrier, code, origin) for CARRIER kind and per owner
+        // for CUSTOM kind, so multiple rows can legitimately share a name
+        // (e.g. "FedEx Pak" from US and from CA). The old constraint makes
+        // any resync throw duplicate-key on the first collision.
+        dropConstraintIfExists("package_preset", "uq_package_preset_name");
     }
 
     private void dropConstraintIfExists(String table, String constraint) {
