@@ -20,7 +20,7 @@ import {
   type Client,
   type ClientUpsertPayload,
 } from '../../api/clientService'
-import { accountRefService } from '../../api/accountRefService'
+import { accountRefService, type CarrierAccountRef } from '../../api/accountRefService'
 import {
   warehouseService,
   clientWarehouseService,
@@ -90,15 +90,29 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
   const [returnSameAsShipFrom, setReturnSameAsShipFrom] = useState(true)
   const [returnAddress, setReturnAddress] = useState<Address>(emptyAddress())
 
-  // ===== Step 4 — First carrier account =====
-  const [carrierForm, setCarrierForm] = useState({
+  // ===== Step 4 — Carrier accounts (one or many) =====
+  // Accounts already saved this session — populated as the user adds each one.
+  const [addedAccounts, setAddedAccounts] = useState<CarrierAccountRef[]>([])
+  // Inline add-form for the next account. Blank means "no form open"; when
+  // there are zero saved accounts we start with the form pre-opened.
+  const [carrierForm, setCarrierForm] = useState<{
+    open: boolean
+    carrierCode: string
+    accountNumber: string
+    accountName: string
+    clientId: string
+    clientSecret: string
+    environment: CarrierEnvironment
+  }>({
+    open: true,
     carrierCode: 'UPS',
     accountNumber: '',
     accountName: '',
     clientId: '',
     clientSecret: '',
-    environment: 'SANDBOX' as CarrierEnvironment,
+    environment: 'SANDBOX',
   })
+  const [addingAccount, setAddingAccount] = useState(false)
 
   // ===== Step 5 — Warehouse + allowlist =====
   const [warehouseChoice, setWarehouseChoice] = useState<WarehouseChoice>('reuse')
@@ -165,6 +179,14 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
   // ===== per-step commits =====
 
   const commitIdentity = async (): Promise<boolean> => {
+    // Idempotent — if we already created the client, Next is a plain advance.
+    // Editing name/email/phone after creation is done via the tabbed Edit
+    // modal after onboarding; we don't try to updateClient() from step 1 so
+    // the code isn't accidentally reused as a payload key.
+    if (createdClient) {
+      markStep(1, 'done')
+      return true
+    }
     if (!identity.clientCode.trim() || !identity.name.trim()) {
       notify.error('Client code and name are required.')
       return false
@@ -245,14 +267,19 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
     }
   }
 
-  const commitCarrierAccount = async (): Promise<boolean> => {
+  /**
+   * Save the currently-open account form and append to addedAccounts. The
+   * first account added becomes the client's default; subsequent ones are
+   * non-default (the admin picks a new default from the Edit screen).
+   */
+  const addOneCarrierAccount = async (): Promise<boolean> => {
     if (!carrierForm.accountNumber.trim() || !carrierForm.clientId.trim() || !carrierForm.clientSecret.trim()) {
-      notify.error('Account number, client ID, and secret are all required — or Skip to add later.')
+      notify.error('Account number, client ID, and secret are all required.')
       return false
     }
-    setSaving(true)
+    setAddingAccount(true)
     try {
-      await accountRefService.upsertAccount({
+      const resp = await accountRefService.upsertAccount({
         carrierCode: carrierForm.carrierCode,
         accountNumber: carrierForm.accountNumber.trim(),
         accountName: carrierForm.accountName.trim() || undefined,
@@ -260,17 +287,57 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
         clientSecret: carrierForm.clientSecret.trim(),
         environment: carrierForm.environment,
         customerNo: currentClientCode,
-        clientDefault: true,
+        clientDefault: addedAccounts.length === 0,
       })
-      markStep(4, 'done')
+      if (resp.data) {
+        setAddedAccounts((cur) => [...cur, resp.data as CarrierAccountRef])
+      }
+      // Reset the form for the next entry but keep the form open so
+      // the user can keep going.
+      setCarrierForm({
+        open: false,
+        carrierCode: nextCarrierAfter(carrierForm.carrierCode),
+        accountNumber: '',
+        accountName: '',
+        clientId: '',
+        clientSecret: '',
+        environment: 'SANDBOX',
+      })
       notify.success(`${carrierForm.carrierCode} account linked to ${currentClientCode}.`)
       return true
     } catch (err) {
       notify.error(err instanceof ApiError ? err.message : 'Failed to save carrier account.')
       return false
     } finally {
-      setSaving(false)
+      setAddingAccount(false)
     }
+  }
+
+  /**
+   * Next on step 4 = advance. If the form is open with a valid entry we
+   * save it first, then advance. If it's open but incomplete AND at least
+   * one account exists, we just advance (partial entry is dropped silently
+   * — the user made a choice to continue). If it's open but incomplete
+   * and no account exists, we surface an error unless the user Skips.
+   */
+  const commitCarrierAccounts = async (): Promise<boolean> => {
+    if (carrierForm.open) {
+      const anyTyped =
+        carrierForm.accountNumber.trim() || carrierForm.clientId.trim() || carrierForm.clientSecret.trim()
+      const complete =
+        carrierForm.accountNumber.trim() && carrierForm.clientId.trim() && carrierForm.clientSecret.trim()
+      if (complete) {
+        const ok = await addOneCarrierAccount()
+        if (!ok) return false
+      } else if (anyTyped) {
+        // Partial data typed — safer to force the user to either complete
+        // it, discard it, or Skip explicitly.
+        notify.error('Complete the account form (or clear it) before continuing. Use Skip to move on without saving.')
+        return false
+      }
+    }
+    markStep(4, 'done')
+    return true
   }
 
   /** Warehouse + allowlist commits happen together on Finish. */
@@ -353,7 +420,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
     if (step === 1) ok = await commitIdentity()
     else if (step === 2) ok = await commitShipFrom()
     else if (step === 3) ok = await commitReturn()
-    else if (step === 4) ok = await commitCarrierAccount()
+    else if (step === 4) ok = await commitCarrierAccounts()
     else if (step === 5) {
       ok = await commitWarehouseAndAllowlist()
       if (ok && createdClient) {
@@ -464,6 +531,9 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
                 setForm={setCarrierForm}
                 inputRef={firstFieldRef}
                 clientCode={currentClientCode}
+                addedAccounts={addedAccounts}
+                adding={addingAccount}
+                onAdd={addOneCarrierAccount}
               />
             ) : null}
             {step === 5 ? (
@@ -748,61 +818,147 @@ function ReturnStep({
 }
 
 function CarrierStep({
-  form, setForm, inputRef, clientCode,
+  form, setForm, inputRef, clientCode, addedAccounts, adding, onAdd,
 }: {
-  form: { carrierCode: string; accountNumber: string; accountName: string; clientId: string; clientSecret: string; environment: CarrierEnvironment }
-  setForm: React.Dispatch<React.SetStateAction<{ carrierCode: string; accountNumber: string; accountName: string; clientId: string; clientSecret: string; environment: CarrierEnvironment }>>
+  form: {
+    open: boolean; carrierCode: string; accountNumber: string; accountName: string;
+    clientId: string; clientSecret: string; environment: CarrierEnvironment
+  }
+  setForm: React.Dispatch<React.SetStateAction<{
+    open: boolean; carrierCode: string; accountNumber: string; accountName: string;
+    clientId: string; clientSecret: string; environment: CarrierEnvironment
+  }>>
   inputRef: React.RefObject<HTMLInputElement | null>
   clientCode: string
+  addedAccounts: CarrierAccountRef[]
+  adding: boolean
+  onAdd: () => Promise<boolean>
 }) {
   const set = (k: keyof typeof form) => (v: string) => setForm((c) => ({ ...c, [k]: v }))
+
   return (
     <div className="max-w-2xl space-y-4">
       <p className="text-[12.5px] text-slate-500">
-        Link a carrier account to <strong>{clientCode}</strong>. This account will pay for the labels
-        and be set as the client's default.
+        Link one or more carrier accounts to <strong>{clientCode}</strong>. The first added becomes
+        the default; add more (e.g. UPS + FedEx + USPS) to make the client shippable on every
+        service you allowlist in step 5.
       </p>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label>Carrier</Label>
-          <Select value={form.carrierCode} onChange={(e) => set('carrierCode')(e.target.value)}>
-            <option value="UPS">UPS</option>
-            <option value="FEDEX">FedEx</option>
-            <option value="USPS">USPS</option>
-            <option value="DHL">DHL Express</option>
-          </Select>
+
+      {/* ---- Already-added accounts list ---- */}
+      {addedAccounts.length > 0 ? (
+        <div className="overflow-hidden rounded-lg border border-emerald-200">
+          <table className="min-w-full text-[12.5px]">
+            <thead className="bg-emerald-50 text-[10.5px] font-bold uppercase tracking-[0.14em] text-emerald-800">
+              <tr>
+                <th className="px-3 py-1.5 text-left">Carrier</th>
+                <th className="px-3 py-1.5 text-left">Account #</th>
+                <th className="px-3 py-1.5 text-left">Environment</th>
+                <th className="px-3 py-1.5 text-left">Default?</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-emerald-100">
+              {addedAccounts.map((a) => (
+                <tr key={a.id ?? `${a.carrierCode}-${a.accountNumber}`} className="bg-white">
+                  <td className="px-3 py-1.5 font-semibold text-slate-800">{a.carrierCode}</td>
+                  <td className="px-3 py-1.5 font-mono text-slate-700">{a.accountNumber}</td>
+                  <td className="px-3 py-1.5 text-slate-600">{a.environment || 'SANDBOX'}</td>
+                  <td className="px-3 py-1.5">
+                    {a.clientDefault ? (
+                      <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] font-bold text-emerald-700">
+                        Default
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <div>
-          <Label>Environment</Label>
-          <Select value={form.environment} onChange={(e) => set('environment')(e.target.value as CarrierEnvironment)}>
-            {carrierEnvironmentOptions.map((env) => (
-              <option key={env} value={env}>{env}</option>
-            ))}
-          </Select>
+      ) : null}
+
+      {/* ---- Collapsed CTA vs open form ---- */}
+      {!form.open ? (
+        <button
+          type="button"
+          onClick={() => setForm((c) => ({ ...c, open: true }))}
+          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          + Add another carrier account
+        </button>
+      ) : (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-[12.5px] font-semibold text-slate-700">
+              {addedAccounts.length === 0 ? 'New carrier account' : `Add another account (${addedAccounts.length} saved)`}
+            </p>
+            {addedAccounts.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setForm((c) => ({ ...c, open: false }))}
+                className="text-[11.5px] text-slate-500 hover:underline"
+                title="Collapse this form"
+              >
+                Cancel
+              </button>
+            ) : null}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Carrier</Label>
+              <Select value={form.carrierCode} onChange={(e) => set('carrierCode')(e.target.value)}>
+                <option value="UPS">UPS</option>
+                <option value="FEDEX">FedEx</option>
+                <option value="USPS">USPS</option>
+                <option value="DHL">DHL Express</option>
+              </Select>
+            </div>
+            <div>
+              <Label>Environment</Label>
+              <Select value={form.environment} onChange={(e) => set('environment')(e.target.value as CarrierEnvironment)}>
+                {carrierEnvironmentOptions.map((env) => (
+                  <option key={env} value={env}>{env}</option>
+                ))}
+              </Select>
+            </div>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div>
+              <Label required>Account number</Label>
+              <input ref={inputRef} type="text" value={form.accountNumber} onChange={(e) => set('accountNumber')(e.target.value)} className={inputCls} />
+            </div>
+            <div>
+              <Label>Account name (optional)</Label>
+              <input type="text" value={form.accountName} onChange={(e) => set('accountName')(e.target.value)} className={inputCls} placeholder="e.g. Acme main UPS" />
+            </div>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div>
+              <Label required>Client ID</Label>
+              <input type="text" value={form.clientId} onChange={(e) => set('clientId')(e.target.value)} className={inputCls} />
+            </div>
+            <div>
+              <Label required>Client secret</Label>
+              <input type="password" value={form.clientSecret} onChange={(e) => set('clientSecret')(e.target.value)} className={inputCls} />
+            </div>
+          </div>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => void onAdd()}
+              disabled={adding}
+              className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50"
+            >
+              {adding ? 'Saving…' : 'Save account'}
+            </button>
+          </div>
         </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label required>Account number</Label>
-          <input ref={inputRef} type="text" value={form.accountNumber} onChange={(e) => set('accountNumber')(e.target.value)} className={inputCls} />
-        </div>
-        <div>
-          <Label>Account name (optional)</Label>
-          <input type="text" value={form.accountName} onChange={(e) => set('accountName')(e.target.value)} className={inputCls} placeholder="e.g. Acme main UPS" />
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label required>Client ID</Label>
-          <input type="text" value={form.clientId} onChange={(e) => set('clientId')(e.target.value)} className={inputCls} />
-        </div>
-        <div>
-          <Label required>Client secret</Label>
-          <input type="password" value={form.clientSecret} onChange={(e) => set('clientSecret')(e.target.value)} className={inputCls} />
-        </div>
-      </div>
+      )}
+
       <p className="text-[11px] text-slate-400">
-        Missing creds? Skip this step — you can add carrier accounts later from the Edit screen.
+        Missing creds? Save what you have and use Skip / Next to move on — more accounts can be added anytime from the Edit screen.
       </p>
     </div>
   )
@@ -1026,4 +1182,14 @@ function hasAddressValue(a: Address | null | undefined): boolean {
 /** Auto-generated warehouse code when the wizard reuses the ship-from address. */
 function generateWarehouseCode(clientCode: string): string {
   return `${clientCode}-WH-${Date.now().toString(36).slice(-4).toUpperCase()}`
+}
+
+/**
+ * After the user adds an account, pre-select the next unpicked carrier
+ * so a UPS + FedEx + USPS run doesn't require three dropdown clicks.
+ */
+function nextCarrierAfter(current: string): string {
+  const order = ['UPS', 'FEDEX', 'USPS', 'DHL']
+  const i = order.indexOf(current)
+  return i === -1 || i === order.length - 1 ? order[0] : order[i + 1]
 }
