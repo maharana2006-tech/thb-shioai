@@ -30,51 +30,38 @@ public class LabelTemplateController {
 
     @Operation(summary = "Fetch the resolved template for a tenant + type",
             description = "Resolution order: tenant-scoped row, then platform " +
-                    "default (tenantId=null). 404 when neither exists.")
+                    "default (tenantId=null). Always 200 — when neither exists, " +
+                    "data is null so the UI renders a blank template. This was " +
+                    "changed from 404 to keep the browser console clean on the " +
+                    "expected 'no template configured yet' path.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/resolve")
     public ResponseEntity<ApiResponse<LabelTemplateDTO>> resolve(
             @RequestParam(name = "tenantId", required = false) String tenantId,
             @RequestParam(name = "templateType", defaultValue = "PACKING_SLIP") String templateType) {
         Optional<LabelTemplate> found = labelTemplateService.resolve(tenantId, templateType);
-        if (found.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(
-                    ApiResponse.<LabelTemplateDTO>builder()
-                            .status("error")
-                            .code(HttpStatus.NOT_FOUND.value())
-                            .message("No template configured")
-                            .errorCode("TEMPLATE_NOT_FOUND")
-                            .build());
-        }
         return ResponseEntity.ok(ApiResponse.<LabelTemplateDTO>builder()
                 .status("success")
                 .code(HttpStatus.OK.value())
-                .message("Template resolved")
-                .data(LabelTemplateDTO.from(found.get()))
+                .message(found.isPresent() ? "Template resolved" : "No template configured")
+                .data(found.map(LabelTemplateDTO::from).orElse(null))
                 .build());
     }
 
-    @Operation(summary = "Fetch the tenant's own template (no fallback)")
+    @Operation(summary = "Fetch the tenant's own template (no fallback)",
+            description = "Always 200 — data is null when the tenant hasn't " +
+                    "configured a template yet. Same rationale as /resolve.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/tenant")
     public ResponseEntity<ApiResponse<LabelTemplateDTO>> forTenant(
             @RequestParam(name = "tenantId", required = false) String tenantId,
             @RequestParam(name = "templateType", defaultValue = "PACKING_SLIP") String templateType) {
         Optional<LabelTemplate> found = labelTemplateService.findForTenant(tenantId, templateType);
-        if (found.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(
-                    ApiResponse.<LabelTemplateDTO>builder()
-                            .status("error")
-                            .code(HttpStatus.NOT_FOUND.value())
-                            .message("Tenant has no template of this type")
-                            .errorCode("TEMPLATE_NOT_FOUND")
-                            .build());
-        }
         return ResponseEntity.ok(ApiResponse.<LabelTemplateDTO>builder()
                 .status("success")
                 .code(HttpStatus.OK.value())
-                .message("Template loaded")
-                .data(LabelTemplateDTO.from(found.get()))
+                .message(found.isPresent() ? "Template loaded" : "Tenant has no template of this type")
+                .data(found.map(LabelTemplateDTO::from).orElse(null))
                 .build());
     }
 
