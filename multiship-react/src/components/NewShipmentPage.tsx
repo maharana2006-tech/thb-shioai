@@ -27,6 +27,8 @@ import {
 } from '../api/clientPolicyService'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import ShipmentPartiesOverrideModal, { type Party } from './modals/ShipmentPartiesOverrideModal'
+import CustomFieldsSection from './shared/CustomFieldsSection'
+import { customFieldService } from '../api/customFieldService'
 import CustomsWizard from './shipment/CustomsWizard'
 import HsCodeCombobox from './shipment/HsCodeCombobox'
 import RatePickerModal from './shipment/RatePickerModal'
@@ -345,6 +347,9 @@ export default function NewShipmentPage() {
     packageType: '', declaredValue: '',
   })
   const [extraPackages, setExtraPackages] = useState<ExtraPackage[]>([])
+
+  // Sprint 43 — custom field values keyed by fieldKey.
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({})
 
   // 3PL guardrails: client's attached warehouses, allowlists, and destination
   // rules. Fetched when clientCode changes; drive the warehouse picker,
@@ -1101,6 +1106,19 @@ export default function NewShipmentPage() {
     try {
       const res = await orderService.generateManualLabel(payload)
       const orderNo = res.data?.orderNo
+      // Sprint 43 — persist custom field values against the new order.
+      // Best-effort: never block the success navigation on this call.
+      if (orderNo && Object.keys(customFieldValues).length > 0) {
+        try {
+          await customFieldService.upsertValues(orderNo, customFieldValues, clientCode || null)
+        } catch (cfErr) {
+          notify.error(
+            cfErr instanceof Error
+              ? `Label generated but custom fields failed to save: ${cfErr.message}`
+              : 'Label generated but custom fields failed to save.',
+          )
+        }
+      }
       notify.success(res.message || 'Shipment label generated.')
       navigate(orderNo ? `/label/${orderNo}` : '/orders')
     } catch (e) {
@@ -1885,6 +1903,17 @@ export default function NewShipmentPage() {
           </>
         )}
       </div>
+
+      {/* Sprint 43 — Custom fields (tenant-defined metadata). Panel
+       *  self-hides when the tenant has no applicable fields. */}
+      {!loading && !noCarriers ? (
+        <CustomFieldsSection
+          tenantId={clientCode || null}
+          values={customFieldValues}
+          onChange={setCustomFieldValues}
+          compact
+        />
+      ) : null}
 
       {/* sticky footer action bar — stays within the content column */}
       {!loading && !noCarriers ? (

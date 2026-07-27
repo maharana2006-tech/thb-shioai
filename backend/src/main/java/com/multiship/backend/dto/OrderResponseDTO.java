@@ -8,6 +8,7 @@ import lombok.NoArgsConstructor;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Map;
 
 @Data
 @Builder
@@ -25,6 +26,13 @@ public class OrderResponseDTO {
      * requested with includeResolution=true.
      */
     private OrderAccountResolutionDTO accountResolution;
+
+    /**
+     * Sprint 43 — tenant-defined custom field values on the order
+     * (fieldKey -> string value). Populated on single-order reads;
+     * omitted from list responses to keep them cheap.
+     */
+    private Map<String, String> customFields;
 
     @Data
     @Builder

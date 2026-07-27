@@ -42,6 +42,9 @@ public class OrderServiceImpl implements OrderService {
     @Autowired
     private CarrierService carrierService;
 
+    @Autowired(required = false)
+    private CustomFieldService customFieldService;
+
     private static final Set<String> VALID_STATUSES = Set.of("PENDING", "GENERATED", "ERROR");
     private static final Set<String> VALID_RESOLUTIONS = Set.of("READY", "NEEDS_DETAILS", "CHOOSE_ACCOUNT", "CLIENT_MISSING");
 
@@ -214,6 +217,15 @@ public class OrderServiceImpl implements OrderService {
         }
 
         OrderResponseDTO order = mapToOrderResponseDTO(results.get(0));
+
+        // Sprint 43 — hydrate custom-field values on single-order reads.
+        if (customFieldService != null) {
+            try {
+                order.setCustomFields(customFieldService.loadValues(orderNo));
+            } catch (Exception ignored) {
+                // Best-effort — custom fields never block the order read.
+            }
+        }
 
         return ApiResponse.<OrderResponseDTO>builder()
                 .status("SUCCESS")
