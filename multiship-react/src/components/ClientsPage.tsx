@@ -21,6 +21,7 @@ import { clientService, type Client } from '../api/clientService'
 import { formatCarrierName } from '../utils/carrierUtils'
 import { countryName } from '../utils/countries'
 import ClientEditorModal from './modals/ClientEditorModal'
+import ClientOnboardingWizard from './modals/ClientOnboardingWizard'
 import CustomsProfileModal from './modals/CustomsProfileModal'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
@@ -58,6 +59,7 @@ export default function ClientsPage() {
 
   const [reloadToken, setReloadToken] = useState(0)
   const [editor, setEditor] = useState<{ client: Client | null } | null>(null)
+  const [wizardOpen, setWizardOpen] = useState(false)
   const [customsClient, setCustomsClient] = useState<Client | null>(null)
 
   useEffect(() => {
@@ -501,7 +503,7 @@ export default function ClientsPage() {
             toolbarActions={
               <button
                 type="button"
-                onClick={() => setEditor({ client: null })}
+                onClick={() => setWizardOpen(true)}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
               >
                 <FiPlus className="h-3.5 w-3.5" /> Add Client
@@ -528,6 +530,19 @@ export default function ClientsPage() {
           onClose={() => setEditor(null)}
           onSaved={() => {
             setEditor(null)
+            refresh()
+          }}
+        />
+      ) : null}
+
+      {wizardOpen ? (
+        <ClientOnboardingWizard
+          onClose={() => {
+            setWizardOpen(false)
+            refresh()
+          }}
+          onFinished={() => {
+            setWizardOpen(false)
             refresh()
           }}
         />
