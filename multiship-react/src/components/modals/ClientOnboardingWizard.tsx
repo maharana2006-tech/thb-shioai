@@ -34,7 +34,8 @@ import {
 import { clientAllowedServicesService } from '../../api/clientCatalogService'
 import { clientCodeMapService, type ClientCodeMap, type CodeMapKind } from '../../api/clientCodeMapService'
 import { formatCarrierName } from '../../utils/carrierUtils'
-import { COUNTRIES, REGIONS } from '../../utils/countries'
+import { COUNTRIES, REGIONS, countryName } from '../../utils/countries'
+import ZoneEditorModal from '../workspace/ZoneEditorModal'
 import { FiEdit3, FiPlus, FiTrash2 } from 'react-icons/fi'
 import { carrierEnvironmentOptions, type CarrierEnvironment } from '../../utils/carrierUtils'
 import CountrySelect from '../workspace/CountrySelect'
@@ -84,7 +85,7 @@ interface Props {
 
 type WarehouseChoice = 'reuse' | 'existing' | 'new'
 
-/** Add-form state for an alias row (SHIPVIA / SERVICE / PACKAGE). */
+/** Add-form state for a PACKAGE alias row (single dest region + country). */
 interface AliasDraft {
   erpCode: string
   targetId: string
@@ -95,6 +96,19 @@ interface AliasDraft {
 const emptyAliasDraft = (): AliasDraft => ({
   erpCode: '', targetId: '', destCountry: '', destRegion: '',
 })
+
+/**
+ * Step 6 SHIPVIA / SERVICE add-form: zone-based destinations. destCodes is
+ * a list of ISO-2 country codes picked via the ZoneEditorModal (identical
+ * to /settings/shipping-service-mapping). On Add we save ONE alias row per
+ * country code — a whole-region pick expands to per-country rows.
+ */
+interface ZoneAliasDraft {
+  erpCode: string
+  targetId: string
+  destCodes: string[]
+}
+const emptyZoneDraft = (): ZoneAliasDraft => ({ erpCode: '', targetId: '', destCodes: [] })
 
 export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
   const [step, setStep] = useState<StepId>(1)
@@ -158,9 +172,9 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
   const [shipviaMaps, setShipviaMaps] = useState<ClientCodeMap[]>([])
   const [serviceMaps, setServiceMaps] = useState<ClientCodeMap[]>([])
   const [packageMaps, setPackageMaps] = useState<ClientCodeMap[]>([])
-  const [shipviaDraft, setShipviaDraft] = useState<AliasDraft>({ erpCode: '', targetId: '', destCountry: '', destRegion: '' })
-  const [serviceDraft, setServiceDraft] = useState<AliasDraft>({ erpCode: '', targetId: '', destCountry: '', destRegion: '' })
-  const [packageDraft, setPackageDraft] = useState<AliasDraft>({ erpCode: '', targetId: '', destCountry: '', destRegion: '' })
+  const [shipviaDraft, setShipviaDraft] = useState<ZoneAliasDraft>(emptyZoneDraft())
+  const [serviceDraft, setServiceDraft] = useState<ZoneAliasDraft>(emptyZoneDraft())
+  const [packageDraft, setPackageDraft] = useState<AliasDraft>(emptyAliasDraft())
   const [addingAlias, setAddingAlias] = useState(false)
 
   // Server-truth client after step 1 (needed for follow-up API calls).
@@ -488,7 +502,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
    * Steps 6 & 7 AND from the Next dispatch as a "sweep unsaved" pass so
    * a user who typed a valid row but forgot to click Add doesn't lose it.
    */
-  const saveAliasDraft = async (
+  const saveAliasSimple = async (
     kind: CodeMapKind,
     draft: AliasDraft,
     onSuccess: (row: ClientCodeMap) => void,
@@ -514,18 +528,59 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
     }
   }
 
+  /**
+   * Zone-mode save: iterate destCodes and post one alias row per country.
+   * An empty destCodes list creates a single fallback row (destCountry=null),
+   * which matches "Any destination" — the user cleared the zone deliberately.
+   */
+  const saveAliasZone = async (
+    kind: CodeMapKind,
+    draft: ZoneAliasDraft,
+    onSuccess: (rows: ClientCodeMap[]) => void,
+    onReset: () => void,
+  ): Promise<boolean> => {
+    if (!draft.erpCode.trim() || !draft.targetId) return true
+    setAddingAlias(true)
+    const saved: ClientCodeMap[] = []
+    try {
+      const codes = draft.destCodes.length > 0 ? draft.destCodes : [null as unknown as string]
+      for (const code of codes) {
+        const resp = await clientCodeMapService.upsert(currentClientCode, kind, {
+          erpCode: draft.erpCode.trim(),
+          targetId: Number(draft.targetId),
+          destCountry: code ?? null,
+          destRegion: null,
+        })
+        if (resp.data) saved.push(resp.data)
+      }
+      if (saved.length > 0) onSuccess(saved)
+      onReset()
+      return true
+    } catch (err) {
+      // Even if some countries succeeded before the throw, the partials made
+      // it into the saved-rows list via the interleaved onSuccess calls above
+      // — no, actually we batch onSuccess at the end. Still, we notify.
+      if (saved.length > 0) onSuccess(saved)
+      notify.error(err instanceof ApiError ? err.message : `Failed to save some ${kind} aliases.`)
+      return false
+    } finally {
+      setAddingAlias(false)
+    }
+  }
+
   const commitServiceAliases = async (): Promise<boolean> => {
-    // Sweep any typed-but-not-Added drafts before advancing.
-    const svOk = await saveAliasDraft(
+    // Sweep any typed-but-not-Added drafts before advancing. Both lists on
+    // Step 6 are zone-based (multi-country per Add).
+    const svOk = await saveAliasZone(
       'SHIPVIA', shipviaDraft,
-      (row) => setShipviaMaps((cur) => [...cur, row]),
-      () => setShipviaDraft(emptyAliasDraft()),
+      (rows) => setShipviaMaps((cur) => [...cur, ...rows]),
+      () => setShipviaDraft(emptyZoneDraft()),
     )
     if (!svOk) return false
-    const srOk = await saveAliasDraft(
+    const srOk = await saveAliasZone(
       'SERVICE', serviceDraft,
-      (row) => setServiceMaps((cur) => [...cur, row]),
-      () => setServiceDraft(emptyAliasDraft()),
+      (rows) => setServiceMaps((cur) => [...cur, ...rows]),
+      () => setServiceDraft(emptyZoneDraft()),
     )
     if (!srOk) return false
     markStep(6, 'done')
@@ -533,7 +588,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
   }
 
   const commitPackageAliases = async (): Promise<boolean> => {
-    const ok = await saveAliasDraft(
+    const ok = await saveAliasSimple(
       'PACKAGE', packageDraft,
       (row) => setPackageMaps((cur) => [...cur, row]),
       () => setPackageDraft(emptyAliasDraft()),
@@ -699,6 +754,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
             {step === 6 ? (
               <ServiceAliasStep
                 clientCode={currentClientCode}
+                origin={createdClient?.shipFrom?.country ?? shipFrom.country ?? 'US'}
                 carriersInScope={carriersInScope(addedAccounts, allowedCarriers)}
                 services={catalog}
                 shipviaMaps={shipviaMaps}
@@ -710,16 +766,16 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
                 adding={addingAlias}
                 onAdd={(kind) => {
                   if (kind === 'SHIPVIA') {
-                    return saveAliasDraft(
+                    return saveAliasZone(
                       'SHIPVIA', shipviaDraft,
-                      (row) => setShipviaMaps((cur) => [...cur, row]),
-                      () => setShipviaDraft(emptyAliasDraft()),
+                      (rows) => setShipviaMaps((cur) => [...cur, ...rows]),
+                      () => setShipviaDraft(emptyZoneDraft()),
                     )
                   }
-                  return saveAliasDraft(
+                  return saveAliasZone(
                     'SERVICE', serviceDraft,
-                    (row) => setServiceMaps((cur) => [...cur, row]),
-                    () => setServiceDraft(emptyAliasDraft()),
+                    (rows) => setServiceMaps((cur) => [...cur, ...rows]),
+                    () => setServiceDraft(emptyZoneDraft()),
                   )
                 }}
                 onRemove={(kind, row) => {
@@ -742,7 +798,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
                 setPackageDraft={setPackageDraft}
                 adding={addingAlias}
                 onAdd={() =>
-                  saveAliasDraft(
+                  saveAliasSimple(
                     'PACKAGE', packageDraft,
                     (row) => setPackageMaps((cur) => [...cur, row]),
                     () => setPackageDraft(emptyAliasDraft()),
@@ -1417,54 +1473,45 @@ function carriersInScope(
 // ==========================================================================
 
 function ServiceAliasStep({
-  clientCode, carriersInScope: scope, services,
+  clientCode, origin, carriersInScope: scope, services,
   shipviaMaps, serviceMaps,
   shipviaDraft, setShipviaDraft,
   serviceDraft, setServiceDraft,
   adding, onAdd, onRemove,
 }: {
   clientCode: string
+  origin: string
   carriersInScope: Set<string>
   services: ShippingServiceItem[]
   shipviaMaps: ClientCodeMap[]
   serviceMaps: ClientCodeMap[]
-  shipviaDraft: { erpCode: string; targetId: string }
-  setShipviaDraft: React.Dispatch<React.SetStateAction<{ erpCode: string; targetId: string }>>
-  serviceDraft: { erpCode: string; targetId: string }
-  setServiceDraft: React.Dispatch<React.SetStateAction<{ erpCode: string; targetId: string }>>
+  shipviaDraft: ZoneAliasDraft
+  setShipviaDraft: React.Dispatch<React.SetStateAction<ZoneAliasDraft>>
+  serviceDraft: ZoneAliasDraft
+  setServiceDraft: React.Dispatch<React.SetStateAction<ZoneAliasDraft>>
   adding: boolean
   onAdd: (kind: 'SHIPVIA' | 'SERVICE') => Promise<boolean>
   onRemove: (kind: 'SHIPVIA' | 'SERVICE', row: ClientCodeMap) => Promise<void>
 }) {
-  const svcOptions = useMemo(() => {
-    const filtered = scope.size === 0
-      ? services
-      : services.filter((s) => scope.has(s.carrier.toUpperCase()))
-    return filtered
-      .filter((s) => s.enabled)
-      .slice()
-      .sort((a, b) => a.carrier.localeCompare(b.carrier) || a.name.localeCompare(b.name))
-  }, [services, scope])
-
   return (
     <div className="max-w-3xl space-y-5">
       <p className="text-[12.5px] text-slate-500">
         When incoming orders for <strong>{clientCode}</strong> land, the ERP's
-        ship-via and service codes are translated on arrival using these
-        aliases. The target dropdown is filtered to services from the carriers
-        picked in Steps 4 & 5.
+        ship-via and service codes are translated on arrival. Enter the ERP
+        code, pick the destination zone (like Settings &gt; Shipping Service
+        Mapping), then choose a service that ships there. Multi-country zones
+        create one alias row per country.
       </p>
 
-      <AliasList
+      <ZoneAliasList
         kind="SHIPVIA"
         heading="ERP ship-via codes"
         subheading='e.g. "P80" → UPS Ground. Overrides the platform-wide ShipViaMapping rules.'
         erpPlaceholder="P80"
         rows={shipviaMaps}
-        options={svcOptions.map((s) => ({
-          value: String(s.id),
-          label: `${formatCarrierName(s.carrier)} · ${s.serviceCode} — ${s.name}`,
-        }))}
+        origin={origin}
+        allServices={services}
+        carriersInScope={scope}
         draft={shipviaDraft}
         setDraft={setShipviaDraft}
         adding={adding}
@@ -1472,16 +1519,15 @@ function ServiceAliasStep({
         onRemove={(row) => onRemove('SHIPVIA', row)}
       />
 
-      <AliasList
+      <ZoneAliasList
         kind="SERVICE"
         heading="ERP service codes"
-        subheading='e.g. "F77-2DAY" → FedEx 2Day. Same target catalog as ship-via.'
+        subheading='e.g. "F77-2DAY" → FedEx 2Day. Same catalog + destination-scoped filter.'
         erpPlaceholder="F77-2DAY"
         rows={serviceMaps}
-        options={svcOptions.map((s) => ({
-          value: String(s.id),
-          label: `${formatCarrierName(s.carrier)} · ${s.serviceCode} — ${s.name}`,
-        }))}
+        origin={origin}
+        allServices={services}
+        carriersInScope={scope}
         draft={serviceDraft}
         setDraft={setServiceDraft}
         adding={adding}
@@ -1556,7 +1602,204 @@ function PackageAliasStep({
 }
 
 // ==========================================================================
-// Shared alias-list primitive (used by both Steps 6 & 7)
+// Zone-based alias list (Step 6: SHIPVIA + SERVICE)
+// ==========================================================================
+
+/**
+ * Zone-based alias list — matches Settings > Shipping Service Mapping:
+ * user types the ERP code, opens the ZoneEditorModal to pick a
+ * destination zone (any mix of regions and countries), and only then
+ * picks a service from a list filtered by the resulting scope. On Add,
+ * one alias row is written per country code in the zone.
+ */
+function ZoneAliasList({
+  heading, subheading, erpPlaceholder, rows,
+  origin, allServices, carriersInScope: scope,
+  draft, setDraft, adding, onAdd, onRemove,
+}: {
+  kind: CodeMapKind
+  heading: string
+  subheading: string
+  erpPlaceholder: string
+  rows: ClientCodeMap[]
+  origin: string
+  allServices: ShippingServiceItem[]
+  carriersInScope: Set<string>
+  draft: ZoneAliasDraft
+  setDraft: React.Dispatch<React.SetStateAction<ZoneAliasDraft>>
+  adding: boolean
+  onAdd: () => Promise<boolean>
+  onRemove: (row: ClientCodeMap) => void | Promise<void>
+}) {
+  const [zoneOpen, setZoneOpen] = useState(false)
+  const originUp = (origin || 'US').toUpperCase()
+
+  /**
+   * Scope inferred from the picked destinations vs the client's origin:
+   *   DOMESTIC — all picked codes == origin
+   *   INTERNATIONAL — all picked codes != origin
+   *   BOTH — mixed
+   * When the zone is empty the scope filter is disabled (no picking yet).
+   */
+  const inferredScope: 'DOMESTIC' | 'INTERNATIONAL' | 'BOTH' | 'ANY' = useMemo(() => {
+    if (draft.destCodes.length === 0) return 'ANY'
+    const anyDomestic = draft.destCodes.some((c) => c.toUpperCase() === originUp)
+    const anyIntl = draft.destCodes.some((c) => c.toUpperCase() !== originUp)
+    if (anyDomestic && anyIntl) return 'BOTH'
+    return anyDomestic ? 'DOMESTIC' : 'INTERNATIONAL'
+  }, [draft.destCodes, originUp])
+
+  const filteredServices = useMemo(() => {
+    if (inferredScope === 'ANY') return []
+    let list = allServices.filter((s) => s.enabled)
+    if (scope.size > 0) list = list.filter((s) => scope.has(s.carrier.toUpperCase()))
+    if (inferredScope === 'DOMESTIC') {
+      list = list.filter((s) => s.scope === 'DOMESTIC' || s.scope === 'BOTH')
+    } else if (inferredScope === 'INTERNATIONAL') {
+      list = list.filter((s) => s.scope === 'INTERNATIONAL' || s.scope === 'BOTH')
+    }
+    // BOTH → keep whatever came out of the carrier filter, no scope narrowing.
+    return list
+      .slice()
+      .sort((a, b) => a.carrier.localeCompare(b.carrier) || a.name.localeCompare(b.name))
+  }, [allServices, scope, inferredScope])
+
+  const zoneSummary = draft.destCodes.length === 0
+    ? 'Pick destinations'
+    : draft.destCodes.length === 1
+      ? `${draft.destCodes[0]} · ${countryName(draft.destCodes[0])}`
+      : `${draft.destCodes.length} countries`
+
+  const canAdd = !adding
+    && draft.erpCode.trim() !== ''
+    && draft.targetId !== ''
+    && draft.destCodes.length > 0
+
+  return (
+    <section>
+      <h4 className="text-[13px] font-semibold text-slate-900">{heading}</h4>
+      <p className="mt-0.5 text-[11.5px] text-slate-500">{subheading}</p>
+
+      {rows.length > 0 ? (
+        <div className="mt-2 overflow-hidden rounded-lg border border-emerald-200">
+          <table className="min-w-full text-[12.5px]">
+            <thead className="bg-emerald-50 text-[10.5px] font-bold uppercase tracking-[0.14em] text-emerald-800">
+              <tr>
+                <th className="px-3 py-1.5 text-left">ERP code</th>
+                <th className="px-3 py-1.5 text-left">Destination</th>
+                <th className="px-3 py-1.5 text-left">Platform target</th>
+                <th className="px-3 py-1.5 w-8"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-emerald-100">
+              {rows.map((row) => (
+                <tr key={row.id} className="bg-white">
+                  <td className="px-3 py-1.5 font-mono text-slate-800">{row.erpCode}</td>
+                  <td className="px-3 py-1.5 text-slate-600">{destSummary(row.destCountry, row.destRegion)}</td>
+                  <td className="px-3 py-1.5 text-slate-700">{row.targetLabel ?? row.targetId ?? '—'}</td>
+                  <td className="px-3 py-1.5 text-right">
+                    <button
+                      type="button"
+                      onClick={() => void onRemove(row)}
+                      className="rounded p-1 text-rose-500 hover:bg-rose-50"
+                      aria-label="Remove alias"
+                    >
+                      <FiTrash2 />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      <div className="mt-2 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div>
+          <label className="block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500">1 · ERP code</label>
+          <input
+            type="text"
+            value={draft.erpCode}
+            onChange={(e) => setDraft((c) => ({ ...c, erpCode: e.target.value }))}
+            placeholder={erpPlaceholder}
+            className={`${inputCls} mt-1`}
+          />
+        </div>
+
+        <div>
+          <label className="block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500">2 · Destination zone</label>
+          <button
+            type="button"
+            onClick={() => setZoneOpen(true)}
+            disabled={!draft.erpCode.trim()}
+            className="mt-1 inline-flex w-full items-center justify-between rounded-md border border-slate-200 bg-white px-3 py-1.5 text-left text-[13px] text-slate-800 outline-none transition hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <span className={draft.destCodes.length === 0 ? 'text-slate-400' : ''}>{zoneSummary}</span>
+            <span className="text-[11px] font-semibold text-[#412d15]">
+              {draft.destCodes.length === 0 ? 'Pick' : 'Change'}
+            </span>
+          </button>
+          <p className="mt-1 text-[10.5px] text-slate-400">
+            Origin: <span className="font-mono text-slate-600">{originUp}</span>
+            {' · '}Filter mode: <span className="font-mono text-slate-600">{inferredScope}</span>
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500">3 · Platform service</label>
+          <Select
+            value={draft.targetId}
+            onChange={(e) => setDraft((c) => ({ ...c, targetId: e.target.value }))}
+            disabled={inferredScope === 'ANY'}
+            className="mt-1"
+          >
+            <option value="">
+              {inferredScope === 'ANY'
+                ? 'Pick a destination first'
+                : filteredServices.length === 0
+                  ? 'No services match the destination + carrier filter'
+                  : '— pick a service —'}
+            </option>
+            {filteredServices.map((s) => (
+              <option key={s.id} value={String(s.id)}>
+                {formatCarrierName(s.carrier)} · {s.serviceCode} — {s.name} [{s.scope[0]}]
+              </option>
+            ))}
+          </Select>
+        </div>
+
+        <div className="flex items-center justify-end">
+          <button
+            type="button"
+            onClick={() => void onAdd()}
+            disabled={!canAdd}
+            className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50"
+          >
+            <FiPlus /> Add {draft.destCodes.length > 1 ? `(${draft.destCodes.length} rows)` : ''}
+          </button>
+        </div>
+
+        <p className="text-[10.5px] text-slate-500">
+          A multi-country zone creates one alias row per country so each lane resolves independently.
+        </p>
+      </div>
+
+      <ZoneEditorModal
+        open={zoneOpen}
+        codes={draft.destCodes}
+        onCodesChange={(codes) => setDraft((c) => ({ ...c, destCodes: codes, targetId: '' }))}
+        onSave={() => setZoneOpen(false)}
+        onClose={() => setZoneOpen(false)}
+        subject={heading}
+        saveLabel="Use this zone"
+        domesticCountry={originUp}
+      />
+    </section>
+  )
+}
+
+// ==========================================================================
+// Shared alias-list primitive (used by Step 7)
 // ==========================================================================
 
 function AliasList({
