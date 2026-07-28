@@ -618,29 +618,38 @@ public class CarrierServiceImpl implements CarrierService {
                 if (routingResult.getTargetServiceId() != null) {
                     com.multiship.backend.model.ShippingService rerouted =
                             shippingConfigService.serviceById(routingResult.getTargetServiceId()).orElse(null);
-                    if (rerouted != null) {
-                        service = rerouted;
-                        String newCarrier = resolveCanonicalCarrierCode(rerouted.getCarrier());
-                        if (!newCarrier.equalsIgnoreCase(carrier)) {
-                            // Swap carrier + connector; try to find a working
-                            // account for the new carrier (existing account, else
-                            // the platform account for that carrier).
-                            carrier = newCarrier;
-                            CarrierAccountRef reroutedAccount = carrierAccountRefRepository
-                                    .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
-                            if (reroutedAccount == null) {
-                                return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
-                                        "Routing rule '" + routingResult.getMatchedRuleName()
-                                        + "' rerouted to " + carrier + " but no verified " + carrier
-                                        + " credentials are available.");
-                            }
-                            account = reroutedAccount;
-                            billToNumber = firstNonBlank(typedNumber, account.getAccountNumber(), "ACCOUNT");
-                            connector = getCarrierConnector(carrier);
-                        }
-                        log.info("Routing rule '{}' rerouted client={} to service={} carrier={}",
-                                routingResult.getMatchedRuleName(), resolvedClient, service.getServiceCode(), carrier);
+                    if (rerouted == null) {
+                        // Audit-fix #5: the rule matched, but its target service
+                        // no longer exists (deleted from the catalog). Previously
+                        // the code silently continued with the ORIGINAL service —
+                        // the rule's intent was lost with no visible signal. Fail
+                        // loudly so the operator can fix the rule.
+                        return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                                "Routing rule '" + routingResult.getMatchedRuleName()
+                                + "' targets service #" + routingResult.getTargetServiceId()
+                                + " which no longer exists. Fix the rule to point at a live service.");
                     }
+                    service = rerouted;
+                    String newCarrier = resolveCanonicalCarrierCode(rerouted.getCarrier());
+                    if (!newCarrier.equalsIgnoreCase(carrier)) {
+                        // Swap carrier + connector; try to find a working
+                        // account for the new carrier (existing account, else
+                        // the platform account for that carrier).
+                        carrier = newCarrier;
+                        CarrierAccountRef reroutedAccount = carrierAccountRefRepository
+                                .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+                        if (reroutedAccount == null) {
+                            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                                    "Routing rule '" + routingResult.getMatchedRuleName()
+                                    + "' rerouted to " + carrier + " but no verified " + carrier
+                                    + " credentials are available.");
+                        }
+                        account = reroutedAccount;
+                        billToNumber = firstNonBlank(typedNumber, account.getAccountNumber(), "ACCOUNT");
+                        connector = getCarrierConnector(carrier);
+                    }
+                    log.info("Routing rule '{}' rerouted client={} to service={} carrier={}",
+                            routingResult.getMatchedRuleName(), resolvedClient, service.getServiceCode(), carrier);
                 }
             }
         }
