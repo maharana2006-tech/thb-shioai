@@ -138,9 +138,8 @@ public class ExternalV2Controller {
             @RequestBody RateShopRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         requireApi(caller);
-        return withIdemp(idempotencyKey, ResponseEntity
-                .status(rateShopService.rateShop(req).getCode())
-                .body(rateShopService.rateShop(req)));
+        ApiResponse<RateShopResponseDTO> result = rateShopService.rateShop(req);
+        return withIdemp(idempotencyKey, ResponseEntity.status(result.getCode()).body(result));
     }
 
     // ================================================================
@@ -153,9 +152,8 @@ public class ExternalV2Controller {
             @RequestBody PickupRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         requireApi(caller);
-        return withIdemp(idempotencyKey, ResponseEntity
-                .status(pickupService.schedule(req).getCode())
-                .body(pickupService.schedule(req)));
+        ApiResponse<PickupResponseDTO> result = pickupService.schedule(req);
+        return withIdemp(idempotencyKey, ResponseEntity.status(result.getCode()).body(result));
     }
 
     @Operation(summary = "Close out the day's shipments at a carrier")
@@ -164,9 +162,8 @@ public class ExternalV2Controller {
             @RequestBody ManifestRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         requireApi(caller);
-        return withIdemp(idempotencyKey, ResponseEntity
-                .status(manifestService.closeOut(req).getCode())
-                .body(manifestService.closeOut(req)));
+        ApiResponse<ManifestResponseDTO> result = manifestService.closeOut(req);
+        return withIdemp(idempotencyKey, ResponseEntity.status(result.getCode()).body(result));
     }
 
     // ================================================================
@@ -178,9 +175,8 @@ public class ExternalV2Controller {
     public ResponseEntity<ApiResponse<LandedCostResponseDTO>> landedCost(
             @RequestBody LandedCostRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller) {
         requireApi(caller);
-        return ResponseEntity
-                .status(landedCostService.estimate(req).getCode())
-                .body(landedCostService.estimate(req));
+        ApiResponse<LandedCostResponseDTO> result = landedCostService.estimate(req);
+        return ResponseEntity.status(result.getCode()).body(result);
     }
 
     @Operation(summary = "Dangerous goods declaration preview (validation only)",
