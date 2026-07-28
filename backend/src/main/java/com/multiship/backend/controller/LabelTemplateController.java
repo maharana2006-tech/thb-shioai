@@ -34,7 +34,7 @@ public class LabelTemplateController {
                     "data is null so the UI renders a blank template. This was " +
                     "changed from 404 to keep the browser console clean on the " +
                     "expected 'no template configured yet' path.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') or @orderAccess.canViewTenant(authentication, #tenantId)")
     @GetMapping("/resolve")
     public ResponseEntity<ApiResponse<LabelTemplateDTO>> resolve(
             @RequestParam(name = "tenantId", required = false) String tenantId,
@@ -51,7 +51,7 @@ public class LabelTemplateController {
     @Operation(summary = "Fetch the tenant's own template (no fallback)",
             description = "Always 200 — data is null when the tenant hasn't " +
                     "configured a template yet. Same rationale as /resolve.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') or @orderAccess.canViewTenant(authentication, #tenantId)")
     @GetMapping("/tenant")
     public ResponseEntity<ApiResponse<LabelTemplateDTO>> forTenant(
             @RequestParam(name = "tenantId", required = false) String tenantId,
@@ -68,7 +68,7 @@ public class LabelTemplateController {
     @Operation(summary = "Upsert a label template",
             description = "Body id null → create; id set → update. " +
                     "One row per (tenantId, templateType).")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') or @orderAccess.canViewTenant(authentication, #body.tenantId)")
     @PostMapping
     public ResponseEntity<ApiResponse<LabelTemplateDTO>> save(@RequestBody LabelTemplateDTO body) {
         LabelTemplate saved = labelTemplateService.save(body.toEntity());
