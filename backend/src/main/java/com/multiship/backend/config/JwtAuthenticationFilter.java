@@ -94,6 +94,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     // grant. Rehydrate an ApiKeyPrincipal so v1/v2 external
                     // controllers work uniformly whether the caller hit them
                     // with X-API-Key or a Bearer JWT from /oauth/token.
+                    //
+                    // Audit-fix #2: apiKeyPrincipalFromToken returns null when
+                    // the ApiKey is missing, revoked (active=false), or the
+                    // subject is malformed. Previously we constructed a
+                    // UsernamePasswordAuthenticationToken with a null principal
+                    // — which Spring marks authenticated=true and still lets
+                    // ROLE_API pass method security. A revoked key's still-
+                    // unexpired JWT would authenticate as if the key were
+                    // live. Skip populating the context when the principal is
+                    // null so the request proceeds unauthenticated (401).
                     if ("API".equalsIgnoreCase(role) && username.startsWith("apikey:") && apiKeyService != null) {
                         principal = apiKeyPrincipalFromToken(username);
                     } else {
@@ -105,9 +115,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                 .build();
                     }
 
-                    UsernamePasswordAuthenticationToken authentication =
-                            new UsernamePasswordAuthenticationToken(principal, null, authorities);
-                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                    if (principal != null) {
+                        UsernamePasswordAuthenticationToken authentication =
+                                new UsernamePasswordAuthenticationToken(principal, null, authorities);
+                        SecurityContextHolder.getContext().setAuthentication(authentication);
+                    }
                 }
             } catch (JwtException | IllegalArgumentException ex) {
                 // Invalid or expired token: leave the context unauthenticated.
