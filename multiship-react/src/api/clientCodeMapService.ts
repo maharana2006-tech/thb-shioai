@@ -16,6 +16,13 @@ export interface ClientCodeMap {
   iso2: string | null
   /** Human-readable target summary for list rendering. */
   targetLabel: string | null
+  /**
+   * Destination scope for SHIPVIA / SERVICE / PACKAGE aliases. null in
+   * both = "any destination" (fallback). Country wins over region when
+   * both are set.
+   */
+  destCountry: string | null
+  destRegion: string | null
   createdAt: string | null
   updatedAt: string | null
 }
@@ -24,6 +31,8 @@ export interface UpsertCodeMapPayload {
   erpCode: string
   targetId?: number | null
   iso2?: string | null
+  destCountry?: string | null
+  destRegion?: string | null
 }
 
 /** enum → URL slug (SHIPVIA → shipvia, DEST_COUNTRY → dest-country). */

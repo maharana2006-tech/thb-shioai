@@ -40,6 +40,14 @@ public class ClientCodeMapDTO {
     /** Human-readable summary of the target row (for list rendering). */
     private String targetLabel;
 
+    /**
+     * Destination scope for SHIPVIA / SERVICE / PACKAGE aliases: null in
+     * both = "any destination" (fallback). If both are set, country wins.
+     * Ignored for DEST_COUNTRY (destination *is* the target).
+     */
+    private String destCountry;
+    private String destRegion;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

@@ -34,6 +34,7 @@ import {
 import { clientAllowedServicesService } from '../../api/clientCatalogService'
 import { clientCodeMapService, type ClientCodeMap, type CodeMapKind } from '../../api/clientCodeMapService'
 import { formatCarrierName } from '../../utils/carrierUtils'
+import { COUNTRIES, REGIONS } from '../../utils/countries'
 import { FiEdit3, FiPlus, FiTrash2 } from 'react-icons/fi'
 import { carrierEnvironmentOptions, type CarrierEnvironment } from '../../utils/carrierUtils'
 import CountrySelect from '../workspace/CountrySelect'
@@ -82,6 +83,18 @@ interface Props {
 }
 
 type WarehouseChoice = 'reuse' | 'existing' | 'new'
+
+/** Add-form state for an alias row (SHIPVIA / SERVICE / PACKAGE). */
+interface AliasDraft {
+  erpCode: string
+  targetId: string
+  /** Blank = "any". Country wins over region when both are set. */
+  destCountry: string
+  destRegion: string
+}
+const emptyAliasDraft = (): AliasDraft => ({
+  erpCode: '', targetId: '', destCountry: '', destRegion: '',
+})
 
 export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
   const [step, setStep] = useState<StepId>(1)
@@ -145,9 +158,9 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
   const [shipviaMaps, setShipviaMaps] = useState<ClientCodeMap[]>([])
   const [serviceMaps, setServiceMaps] = useState<ClientCodeMap[]>([])
   const [packageMaps, setPackageMaps] = useState<ClientCodeMap[]>([])
-  const [shipviaDraft, setShipviaDraft] = useState({ erpCode: '', targetId: '' })
-  const [serviceDraft, setServiceDraft] = useState({ erpCode: '', targetId: '' })
-  const [packageDraft, setPackageDraft] = useState({ erpCode: '', targetId: '' })
+  const [shipviaDraft, setShipviaDraft] = useState<AliasDraft>({ erpCode: '', targetId: '', destCountry: '', destRegion: '' })
+  const [serviceDraft, setServiceDraft] = useState<AliasDraft>({ erpCode: '', targetId: '', destCountry: '', destRegion: '' })
+  const [packageDraft, setPackageDraft] = useState<AliasDraft>({ erpCode: '', targetId: '', destCountry: '', destRegion: '' })
   const [addingAlias, setAddingAlias] = useState(false)
 
   // Server-truth client after step 1 (needed for follow-up API calls).
@@ -477,7 +490,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
    */
   const saveAliasDraft = async (
     kind: CodeMapKind,
-    draft: { erpCode: string; targetId: string },
+    draft: AliasDraft,
     onSuccess: (row: ClientCodeMap) => void,
     onReset: () => void,
   ): Promise<boolean> => {
@@ -487,6 +500,8 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
       const resp = await clientCodeMapService.upsert(currentClientCode, kind, {
         erpCode: draft.erpCode.trim(),
         targetId: Number(draft.targetId),
+        destCountry: draft.destCountry.trim() || null,
+        destRegion: draft.destRegion.trim() || null,
       })
       if (resp.data) onSuccess(resp.data)
       onReset()
@@ -504,13 +519,13 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
     const svOk = await saveAliasDraft(
       'SHIPVIA', shipviaDraft,
       (row) => setShipviaMaps((cur) => [...cur, row]),
-      () => setShipviaDraft({ erpCode: '', targetId: '' }),
+      () => setShipviaDraft(emptyAliasDraft()),
     )
     if (!svOk) return false
     const srOk = await saveAliasDraft(
       'SERVICE', serviceDraft,
       (row) => setServiceMaps((cur) => [...cur, row]),
-      () => setServiceDraft({ erpCode: '', targetId: '' }),
+      () => setServiceDraft(emptyAliasDraft()),
     )
     if (!srOk) return false
     markStep(6, 'done')
@@ -521,7 +536,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
     const ok = await saveAliasDraft(
       'PACKAGE', packageDraft,
       (row) => setPackageMaps((cur) => [...cur, row]),
-      () => setPackageDraft({ erpCode: '', targetId: '' }),
+      () => setPackageDraft(emptyAliasDraft()),
     )
     if (!ok) return false
     markStep(7, 'done')
@@ -698,13 +713,13 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
                     return saveAliasDraft(
                       'SHIPVIA', shipviaDraft,
                       (row) => setShipviaMaps((cur) => [...cur, row]),
-                      () => setShipviaDraft({ erpCode: '', targetId: '' }),
+                      () => setShipviaDraft(emptyAliasDraft()),
                     )
                   }
                   return saveAliasDraft(
                     'SERVICE', serviceDraft,
                     (row) => setServiceMaps((cur) => [...cur, row]),
-                    () => setServiceDraft({ erpCode: '', targetId: '' }),
+                    () => setServiceDraft(emptyAliasDraft()),
                   )
                 }}
                 onRemove={(kind, row) => {
@@ -730,7 +745,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
                   saveAliasDraft(
                     'PACKAGE', packageDraft,
                     (row) => setPackageMaps((cur) => [...cur, row]),
-                    () => setPackageDraft({ erpCode: '', targetId: '' }),
+                    () => setPackageDraft(emptyAliasDraft()),
                   )
                 }
                 onRemove={(row) =>
@@ -1554,8 +1569,8 @@ function AliasList({
   erpPlaceholder: string
   rows: ClientCodeMap[]
   options: Array<{ value: string; label: string }>
-  draft: { erpCode: string; targetId: string }
-  setDraft: React.Dispatch<React.SetStateAction<{ erpCode: string; targetId: string }>>
+  draft: AliasDraft
+  setDraft: React.Dispatch<React.SetStateAction<AliasDraft>>
   adding: boolean
   onAdd: () => Promise<boolean>
   onRemove: (row: ClientCodeMap) => void | Promise<void>
@@ -1571,6 +1586,7 @@ function AliasList({
             <thead className="bg-emerald-50 text-[10.5px] font-bold uppercase tracking-[0.14em] text-emerald-800">
               <tr>
                 <th className="px-3 py-1.5 text-left">ERP code</th>
+                <th className="px-3 py-1.5 text-left">Destination</th>
                 <th className="px-3 py-1.5 text-left">Platform target</th>
                 <th className="px-3 py-1.5 w-8"></th>
               </tr>
@@ -1579,6 +1595,7 @@ function AliasList({
               {rows.map((row) => (
                 <tr key={row.id} className="bg-white">
                   <td className="px-3 py-1.5 font-mono text-slate-800">{row.erpCode}</td>
+                  <td className="px-3 py-1.5 text-slate-600">{destSummary(row.destCountry, row.destRegion)}</td>
                   <td className="px-3 py-1.5 text-slate-700">{row.targetLabel ?? row.targetId ?? '—'}</td>
                   <td className="px-3 py-1.5 text-right">
                     <button
@@ -1597,32 +1614,100 @@ function AliasList({
         </div>
       ) : null}
 
-      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] gap-2">
-        <input
-          type="text"
-          value={draft.erpCode}
-          onChange={(e) => setDraft((c) => ({ ...c, erpCode: e.target.value }))}
-          placeholder={erpPlaceholder}
-          className={inputCls}
-        />
-        <Select
-          value={draft.targetId}
-          onChange={(e) => setDraft((c) => ({ ...c, targetId: e.target.value }))}
-        >
-          <option value="">— pick a platform target —</option>
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </Select>
-        <button
-          type="button"
-          onClick={() => void onAdd()}
-          disabled={adding || !draft.erpCode.trim() || !draft.targetId}
-          className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50"
-        >
-          <FiPlus /> Add
-        </button>
+      <div className="mt-2 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2">
+          <input
+            type="text"
+            value={draft.erpCode}
+            onChange={(e) => setDraft((c) => ({ ...c, erpCode: e.target.value }))}
+            placeholder={erpPlaceholder}
+            className={inputCls}
+          />
+          <Select
+            value={draft.targetId}
+            onChange={(e) => setDraft((c) => ({ ...c, targetId: e.target.value }))}
+          >
+            <option value="">— pick a platform target —</option>
+            {options.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </Select>
+        </div>
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
+          <DestinationRegionSelect
+            value={draft.destRegion}
+            onChange={(v) => setDraft((c) => ({ ...c, destRegion: v, destCountry: '' }))}
+          />
+          <DestinationCountrySelect
+            value={draft.destCountry}
+            region={draft.destRegion}
+            onChange={(v) => setDraft((c) => ({ ...c, destCountry: v }))}
+          />
+          <button
+            type="button"
+            onClick={() => void onAdd()}
+            disabled={adding || !draft.erpCode.trim() || !draft.targetId}
+            className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50"
+          >
+            <FiPlus /> Add
+          </button>
+        </div>
+        <p className="text-[10.5px] text-slate-500">
+          Leave both destination fields blank for the fallback (applies to any destination). Country takes precedence when both are set.
+        </p>
       </div>
     </section>
   )
+}
+
+// ==========================================================================
+// Destination pickers (used by AliasList)
+// ==========================================================================
+
+function DestinationRegionSelect({
+  value, onChange,
+}: {
+  value: string
+  onChange: (v: string) => void
+}) {
+  return (
+    <Select value={value} onChange={(e) => onChange(e.target.value)} aria-label="Destination region">
+      <option value="">Any region</option>
+      {REGIONS.map((r) => (
+        <option key={r} value={r}>{r}</option>
+      ))}
+    </Select>
+  )
+}
+
+function DestinationCountrySelect({
+  value, region, onChange,
+}: {
+  value: string
+  region: string
+  onChange: (v: string) => void
+}) {
+  const options = useMemo(() => {
+    const list = region ? COUNTRIES.filter((c) => c.region === region) : COUNTRIES
+    return list.slice().sort((a, b) => a.name.localeCompare(b.name))
+  }, [region])
+  return (
+    <Select value={value} onChange={(e) => onChange(e.target.value)} aria-label="Destination country">
+      <option value="">{region ? `Any country in ${region}` : 'Any country'}</option>
+      {options.map((c) => (
+        <option key={c.code} value={c.code}>{c.code} — {c.name}</option>
+      ))}
+    </Select>
+  )
+}
+
+function destSummary(country: string | null, region: string | null): string {
+  const c = country?.trim()
+  const r = region?.trim()
+  if (c) {
+    const name = COUNTRIES.find((x) => x.code === c)?.name
+    return name ? `${c} · ${name}` : c
+  }
+  if (r) return r
+  return 'Any'
 }

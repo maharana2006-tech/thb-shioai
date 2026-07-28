@@ -19,12 +19,15 @@ import java.time.LocalDateTime;
 
 /**
  * Per-client package-code alias: maps the ERP's own package SKU
- * (e.g. "ACME-BOX-A") to a platform {@link PackagePreset}.
+ * (e.g. "ACME-BOX-A") to a platform {@link PackagePreset}, optionally
+ * scoped by destination country / region.
+ *
+ * <p>Uniqueness on {@code (clientCode, erpCode, destCountry, destRegion)}
+ * is enforced at the service layer; no DB unique constraint (see
+ * ClientShipviaCodeMap doc for the same Postgres-NULLs rationale).
  */
 @Entity
 @Table(name = "client_package_code_map",
-        uniqueConstraints = @UniqueConstraint(name = "uq_client_package_code",
-                columnNames = {"client_code", "erp_code"}),
         indexes = @Index(name = "idx_client_package_code_client", columnList = "client_code"))
 @Data
 @Builder
@@ -46,6 +49,14 @@ public class ClientPackageCodeMap {
     /** FK to {@link PackagePreset#getId()}. */
     @Column(name = "preset_id", nullable = false)
     private Long presetId;
+
+    /** ISO-2 destination country (nullable = "any country in the region"). */
+    @Column(name = "dest_country", length = 2)
+    private String destCountry;
+
+    /** Destination region name (nullable = "any region"). */
+    @Column(name = "dest_region", length = 40)
+    private String destRegion;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
