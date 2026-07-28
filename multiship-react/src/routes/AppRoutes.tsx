@@ -10,6 +10,7 @@ import ClientsPage from '../pages/ClientsPage'
 import ImporterBrokerPage from '../components/ImporterBrokerPage'
 import LabelTemplatesPage from '../components/LabelTemplatesPage'
 import CustomFieldsPage from '../components/CustomFieldsPage'
+import RoutingRulesPage from '../components/RoutingRulesPage'
 import ShippingServicesPage from '../components/ShippingServicesPage'
 import ShippingServiceMappingPage from '../components/ShippingServiceMappingPage'
 import ApiKeysPage from '../components/ApiKeysPage'
@@ -50,6 +51,7 @@ export default function AppRoutes() {
               <Route path="importer-broker" element={<ImporterBrokerPage />} />
               <Route path="label-templates" element={<LabelTemplatesPage />} />
               <Route path="custom-fields" element={<CustomFieldsPage />} />
+              <Route path="routing-rules" element={<RoutingRulesPage />} />
               <Route path="code-maps" element={<CodeMapsPage />} />
               <Route element={<RequireRole roles={['ADMIN']} />}>
                 <Route path="carriers" element={<CarrierPage />} />

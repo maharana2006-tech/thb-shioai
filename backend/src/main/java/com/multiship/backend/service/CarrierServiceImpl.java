@@ -74,6 +74,12 @@ public class CarrierServiceImpl implements CarrierService {
     private final CustomsService customsService;
     private final ShipmentResolutionService resolutionService;
 
+    /** Sprint 44 — optional so existing tests that build CarrierServiceImpl
+     *  without Spring don't have to plumb another dep. When null, routing
+     *  rules simply don't run. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RoutingRuleService routingRuleService;
+
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<CarrierListResponse>> getAvailableCarriers() {
@@ -574,6 +580,64 @@ public class CarrierServiceImpl implements CarrierService {
                 shippingConfigService.serviceById(req.getServiceId()).orElse(null);
         com.multiship.backend.model.PackagePreset preset =
                 shippingConfigService.presetById(req.getPackagePresetId()).orElse(null);
+
+        // Sprint 44 — routing rules. Runs after the initial carrier/service
+        // pick is known so rules can key off the current selection, but
+        // BEFORE allowlist gates so a valid reroute isn't rejected by the
+        // allowlist of the original service. When the client isn't set or
+        // the routing service isn't wired, this is a no-op.
+        if (hasClient && routingRuleService != null) {
+            com.multiship.backend.dto.RoutingEvaluationRequest evalReq =
+                    com.multiship.backend.dto.RoutingEvaluationRequest.builder()
+                            .weightLb(com.multiship.backend.util.UnitConverter.toPounds(
+                                    req.getWeight(), req.getWeightUnit()))
+                            .destCountry(to.getCountryCode())
+                            .destRegion(null) // resolver looks up region from country via frontend / catalog
+                            .currentCarrier(carrier)
+                            .currentServiceId(service != null ? service.getId() : null)
+                            .declaredValue(req.getDeclaredValue())
+                            .orderSource(req.getSource())
+                            .build();
+            com.multiship.backend.dto.RoutingEvaluationResult routingResult =
+                    routingRuleService.evaluate(resolvedClient, evalReq);
+            if ("MATCH".equals(routingResult.getStatus())) {
+                if (routingResult.getActionType() == com.multiship.backend.model.RoutingRule.ActionType.BLOCK) {
+                    return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                            "Blocked by routing rule '" + routingResult.getMatchedRuleName()
+                            + "': " + routingResult.getBlockReason());
+                }
+                // REROUTE — swap the service. If the target carrier differs,
+                // re-resolve the carrier + account so the rest of the pipeline
+                // hits the right connector.
+                if (routingResult.getTargetServiceId() != null) {
+                    com.multiship.backend.model.ShippingService rerouted =
+                            shippingConfigService.serviceById(routingResult.getTargetServiceId()).orElse(null);
+                    if (rerouted != null) {
+                        service = rerouted;
+                        String newCarrier = resolveCanonicalCarrierCode(rerouted.getCarrier());
+                        if (!newCarrier.equalsIgnoreCase(carrier)) {
+                            // Swap carrier + connector; try to find a working
+                            // account for the new carrier (existing account, else
+                            // the platform account for that carrier).
+                            carrier = newCarrier;
+                            CarrierAccountRef reroutedAccount = carrierAccountRefRepository
+                                    .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+                            if (reroutedAccount == null) {
+                                return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                                        "Routing rule '" + routingResult.getMatchedRuleName()
+                                        + "' rerouted to " + carrier + " but no verified " + carrier
+                                        + " credentials are available.");
+                            }
+                            account = reroutedAccount;
+                            billToNumber = firstNonBlank(typedNumber, account.getAccountNumber(), "ACCOUNT");
+                            connector = getCarrierConnector(carrier);
+                        }
+                        log.info("Routing rule '{}' rerouted client={} to service={} carrier={}",
+                                routingResult.getMatchedRuleName(), resolvedClient, service.getServiceCode(), carrier);
+                    }
+                }
+            }
+        }
 
         // Allowlist gates on the resolved service + preset. Ad-hoc shipments
         // (no client) skip both — same rule as ship-to above.
