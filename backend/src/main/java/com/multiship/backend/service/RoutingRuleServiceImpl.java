@@ -121,10 +121,13 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
                 return "DEST_COUNTRY_MISMATCH";
             }
         }
-        // Destination region
+        // Destination region — case-insensitive. csvSet uppercases the
+        // rule values; audit-fix #3 aligns the request side to match so
+        // frontend-taxonomy labels ("Europe", "North America") don't miss
+        // the rule silently.
         if (rule.getDestRegions() != null && !rule.getDestRegions().isBlank()) {
             Set<String> allowed = csvSet(rule.getDestRegions());
-            if (req.getDestRegion() == null || !allowed.contains(req.getDestRegion())) {
+            if (req.getDestRegion() == null || !allowed.contains(req.getDestRegion().toUpperCase())) {
                 return "DEST_REGION_MISMATCH";
             }
         }

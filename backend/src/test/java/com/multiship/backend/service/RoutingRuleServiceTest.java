@@ -219,6 +219,47 @@ class RoutingRuleServiceTest {
         assertEquals("WEIGHT_BELOW_MIN", result.getTrace().get(0).getOutcome());
     }
 
+    // ===== Audit-fix #3 — null-safe carrier / source + destRegion case =====
+
+    @Test
+    void matches_destRegion_isCaseInsensitive() {
+        // csvSet uppercases rule values, so the rule stores {"EUROPE"}.
+        // Requests can arrive from the frontend with the taxonomy's
+        // capitalised label ("Europe" per utils/countries.ts REGIONS).
+        // Before the fix, the contains check was case-sensitive on the
+        // request side — "Europe" never matched "EUROPE".
+        RoutingRule r = base();
+        r.setDestRegions("Europe");
+        assertEquals("MATCHED",
+                RoutingRuleServiceImpl.matches(r, req().destRegion("Europe").build()),
+                "same-case region should match");
+        assertEquals("MATCHED",
+                RoutingRuleServiceImpl.matches(r, req().destRegion("europe").build()),
+                "lowercase region should match");
+        assertEquals("MATCHED",
+                RoutingRuleServiceImpl.matches(r, req().destRegion("EUROPE").build()),
+                "uppercase region should match");
+    }
+
+    @Test
+    void matches_currentCarrierNull_returnsCarrierMismatchInsteadOfNPE() {
+        // A rule that keys off matchCarrier must gracefully handle a
+        // request without a currentCarrier — return CARRIER_MISMATCH
+        // (rule can't fire without the fact it needs), not NPE.
+        RoutingRule r = base();
+        r.setMatchCarrier("UPS");
+        assertEquals("CARRIER_MISMATCH",
+                RoutingRuleServiceImpl.matches(r, req().build()));
+    }
+
+    @Test
+    void matches_orderSourceNull_returnsSourceMismatchInsteadOfNPE() {
+        RoutingRule r = base();
+        r.setMatchOrderSource("ERP");
+        assertEquals("ORDER_SOURCE_MISMATCH",
+                RoutingRuleServiceImpl.matches(r, req().build()));
+    }
+
     @Test
     void evaluate_blockActionReturnsBlockReason() {
         RoutingRule r = base(); r.setId(1L);
