@@ -31,7 +31,8 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwtService,
-                                                   com.multiship.backend.service.ApiKeyService apiKeyService)
+                                                   com.multiship.backend.service.ApiKeyService apiKeyService,
+                                                   com.multiship.backend.repository.ApiKeyRepository apiKeyRepository)
             throws Exception {
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -40,6 +41,10 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // Open endpoints
                         .requestMatchers("/api/v1/auth/**").permitAll()
+                        // Sprint 46 — OAuth 2.0 token endpoint is public; the
+                        // caller authenticates with client credentials in the
+                        // body, not with a Bearer token.
+                        .requestMatchers("/api/v1/oauth/token").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         // Sprint 36 — carrier webhook receiver: no JWT (carriers can't
@@ -67,7 +72,7 @@ public class SecurityConfig {
                                         "FORBIDDEN", "You do not have permission to perform this action."))
                 )
                 .addFilterBefore(new ApiKeyAuthenticationFilter(apiKeyService), UsernamePasswordAuthenticationFilter.class)
-                .addFilterBefore(new JwtAuthenticationFilter(jwtService), UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(new JwtAuthenticationFilter(jwtService, apiKeyRepository), UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

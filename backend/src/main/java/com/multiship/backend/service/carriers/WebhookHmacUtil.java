@@ -12,7 +12,7 @@ import java.util.HexFormat;
  * using a secret we registered — same algorithm, different header + hex
  * encoding + case conventions.
  */
-final class WebhookHmacUtil {
+public final class WebhookHmacUtil {
 
     private WebhookHmacUtil() {}
 
@@ -21,7 +21,7 @@ final class WebhookHmacUtil {
      * {@code secret}. Returns null when either input is blank OR the
      * MAC init fails (bad algorithm or key spec).
      */
-    static String hmacSha256Hex(String body, String secret) {
+    public static String hmacSha256Hex(String body, String secret) {
         if (secret == null || secret.isBlank() || body == null) return null;
         try {
             Mac mac = Mac.getInstance("HmacSHA256");

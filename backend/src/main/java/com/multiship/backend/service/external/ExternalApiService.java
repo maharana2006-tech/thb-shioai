@@ -63,6 +63,10 @@ public class ExternalApiService {
     private final OrderRawCodesRepository orderRawCodesRepository;
     private final Map<String, CarrierConnector> connectorsByCode;
 
+    /** Sprint 46 — optional so existing tests don't have to plumb another dep. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ExternalWebhookDispatcher webhookDispatcher;
+
     public ExternalApiService(ShippingConfigService shippingConfigService,
                               ShippingServiceRepository serviceRepository,
                               CarrierAccountRefRepository carrierAccountRefRepository,
@@ -283,7 +287,7 @@ public class ExternalApiService {
         // persisted the snapshot on OrderTracking (Phase 4d), so we don't
         // re-run the resolver here — the values printed on the label and the
         // values on the response are guaranteed to be the same row.
-        return ExternalShipmentResponse.builder()
+        ExternalShipmentResponse response = ExternalShipmentResponse.builder()
                 .shipmentId(label.getOrderNo())
                 .reference(req.getReference())
                 .clientCode(clientCode)
@@ -309,6 +313,26 @@ public class ExternalApiService {
                 .estimatedDelivery(label.getEstimatedDelivery())
                 .status(label.getStatus())
                 .build();
+
+        // Sprint 46 — broadcast to subscribed webhooks. Fire-and-forget:
+        // dispatcher runs @Async so a slow partner receiver never gates
+        // the label response.
+        if (webhookDispatcher != null && caller != null) {
+            try {
+                webhookDispatcher.fire(
+                        com.multiship.backend.model.ExternalWebhookSubscription.EventType.LABEL_GENERATED,
+                        caller.getApiKeyId(),
+                        java.util.Map.of(
+                                "shipmentId", response.getShipmentId(),
+                                "trackingNumber", response.getTrackingNumber() == null ? "" : response.getTrackingNumber(),
+                                "carrier", response.getCarrier() == null ? "" : response.getCarrier(),
+                                "service", response.getService() == null ? "" : response.getService(),
+                                "clientCode", clientCode == null ? "" : clientCode
+                        ));
+            } catch (Exception ignored) { /* never fail label on webhook dispatch */ }
+        }
+
+        return response;
     }
 
     // ─────────────────────────────── rates ─────────────────────────────────
