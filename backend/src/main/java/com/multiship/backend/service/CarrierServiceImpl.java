@@ -587,12 +587,18 @@ public class CarrierServiceImpl implements CarrierService {
         // allowlist of the original service. When the client isn't set or
         // the routing service isn't wired, this is a no-op.
         if (hasClient && routingRuleService != null) {
+            // Audit-fix #4 — resolve destRegion from the destination country
+            // via the shared CountryRegions taxonomy. Prior to this the field
+            // was hard-coded null, so every region-scoped routing rule (e.g.
+            // "if destination is Europe, reroute to DHL") silently failed to
+            // match in the label-generation hot path.
             com.multiship.backend.dto.RoutingEvaluationRequest evalReq =
                     com.multiship.backend.dto.RoutingEvaluationRequest.builder()
                             .weightLb(com.multiship.backend.util.UnitConverter.toPounds(
                                     req.getWeight(), req.getWeightUnit()))
                             .destCountry(to.getCountryCode())
-                            .destRegion(null) // resolver looks up region from country via frontend / catalog
+                            .destRegion(com.multiship.backend.util.CountryRegions.regionOf(
+                                    to.getCountryCode()))
                             .currentCarrier(carrier)
                             .currentServiceId(service != null ? service.getId() : null)
                             .declaredValue(req.getDeclaredValue())
