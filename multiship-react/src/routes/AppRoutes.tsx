@@ -12,6 +12,7 @@ import LabelTemplatesPage from '../components/LabelTemplatesPage'
 import CustomFieldsPage from '../components/CustomFieldsPage'
 import RoutingRulesPage from '../components/RoutingRulesPage'
 import ReportsPage from '../components/ReportsPage'
+import WebhookSubscriptionsPage from '../components/WebhookSubscriptionsPage'
 import ShippingServicesPage from '../components/ShippingServicesPage'
 import ShippingServiceMappingPage from '../components/ShippingServiceMappingPage'
 import ApiKeysPage from '../components/ApiKeysPage'
@@ -54,6 +55,7 @@ export default function AppRoutes() {
               <Route path="custom-fields" element={<CustomFieldsPage />} />
               <Route path="routing-rules" element={<RoutingRulesPage />} />
               <Route path="reports" element={<ReportsPage />} />
+              <Route path="webhook-subscriptions" element={<WebhookSubscriptionsPage />} />
               <Route path="code-maps" element={<CodeMapsPage />} />
               <Route element={<RequireRole roles={['ADMIN']} />}>
                 <Route path="carriers" element={<CarrierPage />} />
