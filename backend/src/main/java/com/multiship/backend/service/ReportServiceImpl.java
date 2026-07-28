@@ -76,7 +76,7 @@ public class ReportServiceImpl implements ReportService {
         try (PrintWriter w = new PrintWriter(out)) {
             w.println("orderNo,customerNo,tenantId,shipDate,trackingNumber,status,carrierAmount,billableAmount,currency,destCountry,weight,shipVia");
             for (Object row : q.getResultList()) {
-                Object[] r = (Object[]) row;
+                Object[] r = typedRow(row, 12);
                 w.println(csv(r[0]) + "," + csv(r[1]) + "," + csv(r[2]) + "," + csv(r[3]) + ","
                         + csv(r[4]) + "," + csv(r[5]) + "," + csv(r[6]) + "," + csv(r[7]) + ","
                         + csv(r[8]) + "," + csv(r[9]) + "," + csv(r[10]) + "," + csv(r[11]));
@@ -113,7 +113,7 @@ public class ReportServiceImpl implements ReportService {
         try (PrintWriter w = new PrintWriter(out)) {
             w.println("orderNo,trackingNumber,status,createdAt,updatedAt,customerNo,tenantId,destCountry");
             for (Object row : q.getResultList()) {
-                Object[] r = (Object[]) row;
+                Object[] r = typedRow(row, 8);
                 w.println(csv(r[0]) + "," + csv(r[1]) + "," + csv(r[2]) + "," + csv(r[3]) + ","
                         + csv(r[4]) + "," + csv(r[5]) + "," + csv(r[6]) + "," + csv(r[7]));
             }
@@ -175,7 +175,7 @@ public class ReportServiceImpl implements ReportService {
         try (PrintWriter w = new PrintWriter(out)) {
             w.println("client,yearMonth,labels,totalSpend,avgSpend,currency");
             for (Object row : q.getResultList()) {
-                Object[] r = (Object[]) row;
+                Object[] r = typedRow(row, 6);
                 w.println(csv(r[0]) + "," + csv(r[1]) + "," + csv(r[2]) + ","
                         + csv(r[3]) + "," + csv(r[4]) + "," + csv(r[5]));
             }
@@ -184,6 +184,30 @@ public class ReportServiceImpl implements ReportService {
     }
 
     // ===== helpers =====
+
+    /**
+     * Audit-fix #6 — every native-query result row lands as an Object[]
+     * whose length matches the SELECT column count. Downstream code
+     * reads r[0]..r[N] positionally; adding or removing a column in the
+     * SELECT used to silently produce ArrayIndexOutOfBoundsException at
+     * runtime OR shift every subsequent field into the wrong CSV
+     * position (values misaligned but no crash). This helper turns both
+     * failure modes into an immediate, self-describing IllegalStateException
+     * that surfaces on the first row.
+     */
+    static Object[] typedRow(Object row, int expectedColumns) {
+        if (!(row instanceof Object[] arr)) {
+            throw new IllegalStateException(
+                    "Report SQL returned a scalar where " + expectedColumns
+                            + "-column tuple was expected — check for column-order drift.");
+        }
+        if (arr.length != expectedColumns) {
+            throw new IllegalStateException(
+                    "Report SQL returned " + arr.length + " columns, expected "
+                            + expectedColumns + " — check for column-order drift in the SELECT.");
+        }
+        return arr;
+    }
 
     private static void bindFilters(Query q, ReportFilters f) {
         if (f.getFrom() != null) q.setParameter("fromDate", java.sql.Timestamp.valueOf(f.getFrom()));

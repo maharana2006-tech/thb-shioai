@@ -54,4 +54,42 @@ class ReportServiceImplTest {
     void csv_localDateIsIso() {
         assertEquals("2026-07-28", ReportServiceImpl.csv(LocalDate.of(2026, 7, 28)));
     }
+
+    // ===== Audit-fix #6 — typedRow fail-fast on column drift =====
+
+    @Test
+    void typedRow_correctLengthPassesThrough() {
+        Object[] row = { 1, "hello", null, 42.0 };
+        assertArrayEquals(row, ReportServiceImpl.typedRow(row, 4));
+    }
+
+    @Test
+    void typedRow_extraColumnThrows() {
+        Object[] row = { 1, 2, 3, 4, 5 };
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> ReportServiceImpl.typedRow(row, 4));
+        assertTrue(ex.getMessage().contains("5 columns"),
+                "message should surface the actual column count: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("expected 4"),
+                "message should surface the expected count: " + ex.getMessage());
+    }
+
+    @Test
+    void typedRow_missingColumnThrows() {
+        Object[] row = { 1, 2, 3 };
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> ReportServiceImpl.typedRow(row, 4));
+        assertTrue(ex.getMessage().contains("3 columns"));
+        assertTrue(ex.getMessage().contains("column-order drift"));
+    }
+
+    @Test
+    void typedRow_scalarInsteadOfArrayThrows() {
+        // Native SQL that projects a single column (COUNT(*)) returns a
+        // scalar, not Object[]. If a caller wires a 1-column report and
+        // then adds a second column later, this catches the misuse.
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> ReportServiceImpl.typedRow(42L, 4));
+        assertTrue(ex.getMessage().contains("scalar"));
+    }
 }
