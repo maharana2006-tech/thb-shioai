@@ -74,6 +74,10 @@ public class RateShopServiceImpl implements RateShopService {
     private final RateCacheService rateCacheService;
     private final ExecutorService executor;
 
+    /** Sprint 45 — optional so existing tests don't need to plumb it. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.RateShopHistoryRepository rateShopHistoryRepository;
+
     @Autowired
     public RateShopServiceImpl(CarrierService carrierService,
                                 CarrierAccountRefRepository carrierAccountRefRepository,
@@ -148,7 +152,45 @@ public class RateShopServiceImpl implements RateShopService {
             }
         }
 
-        return success(mergeResults(results), summary(results));
+        RateShopResponseDTO merged = mergeResults(results);
+
+        // Sprint 45 — best-effort history persistence for the reporting
+        // pipeline. Never fails the rate shop itself.
+        if (rateShopHistoryRepository != null) {
+            try {
+                persistHistory(request, results, merged);
+            } catch (Exception ignored) {
+                // swallow: rate-shop success is more important than history.
+            }
+        }
+
+        return success(merged, summary(results));
+    }
+
+    private void persistHistory(RateShopRequestDTO request,
+                                 List<CarrierFanoutResult> results,
+                                 RateShopResponseDTO merged) {
+        com.multiship.backend.model.RateShopHistory row =
+                new com.multiship.backend.model.RateShopHistory();
+        row.setCustomerNo(request.getCustomerNo());
+        ShipmentRequestDTO ship = request.getShipment();
+        if (ship != null) {
+            row.setDestCountry(ship.getRecipientCountryCode());
+            row.setWeight(ship.getWeight());
+            row.setWeightUnit(ship.getWeightUnit());
+        }
+        row.setCarriersQueried(results.size());
+        row.setCarriersReturned((int) results.stream()
+                .filter(r -> !r.options().isEmpty()).count());
+        if (merged != null && merged.getOptions() != null && !merged.getOptions().isEmpty()) {
+            RateOptionDTO cheapest = merged.getOptions().get(0);
+            row.setCheapestCarrier(cheapest.getCarrierCode());
+            row.setCheapestService(cheapest.getServiceCode());
+            row.setCheapestAmount(cheapest.getTotalAmount());
+            row.setCheapestCurrency(cheapest.getCurrency());
+        }
+        row.setCreatedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+        rateShopHistoryRepository.save(row);
     }
 
     /**
