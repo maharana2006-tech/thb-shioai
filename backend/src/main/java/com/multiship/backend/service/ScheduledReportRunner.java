@@ -31,10 +31,23 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ScheduledReportRunner {
 
+    /**
+     * Audit-fix #7 — port the retry pattern from Sprint 46's
+     * {@code ExternalWebhookDispatcher}. Same constants keep the two
+     * webhook delivery paths behaviourally aligned.
+     */
+    static final int WEBHOOK_MAX_ATTEMPTS = 3;
+    /** Wait ms before attempt N. Package-private so tests can override to zero. */
+    static long[] webhookBackoffsMs = { 0L, 2_000L, 10_000L };
+
     private final ScheduledReportRepository scheduleRepo;
     private final GeneratedReportRepository generatedRepo;
     private final ReportService reportService;
     private final ObjectMapper objectMapper;
+
+    /** Package-private RestClient injection point for tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RestClient testRestClient;
 
     /** Every minute. Runs synchronously — schedule count is small in v1. */
     @Scheduled(fixedDelay = 60_000L)
@@ -118,15 +131,46 @@ public class ScheduledReportRunner {
             if (schedule.getDeliveryWebhookUrl() == null || schedule.getDeliveryWebhookUrl().isBlank()) {
                 throw new IllegalStateException("WEBHOOK delivery has no URL configured");
             }
-            RestClient.create().post()
-                    .uri(schedule.getDeliveryWebhookUrl())
-                    .header("Content-Type", "text/csv")
-                    .header("X-Report-Filename", gr.getFilename())
-                    .header("X-Report-Dataset", gr.getDataset())
-                    .body(bytes)
-                    .retrieve()
-                    .toBodilessEntity();
+            deliverWebhookWithRetry(schedule, gr, bytes);
         }
+    }
+
+    /**
+     * Audit-fix #7 — retry the webhook POST up to {@link #WEBHOOK_MAX_ATTEMPTS}
+     * times with exponential backoff on transient failures. Any non-2xx
+     * response OR thrown exception counts as a failure. The final error is
+     * re-thrown so the caller marks the delivery FAILED.
+     */
+    void deliverWebhookWithRetry(ScheduledReport schedule, GeneratedReport gr, byte[] bytes) throws Exception {
+        RestClient client = testRestClient != null ? testRestClient : RestClient.create();
+        Exception last = null;
+        for (int attempt = 1; attempt <= WEBHOOK_MAX_ATTEMPTS; attempt++) {
+            if (attempt > 1) {
+                long wait = webhookBackoffsMs[Math.min(attempt - 1, webhookBackoffsMs.length - 1)];
+                try { Thread.sleep(wait); }
+                catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw ie;
+                }
+            }
+            try {
+                var response = client.post()
+                        .uri(schedule.getDeliveryWebhookUrl())
+                        .header("Content-Type", "text/csv")
+                        .header("X-Report-Filename", gr.getFilename())
+                        .header("X-Report-Dataset", gr.getDataset())
+                        .body(bytes)
+                        .retrieve()
+                        .toBodilessEntity();
+                if (response.getStatusCode().is2xxSuccessful()) return;
+                last = new IllegalStateException(
+                        "Webhook receiver returned HTTP " + response.getStatusCode().value());
+            } catch (Exception e) {
+                last = e;
+            }
+        }
+        // Ran the loop MAX_ATTEMPTS times without a 2xx — surface the last error.
+        if (last != null) throw last;
     }
 
     private static String buildFilename(ScheduledReport s, LocalDateTime now) {
