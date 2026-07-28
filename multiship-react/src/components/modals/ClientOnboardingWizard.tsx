@@ -29,22 +29,30 @@ import {
 import {
   shippingConfigService,
   type ShippingServiceItem,
+  type PackagePreset,
 } from '../../api/shippingConfigService'
 import { clientAllowedServicesService } from '../../api/clientCatalogService'
+import { clientCodeMapService, type ClientCodeMap, type CodeMapKind } from '../../api/clientCodeMapService'
+import { formatCarrierName } from '../../utils/carrierUtils'
+import { FiEdit3, FiPlus, FiTrash2 } from 'react-icons/fi'
 import { carrierEnvironmentOptions, type CarrierEnvironment } from '../../utils/carrierUtils'
 import CountrySelect from '../workspace/CountrySelect'
 import Select from '../workspace/Select'
 
 /**
- * Client onboarding wizard — 5 steps, skip on every step past the
+ * Client onboarding wizard — 7 steps, skip on every step past the
  * first. Commits are incremental: after step 1 the client row exists,
  * each subsequent step writes its own bit if the user provides data,
- * or silently advances on Skip. Advanced tabs (allowed packages,
- * destinations, policy, markup) stay behind the existing tabbed
- * editor for post-onboarding config.
+ * or silently advances on Skip. Steps 6 & 7 populate the per-client
+ * ERP alias tables (SHIPVIA + SERVICE + PACKAGE) so incoming orders
+ * translate raw ERP codes into platform IDs on arrival.
+ *
+ * Anything not covered here (allowed packages, destinations, policy,
+ * markup, platform-wide ship-method rules) stays on the tabbed Edit
+ * modal for post-onboarding config.
  */
 
-type StepId = 1 | 2 | 3 | 4 | 5
+type StepId = 1 | 2 | 3 | 4 | 5 | 6 | 7
 type StepStatus = 'pending' | 'active' | 'done' | 'skipped'
 
 interface StepMeta {
@@ -55,11 +63,13 @@ interface StepMeta {
 }
 
 const STEPS: StepMeta[] = [
-  { id: 1, label: 'Identity',      hint: 'Code, name, contact',                icon: <FiUser /> },
-  { id: 2, label: 'Ship-from',     hint: "Where the client's labels originate", icon: <FiHome /> },
-  { id: 3, label: 'Return',        hint: 'Where undeliverable parcels go',      icon: <FiFlag /> },
-  { id: 4, label: 'Carrier',       hint: 'First carrier account (billing)',    icon: <FiTruck /> },
-  { id: 5, label: 'Warehouse',     hint: 'First warehouse + allowed carriers', icon: <FiPackage /> },
+  { id: 1, label: 'Identity',       hint: 'Code, name, contact',                          icon: <FiUser /> },
+  { id: 2, label: 'Ship-from',      hint: "Where the client's labels originate",           icon: <FiHome /> },
+  { id: 3, label: 'Return',         hint: 'Where undeliverable parcels go',                icon: <FiFlag /> },
+  { id: 4, label: 'Carrier',        hint: 'Carrier accounts (one or many)',                icon: <FiTruck /> },
+  { id: 5, label: 'Warehouse',      hint: 'First warehouse + allowed carriers',            icon: <FiPackage /> },
+  { id: 6, label: 'Service aliases',hint: 'ERP shipvia / service codes → platform service',icon: <FiEdit3 /> },
+  { id: 7, label: 'Package aliases',hint: 'ERP package codes → platform preset',           icon: <FiPackage /> },
 ]
 
 const emptyAddress = (): Address => ({
@@ -76,7 +86,7 @@ type WarehouseChoice = 'reuse' | 'existing' | 'new'
 export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
   const [step, setStep] = useState<StepId>(1)
   const [statuses, setStatuses] = useState<Record<StepId, StepStatus>>({
-    1: 'active', 2: 'pending', 3: 'pending', 4: 'pending', 5: 'pending',
+    1: 'active', 2: 'pending', 3: 'pending', 4: 'pending', 5: 'pending', 6: 'pending', 7: 'pending',
   })
   const [saving, setSaving] = useState(false)
 
@@ -127,6 +137,18 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
     new Set(['UPS', 'FEDEX', 'USPS', 'DHL']),
   )
   const [catalog, setCatalog] = useState<ShippingServiceItem[]>([])
+  const [presets, setPresets] = useState<PackagePreset[]>([])
+
+  // ===== Steps 6 & 7 — ERP code aliases (per-client) =====
+  //  Step 6: SHIPVIA + SERVICE lists (both target a ShippingService id).
+  //  Step 7: PACKAGE list (targets a PackagePreset id).
+  const [shipviaMaps, setShipviaMaps] = useState<ClientCodeMap[]>([])
+  const [serviceMaps, setServiceMaps] = useState<ClientCodeMap[]>([])
+  const [packageMaps, setPackageMaps] = useState<ClientCodeMap[]>([])
+  const [shipviaDraft, setShipviaDraft] = useState({ erpCode: '', targetId: '' })
+  const [serviceDraft, setServiceDraft] = useState({ erpCode: '', targetId: '' })
+  const [packageDraft, setPackageDraft] = useState({ erpCode: '', targetId: '' })
+  const [addingAlias, setAddingAlias] = useState(false)
 
   // Server-truth client after step 1 (needed for follow-up API calls).
   const [createdClient, setCreatedClient] = useState<Client | null>(null)
@@ -149,6 +171,40 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
       .then((c) => setCatalog(c.services ?? []))
       .catch(() => setCatalog([]))
   }, [step])
+
+  // Steps 6 & 7 — load the catalogs (services + presets) and any already-
+  // saved aliases for this client. Runs on entry to both steps so returning
+  // to Step 6 after Step 7 doesn't miss a fresh row saved in Step 7.
+  useEffect(() => {
+    if (step !== 6 && step !== 7) return
+    if (catalog.length === 0) {
+      shippingConfigService
+        .catalog()
+        .then((c) => setCatalog(c.services ?? []))
+        .catch(() => setCatalog([]))
+    }
+    if (presets.length === 0) {
+      shippingConfigService
+        .listPresets()
+        .then(setPresets)
+        .catch(() => setPresets([]))
+    }
+    if (!currentClientCode) return
+    if (step === 6) {
+      Promise.all([
+        clientCodeMapService.list(currentClientCode, 'SHIPVIA').catch(() => ({ data: [] as ClientCodeMap[] })),
+        clientCodeMapService.list(currentClientCode, 'SERVICE').catch(() => ({ data: [] as ClientCodeMap[] })),
+      ]).then(([sv, sr]) => {
+        setShipviaMaps(sv.data ?? [])
+        setServiceMaps(sr.data ?? [])
+      })
+    } else {
+      clientCodeMapService
+        .list(currentClientCode, 'PACKAGE')
+        .then((r) => setPackageMaps(r.data ?? []))
+        .catch(() => setPackageMaps([]))
+    }
+  }, [step, currentClientCode])
 
   // ===== helpers =====
 
@@ -413,6 +469,78 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
     }
   }
 
+  /**
+   * Save the currently-typed draft (if any) for a given alias kind and
+   * refresh the saved-rows list. Called from the inline add buttons on
+   * Steps 6 & 7 AND from the Next dispatch as a "sweep unsaved" pass so
+   * a user who typed a valid row but forgot to click Add doesn't lose it.
+   */
+  const saveAliasDraft = async (
+    kind: CodeMapKind,
+    draft: { erpCode: string; targetId: string },
+    onSuccess: (row: ClientCodeMap) => void,
+    onReset: () => void,
+  ): Promise<boolean> => {
+    if (!draft.erpCode.trim() || !draft.targetId) return true  // nothing to save
+    setAddingAlias(true)
+    try {
+      const resp = await clientCodeMapService.upsert(currentClientCode, kind, {
+        erpCode: draft.erpCode.trim(),
+        targetId: Number(draft.targetId),
+      })
+      if (resp.data) onSuccess(resp.data)
+      onReset()
+      return true
+    } catch (err) {
+      notify.error(err instanceof ApiError ? err.message : `Failed to save ${kind} alias.`)
+      return false
+    } finally {
+      setAddingAlias(false)
+    }
+  }
+
+  const commitServiceAliases = async (): Promise<boolean> => {
+    // Sweep any typed-but-not-Added drafts before advancing.
+    const svOk = await saveAliasDraft(
+      'SHIPVIA', shipviaDraft,
+      (row) => setShipviaMaps((cur) => [...cur, row]),
+      () => setShipviaDraft({ erpCode: '', targetId: '' }),
+    )
+    if (!svOk) return false
+    const srOk = await saveAliasDraft(
+      'SERVICE', serviceDraft,
+      (row) => setServiceMaps((cur) => [...cur, row]),
+      () => setServiceDraft({ erpCode: '', targetId: '' }),
+    )
+    if (!srOk) return false
+    markStep(6, 'done')
+    return true
+  }
+
+  const commitPackageAliases = async (): Promise<boolean> => {
+    const ok = await saveAliasDraft(
+      'PACKAGE', packageDraft,
+      (row) => setPackageMaps((cur) => [...cur, row]),
+      () => setPackageDraft({ erpCode: '', targetId: '' }),
+    )
+    if (!ok) return false
+    markStep(7, 'done')
+    return true
+  }
+
+  const removeAlias = async (
+    kind: CodeMapKind,
+    row: ClientCodeMap,
+    onGone: () => void,
+  ) => {
+    try {
+      await clientCodeMapService.remove(currentClientCode, kind, row.id)
+      onGone()
+    } catch (err) {
+      notify.error(err instanceof ApiError ? err.message : `Failed to delete ${kind} alias.`)
+    }
+  }
+
   // ===== navigation =====
 
   const goNext = async () => {
@@ -421,21 +549,23 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
     else if (step === 2) ok = await commitShipFrom()
     else if (step === 3) ok = await commitReturn()
     else if (step === 4) ok = await commitCarrierAccounts()
-    else if (step === 5) {
-      ok = await commitWarehouseAndAllowlist()
+    else if (step === 5) ok = await commitWarehouseAndAllowlist()
+    else if (step === 6) ok = await commitServiceAliases()
+    else if (step === 7) {
+      ok = await commitPackageAliases()
       if (ok && createdClient) {
         onFinished(createdClient)
         onClose()
         return
       }
     }
-    if (ok && step < 5) advanceTo((step + 1) as StepId)
+    if (ok && step < 7) advanceTo((step + 1) as StepId)
   }
 
   const goSkip = () => {
     if (step === 1) return  // step 1 is never skippable
     markStep(step, 'skipped')
-    if (step < 5) advanceTo((step + 1) as StepId)
+    if (step < 7) advanceTo((step + 1) as StepId)
     else if (createdClient) {
       onFinished(createdClient)
       onClose()
@@ -450,7 +580,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
 
   // ===== render =====
 
-  const isLast = step === 5
+  const isLast = step === 7
   const nextLabel = isLast ? 'Finish' : 'Next'
 
   return (
@@ -549,6 +679,64 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
                 allowedCarriers={allowedCarriers}
                 setAllowedCarriers={setAllowedCarriers}
                 shipFromPreview={createdClient?.shipFrom ?? shipFrom}
+              />
+            ) : null}
+            {step === 6 ? (
+              <ServiceAliasStep
+                clientCode={currentClientCode}
+                carriersInScope={carriersInScope(addedAccounts, allowedCarriers)}
+                services={catalog}
+                shipviaMaps={shipviaMaps}
+                serviceMaps={serviceMaps}
+                shipviaDraft={shipviaDraft}
+                setShipviaDraft={setShipviaDraft}
+                serviceDraft={serviceDraft}
+                setServiceDraft={setServiceDraft}
+                adding={addingAlias}
+                onAdd={(kind) => {
+                  if (kind === 'SHIPVIA') {
+                    return saveAliasDraft(
+                      'SHIPVIA', shipviaDraft,
+                      (row) => setShipviaMaps((cur) => [...cur, row]),
+                      () => setShipviaDraft({ erpCode: '', targetId: '' }),
+                    )
+                  }
+                  return saveAliasDraft(
+                    'SERVICE', serviceDraft,
+                    (row) => setServiceMaps((cur) => [...cur, row]),
+                    () => setServiceDraft({ erpCode: '', targetId: '' }),
+                  )
+                }}
+                onRemove={(kind, row) => {
+                  if (kind === 'SHIPVIA') {
+                    return removeAlias('SHIPVIA', row, () =>
+                      setShipviaMaps((cur) => cur.filter((r) => r.id !== row.id)))
+                  }
+                  return removeAlias('SERVICE', row, () =>
+                    setServiceMaps((cur) => cur.filter((r) => r.id !== row.id)))
+                }}
+              />
+            ) : null}
+            {step === 7 ? (
+              <PackageAliasStep
+                clientCode={currentClientCode}
+                carriersInScope={carriersInScope(addedAccounts, allowedCarriers)}
+                presets={presets}
+                packageMaps={packageMaps}
+                packageDraft={packageDraft}
+                setPackageDraft={setPackageDraft}
+                adding={addingAlias}
+                onAdd={() =>
+                  saveAliasDraft(
+                    'PACKAGE', packageDraft,
+                    (row) => setPackageMaps((cur) => [...cur, row]),
+                    () => setPackageDraft({ erpCode: '', targetId: '' }),
+                  )
+                }
+                onRemove={(row) =>
+                  removeAlias('PACKAGE', row, () =>
+                    setPackageMaps((cur) => cur.filter((r) => r.id !== row.id)))
+                }
               />
             ) : null}
           </div>
@@ -1192,4 +1380,249 @@ function nextCarrierAfter(current: string): string {
   const order = ['UPS', 'FEDEX', 'USPS', 'DHL']
   const i = order.indexOf(current)
   return i === -1 || i === order.length - 1 ? order[0] : order[i + 1]
+}
+
+/**
+ * The set of carrier codes the wizard has touched so far — accounts
+ * added in Step 4 + carriers allowlisted in Step 5. Empty set = user
+ * skipped both, in which case the alias steps show the whole catalog.
+ */
+function carriersInScope(
+  accounts: CarrierAccountRef[],
+  allowlisted: Set<string>,
+): Set<string> {
+  const out = new Set<string>()
+  accounts.forEach((a) => a.carrierCode && out.add(a.carrierCode.toUpperCase()))
+  allowlisted.forEach((c) => out.add(c.toUpperCase()))
+  return out
+}
+
+// ==========================================================================
+// Step 6 — ERP service aliases (SHIPVIA + SERVICE)
+// ==========================================================================
+
+function ServiceAliasStep({
+  clientCode, carriersInScope: scope, services,
+  shipviaMaps, serviceMaps,
+  shipviaDraft, setShipviaDraft,
+  serviceDraft, setServiceDraft,
+  adding, onAdd, onRemove,
+}: {
+  clientCode: string
+  carriersInScope: Set<string>
+  services: ShippingServiceItem[]
+  shipviaMaps: ClientCodeMap[]
+  serviceMaps: ClientCodeMap[]
+  shipviaDraft: { erpCode: string; targetId: string }
+  setShipviaDraft: React.Dispatch<React.SetStateAction<{ erpCode: string; targetId: string }>>
+  serviceDraft: { erpCode: string; targetId: string }
+  setServiceDraft: React.Dispatch<React.SetStateAction<{ erpCode: string; targetId: string }>>
+  adding: boolean
+  onAdd: (kind: 'SHIPVIA' | 'SERVICE') => Promise<boolean>
+  onRemove: (kind: 'SHIPVIA' | 'SERVICE', row: ClientCodeMap) => Promise<void>
+}) {
+  const svcOptions = useMemo(() => {
+    const filtered = scope.size === 0
+      ? services
+      : services.filter((s) => scope.has(s.carrier.toUpperCase()))
+    return filtered
+      .filter((s) => s.enabled)
+      .slice()
+      .sort((a, b) => a.carrier.localeCompare(b.carrier) || a.name.localeCompare(b.name))
+  }, [services, scope])
+
+  return (
+    <div className="max-w-3xl space-y-5">
+      <p className="text-[12.5px] text-slate-500">
+        When incoming orders for <strong>{clientCode}</strong> land, the ERP's
+        ship-via and service codes are translated on arrival using these
+        aliases. The target dropdown is filtered to services from the carriers
+        picked in Steps 4 & 5.
+      </p>
+
+      <AliasList
+        kind="SHIPVIA"
+        heading="ERP ship-via codes"
+        subheading='e.g. "P80" → UPS Ground. Overrides the platform-wide ShipViaMapping rules.'
+        erpPlaceholder="P80"
+        rows={shipviaMaps}
+        options={svcOptions.map((s) => ({
+          value: String(s.id),
+          label: `${formatCarrierName(s.carrier)} · ${s.serviceCode} — ${s.name}`,
+        }))}
+        draft={shipviaDraft}
+        setDraft={setShipviaDraft}
+        adding={adding}
+        onAdd={() => onAdd('SHIPVIA')}
+        onRemove={(row) => onRemove('SHIPVIA', row)}
+      />
+
+      <AliasList
+        kind="SERVICE"
+        heading="ERP service codes"
+        subheading='e.g. "F77-2DAY" → FedEx 2Day. Same target catalog as ship-via.'
+        erpPlaceholder="F77-2DAY"
+        rows={serviceMaps}
+        options={svcOptions.map((s) => ({
+          value: String(s.id),
+          label: `${formatCarrierName(s.carrier)} · ${s.serviceCode} — ${s.name}`,
+        }))}
+        draft={serviceDraft}
+        setDraft={setServiceDraft}
+        adding={adding}
+        onAdd={() => onAdd('SERVICE')}
+        onRemove={(row) => onRemove('SERVICE', row)}
+      />
+    </div>
+  )
+}
+
+// ==========================================================================
+// Step 7 — ERP package aliases (PACKAGE)
+// ==========================================================================
+
+function PackageAliasStep({
+  clientCode, carriersInScope: scope, presets,
+  packageMaps, packageDraft, setPackageDraft,
+  adding, onAdd, onRemove,
+}: {
+  clientCode: string
+  carriersInScope: Set<string>
+  presets: PackagePreset[]
+  packageMaps: ClientCodeMap[]
+  packageDraft: { erpCode: string; targetId: string }
+  setPackageDraft: React.Dispatch<React.SetStateAction<{ erpCode: string; targetId: string }>>
+  adding: boolean
+  onAdd: () => Promise<boolean>
+  onRemove: (row: ClientCodeMap) => Promise<void>
+}) {
+  const pkgOptions = useMemo(() => {
+    // Show:
+    //   - CUSTOM boxes (usable with any carrier)
+    //   - CARRIER presets from carriers in scope
+    // If the scope is empty (user skipped Steps 4 & 5) show the full list.
+    const filtered = scope.size === 0
+      ? presets
+      : presets.filter((p) => {
+        if (!p.carrier) return true  // custom / carrier-agnostic
+        return scope.has(p.carrier.toUpperCase())
+      })
+    return filtered.slice().sort((a, b) => a.name.localeCompare(b.name))
+  }, [presets, scope])
+
+  return (
+    <div className="max-w-3xl space-y-5">
+      <p className="text-[12.5px] text-slate-500">
+        Translate the ERP's package codes on <strong>{clientCode}</strong>'s
+        incoming orders into platform package presets. Filtered to presets
+        from the carriers you picked in Steps 4 & 5, plus custom boxes.
+      </p>
+
+      <AliasList
+        kind="PACKAGE"
+        heading="ERP package codes"
+        subheading='e.g. "BOX-A" → 12x9x3 mailer'
+        erpPlaceholder="BOX-A"
+        rows={packageMaps}
+        options={pkgOptions
+          .filter((p) => p.id != null)
+          .map((p) => ({
+            value: String(p.id),
+            label: `${p.name}${p.carrier ? ` · ${formatCarrierName(p.carrier)}` : ''}${p.kind ? ` · ${p.kind}` : ''}`,
+          }))}
+        draft={packageDraft}
+        setDraft={setPackageDraft}
+        adding={adding}
+        onAdd={onAdd}
+        onRemove={onRemove}
+      />
+    </div>
+  )
+}
+
+// ==========================================================================
+// Shared alias-list primitive (used by both Steps 6 & 7)
+// ==========================================================================
+
+function AliasList({
+  heading, subheading, erpPlaceholder, rows, options,
+  draft, setDraft, adding, onAdd, onRemove,
+}: {
+  kind: CodeMapKind
+  heading: string
+  subheading: string
+  erpPlaceholder: string
+  rows: ClientCodeMap[]
+  options: Array<{ value: string; label: string }>
+  draft: { erpCode: string; targetId: string }
+  setDraft: React.Dispatch<React.SetStateAction<{ erpCode: string; targetId: string }>>
+  adding: boolean
+  onAdd: () => Promise<boolean>
+  onRemove: (row: ClientCodeMap) => void | Promise<void>
+}) {
+  return (
+    <section>
+      <h4 className="text-[13px] font-semibold text-slate-900">{heading}</h4>
+      <p className="mt-0.5 text-[11.5px] text-slate-500">{subheading}</p>
+
+      {rows.length > 0 ? (
+        <div className="mt-2 overflow-hidden rounded-lg border border-emerald-200">
+          <table className="min-w-full text-[12.5px]">
+            <thead className="bg-emerald-50 text-[10.5px] font-bold uppercase tracking-[0.14em] text-emerald-800">
+              <tr>
+                <th className="px-3 py-1.5 text-left">ERP code</th>
+                <th className="px-3 py-1.5 text-left">Platform target</th>
+                <th className="px-3 py-1.5 w-8"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-emerald-100">
+              {rows.map((row) => (
+                <tr key={row.id} className="bg-white">
+                  <td className="px-3 py-1.5 font-mono text-slate-800">{row.erpCode}</td>
+                  <td className="px-3 py-1.5 text-slate-700">{row.targetLabel ?? row.targetId ?? '—'}</td>
+                  <td className="px-3 py-1.5 text-right">
+                    <button
+                      type="button"
+                      onClick={() => void onRemove(row)}
+                      className="rounded p-1 text-rose-500 hover:bg-rose-50"
+                      aria-label="Remove alias"
+                    >
+                      <FiTrash2 />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] gap-2">
+        <input
+          type="text"
+          value={draft.erpCode}
+          onChange={(e) => setDraft((c) => ({ ...c, erpCode: e.target.value }))}
+          placeholder={erpPlaceholder}
+          className={inputCls}
+        />
+        <Select
+          value={draft.targetId}
+          onChange={(e) => setDraft((c) => ({ ...c, targetId: e.target.value }))}
+        >
+          <option value="">— pick a platform target —</option>
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </Select>
+        <button
+          type="button"
+          onClick={() => void onAdd()}
+          disabled={adding || !draft.erpCode.trim() || !draft.targetId}
+          className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50"
+        >
+          <FiPlus /> Add
+        </button>
+      </div>
+    </section>
+  )
 }
