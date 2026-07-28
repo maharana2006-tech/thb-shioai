@@ -32,6 +32,7 @@ import {
 } from '../utils/countries'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
+import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'
 import CustomsProfileModal from './modals/CustomsProfileModal'
 
@@ -581,6 +582,10 @@ export default function ImporterBrokerPage() {
 }
 
 /** Per-row kebab (Edit + Delete). */
+/**
+ * Per-row kebab menu. Uses PortalMenu so the popover escapes
+ * AdvancedDataTable's overflow-auto scroll container.
+ */
 function RowActionsMenu({
   onEdit,
   onDelete,
@@ -589,20 +594,13 @@ function RowActionsMenu({
   onDelete: () => void
 }) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onDocClick = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDocClick)
-    return () => document.removeEventListener('mousedown', onDocClick)
-  }, [open])
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const close = useCallback(() => setOpen(false), [])
 
   return (
-    <div ref={ref} className="relative inline-block text-left">
+    <>
       <button
+        ref={buttonRef}
         type="button"
         onClick={(e) => { e.stopPropagation(); setOpen((c) => !c) }}
         aria-haspopup="menu"
@@ -612,32 +610,26 @@ function RowActionsMenu({
       >
         <FiMoreVertical className="h-3.5 w-3.5" />
       </button>
-      {open ? (
-        <div
-          role="menu"
-          className="absolute right-0 z-20 mt-1 w-40 overflow-hidden rounded-xl border border-slate-200 bg-white text-left shadow-lg"
+      <PortalMenu open={open} anchorRef={buttonRef} onClose={close} width={160}>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => { close(); onEdit() }}
+          className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
         >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => { setOpen(false); onEdit() }}
-            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
-          >
-            <FiEdit3 className="h-3.5 w-3.5 text-slate-500" />
-            Edit
-          </button>
-          <div className="my-1 border-t border-slate-100" />
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => { setOpen(false); onDelete() }}
-            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-rose-600 transition hover:bg-rose-50"
-          >
-            <FiTrash2 className="h-3.5 w-3.5" />
-            Delete
-          </button>
-        </div>
-      ) : null}
-    </div>
+          <FiEdit3 className="h-3.5 w-3.5 text-slate-500" />
+          Edit
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => { close(); onDelete() }}
+          className="flex w-full items-center gap-2 border-t border-slate-100 px-3 py-2 text-[12px] font-semibold text-rose-600 transition hover:bg-rose-50"
+        >
+          <FiTrash2 className="h-3.5 w-3.5" />
+          Delete
+        </button>
+      </PortalMenu>
+    </>
   )
 }
