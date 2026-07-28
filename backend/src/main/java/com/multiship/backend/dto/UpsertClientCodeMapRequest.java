@@ -28,4 +28,14 @@ public class UpsertClientCodeMapRequest {
     /** For DEST_COUNTRY — ISO-3166 alpha-2, upper-case. */
     @Size(min = 2, max = 2)
     private String iso2;
+
+    /**
+     * Destination scope for SHIPVIA / SERVICE / PACKAGE aliases; ignored
+     * for DEST_COUNTRY. Either or both may be null (= "any"). If both
+     * set, country wins for lookup / resolution.
+     */
+    @Size(max = 2)
+    private String destCountry;
+    @Size(max = 40)
+    private String destRegion;
 }

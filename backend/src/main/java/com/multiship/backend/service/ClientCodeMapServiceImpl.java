@@ -75,12 +75,26 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
         }
         String erp = request.getErpCode().trim();
 
+        String destCountry = normaliseDest(request.getDestCountry());
+        String destRegion = normaliseDest(request.getDestRegion());
+
         return switch (kind) {
-            case SHIPVIA -> upsertShipvia(code, erp, request.getTargetId());
-            case SERVICE -> upsertService(code, erp, request.getTargetId());
+            case SHIPVIA -> upsertShipvia(code, erp, request.getTargetId(), destCountry, destRegion);
+            case SERVICE -> upsertService(code, erp, request.getTargetId(), destCountry, destRegion);
             case DEST_COUNTRY -> upsertDest(code, erp, request.getIso2());
-            case PACKAGE -> upsertPackage(code, erp, request.getTargetId());
+            case PACKAGE -> upsertPackage(code, erp, request.getTargetId(), destCountry, destRegion);
         };
+    }
+
+    /**
+     * Normalise a destination field for storage. Blank -> null (fallback
+     * "any destination"). Country codes are upper-cased.
+     */
+    private static String normaliseDest(String v) {
+        if (!StringUtils.hasText(v)) return null;
+        String trimmed = v.trim();
+        if (trimmed.length() == 2) return trimmed.toUpperCase(Locale.ROOT);
+        return trimmed;
     }
 
     @Override
@@ -106,28 +120,42 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
 
     // ===== per-kind upsert helpers =====
 
-    private ApiResponse<ClientCodeMapDTO> upsertShipvia(String code, String erp, Long targetId) {
+    private ApiResponse<ClientCodeMapDTO> upsertShipvia(
+            String code, String erp, Long targetId, String destCountry, String destRegion) {
         if (targetId == null || shippingServiceRepository.findById(targetId).isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
                     "targetId must reference an existing shipping service.");
         }
         ClientShipviaCodeMap row = shipviaRepo
-                .findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(code, erp)
+                .findByClientCodeIgnoreCaseOrderByErpCodeAsc(code).stream()
+                .filter(r -> r.getErpCode().equalsIgnoreCase(erp)
+                        && java.util.Objects.equals(r.getDestCountry(), destCountry)
+                        && java.util.Objects.equals(r.getDestRegion(), destRegion))
+                .findFirst()
                 .orElseGet(() -> ClientShipviaCodeMap.builder().clientCode(code).erpCode(erp).build());
         row.setServiceId(targetId);
+        row.setDestCountry(destCountry);
+        row.setDestRegion(destRegion);
         shipviaRepo.save(row);
         return success("Shipvia alias saved.", toShipviaDto(row));
     }
 
-    private ApiResponse<ClientCodeMapDTO> upsertService(String code, String erp, Long targetId) {
+    private ApiResponse<ClientCodeMapDTO> upsertService(
+            String code, String erp, Long targetId, String destCountry, String destRegion) {
         if (targetId == null || shippingServiceRepository.findById(targetId).isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
                     "targetId must reference an existing shipping service.");
         }
         ClientServiceCodeMap row = serviceRepo
-                .findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(code, erp)
+                .findByClientCodeIgnoreCaseOrderByErpCodeAsc(code).stream()
+                .filter(r -> r.getErpCode().equalsIgnoreCase(erp)
+                        && java.util.Objects.equals(r.getDestCountry(), destCountry)
+                        && java.util.Objects.equals(r.getDestRegion(), destRegion))
+                .findFirst()
                 .orElseGet(() -> ClientServiceCodeMap.builder().clientCode(code).erpCode(erp).build());
         row.setServiceId(targetId);
+        row.setDestCountry(destCountry);
+        row.setDestRegion(destRegion);
         serviceRepo.save(row);
         return success("Service-code alias saved.", toServiceDto(row));
     }
@@ -146,15 +174,22 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
         return success("Destination-country alias saved.", toDestDto(row));
     }
 
-    private ApiResponse<ClientCodeMapDTO> upsertPackage(String code, String erp, Long targetId) {
+    private ApiResponse<ClientCodeMapDTO> upsertPackage(
+            String code, String erp, Long targetId, String destCountry, String destRegion) {
         if (targetId == null || packagePresetRepository.findById(targetId).isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
                     "targetId must reference an existing package preset.");
         }
         ClientPackageCodeMap row = packageRepo
-                .findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(code, erp)
+                .findByClientCodeIgnoreCaseOrderByErpCodeAsc(code).stream()
+                .filter(r -> r.getErpCode().equalsIgnoreCase(erp)
+                        && java.util.Objects.equals(r.getDestCountry(), destCountry)
+                        && java.util.Objects.equals(r.getDestRegion(), destRegion))
+                .findFirst()
                 .orElseGet(() -> ClientPackageCodeMap.builder().clientCode(code).erpCode(erp).build());
         row.setPresetId(targetId);
+        row.setDestCountry(destCountry);
+        row.setDestRegion(destRegion);
         packageRepo.save(row);
         return success("Package alias saved.", toPackageDto(row));
     }
@@ -167,6 +202,7 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
                 .id(row.getId()).kind(ClientCodeMapDTO.Kind.SHIPVIA)
                 .clientCode(row.getClientCode()).erpCode(row.getErpCode())
                 .targetId(row.getServiceId()).targetLabel(label)
+                .destCountry(row.getDestCountry()).destRegion(row.getDestRegion())
                 .createdAt(row.getCreatedAt()).updatedAt(row.getUpdatedAt())
                 .build();
     }
@@ -177,6 +213,7 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
                 .id(row.getId()).kind(ClientCodeMapDTO.Kind.SERVICE)
                 .clientCode(row.getClientCode()).erpCode(row.getErpCode())
                 .targetId(row.getServiceId()).targetLabel(label)
+                .destCountry(row.getDestCountry()).destRegion(row.getDestRegion())
                 .createdAt(row.getCreatedAt()).updatedAt(row.getUpdatedAt())
                 .build();
     }
@@ -196,6 +233,7 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
                 .id(row.getId()).kind(ClientCodeMapDTO.Kind.PACKAGE)
                 .clientCode(row.getClientCode()).erpCode(row.getErpCode())
                 .targetId(row.getPresetId()).targetLabel(label)
+                .destCountry(row.getDestCountry()).destRegion(row.getDestRegion())
                 .createdAt(row.getCreatedAt()).updatedAt(row.getUpdatedAt())
                 .build();
     }

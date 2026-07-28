@@ -45,6 +45,17 @@ public class SchemaHealer implements CommandLineRunner {
         // (e.g. "FedEx Pak" from US and from CA). The old constraint makes
         // any resync throw duplicate-key on the first collision.
         dropConstraintIfExists("package_preset", "uq_package_preset_name");
+
+        // client_shipvia_code_map / client_service_code_map /
+        // client_package_code_map were uniquely keyed on (client_code,
+        // erp_code). Aliases now scope by destination (country + region), so
+        // the same ERP code can legitimately map to different targets per
+        // destination. Drop the old constraints so Hibernate's schema update
+        // can widen the keys via service-layer preflight — new rows insert
+        // cleanly with dest_country / dest_region set.
+        dropConstraintIfExists("client_shipvia_code_map", "uq_client_shipvia_code");
+        dropConstraintIfExists("client_service_code_map", "uq_client_service_code");
+        dropConstraintIfExists("client_package_code_map", "uq_client_package_code");
     }
 
     private void dropConstraintIfExists(String table, String constraint) {

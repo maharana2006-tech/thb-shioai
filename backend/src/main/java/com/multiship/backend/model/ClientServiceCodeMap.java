@@ -23,11 +23,16 @@ import java.time.LocalDateTime;
  * {@link ClientShipviaCodeMap} because "shipvia" is conceptually "how the
  * item moves" while "service code" is "which carrier product to buy" —
  * different fields on the ERP order.
+ *
+ * <p>Destination scope (country / region) lets the same ERP code resolve
+ * to different services per lane. Uniqueness is enforced at the service
+ * layer on {@code (clientCode, erpCode, destCountry, destRegion)}; the DB
+ * doesn't declare a matching unique constraint because Postgres treats
+ * NULLs in unique keys as distinct by default (see ClientShipviaCodeMap
+ * doc for the same rationale).
  */
 @Entity
 @Table(name = "client_service_code_map",
-        uniqueConstraints = @UniqueConstraint(name = "uq_client_service_code",
-                columnNames = {"client_code", "erp_code"}),
         indexes = @Index(name = "idx_client_service_code_client", columnList = "client_code"))
 @Data
 @Builder
@@ -49,6 +54,14 @@ public class ClientServiceCodeMap {
     /** FK to {@link ShippingService#getId()}. */
     @Column(name = "service_id", nullable = false)
     private Long serviceId;
+
+    /** ISO-2 destination country (nullable = "any country in the region"). */
+    @Column(name = "dest_country", length = 2)
+    private String destCountry;
+
+    /** Destination region name (nullable = "any region"). */
+    @Column(name = "dest_region", length = 40)
+    private String destRegion;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
