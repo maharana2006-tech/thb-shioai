@@ -45,6 +45,32 @@ public class RateShopResponseDTO {
         private String currency;
         private LocalDateTime estimatedDelivery;
         private Integer transitDays;
+
+        /**
+         * G4 — internal ShippingService.id resolved for this option, when a
+         * matching row exists in the catalog. Null when the vendor's
+         * serviceCode isn't in our catalog (rate-shop can still return the
+         * option; the label path just won't be routing-aware).
+         */
+        private Long serviceId;
+
+        /**
+         * G4 — what the routing engine would do with this option at label
+         * time. KEEP = no rule matches (silent OK). REROUTE = a rule would
+         * rewrite service or warehouse. BLOCK = a rule would refuse
+         * generation. Null when the caller didn't pass a client scope
+         * (customerNo blank) or the option couldn't be resolved to an id.
+         */
+        private String routingOutcome;
+        private String routingRuleName;
+        /** Carrier of the rerouted service (REROUTE). */
+        private String routingTargetCarrier;
+        /** ServiceCode of the rerouted service (REROUTE). */
+        private String routingTargetServiceCode;
+        /** Warehouse the rule would swap to (REROUTE). */
+        private Long routingTargetWarehouseId;
+        /** BLOCK reason surfaced to the operator. */
+        private String routingBlockReason;
     }
 
     /** Per-carrier fan-out result. {@code source} is LIVE | STUB | ERROR;

@@ -180,6 +180,22 @@ export default function RatePickerModal({ request, onClose, onSelect }: RatePick
                             <FiTruck className="h-2.5 w-2.5 text-slate-400" />
                             {formatTransit(o)}
                           </p>
+                          {o.routingOutcome === 'REROUTE' ? (
+                            <p className="mt-1 rounded-md bg-amber-50 px-1.5 py-0.5 text-[10.5px] font-semibold text-amber-800">
+                              ⚠ Rule '{o.routingRuleName}' will reroute at label time
+                              {o.routingTargetCarrier
+                                ? ` → ${o.routingTargetCarrier}${o.routingTargetServiceCode ? ` · ${o.routingTargetServiceCode}` : ''}`
+                                : ''}
+                              {o.routingTargetWarehouseId
+                                ? ` (warehouse #${o.routingTargetWarehouseId})`
+                                : ''}
+                            </p>
+                          ) : null}
+                          {o.routingOutcome === 'BLOCK' ? (
+                            <p className="mt-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-[10.5px] font-semibold text-rose-800">
+                              ⛔ Rule '{o.routingRuleName}' will BLOCK: {o.routingBlockReason}
+                            </p>
+                          ) : null}
                         </div>
                         <div className="text-right">
                           <p className="text-[16px] font-semibold text-slate-950">
