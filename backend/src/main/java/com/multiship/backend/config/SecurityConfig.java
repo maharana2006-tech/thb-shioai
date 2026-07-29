@@ -53,8 +53,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/webhooks/carrier/**").permitAll()
                         // Admin-only credential management, decided before the
                         // request body is even parsed (403 beats 400).
-                        .requestMatchers("/api/v1/carriers/connect", "/api/v1/carriers/disconnect",
-                                "/api/v1/carriers/refresh-token").hasRole("ADMIN")
+                        .requestMatchers("/api/v1/carriers/connect", "/api/v1/carriers/disconnect").hasRole("ADMIN")
                         .requestMatchers("/api/v1/api-keys/**").hasRole("ADMIN")
                         // Public shipping API for external apps — API key (ROLE_API); ADMIN allowed for testing.
                         .requestMatchers("/api/v1/external/**").hasAnyRole("API", "ADMIN")

@@ -71,12 +71,4 @@ public class CarrierController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    @PreAuthorize("hasRole('ADMIN')")
-    @PostMapping("/refresh-token")
-    public ResponseEntity<ApiResponse<CarrierConnectResponse>> refreshToken(
-            @AuthenticationPrincipal UserDetails userDetails) {
-        ApiResponse<CarrierConnectResponse> response = carrierService.refreshCarrierToken(userDetails);
-        return ResponseEntity.status(response.getCode()).body(response);
-    }
-
 }
