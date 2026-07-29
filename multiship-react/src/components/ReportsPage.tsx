@@ -439,11 +439,25 @@ function ScheduleEditor({
                 className={`${inputCls} font-mono`} rows={3} />
             </div>
             <div><label className={fieldLabel}>Delivery</label>
-              <Select value={draft.deliveryType} onChange={(e) => set('deliveryType', e.target.value as DeliveryType)}>
+              <Select
+                value={draft.deliveryType === 'EMAIL' ? 'DASHBOARD' : draft.deliveryType}
+                onChange={(e) => set('deliveryType', e.target.value as DeliveryType)}
+              >
                 <option value="DASHBOARD">Dashboard (download here)</option>
-                <option value="EMAIL">Email (stub — logs recipient)</option>
                 <option value="WEBHOOK">Webhook POST</option>
               </Select>
+              {/* G7 — EMAIL delivery was a stub that logged the recipient and
+                  marked itself DELIVERED without sending. Hidden from the
+                  selector until real SMTP is wired. If a legacy row loads
+                  with deliveryType=EMAIL the selector coerces it to DASHBOARD
+                  above; save() will then persist DASHBOARD so it stops
+                  silently mis-representing itself in the list. */}
+              {draft.deliveryType === 'EMAIL' ? (
+                <p className="mt-1 text-[10.5px] text-amber-700">
+                  Legacy EMAIL delivery is no longer supported — pick a new
+                  delivery type before saving. Emails were never actually sent.
+                </p>
+              ) : null}
             </div>
             <div className="pt-6">
               <label className="inline-flex items-center gap-2 text-[13px]">
@@ -451,12 +465,7 @@ function ScheduleEditor({
                 Active
               </label>
             </div>
-            {draft.deliveryType === 'EMAIL' ? (
-              <div className="col-span-2">
-                <label className={fieldLabel}>Recipients (comma-separated)</label>
-                <input value={draft.deliveryEmail ?? ''} onChange={(e) => set('deliveryEmail', e.target.value)} className={inputCls} placeholder="ops@acme.example, cfo@acme.example" />
-              </div>
-            ) : null}
+            {/* G7 — EMAIL recipients block hidden along with the option. */}
             {draft.deliveryType === 'WEBHOOK' ? (
               <div className="col-span-2">
                 <label className={fieldLabel}>Webhook URL</label>
