@@ -143,15 +143,14 @@ public class ScheduledReportRunner {
             return;
         }
         if (type == DeliveryType.EMAIL) {
-            // Not wired to a real SMTP sender in v1; log so an ops user can
-            // spot the intended recipient. Delivery still marked DELIVERED
-            // to keep the state machine forward-moving; message notes the
-            // stub so it's not silently dropped.
-            log.info("EMAIL delivery stub — would send {} ({} bytes) to {}",
-                    gr.getFilename(), bytes.length, schedule.getDeliveryEmail());
-            gr.setDeliveryMessage("EMAIL delivery stub — SMTP not configured; recipients: "
-                    + schedule.getDeliveryEmail());
-            return;
+            // G7 — EMAIL was a stub that logged the recipient and marked itself
+            // DELIVERED anyway. That's worse than not being available: users
+            // thought reports were going out. Throw so the row lands FAILED
+            // with a clear message; ReportsPage no longer offers this option
+            // in the UI, so newly-created schedules never hit this branch.
+            throw new IllegalStateException(
+                    "EMAIL delivery is not wired to an SMTP sender on this instance. "
+                            + "Change this schedule's delivery type to DASHBOARD or WEBHOOK.");
         }
         if (type == DeliveryType.WEBHOOK) {
             if (schedule.getDeliveryWebhookUrl() == null || schedule.getDeliveryWebhookUrl().isBlank()) {
