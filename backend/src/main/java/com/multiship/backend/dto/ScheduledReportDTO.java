@@ -29,6 +29,9 @@ public class ScheduledReportDTO {
     private Boolean active;
     private LocalDateTime nextRunAt;
     private LocalDateTime lastRunAt;
+    /** G6 — read-only in DTO round-trip; stamped at CREATE by the controller. */
+    private String createdBy;
+    private String createdByRole;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -43,6 +46,8 @@ public class ScheduledReportDTO {
                 .active(s.getActive())
                 .nextRunAt(s.getNextRunAt())
                 .lastRunAt(s.getLastRunAt())
+                .createdBy(s.getCreatedBy())
+                .createdByRole(s.getCreatedByRole())
                 .createdAt(s.getCreatedAt())
                 .updatedAt(s.getUpdatedAt())
                 .build();

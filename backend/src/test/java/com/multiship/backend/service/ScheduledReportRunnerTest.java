@@ -1,21 +1,31 @@
 package com.multiship.backend.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.multiship.backend.dto.ReportFilters;
 import com.multiship.backend.model.GeneratedReport;
 import com.multiship.backend.model.ScheduledReport;
+import com.multiship.backend.model.ScheduledReport.Dataset;
+import com.multiship.backend.model.ScheduledReport.DeliveryType;
 import com.multiship.backend.model.ScheduledReport.Frequency;
+import com.multiship.backend.repository.GeneratedReportRepository;
+import com.multiship.backend.repository.ScheduledReportRepository;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestClient;
 
+import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -29,7 +39,7 @@ import static org.mockito.Mockito.*;
  */
 class ScheduledReportRunnerTest {
 
-    private static final LocalDateTime NOW = LocalDateTime.of(2026, 7, 28, 12, 0);
+    private static final LocalDateTime NOW = LocalDateTime.of(2026, 7, 28, 12, 0, 30);
 
     @Test
     void daily_addsOneDay() {
@@ -118,6 +128,105 @@ class ScheduledReportRunnerTest {
         s.setId(1L);
         s.setDeliveryWebhookUrl("https://receiver.example/wh");
         return s;
+    }
+
+    // ===== G6 — tenant scope enforcement =====
+
+    @Test
+    void runOne_scheduleTenantIdOverridesFiltersCustomerNo() throws Exception {
+        // Schedule scoped to ACME, but filtersJson names a different tenant
+        // (COMPETITOR). Runner must force customerNo=ACME to prevent the leak.
+        ScheduledReportRepository sRepo = mock(ScheduledReportRepository.class);
+        GeneratedReportRepository gRepo = mock(GeneratedReportRepository.class);
+        ReportService reportService = mock(ReportService.class);
+        ObjectMapper mapper = new ObjectMapper();
+
+        ScheduledReportRunner runner = new ScheduledReportRunner(sRepo, gRepo, reportService, mapper);
+
+        ScheduledReport s = new ScheduledReport();
+        s.setId(42L);
+        s.setTenantId("ACME");
+        s.setDataset(Dataset.ORDERS);
+        s.setFrequency(Frequency.DAILY);
+        s.setDeliveryType(DeliveryType.DASHBOARD);
+        s.setCreatedByRole("ROLE_TENANT");
+        s.setFiltersJson(mapper.writeValueAsString(ReportFilters.builder()
+                .customerNo("COMPETITOR").build()));
+
+        runner.runOne(s, NOW);
+
+        // Assert reportService was called with customerNo=ACME (the schedule
+        // won), not COMPETITOR (the filtersJson).
+        ArgumentCaptor<ReportFilters> captor = ArgumentCaptor.forClass(ReportFilters.class);
+        verify(reportService).streamOrdersCsv(captor.capture(), any(OutputStream.class));
+        assertEquals("ACME", captor.getValue().getCustomerNo(),
+                "schedule tenantId must override any stored filters.customerNo");
+    }
+
+    @Test
+    void runOne_scheduleTenantIdPopulatesEmptyCustomerNo() throws Exception {
+        // Filters had no customerNo → schedule's tenantId is injected.
+        ScheduledReportRepository sRepo = mock(ScheduledReportRepository.class);
+        GeneratedReportRepository gRepo = mock(GeneratedReportRepository.class);
+        ReportService reportService = mock(ReportService.class);
+        ScheduledReportRunner runner = new ScheduledReportRunner(sRepo, gRepo, reportService, new ObjectMapper());
+
+        ScheduledReport s = new ScheduledReport();
+        s.setId(43L);
+        s.setTenantId("ACME");
+        s.setDataset(Dataset.ORDERS);
+        s.setFrequency(Frequency.DAILY);
+        s.setDeliveryType(DeliveryType.DASHBOARD);
+
+        runner.runOne(s, NOW);
+
+        ArgumentCaptor<ReportFilters> captor = ArgumentCaptor.forClass(ReportFilters.class);
+        verify(reportService).streamOrdersCsv(captor.capture(), any(OutputStream.class));
+        assertEquals("ACME", captor.getValue().getCustomerNo());
+    }
+
+    @Test
+    void runOne_platformScheduleFromAdminOrUserPassesThroughUnchanged() throws Exception {
+        // No tenantId + creator was ROLE_ADMIN → runs as-is (customerNo null).
+        ScheduledReportRepository sRepo = mock(ScheduledReportRepository.class);
+        GeneratedReportRepository gRepo = mock(GeneratedReportRepository.class);
+        ReportService reportService = mock(ReportService.class);
+        ScheduledReportRunner runner = new ScheduledReportRunner(sRepo, gRepo, reportService, new ObjectMapper());
+
+        ScheduledReport s = new ScheduledReport();
+        s.setId(44L);
+        s.setDataset(Dataset.ORDERS);
+        s.setFrequency(Frequency.DAILY);
+        s.setDeliveryType(DeliveryType.DASHBOARD);
+        s.setCreatedByRole("ROLE_ADMIN");
+
+        runner.runOne(s, NOW);
+
+        ArgumentCaptor<ReportFilters> captor = ArgumentCaptor.forClass(ReportFilters.class);
+        verify(reportService).streamOrdersCsv(captor.capture(), any(OutputStream.class));
+        assertNull(captor.getValue().getCustomerNo(),
+                "platform-scoped ADMIN schedule keeps customerNo=null");
+    }
+
+    @Test
+    void runOne_tenantCreatorWithoutTenantIdRefusesToRun() {
+        // A TENANT-created schedule that somehow lost its tenantId — refuse to
+        // run rather than pull cross-tenant data.
+        ScheduledReportRepository sRepo = mock(ScheduledReportRepository.class);
+        GeneratedReportRepository gRepo = mock(GeneratedReportRepository.class);
+        ReportService reportService = mock(ReportService.class);
+        ScheduledReportRunner runner = new ScheduledReportRunner(sRepo, gRepo, reportService, new ObjectMapper());
+
+        ScheduledReport s = new ScheduledReport();
+        s.setId(45L);
+        s.setDataset(Dataset.ORDERS);
+        s.setFrequency(Frequency.DAILY);
+        s.setDeliveryType(DeliveryType.DASHBOARD);
+        s.setCreatedByRole("ROLE_TENANT");
+        // deliberately no tenantId
+
+        assertThrows(IllegalStateException.class, () -> runner.runOne(s, NOW));
+        verify(reportService, never()).streamOrdersCsv(any(), any(OutputStream.class));
     }
 
     private static GeneratedReport generated() {

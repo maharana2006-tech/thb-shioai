@@ -71,6 +71,24 @@ public class ScheduledReport {
     @Column(name = "last_run_at")
     private LocalDateTime lastRunAt;
 
+    /**
+     * G6 — who created this schedule (username). Immutable after CREATE:
+     * updates preserve the original creator so audit history survives
+     * ownership changes. Null on legacy rows created before G6.
+     */
+    @Column(name = "created_by", length = 100)
+    private String createdBy;
+
+    /**
+     * G6 — role the creator held at CREATE time (ROLE_ADMIN | ROLE_USER |
+     * ROLE_TENANT). Used by the runner to enforce the schedule's scope on
+     * the CSV output: a TENANT-created schedule can never pull data
+     * outside its own tenant, no matter what filtersJson says. Null on
+     * legacy rows — those keep behaving as before.
+     */
+    @Column(name = "created_by_role", length = 40)
+    private String createdByRole;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
