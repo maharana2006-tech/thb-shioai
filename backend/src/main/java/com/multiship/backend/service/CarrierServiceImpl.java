@@ -533,11 +533,13 @@ public class CarrierServiceImpl implements CarrierService {
         // warehouse address. Any override throws WAREHOUSE_ATTACH_FORBIDDEN
         // when the caller borrowed a warehouse from another tenant.
         String resolvedWarehouseCode = null;
+        Long resolvedWarehouseId = null;
         if (hasClient && StringUtils.hasText(req.getWarehouseCode())) {
             try {
                 Warehouse w = resolutionService.assertWarehouse(resolvedClient, req.getWarehouseCode());
                 from = mergeFromWarehouse(from, w);
                 resolvedWarehouseCode = w.getCode();
+                resolvedWarehouseId = w.getId();
             } catch (ShipmentResolutionException e) {
                 return toResolutionFailure(e);
             }
@@ -659,7 +661,8 @@ public class CarrierServiceImpl implements CarrierService {
         if (hasClient) {
             try {
                 if (service != null) {
-                    resolutionService.assertServiceAllowed(resolvedClient, service.getId(), to.getCountryCode());
+                    resolutionService.assertServiceAllowed(resolvedClient, service.getId(),
+                            to.getCountryCode(), resolvedWarehouseId);
                 }
                 if (preset != null) {
                     resolutionService.assertPackageAllowed(resolvedClient, preset.getId());

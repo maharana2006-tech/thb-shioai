@@ -182,10 +182,12 @@ public class ExternalApiService {
             resolvedVia = "SHIPMETHOD_RULE";
         }
 
-        // 3PL guardrail #2: service on the client's allowlist?
+        // 3PL guardrail #2: service on the client's allowlist? (Also enforces
+        // the G1 warehouse gate — passing the resolved warehouse id.)
         if (serviceId != null) {
             try {
-                resolutionService.assertServiceAllowed(clientCode, serviceId, destCountry);
+                Long warehouseId = resolvedWarehouse != null ? resolvedWarehouse.getId() : null;
+                resolutionService.assertServiceAllowed(clientCode, serviceId, destCountry, warehouseId);
             } catch (ShipmentResolutionException e) {
                 throw toExternal(e);
             }
@@ -380,8 +382,10 @@ public class ExternalApiService {
 
         // Tag options with allowlist status — return everything so the caller
         // can see what's available, but flag the ones a shipment call would
-        // reject as SERVICE_NOT_ALLOWED.
-        Set<Long> allowed = resolutionService.allowedServiceIds(clientCode);
+        // reject as SERVICE_NOT_ALLOWED. G1: warehouse-gate is enforced too
+        // when we've resolved one.
+        Long warehouseId = resolvedWarehouse != null ? resolvedWarehouse.getId() : null;
+        Set<Long> allowed = resolutionService.allowedServiceIds(clientCode, warehouseId);
         boolean noAllowlist = allowed.isEmpty();
         List<ExternalRateResponse.Option> options = services.stream()
                 .map(s -> ExternalRateResponse.Option.builder()

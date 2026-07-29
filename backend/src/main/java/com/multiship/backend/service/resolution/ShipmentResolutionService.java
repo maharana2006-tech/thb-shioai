@@ -68,6 +68,15 @@ public interface ShipmentResolutionService {
      */
     Set<Long> allowedServiceIds(String clientCode);
 
+    /**
+     * Set of service ids the client may ship on FROM the given warehouse.
+     * A service is included when its warehouse-gate is empty (any warehouse
+     * OK) or when the gate lists {@code warehouseId}. Passing {@code null}
+     * for {@code warehouseId} skips the gate — equivalent to
+     * {@link #allowedServiceIds(String)}.
+     */
+    Set<Long> allowedServiceIds(String clientCode, Long warehouseId);
+
     Set<Long> allowedPackageIds(String clientCode);
 
     /**
@@ -82,6 +91,17 @@ public interface ShipmentResolutionService {
      *         this destination.
      */
     void assertServiceAllowed(String clientCode, Long serviceId, String destCountry);
+
+    /**
+     * As {@link #assertServiceAllowed(String, Long, String)}, plus the
+     * warehouse-gate check. When {@code warehouseId} is null the warehouse
+     * gate is not consulted — same behaviour as the 3-arg overload.
+     *
+     * @throws ShipmentResolutionException SERVICE_NOT_ALLOWED_FOR_WAREHOUSE
+     *         when the service is on the allowlist but restricted to
+     *         warehouses that don't include {@code warehouseId}.
+     */
+    void assertServiceAllowed(String clientCode, Long serviceId, String destCountry, Long warehouseId);
 
     /**
      * Assert the given package is usable by the client. CLIENT-owned presets

@@ -9,6 +9,7 @@ import com.multiship.backend.model.Warehouse;
 import com.multiship.backend.repository.ClientAllowedPackageRepository;
 import com.multiship.backend.repository.ClientAllowedServiceDestinationRepository;
 import com.multiship.backend.repository.ClientAllowedServiceRepository;
+import com.multiship.backend.repository.ClientAllowedServiceWarehouseRepository;
 import com.multiship.backend.repository.ClientBillingMarkupRepository;
 import com.multiship.backend.repository.ClientDestinationRuleRepository;
 import com.multiship.backend.repository.ClientShippingPolicyRepository;
@@ -40,6 +41,7 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     private final ClientWarehouseRepository clientWarehouseRepository;
     private final ClientAllowedServiceRepository allowedServiceRepository;
     private final ClientAllowedServiceDestinationRepository destinationGateRepository;
+    private final ClientAllowedServiceWarehouseRepository warehouseGateRepository;
     private final ClientAllowedPackageRepository allowedPackageRepository;
     private final ClientDestinationRuleRepository destinationRuleRepository;
     private final ClientShippingPolicyRepository policyRepository;
@@ -123,6 +125,32 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
 
     @Override
     @Transactional(readOnly = true)
+    public Set<Long> allowedServiceIds(String clientCode, Long warehouseId) {
+        var rows = allowedServiceRepository
+                .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(normalize(clientCode));
+        if (warehouseId == null || rows.isEmpty()) {
+            return rows.stream().map(row -> row.getServiceId()).collect(Collectors.toSet());
+        }
+        // For each allowlist row: allowed if the warehouse gate is empty OR
+        // contains the requested warehouse. One bulk fetch to avoid N+1.
+        List<Long> ids = rows.stream().map(row -> row.getId()).toList();
+        var gates = warehouseGateRepository.findByAllowedServiceIdIn(ids);
+        java.util.Map<Long, java.util.Set<Long>> gateByService = new java.util.HashMap<>();
+        for (var g : gates) {
+            gateByService.computeIfAbsent(g.getAllowedServiceId(), k -> new java.util.HashSet<>())
+                    .add(g.getWarehouseId());
+        }
+        return rows.stream()
+                .filter(row -> {
+                    var gate = gateByService.get(row.getId());
+                    return gate == null || gate.isEmpty() || gate.contains(warehouseId);
+                })
+                .map(row -> row.getServiceId())
+                .collect(Collectors.toSet());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Set<Long> allowedPackageIds(String clientCode) {
         return allowedPackageRepository
                 .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(normalize(clientCode))
@@ -133,6 +161,11 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
 
     @Override
     public void assertServiceAllowed(String clientCode, Long serviceId, String destCountry) {
+        assertServiceAllowed(clientCode, serviceId, destCountry, null);
+    }
+
+    @Override
+    public void assertServiceAllowed(String clientCode, Long serviceId, String destCountry, Long warehouseId) {
         if (serviceId == null) return; // caller validates presence separately
         String code = normalize(clientCode);
         var allowedRow = allowedServiceRepository
@@ -144,19 +177,40 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
             throw new ShipmentResolutionException(ErrorCode.SERVICE_NOT_ALLOWED,
                     "Service " + serviceId + " is not on client " + code + "'s allowlist.");
         }
+        Long allowedRowId = allowedRow.get().getId();
+
         // Destination gate (Phase 5d): row on the allowlist may restrict which
         // destinations the client may use it for.
         String dest = destCountry == null ? "" : destCountry.trim().toUpperCase(Locale.ROOT);
-        if (dest.isEmpty()) return;
-        var destinations = destinationGateRepository
-                .findByAllowedServiceIdOrderByCountryAsc(allowedRow.get().getId());
-        if (destinations.isEmpty()) return; // unrestricted
-        boolean listed = destinations.stream()
-                .anyMatch(d -> dest.equalsIgnoreCase(d.getCountry()));
-        if (!listed) {
-            throw new ShipmentResolutionException(ErrorCode.SERVICE_NOT_ALLOWED_FOR_DEST,
+        if (!dest.isEmpty()) {
+            var destinations = destinationGateRepository
+                    .findByAllowedServiceIdOrderByCountryAsc(allowedRowId);
+            if (!destinations.isEmpty()) {
+                boolean listed = destinations.stream()
+                        .anyMatch(d -> dest.equalsIgnoreCase(d.getCountry()));
+                if (!listed) {
+                    throw new ShipmentResolutionException(ErrorCode.SERVICE_NOT_ALLOWED_FOR_DEST,
+                            "Client " + code + " may not ship on service " + serviceId
+                                    + " to " + dest + " (destination not on the service's gate).");
+                }
+            }
+        }
+
+        // Warehouse gate (G1): row on the allowlist may restrict which
+        // warehouses the client may use it FROM. Only consulted when the
+        // caller supplied a warehouseId — the internal manual-shipment path
+        // may not resolve one, in which case we skip the gate to preserve
+        // legacy behaviour.
+        if (warehouseId == null) return;
+        var warehouses = warehouseGateRepository
+                .findByAllowedServiceIdOrderByWarehouseIdAsc(allowedRowId);
+        if (warehouses.isEmpty()) return; // unrestricted
+        boolean listedWh = warehouses.stream()
+                .anyMatch(w -> warehouseId.equals(w.getWarehouseId()));
+        if (!listedWh) {
+            throw new ShipmentResolutionException(ErrorCode.SERVICE_NOT_ALLOWED_FOR_WAREHOUSE,
                     "Client " + code + " may not ship on service " + serviceId
-                            + " to " + dest + " (destination not on the service's gate).");
+                            + " from warehouse " + warehouseId + " (warehouse not on the service's gate).");
         }
     }
 
