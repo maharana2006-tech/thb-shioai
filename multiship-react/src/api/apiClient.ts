@@ -1,4 +1,9 @@
-export const BASE_URL = 'http://localhost:8080/api/v1';
+// Point the API at the same host the app is opened on, so it works both on
+// localhost and over the LAN (e.g. http://192.168.x.x:5175 → :8080 on that host).
+// Override with VITE_API_BASE_URL if the backend lives elsewhere.
+export const BASE_URL =
+  (import.meta.env?.VITE_API_BASE_URL as string | undefined) ||
+  `${window.location.protocol}//${window.location.hostname}:8080/api/v1`;
 
 /**
  * Error thrown for non-2xx responses. Carries the HTTP status so callers

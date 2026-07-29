@@ -23,6 +23,7 @@ import {
   clientDestinationsService,
   type ClientDestinationRules,
 } from '../api/clientPolicyService'
+import { aiService, type ShipmentWarning } from '../api/aiService'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import ShipmentPartiesOverrideModal, { type Party } from './modals/ShipmentPartiesOverrideModal'
 
@@ -186,8 +187,87 @@ function AddressBlock({
   onChange: (patch: Partial<ManualShipmentAddress>) => void
   withEmail?: boolean
 }) {
+  const [pasteOpen, setPasteOpen] = useState(false)
+  const [pasteText, setPasteText] = useState('')
+  const [parsing, setParsing] = useState(false)
+
+  const runParse = async () => {
+    if (!pasteText.trim()) return
+    setParsing(true)
+    try {
+      const parsed = await aiService.parseAddress(pasteText)
+      // Only apply the fields the model actually found — never clobber with blanks.
+      const patch: Partial<ManualShipmentAddress> = {}
+      const keys: (keyof ManualShipmentAddress)[] = [
+        'name', 'company', 'phone', 'email', 'addressLine1', 'addressLine2',
+        'city', 'state', 'postalCode', 'countryCode',
+      ]
+      let filled = 0
+      for (const k of keys) {
+        const v = (parsed as Record<string, unknown>)[k]
+        if (typeof v === 'string' && v.trim()) {
+          patch[k] = v.trim()
+          filled += 1
+        }
+      }
+      if (!filled) {
+        notify.error('Could not find an address in that text.')
+        return
+      }
+      onChange(patch)
+      notify.success(`Autofilled ${filled} field${filled === 1 ? '' : 's'} — please review.`)
+      setPasteOpen(false)
+      setPasteText('')
+    } catch (err) {
+      notify.error(err instanceof ApiError ? err.message : 'AI autofill failed. Enter the address manually.')
+    } finally {
+      setParsing(false)
+    }
+  }
+
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <>
+      <div className="mb-3">
+        {pasteOpen ? (
+          <div className="rounded-xl border border-[#e3d9c4] bg-[#faf7f0] p-2.5">
+            <textarea
+              className={`${inputCls} min-h-[64px] resize-y`}
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              placeholder="Paste an address, email signature, or order text — e.g. “Jane Doe, Acme Inc, 123 Market St Suite 400, Buffalo NY 14201, +1 212 555 0100”"
+              autoFocus
+            />
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void runParse()}
+                disabled={parsing || !pasteText.trim()}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#412d15] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#1f150c] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiZap className="h-3.5 w-3.5" />
+                {parsing ? 'Reading…' : 'Autofill fields'}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setPasteOpen(false); setPasteText('') }}
+                className="rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setPasteOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#412d15] hover:bg-[#faf7f0]"
+          >
+            <FiZap className="h-3.5 w-3.5" />
+            Paste &amp; autofill with AI
+          </button>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-3">
       <Field label="Full name" required className="col-span-2 sm:col-span-1">
         <input className={inputCls} value={value.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="Jane Doe" />
       </Field>
@@ -220,7 +300,8 @@ function AddressBlock({
           <input className={inputCls} value={value.email} onChange={(e) => onChange({ email: e.target.value })} placeholder="jane@acme.com" />
         </Field>
       ) : null}
-    </div>
+      </div>
+    </>
   )
 }
 
@@ -278,6 +359,13 @@ export default function NewShipmentPage() {
   // Recipient address validation result (from the Validate button).
   const [recipientCheck, setRecipientCheck] = useState<{ valid: boolean; issues: string[] } | null>(null)
   const [validating, setValidating] = useState(false)
+
+  // AI-assist per-section busy flags + pre-ship review result.
+  const [hsBusy, setHsBusy] = useState<number | null>(null)
+  const [pkgBusy, setPkgBusy] = useState(false)
+  const [svcBusy, setSvcBusy] = useState(false)
+  const [reviewBusy, setReviewBusy] = useState(false)
+  const [reviewWarnings, setReviewWarnings] = useState<ShipmentWarning[] | null>(null)
 
   // International commercial-invoice line items (shown only for cross-border lanes).
   type ItemRow = { description: string; sku: string; hsCode: string; countryOfOrigin: string; quantity: string; unitValue: string }
@@ -598,6 +686,133 @@ export default function NewShipmentPage() {
   const removeItem = (i: number) => setItems((rows) => (rows.length > 1 ? rows.filter((_, idx) => idx !== i) : rows))
   const invoiceTotal = items.reduce((sum, it) => sum + (Number(it.quantity) || 0) * (Number(it.unitValue) || 0), 0)
 
+  // ── AI assist handlers (one per section, suggestion-only) ──────────────────
+  const weightInLb = () => {
+    const w = Number(weight) || 0
+    return weightUnit === 'KG' ? Math.round(w * 2.20462 * 100) / 100 : w
+  }
+
+  /** Items — suggest an HS tariff code for one line from its description. */
+  const suggestHsFor = async (i: number) => {
+    const it = items[i]
+    if (!it.description.trim()) return notify.error('Add an item description first.')
+    setHsBusy(i)
+    try {
+      const r = await aiService.suggestHs(it.description, it.countryOfOrigin || undefined)
+      if (!r.hsCode) return notify.error('No HS code could be suggested.')
+      patchItem(i, { hsCode: r.hsCode })
+      const heading = r.heading ? ` — ${r.heading.replace(/\s*\.\s*$/, '')}` : ''
+      notify.success(
+        `HS ${r.hsCode}${r.confidence ? ` · ${r.confidence} confidence` : ''}${heading}. Please verify.`,
+      )
+    } catch (err) {
+      notify.error(err instanceof ApiError ? err.message : 'HS suggestion failed.')
+    } finally {
+      setHsBusy(null)
+    }
+  }
+
+  /** Package & weight — recommend a package + weight from the item list. */
+  const suggestPackagingAi = async () => {
+    const usable = items.filter((it) => it.description.trim())
+    if (!usable.length) return notify.error('Add at least one item description first.')
+    setPkgBusy(true)
+    try {
+      const r = await aiService.suggestPackaging(
+        usable.map((it) => ({ description: it.description.trim(), quantity: Number(it.quantity) || 1 })),
+      )
+      const filled: string[] = []
+      if (r.weightLb) {
+        setWeightUnit('LB')
+        setWeight(String(r.weightLb))
+        filled.push('weight')
+      }
+      if (r.lengthIn || r.widthIn || r.heightIn) {
+        setDimUnit('IN')
+        setPackageChoice(CUSTOM_PKG)
+        if (r.lengthIn) setLength(String(r.lengthIn))
+        if (r.widthIn) setWidth(String(r.widthIn))
+        if (r.heightIn) setHeight(String(r.heightIn))
+        filled.push('dimensions')
+      }
+      if (!filled.length) return notify.error('No packaging estimate was returned.')
+      const why = r.rationale ? ` — ${r.rationale.replace(/\s*\.\s*$/, '')}` : ''
+      notify.success(`Suggested ${filled.join(' + ')}${why}. Please review.`)
+    } catch (err) {
+      notify.error(err instanceof ApiError ? err.message : 'Packaging suggestion failed.')
+    } finally {
+      setPkgBusy(false)
+    }
+  }
+
+  /** Account & service — recommend a service + incoterm for the route. */
+  const recommendServiceAi = async () => {
+    if (!recipient.countryCode) return notify.error('Set the ship-to country first.')
+    setSvcBusy(true)
+    try {
+      const r = await aiService.recommendService({
+        fromCountry: sender.countryCode || undefined,
+        toCountry: recipient.countryCode || undefined,
+        weightLb: weightInLb() || undefined,
+        available: servicesForCarrier.map((s) => s.name),
+      })
+      const applied: string[] = []
+      const wanted = (r.serviceName || r.serviceCode || '').toLowerCase()
+      const match = wanted ? servicesForCarrier.find((s) => s.name.toLowerCase() === wanted) : undefined
+      if (match) {
+        setServiceId(match.id)
+        applied.push(`service “${match.name}”`)
+      }
+      if (r.incoterm === 'DDP' || r.incoterm === 'DAP') {
+        setIncoterms(r.incoterm)
+        applied.push(r.incoterm)
+      }
+      notify.success(
+        `${applied.length ? `Applied ${applied.join(' + ')}. ` : ''}${r.rationale || `Recommended ${r.serviceName || r.serviceCode || 'a service'}`}`,
+      )
+    } catch (err) {
+      notify.error(err instanceof ApiError ? err.message : 'Service recommendation failed.')
+    } finally {
+      setSvcBusy(false)
+    }
+  }
+
+  /** Shipment — pre-ship AI sanity review of the whole form. */
+  const reviewShipmentAi = async () => {
+    setReviewBusy(true)
+    try {
+      const pkgName =
+        packageChoice === CUSTOM_PKG
+          ? 'CUSTOM'
+          : packagesForCarrier.find((p) => String(p.id) === packageChoice)?.name || undefined
+      const r = await aiService.reviewShipment({
+        fromCountry: sender.countryCode,
+        toCountry: recipient.countryCode,
+        weightLb: weightInLb() || undefined,
+        lengthIn: Number(length) || undefined,
+        widthIn: Number(width) || undefined,
+        heightIn: Number(height) || undefined,
+        packageCode: pkgName,
+        incoterm: incoterms,
+        items: isInternational
+          ? items
+              .filter((it) => it.description.trim())
+              .map((it) => ({
+                description: it.description.trim(),
+                hsCode: it.hsCode || undefined,
+                value: (Number(it.quantity) || 0) * (Number(it.unitValue) || 0),
+              }))
+          : [],
+      })
+      setReviewWarnings(r.warnings || [])
+      if (!r.warnings?.length) notify.success('AI review: no issues found — good to ship.')
+    } catch (err) {
+      notify.error(err instanceof ApiError ? err.message : 'AI review failed.')
+    } finally {
+      setReviewBusy(false)
+    }
+  }
+
   const submit = async () => {
     if (!carrier) return notify.error('Pick a carrier you have a verified account with.')
     if (!accountNumber.trim()) return notify.error('Enter the bill-to account number.')
@@ -866,9 +1081,25 @@ export default function NewShipmentPage() {
                 icon={<FiTruck className="h-3.5 w-3.5" />}
                 title="Account & service"
                 badge={
-                  <span className="rounded-full bg-[#efe7d4] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[#5a4526]">
-                    {sender.countryCode || '—'} → {recipient.countryCode || '—'} · {isInternational ? 'Intl' : 'Domestic'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void recommendServiceAi()}
+                      disabled={svcBusy}
+                      title="Recommend a service & incoterm for this route"
+                      className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-[#5a4526] transition hover:border-[#412d15] hover:bg-[#faf7f0] disabled:opacity-50"
+                    >
+                      {svcBusy ? (
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#412d15]" />
+                      ) : (
+                        <FiZap className="h-3 w-3" />
+                      )}
+                      Recommend
+                    </button>
+                    <span className="rounded-full bg-[#efe7d4] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[#5a4526]">
+                      {sender.countryCode || '—'} → {recipient.countryCode || '—'} · {isInternational ? 'Intl' : 'Domestic'}
+                    </span>
+                  </div>
                 }
               >
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -912,6 +1143,20 @@ export default function NewShipmentPage() {
               title="Package & weight"
               badge={
                 <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void suggestPackagingAi()}
+                    disabled={pkgBusy}
+                    title="Suggest packaging & weight from your items"
+                    className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] text-[#5a4526] transition hover:border-[#412d15] hover:bg-[#faf7f0] disabled:opacity-50"
+                  >
+                    {pkgBusy ? (
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#412d15]" />
+                    ) : (
+                      <FiZap className="h-3 w-3" />
+                    )}
+                    Suggest
+                  </button>
                   <div className="flex items-center gap-1.5">
                     <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#8a7959]">Weight</span>
                     <div className="inline-flex rounded-lg border border-[#e3d9c4] bg-white p-0.5">
@@ -1142,7 +1387,23 @@ export default function NewShipmentPage() {
                       >
                         <input className={inputCls} value={it.description} onChange={(e) => patchItem(i, { description: e.target.value })} placeholder="Cotton t-shirt" />
                         <input className={inputCls} value={it.sku} onChange={(e) => patchItem(i, { sku: e.target.value })} placeholder="SKU-001" />
-                        <input className={inputCls} value={it.hsCode} onChange={(e) => patchItem(i, { hsCode: e.target.value })} placeholder="6109.10" />
+                        <div className="relative">
+                          <input className={`${inputCls} pr-7`} value={it.hsCode} onChange={(e) => patchItem(i, { hsCode: e.target.value })} placeholder="6109.10" />
+                          <button
+                            type="button"
+                            onClick={() => void suggestHsFor(i)}
+                            disabled={hsBusy === i}
+                            title="Suggest HS code with AI"
+                            aria-label="Suggest HS code with AI"
+                            className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-[#8a7959] transition hover:bg-[#efe7d4] hover:text-[#412d15] disabled:opacity-50"
+                          >
+                            {hsBusy === i ? (
+                              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#412d15]" />
+                            ) : (
+                              <FiZap className="h-3 w-3" />
+                            )}
+                          </button>
+                        </div>
                         <input className={`${inputCls} uppercase`} value={it.countryOfOrigin} onChange={(e) => patchItem(i, { countryOfOrigin: e.target.value })} placeholder="US" maxLength={2} />
                         <input className={inputCls} type="number" min="1" step="1" value={it.quantity} onChange={(e) => patchItem(i, { quantity: e.target.value })} placeholder="1" />
                         <input className={inputCls} type="number" min="0" step="0.01" value={it.unitValue} onChange={(e) => patchItem(i, { unitValue: e.target.value })} placeholder="20.00" />
@@ -1180,13 +1441,65 @@ export default function NewShipmentPage() {
 
       {/* sticky footer action bar — stays within the content column */}
       {!loading && !noCarriers ? (
-        <div className="sticky bottom-4 z-30">
+        <div className="sticky bottom-4 z-30 space-y-2">
+          {reviewWarnings ? (
+            <div className="rounded-2xl border border-[#e3d9c4] bg-white p-3.5 shadow-[0_18px_50px_rgba(31,21,12,0.14)]">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#5a4526]">
+                  <FiZap className="h-3.5 w-3.5" /> AI pre-ship review
+                </span>
+                <button type="button" onClick={() => setReviewWarnings(null)} className="text-[11px] font-semibold text-[#8a7959] hover:text-[#412d15]">
+                  Dismiss
+                </button>
+              </div>
+              {reviewWarnings.length === 0 ? (
+                <p className="flex items-center gap-1.5 text-[12.5px] text-emerald-700">
+                  <FiCheckCircle className="h-4 w-4" /> No issues found — good to ship.
+                </p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {reviewWarnings.map((w, idx) => {
+                    const tone =
+                      w.severity === 'high'
+                        ? 'bg-rose-50 text-rose-700 ring-rose-200'
+                        : w.severity === 'medium'
+                          ? 'bg-amber-50 text-amber-700 ring-amber-200'
+                          : 'bg-slate-50 text-slate-600 ring-slate-200'
+                    return (
+                      <li key={idx} className="flex items-start gap-2 text-[12.5px] text-[#3f3527]">
+                        <span className={`mt-0.5 inline-flex shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ring-1 ${tone}`}>
+                          {w.severity}
+                        </span>
+                        <span>
+                          {w.field ? <span className="font-semibold">{w.field}: </span> : null}
+                          {w.message}
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+          ) : null}
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-[#e3d9c4] bg-white px-5 py-3 shadow-[0_18px_50px_rgba(31,21,12,0.16)]">
             <span className="hidden text-[11.5px] text-[#8a7959] sm:block">
               The label is purchased immediately on the selected account.
               {isInternational ? ' Commercial invoice included for this cross-border lane.' : ''}
             </span>
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void reviewShipmentAi()}
+                disabled={reviewBusy}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#cdbf9f] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#412d15] hover:bg-[#faf7f0] disabled:opacity-50"
+              >
+                {reviewBusy ? (
+                  <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#412d15]" />
+                ) : (
+                  <FiZap className="h-3.5 w-3.5" />
+                )}
+                AI review
+              </button>
               <button
                 type="button"
                 onClick={() => navigate('/orders')}
