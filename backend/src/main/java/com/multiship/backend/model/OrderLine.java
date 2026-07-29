@@ -76,6 +76,15 @@ public class OrderLine {
     @Column(name = "total_price", precision = 10, scale = 2)
     private BigDecimal totalPrice;
 
+    /**
+     * Sprint 47 — the warehouse this specific line ships FROM. Null means
+     * "same as the order's warehouseCode" (single-warehouse behaviour).
+     * When lines on one order span multiple warehouses the shipment splits
+     * into per-warehouse child shipments; see {@code MultiWarehouseLabelService}.
+     */
+    @Column(name = "warehouse_code", length = 50)
+    private String warehouseCode;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
