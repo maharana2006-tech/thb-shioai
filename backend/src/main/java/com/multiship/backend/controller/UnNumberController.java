@@ -9,13 +9,11 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
-import java.util.Optional;
 
 /**
  * Read-only endpoints backing the UN number autocomplete UI in the
@@ -44,21 +42,4 @@ public class UnNumberController {
                 .build());
     }
 
-    @Operation(summary = "Fetch the directory entry for an exact UN number (case-insensitive)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping("/{unNumber}")
-    public ResponseEntity<ApiResponse<UnNumberEntry>> byNumber(@PathVariable String unNumber) {
-        Optional<UnNumberEntry> entry = directory.byNumber(unNumber);
-        return entry
-                .map(e -> ResponseEntity.ok(ApiResponse.<UnNumberEntry>builder()
-                        .status("success").code(200)
-                        .message("Found.")
-                        .data(e)
-                        .build()))
-                .orElseGet(() -> ResponseEntity.status(404).body(ApiResponse.<UnNumberEntry>builder()
-                        .status("error").code(404)
-                        .message(unNumber + " not in the curated directory.")
-                        .data(null)
-                        .build()));
-    }
 }
