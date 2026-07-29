@@ -1160,61 +1160,6 @@ public class CarrierServiceImpl implements CarrierService {
                 .orElseThrow(() -> new CarrierConnectionException("Unsupported carrier: " + carrierCode));
     }
 
-    @Override
-    @Transactional
-    public ApiResponse<CarrierConnectResponse> refreshCarrierToken(UserDetails userDetails) {
-        User user = resolveUser(userDetails);
-        String carrierCode = resolveCarrierCode(user);
-        CarrierConnector connector = getCarrierConnector(carrierCode);
-
-        CarrierConfig config = carrierConfigRepository.findFirstByUserUsernameAndCarrierCodeAndTenantIdIsNull(user.getUsername(), carrierCode)
-                .orElseThrow(() -> new CarrierConnectionException("Carrier configuration is missing for the current user."));
-
-        String clientId = firstNonBlank(user.getCarrierClientId(), config.getClientId());
-        String clientSecret = firstNonBlank(user.getCarrierClientSecret(), config.getClientSecret());
-        String accountNumber = firstNonBlank(user.getCarrierAccountNumber(), config.getAccountNumber());
-        connector.validateCredentials(clientId, clientSecret);
-
-        String token = connector.getAccessToken(clientId, clientSecret, accountNumber);
-        LocalDateTime expiresAt = LocalDateTime.now().plusHours(1);
-
-        persistCarrierDetails(
-                user,
-                carrierCode,
-                clientId,
-                clientSecret,
-                accountNumber,
-                token,
-                expiresAt,
-                true,
-                firstNonNull(user.getCarrierConnectedAt(), LocalDateTime.now()),
-                firstNonBlank(user.getCarrierEnvironment(), carrierProperties.getDefaultEnvironment())
-        );
-
-        config.setAccessToken(token);
-        config.setTokenExpiresAt(expiresAt);
-        config.setAccountNumber(accountNumber);
-        config.setClientId(clientId);
-        config.setClientSecret(clientSecret);
-        config.setActive(true);
-        carrierConfigRepository.save(config);
-
-        CarrierConnectResponse response = CarrierConnectResponse.builder()
-                .carrierCode(carrierCode)
-                .carrierName(connector.getCarrierName())
-                .connected(true)
-                .message("Carrier access token refreshed successfully.")
-                .accountNumber(accountNumber)
-                .environment(firstNonBlank(user.getCarrierEnvironment(), carrierProperties.getDefaultEnvironment()))
-                .connectedAt(user.getCarrierConnectedAt())
-                .tokenExpiresAt(expiresAt)
-                .tokenExpired(false)
-                .accessTokenPreview(maskToken(token))
-                .build();
-
-        return success("Carrier token refreshed successfully.", response);
-    }
-
     private User resolveUser(UserDetails userDetails) {
         if (userDetails == null || !StringUtils.hasText(userDetails.getUsername())) {
             throw new CarrierConnectionException("Authenticated user is required.");
