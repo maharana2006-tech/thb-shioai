@@ -33,7 +33,7 @@ import ClientMarkupTab from './ClientMarkupTab'
 import ServiceDestinationsDrawer from './ServiceDestinationsDrawer'
 import ServiceWarehousesDrawer from './ServiceWarehousesDrawer'
 import ClientOwnedPackagesPanel from './ClientOwnedPackagesPanel'
-import { FiHome, FiMap } from 'react-icons/fi'
+import { FiMap } from 'react-icons/fi'
 
 type Tab =
   | 'details'
