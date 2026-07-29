@@ -31,10 +31,15 @@ public class RoutingEvaluationResult {
     /** REROUTE or BLOCK when status=MATCH; null otherwise. */
     private ActionType actionType;
 
-    /** REROUTE target (mirrors RoutingRule.targetServiceId). */
+    /** REROUTE target (mirrors RoutingRule.targetServiceId). Null when the
+     *  rule only rewrites the warehouse. */
     private Long targetServiceId;
     /** Convenience: resolved carrier for the target service. */
     private String targetCarrier;
+
+    /** G2 — REROUTE target warehouse. Null when the rule only rewrites the
+     *  service (unchanged fulfilment location). */
+    private Long targetWarehouseId;
 
     /** BLOCK reason. */
     private String blockReason;

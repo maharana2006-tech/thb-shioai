@@ -21,10 +21,15 @@ export interface RoutingRule {
   minDeclaredValue?: number | null
   maxDeclaredValue?: number | null
   matchOrderSource?: string | null
+  /** G2 — match on the currently-resolved fulfilment warehouse. Null = any. */
+  matchWarehouseId?: number | null
 
   // Action
   actionType: RoutingActionType
   targetServiceId?: number | null
+  /** G2 — for REROUTE, the fulfilment warehouse to rewrite the shipment to.
+   *  Null = don't change the warehouse. */
+  targetWarehouseId?: number | null
   blockReason?: string | null
 
   createdAt?: string | null
@@ -37,6 +42,8 @@ export interface RoutingEvaluationRequest {
   destRegion?: string | null
   currentCarrier?: string | null
   currentServiceId?: number | null
+  /** G2 — warehouse currently resolved for the shipment; null when ad-hoc. */
+  currentWarehouseId?: number | null
   declaredValue?: number | null
   orderSource?: string | null
 }
@@ -56,6 +63,8 @@ export interface RoutingEvaluationResult {
   actionType?: RoutingActionType | null
   targetServiceId?: number | null
   targetCarrier?: string | null
+  /** G2 — REROUTE target warehouse; null when the rule only rewrites service. */
+  targetWarehouseId?: number | null
   blockReason?: string | null
   trace: RoutingTraceEntry[]
 }

@@ -23,6 +23,9 @@ public class RoutingEvaluationRequest {
     private String destRegion;    // canonical region name (from countries.ts taxonomy)
     private String currentCarrier;
     private Long currentServiceId;
+    /** G2 — the warehouse currently resolved for the shipment; null when
+     *  the caller hasn't resolved one (ad-hoc shipments). */
+    private Long currentWarehouseId;
     private BigDecimal declaredValue;
     private String orderSource;   // MANUAL | WMS | API | ERP
 }

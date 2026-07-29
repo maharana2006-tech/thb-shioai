@@ -33,10 +33,14 @@ public class RoutingRuleDTO {
     private BigDecimal minDeclaredValue;
     private BigDecimal maxDeclaredValue;
     private String matchOrderSource;
+    /** G2 — match on the currently-resolved warehouse. Null = any. */
+    private Long matchWarehouseId;
 
     // Action
     private ActionType actionType;
     private Long targetServiceId;
+    /** G2 — for REROUTE, the target warehouse. Null = don't change. */
+    private Long targetWarehouseId;
     private String blockReason;
 
     private LocalDateTime createdAt;
@@ -51,7 +55,9 @@ public class RoutingRuleDTO {
                 .matchCarrier(r.getMatchCarrier()).matchServiceId(r.getMatchServiceId())
                 .minDeclaredValue(r.getMinDeclaredValue()).maxDeclaredValue(r.getMaxDeclaredValue())
                 .matchOrderSource(r.getMatchOrderSource())
+                .matchWarehouseId(r.getMatchWarehouseId())
                 .actionType(r.getActionType()).targetServiceId(r.getTargetServiceId())
+                .targetWarehouseId(r.getTargetWarehouseId())
                 .blockReason(r.getBlockReason())
                 .createdAt(r.getCreatedAt()).updatedAt(r.getUpdatedAt())
                 .build();
@@ -73,8 +79,10 @@ public class RoutingRuleDTO {
         r.setMinDeclaredValue(minDeclaredValue);
         r.setMaxDeclaredValue(maxDeclaredValue);
         r.setMatchOrderSource(blankToNull(matchOrderSource));
+        r.setMatchWarehouseId(matchWarehouseId);
         r.setActionType(actionType == null ? ActionType.REROUTE : actionType);
         r.setTargetServiceId(targetServiceId);
+        r.setTargetWarehouseId(targetWarehouseId);
         r.setBlockReason(blankToNull(blockReason));
         return r;
     }
