@@ -90,6 +90,10 @@ public enum ErrorCode {
     /** Service is allowed for the client, but not for this destination country. */
     SERVICE_NOT_ALLOWED_FOR_DEST,
 
+    // ===== Client allowlist × warehouse gate =====
+    /** Service is allowed for the client, but not from this warehouse. */
+    SERVICE_NOT_ALLOWED_FOR_WAREHOUSE,
+
     // ===== Fallback =====
     INTERNAL_ERROR
 }
