@@ -31,8 +31,9 @@ import ClientDestinationsTab from './ClientDestinationsTab'
 import ClientPolicyTab from './ClientPolicyTab'
 import ClientMarkupTab from './ClientMarkupTab'
 import ServiceDestinationsDrawer from './ServiceDestinationsDrawer'
+import ServiceWarehousesDrawer from './ServiceWarehousesDrawer'
 import ClientOwnedPackagesPanel from './ClientOwnedPackagesPanel'
-import { FiMap } from 'react-icons/fi'
+import { FiHome, FiMap } from 'react-icons/fi'
 
 type Tab =
   | 'details'
@@ -83,6 +84,9 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<Tab>('details')
   const [destinationsDrawer, setDestinationsDrawer] = useState<
+    { serviceId: number; label: string; nonce: number } | null
+  >(null)
+  const [warehousesDrawer, setWarehousesDrawer] = useState<
     { serviceId: number; label: string; nonce: number } | null
   >(null)
 
@@ -553,24 +557,37 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
             catalogKey={(s) => s.id}
             catalogLabel={(s) => `${formatCarrierName(s.carrier)} · ${s.serviceCode} — ${s.name}${s.originCountry ? ` (${s.originCountry.toUpperCase()})` : ''}`}
             catalogEligible={(s) => s.enabled}
-            renderRowExtras={(row) => (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setDestinationsDrawer({
-                    serviceId: row.serviceId,
-                    label: `${formatCarrierName(row.carrier || '—')} · ${row.serviceCode || '—'} — ${row.serviceName || '—'}`,
-                    nonce: Date.now(),
-                  })
-                }}
-                title="Destinations…"
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
-              >
-                <FiMap className="h-3 w-3" />
-                Destinations…
-              </button>
-            )}
+            renderRowExtras={(row) => {
+              const label = `${formatCarrierName(row.carrier || '—')} · ${row.serviceCode || '—'} — ${row.serviceName || '—'}`
+              return (
+                <>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setDestinationsDrawer({ serviceId: row.serviceId, label, nonce: Date.now() })
+                    }}
+                    title="Destinations…"
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+                  >
+                    <FiMap className="h-3 w-3" />
+                    Destinations…
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setWarehousesDrawer({ serviceId: row.serviceId, label, nonce: Date.now() })
+                    }}
+                    title="Warehouses…"
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+                  >
+                    <FiHome className="h-3 w-3" />
+                    Warehouses…
+                  </button>
+                </>
+              )
+            }}
           />
         ) : null}
 
@@ -582,6 +599,17 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
             serviceLabel={destinationsDrawer.label}
             onClose={() => setDestinationsDrawer(null)}
             onSaved={() => setDestinationsDrawer(null)}
+          />
+        ) : null}
+
+        {warehousesDrawer && client ? (
+          <ServiceWarehousesDrawer
+            key={warehousesDrawer.nonce}
+            clientCode={client.clientCode}
+            serviceId={warehousesDrawer.serviceId}
+            serviceLabel={warehousesDrawer.label}
+            onClose={() => setWarehousesDrawer(null)}
+            onSaved={() => setWarehousesDrawer(null)}
           />
         ) : null}
 
