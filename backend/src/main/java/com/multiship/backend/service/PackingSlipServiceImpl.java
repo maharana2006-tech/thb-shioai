@@ -2,6 +2,7 @@ package com.multiship.backend.service;
 
 import com.multiship.backend.model.Address;
 import com.multiship.backend.model.Client;
+import com.multiship.backend.model.CustomFieldDefinition;
 import com.multiship.backend.model.LabelTemplate;
 import com.multiship.backend.model.Order;
 import com.multiship.backend.model.OrderLine;
@@ -21,8 +22,11 @@ import org.springframework.stereotype.Service;
 import java.awt.Color;
 import java.io.ByteArrayOutputStream;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -68,6 +72,11 @@ public class PackingSlipServiceImpl implements PackingSlipService {
     private final ClientRepository clientRepository;
     private final LabelTemplateService labelTemplateService;
 
+    /** G5 — optional so pre-Sprint-43 tests don't need to plumb custom
+     *  fields. When null, the packing slip renders exactly as before. */
+    @Autowired(required = false)
+    private CustomFieldService customFieldService;
+
     @Autowired
     public PackingSlipServiceImpl(OrderRepository orderRepository,
                                   OrderLineRepository orderLineRepository,
@@ -94,7 +103,58 @@ public class PackingSlipServiceImpl implements PackingSlipService {
         Client client = tenantId == null ? null
                 : clientRepository.findByClientCodeIgnoreCase(tenantId).orElse(null);
 
-        return renderInternal(order, lines, client, template);
+        // G5 — resolve custom fields captured at shipment time. Sprint 43
+        // stored them but the packing slip silently dropped them; here we
+        // fetch every value on the order and pair each with its
+        // definition's label (falling back to the raw fieldKey when the
+        // definition was deleted after the order shipped).
+        List<CustomFieldEntry> customFields = loadCustomFields(orderNo, tenantId);
+
+        return renderInternal(order, lines, client, template, customFields);
+    }
+
+    /**
+     * Load every custom-field value on the order, joined against the
+     * applicable definitions for label + display order. Returns an empty
+     * list when the service isn't wired (pre-Sprint-43 tests, ad-hoc code
+     * paths that construct the impl directly).
+     */
+    List<CustomFieldEntry> loadCustomFields(Integer orderNo, String tenantId) {
+        if (customFieldService == null || orderNo == null) return List.of();
+        Map<String, String> values = customFieldService.loadValues(orderNo);
+        if (values == null || values.isEmpty()) return List.of();
+        // Map key → label (via applicable definitions); missing definition
+        // = orphaned value, still render but with the raw key so nothing
+        // silently disappears.
+        List<CustomFieldDefinition> defs = customFieldService.listApplicable(tenantId);
+        Map<String, CustomFieldDefinition> defByKey = new HashMap<>();
+        if (defs != null) for (CustomFieldDefinition d : defs) defByKey.put(d.getFieldKey(), d);
+
+        // Preserve definition order (position ASC) so the slip layout is
+        // stable. Any values whose key isn't in defs go at the end.
+        List<CustomFieldEntry> out = new ArrayList<>();
+        for (CustomFieldDefinition d : defs) {
+            String v = values.get(d.getFieldKey());
+            if (v != null && !v.isBlank()) out.add(new CustomFieldEntry(d.getLabel(), v));
+        }
+        for (Map.Entry<String, String> e : values.entrySet()) {
+            if (defByKey.containsKey(e.getKey())) continue;
+            if (e.getValue() == null || e.getValue().isBlank()) continue;
+            out.add(new CustomFieldEntry(e.getKey(), e.getValue()));
+        }
+        return out;
+    }
+
+    /** One row of the "CUSTOM FIELDS" section on the packing slip. */
+    public record CustomFieldEntry(String label, String value) {}
+
+    /** Legacy overload — no custom fields. Delegates to the 5-arg variant
+     *  so pre-Sprint-43 tests keep passing without stubbing G5. */
+    byte[] renderInternal(Order order,
+                          List<OrderLine> lines,
+                          Client client,
+                          LabelTemplate template) {
+        return renderInternal(order, lines, client, template, List.of());
     }
 
     /**
@@ -104,7 +164,8 @@ public class PackingSlipServiceImpl implements PackingSlipService {
     byte[] renderInternal(Order order,
                           List<OrderLine> lines,
                           Client client,
-                          LabelTemplate template) {
+                          LabelTemplate template,
+                          List<CustomFieldEntry> customFields) {
         try (PDDocument doc = new PDDocument();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
@@ -182,9 +243,47 @@ public class PackingSlipServiceImpl implements PackingSlipService {
                     rightY -= 12f;
                 }
 
+                // === Custom fields (G5) ===
+                // Rendered between the info block and the items table so
+                // the operator can spot per-order references (PO#, dept,
+                // marketplace order id, etc.) without scanning the items.
+                float customY = Math.min(leftY, rightY) - 8f;
+                if (customFields != null && !customFields.isEmpty()) {
+                    customY -= 12f;
+                    cs.setNonStrokingColor(primary);
+                    drawText(cs, HELVETICA_BOLD, 10f, "CUSTOM FIELDS", margin, customY);
+                    cs.setNonStrokingColor(Color.BLACK);
+                    customY -= 14f;
+                    // Two-column layout keyed by count so short field lists
+                    // don't waste vertical space.
+                    float col2X = pageWidth / 2f + 20f;
+                    float rowH = 12f;
+                    int i = 0;
+                    for (CustomFieldEntry entry : customFields) {
+                        boolean rightCol2 = (i % 2 == 1);
+                        float x = rightCol2 ? col2X : margin;
+                        float rowY = customY - (i / 2) * rowH;
+                        if (rowY < margin + 80f) break; // preserve footer room
+                        String labelText = truncate(entry.label(), 32) + ":";
+                        drawText(cs, HELVETICA_BOLD, 9f, labelText, x, rowY);
+                        float labelW = textWidth(HELVETICA_BOLD, 9f, labelText) + 4f;
+                        drawText(cs, HELVETICA, 9f,
+                                truncate(entry.value(), 42),
+                                x + labelW, rowY);
+                        i++;
+                    }
+                    // Advance customY past the whole custom-fields block so
+                    // the items table doesn't overlap it.
+                    int rows = (customFields.size() + 1) / 2;
+                    customY -= rows * rowH + 6f;
+                }
+
                 // === Items table ===
-                float tableTop = Math.min(leftY, rightY) - 24f;
                 if (showItems && !lines.isEmpty()) {
+                    // customY was already advanced past custom fields when
+                    // any were rendered — subtract a small gap for the
+                    // divider rule position.
+                    float tableTop = customY - 16f;
                     cs.setStrokingColor(LIGHT_RULE);
                     cs.setLineWidth(0.5f);
                     cs.moveTo(margin, tableTop + 14f);
