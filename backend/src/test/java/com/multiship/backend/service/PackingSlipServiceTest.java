@@ -175,6 +175,82 @@ class PackingSlipServiceTest {
     }
 
     @Test
+    void render_customFields_appearOnPackingSlip() throws Exception {
+        Order order = buildOrder(106, "ARHDEV");
+        when(orderRepository.findByOrderNo(106)).thenReturn(Optional.of(order));
+        when(orderLineRepository.findOrderLinesByOrderNo(106)).thenReturn(List.of());
+        when(clientRepository.findByClientCodeIgnoreCase("ARHDEV")).thenReturn(Optional.empty());
+        when(labelTemplateService.resolve("ARHDEV", "PACKING_SLIP")).thenReturn(Optional.empty());
+
+        // G5 — wire a mock CustomFieldService with two values on the order.
+        CustomFieldService customFieldService = mock(CustomFieldService.class);
+        when(customFieldService.loadValues(106)).thenReturn(java.util.Map.of(
+                "po_number", "PO-42",
+                "dept", "Warehouse-West"));
+        com.multiship.backend.model.CustomFieldDefinition po =
+                new com.multiship.backend.model.CustomFieldDefinition();
+        po.setFieldKey("po_number");
+        po.setLabel("PO Number");
+        po.setPosition(10);
+        com.multiship.backend.model.CustomFieldDefinition dept =
+                new com.multiship.backend.model.CustomFieldDefinition();
+        dept.setFieldKey("dept");
+        dept.setLabel("Department");
+        dept.setPosition(20);
+        when(customFieldService.listApplicable("ARHDEV")).thenReturn(List.of(po, dept));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "customFieldService", customFieldService);
+
+        byte[] pdf = service.render(106);
+        String text = extractText(pdf);
+
+        assertTrue(text.contains("CUSTOM FIELDS"),
+                "Section header should appear; got: " + text);
+        assertTrue(text.contains("PO Number"), text);
+        assertTrue(text.contains("PO-42"), text);
+        assertTrue(text.contains("Department"), text);
+        assertTrue(text.contains("Warehouse-West"), text);
+    }
+
+    @Test
+    void render_customFields_orphanedValueFallsBackToRawKey() throws Exception {
+        // A value whose definition has been deleted since. Slip must still
+        // render it (with the raw key as the label) — we never silently drop.
+        Order order = buildOrder(107, "ARHDEV");
+        when(orderRepository.findByOrderNo(107)).thenReturn(Optional.of(order));
+        when(orderLineRepository.findOrderLinesByOrderNo(107)).thenReturn(List.of());
+        when(clientRepository.findByClientCodeIgnoreCase("ARHDEV")).thenReturn(Optional.empty());
+        when(labelTemplateService.resolve("ARHDEV", "PACKING_SLIP")).thenReturn(Optional.empty());
+
+        CustomFieldService customFieldService = mock(CustomFieldService.class);
+        when(customFieldService.loadValues(107)).thenReturn(java.util.Map.of("legacy_ref", "ORPHAN-9"));
+        when(customFieldService.listApplicable("ARHDEV")).thenReturn(List.of()); // no definitions
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "customFieldService", customFieldService);
+
+        byte[] pdf = service.render(107);
+        String text = extractText(pdf);
+        assertTrue(text.contains("legacy_ref"), "Orphan key should appear as label; got: " + text);
+        assertTrue(text.contains("ORPHAN-9"), text);
+    }
+
+    @Test
+    void render_customFields_serviceUnwired_behavesLikeBefore() throws Exception {
+        // Nothing plumbed → renderInternal skips the custom-fields section
+        // entirely; existing packing slip layout unchanged.
+        Order order = buildOrder(108, "ARHDEV");
+        when(orderRepository.findByOrderNo(108)).thenReturn(Optional.of(order));
+        when(orderLineRepository.findOrderLinesByOrderNo(108)).thenReturn(List.of(
+                buildLine("SKU-A", "Widget", 1)));
+        when(clientRepository.findByClientCodeIgnoreCase("ARHDEV")).thenReturn(Optional.empty());
+        when(labelTemplateService.resolve("ARHDEV", "PACKING_SLIP")).thenReturn(Optional.empty());
+
+        byte[] pdf = service.render(108);
+        String text = extractText(pdf);
+        assertFalse(text.contains("CUSTOM FIELDS"),
+                "No section header when service is unwired; got: " + text);
+        assertTrue(text.contains("SKU-A"), text);
+    }
+
+    @Test
     void render_ignoresGarbageLogoBase64_ratherThanFailing() throws Exception {
         Order order = buildOrder(105, "ARHDEV");
         LabelTemplate tmpl = new LabelTemplate();
