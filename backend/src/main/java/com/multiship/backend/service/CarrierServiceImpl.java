@@ -74,6 +74,12 @@ public class CarrierServiceImpl implements CarrierService {
     private final CustomsService customsService;
     private final ShipmentResolutionService resolutionService;
 
+    /** Sprint 44 — optional so existing tests that build CarrierServiceImpl
+     *  without Spring don't have to plumb another dep. When null, routing
+     *  rules simply don't run. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RoutingRuleService routingRuleService;
+
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<CarrierListResponse>> getAvailableCarriers() {
@@ -527,11 +533,13 @@ public class CarrierServiceImpl implements CarrierService {
         // warehouse address. Any override throws WAREHOUSE_ATTACH_FORBIDDEN
         // when the caller borrowed a warehouse from another tenant.
         String resolvedWarehouseCode = null;
+        Long resolvedWarehouseId = null;
         if (hasClient && StringUtils.hasText(req.getWarehouseCode())) {
             try {
                 Warehouse w = resolutionService.assertWarehouse(resolvedClient, req.getWarehouseCode());
                 from = mergeFromWarehouse(from, w);
                 resolvedWarehouseCode = w.getCode();
+                resolvedWarehouseId = w.getId();
             } catch (ShipmentResolutionException e) {
                 return toResolutionFailure(e);
             }
@@ -575,12 +583,109 @@ public class CarrierServiceImpl implements CarrierService {
         com.multiship.backend.model.PackagePreset preset =
                 shippingConfigService.presetById(req.getPackagePresetId()).orElse(null);
 
+        // Sprint 44 — routing rules. Runs after the initial carrier/service
+        // pick is known so rules can key off the current selection, but
+        // BEFORE allowlist gates so a valid reroute isn't rejected by the
+        // allowlist of the original service. When the client isn't set or
+        // the routing service isn't wired, this is a no-op.
+        if (hasClient && routingRuleService != null) {
+            // Audit-fix #4 — resolve destRegion from the destination country
+            // via the shared CountryRegions taxonomy. Prior to this the field
+            // was hard-coded null, so every region-scoped routing rule (e.g.
+            // "if destination is Europe, reroute to DHL") silently failed to
+            // match in the label-generation hot path.
+            com.multiship.backend.dto.RoutingEvaluationRequest evalReq =
+                    com.multiship.backend.dto.RoutingEvaluationRequest.builder()
+                            .weightLb(com.multiship.backend.util.UnitConverter.toPounds(
+                                    req.getWeight(), req.getWeightUnit()))
+                            .destCountry(to.getCountryCode())
+                            .destRegion(com.multiship.backend.util.CountryRegions.regionOf(
+                                    to.getCountryCode()))
+                            .currentCarrier(carrier)
+                            .currentServiceId(service != null ? service.getId() : null)
+                            .currentWarehouseId(resolvedWarehouseId)
+                            .declaredValue(req.getDeclaredValue())
+                            .orderSource(req.getSource())
+                            .build();
+            com.multiship.backend.dto.RoutingEvaluationResult routingResult =
+                    routingRuleService.evaluate(resolvedClient, evalReq);
+            if ("MATCH".equals(routingResult.getStatus())) {
+                if (routingResult.getActionType() == com.multiship.backend.model.RoutingRule.ActionType.BLOCK) {
+                    return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                            "Blocked by routing rule '" + routingResult.getMatchedRuleName()
+                            + "': " + routingResult.getBlockReason());
+                }
+                // REROUTE — swap the service. If the target carrier differs,
+                // re-resolve the carrier + account so the rest of the pipeline
+                // hits the right connector.
+                if (routingResult.getTargetServiceId() != null) {
+                    com.multiship.backend.model.ShippingService rerouted =
+                            shippingConfigService.serviceById(routingResult.getTargetServiceId()).orElse(null);
+                    if (rerouted == null) {
+                        // Audit-fix #5: the rule matched, but its target service
+                        // no longer exists (deleted from the catalog). Previously
+                        // the code silently continued with the ORIGINAL service —
+                        // the rule's intent was lost with no visible signal. Fail
+                        // loudly so the operator can fix the rule.
+                        return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                                "Routing rule '" + routingResult.getMatchedRuleName()
+                                + "' targets service #" + routingResult.getTargetServiceId()
+                                + " which no longer exists. Fix the rule to point at a live service.");
+                    }
+                    service = rerouted;
+                    String newCarrier = resolveCanonicalCarrierCode(rerouted.getCarrier());
+                    if (!newCarrier.equalsIgnoreCase(carrier)) {
+                        // Swap carrier + connector; try to find a working
+                        // account for the new carrier (existing account, else
+                        // the platform account for that carrier).
+                        carrier = newCarrier;
+                        CarrierAccountRef reroutedAccount = carrierAccountRefRepository
+                                .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+                        if (reroutedAccount == null) {
+                            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                                    "Routing rule '" + routingResult.getMatchedRuleName()
+                                    + "' rerouted to " + carrier + " but no verified " + carrier
+                                    + " credentials are available.");
+                        }
+                        account = reroutedAccount;
+                        billToNumber = firstNonBlank(typedNumber, account.getAccountNumber(), "ACCOUNT");
+                        connector = getCarrierConnector(carrier);
+                    }
+                    log.info("Routing rule '{}' rerouted client={} to service={} carrier={}",
+                            routingResult.getMatchedRuleName(), resolvedClient, service.getServiceCode(), carrier);
+                }
+                // G2 — REROUTE may also (or only) rewrite the fulfilment
+                // warehouse. Verify attach; refuse loudly on a stale target
+                // rather than silently keeping the original.
+                if (routingResult.getTargetWarehouseId() != null
+                        && !routingResult.getTargetWarehouseId().equals(resolvedWarehouseId)) {
+                    try {
+                        Warehouse rerouteWh = resolutionService.assertWarehouseById(
+                                resolvedClient, routingResult.getTargetWarehouseId());
+                        from = mergeFromWarehouse(from, rerouteWh);
+                        resolvedWarehouseCode = rerouteWh.getCode();
+                        resolvedWarehouseId = rerouteWh.getId();
+                        log.info("Routing rule '{}' rerouted client={} to warehouse={}",
+                                routingResult.getMatchedRuleName(), resolvedClient, rerouteWh.getCode());
+                    } catch (ShipmentResolutionException e) {
+                        return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                                "Routing rule '" + routingResult.getMatchedRuleName()
+                                + "' targets warehouse #" + routingResult.getTargetWarehouseId()
+                                + " which " + (e.getErrorCode() == ErrorCode.WAREHOUSE_NOT_FOUND
+                                        ? "no longer exists."
+                                        : "is not attached to this client."));
+                    }
+                }
+            }
+        }
+
         // Allowlist gates on the resolved service + preset. Ad-hoc shipments
         // (no client) skip both — same rule as ship-to above.
         if (hasClient) {
             try {
                 if (service != null) {
-                    resolutionService.assertServiceAllowed(resolvedClient, service.getId());
+                    resolutionService.assertServiceAllowed(resolvedClient, service.getId(),
+                            to.getCountryCode(), resolvedWarehouseId);
                 }
                 if (preset != null) {
                     resolutionService.assertPackageAllowed(resolvedClient, preset.getId());
@@ -621,19 +726,42 @@ public class CarrierServiceImpl implements CarrierService {
                 .recipientPhone(firstNonBlank(to.getPhone(), "0000000000"))
                 .recipientAddressLine1(to.getAddressLine1())
                 .recipientAddressLine2(to.getAddressLine2())
+                .recipientAddressLine3(to.getAddressLine3())
                 .recipientCity(to.getCity())
                 .recipientState(firstNonBlank(to.getState(), ""))
                 .recipientPostalCode(to.getPostalCode())
                 .recipientCountryCode(to.getCountryCode())
+                .recipientResidential(to.getResidential())
+                .recipientPhoneCountryCode(to.getPhoneCountryCode())
                 .referenceNumber(firstNonBlank(req.getReference(), "MANUAL"))
                 .specialInstructions(req.getGoodsDescription())
                 .declaredValue(req.getDeclaredValue())
+                // Sprint 25 — thread the RETURN mode into the ShipmentRequestDTO
+                // so connectors emit each carrier's return-label wire flag
+                // (UPS ReturnService.Code=8, FedEx returnedShipmentDetail,
+                // SWSIM IsReturnLabel=true, DHL pickup.isRequested=true).
+                .isReturn(req.getIsReturn())
+                // Sprint 27 — thread the DG block so connectors emit their
+                // hazmat wire format (UPS HazMatPackageInformation, FedEx
+                // dangerousGoodsDetail, DHL content.dangerousGoods, SWSIM
+                // HazardousMaterials).
+                .dangerousGoods(req.getDangerousGoods())
+                // Sprint 35 — signature + insurance. Each connector
+                // normalises the enum and emits its carrier-specific wire
+                // format (UPS DeliveryConfirmation.DCISType, FedEx
+                // packageSpecialServices.signatureOptionType, DHL
+                // valueAddedServices SF/SI/II, SWSIM SignatureConfirmation
+                // / AdultSignatureRequired + InsuredValue).
+                .signatureOption(req.getSignatureOption())
+                .insuredValue(req.getInsuredValue())
+                .insuredValueCurrency(req.getInsuredValueCurrency())
                 .build();
 
         CarrierConnector.ShipmentResult result;
         try {
             connector.validateCredentials(account.getClientId(), account.getClientSecret());
-            String token = connector.getAccessToken(account.getClientId(), account.getClientSecret());
+            String token = connector.getAccessToken(account.getClientId(), account.getClientSecret(),
+                    account.getAccountNumber());
             result = connector.createShipment(shipmentRequest, token);
         } catch (Exception ex) {
             log.warn("Manual shipment failed at carrier {}: {}", carrier, ex.getMessage());
@@ -785,8 +913,20 @@ public class CarrierServiceImpl implements CarrierService {
     /** One shipment attempt against a resolved account; throws on carrier failure. */
     private CarrierConnector.ShipmentResult attemptShipment(Order order, AccountResolution res, CarrierConnector connector) {
         connector.validateCredentials(res.clientId(), res.clientSecret());
-        String accessToken = connector.getAccessToken(res.clientId(), res.clientSecret());
+        String accessToken = connector.getAccessToken(res.clientId(), res.clientSecret(), res.accountNumber());
         ShipmentRequestDTO shipmentRequest = buildShipmentRequest(order, res.accountNumber(), connector);
+
+        // Fail fast on incomplete customs before the carrier call — the
+        // carriers' own errors are terse ("Invalid commodity") and don't
+        // name the missing field. IntlShipmentValidator concatenates every
+        // gap into one actionable message.
+        java.util.List<IntlShipmentValidator.ValidationError> intlErrors =
+                IntlShipmentValidator.validate(shipmentRequest);
+        if (!intlErrors.isEmpty()) {
+            throw new com.multiship.backend.exception.CarrierConnectionException(
+                    IntlShipmentValidator.toMessage(intlErrors));
+        }
+
         return connector.createShipment(shipmentRequest, accessToken);
     }
 
@@ -1046,61 +1186,6 @@ public class CarrierServiceImpl implements CarrierService {
                 .orElseThrow(() -> new CarrierConnectionException("Unsupported carrier: " + carrierCode));
     }
 
-    @Override
-    @Transactional
-    public ApiResponse<CarrierConnectResponse> refreshCarrierToken(UserDetails userDetails) {
-        User user = resolveUser(userDetails);
-        String carrierCode = resolveCarrierCode(user);
-        CarrierConnector connector = getCarrierConnector(carrierCode);
-
-        CarrierConfig config = carrierConfigRepository.findFirstByUserUsernameAndCarrierCodeAndTenantIdIsNull(user.getUsername(), carrierCode)
-                .orElseThrow(() -> new CarrierConnectionException("Carrier configuration is missing for the current user."));
-
-        String clientId = firstNonBlank(user.getCarrierClientId(), config.getClientId());
-        String clientSecret = firstNonBlank(user.getCarrierClientSecret(), config.getClientSecret());
-        String accountNumber = firstNonBlank(user.getCarrierAccountNumber(), config.getAccountNumber());
-        connector.validateCredentials(clientId, clientSecret);
-
-        String token = connector.getAccessToken(clientId, clientSecret);
-        LocalDateTime expiresAt = LocalDateTime.now().plusHours(1);
-
-        persistCarrierDetails(
-                user,
-                carrierCode,
-                clientId,
-                clientSecret,
-                accountNumber,
-                token,
-                expiresAt,
-                true,
-                firstNonNull(user.getCarrierConnectedAt(), LocalDateTime.now()),
-                firstNonBlank(user.getCarrierEnvironment(), carrierProperties.getDefaultEnvironment())
-        );
-
-        config.setAccessToken(token);
-        config.setTokenExpiresAt(expiresAt);
-        config.setAccountNumber(accountNumber);
-        config.setClientId(clientId);
-        config.setClientSecret(clientSecret);
-        config.setActive(true);
-        carrierConfigRepository.save(config);
-
-        CarrierConnectResponse response = CarrierConnectResponse.builder()
-                .carrierCode(carrierCode)
-                .carrierName(connector.getCarrierName())
-                .connected(true)
-                .message("Carrier access token refreshed successfully.")
-                .accountNumber(accountNumber)
-                .environment(firstNonBlank(user.getCarrierEnvironment(), carrierProperties.getDefaultEnvironment()))
-                .connectedAt(user.getCarrierConnectedAt())
-                .tokenExpiresAt(expiresAt)
-                .tokenExpired(false)
-                .accessTokenPreview(maskToken(token))
-                .build();
-
-        return success("Carrier token refreshed successfully.", response);
-    }
-
     private User resolveUser(UserDetails userDetails) {
         if (userDetails == null || !StringUtils.hasText(userDetails.getUsername())) {
             throw new CarrierConnectionException("Authenticated user is required.");
@@ -1240,6 +1325,40 @@ public class CarrierServiceImpl implements CarrierService {
         // carrier actually charges for; flat-rate packaging skips DIM.
         BigDecimal weight = com.multiship.backend.util.PackageMath.billableWeight(preset, order.getWeight());
 
+        // International metadata: look up the order's customs declaration and
+        // the client's customs profile for this destination. Both are optional;
+        // when both are absent we skip the intl block (domestic shipment). The
+        // populator merges order values over profile values so per-shipment
+        // overrides win — profile values only fill blanks.
+        com.multiship.backend.model.OrderCustoms customs = order.getOrderNo() == null
+                ? null
+                : orderCustomsRepository.findByOrderNoIgnoreCase(String.valueOf(order.getOrderNo())).orElse(null);
+        com.multiship.backend.model.ClientCustomsProfile profile =
+                orderClient != null && order.getShiptoCountryCd() != null
+                        ? clientCustomsProfileRepository
+                                .findByClientAndCountry(orderClient, order.getShiptoCountryCd())
+                                .orElse(null)
+                        : null;
+        // Customs boundary: a country mismatch alone isn't enough — customs
+        // unions (EU, EAEU, GCC, SACU) treat their members as one territory,
+        // so a FR→DE parcel crosses a country border but NOT a customs
+        // border. CustomsTerritories.sameTerritory() suppresses the intl
+        // block for those pairs so we don't build an unnecessary invoice.
+        boolean sameCustomsTerritory = com.multiship.backend.util.CustomsTerritories
+                .sameTerritory(shipper.getCountryCode(), order.getShiptoCountryCd());
+        boolean customsRequired = international && !sameCustomsTerritory;
+        com.multiship.backend.dto.IntlShipmentBlockDTO intlBlock = buildIntlBlock(customsRequired, customs, profile);
+
+        // Currency for declared value: prefer customs currency (OrderCustoms /
+        // profile default), fall back to null → FedEx defaults to USD, matching
+        // the pre-fix behavior for domestic-only accounts.
+        String declaredValueCurrency = intlBlock != null ? intlBlock.getCustomsCurrency() : null;
+
+        // Weight/dim unit: from the customs declaration when available, else
+        // LB/IN (the historical default the connectors assumed).
+        String weightUnit = customs != null && customs.getWeightUnit() != null ? customs.getWeightUnit() : "LB";
+        String dimUnit = "IN"; // Package presets standardize on inches; a per-preset unit lands with the address model rework.
+
         return ShipmentRequestDTO.builder()
                 .carrierCode(connector.getCarrierCode())
                 .accountNumber(firstNonBlank(accountNumber, "ACCOUNT"))
@@ -1249,6 +1368,8 @@ public class CarrierServiceImpl implements CarrierService {
                 .width(preset != null ? preset.getWidth() : null)
                 .height(preset != null ? preset.getHeight() : null)
                 .weight(weight)
+                .weightUnit(weightUnit)
+                .dimUnit(dimUnit)
                 .shipperName(shipper.getName())
                 .shipperPhone(shipper.getPhone())
                 .shipperAddressLine1(shipper.getAddressLine1())
@@ -1268,6 +1389,117 @@ public class CarrierServiceImpl implements CarrierService {
                 .referenceNumber(order.getOrderNo() != null ? String.valueOf(order.getOrderNo()) : null)
                 .specialInstructions(firstNonBlank(order.getGoodsDesc(), order.getShipVia()))
                 .declaredValue(order.getPrice())
+                .declaredValueCurrency(declaredValueCurrency)
+                .intl(intlBlock)
+                // Sprint 25 — thread the Order entity's isReturn flag so
+                // ERP-side return orders get the carrier return-label wire
+                // format on the automatic label path too (not just manual).
+                // Order.isReturn is a legacy 'Y'/'N' column; anything starting
+                // with Y (case-insensitive) counts as a return.
+                .isReturn("Y".equalsIgnoreCase(
+                        order.getIsReturn() == null ? "" : order.getIsReturn().trim()))
+                .build();
+    }
+
+    /**
+     * Build the international shipment block from the order's customs
+     * declaration and the client's customs profile. Returns null when the
+     * shipment is domestic OR there's no customs data on either side.
+     *
+     * <p>Merge order: {@code customs} (order-level) → {@code profile}
+     * (client-level default) → null. First non-null wins. Commodity list
+     * comes only from the order (profile can't hold line items).
+     */
+    private com.multiship.backend.dto.IntlShipmentBlockDTO buildIntlBlock(
+            boolean international,
+            com.multiship.backend.model.OrderCustoms customs,
+            com.multiship.backend.model.ClientCustomsProfile profile) {
+        if (!international) return null;
+        if (customs == null && profile == null) return null;
+
+        java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> commodities =
+                customs == null || customs.getItems() == null
+                        ? java.util.List.of()
+                        : customs.getItems().stream()
+                                .map(i -> com.multiship.backend.dto.CustomsCommodityDTO.builder()
+                                        .description(i.getDescription())
+                                        .hsCode(i.getHsCode())
+                                        .countryOfOrigin(i.getCountryOfOrigin())
+                                        .quantity(i.getQuantity())
+                                        .unitValue(i.getUnitValue())
+                                        .unitWeight(i.getWeight())
+                                        .sku(i.getSku())
+                                        .build())
+                                .toList();
+
+        BigDecimal customsTotal = commodities.stream()
+                .map(com.multiship.backend.dto.CustomsCommodityDTO::lineTotalValue)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        return com.multiship.backend.dto.IntlShipmentBlockDTO.builder()
+                .international(true)
+                .incoterms(firstNonBlank(customs == null ? null : customs.getIncoterms(),
+                        profile == null ? null : profile.getIncoterms()))
+                .reasonForExport(firstNonBlank(customs == null ? null : customs.getReasonForExport(),
+                        profile == null ? null : profile.getReasonForExport()))
+                .customsCurrency(firstNonBlank(customs == null ? null : customs.getCurrency(),
+                        profile == null ? null : profile.getCurrency()))
+                .customsTotalValue(customsTotal.signum() == 0 ? null : customsTotal)
+                .weightUnit(customs == null ? null : customs.getWeightUnit())
+                .dimUnit(null)
+                .importerType(profile == null ? null : profile.getImporterType())
+                .importerName(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getName() : null,
+                        profile == null ? null : profile.getImporterName()))
+                .importerContact(profile == null ? null : profile.getImporterContact())
+                .importerCompany(firstNonBlank(customs == null ? null : customs.getImporterCompany(),
+                        profile == null ? null : profile.getImporterName()))
+                .importerAddressLine1(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getLine1() : null,
+                        profile == null ? null : profile.getImporterAddress1()))
+                .importerAddressLine2(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getLine2() : null,
+                        profile == null ? null : profile.getImporterAddress2()))
+                .importerCity(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getCity() : null,
+                        profile == null ? null : profile.getImporterCity()))
+                .importerState(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getState() : null,
+                        profile == null ? null : profile.getImporterState()))
+                .importerPostcode(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getZip() : null,
+                        profile == null ? null : profile.getImporterPostcode()))
+                .importerCountry(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getCountry() : null,
+                        profile == null ? null : profile.getImporterCountry()))
+                .importerPhone(firstNonBlank(
+                        customs != null && customs.getImporterAddress() != null ? customs.getImporterAddress().getPhone() : null,
+                        profile == null ? null : profile.getImporterPhone()))
+                .importerTaxId(firstNonBlank(customs == null ? null : customs.getImporterTaxId(),
+                        profile == null ? null : profile.getImporterTaxId()))
+                .importerTaxIdType(profile == null ? null : profile.getImporterTaxIdType())
+                .importerVat(customs == null ? null : customs.getImporterVat())
+                .importerEori(firstNonBlank(customs == null ? null : customs.getImporterEori(),
+                        profile == null ? null : profile.getImporterEori()))
+                .importerIoss(profile == null ? null : profile.getImporterIoss())
+                .importerCompanyReg(profile == null ? null : profile.getImporterCompanyReg())
+                .importerIec(profile == null ? null : profile.getImporterIec())
+                .importerGstin(profile == null ? null : profile.getImporterGstin())
+                .brokerName(profile == null ? null : profile.getBrokerName())
+                .brokerCompany(profile == null ? null : profile.getBrokerCompany())
+                .brokerAddressLine1(profile == null ? null : profile.getBrokerAddress1())
+                .brokerAddressLine2(profile == null ? null : profile.getBrokerAddress2())
+                .brokerCity(profile == null ? null : profile.getBrokerCity())
+                .brokerState(profile == null ? null : profile.getBrokerState())
+                .brokerPostcode(profile == null ? null : profile.getBrokerPostcode())
+                .brokerCountry(profile == null ? null : profile.getBrokerCountry())
+                .brokerPhone(profile == null ? null : profile.getBrokerPhone())
+                .brokerId(profile == null ? null : profile.getBrokerId())
+                .brokerLicense(profile == null ? null : profile.getBrokerLicense())
+                .dutyBillTo(profile == null ? null : profile.getDutiesBillTo())
+                .dutyAccount(profile == null ? null : profile.getDutiesAccount())
+                .commodities(commodities)
                 .build();
     }
 
@@ -1292,7 +1524,7 @@ public class CarrierServiceImpl implements CarrierService {
         }
 
         connector.validateCredentials(clientId, clientSecret);
-        String token = connector.getAccessToken(clientId, clientSecret);
+        String token = connector.getAccessToken(clientId, clientSecret, config.getAccountNumber());
         LocalDateTime expiresAt = LocalDateTime.now().plusHours(1);
         config.setAccessToken(token);
         config.setTokenExpiresAt(expiresAt);

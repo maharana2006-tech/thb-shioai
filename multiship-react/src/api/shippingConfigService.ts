@@ -35,6 +35,17 @@ export interface ShipMethodRule {
   destType?: 'ANY' | 'COUNTRIES' | 'REGION' | 'COUNTRY' | null
   destValue?: string | null
   serviceId: number
+  /** Phase 6: allowed packages on this rule. Round-trips through the entity
+   *  as a transient field; persisted in ship_method_rule_package. */
+  allowedPresetIds?: number[]
+}
+
+/** Phase 6: flat row from `rulePackages` in the catalog. Frontend groups by
+ *  rule_id to render the chip per rule. */
+export interface ShipMethodRulePackageLink {
+  id?: number
+  ruleId: number
+  presetId: number
 }
 
 /** Service ↔ package link (which packages a service may ship in). */
@@ -50,6 +61,11 @@ export interface PackagePreset {
   kind: 'CARRIER' | 'CUSTOM'
   carrierPackageCode?: string | null
   carrier?: string | null
+  /** PLATFORM (attachable to any client via allowlist) or CLIENT (private
+   *  to its owner, auto-allowed). Added in Phase 5a. */
+  ownerType?: 'PLATFORM' | 'CLIENT' | null
+  /** Owning client — populated only when ownerType=CLIENT. */
+  ownerClientCode?: string | null
   length?: number | null
   width?: number | null
   height?: number | null
@@ -167,6 +183,8 @@ export interface ShippingCatalog {
   services: ShippingServiceItem[]
   rules: ShipMethodRule[]
   links: ServicePackageLink[]
+  /** Phase 6: allowed-package links per rule. */
+  rulePackages: ShipMethodRulePackageLink[]
   /** Distinct origin countries present in the catalog. */
   originCountries: string[]
 }
@@ -191,6 +209,7 @@ export const shippingConfigService = {
       services: r.data?.services ?? [],
       rules: r.data?.rules ?? [],
       links: r.data?.links ?? [],
+      rulePackages: r.data?.rulePackages ?? [],
       originCountries: r.data?.originCountries ?? [],
     }
   },

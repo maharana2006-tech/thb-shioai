@@ -1,9 +1,10 @@
 import { useSyncExternalStore } from 'react'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
 
-export type CarrierId = 'fedex' | 'ups' | 'usps' | 'dhl'
+// Internal types — no external caller needs these.
+type CarrierId = 'fedex' | 'ups' | 'usps' | 'dhl'
 
-export interface CarrierDefinition {
+interface CarrierDefinition {
   id: CarrierId
   name: string
   description: string
@@ -12,7 +13,7 @@ export interface CarrierDefinition {
   accent: string
 }
 
-export interface CarrierConnection extends CarrierDefinition {
+interface CarrierConnection extends CarrierDefinition {
   connectedAt: string
   connectionName: string
   credentials: Record<string, string>
@@ -192,9 +193,6 @@ const subscribe = (callback: () => void) => {
 
 export const useAppSession = () => useSyncExternalStore(subscribe, getSnapshot, () => emptySnapshot)
 
-export const getAuthenticatedHomePath = (hasConnectedCarrier: boolean) =>
-  hasConnectedCarrier ? '/dashboard' : '/settings/carriers'
-
 export const storeAuthSession = (payload: { token: string; username: string; role: string }) => {
   if (!isBrowser()) {
     return
@@ -215,40 +213,6 @@ export const clearAuthSession = () => {
   window.localStorage.removeItem(STORAGE_KEYS.username)
   window.localStorage.removeItem(STORAGE_KEYS.role)
   emitSessionChange()
-}
-
-export const connectCarrier = (
-  carrierId: CarrierId,
-  config: { connectionName: string; credentials: Record<string, string> }
-) => {
-  const definition = carrierCatalog.find((carrier) => carrier.id === carrierId)
-
-  if (!definition) {
-    return
-  }
-
-  const existingConnections = readConnectedCarriers(readStorageValue(STORAGE_KEYS.carriers))
-
-  if (existingConnections.some((carrier) => carrier.id === carrierId)) {
-    return
-  }
-
-  writeConnectedCarriers([
-    ...existingConnections,
-    {
-      ...definition,
-      connectedAt: new Date().toISOString(),
-      connectionName: config.connectionName,
-      credentials: config.credentials,
-    },
-  ])
-}
-
-export const disconnectCarrier = (carrierId: CarrierId) => {
-  const existingConnections = readConnectedCarriers(readStorageValue(STORAGE_KEYS.carriers))
-  const filteredConnections = existingConnections.filter((carrier) => carrier.id !== carrierId)
-
-  writeConnectedCarriers(filteredConnections)
 }
 
 export const syncCarrierSession = (payload: {
@@ -290,5 +254,3 @@ export const syncCarrierSession = (payload: {
     },
   ])
 }
-
-export { carrierCatalog }

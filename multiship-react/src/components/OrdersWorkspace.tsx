@@ -6,14 +6,18 @@ import {
   FiArrowUp,
   FiCheckCircle,
   FiEdit3,
-  FiExternalLink,
   FiEye,
   FiFileText,
   FiFilter,
   FiRefreshCw,
   FiRotateCw,
+  FiCalendar,
+  FiPackage,
   FiSearch,
+  FiUpload,
+  FiTruck,
   FiX,
+  FiXCircle,
   FiZap,
   FiPlus,
 } from 'react-icons/fi'
@@ -29,6 +33,11 @@ import FillCarrierDetailsModal from './modals/FillCarrierDetailsModal'
 import ClientEditorModal from './modals/ClientEditorModal'
 import AccountPickerModal from './modals/AccountPickerModal'
 import OrderDetailsModal from './modals/OrderDetailsModal'
+import TrackingTimelineModal from './tracking/TrackingTimelineModal'
+import SchedulePickupModal from './modals/SchedulePickupModal'
+import CloseOutModal from './modals/CloseOutModal'
+import BulkLabelModal from './modals/BulkLabelModal'
+import OrderImportModal from './modals/OrderImportModal'
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
 
@@ -123,6 +132,20 @@ export default function OrdersWorkspace() {
   const [pickerCarrier, setPickerCarrier] = useState<string | null>(null)
   const [pickerSuggested, setPickerSuggested] = useState<string | null>(null)
   const [detailsOrderNo, setDetailsOrderNo] = useState<number | null>(null)
+  // Sprint 23 — Track column: opens the TrackingTimelineModal with live
+  // scan events from the connector's authenticated tracking API.
+  const [trackingOrderNo, setTrackingOrderNo] = useState<number | null>(null)
+  // Sprint 30 — Void action: currently-voiding orderNo (for spinner);
+  // handler confirms with the user before calling the carrier.
+  const [voidingOrderNo, setVoidingOrderNo] = useState<number | null>(null)
+  // Sprint 33 — schedule pickup modal (bulk action from the header).
+  const [pickupOpen, setPickupOpen] = useState(false)
+  // Sprint 34 — end-of-day close-out modal.
+  const [closeOutOpen, setCloseOutOpen] = useState(false)
+  // Sprint 37 — bulk-label modal.
+  const [bulkLabelOpen, setBulkLabelOpen] = useState(false)
+  // Sprint 40 — CSV / XLSX import modal.
+  const [importOpen, setImportOpen] = useState(false)
 
   // The header's global search lands here as /orders?q=…
   useEffect(() => {
@@ -228,6 +251,40 @@ export default function OrdersWorkspace() {
   }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sortBy, sortDirection, debouncedFilters, reloadToken])
 
   const refreshQueues = () => setReloadToken((token) => token + 1)
+
+  /**
+   * Sprint 30 — void a label at the carrier. Confirms first (irreversible
+   * at the carrier), then calls POST /orders/{n}/void. Refreshes the queue
+   * on success so the row moves out of "generated" state.
+   */
+  const handleVoid = async (orderNo: number, trackingNumber: string | null) => {
+    if (!trackingNumber) return
+    const ok = window.confirm(
+      `Void tracking ${trackingNumber} at the carrier?\n\n`
+      + 'This calls the carrier\'s void / cancel endpoint (UPS, FedEx, USPS, DHL). '
+      + 'Postage is refunded only if the label hasn\'t been scanned in transit yet — '
+      + 'post-scan voids succeed but no refund is issued.',
+    )
+    if (!ok) return
+    setVoidingOrderNo(orderNo)
+    try {
+      const response = await orderService.voidLabel(orderNo)
+      const data = response.data
+      if (data?.voided || data?.status === 'ALREADY_VOIDED') {
+        notify.success(`Order ${orderNo}: ${data.message}`)
+        refreshQueues()
+      } else {
+        notify.error(`Void failed: ${data?.message ?? 'Unknown error.'}`)
+      }
+    } catch (e) {
+      const msg = e instanceof ApiError ? (e.payload?.message ?? e.message)
+        : e instanceof Error ? e.message
+        : 'Void call failed.'
+      notify.error(msg)
+    } finally {
+      setVoidingOrderNo(null)
+    }
+  }
 
   const readyCount = stats?.ready ?? 0
   const detailsCount = stats?.needsDetails ?? 0
@@ -856,6 +913,31 @@ export default function OrdersWorkspace() {
               <FiZap className="h-3.5 w-3.5" />
               Generate all ready ({readyCount})
             </button>
+            <button type="button" onClick={() => setPickupOpen(true)} className={BTN_GHOST}
+                    title="Book a driver to collect labelled parcels">
+              <FiCalendar className="h-3.5 w-3.5" />
+              Schedule pickup
+            </button>
+            <button type="button" onClick={() => setCloseOutOpen(true)} className={BTN_GHOST}
+                    title="Close out today's shipments so the driver can scan the manifest">
+              <FiFileText className="h-3.5 w-3.5" />
+              Close out day
+            </button>
+            <button type="button"
+                    onClick={() => setBulkLabelOpen(true)}
+                    disabled={rows.length === 0}
+                    className={BTN_GHOST}
+                    title="Generate labels for every visible row and download a ZIP">
+              <FiPackage className="h-3.5 w-3.5" />
+              Bulk labels ({rows.length})
+            </button>
+            <button type="button"
+                    onClick={() => setImportOpen(true)}
+                    className={BTN_GHOST}
+                    title="Upload a CSV or Excel with one order per row">
+              <FiUpload className="h-3.5 w-3.5" />
+              Import CSV/Excel
+            </button>
             <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY}>
               <FiPlus className="h-3.5 w-3.5" />
               New shipment
@@ -1065,16 +1147,31 @@ export default function OrdersWorkspace() {
                     ))}
                     <td className="sticky right-0 z-10 bg-white px-2.5 py-3 text-right align-middle shadow-[-10px_0_12px_-10px_rgba(31,21,12,0.14)] transition group-hover:bg-[#faf7f0]">
                       <span className="inline-flex items-center justify-end gap-1.5">
-                        {view === 'generated' && order.labelDetails.trackingUrl ? (
-                          <a
-                            href={order.labelDetails.trackingUrl}
-                            target="_blank"
-                            rel="noreferrer"
+                        {order.labelDetails.trackingNumber ? (
+                          <button
+                            type="button"
+                            onClick={() => setTrackingOrderNo(orderNo)}
+                            title={`Live tracking for ${order.labelDetails.trackingNumber}`}
+                            aria-label={`Track order ${orderNo}`}
                             className="inline-flex items-center gap-1.5 rounded-lg border border-[#e6dcc7] bg-[#faf7f0] px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#dccfb4] hover:bg-[#f2ebda]"
                           >
-                            <FiExternalLink className="h-3 w-3" />
+                            <FiTruck className="h-3 w-3" />
                             Track
-                          </a>
+                          </button>
+                        ) : null}
+                        {order.labelDetails.trackingNumber
+                          && (order.labelDetails.status || '').toUpperCase() !== 'VOIDED' ? (
+                          <button
+                            type="button"
+                            disabled={voidingOrderNo === orderNo}
+                            onClick={() => void handleVoid(orderNo, order.labelDetails.trackingNumber)}
+                            title={`Void ${order.labelDetails.trackingNumber} at the carrier`}
+                            aria-label={`Void order ${orderNo}`}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px] font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:opacity-40"
+                          >
+                            <FiXCircle className="h-3 w-3" />
+                            {voidingOrderNo === orderNo ? 'Voiding…' : 'Void'}
+                          </button>
                         ) : null}
                         <button
                           type="button"
@@ -1227,6 +1324,34 @@ export default function OrdersWorkspace() {
 
       {detailsOrderNo !== null ? (
         <OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} />
+      ) : null}
+
+      {trackingOrderNo !== null ? (
+        <TrackingTimelineModal orderNo={trackingOrderNo} onClose={() => setTrackingOrderNo(null)} />
+      ) : null}
+
+      {pickupOpen ? (
+        <SchedulePickupModal onClose={() => setPickupOpen(false)} />
+      ) : null}
+
+      {closeOutOpen ? (
+        <CloseOutModal
+          onClose={() => setCloseOutOpen(false)}
+          trackingNumbers={rows
+            .map((o) => o.labelDetails.trackingNumber)
+            .filter((t): t is string => Boolean(t))}
+        />
+      ) : null}
+
+      {bulkLabelOpen ? (
+        <BulkLabelModal
+          onClose={() => setBulkLabelOpen(false)}
+          orderNumbers={rows.map((o) => o.orderDetails.orderNo)}
+        />
+      ) : null}
+
+      {importOpen ? (
+        <OrderImportModal onClose={() => setImportOpen(false)} />
       ) : null}
     </div>
   )

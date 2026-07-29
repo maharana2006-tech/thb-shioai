@@ -8,6 +8,8 @@ import org.springframework.context.annotation.Bean;
 
 @SpringBootApplication
 @ConfigurationPropertiesScan(basePackages = "com.multiship.backend.config")
+@org.springframework.scheduling.annotation.EnableScheduling
+@org.springframework.scheduling.annotation.EnableAsync
 public class BackendApplication {
 
 	@Bean

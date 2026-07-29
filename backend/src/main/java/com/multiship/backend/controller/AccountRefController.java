@@ -13,6 +13,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -62,6 +63,15 @@ public class AccountRefController {
     @PostMapping("/{accountId}/toggle-active")
     public ResponseEntity<ApiResponse<CarrierAccountRefDTO>> toggleActive(@PathVariable Long accountId) {
         ApiResponse<CarrierAccountRefDTO> response = accountRefService.toggleActive(accountId);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Delete a carrier account (ADMIN only)",
+            description = "Refuses with 409 ACCOUNT_HAS_LABELS when the account has already generated any labels — deactivate it instead to preserve the audit trail.")
+    @PreAuthorize("hasRole('ADMIN')")
+    @DeleteMapping("/{accountId}")
+    public ResponseEntity<ApiResponse<Void>> deleteAccount(@PathVariable Long accountId) {
+        ApiResponse<Void> response = accountRefService.deleteAccount(accountId);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 

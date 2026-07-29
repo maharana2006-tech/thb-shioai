@@ -51,6 +51,17 @@ public interface ShipmentResolutionService {
     /** {@link #resolveWarehouse} that throws NO_DEFAULT_WAREHOUSE on empty. */
     Warehouse assertWarehouse(String clientCode, String requestedWarehouseCode);
 
+    /**
+     * G2 — resolve a warehouse by id and verify it's attached to the
+     * client. Used by the routing-rule REROUTE path when the rule names a
+     * target warehouse (fetched by id rather than code).
+     *
+     * @throws ShipmentResolutionException WAREHOUSE_NOT_FOUND when the id
+     *         doesn't exist, or WAREHOUSE_ATTACH_FORBIDDEN when it exists
+     *         but isn't attached to the client.
+     */
+    Warehouse assertWarehouseById(String clientCode, Long warehouseId);
+
     // ===== Ship-to =====
 
     /** Does the client's destination-rule set permit shipping to this country? */
@@ -68,17 +79,48 @@ public interface ShipmentResolutionService {
      */
     Set<Long> allowedServiceIds(String clientCode);
 
+    /**
+     * Set of service ids the client may ship on FROM the given warehouse.
+     * A service is included when its warehouse-gate is empty (any warehouse
+     * OK) or when the gate lists {@code warehouseId}. Passing {@code null}
+     * for {@code warehouseId} skips the gate — equivalent to
+     * {@link #allowedServiceIds(String)}.
+     */
+    Set<Long> allowedServiceIds(String clientCode, Long warehouseId);
+
     Set<Long> allowedPackageIds(String clientCode);
 
     /**
-     * Assert the given service is on the client's allowlist (or the client
-     * has no allowlist configured yet).
+     * Assert the given service is on the client's allowlist and its
+     * destination-gate (if any) permits {@code destCountry}. When the row
+     * has no destination rows it's unrestricted; otherwise the target
+     * country must be listed.
      *
-     * @throws ShipmentResolutionException SERVICE_NOT_ALLOWED.
+     * @throws ShipmentResolutionException SERVICE_NOT_ALLOWED — the service
+     *         isn't on the allowlist at all;
+     *         SERVICE_NOT_ALLOWED_FOR_DEST — it's on the list but not for
+     *         this destination.
      */
-    void assertServiceAllowed(String clientCode, Long serviceId);
+    void assertServiceAllowed(String clientCode, Long serviceId, String destCountry);
 
-    /** {@link #assertServiceAllowed} for packages / PACKAGE_NOT_ALLOWED. */
+    /**
+     * As {@link #assertServiceAllowed(String, Long, String)}, plus the
+     * warehouse-gate check. When {@code warehouseId} is null the warehouse
+     * gate is not consulted — same behaviour as the 3-arg overload.
+     *
+     * @throws ShipmentResolutionException SERVICE_NOT_ALLOWED_FOR_WAREHOUSE
+     *         when the service is on the allowlist but restricted to
+     *         warehouses that don't include {@code warehouseId}.
+     */
+    void assertServiceAllowed(String clientCode, Long serviceId, String destCountry, Long warehouseId);
+
+    /**
+     * Assert the given package is usable by the client. CLIENT-owned presets
+     * auto-pass when the owner matches; PLATFORM presets must be on
+     * {@link com.multiship.backend.model.ClientAllowedPackage}.
+     *
+     * @throws ShipmentResolutionException PACKAGE_NOT_ALLOWED.
+     */
     void assertPackageAllowed(String clientCode, Long presetId);
 
     // ===== Rate strategy =====

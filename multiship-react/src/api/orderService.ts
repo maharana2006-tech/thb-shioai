@@ -1,5 +1,6 @@
 import { apiClient, BASE_URL } from './apiClient'
 import type { OrderAccountResolution } from './accountRefService'
+import type { DangerousGoodsBlock } from './dgService'
 
 // ===== Request/Response Types =====
 
@@ -51,6 +52,9 @@ export interface Order {
   carrierAccount?: CarrierAccountInfo | null
   /** Cascade result for this order; present when listed with includeResolution=true. */
   accountResolution?: OrderAccountResolution | null
+  /** Sprint 43 — tenant-defined custom field values (fieldKey -> value).
+   *  Populated on single-order reads only; omitted from list responses. */
+  customFields?: Record<string, string> | null
 }
 
 export interface OrderSummary {
@@ -335,10 +339,16 @@ export interface ManualShipmentAddress {
   email?: string
   addressLine1: string
   addressLine2?: string
+  /** Third street line — JP/CN/IN long addresses. Optional; carriers accept 3+. */
+  addressLine3?: string
   city: string
   state?: string
   postalCode: string
   countryCode: string
+  /** True when this is a residence — carriers apply a residential surcharge on international. */
+  residential?: boolean
+  /** ISO dial code (no plus): "1", "44", "91". Prepended to phone at carrier time. */
+  phoneCountryCode?: string
 }
 
 /** One commercial-invoice line on an international manual shipment. */
@@ -389,6 +399,78 @@ export interface ManualShipmentPayload {
   importer?: Record<string, string>
   broker?: Record<string, string>
   currency?: string
+  /** Sprint 27 — dangerous goods declaration. Backend threads this into
+   *  the ShipmentRequestDTO.dangerousGoods field which every connector's
+   *  wire format keys off. Null on non-hazmat shipments. */
+  dangerousGoods?: DangerousGoodsBlock | null
+  /** Sprint 29 — multi-package. When present, connectors iterate this
+   *  list and emit one carrier-specific package block per entry
+   *  (Shipment.Package[] on UPS, requestedPackageLineItems[] on FedEx,
+   *  content.packages[] on DHL, N CreateIndicium calls on USPS/Stamps).
+   *  Null / omitted → backend synthesises a single-package list from the
+   *  top-level weight/length/width/height fields (existing behavior). */
+  packages?: PackageDetail[]
+  /** Sprint 35 — signature at delivery. NONE | INDIRECT | DIRECT | ADULT.
+   *  Null / omitted → carrier default (usually no signature on domestic
+   *  ground, indirect on air). */
+  signatureOption?: 'NONE' | 'INDIRECT' | 'DIRECT' | 'ADULT' | null
+  /** Sprint 35 — insured value beyond the carrier's free tier ($100 UPS
+   *  / FedEx / USPS Priority Ground). Null / 0 → no explicit insurance
+   *  requested; the free tier still applies. */
+  insuredValue?: number | null
+  insuredValueCurrency?: string | null
+}
+
+/** One box in a multi-package shipment — mirrors backend PackageDetailDTO. */
+export interface PackageDetail {
+  sequenceNumber?: number
+  packageType?: string
+  weight: number
+  weightUnit?: 'LB' | 'KG'
+  length?: number
+  width?: number
+  height?: number
+  dimUnit?: 'IN' | 'CM'
+  declaredValue?: number
+  description?: string
+  reference?: string
+}
+
+/** One scan / status update on a carrier's timeline. Timestamps are ISO-8601
+ *  strings on the wire; the timeline component parses to Date for display. */
+export interface TrackingEventDTO {
+  timestamp: string | null
+  status: string | null
+  description: string
+  location: string | null
+}
+
+/** Sprint 30 response for POST /api/v1/orders/{n}/void. Status is the
+ *  enum from the connector's VoidResult: VOIDED (carrier confirmed),
+ *  ALREADY_VOIDED (idempotent no-op), NOT_SUPPORTED (no live credentials
+ *  or no wire implementation), ERROR (carrier rejected or call failed). */
+export interface VoidLabelResponse {
+  orderNo: number
+  trackingNumber: string | null
+  carrierCode: string | null
+  voided: boolean
+  status: 'VOIDED' | 'ALREADY_VOIDED' | 'NOT_SUPPORTED' | 'ERROR'
+  message: string
+}
+
+/** Backend response for /api/v1/orders/{n}/tracking/live. Source flag drives
+ *  the freshness badge — LIVE (just checked) / CACHE (served from memory) /
+ *  STUB (no live credentials, only the tracking URL is available). */
+export interface TrackingResponseDTO {
+  trackingNumber: string
+  carrierCode: string | null
+  status: string | null
+  delivered: boolean | null
+  trackingUrl: string | null
+  currentLocation: string | null
+  estimatedDelivery: string | null
+  events: TrackingEventDTO[]
+  source: 'LIVE' | 'CACHE' | 'STUB'
 }
 
 // ===== Order Service =====
@@ -537,6 +619,30 @@ export const orderService = {
   /** One-shot manual shipment: create + purchase the label in a single call. */
   generateManualLabel: (payload: ManualShipmentPayload) =>
     apiClient.post<ApiResponse<LabelGenerationResponse>>('/orders/manual-label', payload),
+
+  /**
+   * Live tracking for an order — status, events, estimated delivery. Backend
+   * caches for 5 min (in-flight) / 24 h (delivered), so calling this on a
+   * quick UI refresh is safe. Every failure mode falls back to a URL-only
+   * stub (source === 'STUB'); callers should render the timeline when
+   * events[] is non-empty and fall back to the trackingUrl link when it's
+   * empty.
+   */
+  getLiveTracking: (orderNo: number | string) =>
+    apiClient.get<ApiResponse<TrackingResponseDTO>>(
+      `/orders/${encodeURIComponent(String(orderNo))}/tracking/live`,
+    ),
+
+  /**
+   * Sprint 30 — void / cancel a previously-issued label at the carrier.
+   * Idempotent — voiding an already-VOIDED order returns 200 without a
+   * carrier round-trip.
+   */
+  voidLabel: (orderNo: number | string) =>
+    apiClient.post<ApiResponse<VoidLabelResponse>>(
+      `/orders/${encodeURIComponent(String(orderNo))}/void`,
+      {},
+    ),
 
   /**
    * Get city distribution (using stats endpoint)

@@ -22,6 +22,7 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,6 +46,7 @@ public class ShippingConfigService {
     private final ShipViaMappingRepository ruleRepository;
     private final PackagePresetRepository presetRepository;
     private final ServicePackageRepository servicePackageRepository;
+    private final com.multiship.backend.repository.ShipMethodRulePackageRepository rulePackageRepository;
     /** The carrier connectors — the source of truth for what a carrier offers per origin. */
     private final List<CarrierConnector> carrierConnectors;
     /** Platform carrier accounts — their credentials authenticate the live availability call. */
@@ -79,6 +81,9 @@ public class ShippingConfigService {
         data.put("services", services);
         data.put("rules", ruleRepository.findAllByOrderByShipviaCdAsc());
         data.put("links", servicePackageRepository.findAll());
+        // Phase 6: allowed-packages per ship-method rule, flat list; frontend
+        // groups by rule_id for display.
+        data.put("rulePackages", rulePackageRepository.findAll());
         data.put("originCountries", serviceRepository.findDistinctOriginCountries());
         return success("Shipping catalog retrieved.", data);
     }
@@ -266,7 +271,8 @@ public class ShippingConfigService {
             return null;
         }
         try {
-            return connector.getAccessToken(account.getClientId(), account.getClientSecret());
+            return connector.getAccessToken(account.getClientId(), account.getClientSecret(),
+                    account.getAccountNumber());
         } catch (Exception ex) {
             return null;
         }
@@ -287,7 +293,8 @@ public class ShippingConfigService {
 
     @Transactional
     public ApiResponse<ShipViaMapping> upsertRule(Long id, String shipviaCd, String clientCode,
-                                                  String destType, String destValue, Long serviceId) {
+                                                  String destType, String destValue, Long serviceId,
+                                                  List<Long> allowedPresetIds) {
         String code = norm(shipviaCd);
         if (code.isEmpty()) {
             return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
@@ -345,13 +352,64 @@ public class ShippingConfigService {
         rule.setDestValue(value);
         rule.setServiceId(svc.getId());
         ruleRepository.save(rule);
-        return success("Rule saved: " + code + " → " + svc.getName() + ".", rule);
+
+        // Phase 6 — allowed packages on the rule. Diff-free replace: wipe
+        // then insert. Flush the delete first so uq_rule_package doesn't
+        // trip when a preset is re-linked in the same call.
+        List<Long> ids = allowedPresetIds == null ? List.of()
+                : allowedPresetIds.stream()
+                        .filter(java.util.Objects::nonNull)
+                        .distinct()
+                        .filter(presetRepository::existsById)
+                        .toList();
+        rulePackageRepository.deleteAllByRuleId(rule.getId());
+        rulePackageRepository.flush();
+        for (Long presetId : ids) {
+            rulePackageRepository.save(com.multiship.backend.model.ShipMethodRulePackage.builder()
+                    .ruleId(rule.getId()).presetId(presetId).build());
+        }
+
+        // Weight fit: warn (don't block) when a linked preset's max weight
+        // exceeds the service's carrier cap. Normalise kg → lb.
+        List<String> warnings = weightWarnings(svc, ids);
+        String base = "Rule saved: " + code + " → " + svc.getName() + ".";
+        String msg = warnings.isEmpty() ? base
+                : base + " " + String.join(" ", warnings);
+        return success(msg, rule);
     }
 
     @Transactional
     public ApiResponse<Void> deleteRule(Long id) {
-        ruleRepository.findById(id).ifPresent(ruleRepository::delete);
+        ruleRepository.findById(id).ifPresent(rule -> {
+            // Cascade the rule's allowed-package rows so we don't leave
+            // orphans that break the uq index on future re-adds.
+            rulePackageRepository.deleteAllByRuleId(rule.getId());
+            ruleRepository.delete(rule);
+        });
         return success("Rule removed.", null);
+    }
+
+    /**
+     * Compute human-readable warnings for presets whose max weight exceeds
+     * the service's carrier cap. Advisory only — the save still persists.
+     * Returns an empty list when everything fits or the service has no cap.
+     */
+    private List<String> weightWarnings(ShippingService svc, List<Long> presetIds) {
+        Integer cap = svc.getMaxWeightLb();
+        if (cap == null || presetIds.isEmpty()) return List.of();
+        List<String> out = new ArrayList<>();
+        for (Long pid : presetIds) {
+            PackagePreset p = presetRepository.findById(pid).orElse(null);
+            if (p == null || p.getMaxWeight() == null) continue;
+            double lb = "KG".equalsIgnoreCase(p.getWeightUnit())
+                    ? p.getMaxWeight().doubleValue() * 2.20462
+                    : p.getMaxWeight().doubleValue();
+            if (lb > cap) {
+                out.add("Warning: '" + p.getName() + "' (" + Math.round(lb) + " lb) exceeds "
+                        + svc.getName() + "'s " + cap + " lb cap.");
+            }
+        }
+        return out;
     }
 
     // ===== Service ↔ package links =====
@@ -401,6 +459,28 @@ public class ShippingConfigService {
                     "A package named '" + request.getName().trim() + "' already exists.");
         }
 
+        // Ownership invariants (Phase 5a): PLATFORM forbids owner_client_code,
+        // CLIENT requires it. Absent ownerType defaults to PLATFORM so existing
+        // callers that don't yet set it keep working.
+        String ownerType = StringUtils.hasText(request.getOwnerType())
+                ? request.getOwnerType().trim().toUpperCase(Locale.ROOT)
+                : PackagePreset.OWNER_PLATFORM;
+        String ownerClient = StringUtils.hasText(request.getOwnerClientCode())
+                ? request.getOwnerClientCode().trim().toUpperCase(Locale.ROOT)
+                : null;
+        if (!PackagePreset.OWNER_PLATFORM.equals(ownerType) && !PackagePreset.OWNER_CLIENT.equals(ownerType)) {
+            return failure(HttpStatus.BAD_REQUEST, ErrorCode.WAREHOUSE_OWNER_INVALID,
+                    "ownerType must be PLATFORM or CLIENT.");
+        }
+        if (PackagePreset.OWNER_CLIENT.equals(ownerType) && ownerClient == null) {
+            return failure(HttpStatus.BAD_REQUEST, ErrorCode.WAREHOUSE_OWNER_INVALID,
+                    "CLIENT-owned package requires ownerClientCode.");
+        }
+        if (PackagePreset.OWNER_PLATFORM.equals(ownerType) && ownerClient != null) {
+            return failure(HttpStatus.BAD_REQUEST, ErrorCode.WAREHOUSE_OWNER_INVALID,
+                    "PLATFORM package must not carry ownerClientCode.");
+        }
+
         PackagePreset p = id != null ? presetRepository.findById(id).orElse(null) : new PackagePreset();
         if (p == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.VALIDATION_ERROR, "Package preset not found.");
@@ -411,6 +491,8 @@ public class ShippingConfigService {
         if (id == null) {
             p.setSource("CUSTOM");
         }
+        p.setOwnerType(ownerType);
+        p.setOwnerClientCode(ownerClient);
         p.setName(request.getName().trim());
         p.setKind(carrierKind ? "CARRIER" : "CUSTOM");
         p.setCarrierPackageCode(carrierKind ? request.getCarrierPackageCode().trim() : null);

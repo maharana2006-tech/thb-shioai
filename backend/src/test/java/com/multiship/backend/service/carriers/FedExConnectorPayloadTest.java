@@ -1,0 +1,337 @@
+package com.multiship.backend.service.carriers;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.multiship.backend.config.CarrierProperties;
+import com.multiship.backend.dto.CustomsCommodityDTO;
+import com.multiship.backend.dto.IntlShipmentBlockDTO;
+import com.multiship.backend.dto.ShipmentRequestDTO;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.Method;
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * Golden-value tests for {@link FedExConnector#buildShipmentPayload}. Mirrors
+ * the UPS payload test — the shape assertions here are what FedEx's Ship API
+ * v1 validates against.
+ */
+class FedExConnectorPayloadTest {
+
+    private FedExConnector connector;
+    private Method buildShipmentPayload;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        // Populate the label-response option so the payload builder doesn't NPE
+        // reading it — every other config value is unused by the SUT.
+        CarrierProperties props = new CarrierProperties();
+        props.getFedEx().setLabelResponseOption("URL_ONLY");
+
+        // FxRateService stub that always returns empty — forces the IOSS
+        // threshold check to use the fixed local table, which the pre-Sprint
+        // 5.5 assertions were written against. Sprint 5.5 tests explicitly
+        // wire the live path via FedExConnectorFxIossTest.
+        com.multiship.backend.service.fx.FxRateService noFx =
+                new com.multiship.backend.service.fx.FxRateService() {
+                    @Override
+                    public java.util.Optional<java.math.BigDecimal> rate(String from, String to) {
+                        return java.util.Optional.empty();
+                    }
+                    @Override
+                    public java.util.Optional<java.math.BigDecimal> convert(java.math.BigDecimal amount, String from, String to) {
+                        return java.util.Optional.empty();
+                    }
+                    @Override
+                    public boolean supports(String currency) {
+                        return false;
+                    }
+                };
+        connector = new FedExConnector(props, new ObjectMapper(), noFx);
+        buildShipmentPayload = FedExConnector.class.getDeclaredMethod("buildShipmentPayload", ShipmentRequestDTO.class);
+        buildShipmentPayload.setAccessible(true);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> build(ShipmentRequestDTO request) throws Exception {
+        return (Map<String, Object>) buildShipmentPayload.invoke(connector, request);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> requestedShipment(ShipmentRequestDTO request) throws Exception {
+        return (Map<String, Object>) build(request).get("requestedShipment");
+    }
+
+    private ShipmentRequestDTO baseRequest() {
+        return ShipmentRequestDTO.builder()
+                .carrierCode("FEDEX")
+                .accountNumber("A99999")
+                .serviceType("INTERNATIONAL_PRIORITY")
+                .packageType("YOUR_PACKAGING")
+                .weight(new BigDecimal("2.5"))
+                .weightUnit("LB")
+                .shipperName("Acme Warehouse")
+                .shipperPhone("5551234567")
+                .shipperAddressLine1("1 Warehouse Way")
+                .shipperCity("Louisville")
+                .shipperState("KY")
+                .shipperPostalCode("40209")
+                .shipperCountryCode("US")
+                .recipientName("Jane Doe")
+                .recipientPhone("5559876543")
+                .recipientAddressLine1("42 High Street")
+                .recipientCity("London")
+                .recipientState("")
+                .recipientPostalCode("W1A 1AA")
+                .recipientCountryCode("GB")
+                .referenceNumber("PO-1001")
+                .declaredValue(new BigDecimal("500.00"))
+                .declaredValueCurrency("EUR")
+                .build();
+    }
+
+    private IntlShipmentBlockDTO baseIntl() {
+        return IntlShipmentBlockDTO.builder()
+                .international(true)
+                .incoterms("DDP")
+                .customsCurrency("EUR")
+                .customsTotalValue(new BigDecimal("500.00"))
+                .reasonForExport("SALE")
+                .weightUnit("KG")
+                .commodities(List.of(CustomsCommodityDTO.builder()
+                        .description("Widget")
+                        .hsCode("6104.62.20")
+                        .countryOfOrigin("US")
+                        .quantity(10)
+                        .unitValue(new BigDecimal("50.00"))
+                        .unitWeight(new BigDecimal("0.5"))
+                        .sku("SKU-1")
+                        .build()))
+                .build();
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void domesticPayloadOmitsCustomsClearanceDetail() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientCountryCode("US");
+        Map<String, Object> rs = requestedShipment(r);
+        assertNull(rs.get("customsClearanceDetail"));
+        assertNull(rs.get("shipmentSpecialServicesRequested"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void kgOnDtoLandsAsKgOnFedExWire() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setWeightUnit("KG");
+        r.setWeight(new BigDecimal("1.5"));
+        Map<String, Object> rs = requestedShipment(r);
+        // Sprint 28 — requestedPackageLineItems is now a List<Map> for multi-package iteration.
+        java.util.List<Map<String, Object>> pkgs =
+                (java.util.List<Map<String, Object>>) rs.get("requestedPackageLineItems");
+        Map<String, Object> pkg = pkgs.get(0);
+        Map<String, Object> weight = (Map<String, Object>) pkg.get("weight");
+        assertEquals("KG", weight.get("units"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void internationalPayloadEmitsCustomsClearanceDetail() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setIntl(baseIntl());
+
+        Map<String, Object> rs = requestedShipment(r);
+        Map<String, Object> ccd = (Map<String, Object>) rs.get("customsClearanceDetail");
+        assertNotNull(ccd);
+        Map<String, Object> ci = (Map<String, Object>) ccd.get("commercialInvoice");
+        assertEquals("DDP", ci.get("termsOfSale"));
+        assertEquals("SOLD", ci.get("purpose"));
+
+        Map<String, Object> cv = (Map<String, Object>) ccd.get("customsValue");
+        assertEquals(new BigDecimal("500.00"), cv.get("amount"));
+        assertEquals("EUR", cv.get("currency"));
+
+        List<Map<String, Object>> commodities = (List<Map<String, Object>>) ccd.get("commodities");
+        assertEquals(1, commodities.size());
+        Map<String, Object> line = commodities.get(0);
+        assertEquals("Widget", line.get("description"));
+        assertEquals("6104.62.20", line.get("harmonizedCode"));
+        assertEquals("US", line.get("countryOfManufacture"));
+        assertEquals("SKU-1", line.get("partNumber"));
+        Map<String, Object> unitPrice = (Map<String, Object>) line.get("unitPrice");
+        assertEquals("EUR", unitPrice.get("currency"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void ddpMapsToSenderDutiesPayment() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setIntl(baseIntl()); // DDP
+        Map<String, Object> duties = (Map<String, Object>) ((Map<String, Object>)
+                requestedShipment(r).get("customsClearanceDetail")).get("dutiesPayment");
+        assertEquals("SENDER", duties.get("paymentType"));
+        assertNotNull(duties.get("payor"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void dapMapsToRecipientAndOmitsPayor() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setIncoterms("DAP");
+        r.setIntl(intl);
+        Map<String, Object> duties = (Map<String, Object>) ((Map<String, Object>)
+                requestedShipment(r).get("customsClearanceDetail")).get("dutiesPayment");
+        assertEquals("RECIPIENT", duties.get("paymentType"));
+        assertNull(duties.get("payor"), "DAP should leave duty payor blank — FedEx bills consignee");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void thirdPartyDutyIncludesPayorAccount() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setIncoterms("DAP");
+        intl.setDutyBillTo("THIRD_PARTY");
+        intl.setDutyAccount("PAYER-999");
+        r.setIntl(intl);
+        Map<String, Object> duties = (Map<String, Object>) ((Map<String, Object>)
+                requestedShipment(r).get("customsClearanceDetail")).get("dutiesPayment");
+        assertEquals("THIRD_PARTY", duties.get("paymentType"));
+        Map<String, Object> payor = (Map<String, Object>) duties.get("payor");
+        Map<String, Object> account = (Map<String, Object>) ((Map<String, Object>) payor.get("responsibleParty"))
+                .get("accountNumber");
+        assertEquals("PAYER-999", account.get("value"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void iossEmittedForEuLowValueShipment() throws Exception {
+        ShipmentRequestDTO r = baseRequest(); // GB destination — no longer EU but treat as intl
+        r.setRecipientCountryCode("DE"); // EU
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setCustomsTotalValue(new BigDecimal("120.00")); // ≤ €150
+        intl.setImporterIoss("IM3702000001");
+        r.setIntl(intl);
+
+        Map<String, Object> shipper = (Map<String, Object>) requestedShipment(r).get("shipper");
+        List<Map<String, Object>> tins = (List<Map<String, Object>>) shipper.get("tins");
+        assertNotNull(tins);
+        assertTrue(tins.stream().anyMatch(t -> "IOSS".equals(t.get("tinType"))),
+                "IOSS TIN should be present on EU B2C ≤€150");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void iossSuppressedAboveThreshold() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientCountryCode("DE");
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setCustomsTotalValue(new BigDecimal("300.00")); // > €150
+        intl.setImporterIoss("IM3702000001");
+        r.setIntl(intl);
+
+        Map<String, Object> shipper = (Map<String, Object>) requestedShipment(r).get("shipper");
+        List<Map<String, Object>> tins = (List<Map<String, Object>>) shipper.get("tins");
+        assertFalse(tins != null && tins.stream().anyMatch(t -> "IOSS".equals(t.get("tinType"))),
+                "IOSS TIN should be omitted above €150");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void iossSuppressedOutsideEu() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientCountryCode("GB"); // non-EU post-Brexit
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setCustomsTotalValue(new BigDecimal("120.00"));
+        intl.setImporterIoss("IM3702000001");
+        r.setIntl(intl);
+
+        Map<String, Object> shipper = (Map<String, Object>) requestedShipment(r).get("shipper");
+        List<Map<String, Object>> tins = (List<Map<String, Object>>) shipper.get("tins");
+        assertFalse(tins != null && tins.stream().anyMatch(t -> "IOSS".equals(t.get("tinType"))),
+                "IOSS TIN should be omitted for non-EU destinations");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void eoriEmittedRegardlessOfDestination() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setImporterEori("GB123456789012");
+        r.setIntl(intl);
+
+        Map<String, Object> shipper = (Map<String, Object>) requestedShipment(r).get("shipper");
+        List<Map<String, Object>> tins = (List<Map<String, Object>>) shipper.get("tins");
+        assertTrue(tins.stream().anyMatch(t ->
+                "GB123456789012".equals(t.get("number")) && "BUSINESS_UNION".equals(t.get("tinType"))));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void reasonForExportMapsToFedExPurpose() throws Exception {
+        for (Map.Entry<String, String> mapping : Map.of(
+                "SALE", "SOLD",
+                "GIFT", "GIFT",
+                "SAMPLE", "SAMPLE",
+                "RETURN", "RETURN",
+                "REPAIR", "REPAIR_AND_RETURN",
+                "DOCUMENTS", "NOT_SOLD"
+        ).entrySet()) {
+            ShipmentRequestDTO r = baseRequest();
+            IntlShipmentBlockDTO intl = baseIntl();
+            intl.setReasonForExport(mapping.getKey());
+            r.setIntl(intl);
+            Map<String, Object> ci = (Map<String, Object>) ((Map<String, Object>)
+                    requestedShipment(r).get("customsClearanceDetail")).get("commercialInvoice");
+            assertEquals(mapping.getValue(), ci.get("purpose"), "Reason " + mapping.getKey());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void etdSpecialServiceRequestedForIntlShipments() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setIntl(baseIntl());
+        Map<String, Object> ssr = (Map<String, Object>) requestedShipment(r).get("shipmentSpecialServicesRequested");
+        List<String> types = (List<String>) ssr.get("specialServiceTypes");
+        assertTrue(types.contains("ELECTRONIC_TRADE_DOCUMENTS"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void importerOfRecordSuppressedWhenBlank() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setIntl(baseIntl()); // no importer name/address
+        Map<String, Object> ccd = (Map<String, Object>) requestedShipment(r).get("customsClearanceDetail");
+        assertNull(ccd.get("importerOfRecord"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void brokerBlockOnlyWhenBrokerConfigured() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setBrokerName("Broker Inc");
+        intl.setBrokerCompany("Broker Ltd");
+        intl.setBrokerAddressLine1("1 Broker St");
+        intl.setBrokerCity("Dover");
+        intl.setBrokerCountry("GB");
+        r.setIntl(intl);
+
+        Map<String, Object> ccd = (Map<String, Object>) requestedShipment(r).get("customsClearanceDetail");
+        List<Map<String, Object>> brokers = (List<Map<String, Object>>) ccd.get("brokers");
+        assertNotNull(brokers);
+        assertEquals(1, brokers.size());
+        assertEquals("IMPORT", brokers.get(0).get("type"));
+    }
+}

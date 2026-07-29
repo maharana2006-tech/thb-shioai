@@ -47,6 +47,12 @@ export interface ClientAllowlistTabProps<TAllowed, TCatalog> {
   allowedIsDefault: (item: TAllowed) => boolean
   /** Row → display body (2-line usually: primary + secondary). */
   renderAllowed: (item: TAllowed) => ReactNode
+  /**
+   * Optional slot: extra controls to render on each row between the row body
+   * and the Make-default / Remove buttons. Services use this for the
+   * Destinations drawer trigger.
+   */
+  renderRowExtras?: (item: TAllowed) => ReactNode
 
   /** Catalog entry → numeric id (used in the select value and to key rows). */
   catalogKey: (item: TCatalog) => number
@@ -71,6 +77,7 @@ export default function ClientAllowlistTab<TAllowed, TCatalog>({
   allowedKey,
   allowedIsDefault,
   renderAllowed,
+  renderRowExtras,
   catalogKey,
   catalogLabel,
   catalogEligible,
@@ -265,6 +272,7 @@ export default function ClientAllowlistTab<TAllowed, TCatalog>({
                 className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3 py-2"
               >
                 <div className="min-w-0 flex-1">{renderAllowed(row)}</div>
+                {renderRowExtras ? renderRowExtras(row) : null}
                 {isDefault ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-[#412d15]/10 px-2 py-0.5 text-[10.5px] font-semibold text-[#412d15]">
                     <FiStar className="h-3 w-3" />

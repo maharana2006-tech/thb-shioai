@@ -3,6 +3,10 @@ package com.multiship.backend.controller;
 import com.multiship.backend.dto.AllowServiceRequest;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ClientAllowedServiceDTO;
+import com.multiship.backend.dto.ClientAllowedServiceDestinationsDTO;
+import com.multiship.backend.dto.ClientAllowedServiceWarehousesDTO;
+import com.multiship.backend.dto.ReplaceAllowedServiceDestinationsRequest;
+import com.multiship.backend.dto.ReplaceAllowedServiceWarehousesRequest;
 import com.multiship.backend.service.ClientAllowedServiceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -71,6 +75,78 @@ public class ClientAllowedServiceController {
             @PathVariable String clientCode,
             @PathVariable Long serviceId) {
         ApiResponse<ClientAllowedServiceDTO> response = service.setDefault(clientCode, serviceId);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    // ===== Destination gate (Phase 5b) =====
+
+    @Operation(summary = "Get destinations the client may ship on this allowed service",
+            description = "Empty list = unrestricted (any destination).")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/{serviceId}/destinations")
+    public ResponseEntity<ApiResponse<ClientAllowedServiceDestinationsDTO>> getDestinations(
+            @PathVariable String clientCode,
+            @PathVariable Long serviceId) {
+        ApiResponse<ClientAllowedServiceDestinationsDTO> response = service.getDestinations(clientCode, serviceId);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Replace the destination whitelist for this allowed service",
+            description = "Atomic replace — dedupes and drops non-ISO-2 codes. Empty list = clear (unrestricted).")
+    @PreAuthorize("hasRole('ADMIN')")
+    @PutMapping("/{serviceId}/destinations")
+    public ResponseEntity<ApiResponse<ClientAllowedServiceDestinationsDTO>> replaceDestinations(
+            @PathVariable String clientCode,
+            @PathVariable Long serviceId,
+            @Valid @RequestBody ReplaceAllowedServiceDestinationsRequest request) {
+        ApiResponse<ClientAllowedServiceDestinationsDTO> response =
+                service.replaceDestinations(clientCode, serviceId, request);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Clear the destination whitelist (service becomes unrestricted)")
+    @PreAuthorize("hasRole('ADMIN')")
+    @DeleteMapping("/{serviceId}/destinations")
+    public ResponseEntity<ApiResponse<Void>> clearDestinations(
+            @PathVariable String clientCode,
+            @PathVariable Long serviceId) {
+        ApiResponse<Void> response = service.clearDestinations(clientCode, serviceId);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    // ===== Warehouse gate (G1) =====
+
+    @Operation(summary = "Get warehouses the client may ship on this allowed service",
+            description = "Empty list = unrestricted (any warehouse attached to the client).")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/{serviceId}/warehouses")
+    public ResponseEntity<ApiResponse<ClientAllowedServiceWarehousesDTO>> getWarehouses(
+            @PathVariable String clientCode,
+            @PathVariable Long serviceId) {
+        ApiResponse<ClientAllowedServiceWarehousesDTO> response = service.getWarehouses(clientCode, serviceId);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Replace the warehouse whitelist for this allowed service",
+            description = "Atomic replace — dedupes and silently drops warehouses not attached to the client. Empty list = clear (unrestricted).")
+    @PreAuthorize("hasRole('ADMIN')")
+    @PutMapping("/{serviceId}/warehouses")
+    public ResponseEntity<ApiResponse<ClientAllowedServiceWarehousesDTO>> replaceWarehouses(
+            @PathVariable String clientCode,
+            @PathVariable Long serviceId,
+            @Valid @RequestBody ReplaceAllowedServiceWarehousesRequest request) {
+        ApiResponse<ClientAllowedServiceWarehousesDTO> response =
+                service.replaceWarehouses(clientCode, serviceId, request);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Clear the warehouse whitelist (service becomes unrestricted)")
+    @PreAuthorize("hasRole('ADMIN')")
+    @DeleteMapping("/{serviceId}/warehouses")
+    public ResponseEntity<ApiResponse<Void>> clearWarehouses(
+            @PathVariable String clientCode,
+            @PathVariable Long serviceId) {
+        ApiResponse<Void> response = service.clearWarehouses(clientCode, serviceId);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 }

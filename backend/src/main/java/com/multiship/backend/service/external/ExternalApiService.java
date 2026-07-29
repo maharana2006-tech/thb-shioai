@@ -21,8 +21,11 @@ import com.multiship.backend.repository.ShippingServiceRepository;
 import com.multiship.backend.service.CarrierService;
 import com.multiship.backend.service.ShippingConfigService;
 import com.multiship.backend.service.carriers.CarrierConnector;
+import com.multiship.backend.service.intake.ClientCodeTranslationService;
 import com.multiship.backend.service.resolution.ShipmentResolutionException;
 import com.multiship.backend.service.resolution.ShipmentResolutionService;
+import com.multiship.backend.model.OrderRawCodes;
+import com.multiship.backend.repository.OrderRawCodesRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -56,7 +59,13 @@ public class ExternalApiService {
     private final CarrierService carrierService;
     private final CarrierProperties carrierProperties;
     private final ShipmentResolutionService resolutionService;
+    private final ClientCodeTranslationService translationService;
+    private final OrderRawCodesRepository orderRawCodesRepository;
     private final Map<String, CarrierConnector> connectorsByCode;
+
+    /** Sprint 46 — optional so existing tests don't have to plumb another dep. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ExternalWebhookDispatcher webhookDispatcher;
 
     public ExternalApiService(ShippingConfigService shippingConfigService,
                               ShippingServiceRepository serviceRepository,
@@ -67,6 +76,8 @@ public class ExternalApiService {
                               CarrierService carrierService,
                               CarrierProperties carrierProperties,
                               ShipmentResolutionService resolutionService,
+                              ClientCodeTranslationService translationService,
+                              OrderRawCodesRepository orderRawCodesRepository,
                               List<CarrierConnector> carrierConnectors) {
         this.shippingConfigService = shippingConfigService;
         this.serviceRepository = serviceRepository;
@@ -77,6 +88,8 @@ public class ExternalApiService {
         this.carrierService = carrierService;
         this.carrierProperties = carrierProperties;
         this.resolutionService = resolutionService;
+        this.translationService = translationService;
+        this.orderRawCodesRepository = orderRawCodesRepository;
         this.connectorsByCode = carrierConnectors.stream()
                 .collect(Collectors.toMap(c -> c.getCarrierCode().toUpperCase(Locale.ROOT), Function.identity(), (a, b) -> a));
     }
@@ -91,6 +104,26 @@ public class ExternalApiService {
         if (req.getParcel() == null || req.getParcel().getWeight() == null
                 || req.getParcel().getWeight().signum() <= 0) {
             throw new ExternalApiException(422, ErrorCode.VALIDATION_ERROR, "parcel.weight (> 0) is required.");
+        }
+
+        // Phase 5c — order-intake translation. Snapshot raw ERP codes before
+        // we mutate anything, then translate each via the client's alias
+        // tables. When a client has zero rows in a given table, translation
+        // silently no-ops; when they have some rows but not one matching the
+        // incoming code, the translator throws UNKNOWN_* (strict policy).
+        String rawShipvia = req.getShipMethod();
+        String rawDestCountry = req.getShipTo().getCountryCode();
+        String rawPackageCode = req.getParcel().getPackagingCode();
+
+        Long translatedShipviaService;
+        Long translatedPackagePreset;
+        try {
+            translationService.translateDestCountry(clientCode, rawDestCountry)
+                    .ifPresent(iso -> req.getShipTo().setCountryCode(iso));
+            translatedShipviaService = translationService.translateShipvia(clientCode, rawShipvia).orElse(null);
+            translatedPackagePreset = translationService.translatePackage(clientCode, rawPackageCode).orElse(null);
+        } catch (ShipmentResolutionException e) {
+            throw toExternal(e);
         }
 
         // 3PL guardrail #1: destination allowed for this client?
@@ -126,6 +159,16 @@ public class ExternalApiService {
         if (StringUtils.hasText(req.getCarrierCode())) {
             carrier = req.getCarrierCode().trim().toUpperCase(Locale.ROOT);
             resolvedVia = "CARRIER_OVERRIDE";
+        } else if (translatedShipviaService != null) {
+            // Phase 5c — client has a direct shipvia alias, use it and skip
+            // the rule resolver entirely.
+            ShippingService svc = serviceRepository.findById(translatedShipviaService)
+                    .orElseThrow(() -> new ExternalApiException(422, ErrorCode.UNKNOWN_SHIPVIA_CODE,
+                            "Shipvia alias points at a shipping service that no longer exists."));
+            carrier = svc.getCarrier();
+            serviceId = svc.getId();
+            serviceCode = svc.getServiceCode();
+            resolvedVia = "SHIPVIA_ALIAS";
         } else {
             Optional<ShippingService> svc = shippingConfigService.resolveRule(clientCode, req.getShipMethod(), destCountry);
             if (svc.isEmpty()) {
@@ -139,10 +182,12 @@ public class ExternalApiService {
             resolvedVia = "SHIPMETHOD_RULE";
         }
 
-        // 3PL guardrail #2: service on the client's allowlist?
+        // 3PL guardrail #2: service on the client's allowlist? (Also enforces
+        // the G1 warehouse gate — passing the resolved warehouse id.)
         if (serviceId != null) {
             try {
-                resolutionService.assertServiceAllowed(clientCode, serviceId);
+                Long warehouseId = resolvedWarehouse != null ? resolvedWarehouse.getId() : null;
+                resolutionService.assertServiceAllowed(clientCode, serviceId, destCountry, warehouseId);
             } catch (ShipmentResolutionException e) {
                 throw toExternal(e);
             }
@@ -183,9 +228,13 @@ public class ExternalApiService {
         manual.setWidth(p.getWidth());
         manual.setHeight(p.getHeight());
         manual.setDimUnit(p.getDimUnit());
-        // packagingCode: resolve by preset name when supplied; otherwise the custom dims above are used.
+        // packagingCode: prefer the Phase-5c client alias when configured; else
+        // fall back to matching by preset name / carrier package code.
         Long resolvedPresetId = null;
-        if (StringUtils.hasText(p.getPackagingCode())) {
+        if (translatedPackagePreset != null) {
+            resolvedPresetId = translatedPackagePreset;
+            manual.setPackagePresetId(resolvedPresetId);
+        } else if (StringUtils.hasText(p.getPackagingCode())) {
             Optional<Long> presetHit = shippingConfigService.listPresets().getData().stream()
                     .filter(pr -> p.getPackagingCode().equalsIgnoreCase(pr.getName())
                             || p.getPackagingCode().equalsIgnoreCase(pr.getCarrierPackageCode()))
@@ -218,12 +267,29 @@ public class ExternalApiService {
 
         LabelGenerationResponse label = resp.getData();
 
+        // Phase 5c — audit sidecar: preserve the raw ERP codes the caller sent
+        // so an admin can always trace back what actually came in. Best-effort
+        // — a failure here doesn't block the label from being returned.
+        if (label.getOrderNo() != null) {
+            try {
+                orderRawCodesRepository.save(OrderRawCodes.builder()
+                        .orderNo(label.getOrderNo().intValue())
+                        .clientCode(clientCode)
+                        .rawShipvia(rawShipvia)
+                        .rawDestCountry(rawDestCountry)
+                        .rawPackageCode(rawPackageCode)
+                        .build());
+            } catch (Exception ex) {
+                log.warn("Failed to persist OrderRawCodes for order {}: {}", label.getOrderNo(), ex.getMessage());
+            }
+        }
+
         // 3PL snapshot: read straight off the label response. carrierService.
         // generateManualLabel already ran applyMarkup + isPastCutoff and
         // persisted the snapshot on OrderTracking (Phase 4d), so we don't
         // re-run the resolver here — the values printed on the label and the
         // values on the response are guaranteed to be the same row.
-        return ExternalShipmentResponse.builder()
+        ExternalShipmentResponse response = ExternalShipmentResponse.builder()
                 .shipmentId(label.getOrderNo())
                 .reference(req.getReference())
                 .clientCode(clientCode)
@@ -249,6 +315,26 @@ public class ExternalApiService {
                 .estimatedDelivery(label.getEstimatedDelivery())
                 .status(label.getStatus())
                 .build();
+
+        // Sprint 46 — broadcast to subscribed webhooks. Fire-and-forget:
+        // dispatcher runs @Async so a slow partner receiver never gates
+        // the label response.
+        if (webhookDispatcher != null && caller != null) {
+            try {
+                webhookDispatcher.fire(
+                        com.multiship.backend.model.ExternalWebhookSubscription.EventType.LABEL_GENERATED,
+                        caller.getApiKeyId(),
+                        java.util.Map.of(
+                                "shipmentId", response.getShipmentId(),
+                                "trackingNumber", response.getTrackingNumber() == null ? "" : response.getTrackingNumber(),
+                                "carrier", response.getCarrier() == null ? "" : response.getCarrier(),
+                                "service", response.getService() == null ? "" : response.getService(),
+                                "clientCode", clientCode == null ? "" : clientCode
+                        ));
+            } catch (Exception ignored) { /* never fail label on webhook dispatch */ }
+        }
+
+        return response;
     }
 
     // ─────────────────────────────── rates ─────────────────────────────────
@@ -296,8 +382,10 @@ public class ExternalApiService {
 
         // Tag options with allowlist status — return everything so the caller
         // can see what's available, but flag the ones a shipment call would
-        // reject as SERVICE_NOT_ALLOWED.
-        Set<Long> allowed = resolutionService.allowedServiceIds(clientCode);
+        // reject as SERVICE_NOT_ALLOWED. G1: warehouse-gate is enforced too
+        // when we've resolved one.
+        Long warehouseId = resolvedWarehouse != null ? resolvedWarehouse.getId() : null;
+        Set<Long> allowed = resolutionService.allowedServiceIds(clientCode, warehouseId);
         boolean noAllowlist = allowed.isEmpty();
         List<ExternalRateResponse.Option> options = services.stream()
                 .map(s -> ExternalRateResponse.Option.builder()

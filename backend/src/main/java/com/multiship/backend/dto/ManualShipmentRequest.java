@@ -89,6 +89,34 @@ public class ManualShipmentRequest {
     /** Per-shipment customs-broker override — overrides the client profile for THIS label only. */
     private java.util.Map<String, Object> broker;
 
+    /**
+     * Sprint 27 — dangerous goods declaration. When present + ready,
+     * connectors emit their carrier-specific hazmat wire format (UPS
+     * HazMatPackageInformation, FedEx dangerousGoodsDetail, DHL
+     * content.dangerousGoods, SWSIM HazardousMaterials).
+     */
+    private DangerousGoodsBlockDTO dangerousGoods;
+
+    /**
+     * Sprint 35 — signature at delivery. NONE | INDIRECT | DIRECT | ADULT.
+     * Null = carrier default. Every connector normalises + emits the
+     * carrier-specific wire format.
+     */
+    private String signatureOption;
+
+    /**
+     * Sprint 35 — insured value beyond the free tier ($100 UPS/FedEx/USPS
+     * Priority Ground). Null / 0 = no explicit insurance requested; the
+     * carrier's free tier still applies.
+     */
+    private BigDecimal insuredValue;
+
+    /**
+     * ISO-4217 for {@link #insuredValue}. Null defaults to
+     * {@link #currency} on the wire, then to USD at the connector.
+     */
+    private String insuredValueCurrency;
+
     @Data
     public static class Address {
         private String name;
@@ -97,10 +125,16 @@ public class ManualShipmentRequest {
         private String email;
         private String addressLine1;
         private String addressLine2;
+        /** Third street line — JP/CN/IN often need this. */
+        private String addressLine3;
         private String city;
         private String state;
         private String postalCode;
         private String countryCode;
+        /** True when this is a residence — flips carrier residential rating. */
+        private Boolean residential;
+        /** ISO dial code (no plus) — "1", "44", "91". Prepended to phone at carrier time. */
+        private String phoneCountryCode;
     }
 
     /** One commercial-invoice line. */

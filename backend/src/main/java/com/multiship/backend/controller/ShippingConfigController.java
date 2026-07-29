@@ -61,13 +61,15 @@ public class ShippingConfigController {
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
-    @Operation(summary = "Create/update a ship-method rule (client + destination aware)")
+    @Operation(summary = "Create/update a ship-method rule (client + destination aware)",
+            description = "Optional allowedPresetIds sets the rule's default package options; empty = unrestricted at the rule level.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PutMapping("/ship-method-rules")
     public ResponseEntity<ApiResponse<ShipViaMapping>> upsertRule(@RequestBody ShipViaMapping body) {
         ApiResponse<ShipViaMapping> r = service.upsertRule(
                 body.getId(), body.getShipviaCd(), body.getClientCode(),
-                body.getDestType(), body.getDestValue(), body.getServiceId());
+                body.getDestType(), body.getDestValue(), body.getServiceId(),
+                body.getAllowedPresetIds());
         return ResponseEntity.status(r.getCode()).body(r);
     }
 

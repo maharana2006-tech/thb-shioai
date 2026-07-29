@@ -3,11 +3,20 @@ package com.multiship.backend.service;
 import com.multiship.backend.dto.AllowServiceRequest;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ClientAllowedServiceDTO;
+import com.multiship.backend.dto.ClientAllowedServiceDestinationsDTO;
+import com.multiship.backend.dto.ClientAllowedServiceWarehousesDTO;
 import com.multiship.backend.dto.ErrorCode;
+import com.multiship.backend.dto.ReplaceAllowedServiceDestinationsRequest;
+import com.multiship.backend.dto.ReplaceAllowedServiceWarehousesRequest;
 import com.multiship.backend.model.ClientAllowedService;
+import com.multiship.backend.model.ClientAllowedServiceDestination;
+import com.multiship.backend.model.ClientAllowedServiceWarehouse;
 import com.multiship.backend.model.ShippingService;
+import com.multiship.backend.repository.ClientAllowedServiceDestinationRepository;
 import com.multiship.backend.repository.ClientAllowedServiceRepository;
+import com.multiship.backend.repository.ClientAllowedServiceWarehouseRepository;
 import com.multiship.backend.repository.ClientRepository;
+import com.multiship.backend.repository.ClientWarehouseRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -15,14 +24,19 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceService {
 
     private final ClientAllowedServiceRepository repo;
+    private final ClientAllowedServiceDestinationRepository destinationRepository;
+    private final ClientAllowedServiceWarehouseRepository warehouseGateRepository;
+    private final ClientWarehouseRepository clientWarehouseRepository;
     private final ClientRepository clientRepository;
     private final ShippingServiceRepository shippingServiceRepository;
 
@@ -150,6 +164,150 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
                 .updatedAt(link.getUpdatedAt())
                 .build();
     }
+
+    // ===== Destination gate =====
+
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<ClientAllowedServiceDestinationsDTO> getDestinations(String clientCode, Long serviceId) {
+        String code = normalize(clientCode);
+        ClientAllowedService allow = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
+        if (allow == null) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
+                    "Service " + serviceId + " is not on client " + code + "'s allowlist.");
+        }
+        List<String> countries = destinationRepository
+                .findByAllowedServiceIdOrderByCountryAsc(allow.getId())
+                .stream()
+                .map(ClientAllowedServiceDestination::getCountry)
+                .toList();
+        return success("Service destinations retrieved successfully.",
+                ClientAllowedServiceDestinationsDTO.builder()
+                        .clientCode(code).serviceId(serviceId).countries(countries)
+                        .build());
+    }
+
+    @Override
+    @Transactional
+    public ApiResponse<ClientAllowedServiceDestinationsDTO> replaceDestinations(
+            String clientCode, Long serviceId, ReplaceAllowedServiceDestinationsRequest request) {
+        String code = normalize(clientCode);
+        ClientAllowedService allow = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
+        if (allow == null) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
+                    "Service " + serviceId + " is not on client " + code + "'s allowlist.");
+        }
+        // Diff-free replace: wipe first, insert deduped set.
+        destinationRepository.deleteAllByAllowedServiceId(allow.getId());
+        Set<String> deduped = request.getCountries() == null
+                ? Set.of()
+                : request.getCountries().stream()
+                        .filter(c -> c != null && !c.isBlank())
+                        .map(c -> c.trim().toUpperCase(Locale.ROOT))
+                        .filter(c -> c.length() == 2)
+                        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        for (String country : deduped) {
+            destinationRepository.save(ClientAllowedServiceDestination.builder()
+                    .allowedServiceId(allow.getId())
+                    .clientCode(code)
+                    .country(country)
+                    .build());
+        }
+        return success("Service destinations updated successfully.",
+                ClientAllowedServiceDestinationsDTO.builder()
+                        .clientCode(code).serviceId(serviceId)
+                        .countries(deduped.stream().sorted().toList())
+                        .build());
+    }
+
+    @Override
+    @Transactional
+    public ApiResponse<Void> clearDestinations(String clientCode, Long serviceId) {
+        String code = normalize(clientCode);
+        ClientAllowedService allow = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
+        if (allow == null) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
+                    "Service " + serviceId + " is not on client " + code + "'s allowlist.");
+        }
+        destinationRepository.deleteAllByAllowedServiceId(allow.getId());
+        return success("Destination gate cleared for service " + serviceId + " on client " + code + ".", null);
+    }
+
+    // ===== Warehouse gate (G1) =====
+
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<ClientAllowedServiceWarehousesDTO> getWarehouses(String clientCode, Long serviceId) {
+        String code = normalize(clientCode);
+        ClientAllowedService allow = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
+        if (allow == null) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
+                    "Service " + serviceId + " is not on client " + code + "'s allowlist.");
+        }
+        List<Long> warehouseIds = warehouseGateRepository
+                .findByAllowedServiceIdOrderByWarehouseIdAsc(allow.getId())
+                .stream()
+                .map(ClientAllowedServiceWarehouse::getWarehouseId)
+                .toList();
+        return success("Service warehouses retrieved successfully.",
+                ClientAllowedServiceWarehousesDTO.builder()
+                        .clientCode(code).serviceId(serviceId).warehouseIds(warehouseIds)
+                        .build());
+    }
+
+    @Override
+    @Transactional
+    public ApiResponse<ClientAllowedServiceWarehousesDTO> replaceWarehouses(
+            String clientCode, Long serviceId, ReplaceAllowedServiceWarehousesRequest request) {
+        String code = normalize(clientCode);
+        ClientAllowedService allow = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
+        if (allow == null) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
+                    "Service " + serviceId + " is not on client " + code + "'s allowlist.");
+        }
+        // Filter to warehouses actually attached to the client so a gate
+        // can't reference a warehouse the client can't ship from anyway.
+        Set<Long> clientAttached = clientWarehouseRepository
+                .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(code)
+                .stream()
+                .map(cw -> cw.getWarehouseId())
+                .collect(java.util.stream.Collectors.toSet());
+
+        // Diff-free replace: wipe first, insert deduped set.
+        warehouseGateRepository.deleteAllByAllowedServiceId(allow.getId());
+        Set<Long> deduped = request.getWarehouseIds() == null
+                ? Set.of()
+                : request.getWarehouseIds().stream()
+                        .filter(id -> id != null && clientAttached.contains(id))
+                        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        for (Long warehouseId : deduped) {
+            warehouseGateRepository.save(ClientAllowedServiceWarehouse.builder()
+                    .allowedServiceId(allow.getId())
+                    .clientCode(code)
+                    .warehouseId(warehouseId)
+                    .build());
+        }
+        return success("Service warehouses updated successfully.",
+                ClientAllowedServiceWarehousesDTO.builder()
+                        .clientCode(code).serviceId(serviceId)
+                        .warehouseIds(deduped.stream().sorted().toList())
+                        .build());
+    }
+
+    @Override
+    @Transactional
+    public ApiResponse<Void> clearWarehouses(String clientCode, Long serviceId) {
+        String code = normalize(clientCode);
+        ClientAllowedService allow = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
+        if (allow == null) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
+                    "Service " + serviceId + " is not on client " + code + "'s allowlist.");
+        }
+        warehouseGateRepository.deleteAllByAllowedServiceId(allow.getId());
+        return success("Warehouse gate cleared for service " + serviceId + " on client " + code + ".", null);
+    }
+
+    // ===== helpers =====
 
     private String normalize(String value) {
         return value != null ? value.trim().toUpperCase(Locale.ROOT) : "";

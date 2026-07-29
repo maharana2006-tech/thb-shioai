@@ -14,6 +14,8 @@ import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
 import { shippingConfigService, type ShippingServiceItem, type PackagePreset } from '../api/shippingConfigService'
 import { addressService } from '../api/addressService'
+import { addressValidationService, type AddressValidationResponse } from '../api/addressValidationService'
+import { recipientBookService, type SavedRecipient } from '../api/recipientBookService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
 import {
   clientAllowedPackagesService,
@@ -26,6 +28,18 @@ import {
 import { aiService, type ShipmentWarning } from '../api/aiService'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import ShipmentPartiesOverrideModal, { type Party } from './modals/ShipmentPartiesOverrideModal'
+import CustomFieldsSection from './shared/CustomFieldsSection'
+import { customFieldService } from '../api/customFieldService'
+import CustomsWizard from './shipment/CustomsWizard'
+import HsCodeCombobox from './shipment/HsCodeCombobox'
+import RatePickerModal from './shipment/RatePickerModal'
+import type { RateOption, RateShopRequest } from '../api/rateShopService'
+import DangerousGoodsWizard from './shipment/DangerousGoodsWizard'
+import type { DangerousGoodsBlock } from '../api/dgService'
+import LandedCostModal from './shipment/LandedCostModal'
+import type { LandedCostRequest } from '../api/landedCostService'
+import type { CustomsItem, OrderCustomsPayload } from '../api/customsService'
+import { parseIntlValidationMessage } from '../utils/intlValidationErrors'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -280,6 +294,20 @@ function AddressBlock({
       <Field label="Address line 2" className="col-span-2">
         <input className={inputCls} value={value.addressLine2} onChange={(e) => onChange({ addressLine2: e.target.value })} placeholder="Suite 400" />
       </Field>
+      {value.addressLine2 || value.addressLine3 ? (
+        <Field
+          label="Address line 3"
+          title="Needed for some JP / CN / IN addresses that span three street lines"
+          className="col-span-2"
+        >
+          <input
+            className={inputCls}
+            value={value.addressLine3 ?? ''}
+            onChange={(e) => onChange({ addressLine3: e.target.value })}
+            placeholder="Chiyoda-ku, Nihonbashi"
+          />
+        </Field>
+      ) : null}
       <Field label="City" required>
         <input className={inputCls} value={value.city} onChange={(e) => onChange({ city: e.target.value })} placeholder="Buffalo" />
       </Field>
@@ -292,6 +320,16 @@ function AddressBlock({
       <Field label="Country" required>
         <CountrySelect value={value.countryCode} onChange={(code) => onChange({ countryCode: code })} />
       </Field>
+      <Field label="Phone country code" title="ISO dial code without the plus — e.g. 1 for US, 44 for GB, 91 for IN">
+        <input
+          className={inputCls}
+          value={value.phoneCountryCode ?? ''}
+          onChange={(e) => onChange({ phoneCountryCode: e.target.value.replace(/[^\d]/g, '') })}
+          placeholder="44"
+          inputMode="numeric"
+          maxLength={4}
+        />
+      </Field>
       <Field label="Phone">
         <input className={inputCls} value={value.phone} onChange={(e) => onChange({ phone: e.target.value })} placeholder="2125550100" />
       </Field>
@@ -300,6 +338,18 @@ function AddressBlock({
           <input className={inputCls} value={value.email} onChange={(e) => onChange({ email: e.target.value })} placeholder="jane@acme.com" />
         </Field>
       ) : null}
+      <label className="col-span-2 mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] font-semibold text-slate-700">
+        <input
+          type="checkbox"
+          checked={Boolean(value.residential)}
+          onChange={(e) => onChange({ residential: e.target.checked })}
+          className="h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
+        />
+        <span>Residential address</span>
+        <span className="ml-auto text-[10.5px] font-normal text-slate-400">
+          UPS + FedEx charge a residential surcharge on international to homes
+        </span>
+      </label>
       </div>
     </>
   )
@@ -344,6 +394,43 @@ export default function NewShipmentPage() {
   const [weightUnit, setWeightUnit] = useState<'LB' | 'KG'>('LB')
   const [declaredValue, setDeclaredValue] = useState('')
   const [clientCode, setClientCode] = useState('')
+  // Sprint 35 — signature at delivery + insured value beyond the
+  // carrier's free tier. Signature is a per-shipment enum; insured
+  // value is a separate money amount from declared/customs value.
+  const [signatureOption, setSignatureOption] = useState<'NONE' | 'INDIRECT' | 'DIRECT' | 'ADULT'>('NONE')
+  const [insuredValue, setInsuredValue] = useState('')
+  // Sprint 22 — rate picker: opens the RatePickerModal with current form
+  // state; on select we populate carrier + serviceId + accountNumber.
+  const [ratePickerOpen, setRatePickerOpen] = useState(false)
+  // Sprint 27 — dangerous goods declaration. Null on non-hazmat shipments;
+  // populated by DangerousGoodsWizard and threaded into the manual
+  // shipment payload as dangerousGoods.
+  const [dgBlock, setDgBlock] = useState<DangerousGoodsBlock | null>(null)
+  const [dgWizardOpen, setDgWizardOpen] = useState(false)
+  // Sprint 32 — landed cost modal. Opens on demand for cross-border
+  // shipments; backend routes to UPS Landed Cost / FedEx EDT / DHL
+  // Duties + Taxes based on the carrier the operator picked.
+  const [landedCostOpen, setLandedCostOpen] = useState(false)
+  // Sprint 29 — multi-package. The first box uses the existing top-level
+  // weight/dims/packaging fields; extraPackages holds boxes 2..N. When
+  // non-empty the payload emits packages[] (backend keys off effective-
+  // Packages()); when empty the existing single-package payload is sent.
+  type ExtraPackage = {
+    weight: string
+    length: string
+    width: string
+    height: string
+    packageType: string  // may be empty → falls back to shipment-level
+    declaredValue: string
+  }
+  const blankExtraPackage = (): ExtraPackage => ({
+    weight: '', length: '', width: '', height: '',
+    packageType: '', declaredValue: '',
+  })
+  const [extraPackages, setExtraPackages] = useState<ExtraPackage[]>([])
+
+  // Sprint 43 — custom field values keyed by fieldKey.
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({})
 
   // 3PL guardrails: client's attached warehouses, allowlists, and destination
   // rules. Fetched when clientCode changes; drive the warehouse picker,
@@ -354,14 +441,25 @@ export default function NewShipmentPage() {
    *  allowlist yet, treat as unrestricted so shipments still ship. */
   const [allowedServiceIds, setAllowedServiceIds] = useState<Set<number> | null>(null)
   const [allowedPackageIds, setAllowedPackageIds] = useState<Set<number> | null>(null)
+  /** Client's default from ClientAllowedService.isDefault — used to preselect
+   *  the picker on client change rather than falling back to sort-order first. */
+  const [defaultServiceId, setDefaultServiceId] = useState<number | null>(null)
+  const [defaultPackagePresetId, setDefaultPackagePresetId] = useState<number | null>(null)
   const [destRules, setDestRules] = useState<ClientDestinationRules | null>(null)
 
   // Recipient address validation result (from the Validate button).
   const [recipientCheck, setRecipientCheck] = useState<{ valid: boolean; issues: string[] } | null>(null)
+  // Sprint 31 — carrier-side address validation result (from the Validate with carrier button).
+  const [carrierAddressResult, setCarrierAddressResult] = useState<AddressValidationResponse | null>(null)
+  const [carrierValidating, setCarrierValidating] = useState(false)
+  // Sprint 38 — saved recipients: address-book search + save UI.
+  const [recipientSearch, setRecipientSearch] = useState('')
+  const [recipientSuggestions, setRecipientSuggestions] = useState<SavedRecipient[]>([])
+  const [recipientDropdownOpen, setRecipientDropdownOpen] = useState(false)
+  const [savingRecipient, setSavingRecipient] = useState(false)
   const [validating, setValidating] = useState(false)
 
   // AI-assist per-section busy flags + pre-ship review result.
-  const [hsBusy, setHsBusy] = useState<number | null>(null)
   const [pkgBusy, setPkgBusy] = useState(false)
   const [svcBusy, setSvcBusy] = useState(false)
   const [reviewBusy, setReviewBusy] = useState(false)
@@ -374,6 +472,12 @@ export default function NewShipmentPage() {
   // Reason of export + currency are sticky — they prefill from the last shipment.
   const [reasonForExport, setReasonForExport] = useState(() => readSticky('ms:lastReason', 'SALE'))
   const [currency, setCurrency] = useState(() => readSticky('ms:lastCurrency', 'USD'))
+
+  // Optional guided-wizard for the customs section. Off by default; users
+  // click "Open guided wizard" to enter a 4-step flow that maps onto the
+  // same state as the inline form. Closing without Save preserves the
+  // inline form's current values.
+  const [wizardOpen, setWizardOpen] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -437,6 +541,8 @@ export default function NewShipmentPage() {
       setWarehouseCode('')
       setAllowedServiceIds(null)
       setAllowedPackageIds(null)
+      setDefaultServiceId(null)
+      setDefaultPackagePresetId(null)
       setDestRules(null)
       return
     }
@@ -461,8 +567,10 @@ export default function NewShipmentPage() {
         // resolver rejects on empty.
         const svcs = svcResp.data ?? []
         setAllowedServiceIds(svcs.length ? new Set(svcs.map((s) => s.serviceId)) : null)
+        setDefaultServiceId(svcs.find((s) => s.isDefault)?.serviceId ?? null)
         const pkgs = pkgResp.data ?? []
         setAllowedPackageIds(pkgs.length ? new Set(pkgs.map((p) => p.presetId)) : null)
+        setDefaultPackagePresetId(pkgs.find((p) => p.isDefault)?.presetId ?? null)
         setDestRules(destResp.data ?? null)
       } catch {
         // Silent degrade: same behaviour as before the 3PL settings existed.
@@ -508,6 +616,101 @@ export default function NewShipmentPage() {
   const scopeFits = (scope?: string | null) => !scope || scope === 'BOTH' || scope === neededScope
 
   const originMatch = (o?: string | null) => (o ?? 'US').toUpperCase() === (sender.countryCode || 'US').toUpperCase()
+
+  // Sprint 22 — build a rate-shop request from the current form state.
+  // Postal codes + weight are the minimum required set; the picker disables
+  // its trigger button when they're missing.
+  const rateShopRequest = useMemo<RateShopRequest>(() => ({
+    shipment: {
+      carrierCode: carrier || undefined,
+      accountNumber: accountNumber || undefined,
+      packageType: packageChoice || undefined,
+      weight: Number(weight) || 0,
+      weightUnit,
+      length: length ? Number(length) : undefined,
+      width: width ? Number(width) : undefined,
+      height: height ? Number(height) : undefined,
+      dimUnit,
+      shipperPostalCode: sender.postalCode || '',
+      shipperCountryCode: sender.countryCode || 'US',
+      shipperCity: sender.city || undefined,
+      shipperState: sender.state || undefined,
+      shipperName: sender.name || undefined,
+      shipperAddressLine1: sender.addressLine1 || undefined,
+      recipientPostalCode: recipient.postalCode || '',
+      recipientCountryCode: recipient.countryCode || 'US',
+      recipientCity: recipient.city || undefined,
+      recipientState: recipient.state || undefined,
+      recipientName: recipient.name || undefined,
+      recipientAddressLine1: recipient.addressLine1 || undefined,
+      recipientResidential: recipient.residential,
+      declaredValue: declaredValue ? Number(declaredValue) : undefined,
+    },
+    customerNo: clientCode || null,
+    // No carriers whitelist — let the backend fan out to every configured
+    // carrier so the picker can compare across the tenant's full inventory.
+  }), [carrier, accountNumber, packageChoice, weight, weightUnit, length, width, height, dimUnit,
+        sender, recipient, declaredValue, clientCode])
+
+  const canOpenRatePicker = Boolean(
+    rateShopRequest.shipment.weight > 0
+    && rateShopRequest.shipment.shipperPostalCode
+    && rateShopRequest.shipment.recipientPostalCode,
+  )
+
+  /**
+   * Sprint 32 — landed cost request built from the current form. Requires
+   * a picked carrier, a cross-border lane, and a customs block (declared
+   * value + items) — USPS returns NOT_SUPPORTED regardless, and domestic
+   * lanes come back with source=NOT_SUPPORTED from every carrier.
+   */
+  const landedCostRequest = useMemo<LandedCostRequest>(() => ({
+    carrierCode: carrier || '',
+    customerNo: clientCode || null,
+    shipment: {
+      ...rateShopRequest.shipment,
+      declaredValueCurrency: currency,
+    },
+  }), [carrier, clientCode, rateShopRequest.shipment, currency])
+
+  const canEstimateLandedCost = Boolean(
+    canOpenRatePicker
+    && carrier
+    && isInternational
+    && Number(declaredValue) > 0,
+  )
+
+  /**
+   * Handle a picker selection: switch the carrier, look up the numeric
+   * serviceId from the catalog, and pick a matching account. Ignores the
+   * option's currency + price — those are informational for the operator;
+   * the actual bill still comes from the carrier's own rate engine at
+   * label time.
+   */
+  const handleRateSelected = (option: RateOption) => {
+    const nextCarrier = canon(option.carrierCode)
+    if (nextCarrier && nextCarrier !== carrier) setCarrier(nextCarrier)
+    // Look up the numeric serviceId that matches the carrier's service code.
+    // If the tenant hasn't loaded that service into their catalog yet we
+    // clear the picker so they know to add it — a stale value would silently
+    // ship on the wrong service.
+    const match = services.find(
+      (s) => canon(s.carrier) === nextCarrier && s.serviceCode === option.serviceCode,
+    )
+    setServiceId(match?.id ?? '')
+    // Prefer the account associated with the credentials that produced this
+    // quote; fall back to the current selection if we can't identify it.
+    const preferredAccount = accounts.find(
+      (a) => canon(a.carrierCode) === nextCarrier
+        && (!clientCode || (a.customerNo || '').toUpperCase() === clientCode.toUpperCase()),
+    )
+    if (preferredAccount?.accountNumber) setAccountNumber(preferredAccount.accountNumber)
+    notify.success(
+      `Picked ${option.carrierCode} ${option.serviceName ?? option.serviceCode}${
+        match ? '' : ' — service not in your catalog; add it before generating a label.'
+      }`,
+    )
+  }
   const accountsForCarrier = useMemo(() => {
     const onCarrier = accounts.filter((a) => canon(a.carrierCode) === carrier)
     if (!clientCode) return onCarrier
@@ -558,17 +761,32 @@ export default function NewShipmentPage() {
         ? cur
         : accountsForCarrier[0]?.accountNumber ?? cur,
     )
-    setServiceId((cur) => (servicesForCarrier.some((s) => s.id === cur) ? cur : servicesForCarrier[0]?.id ?? ''))
-    setPackageChoice((cur) =>
-      cur === CUSTOM_PKG || packagesForCarrier.some((p) => String(p.id) === cur)
-        ? cur
-        : packagesForCarrier[0]?.id != null
-          ? String(packagesForCarrier[0]?.id)
-          : CUSTOM_PKG,
-    )
+    // Phase 5f — prefer the client's default from ClientAllowedService.isDefault
+    // over "first available in filtered list". Falls back to first when the
+    // client has no default configured or the default isn't in the current
+    // carrier/scope filter.
+    setServiceId((cur) => {
+      if (servicesForCarrier.some((s) => s.id === cur)) return cur
+      if (defaultServiceId != null && servicesForCarrier.some((s) => s.id === defaultServiceId)) {
+        return defaultServiceId
+      }
+      return servicesForCarrier[0]?.id ?? ''
+    })
+    setPackageChoice((cur) => {
+      if (cur === CUSTOM_PKG || packagesForCarrier.some((p) => String(p.id) === cur)) return cur
+      if (
+        defaultPackagePresetId != null
+        && packagesForCarrier.some((p) => p.id === defaultPackagePresetId)
+      ) {
+        return String(defaultPackagePresetId)
+      }
+      return packagesForCarrier[0]?.id != null
+        ? String(packagesForCarrier[0]?.id)
+        : CUSTOM_PKG
+    })
     // Re-validate account/service/package whenever the carrier, client, or route changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [carrier, clientCode, accountsForCarrier, servicesForCarrier, packagesForCarrier])
+  }, [carrier, clientCode, accountsForCarrier, servicesForCarrier, packagesForCarrier, defaultServiceId, defaultPackagePresetId])
 
   /**
    * Select a client: fill YOUR address on the correct side and auto-pick its
@@ -680,6 +898,190 @@ export default function NewShipmentPage() {
     }
   }
 
+  /**
+   * Sprint 31 — validate the ship-to address against the SELECTED carrier's
+   * own database (UPS AVS / FedEx AV / DHL address-validate / SWSIM
+   * CleanseAddress). Complements the platform-side check by confirming the
+   * carrier can actually deliver the parcel + returning residential/commercial
+   * classification.
+   */
+  const validateRecipientWithCarrier = async () => {
+    if (!carrier) {
+      notify.error('Pick a carrier first — validation is carrier-specific.')
+      return
+    }
+    setCarrierValidating(true)
+    try {
+      const res = await addressValidationService.validate({
+        carrierCode: carrier,
+        customerNo: clientCode.trim() || null,
+        name: recipient.name || undefined,
+        addressLine1: recipient.addressLine1,
+        addressLine2: recipient.addressLine2 || undefined,
+        addressLine3: recipient.addressLine3 || undefined,
+        city: recipient.city,
+        state: recipient.state || undefined,
+        postalCode: recipient.postalCode,
+        countryCode: recipient.countryCode,
+      })
+      const d = res.data
+      setCarrierAddressResult(d ?? null)
+      if (d?.valid) {
+        notify.success(`${carrier}: ${d.matchLevel} match.`)
+      } else if (d) {
+        notify.error(`${carrier}: ${d.message}`)
+      }
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Carrier address validation failed.')
+    } finally {
+      setCarrierValidating(false)
+    }
+  }
+
+  /**
+   * Sprint 38 — search the address book. Fires on every input change
+   * (debounce-free — the endpoint caps at 25 hits and returns fast).
+   * Empty / < 2 chars → clear suggestions.
+   */
+  const runRecipientSearch = async (q: string) => {
+    setRecipientSearch(q)
+    if (!q || q.trim().length < 2) {
+      setRecipientSuggestions([])
+      setRecipientDropdownOpen(false)
+      return
+    }
+    try {
+      const hits = await recipientBookService.search(q, clientCode || null)
+      setRecipientSuggestions(hits)
+      setRecipientDropdownOpen(hits.length > 0)
+    } catch {
+      setRecipientSuggestions([])
+      setRecipientDropdownOpen(false)
+    }
+  }
+
+  /** Apply a saved recipient — overwrites the current recipient block. */
+  const applySavedRecipient = (r: SavedRecipient) => {
+    setRecipient((cur) => ({
+      ...cur,
+      name: r.name ?? cur.name,
+      company: r.company ?? cur.company,
+      phone: r.phone ?? cur.phone,
+      phoneCountryCode: r.phoneCountryCode ?? cur.phoneCountryCode,
+      email: r.email ?? cur.email,
+      addressLine1: r.addressLine1 ?? cur.addressLine1,
+      addressLine2: r.addressLine2 ?? cur.addressLine2,
+      addressLine3: r.addressLine3 ?? cur.addressLine3,
+      city: r.city ?? cur.city,
+      state: r.state ?? cur.state,
+      postalCode: r.postalCode ?? cur.postalCode,
+      countryCode: r.countryCode ?? cur.countryCode,
+      residential: r.residential ?? cur.residential,
+    }))
+    setRecipientSearch(r.name)
+    setRecipientSuggestions([])
+    setRecipientDropdownOpen(false)
+    notify.success(`Loaded ${r.name} from the address book.`)
+  }
+
+  /**
+   * Save the current recipient to the address book. Idempotent —
+   * backend returns the existing row if it's a duplicate.
+   */
+  const saveCurrentRecipient = async () => {
+    if (!recipient.name?.trim() || !recipient.addressLine1?.trim()
+        || !recipient.city?.trim() || !recipient.postalCode?.trim()
+        || !recipient.countryCode?.trim()) {
+      notify.error('Fill name + address + city + postal code + country before saving.')
+      return
+    }
+    setSavingRecipient(true)
+    try {
+      const response = await recipientBookService.save({
+        ownerCustomerNo: clientCode || null,
+        name: recipient.name,
+        company: recipient.company ?? null,
+        phone: recipient.phone ?? null,
+        phoneCountryCode: recipient.phoneCountryCode ?? null,
+        email: recipient.email ?? null,
+        addressLine1: recipient.addressLine1,
+        addressLine2: recipient.addressLine2 ?? null,
+        addressLine3: recipient.addressLine3 ?? null,
+        city: recipient.city,
+        state: recipient.state ?? null,
+        postalCode: recipient.postalCode,
+        countryCode: recipient.countryCode,
+        residential: recipient.residential ?? null,
+      })
+      notify.success(response.message ?? 'Recipient saved.')
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Save failed.')
+    } finally {
+      setSavingRecipient(false)
+    }
+  }
+
+  /** Apply the carrier's suggested address to the recipient block. */
+  const applyCarrierSuggestion = () => {
+    const s = carrierAddressResult?.suggested
+    if (!s) return
+    setRecipient((cur) => ({
+      ...cur,
+      addressLine1: s.addressLine1 ?? cur.addressLine1,
+      addressLine2: s.addressLine2 ?? cur.addressLine2,
+      addressLine3: s.addressLine3 ?? cur.addressLine3,
+      city: s.city ?? cur.city,
+      state: s.state ?? cur.state,
+      postalCode: s.postalCode ?? cur.postalCode,
+      countryCode: s.countryCode ?? cur.countryCode,
+    }))
+    setCarrierAddressResult(null)
+    notify.success('Applied carrier-suggested address.')
+  }
+
+  // Wizard payload = a snapshot of the current inline state in the shape
+  // CustomsWizard expects (OrderCustomsPayload). Rebuilt each time the
+  // wizard opens so it starts from whatever the user last typed inline.
+  const wizardPayload = useMemo<OrderCustomsPayload>(() => ({
+    items: items
+      .filter((it) => it.description.trim() || it.hsCode.trim())
+      .map<CustomsItem>((it) => ({
+        description: it.description.trim(),
+        hsCode: it.hsCode.trim() || null,
+        countryOfOrigin: it.countryOfOrigin.trim().toUpperCase() || null,
+        quantity: Number(it.quantity) || 1,
+        unitValue: Number(it.unitValue) || 0,
+        sku: it.sku.trim() || null,
+      })),
+    incoterms,
+    reasonForExport,
+    currency,
+    weightUnit,
+  }), [items, incoterms, reasonForExport, currency, weightUnit])
+
+  /** Copy wizard-side state back into the inline form state so both stay in sync. */
+  const acceptWizardPayload = (payload: OrderCustomsPayload) => {
+    const rows: ItemRow[] = (payload.items ?? []).map((it) => ({
+      description: it.description ?? '',
+      sku: it.sku ?? '',
+      hsCode: it.hsCode ?? '',
+      countryOfOrigin: it.countryOfOrigin ?? '',
+      quantity: String(it.quantity ?? 1),
+      unitValue: it.unitValue != null ? String(it.unitValue) : '',
+    }))
+    // Keep at least one row so the inline form isn't blank after a Save
+    // with zero items entered in the wizard.
+    setItems(rows.length ? rows : [blankItem()])
+    if (payload.incoterms) setIncoterms(payload.incoterms)
+    if (payload.reasonForExport) setReasonForExport(payload.reasonForExport)
+    if (payload.currency) setCurrency(payload.currency)
+    if (payload.weightUnit && (payload.weightUnit === 'LB' || payload.weightUnit === 'KG')) {
+      setWeightUnit(payload.weightUnit)
+    }
+    setWizardOpen(false)
+    notify.success('Customs details saved to this shipment.')
+  }
+
   const patchItem = (i: number, patch: Partial<ItemRow>) =>
     setItems((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
   const addItem = () => setItems((rows) => [blankItem(), ...rows])
@@ -690,26 +1092,6 @@ export default function NewShipmentPage() {
   const weightInLb = () => {
     const w = Number(weight) || 0
     return weightUnit === 'KG' ? Math.round(w * 2.20462 * 100) / 100 : w
-  }
-
-  /** Items — suggest an HS tariff code for one line from its description. */
-  const suggestHsFor = async (i: number) => {
-    const it = items[i]
-    if (!it.description.trim()) return notify.error('Add an item description first.')
-    setHsBusy(i)
-    try {
-      const r = await aiService.suggestHs(it.description, it.countryOfOrigin || undefined)
-      if (!r.hsCode) return notify.error('No HS code could be suggested.')
-      patchItem(i, { hsCode: r.hsCode })
-      const heading = r.heading ? ` — ${r.heading.replace(/\s*\.\s*$/, '')}` : ''
-      notify.success(
-        `HS ${r.hsCode}${r.confidence ? ` · ${r.confidence} confidence` : ''}${heading}. Please verify.`,
-      )
-    } catch (err) {
-      notify.error(err instanceof ApiError ? err.message : 'HS suggestion failed.')
-    } finally {
-      setHsBusy(null)
-    }
   }
 
   /** Package & weight — recommend a package + weight from the item list. */
@@ -868,6 +1250,48 @@ export default function NewShipmentPage() {
       clientCode: clientCode.trim() || undefined,
       warehouseCode: warehouseCode || undefined,
       declaredValue: declaredValue ? Number(declaredValue) : null,
+      // Sprint 27 — attach the DG block when populated; backend threads
+      // it into ShipmentRequestDTO.dangerousGoods and every connector's
+      // hazmat wire format keys off it.
+      ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
+      // Sprint 35 — signature + insurance. NONE → omit so the backend
+      // uses the carrier default; explicit values flow through to each
+      // connector's per-carrier wire format.
+      ...(signatureOption !== 'NONE' ? { signatureOption } : {}),
+      ...(insuredValue && Number(insuredValue) > 0
+        ? { insuredValue: Number(insuredValue), insuredValueCurrency: currency }
+        : {}),
+      // Sprint 29 — multi-package. When extra boxes are present, build
+      // a packages[] array with box 1 mirroring the top-level fields and
+      // boxes 2..N from extraPackages. Backend's effectivePackages() also
+      // handles the null case, so empty extraPackages leaves the payload
+      // untouched (existing single-package behavior).
+      ...(extraPackages.length > 0 ? {
+        packages: [
+          {
+            sequenceNumber: 1,
+            packageType: isCustomPkg ? undefined : String(packageChoice),
+            weight: w,
+            weightUnit,
+            length: isCustomPkg ? Number(length) : undefined,
+            width: isCustomPkg ? Number(width) : undefined,
+            height: isCustomPkg ? Number(height) : undefined,
+            dimUnit,
+            declaredValue: declaredValue ? Number(declaredValue) : undefined,
+          },
+          ...extraPackages.map((p, i) => ({
+            sequenceNumber: i + 2,
+            packageType: p.packageType || undefined,
+            weight: Number(p.weight),
+            weightUnit,
+            length: p.length ? Number(p.length) : undefined,
+            width: p.width ? Number(p.width) : undefined,
+            height: p.height ? Number(p.height) : undefined,
+            dimUnit,
+            declaredValue: p.declaredValue ? Number(p.declaredValue) : undefined,
+          })),
+        ],
+      } : {}),
       ...(isInternational ? { items: cleanItems, reasonForExport, currency, incoterms } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
     }
@@ -876,11 +1300,37 @@ export default function NewShipmentPage() {
     try {
       const res = await orderService.generateManualLabel(payload)
       const orderNo = res.data?.orderNo
+      // Sprint 43 — persist custom field values against the new order.
+      // Best-effort: never block the success navigation on this call.
+      if (orderNo && Object.keys(customFieldValues).length > 0) {
+        try {
+          await customFieldService.upsertValues(orderNo, customFieldValues, clientCode || null)
+        } catch (cfErr) {
+          notify.error(
+            cfErr instanceof Error
+              ? `Label generated but custom fields failed to save: ${cfErr.message}`
+              : 'Label generated but custom fields failed to save.',
+          )
+        }
+      }
       notify.success(res.message || 'Shipment label generated.')
       navigate(orderNo ? `/label/${orderNo}` : '/orders')
     } catch (e) {
-      if (e instanceof ApiError) notify.error(e.message)
-      else notify.error(e instanceof Error ? e.message : 'Failed to generate the label.')
+      const raw = e instanceof ApiError
+        ? e.message
+        : e instanceof Error
+          ? e.message
+          : 'Failed to generate the label.'
+      // Backend's IntlShipmentValidator concatenates every gap into a single
+      // message with a stable prefix. Parse it back into a structured
+      // notify.error so the user sees a title + bullet list instead of a
+      // wall of text.
+      const parsed = parseIntlValidationMessage(raw)
+      if (parsed) {
+        notify.error({ title: parsed.title, body: parsed.body })
+      } else {
+        notify.error(raw)
+      }
     } finally {
       setSubmitting(false)
     }
@@ -1025,21 +1475,96 @@ export default function NewShipmentPage() {
                 icon={<FiMapPin className="h-3.5 w-3.5" />}
                 title={isReturn ? 'Return to · your address' : 'Ship to · recipient'}
                 badge={
-                  <button
-                    type="button"
-                    onClick={() => void validateRecipient()}
-                    disabled={validating}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
-                  >
-                    {validating ? (
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
-                    ) : (
-                      <FiCheckCircle className="h-3.5 w-3.5" />
-                    )}
-                    Validate address
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => void validateRecipient()}
+                      disabled={validating}
+                      title="Platform-side check — postal format, address components"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                    >
+                      {validating ? (
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+                      ) : (
+                        <FiCheckCircle className="h-3.5 w-3.5" />
+                      )}
+                      Validate address
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void validateRecipientWithCarrier()}
+                      disabled={carrierValidating || !carrier}
+                      title={carrier
+                        ? `Carrier-side check — ask ${carrier} whether they can deliver here + residential/commercial classification`
+                        : 'Pick a carrier first'}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#1f150c] bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {carrierValidating ? (
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#8a7959] border-t-[#f4eede]" />
+                      ) : (
+                        <FiSearch className="h-3 w-3" />
+                      )}
+                      Check with {carrier || 'carrier'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void saveCurrentRecipient()}
+                      disabled={savingRecipient}
+                      title="Save this recipient to the address book"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
+                    >
+                      <FiPlus className="h-3 w-3" />
+                      {savingRecipient ? 'Saving…' : 'Save recipient'}
+                    </button>
+                  </div>
                 }
               >
+                {/* Sprint 38 — address-book combobox. Type ≥ 2 chars to
+                    search; picking a suggestion overwrites every field
+                    in the recipient block below. */}
+                <div className="relative mb-3">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={recipientSearch}
+                      onChange={(e) => void runRecipientSearch(e.target.value)}
+                      onFocus={() => recipientSuggestions.length > 0 && setRecipientDropdownOpen(true)}
+                      onBlur={() => setTimeout(() => setRecipientDropdownOpen(false), 150)}
+                      placeholder="Search address book (name, city, postal code)…"
+                      className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 pl-8 text-[12px] outline-none focus:border-[#1f150c]"
+                    />
+                    <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[#8a7959]" />
+                  </div>
+                  {recipientDropdownOpen && recipientSuggestions.length > 0 ? (
+                    <ul className="absolute z-10 mt-0.5 max-h-64 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                      {recipientSuggestions.map((s) => (
+                        <li key={s.id}>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => applySavedRecipient(s)}
+                            className="flex w-full items-start justify-between gap-2 px-2.5 py-1.5 text-left text-[11.5px] hover:bg-slate-50"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold text-slate-950">{s.name}</p>
+                              <p className="truncate text-[10.5px] text-slate-500">
+                                {s.addressLine1}
+                                {s.city ? `, ${s.city}` : ''}
+                                {s.state ? `, ${s.state}` : ''}
+                                {' '}{s.postalCode} {s.countryCode}
+                              </p>
+                            </div>
+                            {s.tag ? (
+                              <span className="whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-500">
+                                {s.tag}
+                              </span>
+                            ) : null}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
                 <AddressBlock value={recipient} onChange={(patch) => setRecipient((r) => ({ ...r, ...patch }))} withEmail={!isReturn} />
                 {!destAllowed && destRules?.mode && recipient.countryCode ? (
                   <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
@@ -1071,6 +1596,13 @@ export default function NewShipmentPage() {
                       </ul>
                     </div>
                   )
+                ) : null}
+                {carrierAddressResult ? (
+                  <CarrierAddressBanner
+                    result={carrierAddressResult}
+                    onApply={applyCarrierSuggestion}
+                    onDismiss={() => setCarrierAddressResult(null)}
+                  />
                 ) : null}
               </SectionCard>
             </div>
@@ -1121,12 +1653,51 @@ export default function NewShipmentPage() {
                     </datalist>
                   </Field>
                   <Field label="Service level">
-                    <select className={inputCls} value={serviceId} onChange={(e) => setServiceId(e.target.value ? Number(e.target.value) : '')}>
-                      {servicesForCarrier.length === 0 ? <option value="">Carrier default</option> : null}
-                      {servicesForCarrier.map((s) => (
-                        <option key={s.id} value={s.id}>{s.name}</option>
-                      ))}
-                    </select>
+                    <div className="flex items-center gap-1.5">
+                      <select className={inputCls} value={serviceId} onChange={(e) => setServiceId(e.target.value ? Number(e.target.value) : '')}>
+                        {servicesForCarrier.length === 0 ? <option value="">Carrier default</option> : null}
+                        {servicesForCarrier.map((s) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={!canOpenRatePicker}
+                        onClick={() => setRatePickerOpen(true)}
+                        title={canOpenRatePicker
+                          ? 'Fetch live rates across every configured carrier'
+                          : 'Enter postal codes and weight first'}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[#1f150c] bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <FiSearch className="h-2.5 w-2.5" />
+                        Compare rates
+                      </button>
+                    </div>
+                  </Field>
+                  <Field label="Dangerous goods">
+                    <button
+                      type="button"
+                      onClick={() => setDgWizardOpen(true)}
+                      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition ${
+                        dgBlock
+                          ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <FiAlertTriangle className="h-3 w-3" />
+                      {dgBlock
+                        ? `Hazmat attached · ${dgBlock.commodities.length} commodity(ies)`
+                        : 'Declare dangerous goods'}
+                    </button>
+                    {dgBlock ? (
+                      <button
+                        type="button"
+                        onClick={() => setDgBlock(null)}
+                        className="ml-2 text-[10.5px] font-semibold text-rose-600 hover:underline"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
                   </Field>
                   <Field label="Incoterms">
                     <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
@@ -1216,6 +1787,32 @@ export default function NewShipmentPage() {
                     <input className={inputCls} type="number" min="0" step="0.01" value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value)} placeholder="100.00" />
                   </Field>
                 </div>
+                {/* Sprint 35 — signature at delivery + insured value.
+                    NONE = carrier default (usually no signature domestic,
+                    indirect on air); ADULT = 21+ ID required (higher fee).
+                    Insured value beyond the carrier's free $100 tier
+                    incurs an insurance surcharge on UPS/FedEx; USPS +
+                    DHL treat it as a separate rider. */}
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Signature at delivery"
+                         hint="Adult signature = 21+ ID; higher fee">
+                    <select className={inputCls}
+                            value={signatureOption}
+                            onChange={(e) => setSignatureOption(e.target.value as typeof signatureOption)}>
+                      <option value="NONE">Carrier default</option>
+                      <option value="INDIRECT">Indirect (anyone at address)</option>
+                      <option value="DIRECT">Direct (someone at address)</option>
+                      <option value="ADULT">Adult signature (21+)</option>
+                    </select>
+                  </Field>
+                  <Field label={`Insured value (${currency})`}
+                         hint="Beyond the carrier's free $100 tier">
+                    <input className={inputCls} type="number" min="0" step="0.01"
+                           value={insuredValue}
+                           onChange={(e) => setInsuredValue(e.target.value)}
+                           placeholder="0.00" />
+                  </Field>
+                </div>
                 {isCustomPkg ? (
                   <div className="grid grid-cols-3 gap-3">
                     <Field label={`Length (${dimUnit.toLowerCase()})`} required>
@@ -1229,6 +1826,85 @@ export default function NewShipmentPage() {
                     </Field>
                   </div>
                 ) : null}
+
+                {/* Sprint 29 — additional boxes. First box uses the fields
+                    above; extra rows collect per-box weight + dims. */}
+                {extraPackages.map((p, idx) => (
+                  <div key={idx} className="rounded-xl border border-dashed border-[#e3d9c4] bg-[#faf7f0]/60 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
+                        Box {idx + 2}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setExtraPackages((cur) => cur.filter((_, i) => i !== idx))}
+                        aria-label={`Remove box ${idx + 2}`}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#8a7959] hover:bg-rose-50 hover:text-rose-600"
+                      >
+                        <FiTrash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label={`Weight (${weightUnit.toLowerCase()})`} required>
+                        <input
+                          className={inputCls}
+                          type="number" min="0" step="0.1"
+                          value={p.weight}
+                          onChange={(e) => setExtraPackages((cur) =>
+                            cur.map((x, i) => (i === idx ? { ...x, weight: e.target.value } : x)))}
+                          placeholder="2.5"
+                        />
+                      </Field>
+                      <Field label={`Declared value (${currency})`}>
+                        <input
+                          className={inputCls}
+                          type="number" min="0" step="0.01"
+                          value={p.declaredValue}
+                          onChange={(e) => setExtraPackages((cur) =>
+                            cur.map((x, i) => (i === idx ? { ...x, declaredValue: e.target.value } : x)))}
+                          placeholder="100.00"
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      <Field label={`L (${dimUnit.toLowerCase()})`}>
+                        <input
+                          className={inputCls}
+                          type="number" min="0" step="0.1"
+                          value={p.length}
+                          onChange={(e) => setExtraPackages((cur) =>
+                            cur.map((x, i) => (i === idx ? { ...x, length: e.target.value } : x)))}
+                        />
+                      </Field>
+                      <Field label={`W (${dimUnit.toLowerCase()})`}>
+                        <input
+                          className={inputCls}
+                          type="number" min="0" step="0.1"
+                          value={p.width}
+                          onChange={(e) => setExtraPackages((cur) =>
+                            cur.map((x, i) => (i === idx ? { ...x, width: e.target.value } : x)))}
+                        />
+                      </Field>
+                      <Field label={`H (${dimUnit.toLowerCase()})`}>
+                        <input
+                          className={inputCls}
+                          type="number" min="0" step="0.1"
+                          value={p.height}
+                          onChange={(e) => setExtraPackages((cur) =>
+                            cur.map((x, i) => (i === idx ? { ...x, height: e.target.value } : x)))}
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setExtraPackages((cur) => [...cur, blankExtraPackage()])}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                >
+                  <FiPlus className="h-3 w-3" />
+                  {extraPackages.length === 0 ? 'Add another box (multi-package shipment)' : 'Add another box'}
+                </button>
               </div>
               </SectionCard>
             </div>
@@ -1354,6 +2030,25 @@ export default function NewShipmentPage() {
                     </span>
                     <button
                       type="button"
+                      onClick={() => setWizardOpen(true)}
+                      title="Step through the customs declaration with per-carrier hints"
+                      className="inline-flex items-center gap-1 rounded-lg border border-emerald-600 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-50 shadow-sm"
+                    >
+                      <FiGlobe className="h-3.5 w-3.5" /> Guided wizard
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canEstimateLandedCost}
+                      onClick={() => setLandedCostOpen(true)}
+                      title={canEstimateLandedCost
+                        ? `Ask ${carrier} for freight + duty + tax estimate`
+                        : 'Pick a carrier + fill weight + declared value first'}
+                      className="inline-flex items-center gap-1 rounded-lg border border-[#1f150c] bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <FiZap className="h-3.5 w-3.5" /> Landed cost
+                    </button>
+                    <button
+                      type="button"
                       onClick={addItem}
                       className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
                     >
@@ -1381,29 +2076,21 @@ export default function NewShipmentPage() {
                   {items.map((it, i) => {
                     const amount = (Number(it.quantity) || 0) * (Number(it.unitValue) || 0)
                     return (
+                      <div key={i} className="space-y-1">
                       <div
-                        key={i}
-                        className="grid min-w-[760px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_44px] items-center gap-2"
+                        className="grid min-w-[760px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_44px] items-start gap-2"
                       >
                         <input className={inputCls} value={it.description} onChange={(e) => patchItem(i, { description: e.target.value })} placeholder="Cotton t-shirt" />
                         <input className={inputCls} value={it.sku} onChange={(e) => patchItem(i, { sku: e.target.value })} placeholder="SKU-001" />
-                        <div className="relative">
-                          <input className={`${inputCls} pr-7`} value={it.hsCode} onChange={(e) => patchItem(i, { hsCode: e.target.value })} placeholder="6109.10" />
-                          <button
-                            type="button"
-                            onClick={() => void suggestHsFor(i)}
-                            disabled={hsBusy === i}
-                            title="Suggest HS code with AI"
-                            aria-label="Suggest HS code with AI"
-                            className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-[#8a7959] transition hover:bg-[#efe7d4] hover:text-[#412d15] disabled:opacity-50"
-                          >
-                            {hsBusy === i ? (
-                              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#412d15]" />
-                            ) : (
-                              <FiZap className="h-3 w-3" />
-                            )}
-                          </button>
-                        </div>
+                        <HsCodeCombobox
+                          value={it.hsCode}
+                          onChange={(v) => patchItem(i, { hsCode: v })}
+                          onDescriptionSuggest={(desc) => {
+                            if (!it.description || !it.description.trim()) {
+                              patchItem(i, { description: desc })
+                            }
+                          }}
+                        />
                         <input className={`${inputCls} uppercase`} value={it.countryOfOrigin} onChange={(e) => patchItem(i, { countryOfOrigin: e.target.value })} placeholder="US" maxLength={2} />
                         <input className={inputCls} type="number" min="1" step="1" value={it.quantity} onChange={(e) => patchItem(i, { quantity: e.target.value })} placeholder="1" />
                         <input className={inputCls} type="number" min="0" step="0.01" value={it.unitValue} onChange={(e) => patchItem(i, { unitValue: e.target.value })} placeholder="20.00" />
@@ -1422,6 +2109,8 @@ export default function NewShipmentPage() {
                           </button>
                         </div>
                       </div>
+                      {/* HS code shape hint is rendered inline by HsCodeCombobox. */}
+                      </div>
                     )
                   })}
 
@@ -1438,6 +2127,17 @@ export default function NewShipmentPage() {
           </>
         )}
       </div>
+
+      {/* Sprint 43 — Custom fields (tenant-defined metadata). Panel
+       *  self-hides when the tenant has no applicable fields. */}
+      {!loading && !noCarriers ? (
+        <CustomFieldsSection
+          tenantId={clientCode || null}
+          values={customFieldValues}
+          onChange={setCustomFieldValues}
+          compact
+        />
+      ) : null}
 
       {/* sticky footer action bar — stays within the content column */}
       {!loading && !noCarriers ? (
@@ -1531,6 +2231,36 @@ export default function NewShipmentPage() {
         </div>
       ) : null}
 
+      {ratePickerOpen ? (
+        <RatePickerModal
+          request={rateShopRequest}
+          onClose={() => setRatePickerOpen(false)}
+          onSelect={handleRateSelected}
+        />
+      ) : null}
+
+      {dgWizardOpen ? (
+        <DangerousGoodsWizard
+          value={dgBlock}
+          onChange={(next) => setDgBlock(next)}
+          onComplete={(next) => {
+            setDgBlock(next)
+            setDgWizardOpen(false)
+            notify.success(
+              `Dangerous goods block attached · ${next.commodities.length} commodity(ies).`,
+            )
+          }}
+          onCancel={() => setDgWizardOpen(false)}
+        />
+      ) : null}
+
+      {landedCostOpen ? (
+        <LandedCostModal
+          request={landedCostRequest}
+          onClose={() => setLandedCostOpen(false)}
+        />
+      ) : null}
+
       {overrideEditorOpen ? (
         <ShipmentPartiesOverrideModal
           importer={editorSeed.importer}
@@ -1542,6 +2272,113 @@ export default function NewShipmentPage() {
             setOverrideEditorOpen(false)
           }}
         />
+      ) : null}
+
+      {/* Customs wizard — full-screen modal overlay. Owns its own scroll +
+          keyboard trap; the parent form stays mounted so state is preserved
+          if the user cancels. */}
+      {wizardOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Customs declaration wizard"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
+        >
+          <div className="flex h-[min(720px,90vh)] w-full max-w-[720px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
+            <CustomsWizard
+              carrierCode={carrier}
+              originCountry={sender.countryCode}
+              destinationCountry={recipient.countryCode}
+              value={wizardPayload}
+              onChange={() => {
+                // No-op: the wizard renders from wizardPayload but writes
+                // back only on Complete. We don't mirror in-progress edits
+                // to the inline form because the user might cancel.
+              }}
+              onComplete={acceptWizardPayload}
+              onCancel={() => setWizardOpen(false)}
+            />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Sprint 31 — inline banner for carrier-side address validation results.
+ * Colour by matchLevel; when the carrier returned a suggested address,
+ * show the diff + an Apply button that overwrites the recipient block.
+ */
+function CarrierAddressBanner({
+  result,
+  onApply,
+  onDismiss,
+}: {
+  result: AddressValidationResponse
+  onApply: () => void
+  onDismiss: () => void
+}) {
+  const level = result.matchLevel
+  const palette =
+    level === 'EXACT'
+      ? { border: 'border-emerald-200', bg: 'bg-emerald-50', text: 'text-emerald-800' }
+      : level === 'CORRECTED' || level === 'AMBIGUOUS'
+        ? { border: 'border-amber-200', bg: 'bg-amber-50', text: 'text-amber-800' }
+        : level === 'NOT_SUPPORTED'
+          ? { border: 'border-slate-200', bg: 'bg-slate-50', text: 'text-slate-700' }
+          : { border: 'border-rose-200', bg: 'bg-rose-50', text: 'text-rose-800' }
+  const s = result.suggested
+  return (
+    <div className={`mt-3 rounded-xl border ${palette.border} ${palette.bg} px-3 py-2 text-[12px] ${palette.text}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="flex items-center gap-1.5 font-semibold">
+            <span className="rounded-full bg-white/60 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.14em]">
+              {result.carrierCode} · {level}
+            </span>
+            {result.classification && result.classification !== 'UNKNOWN' ? (
+              <span className="rounded-full bg-white/60 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.14em]">
+                {result.classification}
+              </span>
+            ) : null}
+          </p>
+          <p className="mt-1">{result.message}</p>
+          {s ? (
+            <div className="mt-2 rounded-lg bg-white/60 px-2.5 py-1.5 font-mono text-[10.5px]">
+              <p>{s.addressLine1}</p>
+              {s.addressLine2 ? <p>{s.addressLine2}</p> : null}
+              {s.addressLine3 ? <p>{s.addressLine3}</p> : null}
+              <p>
+                {s.city}, {s.state} {s.postalCode} {s.countryCode}
+              </p>
+            </div>
+          ) : null}
+          {result.warnings && result.warnings.length > 0 ? (
+            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px]">
+              {result.warnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          className="shrink-0 rounded p-1 hover:bg-white/40"
+        >
+          <FiX className="h-3 w-3" />
+        </button>
+      </div>
+      {s ? (
+        <button
+          type="button"
+          onClick={onApply}
+          className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-current bg-white/60 px-2.5 py-1 text-[11px] font-semibold hover:bg-white/80"
+        >
+          Apply suggested address
+        </button>
       ) : null}
     </div>
   )

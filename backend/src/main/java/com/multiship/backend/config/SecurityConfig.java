@@ -31,7 +31,8 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwtService,
-                                                   com.multiship.backend.service.ApiKeyService apiKeyService)
+                                                   com.multiship.backend.service.ApiKeyService apiKeyService,
+                                                   com.multiship.backend.repository.ApiKeyRepository apiKeyRepository)
             throws Exception {
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -40,12 +41,19 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // Open endpoints
                         .requestMatchers("/api/v1/auth/**").permitAll()
+                        // Sprint 46 — OAuth 2.0 token endpoint is public; the
+                        // caller authenticates with client credentials in the
+                        // body, not with a Bearer token.
+                        .requestMatchers("/api/v1/oauth/token").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+                        // Sprint 36 — carrier webhook receiver: no JWT (carriers can't
+                        // produce our tokens). Signature verification per carrier via
+                        // HMAC-SHA256 in the request header.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/webhooks/carrier/**").permitAll()
                         // Admin-only credential management, decided before the
                         // request body is even parsed (403 beats 400).
-                        .requestMatchers("/api/v1/carriers/connect", "/api/v1/carriers/disconnect",
-                                "/api/v1/carriers/refresh-token").hasRole("ADMIN")
+                        .requestMatchers("/api/v1/carriers/connect", "/api/v1/carriers/disconnect").hasRole("ADMIN")
                         .requestMatchers("/api/v1/api-keys/**").hasRole("ADMIN")
                         // Public shipping API for external apps — API key (ROLE_API); ADMIN allowed for testing.
                         .requestMatchers("/api/v1/external/**").hasAnyRole("API", "ADMIN")
@@ -63,7 +71,7 @@ public class SecurityConfig {
                                         "FORBIDDEN", "You do not have permission to perform this action."))
                 )
                 .addFilterBefore(new ApiKeyAuthenticationFilter(apiKeyService), UsernamePasswordAuthenticationFilter.class)
-                .addFilterBefore(new JwtAuthenticationFilter(jwtService), UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(new JwtAuthenticationFilter(jwtService, apiKeyRepository), UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

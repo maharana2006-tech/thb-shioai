@@ -43,6 +43,10 @@ public class CarrierProperties {
 
     @Valid
     @NestedConfigurationProperty
+    private final Dhl dhl = new Dhl();
+
+    @Valid
+    @NestedConfigurationProperty
     private final ShipperDefaults shipper = new ShipperDefaults();
 
     @Getter
@@ -102,6 +106,16 @@ public class CarrierProperties {
         @NotBlank
         private String authUrl;
 
+        /**
+         * UPS's CIE (customer integration environment) OAuth endpoint. UPS
+         * issues Consumer Keys for a specific environment — a key created on
+         * the CIE / sandbox side 401s ("ClientId is Invalid") against the
+         * production onlinetools host and vice versa. Selected when the
+         * caller's environment == SANDBOX.
+         */
+        @NotBlank
+        private String sandboxAuthUrl;
+
         @NotBlank
         private String apiVersion;
 
@@ -145,6 +159,61 @@ public class CarrierProperties {
 
         @NotBlank
         private String authUrl;
+
+        /**
+         * SWSIM staging endpoint. Selected when the caller's environment is
+         * SANDBOX so testing credentials aren't sent to production.
+         */
+        @NotBlank
+        private String sandboxAuthUrl;
+
+        @NotBlank
+        private String apiVersion;
+
+        @NotBlank
+        private String shipmentPath;
+
+        @NotBlank
+        private String trackingPath;
+
+        @NotBlank
+        private String tokenPath;
+
+        @NotBlank
+        private String logoUrl;
+
+        @NotBlank
+        private String documentationUrl;
+
+        @NotBlank
+        private String connectionGuide;
+
+        @NotBlank
+        private String defaultServiceType;
+
+        @NotBlank
+        private String defaultPackageType;
+
+        @NotBlank
+        private String labelResponseOption;
+    }
+
+    @Getter
+    @Setter
+    public static class Dhl {
+
+        @NotBlank
+        private String apiBaseUrl;
+
+        @NotBlank
+        private String sandboxUrl;
+
+        @NotBlank
+        private String authUrl;
+
+        /** Sandbox endpoint — DHL uses a /test suffix, same host as production. */
+        @NotBlank
+        private String sandboxAuthUrl;
 
         @NotBlank
         private String apiVersion;

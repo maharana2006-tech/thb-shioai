@@ -59,6 +59,9 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.ShippingConfigService shippingConfigService;
 
+    @Autowired
+    private com.multiship.backend.service.PackingSlipService packingSlipService;
+
     /** Map a client Address value object into the label payload shape. */
     private Map<String, Object> addressMap(com.multiship.backend.model.Address a, String fallbackName) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -516,6 +519,32 @@ public class OrderController {
         return ResponseEntity.ok()
                 .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".zpl")
                 .body(zpl);
+    }
+
+    @Operation(
+            summary = "Branded packing slip PDF for the order",
+            description = "Sprint 42 — renders a tenant-branded packing slip PDF " +
+                    "(the branded page that ships INSIDE the parcel). Applies the " +
+                    "tenant's LabelTemplate when present; otherwise the platform " +
+                    "default; otherwise built-in defaults. The carrier's shipping " +
+                    "label itself is NOT customisable — that's carrier-mandated. " +
+                    "Response is application/pdf inline."
+    )
+    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
+    @GetMapping(value = "/{orderNo}/packing-slip",
+            produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> getPackingSlip(@PathVariable Integer orderNo) {
+        try {
+            byte[] pdf = packingSlipService.render(orderNo);
+            return ResponseEntity.ok()
+                    .header("Content-Disposition",
+                            "inline; filename=packing-slip-" + orderNo + ".pdf")
+                    .header("Content-Type",
+                            org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+                    .body(pdf);
+        } catch (IllegalArgumentException notFound) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.NOT_FOUND).build();
+        }
     }
 
     @Operation(

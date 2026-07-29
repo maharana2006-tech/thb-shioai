@@ -21,18 +21,20 @@ public class AccountRefUpsertRequest {
 
     private String accountName;
 
-    @NotBlank
+    /**
+     * OAuth client id. Optional on updates: blank means "keep the persisted
+     * value". Required on create — the service throws VALIDATION_ERROR when
+     * the underlying row is new and clientId is blank.
+     */
     private String clientId;
 
-    @NotBlank
+    /** OAuth client secret. Same optional-on-update semantics as {@link #clientId}. */
     private String clientSecret;
 
     @Pattern(regexp = "(?i)SANDBOX|PRODUCTION", message = "Environment must be SANDBOX or PRODUCTION")
     private String environment;
 
     private String customerNo;
-
-    private Boolean setAsDefault;
 
     /** Make this the linked client's default account (demotes the client's other accounts). */
     private Boolean clientDefault;

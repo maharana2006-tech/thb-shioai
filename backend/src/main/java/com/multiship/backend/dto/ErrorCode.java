@@ -30,6 +30,8 @@ public enum ErrorCode {
     // ===== Carrier accounts =====
     ACCOUNT_NOT_FOUND,
     ACCOUNT_INCOMPLETE,
+    /** Delete refused — the account has already generated labels; deactivate instead. */
+    ACCOUNT_HAS_LABELS,
     TENANT_REQUIRED,
     TENANT_ACCOUNT_NOT_FOUND,
     CARRIER_CONNECTION_FAILED,
@@ -73,6 +75,24 @@ public enum ErrorCode {
     POLICY_FIXED_SERVICE_REQUIRED,
     /** Markup value must be non-negative; currency must be 3 letters. */
     MARKUP_INVALID,
+
+    // ===== Order intake code translation (Phase 5) =====
+    /** ERP shipvia code has no alias for this client. */
+    UNKNOWN_SHIPVIA_CODE,
+    /** ERP service-level code has no alias for this client. */
+    UNKNOWN_SERVICE_CODE,
+    /** ERP destination-country code has no alias for this client. */
+    UNKNOWN_DEST_CODE,
+    /** ERP package SKU has no alias for this client. */
+    UNKNOWN_PACKAGE_CODE,
+
+    // ===== Client allowlist × destination gate =====
+    /** Service is allowed for the client, but not for this destination country. */
+    SERVICE_NOT_ALLOWED_FOR_DEST,
+
+    // ===== Client allowlist × warehouse gate =====
+    /** Service is allowed for the client, but not from this warehouse. */
+    SERVICE_NOT_ALLOWED_FOR_WAREHOUSE,
 
     // ===== Fallback =====
     INTERNAL_ERROR

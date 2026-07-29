@@ -27,4 +27,11 @@ public interface AccountRefService {
 
     /** Platform-account credentials for a carrier, to pre-fill the add-account drawer. */
     ApiResponse<PlatformCredentialsDTO> getPlatformCredentials(String carrierCode);
+
+    /**
+     * Delete a saved account. Refuses (409 ACCOUNT_HAS_LABELS) when the
+     * account has already generated any labels — deactivation preserves the
+     * audit trail, deletion is only for accidentally-added rows.
+     */
+    ApiResponse<Void> deleteAccount(Long accountId);
 }

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
-import { FiArrowLeft, FiCopy, FiDownload, FiExternalLink, FiFileText, FiPrinter, FiTag } from 'react-icons/fi'
+import { FiActivity, FiArrowLeft, FiCopy, FiDownload, FiExternalLink, FiFileText, FiPrinter, FiTag } from 'react-icons/fi'
 import { orderService, type LabelDocumentPayload } from '../api/orderService'
+import TrackingTimelineModal from './tracking/TrackingTimelineModal'
 import { useAppSession } from '../hooks/useAppSession'
 import { getTenantIdForUser, normalizeRole } from '../utils/roles'
 import { encodeCode128B } from '../utils/code128'
@@ -124,6 +125,7 @@ export default function LabelDocumentPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<DocumentTab>('label')
+  const [trackingOpen, setTrackingOpen] = useState(false)
   const [zplBusy, setZplBusy] = useState(false)
 
   const fetchZpl = async (): Promise<string | null> => {
@@ -342,7 +344,17 @@ export default function LabelDocumentPage() {
             </button>
           </div>
 
-          {label?.trackingUrl ? (
+          {trackingNumber ? (
+            <button
+              type="button"
+              onClick={() => setTrackingOpen(true)}
+              title="Open the live tracking timeline for this order"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-600 bg-white px-3 py-1.5 text-[13px] font-semibold text-emerald-700 transition hover:bg-emerald-50 shadow-sm"
+            >
+              <FiActivity className="h-3.5 w-3.5" />
+              Track live
+            </button>
+          ) : label?.trackingUrl ? (
             <a
               href={label.trackingUrl}
               target="_blank"
@@ -786,6 +798,13 @@ export default function LabelDocumentPage() {
             </div>
           )}
         </div>
+      ) : null}
+
+      {trackingOpen && order?.orderNo != null ? (
+        <TrackingTimelineModal
+          orderNo={order.orderNo}
+          onClose={() => setTrackingOpen(false)}
+        />
       ) : null}
     </div>
   )

@@ -37,6 +37,4 @@ public interface CarrierService {
     ApiResponse<List<OrderAccountResolutionDTO>> resolveOrderAccounts(List<Integer> orderNos);
 
     CarrierConnector getCarrierConnector(String carrierCode);
-
-    ApiResponse<CarrierConnectResponse> refreshCarrierToken(UserDetails user);
 }
