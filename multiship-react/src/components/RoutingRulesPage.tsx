@@ -24,6 +24,10 @@ import {
   type ShippingServiceItem,
 } from '../api/shippingConfigService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
+import {
+  warehouseSelectorService,
+  type WarehouseSelectionResult,
+} from '../api/warehouseSelectorService'
 import { REGIONS } from '../utils/countries'
 import { formatCarrierName } from '../utils/carrierUtils'
 import Select from './workspace/Select'
@@ -522,6 +526,10 @@ function DryRunPanel({
   const [req, setReq] = useState<RoutingEvaluationRequest>({})
   const [result, setResult] = useState<RoutingEvaluationResult | null>(null)
   const [running, setRunning] = useState(false)
+  // G3 — separate state for the "which warehouse would be picked" preview.
+  const [destPostal, setDestPostal] = useState('')
+  const [whResult, setWhResult] = useState<WarehouseSelectionResult | null>(null)
+  const [whRunning, setWhRunning] = useState(false)
 
   const run = async () => {
     setRunning(true)
@@ -531,6 +539,20 @@ function DryRunPanel({
       notify.error(err instanceof ApiError ? err.message : 'Dry-run failed.')
     } finally {
       setRunning(false)
+    }
+  }
+
+  const runWarehouseSelect = async () => {
+    setWhRunning(true)
+    try {
+      setWhResult(await warehouseSelectorService.selectNearest(clientCode, {
+        destCountry: req.destCountry ?? null,
+        destPostal: destPostal.trim() || null,
+      }))
+    } catch (err) {
+      notify.error(err instanceof ApiError ? err.message : 'Warehouse preview failed.')
+    } finally {
+      setWhRunning(false)
     }
   }
 
@@ -662,6 +684,60 @@ function DryRunPanel({
               </ul>
             </div>
           ) : null}
+
+          {/* G3 — Nearest-warehouse preview. Shares the destination country
+              with the rule dry-run above; adds a postal input. */}
+          <div className="mt-4 border-t border-slate-200 pt-3">
+            <h4 className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">
+              Nearest warehouse
+            </h4>
+            <p className="mb-2 text-[11.5px] text-slate-500">
+              Which attached warehouse would auto-fulfil this destination? Uses country match,
+              then postal-prefix within country, then any attached (default first).
+            </p>
+            <div className="mb-2">
+              <label className={fieldLabel}>Destination postal</label>
+              <input type="text" value={destPostal}
+                onChange={(e) => setDestPostal(e.target.value)}
+                placeholder="e.g. 10001 or SW1A 1AA" className={inputCls} />
+            </div>
+            <button type="button" onClick={runWarehouseSelect} disabled={whRunning}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+              <FiPlay /> {whRunning ? 'Running…' : 'Preview nearest'}
+            </button>
+
+            {whResult ? (
+              <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 text-[13px] font-semibold text-slate-900">
+                  {whResult.matchReason === 'NONE'
+                    ? <span className="text-rose-700">No warehouses attached to this client.</span>
+                    : <>Winner: <span className="text-emerald-700">
+                        {whResult.selectedWarehouseCode} — {whResult.selectedWarehouseName}
+                      </span></>}
+                </div>
+                {whResult.matchReason !== 'NONE' ? (
+                  <div className="mb-2 text-[12px] text-slate-600">
+                    Reason: <span className="font-bold">{whResult.matchReason}</span>
+                    {whResult.postalPrefixLength > 0
+                      ? <span> · postal prefix {whResult.postalPrefixLength} char{whResult.postalPrefixLength === 1 ? '' : 's'}</span>
+                      : null}
+                  </div>
+                ) : null}
+                {whResult.candidates.length > 0 ? (
+                  <ul className="space-y-0.5 text-[11.5px]">
+                    {whResult.candidates.map((c) => (
+                      <li key={c.warehouseId} className="font-mono text-slate-700">
+                        <span className="tabular-nums text-slate-400">[{c.score.toString().padStart(6)}]</span>
+                        {' '}{c.warehouseCode}
+                        {c.isDefault ? <span className="ml-1 text-[10px] text-slate-500">(default)</span> : null}
+                        <span className="ml-1 text-slate-500">— {c.reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

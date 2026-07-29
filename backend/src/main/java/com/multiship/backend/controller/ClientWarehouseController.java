@@ -3,7 +3,10 @@ package com.multiship.backend.controller;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.AttachWarehouseRequest;
 import com.multiship.backend.dto.ClientWarehouseDTO;
+import com.multiship.backend.dto.WarehouseSelectionRequest;
+import com.multiship.backend.dto.WarehouseSelectionResult;
 import com.multiship.backend.service.ClientWarehouseService;
+import com.multiship.backend.service.warehouse.WarehouseSelector;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -33,6 +36,7 @@ import java.util.List;
 public class ClientWarehouseController {
 
     private final ClientWarehouseService service;
+    private final WarehouseSelector warehouseSelector;
 
     @Operation(summary = "List warehouses attached to a client (default first)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
@@ -73,5 +77,27 @@ public class ClientWarehouseController {
             @PathVariable String warehouseCode) {
         ApiResponse<ClientWarehouseDTO> response = service.setDefault(clientCode, warehouseCode);
         return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    // ===== G3 — warehouse distance/postal selector =====
+
+    @Operation(summary = "Preview which attached warehouse would fulfil this destination",
+            description = "Scores every attached warehouse (same-country > postal-prefix within-country > any) and returns the winner plus a per-candidate trace so a dry-run UI can show why. Read-only — does not commit anything.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/select-nearest")
+    public ResponseEntity<ApiResponse<WarehouseSelectionResult>> selectNearest(
+            @PathVariable String clientCode,
+            @RequestBody WarehouseSelectionRequest request) {
+        WarehouseSelectionResult result = warehouseSelector.selectNearest(
+                clientCode,
+                request == null ? null : request.getDestCountry(),
+                request == null ? null : request.getDestPostal());
+        return ResponseEntity.ok(ApiResponse.<WarehouseSelectionResult>builder()
+                .status("success").code(200)
+                .message("NONE".equals(result.getMatchReason())
+                        ? "Client has no attached warehouses."
+                        : "Nearest warehouse resolved by " + result.getMatchReason() + ".")
+                .data(result)
+                .build());
     }
 }
