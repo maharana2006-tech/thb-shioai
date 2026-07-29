@@ -68,6 +68,32 @@ public class ScheduledReportRunner {
     @Transactional
     public GeneratedReport runOne(ScheduledReport schedule, LocalDateTime now) {
         ReportFilters filters = parseFilters(schedule.getFiltersJson());
+        // G6 — enforce the schedule's tenant scope on the CSV output.
+        //
+        // Before G6, the runner passed the raw filtersJson to reportService
+        // untouched. A schedule row could be tenant-scoped (tenantId=ACME)
+        // but its filtersJson could omit customerNo — the CSV would then
+        // pull EVERY tenant's rows, cross-tenant leak.
+        //
+        // Rules:
+        //   1. When the schedule has a tenantId, force filters.customerNo
+        //      to it. Ignore any stored override.
+        //   2. When creator was ROLE_TENANT, tenantId is mandatory — refuse
+        //      to run a platform-scoped schedule from a tenant creator.
+        //   3. Platform-scoped schedules from ADMIN / USER are unchanged.
+        if (schedule.getTenantId() != null && !schedule.getTenantId().isBlank()) {
+            if (filters.getCustomerNo() != null
+                    && !schedule.getTenantId().equalsIgnoreCase(filters.getCustomerNo())) {
+                log.warn("Schedule {} tenantId={} overriding filters.customerNo={} to prevent cross-tenant leak",
+                        schedule.getId(), schedule.getTenantId(), filters.getCustomerNo());
+            }
+            filters.setCustomerNo(schedule.getTenantId());
+        } else if ("ROLE_TENANT".equals(schedule.getCreatedByRole())) {
+            throw new IllegalStateException(
+                    "TENANT-created schedule " + schedule.getId()
+                            + " has no tenantId — refusing to run to prevent cross-tenant leak.");
+        }
+
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         String filename = buildFilename(schedule, now);
         switch (schedule.getDataset()) {

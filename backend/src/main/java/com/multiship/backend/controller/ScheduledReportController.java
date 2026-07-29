@@ -14,6 +14,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
@@ -57,6 +60,21 @@ public class ScheduledReportController {
         if (s.getId() == null) {
             s.setCreatedAt(now);
             s.setNextRunAt(now);   // fire on next tick
+            // G6 — stamp creator + role from the SecurityContext so the
+            // runner can later enforce the caller's scope on the CSV output.
+            Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+            if (auth != null) {
+                s.setCreatedBy(auth.getName());
+                s.setCreatedByRole(primaryRole(auth));
+            }
+        } else {
+            // G6 — updates never overwrite creator / role. Preserve from the
+            // existing row so audit history survives a save from anyone else.
+            scheduleRepo.findById(s.getId()).ifPresent(existing -> {
+                s.setCreatedBy(existing.getCreatedBy());
+                s.setCreatedByRole(existing.getCreatedByRole());
+                s.setCreatedAt(existing.getCreatedAt());
+            });
         }
         s.setUpdatedAt(now);
         ScheduledReport saved = scheduleRepo.save(s);
@@ -64,6 +82,18 @@ public class ScheduledReportController {
         return ResponseEntity.status(code).body(ApiResponse.<ScheduledReportDTO>builder()
                 .status("success").code(code.value()).message("Schedule saved")
                 .data(ScheduledReportDTO.from(saved)).build());
+    }
+
+    /** Extract the caller's primary role. Prefers ROLE_TENANT (most restrictive)
+     *  then ROLE_ADMIN, then ROLE_USER, matching {@code OrderAccessEvaluator}'s
+     *  precedence. Returns null when no known role is present. */
+    private static String primaryRole(Authentication auth) {
+        java.util.Set<String> roles = new java.util.HashSet<>();
+        for (GrantedAuthority ga : auth.getAuthorities()) roles.add(ga.getAuthority());
+        if (roles.contains("ROLE_TENANT")) return "ROLE_TENANT";
+        if (roles.contains("ROLE_ADMIN")) return "ROLE_ADMIN";
+        if (roles.contains("ROLE_USER")) return "ROLE_USER";
+        return null;
     }
 
     @Operation(summary = "Delete a schedule")
