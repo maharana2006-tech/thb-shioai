@@ -87,6 +87,26 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
                         "Client " + normalize(clientCode) + " has no attached warehouses; specify a warehouse code or attach one."));
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Warehouse assertWarehouseById(String clientCode, Long warehouseId) {
+        String code = normalize(clientCode);
+        if (warehouseId == null) {
+            throw new ShipmentResolutionException(ErrorCode.WAREHOUSE_NOT_FOUND,
+                    "Warehouse id is required.");
+        }
+        Warehouse w = warehouseRepository.findById(warehouseId)
+                .orElseThrow(() -> new ShipmentResolutionException(ErrorCode.WAREHOUSE_NOT_FOUND,
+                        "Warehouse " + warehouseId + " was not found."));
+        boolean attached = clientWarehouseRepository
+                .findByClientCodeIgnoreCaseAndWarehouseId(code, w.getId()).isPresent();
+        if (!attached) {
+            throw new ShipmentResolutionException(ErrorCode.WAREHOUSE_ATTACH_FORBIDDEN,
+                    "Warehouse " + w.getCode() + " is not attached to client " + code + ".");
+        }
+        return w;
+    }
+
     // ===== Ship-to =====
 
     @Override

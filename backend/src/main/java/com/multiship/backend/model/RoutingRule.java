@@ -95,15 +95,35 @@ public class RoutingRule {
     @Column(name = "match_order_source", length = 20)
     private String matchOrderSource;
 
+    /**
+     * G2 — match the shipment's currently-picked warehouse. Null = any
+     * warehouse. Combined with {@link #targetWarehouseId} lets a rule
+     * express "if fulfilment is currently at warehouse=EAST → route to
+     * FEDEX" (match-only) or "for dest=CA → fulfil from warehouse=WEST"
+     * (target-only) or both.
+     */
+    @Column(name = "match_warehouse_id")
+    private Long matchWarehouseId;
+
     // ===== Action =====
 
     @Enumerated(EnumType.STRING)
     @Column(name = "action_type", nullable = false, length = 20)
     private ActionType actionType = ActionType.REROUTE;
 
-    /** For REROUTE — the new service to rewrite the selection to. */
+    /** For REROUTE — the new service to rewrite the selection to. Optional;
+     *  a REROUTE with only {@link #targetWarehouseId} set will keep the
+     *  original service and only swap the fulfilment warehouse. */
     @Column(name = "target_service_id")
     private Long targetServiceId;
+
+    /**
+     * G2 — for REROUTE, the fulfilment warehouse to rewrite the shipment
+     * to. Null = don't change the warehouse. When set on a BLOCK rule the
+     * evaluator ignores it (BLOCK actions have no target).
+     */
+    @Column(name = "target_warehouse_id")
+    private Long targetWarehouseId;
 
     /** For BLOCK — human-readable reason surfaced to the operator. */
     @Column(name = "block_reason", length = 300)

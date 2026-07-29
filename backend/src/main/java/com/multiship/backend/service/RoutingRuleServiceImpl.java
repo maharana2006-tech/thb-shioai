@@ -51,12 +51,20 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
             throw new IllegalArgumentException("name is required");
         }
         if (rule.getActionType() == null) rule.setActionType(ActionType.REROUTE);
-        if (rule.getActionType() == ActionType.REROUTE && rule.getTargetServiceId() == null) {
-            throw new IllegalArgumentException("REROUTE rules require targetServiceId");
+        if (rule.getActionType() == ActionType.REROUTE
+                && rule.getTargetServiceId() == null
+                && rule.getTargetWarehouseId() == null) {
+            // G2: REROUTE now accepts service, warehouse, or both. At least one must be set
+            // or the rule matches but does nothing.
+            throw new IllegalArgumentException("REROUTE rules require targetServiceId, targetWarehouseId, or both");
         }
         if (rule.getActionType() == ActionType.BLOCK
                 && (rule.getBlockReason() == null || rule.getBlockReason().isBlank())) {
             throw new IllegalArgumentException("BLOCK rules require blockReason");
+        }
+        if (rule.getActionType() == ActionType.BLOCK && rule.getTargetWarehouseId() != null) {
+            // G2: BLOCK actions have no target — clear it so the DB stays honest.
+            rule.setTargetWarehouseId(null);
         }
         LocalDateTime now = LocalDateTime.now();
         if (rule.getId() == null) rule.setCreatedAt(now);
@@ -158,6 +166,11 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
                 && !rule.getMatchOrderSource().equalsIgnoreCase(req.getOrderSource())) {
             return "ORDER_SOURCE_MISMATCH";
         }
+        // G2 — currently-resolved warehouse
+        if (rule.getMatchWarehouseId() != null
+                && !rule.getMatchWarehouseId().equals(req.getCurrentWarehouseId())) {
+            return "WAREHOUSE_MISMATCH";
+        }
         return "MATCHED";
     }
 
@@ -178,6 +191,7 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
                 .trace(trace);
         if (rule.getActionType() == ActionType.REROUTE) {
             b.targetServiceId(rule.getTargetServiceId());
+            b.targetWarehouseId(rule.getTargetWarehouseId());
             if (rule.getTargetServiceId() != null) {
                 serviceRepo.findById(rule.getTargetServiceId())
                         .map(ShippingService::getCarrier)

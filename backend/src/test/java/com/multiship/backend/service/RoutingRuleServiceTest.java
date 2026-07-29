@@ -43,7 +43,32 @@ class RoutingRuleServiceTest {
         RoutingRule r = base();
         r.setActionType(ActionType.REROUTE);
         r.setTargetServiceId(null);
+        r.setTargetWarehouseId(null);
         assertThrows(IllegalArgumentException.class, () -> service.save(r));
+    }
+
+    @Test
+    void save_acceptsRerouteWithOnlyTargetWarehouse() {
+        // G2 — REROUTE may set only warehouse, only service, or both.
+        RoutingRule r = base();
+        r.setActionType(ActionType.REROUTE);
+        r.setTargetServiceId(null);
+        r.setTargetWarehouseId(7L);
+        when(ruleRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        RoutingRule saved = service.save(r);
+        assertEquals(7L, saved.getTargetWarehouseId());
+    }
+
+    @Test
+    void save_blockClearsTargetWarehouseIfSet() {
+        // G2 — BLOCK has no target, so the writer strips a stray target.
+        RoutingRule r = base();
+        r.setActionType(ActionType.BLOCK);
+        r.setBlockReason("nope");
+        r.setTargetWarehouseId(7L);
+        when(ruleRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        RoutingRule saved = service.save(r);
+        assertNull(saved.getTargetWarehouseId());
     }
 
     @Test
@@ -258,6 +283,47 @@ class RoutingRuleServiceTest {
         r.setMatchOrderSource("ERP");
         assertEquals("ORDER_SOURCE_MISMATCH",
                 RoutingRuleServiceImpl.matches(r, req().build()));
+    }
+
+    // ===== G2 — warehouse dimension =====
+
+    @Test
+    void matches_currentWarehouseId() {
+        RoutingRule r = base();
+        r.setMatchWarehouseId(42L);
+        assertEquals("MATCHED",
+                RoutingRuleServiceImpl.matches(r, req().currentWarehouseId(42L).build()));
+        assertEquals("WAREHOUSE_MISMATCH",
+                RoutingRuleServiceImpl.matches(r, req().currentWarehouseId(99L).build()));
+        assertEquals("WAREHOUSE_MISMATCH",
+                RoutingRuleServiceImpl.matches(r, req().build()),
+                "null current warehouse fails a warehouse-scoped rule");
+    }
+
+    @Test
+    void matches_noWarehouseConditionMatchesAny() {
+        // Rule without matchWarehouseId doesn't care what warehouse the
+        // request carries — backward-compat for pre-G2 rules.
+        RoutingRule r = base();
+        assertEquals("MATCHED",
+                RoutingRuleServiceImpl.matches(r, req().currentWarehouseId(42L).build()));
+        assertEquals("MATCHED",
+                RoutingRuleServiceImpl.matches(r, req().build()));
+    }
+
+    @Test
+    void evaluate_targetWarehouseIdOnResult() {
+        RoutingRule r = base(); r.setId(1L);
+        r.setTargetServiceId(null); // warehouse-only reroute
+        r.setTargetWarehouseId(7L);
+        when(ruleRepo.findByClientCodeIgnoreCaseOrderByPriorityAscIdAsc("ARHDEV"))
+                .thenReturn(List.of(r));
+
+        RoutingEvaluationResult result = service.evaluate("ARHDEV", req().build());
+        assertEquals("MATCH", result.getStatus());
+        assertEquals(ActionType.REROUTE, result.getActionType());
+        assertEquals(7L, result.getTargetWarehouseId());
+        assertNull(result.getTargetServiceId());
     }
 
     @Test

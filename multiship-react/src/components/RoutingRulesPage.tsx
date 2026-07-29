@@ -23,6 +23,7 @@ import {
   shippingConfigService,
   type ShippingServiceItem,
 } from '../api/shippingConfigService'
+import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
 import { REGIONS } from '../utils/countries'
 import { formatCarrierName } from '../utils/carrierUtils'
 import Select from './workspace/Select'
@@ -42,6 +43,7 @@ export default function RoutingRulesPage() {
   const [clientCode, setClientCode] = useState('')
   const [rules, setRules] = useState<RoutingRule[]>([])
   const [services, setServices] = useState<ShippingServiceItem[]>([])
+  const [warehouses, setWarehouses] = useState<ClientWarehouse[]>([])
   const [loading, setLoading] = useState(false)
   const [editing, setEditing] = useState<RoutingRule | null>(null)
   const [dryRunOpen, setDryRunOpen] = useState(false)
@@ -61,11 +63,18 @@ export default function RoutingRulesPage() {
   const load = useCallback(async () => {
     if (!clientCode) {
       setRules([])
+      setWarehouses([])
       return
     }
     setLoading(true)
     try {
-      setRules(await routingRuleService.list(clientCode))
+      const [rulesRes, whRes] = await Promise.all([
+        routingRuleService.list(clientCode),
+        clientWarehouseService.listForClient(clientCode),
+      ])
+      setRules(rulesRes)
+      // Only warehouses where the embedded Warehouse resolved — filter defensively.
+      setWarehouses((whRes.data ?? []).filter((cw) => cw.warehouse !== null))
     } catch (err: any) {
       notify.error(err?.message ?? 'Failed to load rules.')
     } finally {
@@ -109,6 +118,12 @@ export default function RoutingRulesPage() {
     if (!id) return '—'
     const s = services.find((v) => v.id === id)
     return s ? `${formatCarrierName(s.carrier)} · ${s.serviceCode} — ${s.name}` : `#${id}`
+  }
+
+  const warehouseLabel = (id?: number | null): string => {
+    if (!id) return '—'
+    const w = warehouses.find((cw) => cw.warehouse?.id === id)?.warehouse
+    return w ? `${w.code} — ${w.name}` : `#${id}`
   }
 
   const clientOptions = useMemo(
@@ -197,10 +212,22 @@ export default function RoutingRulesPage() {
                       {conditionSummary(r) || <em className="text-slate-400">Any shipment</em>}
                     </td>
                     <td className="px-4 py-2 text-[11.5px]">
-                      {r.actionType === 'REROUTE'
-                        ? <><span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10.5px] font-bold text-sky-700">REROUTE</span> <span className="text-slate-600">→ {serviceLabel(r.targetServiceId)}</span></>
-                        : <><span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10.5px] font-bold text-rose-700">BLOCK</span> <span className="text-slate-600">— {r.blockReason}</span></>
-                      }
+                      {r.actionType === 'REROUTE' ? (
+                        <>
+                          <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10.5px] font-bold text-sky-700">REROUTE</span>
+                          {r.targetServiceId ? (
+                            <span className="ml-1 text-slate-600">→ svc {serviceLabel(r.targetServiceId)}</span>
+                          ) : null}
+                          {r.targetWarehouseId ? (
+                            <span className="ml-1 text-slate-600">→ wh {warehouseLabel(r.targetWarehouseId)}</span>
+                          ) : null}
+                        </>
+                      ) : (
+                        <>
+                          <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10.5px] font-bold text-rose-700">BLOCK</span>
+                          <span className="ml-1 text-slate-600">— {r.blockReason}</span>
+                        </>
+                      )}
                     </td>
                     <td className="px-4 py-2 text-[11.5px]">
                       {r.active === false ? <span className="text-rose-600">Inactive</span> : <span className="text-emerald-700">Active</span>}
@@ -233,6 +260,7 @@ export default function RoutingRulesPage() {
         <RuleEditorModal
           rule={editing}
           services={services}
+          warehouses={warehouses}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); refresh() }}
         />
@@ -242,6 +270,7 @@ export default function RoutingRulesPage() {
         <DryRunPanel
           clientCode={clientCode}
           services={services}
+          warehouses={warehouses}
           onClose={() => setDryRunOpen(false)}
         />
       ) : null}
@@ -254,10 +283,11 @@ export default function RoutingRulesPage() {
 // ==========================================================================
 
 function RuleEditorModal({
-  rule, services, onClose, onSaved,
+  rule, services, warehouses, onClose, onSaved,
 }: {
   rule: RoutingRule
   services: ShippingServiceItem[]
+  warehouses: ClientWarehouse[]
   onClose: () => void
   onSaved: () => void
 }) {
@@ -274,8 +304,8 @@ function RuleEditorModal({
       notify.error('Name is required.')
       return
     }
-    if (draft.actionType === 'REROUTE' && !draft.targetServiceId) {
-      notify.error('REROUTE rules need a target service.')
+    if (draft.actionType === 'REROUTE' && !draft.targetServiceId && !draft.targetWarehouseId) {
+      notify.error('REROUTE rules need a target service, warehouse, or both.')
       return
     }
     if (draft.actionType === 'BLOCK' && !draft.blockReason?.trim()) {
@@ -389,6 +419,19 @@ function RuleEditorModal({
                   {SOURCE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                 </Select>
               </div>
+              <div>
+                <label className={fieldLabel}>Current warehouse</label>
+                <Select value={draft.matchWarehouseId?.toString() ?? ''}
+                  onChange={(e) => setNum('matchWarehouseId')(e.target.value)}>
+                  <option value="">Any warehouse</option>
+                  {warehouses.map((cw) => (
+                    <option key={cw.warehouse!.id} value={cw.warehouse!.id}>
+                      {cw.warehouse!.code} — {cw.warehouse!.name}
+                      {cw.isDefault ? ' (default)' : ''}
+                    </option>
+                  ))}
+                </Select>
+              </div>
             </div>
           </section>
 
@@ -408,17 +451,35 @@ function RuleEditorModal({
               </label>
             </div>
             {draft.actionType === 'REROUTE' ? (
-              <div>
-                <label className={fieldLabel}>Target service</label>
-                <Select value={draft.targetServiceId?.toString() ?? ''}
-                  onChange={(e) => setNum('targetServiceId')(e.target.value)}>
-                  <option value="">— pick target —</option>
-                  {services.filter((s) => s.enabled).map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {formatCarrierName(s.carrier)} · {s.serviceCode} — {s.name}
-                    </option>
-                  ))}
-                </Select>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={fieldLabel}>Target service</label>
+                  <Select value={draft.targetServiceId?.toString() ?? ''}
+                    onChange={(e) => setNum('targetServiceId')(e.target.value)}>
+                    <option value="">Keep current service</option>
+                    {services.filter((s) => s.enabled).map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {formatCarrierName(s.carrier)} · {s.serviceCode} — {s.name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div>
+                  <label className={fieldLabel}>Target warehouse</label>
+                  <Select value={draft.targetWarehouseId?.toString() ?? ''}
+                    onChange={(e) => setNum('targetWarehouseId')(e.target.value)}>
+                    <option value="">Keep current warehouse</option>
+                    {warehouses.map((cw) => (
+                      <option key={cw.warehouse!.id} value={cw.warehouse!.id}>
+                        {cw.warehouse!.code} — {cw.warehouse!.name}
+                        {cw.isDefault ? ' (default)' : ''}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <p className="col-span-2 text-[10.5px] text-slate-400">
+                  Pick at least one. Leaving both empty is not a valid REROUTE.
+                </p>
               </div>
             ) : (
               <div>
@@ -451,10 +512,11 @@ function RuleEditorModal({
 // ==========================================================================
 
 function DryRunPanel({
-  clientCode, services, onClose,
+  clientCode, services, warehouses, onClose,
 }: {
   clientCode: string
   services: ShippingServiceItem[]
+  warehouses: ClientWarehouse[]
   onClose: () => void
 }) {
   const [req, setReq] = useState<RoutingEvaluationRequest>({})
@@ -543,6 +605,19 @@ function DryRunPanel({
                 {SOURCE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
               </Select>
             </div>
+            <div>
+              <label className={fieldLabel}>Current warehouse</label>
+              <Select value={req.currentWarehouseId?.toString() ?? ''}
+                onChange={(e) => setNum('currentWarehouseId')(e.target.value)}>
+                <option value="">Any</option>
+                {warehouses.map((cw) => (
+                  <option key={cw.warehouse!.id} value={cw.warehouse!.id}>
+                    {cw.warehouse!.code} — {cw.warehouse!.name}
+                    {cw.isDefault ? ' (default)' : ''}
+                  </option>
+                ))}
+              </Select>
+            </div>
           </div>
 
           <button type="button" onClick={run} disabled={running}
@@ -561,8 +636,11 @@ function DryRunPanel({
                 <div className="mb-3 text-[12.5px]">
                   Action: <span className="font-bold">{result.actionType}</span>
                   {result.actionType === 'REROUTE' && result.targetServiceId ? (
-                    <span> → target service id {result.targetServiceId}
+                    <span> → service id {result.targetServiceId}
                       {result.targetCarrier ? ` (${result.targetCarrier})` : ''}</span>
+                  ) : null}
+                  {result.actionType === 'REROUTE' && result.targetWarehouseId ? (
+                    <span> → warehouse id {result.targetWarehouseId}</span>
                   ) : null}
                   {result.actionType === 'BLOCK' ? (
                     <span> — {result.blockReason}</span>
@@ -611,5 +689,6 @@ function conditionSummary(r: RoutingRule): string {
     parts.push(`val ${r.minDeclaredValue ?? '-'}–${r.maxDeclaredValue ?? '-'}`)
   }
   if (r.matchOrderSource) parts.push(`source ${r.matchOrderSource}`)
+  if (r.matchWarehouseId) parts.push(`wh #${r.matchWarehouseId}`)
   return parts.join(' · ')
 }

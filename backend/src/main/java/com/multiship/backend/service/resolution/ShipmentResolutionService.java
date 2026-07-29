@@ -51,6 +51,17 @@ public interface ShipmentResolutionService {
     /** {@link #resolveWarehouse} that throws NO_DEFAULT_WAREHOUSE on empty. */
     Warehouse assertWarehouse(String clientCode, String requestedWarehouseCode);
 
+    /**
+     * G2 — resolve a warehouse by id and verify it's attached to the
+     * client. Used by the routing-rule REROUTE path when the rule names a
+     * target warehouse (fetched by id rather than code).
+     *
+     * @throws ShipmentResolutionException WAREHOUSE_NOT_FOUND when the id
+     *         doesn't exist, or WAREHOUSE_ATTACH_FORBIDDEN when it exists
+     *         but isn't attached to the client.
+     */
+    Warehouse assertWarehouseById(String clientCode, Long warehouseId);
+
     // ===== Ship-to =====
 
     /** Does the client's destination-rule set permit shipping to this country? */

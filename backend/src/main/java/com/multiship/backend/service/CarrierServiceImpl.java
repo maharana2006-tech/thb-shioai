@@ -603,6 +603,7 @@ public class CarrierServiceImpl implements CarrierService {
                                     to.getCountryCode()))
                             .currentCarrier(carrier)
                             .currentServiceId(service != null ? service.getId() : null)
+                            .currentWarehouseId(resolvedWarehouseId)
                             .declaredValue(req.getDeclaredValue())
                             .orderSource(req.getSource())
                             .build();
@@ -652,6 +653,28 @@ public class CarrierServiceImpl implements CarrierService {
                     }
                     log.info("Routing rule '{}' rerouted client={} to service={} carrier={}",
                             routingResult.getMatchedRuleName(), resolvedClient, service.getServiceCode(), carrier);
+                }
+                // G2 — REROUTE may also (or only) rewrite the fulfilment
+                // warehouse. Verify attach; refuse loudly on a stale target
+                // rather than silently keeping the original.
+                if (routingResult.getTargetWarehouseId() != null
+                        && !routingResult.getTargetWarehouseId().equals(resolvedWarehouseId)) {
+                    try {
+                        Warehouse rerouteWh = resolutionService.assertWarehouseById(
+                                resolvedClient, routingResult.getTargetWarehouseId());
+                        from = mergeFromWarehouse(from, rerouteWh);
+                        resolvedWarehouseCode = rerouteWh.getCode();
+                        resolvedWarehouseId = rerouteWh.getId();
+                        log.info("Routing rule '{}' rerouted client={} to warehouse={}",
+                                routingResult.getMatchedRuleName(), resolvedClient, rerouteWh.getCode());
+                    } catch (ShipmentResolutionException e) {
+                        return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                                "Routing rule '" + routingResult.getMatchedRuleName()
+                                + "' targets warehouse #" + routingResult.getTargetWarehouseId()
+                                + " which " + (e.getErrorCode() == ErrorCode.WAREHOUSE_NOT_FOUND
+                                        ? "no longer exists."
+                                        : "is not attached to this client."));
+                    }
                 }
             }
         }
