@@ -429,4 +429,147 @@ class RateShopServiceImplTest {
         org.mockito.Mockito.verify(fxRateService, org.mockito.Mockito.never())
                 .convert(any(), anyString(), anyString());
     }
+
+    /* -------------------------- G4 — routing preview -------------------------- */
+
+    @Test
+    void routingOutcomeKeepWhenNoRuleMatches() {
+        RoutingRuleService rules = mock(RoutingRuleService.class);
+        com.multiship.backend.repository.ShippingServiceRepository svcRepo =
+                mock(com.multiship.backend.repository.ShippingServiceRepository.class);
+        // Service catalog: UPS/03 → id 100
+        when(svcRepo.findByCarrierIgnoreCaseAndServiceCodeIgnoreCase("UPS", "03"))
+                .thenReturn(Optional.of(svc(100L, "UPS", "03")));
+        // Rule engine returns NO_MATCH
+        when(rules.evaluate(anyString(), any()))
+                .thenReturn(com.multiship.backend.dto.RoutingEvaluationResult.builder()
+                        .status("NO_MATCH").build());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "routingRuleService", rules);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "shippingServiceRepository", svcRepo);
+
+        stubUpsOnly("UPS", "03", "12.50");
+        var response = service.rateShop(RateShopRequestDTO.builder()
+                .shipment(shipment()).customerNo("ACME").build());
+        var opt = response.getData().getOptions().get(0);
+        assertEquals(100L, opt.getServiceId());
+        assertEquals("KEEP", opt.getRoutingOutcome());
+        assertNull(opt.getRoutingRuleName());
+    }
+
+    @Test
+    void routingOutcomeRerouteRewritesTargetCarrierAndService() {
+        RoutingRuleService rules = mock(RoutingRuleService.class);
+        com.multiship.backend.repository.ShippingServiceRepository svcRepo =
+                mock(com.multiship.backend.repository.ShippingServiceRepository.class);
+        when(svcRepo.findByCarrierIgnoreCaseAndServiceCodeIgnoreCase("UPS", "03"))
+                .thenReturn(Optional.of(svc(100L, "UPS", "03")));
+        // Rule reroutes to serviceId 200 (DHL/P)
+        when(svcRepo.findById(200L)).thenReturn(Optional.of(svc(200L, "DHL", "P")));
+        when(rules.evaluate(anyString(), any()))
+                .thenReturn(com.multiship.backend.dto.RoutingEvaluationResult.builder()
+                        .status("MATCH")
+                        .matchedRuleName("EU→DHL")
+                        .actionType(com.multiship.backend.model.RoutingRule.ActionType.REROUTE)
+                        .targetServiceId(200L)
+                        .targetCarrier("DHL")
+                        .build());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "routingRuleService", rules);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "shippingServiceRepository", svcRepo);
+
+        stubUpsOnly("UPS", "03", "12.50");
+        var response = service.rateShop(RateShopRequestDTO.builder()
+                .shipment(shipment()).customerNo("ACME").build());
+        var opt = response.getData().getOptions().get(0);
+        assertEquals("REROUTE", opt.getRoutingOutcome());
+        assertEquals("EU→DHL", opt.getRoutingRuleName());
+        assertEquals("DHL", opt.getRoutingTargetCarrier());
+        assertEquals("P", opt.getRoutingTargetServiceCode());
+    }
+
+    @Test
+    void routingOutcomeBlockCarriesReason() {
+        RoutingRuleService rules = mock(RoutingRuleService.class);
+        com.multiship.backend.repository.ShippingServiceRepository svcRepo =
+                mock(com.multiship.backend.repository.ShippingServiceRepository.class);
+        when(svcRepo.findByCarrierIgnoreCaseAndServiceCodeIgnoreCase("UPS", "03"))
+                .thenReturn(Optional.of(svc(100L, "UPS", "03")));
+        when(rules.evaluate(anyString(), any()))
+                .thenReturn(com.multiship.backend.dto.RoutingEvaluationResult.builder()
+                        .status("MATCH")
+                        .matchedRuleName("Heavy weight")
+                        .actionType(com.multiship.backend.model.RoutingRule.ActionType.BLOCK)
+                        .blockReason("Weight over carrier max")
+                        .build());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "routingRuleService", rules);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "shippingServiceRepository", svcRepo);
+
+        stubUpsOnly("UPS", "03", "12.50");
+        var response = service.rateShop(RateShopRequestDTO.builder()
+                .shipment(shipment()).customerNo("ACME").build());
+        var opt = response.getData().getOptions().get(0);
+        assertEquals("BLOCK", opt.getRoutingOutcome());
+        assertEquals("Weight over carrier max", opt.getRoutingBlockReason());
+    }
+
+    @Test
+    void routingPreviewSkippedWhenCustomerNoBlank() {
+        RoutingRuleService rules = mock(RoutingRuleService.class);
+        com.multiship.backend.repository.ShippingServiceRepository svcRepo =
+                mock(com.multiship.backend.repository.ShippingServiceRepository.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "routingRuleService", rules);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "shippingServiceRepository", svcRepo);
+
+        stubUpsOnly("UPS", "03", "12.50");
+        // No customerNo → routing preview never called; option carries no tag.
+        var response = service.rateShop(req());
+        var opt = response.getData().getOptions().get(0);
+        assertNull(opt.getRoutingOutcome());
+        org.mockito.Mockito.verify(rules, org.mockito.Mockito.never())
+                .evaluate(anyString(), any());
+    }
+
+    @Test
+    void routingPreviewSkippedWhenServiceIdUnresolvable() {
+        // The catalog doesn't have UPS/UNKNOWN → serviceId stays null →
+        // routing engine is never called.
+        RoutingRuleService rules = mock(RoutingRuleService.class);
+        com.multiship.backend.repository.ShippingServiceRepository svcRepo =
+                mock(com.multiship.backend.repository.ShippingServiceRepository.class);
+        when(svcRepo.findByCarrierIgnoreCaseAndServiceCodeIgnoreCase("UPS", "UNKNOWN"))
+                .thenReturn(Optional.empty());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "routingRuleService", rules);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "shippingServiceRepository", svcRepo);
+
+        stubUpsOnly("UPS", "UNKNOWN", "12.50");
+        var response = service.rateShop(RateShopRequestDTO.builder()
+                .shipment(shipment()).customerNo("ACME").build());
+        var opt = response.getData().getOptions().get(0);
+        assertNull(opt.getServiceId());
+        assertNull(opt.getRoutingOutcome());
+        org.mockito.Mockito.verify(rules, org.mockito.Mockito.never())
+                .evaluate(anyString(), any());
+    }
+
+    private void stubUpsOnly(String carrier, String serviceCode, String amount) {
+        when(accountRepo.findPlatformAccountsByCarrier(anyString()))
+                .thenReturn(List.of(acct("_")));
+        when(upsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(uspsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(dhlConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
+        when(upsConn.getRates(any(), anyString())).thenReturn(List.of(option(carrier, serviceCode, amount)));
+        when(fedexConn.getRates(any(), anyString())).thenReturn(List.of());
+        when(uspsConn.getRates(any(), anyString())).thenReturn(List.of());
+        when(dhlConn.getRates(any(), anyString())).thenReturn(List.of());
+    }
+
+    private com.multiship.backend.model.ShippingService svc(Long id, String carrier, String serviceCode) {
+        var s = com.multiship.backend.model.ShippingService.builder()
+                .carrier(carrier).serviceCode(serviceCode)
+                .name(carrier + " " + serviceCode)
+                .scope("BOTH").enabled(true).sortOrder(0)
+                .build();
+        s.setId(id);
+        return s;
+    }
 }

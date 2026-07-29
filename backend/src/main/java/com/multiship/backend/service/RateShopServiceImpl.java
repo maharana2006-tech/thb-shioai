@@ -6,11 +6,17 @@ import com.multiship.backend.dto.RateShopRequestDTO;
 import com.multiship.backend.dto.RateShopResponseDTO;
 import com.multiship.backend.dto.RateShopResponseDTO.CarrierRateStatus;
 import com.multiship.backend.dto.RateShopResponseDTO.RateOptionDTO;
+import com.multiship.backend.dto.RoutingEvaluationRequest;
+import com.multiship.backend.dto.RoutingEvaluationResult;
 import com.multiship.backend.dto.ShipmentRequestDTO;
 import com.multiship.backend.model.CarrierAccountRef;
+import com.multiship.backend.model.RoutingRule.ActionType;
+import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
+import com.multiship.backend.repository.ShippingServiceRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.service.fx.FxRateService;
+import com.multiship.backend.util.UnitConverter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -77,6 +83,14 @@ public class RateShopServiceImpl implements RateShopService {
     /** Sprint 45 — optional so existing tests don't need to plumb it. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.RateShopHistoryRepository rateShopHistoryRepository;
+
+    /** G4 — optional so existing tests don't need to plumb routing.
+     *  When absent, rate-shop options aren't tagged with routing outcome. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RoutingRuleService routingRuleService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ShippingServiceRepository shippingServiceRepository;
 
     @Autowired
     public RateShopServiceImpl(CarrierService carrierService,
@@ -153,6 +167,11 @@ public class RateShopServiceImpl implements RateShopService {
         }
 
         RateShopResponseDTO merged = mergeResults(results);
+
+        // G4 — enrich each option with the internal serviceId and the
+        // routing-engine preview. Best-effort: any resolution failure just
+        // leaves the option untagged rather than failing the whole rate shop.
+        enrichWithRoutingPreview(merged, request);
 
         // Sprint 45 — best-effort history persistence for the reporting
         // pipeline. Never fails the rate shop itself.
@@ -369,6 +388,89 @@ public class RateShopServiceImpl implements RateShopService {
                 .options(options)
                 .carrierResults(statuses)
                 .build();
+    }
+
+    /**
+     * G4 — for each merged option, resolve the internal ShippingService.id
+     * from (carrier, serviceCode) and ask the routing engine what would
+     * happen at label time. Silent no-op when the caller didn't scope by
+     * client, or when the routing service isn't wired.
+     */
+    private void enrichWithRoutingPreview(RateShopResponseDTO merged, RateShopRequestDTO request) {
+        if (merged == null || merged.getOptions() == null || merged.getOptions().isEmpty()) return;
+        if (routingRuleService == null || shippingServiceRepository == null) return;
+        String clientCode = request == null ? null : request.getCustomerNo();
+        if (clientCode == null || clientCode.isBlank()) return;
+
+        ShipmentRequestDTO shipment = request.getShipment();
+        BigDecimal weightLb = shipment == null ? null
+                : UnitConverter.toPounds(shipment.getWeight(), shipment.getWeightUnit());
+        String destCountry = shipment == null ? null : shipment.getRecipientCountryCode();
+        String destRegion = destCountry == null ? null
+                : com.multiship.backend.util.CountryRegions.regionOf(destCountry);
+        BigDecimal declaredValue = shipment == null ? null : shipment.getDeclaredValue();
+
+        for (RateOptionDTO option : merged.getOptions()) {
+            Long serviceId = resolveServiceId(option.getCarrierCode(), option.getServiceCode());
+            option.setServiceId(serviceId);
+            if (serviceId == null) continue; // can't ask the engine without an id
+
+            RoutingEvaluationRequest evalReq = RoutingEvaluationRequest.builder()
+                    .weightLb(weightLb)
+                    .destCountry(destCountry)
+                    .destRegion(destRegion)
+                    .currentCarrier(option.getCarrierCode())
+                    .currentServiceId(serviceId)
+                    // Rate-shop has no resolved warehouse — null skips warehouse-scoped rules.
+                    .currentWarehouseId(null)
+                    .declaredValue(declaredValue)
+                    .orderSource(null)
+                    .build();
+            RoutingEvaluationResult result = safeEvaluate(clientCode, evalReq);
+            if (result == null || !"MATCH".equals(result.getStatus())) {
+                option.setRoutingOutcome("KEEP");
+                continue;
+            }
+            option.setRoutingRuleName(result.getMatchedRuleName());
+            if (result.getActionType() == ActionType.BLOCK) {
+                option.setRoutingOutcome("BLOCK");
+                option.setRoutingBlockReason(result.getBlockReason());
+            } else if (result.getActionType() == ActionType.REROUTE) {
+                option.setRoutingOutcome("REROUTE");
+                option.setRoutingTargetCarrier(result.getTargetCarrier());
+                option.setRoutingTargetWarehouseId(result.getTargetWarehouseId());
+                if (result.getTargetServiceId() != null) {
+                    ShippingService target = shippingServiceRepository
+                            .findById(result.getTargetServiceId()).orElse(null);
+                    if (target != null) {
+                        option.setRoutingTargetServiceCode(target.getServiceCode());
+                        if (option.getRoutingTargetCarrier() == null) {
+                            option.setRoutingTargetCarrier(target.getCarrier());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private Long resolveServiceId(String carrier, String serviceCode) {
+        if (shippingServiceRepository == null) return null;
+        if (carrier == null || carrier.isBlank() || serviceCode == null || serviceCode.isBlank()) return null;
+        return shippingServiceRepository
+                .findByCarrierIgnoreCaseAndServiceCodeIgnoreCase(carrier, serviceCode)
+                .map(ShippingService::getId)
+                .orElse(null);
+    }
+
+    private RoutingEvaluationResult safeEvaluate(String clientCode, RoutingEvaluationRequest req) {
+        try {
+            return routingRuleService.evaluate(clientCode, req);
+        } catch (Exception ex) {
+            // A rate-shop preview must never fail the whole call — swallow
+            // any evaluator exception and leave the option untagged.
+            log.debug("Routing preview failed for client={}: {}", clientCode, ex.getMessage());
+            return null;
+        }
     }
 
     /**

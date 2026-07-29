@@ -14,6 +14,21 @@ export interface RateOption {
   currency: string
   estimatedDelivery?: string | null
   transitDays?: number | null
+
+  /** G4 — internal ShippingService.id. Null when the vendor's serviceCode
+   *  isn't in our catalog. */
+  serviceId?: number | null
+  /** G4 — what routing rules would do to this option at label time.
+   *   KEEP    — no rule matches, option would be used as-is
+   *   REROUTE — a rule would rewrite the service or warehouse
+   *   BLOCK   — a rule would refuse label generation
+   *  Null when no client scope was passed or the serviceId couldn't be resolved. */
+  routingOutcome?: 'KEEP' | 'REROUTE' | 'BLOCK' | null
+  routingRuleName?: string | null
+  routingTargetCarrier?: string | null
+  routingTargetServiceCode?: string | null
+  routingTargetWarehouseId?: number | null
+  routingBlockReason?: string | null
 }
 
 /**
