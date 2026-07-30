@@ -69,8 +69,9 @@ public class OrderImportController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    @Operation(summary = "Download the CSV template")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @Operation(summary = "Download the CSV template",
+            description = "Public — the template is static schema (headers + one dummy row) " +
+                    "and downloads via a browser <a href> that carries no Authorization header.")
     @GetMapping(value = "/template.csv", produces = "text/csv")
     public ResponseEntity<byte[]> template() {
         byte[] csv = orderImportService.csvTemplate();
