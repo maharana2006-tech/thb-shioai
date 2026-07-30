@@ -62,6 +62,9 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.PackingSlipService packingSlipService;
 
+    @Autowired
+    private com.multiship.backend.service.shipment.MultiWarehousePreviewService multiWarehousePreviewService;
+
     /** Map a client Address value object into the label payload shape. */
     private Map<String, Object> addressMap(com.multiship.backend.model.Address a, String fallbackName) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -589,6 +592,22 @@ public class OrderController {
             @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
         ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> response =
                 carrierService.generateManualLabel(request, userDetails);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Preview a multi-warehouse split without generating labels (Sprint 47)",
+            description = "Dry-run for /multi-warehouse-label. Runs the G3 nearest-warehouse selector on every " +
+                    "line missing a warehouseCode and returns the resulting split plan: how many child shipments " +
+                    "would be generated, per-line assignment trace (EXPLICIT / AUTO / NONE), and a rollup grouped " +
+                    "by warehouse. No labels bought, no rows written.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Preview generated")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation error — missing clientCode / lines")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/multi-warehouse-preview")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.MultiWarehousePreviewResponse>> previewMultiWarehouseSplit(
+            @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.MultiWarehouseLabelRequest request) {
+        ApiResponse<com.multiship.backend.dto.MultiWarehousePreviewResponse> response =
+                multiWarehousePreviewService.preview(request);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
