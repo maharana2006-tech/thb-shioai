@@ -37,6 +37,7 @@ import TrackingTimelineModal from './tracking/TrackingTimelineModal'
 import SchedulePickupModal from './modals/SchedulePickupModal'
 import CloseOutModal from './modals/CloseOutModal'
 import BulkLabelModal from './modals/BulkLabelModal'
+import MultiWarehouseSplitModal from './modals/MultiWarehouseSplitModal'
 import OrderImportModal from './modals/OrderImportModal'
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
@@ -144,6 +145,7 @@ export default function OrdersWorkspace() {
   const [closeOutOpen, setCloseOutOpen] = useState(false)
   // Sprint 37 — bulk-label modal.
   const [bulkLabelOpen, setBulkLabelOpen] = useState(false)
+  const [splitOpen, setSplitOpen] = useState(false)
   // Sprint 40 — CSV / XLSX import modal.
   const [importOpen, setImportOpen] = useState(false)
 
@@ -932,6 +934,13 @@ export default function OrdersWorkspace() {
               Bulk labels ({rows.length})
             </button>
             <button type="button"
+                    onClick={() => setSplitOpen(true)}
+                    className={BTN_GHOST}
+                    title="Split one shipment across multiple warehouses (Sprint 47)">
+              <FiTruck className="h-3.5 w-3.5" />
+              Split across warehouses
+            </button>
+            <button type="button"
                     onClick={() => setImportOpen(true)}
                     className={BTN_GHOST}
                     title="Upload a CSV or Excel with one order per row">
@@ -1349,6 +1358,8 @@ export default function OrdersWorkspace() {
           orderNumbers={rows.map((o) => o.orderDetails.orderNo)}
         />
       ) : null}
+
+      {splitOpen ? <MultiWarehouseSplitModal onClose={() => setSplitOpen(false)} /> : null}
 
       {importOpen ? (
         <OrderImportModal onClose={() => setImportOpen(false)} />
