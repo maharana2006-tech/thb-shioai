@@ -31,6 +31,7 @@ export default function LabelTemplatesPage() {
   const [template, setTemplate] = useState<LabelTemplate>(blankTemplate())
   const [previewOrderNo, setPreviewOrderNo] = useState('')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewing, setPreviewing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [reloadToken, setReloadToken] = useState(0)
@@ -131,14 +132,38 @@ export default function LabelTemplatesPage() {
     }
   }
 
-  const openPreview = () => {
+  const openPreview = async () => {
     const orderNo = previewOrderNo.trim()
     if (!orderNo) {
       notify.error('Enter an order number to preview.')
       return
     }
-    setPreviewUrl(labelTemplateService.previewUrl(orderNo))
+    if (previewing) return
+    setPreviewing(true)
+    try {
+      const objectUrl = await labelTemplateService.fetchPreviewObjectUrl(orderNo)
+      // Swap the src, then revoke the OLD blob so the browser can free it.
+      // The <iframe> keeps rendering the fresh one — revocation only kills
+      // the reference we swapped away from.
+      setPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev)
+        return objectUrl
+      })
+    } catch (err: any) {
+      notify.error(err?.message ?? 'Preview failed.')
+    } finally {
+      setPreviewing(false)
+    }
   }
+
+  // Revoke the last Blob URL when the component unmounts so we don't leak
+  // it into the tab's memory for its lifetime.
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const clientOptions = useMemo(
     () => [
@@ -323,16 +348,19 @@ export default function LabelTemplatesPage() {
             />
             <button
               type="button"
-              onClick={openPreview}
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50"
+              onClick={() => void openPreview()}
+              disabled={previewing}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             >
-              <FiEye /> Preview
+              {previewing ? <FiLoader className="animate-spin" /> : <FiEye />}
+              {previewing ? 'Loading…' : 'Preview'}
             </button>
             {previewUrl ? (
               <button
                 type="button"
-                onClick={() => setPreviewUrl((u) => (u ? `${u.split('#')[0]}#r=${Date.now()}` : u))}
-                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50"
+                onClick={() => void openPreview()}
+                disabled={previewing}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
               >
                 <FiRefreshCw /> Reload
               </button>
