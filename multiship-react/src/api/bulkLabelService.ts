@@ -1,6 +1,29 @@
 import { apiClient, BASE_URL } from './apiClient'
 import type { ApiResponse } from './orderService'
 
+/**
+ * Fetch the ZIP with the current Bearer token and trigger a save via a
+ * synthetic anchor click. Necessary because the endpoint is JWT-gated —
+ * a plain <a href> download would 401 (browser navigations carry no
+ * Authorization header). Mirrors the pattern in reportService.
+ */
+async function downloadZip(jobId: number, filename: string): Promise<void> {
+  const token = localStorage.getItem('multiship_token')
+  const resp = await fetch(`${BASE_URL}/bulk-labels/${jobId}/download`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
+  if (!resp.ok) throw new Error(`Download failed: HTTP ${resp.status}`)
+  const blob = await resp.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = objectUrl
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
 export interface BulkLabelJob {
   id: number
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
@@ -21,7 +44,9 @@ export const bulkLabelService = {
   status: (jobId: number) =>
     apiClient.get<ApiResponse<BulkLabelJob>>(`/bulk-labels/${jobId}`),
 
-  /** Direct download URL — the endpoint streams the ZIP as an
-   *  octet-stream, so the browser handles it natively via <a href>. */
-  downloadUrl: (jobId: number) => `${BASE_URL}/bulk-labels/${jobId}/download`,
+  /**
+   * Download the ZIP for a completed job. Endpoint is JWT-gated so a
+   * plain <a href> would 401 — we fetch with Bearer and blob-download.
+   */
+  download: downloadZip,
 }
