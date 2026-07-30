@@ -1,4 +1,4 @@
-import { apiClient } from './apiClient'
+import { apiClient, BASE_URL } from './apiClient'
 import type { ApiResponse } from './orderService'
 
 /**
@@ -61,11 +61,22 @@ export const labelTemplateService = {
   remove: (id: number) => apiClient.delete<ApiResponse<void>>(`${BASE}/${id}`),
 
   /**
-   * Preview URL for the branded packing slip of a given order. The
-   * PDF endpoint is served under /api/v1/orders/{orderNo}/packing-slip
-   * and returns application/pdf inline; embed via <iframe src=..>
-   * or open in a new tab.
+   * Fetch the branded packing-slip PDF for one order and return a Blob
+   * object URL suitable for an <iframe src> or a new-tab open. The
+   * endpoint is JWT-gated and lives on a different origin in dev
+   * (:8080 vs Vite's :5173), so a bare href would both 401 and resolve
+   * against the wrong origin. Caller MUST revoke the returned URL when
+   * done to avoid leaking a Blob into memory for the tab's lifetime.
    */
-  previewUrl: (orderNo: number | string): string =>
-    `/api/v1/orders/${orderNo}/packing-slip`,
+  fetchPreviewObjectUrl: async (orderNo: number | string): Promise<string> => {
+    const token = localStorage.getItem('multiship_token')
+    const resp = await fetch(`${BASE_URL}/orders/${orderNo}/packing-slip`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
+    if (!resp.ok) {
+      throw new Error(`Packing-slip preview failed (HTTP ${resp.status}).`)
+    }
+    const blob = await resp.blob()
+    return URL.createObjectURL(blob)
+  },
 }
