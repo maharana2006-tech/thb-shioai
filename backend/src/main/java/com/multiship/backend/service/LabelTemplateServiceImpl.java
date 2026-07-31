@@ -62,11 +62,14 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
     }
 
     @Override
-    public Page<LabelTemplate> list(String search, String templateType, Boolean hasLogo, Pageable pageable) {
-        // Normalise blanks to null so the JPQL "IS NULL" branches fire and
-        // we skip filtering on that axis (matches ClientsPage semantics).
-        String s = (search == null || search.isBlank()) ? null : search.trim();
-        String t = (templateType == null || templateType.isBlank()) ? null : templateType.trim();
-        return repo.search(s, t, hasLogo, pageable);
+    public Page<LabelTemplate> list(String search, String templateType, String hasLogo, Pageable pageable) {
+        // Normalise to empty-string sentinels so the JPQL '= ''' branches
+        // skip cleanly. Nulls would bind as bytea under Postgres +
+        // Hibernate and blow up any LOWER(...) call in the query.
+        String s = search == null ? "" : search.trim();
+        String t = templateType == null ? "" : templateType.trim();
+        String h = hasLogo == null ? "" : hasLogo.trim().toUpperCase();
+        if (!h.isEmpty() && !"Y".equals(h) && !"N".equals(h)) h = "";
+        return repo.search(s, t, h, pageable);
     }
 }

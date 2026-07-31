@@ -28,9 +28,9 @@ public interface LabelTemplateService {
     void delete(Long id);
 
     /**
-     * List all templates for the operator settings screen. Optional
-     * filters — nulls skip the corresponding predicate. Sort + page
-     * carried on {@code pageable}.
+     * List all templates for the operator settings screen. Empty
+     * strings mean "no filter on this axis" (nulls are normalised).
+     * {@code hasLogo}: null / '' = any, 'Y' = with logo, 'N' = without.
      */
-    Page<LabelTemplate> list(String search, String templateType, Boolean hasLogo, Pageable pageable);
+    Page<LabelTemplate> list(String search, String templateType, String hasLogo, Pageable pageable);
 }
