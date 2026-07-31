@@ -2,17 +2,24 @@ package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.LabelTemplateDTO;
+import com.multiship.backend.dto.PageResponseDTO;
 import com.multiship.backend.model.LabelTemplate;
 import com.multiship.backend.service.LabelTemplateService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Sprint 42 — CRUD for tenant-branded label templates. Powers the
@@ -27,6 +34,78 @@ import java.util.Optional;
 public class LabelTemplateController {
 
     private final LabelTemplateService labelTemplateService;
+
+    /** Whitelist of sortBy values accepted from the client — keeps the
+     *  Sort DSL closed to entity properties, no free-form SQL. */
+    private static final Set<String> SORTABLE = Set.of(
+            "tenantId", "templateType", "updatedAt", "createdAt");
+
+    @Operation(summary = "List label templates (operator settings page)",
+            description = "Cross-tenant list for the settings UI. Filters: search matches " +
+                    "tenant id (case-insensitive contains), templateType exact, hasLogo true/false. " +
+                    "Operator-only — TENANT users don't see this endpoint (their template lives " +
+                    "under /resolve). Sort: tenantId | templateType | updatedAt | createdAt.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping
+    public ResponseEntity<ApiResponse<PageResponseDTO<LabelTemplateDTO>>> list(
+            @Parameter(description = "Case-insensitive substring match on tenant id")
+            @RequestParam(required = false) String search,
+            @Parameter(description = "PACKING_SLIP | RETURN_COVER | COMMERCIAL_INVOICE")
+            @RequestParam(required = false) String templateType,
+            @Parameter(description = "true = only templates with a logo; false = only without; omit = both")
+            @RequestParam(required = false) Boolean hasLogo,
+            @RequestParam(defaultValue = "updatedAt") String sortBy,
+            @RequestParam(defaultValue = "DESC") String sortDirection,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size) {
+
+        String safeSortBy = SORTABLE.contains(sortBy) ? sortBy : "updatedAt";
+        Sort.Direction dir = "ASC".equalsIgnoreCase(sortDirection)
+                ? Sort.Direction.ASC : Sort.Direction.DESC;
+        int safeSize = Math.min(Math.max(size, 1), 100);
+        int safePage = Math.max(page, 0);
+
+        Page<LabelTemplate> result = labelTemplateService.list(
+                search, templateType, hasLogo,
+                PageRequest.of(safePage, safeSize, Sort.by(dir, safeSortBy)));
+
+        List<LabelTemplateDTO> content = result.getContent().stream()
+                .map(LabelTemplateDTO::summary)
+                .toList();
+        PageResponseDTO<LabelTemplateDTO> body = PageResponseDTO.of(
+                content, result.getNumber(), result.getSize(), result.getTotalElements(),
+                safeSortBy, dir.name());
+
+        return ResponseEntity.ok(ApiResponse.<PageResponseDTO<LabelTemplateDTO>>builder()
+                .status("success")
+                .code(HttpStatus.OK.value())
+                .message(body.getTotalElements() + " template(s)")
+                .data(body)
+                .build());
+    }
+
+    @Operation(summary = "Fetch a specific template by id",
+            description = "Used by the operator settings editor when opening " +
+                    "/settings/label-templates/{id}. 404 when the id doesn't exist.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/{id}")
+    public ResponseEntity<ApiResponse<LabelTemplateDTO>> getById(@PathVariable Long id) {
+        Optional<LabelTemplate> found = labelTemplateService.findById(id);
+        if (found.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(
+                    ApiResponse.<LabelTemplateDTO>builder()
+                            .status("error")
+                            .code(HttpStatus.NOT_FOUND.value())
+                            .message("Label template " + id + " was not found.")
+                            .build());
+        }
+        return ResponseEntity.ok(ApiResponse.<LabelTemplateDTO>builder()
+                .status("success")
+                .code(HttpStatus.OK.value())
+                .message("Template loaded")
+                .data(LabelTemplateDTO.from(found.get()))
+                .build());
+    }
 
     @Operation(summary = "Fetch the resolved template for a tenant + type",
             description = "Resolution order: tenant-scoped row, then platform " +
