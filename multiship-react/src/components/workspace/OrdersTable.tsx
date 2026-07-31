@@ -74,7 +74,7 @@ export default function OrdersTable({
 }: OrdersTableProps) {
   return (
     <div className="overflow-x-auto">
-      <table className={`w-full min-w-[980px] text-slate-700 ${compact ? 'text-[12px]' : 'text-[13px]'}`}>
+      <table className={`w-full min-w-[1100px] text-slate-700 ${compact ? 'text-[12px]' : 'text-[13px]'}`}>
         <thead className={`border-b border-slate-200 text-left uppercase tracking-[0.16em] text-slate-500 ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
           <tr>
             <th className={compact ? 'px-2.5 py-3' : 'px-3 py-3.5'}>
@@ -85,6 +85,9 @@ export default function OrdersTable({
             </th>
             <th className={compact ? 'px-2.5 py-3' : 'px-3 py-3.5'}>
               <HeaderLabel icon={<FiGitBranch className="h-3 w-3" />} label="Source" />
+            </th>
+            <th className={compact ? 'px-2.5 py-3' : 'px-3 py-3.5'}>
+              <HeaderLabel icon={<FiHash className="h-3 w-3" />} label="Ref Order #" />
             </th>
             {mode === 'labels' ? (
               <>
@@ -141,6 +144,9 @@ export default function OrdersTable({
               <td className={compact ? 'px-2.5 py-3' : 'px-3 py-3.5'}>{order.orderDetails.customerCode}</td>
               <td className={compact ? 'px-2.5 py-3' : 'px-3 py-3.5'}>
                 <SourceBadge source={order.orderDetails.source} />
+              </td>
+              <td className={compact ? 'px-2.5 py-3' : 'px-3 py-3.5'}>
+                {order.orderDetails.refOrderNumber || <span className="text-slate-400">—</span>}
               </td>
               {mode === 'labels' ? (
                 <>
@@ -212,7 +218,7 @@ export default function OrdersTable({
 
           {!orders.length ? (
             <tr>
-              <td colSpan={mode === 'labels' ? 12 : 10} className={`${compact ? 'px-2.5 py-8 text-[13px]' : 'px-3 py-10 text-sm'} text-center text-slate-500`}>
+              <td colSpan={mode === 'labels' ? 13 : 11} className={`${compact ? 'px-2.5 py-8 text-[13px]' : 'px-3 py-10 text-sm'} text-center text-slate-500`}>
                 {loading ? 'Loading orders...' : emptyText}
               </td>
             </tr>

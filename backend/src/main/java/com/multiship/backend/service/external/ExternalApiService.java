@@ -278,6 +278,7 @@ public class ExternalApiService {
                         .rawShipvia(rawShipvia)
                         .rawDestCountry(rawDestCountry)
                         .rawPackageCode(rawPackageCode)
+                        .refOrderNumber(req.getRefOrderNumber())
                         .build());
             } catch (Exception ex) {
                 log.warn("Failed to persist OrderRawCodes for order {}: {}", label.getOrderNo(), ex.getMessage());
@@ -292,6 +293,7 @@ public class ExternalApiService {
         ExternalShipmentResponse response = ExternalShipmentResponse.builder()
                 .shipmentId(label.getOrderNo())
                 .reference(req.getReference())
+                .refOrderNumber(req.getRefOrderNumber())
                 .clientCode(clientCode)
                 .carrier(carrier)
                 .service(serviceCode)

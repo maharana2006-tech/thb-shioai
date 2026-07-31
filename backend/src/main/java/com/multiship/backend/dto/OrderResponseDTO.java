@@ -47,6 +47,8 @@ public class OrderResponseDTO {
         private LocalDate createdDate;
         /** Where the order came from: MANUAL | WMS | API | ERP. */
         private String source;
+        /** The WMS's own order number, as sent on the external shipment request. */
+        private String refOrderNumber;
     }
 
     @Data

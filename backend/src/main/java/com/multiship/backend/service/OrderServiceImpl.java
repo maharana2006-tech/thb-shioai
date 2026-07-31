@@ -17,6 +17,7 @@ import com.multiship.backend.model.Order;
 import com.multiship.backend.model.OrderLine;
 import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.CarrierConfigRepository;
+import com.multiship.backend.repository.OrderRawCodesRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -44,6 +45,9 @@ public class OrderServiceImpl implements OrderService {
 
     @Autowired(required = false)
     private CustomFieldService customFieldService;
+
+    @Autowired
+    private OrderRawCodesRepository orderRawCodesRepository;
 
     private static final Set<String> VALID_STATUSES = Set.of("PENDING", "GENERATED", "ERROR");
     private static final Set<String> VALID_RESOLUTIONS = Set.of("READY", "NEEDS_DETAILS", "CHOOSE_ACCOUNT", "CLIENT_MISSING");
@@ -120,6 +124,8 @@ public class OrderServiceImpl implements OrderService {
                 .map(this::mapToOrderResponseDTO)
                 .collect(Collectors.toList());
 
+        attachRefOrderNumbers(orders);
+
         if (includeResolution && !orders.isEmpty()) {
             attachResolutions(orders);
         }
@@ -178,6 +184,26 @@ public class OrderServiceImpl implements OrderService {
                 order.setAccountResolution(byOrderNo.get(order.getOrderDetails().getOrderNo())));
     }
 
+    /** Stamps each order with the WMS's own order number, from the raw-codes audit sidecar. */
+    private void attachRefOrderNumbers(List<OrderResponseDTO> orders) {
+        if (orders.isEmpty()) {
+            return;
+        }
+        List<Integer> orderNos = orders.stream()
+                .map(order -> order.getOrderDetails().getOrderNo())
+                .collect(Collectors.toList());
+
+        Map<Integer, String> byOrderNo = orderRawCodesRepository.findAllById(orderNos).stream()
+                .filter(raw -> raw.getRefOrderNumber() != null)
+                .collect(Collectors.toMap(
+                        com.multiship.backend.model.OrderRawCodes::getOrderNo,
+                        com.multiship.backend.model.OrderRawCodes::getRefOrderNumber,
+                        (a, b) -> a));
+
+        orders.forEach(order ->
+                order.getOrderDetails().setRefOrderNumber(byOrderNo.get(order.getOrderDetails().getOrderNo())));
+    }
+
     private boolean isValidDateFilter(String value) {
         return value.isEmpty() || value.matches("\\d{4}-\\d{2}-\\d{2}");
     }
@@ -217,6 +243,7 @@ public class OrderServiceImpl implements OrderService {
         }
 
         OrderResponseDTO order = mapToOrderResponseDTO(results.get(0));
+        attachRefOrderNumbers(List.of(order));
 
         // Sprint 43 — hydrate custom-field values on single-order reads.
         if (customFieldService != null) {

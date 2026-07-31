@@ -16,6 +16,9 @@ public class ExternalShipmentRequest {
     /** The caller's own order/shipment reference (prints on the label). */
     private String reference;
 
+    /** The WMS's own order number — recorded for traceability, echoed back on the response. */
+    private String refOrderNumber;
+
     /**
      * The client to ship on behalf of. Required for a platform-wide (WMS) key;
      * for a client-bound key it may be omitted — if sent, it must match the key.

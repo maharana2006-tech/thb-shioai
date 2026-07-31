@@ -13,6 +13,8 @@ export interface OrderDetails {
   createdDate: string
   /** Where the order came from: MANUAL | WMS | API | ERP. */
   source?: string | null
+  /** The WMS's own order number, as sent on the external shipment request. */
+  refOrderNumber?: string | null
 }
 
 export interface ShippingDetails {
