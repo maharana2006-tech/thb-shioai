@@ -52,8 +52,10 @@ public class LabelTemplateController {
             @RequestParam(required = false) String search,
             @Parameter(description = "PACKING_SLIP | RETURN_COVER | COMMERCIAL_INVOICE")
             @RequestParam(required = false) String templateType,
-            @Parameter(description = "true = only templates with a logo; false = only without; omit = both")
-            @RequestParam(required = false) Boolean hasLogo,
+            @Parameter(description = "'Y' = only with logo, 'N' = only without, omit = both. " +
+                    "(String, not boolean — avoids the Postgres bytea-null-typing issue on " +
+                    "Hibernate-bound nullable booleans.)")
+            @RequestParam(required = false) String hasLogo,
             @RequestParam(defaultValue = "updatedAt") String sortBy,
             @RequestParam(defaultValue = "DESC") String sortDirection,
             @RequestParam(defaultValue = "0") int page,
