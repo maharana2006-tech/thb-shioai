@@ -15,13 +15,67 @@ export interface LabelTemplate {
   headerText?: string | null
   footerText?: string | null
   showItems?: boolean | null
+  /** Populated on every DTO by the backend — true when logoBase64 is
+   *  non-blank. Set even on list summaries (where logoBase64 itself is
+   *  stripped for payload size). */
+  hasLogo?: boolean | null
   createdAt?: string | null
   updatedAt?: string | null
+}
+
+export interface LabelTemplateListParams {
+  search?: string
+  templateType?: string
+  /** 'Y' | 'N' — passed through as boolean to the backend. */
+  hasLogo?: 'Y' | 'N' | ''
+  sortBy?: string
+  sortDirection?: 'ASC' | 'DESC'
+  page?: number
+  size?: number
+}
+
+export interface LabelTemplatePage {
+  content: LabelTemplate[]
+  pageNumber: number
+  pageSize: number
+  totalElements: number
+  totalPages: number
+  first: boolean
+  last: boolean
+  empty: boolean
+  sortBy: string | null
+  sortDirection: string | null
 }
 
 const BASE = '/label-templates'
 
 export const labelTemplateService = {
+  /**
+   * Cross-tenant list for the operator settings page. Filters skip
+   * on null/blank; sort defaults to updatedAt DESC on the server.
+   * Response strips {@code logoBase64} to keep the page bounded
+   * (logo lives on the detail response the editor loads).
+   */
+  listTemplates: (params: LabelTemplateListParams = {}) => {
+    const query = new URLSearchParams()
+    if (params.search?.trim()) query.set('search', params.search.trim())
+    if (params.templateType?.trim()) query.set('templateType', params.templateType.trim())
+    if (params.hasLogo === 'Y') query.set('hasLogo', 'true')
+    if (params.hasLogo === 'N') query.set('hasLogo', 'false')
+    if (params.sortBy) query.set('sortBy', params.sortBy)
+    if (params.sortDirection) query.set('sortDirection', params.sortDirection)
+    query.set('page', String(params.page ?? 0))
+    query.set('size', String(params.size ?? 25))
+    return apiClient.get<ApiResponse<LabelTemplatePage>>(`${BASE}?${query.toString()}`)
+  },
+
+  /**
+   * Fetch a specific template by id. Used by the editor page when
+   * navigating to /settings/label-templates/:id. Wraps a repository
+   * lookup — the endpoint returns 404 when the id doesn't exist.
+   */
+  getById: (id: number) => apiClient.get<ApiResponse<LabelTemplate>>(`${BASE}/${id}`),
+
   /**
    * Resolve the effective template for a tenant, falling back to the platform
    * default (tenantId=null). Returns null when neither exists — the endpoint

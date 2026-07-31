@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import {
+  FiArrowLeft,
   FiCheck,
-  FiEye,
   FiImage,
   FiInfo,
   FiLoader,
-  FiRefreshCw,
   FiSave,
   FiTrash2,
 } from 'react-icons/fi'
@@ -19,19 +18,33 @@ import Select from './workspace/Select'
 const PLATFORM_DEFAULT_VALUE = '__PLATFORM__'
 const DEFAULT_HEADER = 'PACKING SLIP'
 const DEFAULT_COLOR = '#1f150c'
+const TEMPLATE_TYPES = ['PACKING_SLIP', 'RETURN_COVER', 'COMMERCIAL_INVOICE']
 
-/** Sprint 42 — Label Templates settings page. Powers the tenant-branded
- *  packing slip PDF that ships INSIDE the parcel. The carrier's shipping
- *  label itself is not customisable — that's carrier-mandated. */
-export default function LabelTemplatesPage() {
+const isAdmin = () =>
+  (localStorage.getItem('multiship_role') || '').toUpperCase() === 'ADMIN'
+
+/**
+ * Editor for a single label template. Two entry points:
+ *   /settings/label-templates/new — create mode; tenant + type are
+ *       editable selectors so the operator picks the scope
+ *   /settings/label-templates/{id} — edit mode; tenant + type are
+ *       locked to the existing row's (tenantId, templateType) tuple
+ *       because the DB has a unique constraint on that pair
+ *
+ * Live preview moved out — it's on the list page as a global tool now.
+ */
+export default function LabelTemplateEditorPage() {
+  const navigate = useNavigate()
+  const { id } = useParams<{ id?: string }>()
+  const editingId = id && id !== 'new' ? Number(id) : null
+  const isEdit = editingId != null
+  const admin = isAdmin()
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
 
   const [clients, setClients] = useState<Client[]>([])
   const [tenantId, setTenantId] = useState<string>(PLATFORM_DEFAULT_VALUE)
+  const [templateType, setTemplateType] = useState('PACKING_SLIP')
   const [template, setTemplate] = useState<LabelTemplate>(blankTemplate())
-  const [previewOrderNo, setPreviewOrderNo] = useState('')
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [previewing, setPreviewing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [reloadToken, setReloadToken] = useState(0)
@@ -39,7 +52,7 @@ export default function LabelTemplatesPage() {
 
   const effectiveTenantId = tenantId === PLATFORM_DEFAULT_VALUE ? null : tenantId
 
-  // Load clients once (small list — powers the tenant picker).
+  // Load clients once — powers the tenant picker in create mode.
   useEffect(() => {
     let cancelled = false
     clientService
@@ -54,35 +67,55 @@ export default function LabelTemplatesPage() {
     }
   }, [])
 
-  // Load the tenant's template (does NOT fall back to platform default).
+  // Load an existing template by id (edit mode). In create mode we start
+  // from a blank template scoped to whatever tenant/type the operator picks.
   const loadTemplate = useCallback(async () => {
+    if (!isEdit || editingId == null) {
+      setTemplate(blankTemplate(effectiveTenantId, templateType))
+      return
+    }
     setLoading(true)
     try {
-      const tmpl = await labelTemplateService.forTenant(effectiveTenantId, 'PACKING_SLIP')
-      setTemplate(tmpl ?? blankTemplate(effectiveTenantId))
+      const resp = await labelTemplateService.getById(editingId)
+      const t = resp.data
+      if (!t) throw new Error('Template not found.')
+      setTemplate(t)
+      // In edit mode, tenant + type are dictated by the row.
+      setTenantId(t.tenantId ?? PLATFORM_DEFAULT_VALUE)
+      setTemplateType(t.templateType ?? 'PACKING_SLIP')
     } catch (err: any) {
       notify.error(err?.message ?? 'Failed to load template.')
-      setTemplate(blankTemplate(effectiveTenantId))
+      navigate('/settings/label-templates')
     } finally {
       setLoading(false)
     }
-  }, [effectiveTenantId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingId, isEdit, reloadToken])
 
   useEffect(() => {
     loadTemplate()
-  }, [loadTemplate, reloadToken])
+  }, [loadTemplate])
 
-  const refresh = useCallback(() => {
-    setReloadToken((t) => t + 1)
-  }, [])
+  // When the operator changes the tenant/type in CREATE mode, reset the
+  // template body to a blank scoped correctly. In edit mode the pickers
+  // are disabled so this path doesn't fire.
+  useEffect(() => {
+    if (isEdit) return
+    setTemplate((prev) => ({
+      ...prev,
+      tenantId: effectiveTenantId,
+      templateType,
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveTenantId, templateType, isEdit])
 
+  const refresh = useCallback(() => setReloadToken((t) => t + 1), [])
   useEffect(() => {
     registerRefresh(refresh)
     return () => registerRefresh(null)
   }, [registerRefresh, refresh])
 
   // ===== handlers =====
-
   const updateField = <K extends keyof LabelTemplate>(key: K, value: LabelTemplate[K]) => {
     setTemplate((t) => ({ ...t, [key]: value }))
   }
@@ -108,11 +141,16 @@ export default function LabelTemplatesPage() {
       const payload: LabelTemplate = {
         ...template,
         tenantId: effectiveTenantId,
-        templateType: 'PACKING_SLIP',
+        templateType,
       }
       const resp = await labelTemplateService.save(payload)
       if (resp.data) setTemplate(resp.data)
       notify.success('Template saved.')
+      // On create → navigate to the new row's edit URL so the operator
+      // stays in-context and can keep tweaking.
+      if (!isEdit && resp.data?.id != null) {
+        navigate(`/settings/label-templates/${resp.data.id}`, { replace: true })
+      }
     } catch (err: any) {
       notify.error(err?.message ?? 'Failed to save template.')
     } finally {
@@ -122,48 +160,24 @@ export default function LabelTemplatesPage() {
 
   const remove = async () => {
     if (!template.id) return
-    if (!window.confirm('Delete this template? Orders will fall back to the platform default.')) return
+    if (!admin) {
+      notify.error('Only admins can delete templates.')
+      return
+    }
+    const label = effectiveTenantId ? effectiveTenantId : 'Platform default'
+    const ok = await notify.confirm(
+      `Delete this template for ${label} (${templateType})? Orders will fall back to the resolution order.`,
+      { danger: true, confirmLabel: 'Delete', title: 'Delete label template' },
+    )
+    if (!ok) return
     try {
       await labelTemplateService.remove(template.id)
-      setTemplate(blankTemplate(effectiveTenantId))
       notify.success('Template deleted.')
+      navigate('/settings/label-templates')
     } catch (err: any) {
       notify.error(err?.message ?? 'Failed to delete template.')
     }
   }
-
-  const openPreview = async () => {
-    const orderNo = previewOrderNo.trim()
-    if (!orderNo) {
-      notify.error('Enter an order number to preview.')
-      return
-    }
-    if (previewing) return
-    setPreviewing(true)
-    try {
-      const objectUrl = await labelTemplateService.fetchPreviewObjectUrl(orderNo)
-      // Swap the src, then revoke the OLD blob so the browser can free it.
-      // The <iframe> keeps rendering the fresh one — revocation only kills
-      // the reference we swapped away from.
-      setPreviewUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev)
-        return objectUrl
-      })
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Preview failed.')
-    } finally {
-      setPreviewing(false)
-    }
-  }
-
-  // Revoke the last Blob URL when the component unmounts so we don't leak
-  // it into the tab's memory for its lifetime.
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   const clientOptions = useMemo(
     () => [
@@ -177,35 +191,70 @@ export default function LabelTemplatesPage() {
   )
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
-      {/* ===== Editor ===== */}
+    <div className="space-y-4">
+      {/* Back / breadcrumb */}
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => navigate('/settings/label-templates')}
+          className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-slate-600 hover:text-slate-950"
+        >
+          <FiArrowLeft className="h-3.5 w-3.5" /> Back to templates
+        </button>
+        {loading ? <FiLoader className="animate-spin text-slate-400" /> : null}
+      </div>
+
+      {/* Editor card */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">Packing slip template</h2>
-            <p className="mt-1 max-w-md text-[12.5px] text-slate-500">
-              Branded page printed on regular paper and slipped inside the parcel.
-              The carrier's shipping label itself is not customisable.
-            </p>
-          </div>
-          {loading ? <FiLoader className="animate-spin text-slate-400" /> : null}
+        <div className="mb-5">
+          <h2 className="text-base font-semibold text-slate-900">
+            {isEdit ? `Edit template #${template.id ?? '?'}` : 'New template'}
+          </h2>
+          <p className="mt-1 max-w-2xl text-[12.5px] text-slate-500">
+            Branded page printed on regular paper and slipped inside the parcel. The
+            carrier's shipping label itself is not customisable.
+          </p>
         </div>
 
-        <div className="mb-4">
-          <label className={fieldLabel}>Tenant</label>
-          <Select
-            value={tenantId}
-            onChange={(e) => setTenantId(e.target.value || PLATFORM_DEFAULT_VALUE)}
-          >
-            {clientOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </Select>
-          <p className="mt-1 text-[11px] text-slate-400">
-            Platform default is the fallback when a tenant hasn't configured its own.
-          </p>
+        <div className="mb-4 grid grid-cols-2 gap-4">
+          <div>
+            <label className={fieldLabel}>Tenant</label>
+            <Select
+              value={tenantId}
+              onChange={(e) => setTenantId(e.target.value || PLATFORM_DEFAULT_VALUE)}
+              disabled={isEdit}
+            >
+              {clientOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </Select>
+            <p className="mt-1 text-[11px] text-slate-400">
+              {isEdit
+                ? 'Tenant is fixed after creation (unique per tenant + type).'
+                : 'Platform default is the fallback for tenants without their own.'}
+            </p>
+          </div>
+          <div>
+            <label className={fieldLabel}>Template type</label>
+            <Select
+              value={templateType}
+              onChange={(e) => setTemplateType(e.target.value)}
+              disabled={isEdit}
+            >
+              {TEMPLATE_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </Select>
+            <p className="mt-1 text-[11px] text-slate-400">
+              {isEdit
+                ? 'Type is fixed after creation.'
+                : 'Currently only PACKING_SLIP is rendered — RETURN_COVER and COMMERCIAL_INVOICE reserved for later sprints.'}
+            </p>
+          </div>
         </div>
 
         <div className="mb-4">
@@ -306,10 +355,10 @@ export default function LabelTemplatesPage() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-[11.5px] text-slate-500">
             <FiInfo className="text-slate-400" />
-            {template.id ? `Template #${template.id}` : 'New template — save to publish.'}
+            {isEdit ? `Template #${template.id}` : 'New template — save to publish.'}
           </div>
           <div className="flex gap-2">
-            {template.id ? (
+            {isEdit && admin ? (
               <button
                 type="button"
                 onClick={remove}
@@ -330,73 +379,24 @@ export default function LabelTemplatesPage() {
         </div>
       </div>
 
-      {/* ===== Preview + explainer ===== */}
-      <div className="flex flex-col gap-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-1 text-base font-semibold text-slate-900">Live preview</h2>
-          <p className="mb-3 text-[12.5px] text-slate-500">
-            Enter an existing order number to fetch its packing slip PDF rendered with
-            the currently-<em>saved</em> template.
-          </p>
-          <div className="mb-3 flex gap-2">
-            <input
-              type="text"
-              value={previewOrderNo}
-              onChange={(e) => setPreviewOrderNo(e.target.value)}
-              placeholder="Order number, e.g. 100"
-              className={textInput}
-            />
-            <button
-              type="button"
-              onClick={() => void openPreview()}
-              disabled={previewing}
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-            >
-              {previewing ? <FiLoader className="animate-spin" /> : <FiEye />}
-              {previewing ? 'Loading…' : 'Preview'}
-            </button>
-            {previewUrl ? (
-              <button
-                type="button"
-                onClick={() => void openPreview()}
-                disabled={previewing}
-                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              >
-                <FiRefreshCw /> Reload
-              </button>
-            ) : null}
-          </div>
-          {previewUrl ? (
-            <iframe
-              src={previewUrl}
-              title="Packing slip preview"
-              className="h-[520px] w-full rounded-lg border border-slate-200 bg-slate-50"
-            />
-          ) : (
-            <div className="flex h-[520px] items-center justify-center rounded-lg border border-dashed border-slate-200 text-[12.5px] text-slate-400">
-              Enter an order number above to render a preview.
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-5">
-          <h3 className="mb-1 text-[13px] font-semibold text-emerald-800">What this template covers</h3>
-          <ul className="space-y-1 text-[12.5px] text-emerald-800/80">
-            <li className="flex items-start gap-2">
-              <FiCheck className="mt-0.5 text-emerald-600" />
-              Branded packing slip PDF slipped inside the parcel.
-            </li>
-            <li className="flex items-start gap-2">
-              <FiCheck className="mt-0.5 text-emerald-600" />
-              Tenant-scoped: each client can override the platform default.
-            </li>
-            <li className="flex items-start gap-2 text-emerald-800/70">
-              <FiInfo className="mt-0.5" />
-              The carrier's shipping label is <strong>not</strong> customisable — every carrier
-              mandates an exact barcode / address format on its own label PDF.
-            </li>
-          </ul>
-        </div>
+      {/* Scope explainer */}
+      <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-5">
+        <h3 className="mb-1 text-[13px] font-semibold text-emerald-800">What this template covers</h3>
+        <ul className="space-y-1 text-[12.5px] text-emerald-800/80">
+          <li className="flex items-start gap-2">
+            <FiCheck className="mt-0.5 text-emerald-600" />
+            Branded packing slip PDF slipped inside the parcel.
+          </li>
+          <li className="flex items-start gap-2">
+            <FiCheck className="mt-0.5 text-emerald-600" />
+            Tenant-scoped: each client can override the platform default.
+          </li>
+          <li className="flex items-start gap-2 text-emerald-800/70">
+            <FiInfo className="mt-0.5" />
+            The carrier's shipping label is <strong>not</strong> customisable — every carrier
+            mandates an exact barcode / address format on its own label PDF.
+          </li>
+        </ul>
       </div>
     </div>
   )
@@ -409,11 +409,14 @@ const fieldLabel =
 const textInput =
   'w-full rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-[#1f150c]'
 
-function blankTemplate(tenantId: string | null = null): LabelTemplate {
+function blankTemplate(
+  tenantId: string | null = null,
+  templateType: string = 'PACKING_SLIP',
+): LabelTemplate {
   return {
     id: null,
     tenantId,
-    templateType: 'PACKING_SLIP',
+    templateType,
     logoBase64: null,
     primaryColor: DEFAULT_COLOR,
     headerText: DEFAULT_HEADER,

@@ -1,6 +1,8 @@
 package com.multiship.backend.service;
 
 import com.multiship.backend.model.LabelTemplate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.util.Optional;
 
@@ -9,6 +11,9 @@ import java.util.Optional;
  * gets one template per {@code templateType}; upsert-style save.
  */
 public interface LabelTemplateService {
+
+    /** Fetch a template by primary key. */
+    Optional<LabelTemplate> findById(Long id);
 
     /** Resolve the effective template: tenant-scoped, then platform default. */
     Optional<LabelTemplate> resolve(String tenantId, String templateType);
@@ -21,4 +26,11 @@ public interface LabelTemplateService {
 
     /** Delete by id. */
     void delete(Long id);
+
+    /**
+     * List all templates for the operator settings screen. Optional
+     * filters — nulls skip the corresponding predicate. Sort + page
+     * carried on {@code pageable}.
+     */
+    Page<LabelTemplate> list(String search, String templateType, Boolean hasLogo, Pageable pageable);
 }
