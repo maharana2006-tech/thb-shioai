@@ -33,8 +33,16 @@ export default function SettingsLayout() {
     setRefresh(() => handler)
   }, [])
 
+  // Match nested routes (e.g. /settings/label-templates/{id}) to the parent
+  // tab so navigating from list -> edit keeps the tab lit.
   const activeItem = useMemo(
-    () => settingsNavItems.find((item) => item.to === location.pathname) || null,
+    () =>
+      settingsNavItems.find(
+        (item) =>
+          item.to === location.pathname ||
+          location.pathname === item.to + '/' ||
+          location.pathname.startsWith(item.to + '/'),
+      ) || null,
     [location.pathname],
   )
 
@@ -54,20 +62,27 @@ export default function SettingsLayout() {
           right-aligned; a page registers its handler via outlet context. */}
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
         <div className="flex flex-wrap gap-0.5" role="tablist">
-          {items.map((item) => (
-            <NavLink
-              key={item.key}
-              to={item.to}
-              className={({ isActive }) =>
-                `inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-[13px] font-semibold transition ${
-                  isActive ? 'bg-[#1f150c] !text-white' : '!text-slate-600 hover:bg-slate-100'
-                }`
-              }
-            >
-              <span className="[&>svg]:h-4 [&>svg]:w-4">{navIcons[item.iconKey]}</span>
-              {item.label}
-            </NavLink>
-          ))}
+          {items.map((item) => {
+            // NavLink's default exact match would drop the tab when the user
+            // navigates from /settings/label-templates → /settings/label-templates/{id}.
+            // Manually flag active when the current path is the tab OR a
+            // descendant of it.
+            const active =
+              location.pathname === item.to ||
+              location.pathname.startsWith(item.to + '/')
+            return (
+              <NavLink
+                key={item.key}
+                to={item.to}
+                className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-[13px] font-semibold transition ${
+                  active ? 'bg-[#1f150c] !text-white' : '!text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <span className="[&>svg]:h-4 [&>svg]:w-4">{navIcons[item.iconKey]}</span>
+                {item.label}
+              </NavLink>
+            )
+          })}
         </div>
 
         <button

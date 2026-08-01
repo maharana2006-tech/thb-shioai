@@ -23,6 +23,10 @@ public class LabelTemplateDTO {
     private String headerText;
     private String footerText;
     private Boolean showItems;
+    /** Convenience for list views — true when logoBase64 is non-blank.
+     *  Populated on every DTO so the frontend can render a Has-logo
+     *  column without inspecting the (potentially 200 KB) blob. */
+    private Boolean hasLogo;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -36,9 +40,19 @@ public class LabelTemplateDTO {
                 .headerText(t.getHeaderText())
                 .footerText(t.getFooterText())
                 .showItems(t.getShowItems())
+                .hasLogo(t.getLogoBase64() != null && !t.getLogoBase64().isBlank())
                 .createdAt(t.getCreatedAt())
                 .updatedAt(t.getUpdatedAt())
                 .build();
+    }
+
+    /** Same as {@link #from(LabelTemplate)} but omits the logo blob —
+     *  meant for list endpoints so a page of 25 templates doesn't ship
+     *  25 × up-to-200KB of base64 across the wire. */
+    public static LabelTemplateDTO summary(LabelTemplate t) {
+        LabelTemplateDTO dto = from(t);
+        dto.setLogoBase64(null);
+        return dto;
     }
 
     public LabelTemplate toEntity() {

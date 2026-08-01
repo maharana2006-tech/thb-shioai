@@ -1,6 +1,8 @@
 package com.multiship.backend.repository;
 
 import com.multiship.backend.model.LabelTemplate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -25,4 +27,27 @@ public interface LabelTemplateRepository extends JpaRepository<LabelTemplate, Lo
     Optional<LabelTemplate> findByTenantAndType(
             @Param("tenantId") String tenantId,
             @Param("templateType") String templateType);
+
+    /**
+     * List templates filtered by (case-insensitive tenant contains),
+     * template type, and logo presence. Empty-string sentinel means
+     * "skip this axis" — never pass null. Booleans go through as
+     * '' | 'Y' | 'N' to avoid Postgres's bytea-null-typing issue that
+     * you get with a nullable Boolean parameter under Hibernate.
+     * Operator-only endpoint — no tenant scoping in the query itself.
+     */
+    @Query("""
+        SELECT t FROM LabelTemplate t
+        WHERE (:search = ''
+               OR LOWER(COALESCE(t.tenantId, '')) LIKE CONCAT('%', LOWER(:search), '%'))
+          AND (:templateType = '' OR t.templateType = :templateType)
+          AND (:hasLogo = ''
+               OR (:hasLogo = 'Y' AND t.logoBase64 IS NOT NULL AND LENGTH(t.logoBase64) > 0)
+               OR (:hasLogo = 'N' AND (t.logoBase64 IS NULL OR LENGTH(t.logoBase64) = 0)))
+    """)
+    Page<LabelTemplate> search(
+            @Param("search") String search,
+            @Param("templateType") String templateType,
+            @Param("hasLogo") String hasLogo,
+            Pageable pageable);
 }

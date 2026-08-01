@@ -8,7 +8,8 @@ import SettingsLayout from '../components/layout/SettingsLayout'
 import CarrierPage from '../pages/CarrierPage'
 import ClientsPage from '../pages/ClientsPage'
 import ImporterBrokerPage from '../components/ImporterBrokerPage'
-import LabelTemplatesPage from '../components/LabelTemplatesPage'
+import LabelTemplatesListPage from '../components/LabelTemplatesListPage'
+import LabelTemplateEditorPage from '../components/LabelTemplateEditorPage'
 import CustomFieldsPage from '../components/CustomFieldsPage'
 import RoutingRulesPage from '../components/RoutingRulesPage'
 import ReportsPage from '../components/ReportsPage'
@@ -51,7 +52,9 @@ export default function AppRoutes() {
               <Route path="shipping-service-mapping" element={<ShippingServiceMappingPage />} />
               <Route path="packages" element={<PackagesPage />} />
               <Route path="importer-broker" element={<ImporterBrokerPage />} />
-              <Route path="label-templates" element={<LabelTemplatesPage />} />
+              <Route path="label-templates" element={<LabelTemplatesListPage />} />
+              <Route path="label-templates/new" element={<LabelTemplateEditorPage />} />
+              <Route path="label-templates/:id" element={<LabelTemplateEditorPage />} />
               <Route path="custom-fields" element={<CustomFieldsPage />} />
               <Route path="routing-rules" element={<RoutingRulesPage />} />
               <Route path="reports" element={<ReportsPage />} />
