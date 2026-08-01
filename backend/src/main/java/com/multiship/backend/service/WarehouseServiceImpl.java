@@ -31,6 +31,7 @@ public class WarehouseServiceImpl implements WarehouseService {
     private final WarehouseRepository warehouseRepository;
     private final ClientWarehouseRepository clientWarehouseRepository;
     private final ClientRepository clientRepository;
+    private final AuditService auditService;
 
     @Override
     @Transactional(readOnly = true)
@@ -89,6 +90,8 @@ public class WarehouseServiceImpl implements WarehouseService {
                 .build();
         warehouseRepository.save(w);
 
+        auditService.record(AuditService.CREATE, AuditService.WAREHOUSE,
+                w.getId(), code, toDTO(w), "Warehouse " + code + " created.");
         return success("Warehouse " + code + " created successfully.", toDTO(w));
     }
 
@@ -115,6 +118,9 @@ public class WarehouseServiceImpl implements WarehouseService {
         }
         warehouseRepository.save(w);
 
+        auditService.record(AuditService.UPDATE, AuditService.WAREHOUSE,
+                w.getId(), w.getCode(), toDTO(w),
+                "Warehouse " + w.getCode() + " updated.");
         return success("Warehouse " + w.getCode() + " updated successfully.", toDTO(w));
     }
 
@@ -128,8 +134,11 @@ public class WarehouseServiceImpl implements WarehouseService {
         }
         w.setActive(!Boolean.TRUE.equals(w.getActive()));
         warehouseRepository.save(w);
-        return success("Warehouse " + w.getCode() + " is now "
-                + (Boolean.TRUE.equals(w.getActive()) ? "active" : "inactive") + ".", toDTO(w));
+        String state = Boolean.TRUE.equals(w.getActive()) ? "active" : "inactive";
+        auditService.record(AuditService.TOGGLE_ACTIVE, AuditService.WAREHOUSE,
+                w.getId(), w.getCode(), java.util.Map.of("active", w.getActive()),
+                "Warehouse " + w.getCode() + " is now " + state + ".");
+        return success("Warehouse " + w.getCode() + " is now " + state + ".", toDTO(w));
     }
 
     @Override
@@ -148,7 +157,12 @@ public class WarehouseServiceImpl implements WarehouseService {
         if (attachedClients > 0) {
             clientWarehouseRepository.deleteAll(clientWarehouseRepository.findByWarehouseId(w.getId()));
         }
+        Long deletedId = w.getId();
         warehouseRepository.delete(w);
+        auditService.record(AuditService.DELETE, AuditService.WAREHOUSE,
+                deletedId, c, null,
+                "Warehouse " + c + " deleted"
+                        + (attachedClients > 0 ? " (unlinked from " + attachedClients + " client(s))" : "") + ".");
         return success("Warehouse " + c + " deleted successfully"
                 + (attachedClients > 0 ? " (unlinked from " + attachedClients + " client(s))" : "") + ".", null);
     }

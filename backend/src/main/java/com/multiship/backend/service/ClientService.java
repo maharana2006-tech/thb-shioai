@@ -21,6 +21,9 @@ public interface ClientService {
 
     ApiResponse<ClientDTO> toggleActive(String clientCode);
 
+    /** Preview cascade counts + pending-order guard for the confirm dialog. */
+    ApiResponse<com.multiship.backend.dto.ClientCascadePreviewDTO> previewCascade(String clientCode);
+
     ApiResponse<Void> deleteClient(String clientCode);
 
     ApiResponse<List<CarrierAccountRefDTO>> listClientAccounts(String clientCode);

@@ -26,6 +26,7 @@ export const settingsPaths = {
   codeMaps: '/settings/code-maps',
   apiKeys: '/settings/api-keys',
   apiReference: '/settings/api-reference',
+  auditLog: '/settings/audit-log',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -98,6 +99,9 @@ export const settingsNavItems: Array<{
   { key: 'api-reference', label: 'API Reference', to: settingsPaths.apiReference, iconKey: 'apiDocs',
     description: 'How external systems call the public shipping API — endpoints, examples, and error codes.',
     roles: ['ADMIN'] },
+  { key: 'audit-log', label: 'Audit Log', to: settingsPaths.auditLog, iconKey: 'apiDocs',
+    description: 'Append-only trail of every settings write — who did what to which entity, when.',
+    roles: ['ADMIN', 'USER'] },
 ]
 
 export const getNavItemsForRole = (role: UserRole) => {

@@ -1,19 +1,28 @@
 package com.multiship.backend.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.CarrierAccountRefDTO;
 import com.multiship.backend.dto.AddressDTO;
+import com.multiship.backend.dto.ClientCascadePreviewDTO;
+import com.multiship.backend.dto.ClientCascadeSnapshot;
 import com.multiship.backend.dto.ClientDTO;
 import com.multiship.backend.dto.ClientListFilters;
 import com.multiship.backend.dto.ClientUpsertRequest;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.PageResponseDTO;
+import com.multiship.backend.model.AuditLog;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.Address;
 import com.multiship.backend.model.Client;
+import com.multiship.backend.model.ClientWarehouse;
+import com.multiship.backend.model.Warehouse;
+import com.multiship.backend.repository.AuditLogRepository;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.ClientRepository;
+import com.multiship.backend.repository.ClientWarehouseRepository;
 import com.multiship.backend.repository.OrderRepository;
+import com.multiship.backend.repository.WarehouseRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -33,6 +42,11 @@ public class ClientServiceImpl implements ClientService {
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     private final OrderRepository orderRepository;
     private final com.multiship.backend.repository.ClientCustomsProfileRepository customsProfileRepository;
+    private final WarehouseRepository warehouseRepository;
+    private final ClientWarehouseRepository clientWarehouseRepository;
+    private final AuditService auditService;
+    private final AuditLogRepository auditLogRepository;
+    private final ObjectMapper cascadeJson = new ObjectMapper();
 
     @Override
     @Transactional(readOnly = true)
@@ -159,6 +173,8 @@ public class ClientServiceImpl implements ClientService {
         applyFields(client, request);
         clientRepository.save(client);
 
+        auditService.record(AuditService.CREATE, AuditService.CLIENT,
+                client.getId(), code, toDTO(client), "Client " + code + " created.");
         return success("Client " + code + " created successfully.", toDTO(client));
     }
 
@@ -176,23 +192,208 @@ public class ClientServiceImpl implements ClientService {
         applyFields(client, request);
         clientRepository.save(client);
 
+        auditService.record(AuditService.UPDATE, AuditService.CLIENT,
+                client.getId(), client.getClientCode(), toDTO(client),
+                "Client " + client.getClientCode() + " updated.");
         return success("Client " + client.getClientCode() + " updated successfully.", toDTO(client));
     }
 
     @Override
     @Transactional
     public ApiResponse<ClientDTO> toggleActive(String clientCode) {
-        Client client = clientRepository.findByClientCodeIgnoreCase(normalize(clientCode)).orElse(null);
-
+        String code = normalize(clientCode);
+        Client client = clientRepository.findByClientCodeIgnoreCase(code).orElse(null);
         if (client == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
-                    "Client " + normalize(clientCode) + " was not found.");
+                    "Client " + code + " was not found.");
+        }
+        return client.isActive() ? disableWithCascade(client) : enableWithRestore(client);
+    }
+
+    /**
+     * Disable path — guards on pending orders, cascades to carrier
+     * accounts + client-owned warehouses + attachment links, records
+     * a snapshot in the audit log so re-enable can restore exactly
+     * these rows.
+     */
+    private ApiResponse<ClientDTO> disableWithCascade(Client client) {
+        String code = client.getClientCode();
+
+        long pending = orderRepository.countPendingByClient(code);
+        if (pending > 0) {
+            return failure(HttpStatus.CONFLICT, ErrorCode.CLIENT_HAS_ORDERS,
+                    "Client " + code + " has " + pending
+                            + " pending order(s). Complete or void them before deactivating.");
         }
 
-        client.setStatus(client.isActive() ? Client.STATUS_INACTIVE : Client.STATUS_ACTIVE);
+        // Collect active rows scoped to this client, deactivate them,
+        // remember the ids for the audit log.
+        List<CarrierAccountRef> accounts = carrierAccountRefRepository
+                .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(code);
+        List<Long> deactivatedAccountIds = new java.util.ArrayList<>();
+        for (CarrierAccountRef a : accounts) {
+            if (Boolean.TRUE.equals(a.getActive())) {
+                a.setActive(false);
+                deactivatedAccountIds.add(a.getId());
+            }
+        }
+        if (!deactivatedAccountIds.isEmpty()) {
+            carrierAccountRefRepository.saveAll(accounts);
+        }
+
+        List<Warehouse> ownedWarehouses = warehouseRepository
+                .findByOwnerClientCodeIgnoreCaseOrderByCodeAsc(code);
+        List<String> deactivatedWarehouseCodes = new java.util.ArrayList<>();
+        for (Warehouse w : ownedWarehouses) {
+            if (Boolean.TRUE.equals(w.getActive())) {
+                w.setActive(false);
+                deactivatedWarehouseCodes.add(w.getCode());
+            }
+        }
+        if (!deactivatedWarehouseCodes.isEmpty()) {
+            warehouseRepository.saveAll(ownedWarehouses);
+        }
+
+        List<ClientWarehouse> links = clientWarehouseRepository
+                .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(code);
+        List<Long> detachedLinkIds = links.stream().map(ClientWarehouse::getId).toList();
+        // Client-warehouse link rows have no active flag; drop them and
+        // remember the target warehouse codes on the snapshot so re-enable
+        // can re-attach. The re-attach uses attach() which is idempotent.
+        java.util.List<String> detachedWarehouseCodes = new java.util.ArrayList<>();
+        for (ClientWarehouse link : links) {
+            Warehouse w = warehouseRepository.findById(link.getWarehouseId()).orElse(null);
+            if (w != null) detachedWarehouseCodes.add(w.getCode());
+        }
+        if (!links.isEmpty()) {
+            clientWarehouseRepository.deleteAll(links);
+        }
+
+        client.setStatus(Client.STATUS_INACTIVE);
         clientRepository.save(client);
 
-        return success("Client " + client.getClientCode() + " is now " + client.getStatus() + ".", toDTO(client));
+        ClientCascadeSnapshot snap = ClientCascadeSnapshot.builder()
+                .carrierAccountIds(deactivatedAccountIds)
+                .clientOwnedWarehouseCodes(deactivatedWarehouseCodes)
+                .clientWarehouseLinkIds(detachedLinkIds)
+                .build();
+        String notes = "Deactivated: " + deactivatedAccountIds.size() + " carrier account(s), "
+                + deactivatedWarehouseCodes.size() + " client-owned warehouse(s), "
+                + detachedLinkIds.size() + " attachment(s).";
+        auditService.record(AuditService.CASCADE_DISABLE, AuditService.CLIENT,
+                client.getId(), code, snap, notes);
+
+        return success("Client " + code + " deactivated. " + notes, toDTO(client));
+    }
+
+    /**
+     * Enable path — look up the most-recent CASCADE_DISABLE snapshot
+     * for this client and restore only those rows. Rows that were
+     * inactive BEFORE the cascade stay inactive. If no snapshot exists
+     * (client was disabled before this feature landed) we just re-
+     * activate the client without cascading — safe default.
+     */
+    private ApiResponse<ClientDTO> enableWithRestore(Client client) {
+        String code = client.getClientCode();
+        client.setStatus(Client.STATUS_ACTIVE);
+        clientRepository.save(client);
+
+        ClientCascadeSnapshot snap = auditLogRepository
+                .findFirstByEntityTypeAndEntityKeyAndActionOrderByCreatedAtDesc(
+                        AuditService.CLIENT, code, AuditService.CASCADE_DISABLE)
+                .map(AuditLog::getChanges)
+                .flatMap(this::parseSnapshot)
+                .orElse(null);
+
+        int restoredAccounts = 0;
+        int restoredWarehouses = 0;
+        int reattachedLinks = 0;
+        if (snap != null) {
+            if (snap.getCarrierAccountIds() != null) {
+                for (Long id : snap.getCarrierAccountIds()) {
+                    carrierAccountRefRepository.findById(id).ifPresent(a -> {
+                        a.setActive(true);
+                        carrierAccountRefRepository.save(a);
+                    });
+                    restoredAccounts++;
+                }
+            }
+            if (snap.getClientOwnedWarehouseCodes() != null) {
+                for (String whCode : snap.getClientOwnedWarehouseCodes()) {
+                    warehouseRepository.findByCodeIgnoreCase(whCode).ifPresent(w -> {
+                        w.setActive(true);
+                        warehouseRepository.save(w);
+                    });
+                    restoredWarehouses++;
+                }
+            }
+            if (snap.getClientOwnedWarehouseCodes() != null) {
+                // Re-attach: iterate ownedWarehouseCodes (the same list we
+                // detached from) and create fresh client_warehouse rows.
+                // First one becomes default (mirrors initial attach behaviour).
+                boolean first = true;
+                for (String whCode : snap.getClientOwnedWarehouseCodes()) {
+                    Warehouse w = warehouseRepository.findByCodeIgnoreCase(whCode).orElse(null);
+                    if (w == null) continue;
+                    if (clientWarehouseRepository
+                            .findByClientCodeIgnoreCaseAndWarehouseId(code, w.getId()).isPresent()) {
+                        continue;
+                    }
+                    ClientWarehouse cw = new ClientWarehouse();
+                    cw.setClientCode(code);
+                    cw.setWarehouseId(w.getId());
+                    cw.setIsDefault(first);
+                    clientWarehouseRepository.save(cw);
+                    reattachedLinks++;
+                    first = false;
+                }
+            }
+        }
+
+        String notes = "Reactivated: " + restoredAccounts + " carrier account(s), "
+                + restoredWarehouses + " client-owned warehouse(s), "
+                + reattachedLinks + " attachment(s).";
+        auditService.record(AuditService.CASCADE_ENABLE, AuditService.CLIENT,
+                client.getId(), code, snap, notes);
+        return success("Client " + code + " reactivated. " + notes, toDTO(client));
+    }
+
+    private java.util.Optional<ClientCascadeSnapshot> parseSnapshot(String json) {
+        if (json == null || json.isBlank()) return java.util.Optional.empty();
+        try {
+            return java.util.Optional.of(cascadeJson.readValue(json, ClientCascadeSnapshot.class));
+        } catch (Exception ex) {
+            return java.util.Optional.empty();
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<ClientCascadePreviewDTO> previewCascade(String clientCode) {
+        String code = normalize(clientCode);
+        Client client = clientRepository.findByClientCodeIgnoreCase(code).orElse(null);
+        if (client == null) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
+                    "Client " + code + " was not found.");
+        }
+        long pending = orderRepository.countPendingByClient(code);
+        long activeAccounts = carrierAccountRefRepository
+                .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(code).stream()
+                .filter(a -> Boolean.TRUE.equals(a.getActive())).count();
+        long activeOwnedWh = warehouseRepository
+                .findByOwnerClientCodeIgnoreCaseOrderByCodeAsc(code).stream()
+                .filter(w -> Boolean.TRUE.equals(w.getActive())).count();
+        long links = clientWarehouseRepository
+                .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(code).size();
+        ClientCascadePreviewDTO body = ClientCascadePreviewDTO.builder()
+                .clientCode(code)
+                .pendingOrderCount(pending)
+                .activeCarrierAccountCount(activeAccounts)
+                .clientOwnedWarehouseCount(activeOwnedWh)
+                .clientWarehouseLinkCount(links)
+                .clientCurrentlyActive(client.isActive())
+                .build();
+        return success("Cascade preview computed.", body);
     }
 
     @Override
@@ -220,6 +421,9 @@ public class ClientServiceImpl implements ClientService {
                 carrierAccountRefRepository.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(code));
 
         clientRepository.delete(client);
+        auditService.record(AuditService.DELETE, AuditService.CLIENT,
+                client.getId(), code, null,
+                "Client " + code + " deleted (including its carrier accounts and customs profiles).");
         return success("Client " + code + " deleted successfully (including its carrier accounts and customs profiles).", null);
     }
 

@@ -149,13 +149,52 @@ export default function ClientsPage() {
   }
 
   const handleToggleActive = async (client: Client) => {
+    // Disable path goes through cascade-preview first: hard block on
+    // pending orders, otherwise confirm with the caller so they know
+    // how many carrier accounts / warehouses will be deactivated too.
+    // Enable path is trivial — no cascade blockers.
+    const goingInactive = client.status === 'ACTIVE'
+    if (goingInactive) {
+      try {
+        const preview = (await clientService.cascadePreview(client.clientCode)).data
+        if (!preview) throw new Error('Preview returned no data.')
+        if (preview.pendingOrderCount > 0) {
+          notify.error(
+            `${client.clientCode} has ${preview.pendingOrderCount} pending order(s). ` +
+              `Complete or void them before deactivating.`,
+          )
+          return
+        }
+        const summary =
+          `Deactivating ${client.clientCode} will also disable:\n` +
+          `• ${preview.activeCarrierAccountCount} carrier account(s)\n` +
+          `• ${preview.clientOwnedWarehouseCount} client-owned warehouse(s)\n` +
+          `• ${preview.clientWarehouseLinkCount} warehouse attachment(s)\n\n` +
+          `Re-enabling later restores exactly these rows.`
+        const ok = await notify.confirm(summary, {
+          title: `Deactivate ${client.clientCode}?`,
+          confirmLabel: 'Deactivate',
+          danger: true,
+        })
+        if (!ok) return
+      } catch (error) {
+        notify.error(error instanceof Error ? error.message : 'Failed to preview the cascade.')
+        return
+      }
+    }
+
     setBusyId(client.id)
     try {
       const r = await clientService.toggleActive(client.clientCode)
       notify.success(`${client.clientCode} is now ${r.data.status}.`)
       refresh()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to update the client status.')
+      if (error instanceof ApiError && error.errorCode === 'CLIENT_HAS_ORDERS') {
+        // Race: someone created a pending order between preview and toggle.
+        notify.error(error.message)
+      } else {
+        notify.error(error instanceof Error ? error.message : 'Failed to update the client status.')
+      }
     } finally {
       setBusyId(null)
     }

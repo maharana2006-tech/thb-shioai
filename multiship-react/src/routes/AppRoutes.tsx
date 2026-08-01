@@ -21,6 +21,7 @@ import ApiReferencePage from '../components/ApiReferencePage'
 import PackagesPage from '../components/PackagesPage'
 import WarehousesPage from '../components/WarehousesPage'
 import CodeMapsPage from '../components/CodeMapsPage'
+import AuditLogPage from '../components/AuditLogPage'
 import DashboardPage from '../pages/DashboardPage'
 import OrdersPage from '../pages/OrdersPage'
 import NewShipmentPage from '../components/NewShipmentPage'
@@ -64,8 +65,9 @@ export default function AppRoutes() {
                   writes (connect/disconnect) are gated to ADMIN at the
                   backend @PreAuthorize. Route-level RequireRole here would
                   have redirected USER role to /dashboard even though the
-                  sidebar shows the entry — user-reported bug fix. */}
+                  sidebar shows the entry. */}
               <Route path="carriers" element={<CarrierPage />} />
+              <Route path="audit-log" element={<AuditLogPage />} />
               <Route element={<RequireRole roles={['ADMIN']} />}>
                 <Route path="api-keys" element={<ApiKeysPage />} />
                 <Route path="api-reference" element={<ApiReferencePage />} />

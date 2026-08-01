@@ -43,6 +43,20 @@ export interface ClientUpsertPayload {
   returnSameAsShipFrom?: boolean
 }
 
+/**
+ * Preview counts returned before a client-disable cascade — the
+ * Clients page uses `pendingOrderCount > 0` as a hard block and the
+ * rest to render the confirm-dialog summary.
+ */
+export interface ClientCascadePreview {
+  clientCode: string
+  pendingOrderCount: number
+  activeCarrierAccountCount: number
+  clientOwnedWarehouseCount: number
+  clientWarehouseLinkCount: number
+  clientCurrentlyActive: boolean
+}
+
 export interface ClientPage {
   content: Client[]
   pageNumber: number
@@ -99,6 +113,11 @@ export const clientService = {
   updateClient: (clientCode: string, payload: ClientUpsertPayload) => {
     return apiClient.put<ApiResponse<Client>>(`/clients/${encodeURIComponent(clientCode)}`, payload)
   },
+
+  cascadePreview: (clientCode: string) =>
+    apiClient.get<ApiResponse<ClientCascadePreview>>(
+      `/clients/${encodeURIComponent(clientCode)}/cascade-preview`,
+    ),
 
   toggleActive: (clientCode: string) => {
     return apiClient.post<ApiResponse<Client>>(`/clients/${encodeURIComponent(clientCode)}/toggle-active`)
