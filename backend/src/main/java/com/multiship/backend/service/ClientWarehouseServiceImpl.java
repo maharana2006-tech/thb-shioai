@@ -28,6 +28,7 @@ public class ClientWarehouseServiceImpl implements ClientWarehouseService {
     private final ClientWarehouseRepository clientWarehouseRepository;
     private final WarehouseRepository warehouseRepository;
     private final ClientRepository clientRepository;
+    private final AuditService auditService;
 
     @Override
     @Transactional(readOnly = true)
@@ -88,6 +89,12 @@ public class ClientWarehouseServiceImpl implements ClientWarehouseService {
                 .build();
         clientWarehouseRepository.save(link);
 
+        auditService.record("ATTACH_WAREHOUSE", AuditService.CLIENT,
+                code, code + " ← " + warehouse.getCode(),
+                java.util.Map.of("warehouseCode", warehouse.getCode(),
+                        "isDefault", shouldBeDefault),
+                "Attached warehouse " + warehouse.getCode() + " to client " + code
+                        + (shouldBeDefault ? " (default)." : "."));
         return success("Warehouse " + warehouse.getCode() + " attached to client " + code
                 + (shouldBeDefault ? " as the default." : "."), toDTO(link));
     }
@@ -121,6 +128,11 @@ public class ClientWarehouseServiceImpl implements ClientWarehouseService {
                         clientWarehouseRepository.save(next);
                     });
         }
+        auditService.record("DETACH_WAREHOUSE", AuditService.CLIENT,
+                code, code + " ↛ " + warehouse.getCode(),
+                java.util.Map.of("warehouseCode", warehouse.getCode(),
+                        "wasDefault", wasDefault),
+                "Detached warehouse " + warehouse.getCode() + " from client " + code + ".");
         return success("Warehouse " + warehouse.getCode() + " detached from client " + code + ".", null);
     }
 
@@ -142,6 +154,10 @@ public class ClientWarehouseServiceImpl implements ClientWarehouseService {
         clearExistingDefault(code);
         target.setIsDefault(true);
         clientWarehouseRepository.save(target);
+        auditService.record("SET_DEFAULT_WAREHOUSE", AuditService.CLIENT,
+                code, code + " ★ " + warehouse.getCode(),
+                java.util.Map.of("warehouseCode", warehouse.getCode()),
+                "Set " + warehouse.getCode() + " as the default warehouse for client " + code + ".");
         return success("Warehouse " + warehouse.getCode() + " is now the default for client " + code + ".",
                 toDTO(target));
     }

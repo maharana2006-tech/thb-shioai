@@ -276,6 +276,7 @@ public class ClientServiceImpl implements ClientService {
                 .carrierAccountIds(deactivatedAccountIds)
                 .clientOwnedWarehouseCodes(deactivatedWarehouseCodes)
                 .clientWarehouseLinkIds(detachedLinkIds)
+                .detachedWarehouseCodes(detachedWarehouseCodes)
                 .build();
         String notes = "Deactivated: " + deactivatedAccountIds.size() + " carrier account(s), "
                 + deactivatedWarehouseCodes.size() + " client-owned warehouse(s), "
@@ -327,12 +328,18 @@ public class ClientServiceImpl implements ClientService {
                     restoredWarehouses++;
                 }
             }
-            if (snap.getClientOwnedWarehouseCodes() != null) {
-                // Re-attach: iterate ownedWarehouseCodes (the same list we
-                // detached from) and create fresh client_warehouse rows.
-                // First one becomes default (mirrors initial attach behaviour).
+            // Re-attach: iterate EVERY warehouse the client had attached
+            // (both CLIENT-owned and PLATFORM-owned). The earlier version
+            // iterated clientOwnedWarehouseCodes which silently lost any
+            // platform-warehouse attachment across a disable/enable cycle.
+            List<String> reattachCodes = snap.getDetachedWarehouseCodes() != null
+                    ? snap.getDetachedWarehouseCodes()
+                    // Fallback for audit rows written before the fix — the
+                    // best we can do is re-activate any client-owned rows.
+                    : snap.getClientOwnedWarehouseCodes();
+            if (reattachCodes != null) {
                 boolean first = true;
-                for (String whCode : snap.getClientOwnedWarehouseCodes()) {
+                for (String whCode : reattachCodes) {
                     Warehouse w = warehouseRepository.findByCodeIgnoreCase(whCode).orElse(null);
                     if (w == null) continue;
                     if (clientWarehouseRepository
