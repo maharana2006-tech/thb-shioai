@@ -60,8 +60,11 @@ public class AuditLogController {
         String safeEntity = entityType == null ? "" : entityType.trim().toUpperCase();
         String safeAction = action == null ? "" : action.trim().toUpperCase();
         String safeKey = entityKey == null ? "" : entityKey.trim();
-        LocalDateTime sinceTs = parseOrNull(since);
-        LocalDateTime untilTs = parseOrNull(until);
+        // Substitute sentinel bounds when the caller doesn't specify
+        // a date filter — Postgres can't infer the type of a null
+        // LocalDateTime bound. Same fix pattern as LabelTemplateRepo.
+        LocalDateTime sinceTs = parseOrDefault(since, LocalDateTime.of(1970, 1, 1, 0, 0));
+        LocalDateTime untilTs = parseOrDefault(until, LocalDateTime.of(9999, 12, 31, 23, 59));
         int safeSize = Math.min(Math.max(size, 1), 200);
         int safePage = Math.max(page, 0);
 
@@ -81,12 +84,12 @@ public class AuditLogController {
                 .build());
     }
 
-    private static LocalDateTime parseOrNull(String s) {
-        if (s == null || s.isBlank()) return null;
+    private static LocalDateTime parseOrDefault(String s, LocalDateTime fallback) {
+        if (s == null || s.isBlank()) return fallback;
         try {
             return LocalDateTime.parse(s.trim());
         } catch (Exception ex) {
-            return null;
+            return fallback;
         }
     }
 }

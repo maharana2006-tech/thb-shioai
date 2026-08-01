@@ -20,14 +20,22 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
      * ClientRepository.search() to sidestep Postgres bytea-null-typing
      * on nullable String params.
      */
+    /**
+     * Timestamp bounds are always non-null — caller substitutes
+     * LocalDateTime.MIN / MAX when the user leaves the filter blank.
+     * Nullable LocalDateTime params bind as {@code bytea} under
+     * Postgres + Hibernate and blow up with "cannot determine data
+     * type of parameter" — same class of bug as
+     * {@code LabelTemplateRepository.search}.
+     */
     @Query("""
         SELECT a FROM AuditLog a
-        WHERE (:actor = '' OR LOWER(a.actor) LIKE CONCAT('%', LOWER(:actor), '%'))
+        WHERE (:actor = '' OR LOWER(COALESCE(a.actor, '')) LIKE CONCAT('%', LOWER(:actor), '%'))
           AND (:entityType = '' OR a.entityType = :entityType)
           AND (:action = '' OR a.action = :action)
-          AND (:entityKey = '' OR LOWER(a.entityKey) LIKE CONCAT('%', LOWER(:entityKey), '%'))
-          AND (:since IS NULL OR a.createdAt >= :since)
-          AND (:until IS NULL OR a.createdAt <= :until)
+          AND (:entityKey = '' OR LOWER(COALESCE(a.entityKey, '')) LIKE CONCAT('%', LOWER(:entityKey), '%'))
+          AND a.createdAt >= :since
+          AND a.createdAt <= :until
     """)
     Page<AuditLog> search(
             @Param("actor") String actor,
