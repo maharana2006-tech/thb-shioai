@@ -242,7 +242,7 @@ export default function WarehousesPage() {
               <ActiveToggle
                 active={!!w.active}
                 busy={busyId !== null}
-                disabled={!admin}
+                disabled={false}
                 onToggle={(e) => { e.stopPropagation(); void handleToggleActive(w) }}
               />
               <span
