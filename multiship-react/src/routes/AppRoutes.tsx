@@ -57,8 +57,13 @@ export default function AppRoutes() {
               <Route path="reports" element={<ReportsPage />} />
               <Route path="webhook-subscriptions" element={<WebhookSubscriptionsPage />} />
               <Route path="code-maps" element={<CodeMapsPage />} />
+              {/* Carriers page: reads (list, filter, verify) accept USER;
+                  writes (connect/disconnect) are gated to ADMIN at the
+                  backend @PreAuthorize. Route-level RequireRole here would
+                  have redirected USER role to /dashboard even though the
+                  sidebar shows the entry — user-reported bug fix. */}
+              <Route path="carriers" element={<CarrierPage />} />
               <Route element={<RequireRole roles={['ADMIN']} />}>
-                <Route path="carriers" element={<CarrierPage />} />
                 <Route path="api-keys" element={<ApiKeysPage />} />
                 <Route path="api-reference" element={<ApiReferencePage />} />
               </Route>
