@@ -132,6 +132,114 @@ export function bindingCarriers(caps: AddressCaps, enabled: Iterable<string>, fi
   return codes.filter((c) => CARRIER_ADDRESS_CAPS[c][field] === caps[field])
 }
 
+// ===== data-type validation =====
+
+/**
+ * Postal-code patterns for the countries we ship to most. Anchored to
+ * whole-input matches. HK entry is `null` because Hong Kong has no
+ * postal codes — the field should be left blank there. Fallback for
+ * countries not in the map: any non-empty string up to the carrier cap.
+ */
+export const ZIP_PATTERNS: Record<string, RegExp | null> = {
+  US: /^\d{5}(-\d{4})?$/,
+  CA: /^[A-Z]\d[A-Z] ?\d[A-Z]\d$/,
+  GB: /^[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2}$/,
+  DE: /^\d{5}$/,
+  FR: /^\d{5}$/,
+  ES: /^\d{5}$/,
+  IT: /^\d{5}$/,
+  NL: /^\d{4} ?[A-Z]{2}$/,
+  IN: /^\d{6}$/,
+  JP: /^\d{3}-?\d{4}$/,
+  CN: /^\d{6}$/,
+  AU: /^\d{4}$/,
+  BR: /^\d{5}-?\d{3}$/,
+  MX: /^\d{5}$/,
+  SG: /^\d{6}$/,
+  HK: null,
+}
+
+/** Validate a ZIP against a country. Blank is allowed (fields are
+ *  individually optional at wizard time). Countries not in the map
+ *  accept anything. */
+export function validateZip(zip: string, country: string): { ok: boolean; message?: string } {
+  const trimmed = zip.trim()
+  if (!trimmed) return { ok: true }
+  const key = country.trim().toUpperCase()
+  const pat = ZIP_PATTERNS[key]
+  if (pat === undefined) return { ok: true } // unknown country → no validation
+  if (pat === null) {
+    return trimmed.length === 0
+      ? { ok: true }
+      : { ok: false, message: `${key} does not use postal codes — leave this blank.` }
+  }
+  return pat.test(trimmed.toUpperCase())
+    ? { ok: true }
+    : { ok: false, message: `Not a valid ${key} postal code (${describeZip(key)}).` }
+}
+
+function describeZip(country: string): string {
+  switch (country) {
+    case 'US': return '5 digits, optionally +4 (e.g. 10001 or 10001-1234)'
+    case 'CA': return 'A1A 1A1'
+    case 'GB': return 'e.g. SW1A 1AA'
+    case 'NL': return '1234 AB'
+    case 'IN': return '6 digits'
+    case 'JP': return '123-4567'
+    case 'AU': return '4 digits'
+    default: return 'check the carrier docs for this country'
+  }
+}
+
+/**
+ * State/province rule per country. US + CA carriers reject anything
+ * other than the two-letter code; other countries accept longer
+ * province names free-form.
+ */
+export function stateRule(country: string): { maxLength: number; pattern?: string; upper: boolean; hint: string } {
+  const key = country.trim().toUpperCase()
+  if (key === 'US' || key === 'CA') {
+    return {
+      maxLength: 2,
+      pattern: '[A-Z]{2}',
+      upper: true,
+      hint: `${key} state/province must be the 2-letter code (e.g. NY, CA).`,
+    }
+  }
+  return { maxLength: 35, upper: false, hint: '' }
+}
+
+/** RFC-ish email format check — mirrors what most carriers accept. */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+export function validateEmail(email: string): { ok: boolean; message?: string } {
+  const trimmed = email.trim()
+  if (!trimmed) return { ok: true }
+  return EMAIL_RE.test(trimmed)
+    ? { ok: true }
+    : { ok: false, message: 'Enter a valid email address.' }
+}
+
+/** Strip control chars + XSS-adjacent bytes from address / name inputs
+ *  as the user types. Non-blocking — the sanitizer just quietly drops
+ *  chars carriers never accept. */
+export function sanitizeText(v: string): string {
+  // eslint-disable-next-line no-control-regex
+  return v.replace(/[\x00-\x1f\x7f<>\\`|]/g, '')
+}
+
+/** Strict alnum + `_` + `-` filter for code fields (client code,
+ *  warehouse code). Applied on keystroke so patterns are enforced in
+ *  real time — HTML5 pattern only fires on submit. */
+export function filterCode(v: string): string {
+  return v.toUpperCase().replace(/[^A-Z0-9_-]/g, '')
+}
+
+/** Digits + optional dial `+` + spaces + dashes + parens. Rejects
+ *  letters and everything else. */
+export function filterPhone(v: string): string {
+  return v.replace(/[^\d+\s()-]/g, '')
+}
+
 // ===== internal helpers =====
 
 function normaliseCarrierCodes(carriers: Iterable<string>): CarrierCode[] {

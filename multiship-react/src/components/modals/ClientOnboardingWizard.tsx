@@ -42,7 +42,13 @@ import CountrySelect from '../workspace/CountrySelect'
 import Select from '../workspace/Select'
 import {
   CARRIER_ACCOUNT_RULES,
+  filterCode,
+  filterPhone,
   intersectionAddressCaps,
+  sanitizeText,
+  stateRule,
+  validateEmail,
+  validateZip,
   type CarrierCode,
 } from '../../utils/carrierFieldLimits'
 
@@ -70,13 +76,13 @@ interface StepMeta {
 }
 
 const STEPS: StepMeta[] = [
-  { id: 1, label: 'Identity',       hint: 'Code, name, contact',                          icon: <FiUser /> },
-  { id: 2, label: 'Ship-from',      hint: "Where the client's labels originate",           icon: <FiHome /> },
-  { id: 3, label: 'Return',         hint: 'Where undeliverable parcels go',                icon: <FiFlag /> },
-  { id: 4, label: 'Carrier',        hint: 'Carrier accounts (one or many)',                icon: <FiTruck /> },
-  { id: 5, label: 'Warehouse',      hint: 'First warehouse + allowed carriers',            icon: <FiPackage /> },
-  { id: 6, label: 'Service aliases',hint: 'ERP shipvia / service codes → platform service',icon: <FiEdit3 /> },
-  { id: 7, label: 'Package aliases',hint: 'ERP package codes → platform preset',           icon: <FiPackage /> },
+  { id: 1, label: 'Identity',   hint: 'Code, name, contact',                                       icon: <FiUser /> },
+  { id: 2, label: 'Carriers',   hint: 'Which carriers this client ships with',                     icon: <FiTruck /> },
+  { id: 3, label: 'Accounts',   hint: 'Credentials for each enabled carrier',                      icon: <FiTruck /> },
+  { id: 4, label: 'Warehouse',  hint: 'First warehouse (attached to this client)',                 icon: <FiPackage /> },
+  { id: 5, label: 'Ship-from',  hint: "Origin address on this client's labels",                    icon: <FiHome /> },
+  { id: 6, label: 'Return',     hint: 'Where undeliverable parcels come back',                     icon: <FiFlag /> },
+  { id: 7, label: 'Aliases',    hint: 'ERP shipvia / service / package codes → platform ids',      icon: <FiEdit3 /> },
 ]
 
 const emptyAddress = (): Address => ({
@@ -157,7 +163,11 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
   const [addingAccount, setAddingAccount] = useState(false)
 
   // ===== Step 5 — Warehouse + allowlist =====
-  const [warehouseChoice, setWarehouseChoice] = useState<WarehouseChoice>('reuse')
+  // Default was 'reuse' (ship-from) back when Warehouse came AFTER ship-from.
+  // After the Sprint 47 reorder, ship-from is Step 5 (later), so 'existing'
+  // is the sensible default entry. The 'reuse' guard in WarehouseAllowlistStep
+  // catches any stale state.
+  const [warehouseChoice, setWarehouseChoice] = useState<WarehouseChoice>('existing')
   const [existingWarehouses, setExistingWarehouses] = useState<Warehouse[]>([])
   const [selectedExistingCode, setSelectedExistingCode] = useState('')
   const [newWarehouse, setNewWarehouse] = useState<{ code: string; name: string; address: Address }>({
@@ -204,11 +214,11 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
       .catch(() => setCatalog([]))
   }, [step])
 
-  // Steps 6 & 7 — load the catalogs (services + presets) and any already-
-  // saved aliases for this client. Runs on entry to both steps so returning
-  // to Step 6 after Step 7 doesn't miss a fresh row saved in Step 7.
+  // Step 7 — load the catalogs (services + presets) and every already-
+  // saved alias row for this client. Runs once on entry to the aliases
+  // step; both SHIPVIA/SERVICE and PACKAGE render there now.
   useEffect(() => {
-    if (step !== 6 && step !== 7) return
+    if (step !== 7) return
     if (catalog.length === 0) {
       shippingConfigService
         .catalog()
@@ -222,20 +232,15 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
         .catch(() => setPresets([]))
     }
     if (!currentClientCode) return
-    if (step === 6) {
-      Promise.all([
-        clientCodeMapService.list(currentClientCode, 'SHIPVIA').catch(() => ({ data: [] as ClientCodeMap[] })),
-        clientCodeMapService.list(currentClientCode, 'SERVICE').catch(() => ({ data: [] as ClientCodeMap[] })),
-      ]).then(([sv, sr]) => {
-        setShipviaMaps(sv.data ?? [])
-        setServiceMaps(sr.data ?? [])
-      })
-    } else {
-      clientCodeMapService
-        .list(currentClientCode, 'PACKAGE')
-        .then((r) => setPackageMaps(r.data ?? []))
-        .catch(() => setPackageMaps([]))
-    }
+    Promise.all([
+      clientCodeMapService.list(currentClientCode, 'SHIPVIA').catch(() => ({ data: [] as ClientCodeMap[] })),
+      clientCodeMapService.list(currentClientCode, 'SERVICE').catch(() => ({ data: [] as ClientCodeMap[] })),
+      clientCodeMapService.list(currentClientCode, 'PACKAGE').catch(() => ({ data: [] as ClientCodeMap[] })),
+    ]).then(([sv, sr, pk]) => {
+      setShipviaMaps(sv.data ?? [])
+      setServiceMaps(sr.data ?? [])
+      setPackageMaps(pk.data ?? [])
+    })
   }, [step, currentClientCode])
 
   // ===== helpers =====
@@ -318,7 +323,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
         returnSameAsShipFrom: createdClient?.returnSameAsShipFrom ?? true,
       })
       if (resp.data) setCreatedClient(resp.data)
-      markStep(2, 'done')
+      markStep(5, 'done')
       return true
     } catch (err) {
       notify.error(err instanceof ApiError ? err.message : 'Failed to save ship-from address.')
@@ -345,7 +350,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
         returnSameAsShipFrom,
       })
       if (resp.data) setCreatedClient(resp.data)
-      markStep(3, 'done')
+      markStep(6, 'done')
       return true
     } catch (err) {
       notify.error(err instanceof ApiError ? err.message : 'Failed to save return address.')
@@ -424,7 +429,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
         return false
       }
     }
-    markStep(4, 'done')
+    markStep(3, 'done')
     return true
   }
 
@@ -491,7 +496,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
         }
       }
 
-      markStep(5, 'done')
+      markStep(4, 'done')
       return true
     } catch (err) {
       notify.error(err instanceof ApiError ? err.message : 'Failed to finalise onboarding.')
@@ -588,7 +593,9 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
       () => setServiceDraft(emptyZoneDraft()),
     )
     if (!srOk) return false
-    markStep(6, 'done')
+    // Both service + package aliases render on new Step 7 (combined), so
+    // both mark the same step done. commitPackageAliases below does the
+    // final mark.
     return true
   }
 
@@ -619,15 +626,20 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
   // ===== navigation =====
 
   const goNext = async () => {
+    // New step order (Sprint 47 audit):
+    //   1 Identity → 2 Carriers pick → 3 Accounts → 4 Warehouse →
+    //   5 Ship-from → 6 Return → 7 Aliases (SHIPVIA+SERVICE+PACKAGE)
     let ok = true
     if (step === 1) ok = await commitIdentity()
-    else if (step === 2) ok = await commitShipFrom()
-    else if (step === 3) ok = await commitReturn()
-    else if (step === 4) ok = await commitCarrierAccounts()
-    else if (step === 5) ok = await commitWarehouseAndAllowlist()
-    else if (step === 6) ok = await commitServiceAliases()
+    else if (step === 2) ok = commitCarriersPick()
+    else if (step === 3) ok = await commitCarrierAccounts()
+    else if (step === 4) ok = await commitWarehouseAndAllowlist()
+    else if (step === 5) ok = await commitShipFrom()
+    else if (step === 6) ok = await commitReturn()
     else if (step === 7) {
-      ok = await commitPackageAliases()
+      const svOk = await commitServiceAliases()
+      if (!svOk) ok = false
+      else ok = await commitPackageAliases()
       if (ok && createdClient) {
         onFinished(createdClient)
         onClose()
@@ -635,6 +647,19 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
       }
     }
     if (ok && step < 7) advanceTo((step + 1) as StepId)
+  }
+
+  /** Step 2 client-side commit — just gates on at-least-one-carrier picked.
+   *  The allowlist rows themselves get persisted on Step 4 (Warehouse)
+   *  since that's when the client is definitely on disk with a warehouse
+   *  to attach services to. */
+  const commitCarriersPick = (): boolean => {
+    if (allowedCarriers.size === 0) {
+      notify.error('Pick at least one carrier this client will ship with.')
+      return false
+    }
+    markStep(2, 'done')
+    return true
   }
 
   const goSkip = () => {
@@ -665,7 +690,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
         {/* ==== Left rail ==== */}
         <div className="flex w-[240px] flex-col border-r border-slate-200 bg-slate-50 p-5">
           <h2 className="text-[13px] font-semibold uppercase tracking-[0.16em] text-slate-500">Onboarding</h2>
-          <p className="mt-1 text-[11px] text-slate-400">Get a new client shippable in five steps.</p>
+          <p className="mt-1 text-[11px] text-slate-400">Get a new client shippable in seven steps.</p>
           <div className="mt-6 space-y-2">
             {STEPS.map((s) => (
               <StepRailItem
@@ -688,7 +713,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
           <div className="flex items-start justify-between border-b border-slate-200 px-6 py-4">
             <div>
               <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
-                Step {step} of 5
+                Step {step} of 7
               </p>
               <h3 className="mt-0.5 text-[17px] font-semibold text-slate-900">{STEPS[step - 1].label}</h3>
               <p className="mt-0.5 text-[12.5px] text-slate-500">{STEPS[step - 1].hint}</p>
@@ -713,26 +738,12 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
               />
             ) : null}
             {step === 2 ? (
-              <AddressStep
-                title="Ship-from address"
-                caption="This becomes the FROM block on every label."
-                address={shipFrom}
-                onChange={setShipFrom}
-                inputRef={firstFieldRef}
-                enabledCarriers={Array.from(allowedCarriers)}
+              <CarriersPickStep
+                allowedCarriers={allowedCarriers}
+                setAllowedCarriers={setAllowedCarriers}
               />
             ) : null}
             {step === 3 ? (
-              <ReturnStep
-                returnSameAsShipFrom={returnSameAsShipFrom}
-                setReturnSameAsShipFrom={setReturnSameAsShipFrom}
-                returnAddress={returnAddress}
-                setReturnAddress={setReturnAddress}
-                shipFrom={createdClient?.shipFrom ?? shipFrom}
-                enabledCarriers={Array.from(allowedCarriers)}
-              />
-            ) : null}
-            {step === 4 ? (
               <CarrierStep
                 form={carrierForm}
                 setForm={setCarrierForm}
@@ -743,7 +754,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
                 onAdd={addOneCarrierAccount}
               />
             ) : null}
-            {step === 5 ? (
+            {step === 4 ? (
               <WarehouseAllowlistStep
                 clientCode={currentClientCode}
                 warehouseChoice={warehouseChoice}
@@ -754,11 +765,29 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
                 newWarehouse={newWarehouse}
                 setNewWarehouse={setNewWarehouse}
                 allowedCarriers={allowedCarriers}
-                setAllowedCarriers={setAllowedCarriers}
-                shipFromPreview={createdClient?.shipFrom ?? shipFrom}
+              />
+            ) : null}
+            {step === 5 ? (
+              <AddressStep
+                title="Ship-from address"
+                caption="This becomes the FROM block on every label."
+                address={shipFrom}
+                onChange={setShipFrom}
+                inputRef={firstFieldRef}
+                enabledCarriers={Array.from(allowedCarriers)}
               />
             ) : null}
             {step === 6 ? (
+              <ReturnStep
+                returnSameAsShipFrom={returnSameAsShipFrom}
+                setReturnSameAsShipFrom={setReturnSameAsShipFrom}
+                returnAddress={returnAddress}
+                setReturnAddress={setReturnAddress}
+                shipFrom={createdClient?.shipFrom ?? shipFrom}
+                enabledCarriers={Array.from(allowedCarriers)}
+              />
+            ) : null}
+            {step === 7 ? (
               <ServiceAliasStep
                 clientCode={currentClientCode}
                 origin={createdClient?.shipFrom?.country ?? shipFrom.country ?? 'US'}
@@ -932,7 +961,10 @@ function IdentityStep({
             maxLength={50}
             pattern="[A-Za-z0-9_-]+"
             autoCapitalize="characters"
-            onChange={(e) => setIdentity((c) => ({ ...c, clientCode: e.target.value.toUpperCase() }))}
+            // filterCode() strips illegal chars as the user types — the
+            // HTML5 pattern only fires on submit, which the user rightly
+            // called out as too late.
+            onChange={(e) => setIdentity((c) => ({ ...c, clientCode: filterCode(e.target.value) }))}
             placeholder="ARHDEV"
             className={inputCls}
           />
@@ -946,7 +978,7 @@ function IdentityStep({
             type="text"
             value={identity.name}
             maxLength={255}
-            onChange={(e) => setIdentity((c) => ({ ...c, name: e.target.value }))}
+            onChange={(e) => setIdentity((c) => ({ ...c, name: sanitizeText(e.target.value) }))}
             placeholder="Acme Fulfillment Inc."
             className={inputCls}
           />
@@ -959,10 +991,16 @@ function IdentityStep({
             type="email"
             value={identity.email}
             maxLength={120}
-            onChange={(e) => setIdentity((c) => ({ ...c, email: e.target.value }))}
+            onChange={(e) => setIdentity((c) => ({ ...c, email: e.target.value.trim() }))}
             placeholder="ops@acme.example"
             className={inputCls}
           />
+          {(() => {
+            const v = validateEmail(identity.email)
+            return !v.ok ? (
+              <p className="mt-1 text-[11px] text-rose-600">{v.message}</p>
+            ) : null
+          })()}
         </div>
         <div>
           <Label>Phone</Label>
@@ -970,12 +1008,12 @@ function IdentityStep({
             type="tel"
             value={identity.phone}
             maxLength={30}
-            onChange={(e) => setIdentity((c) => ({ ...c, phone: e.target.value }))}
+            onChange={(e) => setIdentity((c) => ({ ...c, phone: filterPhone(e.target.value) }))}
             placeholder="+1 555 123 4567"
             className={inputCls}
           />
           <p className="mt-1 text-[11px] text-slate-400">
-            This is a general contact phone. Ship-from + shipment phones are capped separately based on your carriers.
+            Digits + optional dial code / spaces / dashes. Ship-from + shipment phones on later steps are capped separately per carrier.
           </p>
         </div>
       </div>
@@ -1016,33 +1054,65 @@ function AddressStep({
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label>Contact name</Label>
-          <input ref={inputRef} type="text" value={address.name || ''} maxLength={caps.name} onChange={(e) => set('name')(e.target.value)} className={inputCls} placeholder={title === 'Ship-from address' ? 'Warehouse name / label' : 'Return contact'} />
+          <input ref={inputRef} type="text" value={address.name || ''} maxLength={caps.name} onChange={(e) => set('name')(sanitizeText(e.target.value))} className={inputCls} placeholder={title === 'Ship-from address' ? 'Warehouse name / label' : 'Return contact'} />
         </div>
         <div>
           <Label>Phone</Label>
-          <input type="tel" value={address.phone || ''} maxLength={caps.phone} onChange={(e) => set('phone')(e.target.value)} className={inputCls} />
+          <input type="tel" value={address.phone || ''} maxLength={caps.phone} onChange={(e) => set('phone')(filterPhone(e.target.value))} className={inputCls} />
         </div>
       </div>
       <div>
         <Label>Street</Label>
-        <input type="text" value={address.line1 || ''} maxLength={caps.line} onChange={(e) => set('line1')(e.target.value)} className={inputCls} placeholder="123 Depot Way" />
+        <input type="text" value={address.line1 || ''} maxLength={caps.line} onChange={(e) => set('line1')(sanitizeText(e.target.value))} className={inputCls} placeholder="123 Depot Way" />
       </div>
       <div>
         <Label>Suite / unit</Label>
-        <input type="text" value={address.line2 || ''} maxLength={caps.line} onChange={(e) => set('line2')(e.target.value)} className={inputCls} placeholder="Suite 200" />
+        <input type="text" value={address.line2 || ''} maxLength={caps.line} onChange={(e) => set('line2')(sanitizeText(e.target.value))} className={inputCls} placeholder="Suite 200" />
       </div>
       <div className="grid grid-cols-4 gap-3">
         <div className="col-span-2">
           <Label>City</Label>
-          <input type="text" value={address.city || ''} maxLength={caps.city} onChange={(e) => set('city')(e.target.value)} className={inputCls} />
+          <input type="text" value={address.city || ''} maxLength={caps.city} onChange={(e) => set('city')(sanitizeText(e.target.value))} className={inputCls} />
         </div>
         <div>
-          <Label>State</Label>
-          <input type="text" value={address.state || ''} maxLength={caps.state} onChange={(e) => set('state')(e.target.value)} className={inputCls} />
+          {(() => {
+            const sr = stateRule(address.country || 'US')
+            return (
+              <>
+                <Label>State</Label>
+                <input
+                  type="text"
+                  value={address.state || ''}
+                  maxLength={Math.min(caps.state, sr.maxLength)}
+                  pattern={sr.pattern}
+                  onChange={(e) => {
+                    const v = sanitizeText(e.target.value)
+                    set('state')(sr.upper ? v.toUpperCase() : v)
+                  }}
+                  className={inputCls}
+                  placeholder={sr.upper ? 'NY' : ''}
+                />
+                {sr.hint ? <p className="mt-1 text-[10.5px] text-slate-400">{sr.hint}</p> : null}
+              </>
+            )
+          })()}
         </div>
         <div>
           <Label>ZIP</Label>
-          <input type="text" value={address.zip || ''} maxLength={caps.zip} onChange={(e) => set('zip')(e.target.value)} className={inputCls} placeholder="10001 or 10001-1234" />
+          <input
+            type="text"
+            value={address.zip || ''}
+            maxLength={caps.zip}
+            onChange={(e) => set('zip')(sanitizeText(e.target.value))}
+            className={inputCls}
+            placeholder="10001 or 10001-1234"
+          />
+          {(() => {
+            const v = validateZip(address.zip || '', address.country || 'US')
+            return !v.ok ? (
+              <p className="mt-1 text-[10.5px] text-rose-600">{v.message}</p>
+            ) : null
+          })()}
         </div>
       </div>
       <div>
@@ -1272,8 +1342,7 @@ function WarehouseAllowlistStep({
   warehouseChoice, setWarehouseChoice,
   existingWarehouses, selectedExistingCode, setSelectedExistingCode,
   newWarehouse, setNewWarehouse,
-  allowedCarriers, setAllowedCarriers,
-  shipFromPreview,
+  allowedCarriers,
 }: {
   clientCode: string
   warehouseChoice: WarehouseChoice
@@ -1283,27 +1352,23 @@ function WarehouseAllowlistStep({
   setSelectedExistingCode: (v: string) => void
   newWarehouse: { code: string; name: string; address: Address }
   setNewWarehouse: React.Dispatch<React.SetStateAction<{ code: string; name: string; address: Address }>>
+  /** Read-only here — picked on Step 2. Used to compute address caps + label. */
   allowedCarriers: Set<string>
-  setAllowedCarriers: React.Dispatch<React.SetStateAction<Set<string>>>
-  shipFromPreview: Address | null | undefined
 }) {
-  const toggleCarrier = (c: string) => {
-    const next = new Set(allowedCarriers)
-    if (next.has(c)) next.delete(c)
-    else next.add(c)
-    setAllowedCarriers(next)
-  }
   const setNewAddr = (k: keyof Address) => (v: string) =>
     setNewWarehouse((cur) => ({ ...cur, address: { ...cur.address, [k]: v } }))
 
-  const carrierOptions = useMemo(
-    () => ['UPS', 'FEDEX', 'USPS', 'DHL'] as const,
-    [],
-  )
-  // Warehouse-address caps recompute LIVE against the allowedCarriers set:
-  // uncheck UPS on this step and the caps relax to the FedEx/USPS/DHL
-  // intersection. Empty set falls back to DB caps (loose).
+  // Warehouse-address caps derive from the allowedCarriers set the user
+  // picked on Step 2. Empty set falls back to DB caps (loose).
   const warehouseCaps = intersectionAddressCaps(Array.from(allowedCarriers))
+
+  // Guard: if the user landed on 'reuse' from an older wizard session
+  // (was Step 5 before the reorder), snap them to 'existing' since
+  // ship-from doesn't exist yet at this point in the flow.
+  useEffect(() => {
+    if (warehouseChoice === 'reuse') setWarehouseChoice('existing')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <div className="max-w-2xl space-y-5">
@@ -1311,15 +1376,10 @@ function WarehouseAllowlistStep({
       <section>
         <h4 className="mb-1 text-[13px] font-semibold text-slate-900">First warehouse</h4>
         <p className="mb-3 text-[12px] text-slate-500">
-          Client <strong>{clientCode}</strong> ships from this location by default.
+          Client <strong>{clientCode}</strong> ships from this location by default. Enabled
+          carriers: <span className="font-mono text-slate-700">{Array.from(allowedCarriers).join(' · ') || 'none'}</span>.
         </p>
-        <div className="grid grid-cols-3 gap-2">
-          <ChoiceCard
-            active={warehouseChoice === 'reuse'}
-            onClick={() => setWarehouseChoice('reuse')}
-            title="Use the ship-from address"
-            hint="Fastest — reuses what you entered on step 2."
-          />
+        <div className="grid grid-cols-2 gap-2">
           <ChoiceCard
             active={warehouseChoice === 'existing'}
             onClick={() => setWarehouseChoice('existing')}
@@ -1333,27 +1393,6 @@ function WarehouseAllowlistStep({
             hint="Fill in a fresh warehouse."
           />
         </div>
-
-        {warehouseChoice === 'reuse' ? (
-          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-[12.5px]">
-            {hasAddressValue(shipFromPreview)
-              ? (
-                <>
-                  <div className="font-semibold text-slate-800">
-                    {shipFromPreview?.line1}
-                  </div>
-                  <div className="text-slate-600">
-                    {shipFromPreview?.city}, {shipFromPreview?.state} {shipFromPreview?.zip} · {shipFromPreview?.country}
-                  </div>
-                </>
-              )
-              : (
-                <span className="italic text-amber-700">
-                  Ship-from address is empty. Go back to step 2 first, or pick another option.
-                </span>
-              )}
-          </div>
-        ) : null}
 
         {warehouseChoice === 'existing' ? (
           <div className="mt-3">
@@ -1384,7 +1423,7 @@ function WarehouseAllowlistStep({
                   maxLength={50}
                   pattern="[A-Za-z0-9_-]+"
                   autoCapitalize="characters"
-                  onChange={(e) => setNewWarehouse((c) => ({ ...c, code: e.target.value.toUpperCase() }))}
+                  onChange={(e) => setNewWarehouse((c) => ({ ...c, code: filterCode(e.target.value) }))}
                   className={inputCls}
                   placeholder="MAIN-DEPOT"
                 />
@@ -1395,7 +1434,7 @@ function WarehouseAllowlistStep({
                   type="text"
                   value={newWarehouse.name}
                   maxLength={255}
-                  onChange={(e) => setNewWarehouse((c) => ({ ...c, name: e.target.value }))}
+                  onChange={(e) => setNewWarehouse((c) => ({ ...c, name: sanitizeText(e.target.value) }))}
                   className={inputCls}
                   placeholder="Main depot"
                 />
@@ -1408,46 +1447,87 @@ function WarehouseAllowlistStep({
             <div className="grid grid-cols-4 gap-3">
               <div className="col-span-2">
                 <Label>Street</Label>
-                <input type="text" value={newWarehouse.address.line1 || ''} maxLength={warehouseCaps.line} onChange={(e) => setNewAddr('line1')(e.target.value)} className={inputCls} />
+                <input type="text" value={newWarehouse.address.line1 || ''} maxLength={warehouseCaps.line} onChange={(e) => setNewAddr('line1')(sanitizeText(e.target.value))} className={inputCls} />
               </div>
               <div>
                 <Label>City</Label>
-                <input type="text" value={newWarehouse.address.city || ''} maxLength={warehouseCaps.city} onChange={(e) => setNewAddr('city')(e.target.value)} className={inputCls} />
+                <input type="text" value={newWarehouse.address.city || ''} maxLength={warehouseCaps.city} onChange={(e) => setNewAddr('city')(sanitizeText(e.target.value))} className={inputCls} />
               </div>
               <div>
                 <Label>ZIP</Label>
-                <input type="text" value={newWarehouse.address.zip || ''} maxLength={warehouseCaps.zip} onChange={(e) => setNewAddr('zip')(e.target.value)} className={inputCls} />
+                <input
+                  type="text"
+                  value={newWarehouse.address.zip || ''}
+                  maxLength={warehouseCaps.zip}
+                  onChange={(e) => setNewAddr('zip')(sanitizeText(e.target.value))}
+                  className={inputCls}
+                />
+                {(() => {
+                  const v = validateZip(newWarehouse.address.zip || '', newWarehouse.address.country || 'US')
+                  return !v.ok ? (
+                    <p className="mt-1 text-[10.5px] text-rose-600">{v.message}</p>
+                  ) : null
+                })()}
               </div>
             </div>
           </div>
         ) : null}
       </section>
+    </div>
+  )
+}
 
-      {/* ---- Allowlist ---- */}
-      <section>
-        <h4 className="mb-1 text-[13px] font-semibold text-slate-900">Allowed carriers</h4>
-        <p className="mb-3 text-[12px] text-slate-500">
-          Tick the carriers this client can ship with. All active services from those carriers are
-          auto-allowed; narrow the list later on the Edit screen.
+/**
+ * New Step 2 — pick which carriers this client will ship with. The
+ * allowlist rows get persisted on Step 4 (Warehouse commit); this
+ * component just owns the client-side allowedCarriers set.
+ */
+function CarriersPickStep({
+  allowedCarriers, setAllowedCarriers,
+}: {
+  allowedCarriers: Set<string>
+  setAllowedCarriers: React.Dispatch<React.SetStateAction<Set<string>>>
+}) {
+  const carrierOptions = ['UPS', 'FEDEX', 'USPS', 'DHL'] as const
+  const toggle = (c: string) => {
+    const next = new Set(allowedCarriers)
+    if (next.has(c)) next.delete(c)
+    else next.add(c)
+    setAllowedCarriers(next)
+  }
+  return (
+    <div className="max-w-2xl space-y-4">
+      <p className="text-[12.5px] text-slate-500">
+        Pick every carrier this client will ship with. The address / postal / phone caps on the
+        remaining steps adapt to the tightest cap across the carriers you tick here — so a value
+        typed there is guaranteed to be accepted at label-generation time on any of them.
+      </p>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {carrierOptions.map((c) => (
+          <label
+            key={c}
+            className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-[13px] font-semibold transition ${
+              allowedCarriers.has(c) ? 'border-[#1f150c] bg-[#faf7f0] text-[#1f150c]' : 'border-slate-200 bg-white text-slate-600'
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={allowedCarriers.has(c)}
+              onChange={() => toggle(c)}
+            />
+            {c}
+          </label>
+        ))}
+      </div>
+      {allowedCarriers.size === 0 ? (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+          Pick at least one carrier — Next won't advance until you do.
         </p>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {carrierOptions.map((c) => (
-            <label
-              key={c}
-              className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-[12.5px] font-semibold transition ${
-                allowedCarriers.has(c) ? 'border-[#1f150c] bg-[#faf7f0] text-[#1f150c]' : 'border-slate-200 bg-white text-slate-600'
-              }`}
-            >
-              <input
-                type="checkbox"
-                checked={allowedCarriers.has(c)}
-                onChange={() => toggleCarrier(c)}
-              />
-              {c}
-            </label>
-          ))}
-        </div>
-      </section>
+      ) : null}
+      <p className="text-[11px] text-slate-400">
+        Narrow this later per-service (UPS Ground only, no UPS Next Day, etc.) from the Client Edit
+        screen after onboarding.
+      </p>
     </div>
   )
 }
