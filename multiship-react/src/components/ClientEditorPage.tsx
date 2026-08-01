@@ -1,39 +1,39 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { notify } from '../../utils/notify'
-import { FiArrowRight, FiHome, FiPlus, FiStar, FiTrash2, FiX } from 'react-icons/fi'
-import { ApiError } from '../../api/apiClient'
-import { clientService, type Address, type Client, type ClientUpsertPayload } from '../../api/clientService'
-import { accountRefService, type CarrierAccountRef } from '../../api/accountRefService'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { notify } from '../utils/notify'
+import { FiArrowLeft, FiArrowRight, FiHome, FiLoader, FiPlus, FiStar, FiTrash2 } from 'react-icons/fi'
+import { ApiError } from '../api/apiClient'
+import { clientService, type Address, type Client, type ClientUpsertPayload } from '../api/clientService'
+import { accountRefService, type CarrierAccountRef } from '../api/accountRefService'
 import {
   clientWarehouseService,
   warehouseService,
   type ClientWarehouse,
   type Warehouse,
-} from '../../api/warehouseService'
+} from '../api/warehouseService'
 import {
   clientAllowedPackagesService,
   clientAllowedServicesService,
   type ClientAllowedPackage,
   type ClientAllowedService,
-} from '../../api/clientCatalogService'
+} from '../api/clientCatalogService'
 import {
   shippingConfigService,
   type PackagePreset,
   type ShippingServiceItem,
-} from '../../api/shippingConfigService'
-import { formatCarrierName, carrierEnvironmentOptions, type CarrierEnvironment } from '../../utils/carrierUtils'
-import CarrierLogo from '../workspace/CarrierLogo'
-import CountrySelect from '../workspace/CountrySelect'
-import Select from '../workspace/Select'
-import ClientAllowlistTab from './ClientAllowlistTab'
-import ClientDestinationsTab from './ClientDestinationsTab'
-import ClientPolicyTab from './ClientPolicyTab'
-import ClientMarkupTab from './ClientMarkupTab'
-import CarrierConnections from '../CarrierConnections'
-import ServiceDestinationsDrawer from './ServiceDestinationsDrawer'
-import ServiceWarehousesDrawer from './ServiceWarehousesDrawer'
-import ClientOwnedPackagesPanel from './ClientOwnedPackagesPanel'
+} from '../api/shippingConfigService'
+import { formatCarrierName, carrierEnvironmentOptions, type CarrierEnvironment } from '../utils/carrierUtils'
+import CarrierLogo from './workspace/CarrierLogo'
+import CountrySelect from './workspace/CountrySelect'
+import Select from './workspace/Select'
+import ClientAllowlistTab from './modals/ClientAllowlistTab'
+import ClientDestinationsTab from './modals/ClientDestinationsTab'
+import ClientPolicyTab from './modals/ClientPolicyTab'
+import ClientMarkupTab from './modals/ClientMarkupTab'
+import CarrierConnections from './CarrierConnections'
+import ServiceDestinationsDrawer from './modals/ServiceDestinationsDrawer'
+import ServiceWarehousesDrawer from './modals/ServiceWarehousesDrawer'
+import ClientOwnedPackagesPanel from './modals/ClientOwnedPackagesPanel'
 import { FiMap } from 'react-icons/fi'
 
 type Tab =
@@ -46,14 +46,6 @@ type Tab =
   | 'policy'
   | 'markup'
 
-interface ClientEditorModalProps {
-  /** Existing client to edit; omit to create a new one. */
-  client?: Client | null
-  /** Prefill + lock the code (the Labels page "No client" flow). */
-  lockedCode?: string
-  onSaved: (client: Client) => void
-  onClose: () => void
-}
 
 const inputClassName =
   'w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-sky-600 focus:ring-4 focus:ring-sky-100'
@@ -76,14 +68,42 @@ const carrierOptions = [
   { code: 'USPS', label: 'USPS' },
 ]
 
+const emptyAddress: Address = { name: '', line1: '', line2: '', city: '', state: '', zip: '', country: 'US', phone: '' }
+
+const emptyForm = (code: string = ''): ClientUpsertPayload => ({
+  clientCode: code,
+  name: '',
+  email: '',
+  phone: '',
+  shipFrom: { ...emptyAddress },
+  returnAddress: { ...emptyAddress },
+  returnSameAsShipFrom: true,
+})
+
 /**
- * Create or edit a client. In edit mode the client's linked carrier accounts
- * are managed inline: list with a per-client default, plus an add-account
- * form that saves straight into the account book with customerNo set.
+ * Full-page client editor at /settings/clients/{code} (edit) or
+ * /settings/clients/new (create). Replaced the ClientEditorModal +
+ * ClientOnboardingWizard combo — a single page owns the whole client
+ * profile now: identity + address + tabs for carriers / warehouses /
+ * services / packages / destinations / policy / markup.
+ *
+ * URL param `clientCode`:
+ *   • undefined / 'new' → create mode; typed code lives in state.
+ *   • an existing code → edit mode; the row is loaded on mount.
  */
-export default function ClientEditorModal({ client, lockedCode, onSaved, onClose }: ClientEditorModalProps) {
-  const isEdit = Boolean(client)
+export default function ClientEditorPage() {
   const navigate = useNavigate()
+  const { clientCode: urlClientCode } = useParams<{ clientCode?: string }>()
+  const [searchParams] = useSearchParams()
+  const editingCode = urlClientCode && urlClientCode !== 'new' ? urlClientCode : null
+  const isEdit = editingCode != null
+  // ?code=X on /settings/clients/new prefills the client-code field —
+  // OrdersWorkspace uses this when it lands from a CLIENT_MISSING label
+  // error so the operator doesn't retype the code from the order.
+  const prefillCode = !isEdit ? (searchParams.get('code') || '') : ''
+
+  const [client, setClient] = useState<Client | null>(null)
+  const [loading, setLoading] = useState(isEdit)
   const [activeTab, setActiveTab] = useState<Tab>('details')
   const [destinationsDrawer, setDestinationsDrawer] = useState<
     { serviceId: number; label: string; nonce: number } | null
@@ -92,19 +112,10 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
     { serviceId: number; label: string; nonce: number } | null
   >(null)
 
-  const emptyAddress: Address = { name: '', line1: '', line2: '', city: '', state: '', zip: '', country: 'US', phone: '' }
-  const [form, setForm] = useState<ClientUpsertPayload>({
-    clientCode: client?.clientCode || lockedCode || '',
-    name: client?.name || '',
-    email: client?.email || '',
-    phone: client?.phone || '',
-    shipFrom: { ...emptyAddress, ...(client?.shipFrom ?? {}) },
-    returnAddress: { ...emptyAddress, ...(client?.returnAddress ?? {}) },
-    returnSameAsShipFrom: client?.returnSameAsShipFrom ?? true,
-  })
+  const [form, setForm] = useState<ClientUpsertPayload>(() => emptyForm(prefillCode))
   const [saving, setSaving] = useState(false)
 
-  const [accounts, setAccounts] = useState<CarrierAccountRef[]>(client?.carrierAccounts ?? [])
+  const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
   const [showAccountForm, setShowAccountForm] = useState(false)
   const [accountForm, setAccountForm] = useState({
     carrierCode: 'UPS',
@@ -125,13 +136,63 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
     try {
       setAccounts(await clientService.listClientAccounts(code))
     } catch {
-      /* the list is cosmetic inside the modal */
+      /* the list is cosmetic on the page */
     }
   }
 
+  // Load the client row in edit mode; drop the page back to the list
+  // on 404 so a stale URL doesn't leave the operator staring at empty
+  // fields.
   useEffect(() => {
-    if (client?.clientCode) void refreshAccounts(client.clientCode)
-  }, [client?.clientCode])
+    if (!isEdit || !editingCode) return
+    let cancelled = false
+    setLoading(true)
+    clientService
+      .getClient(editingCode)
+      .then((resp) => {
+        if (cancelled) return
+        const c = resp.data
+        if (!c) throw new Error('Client not found')
+        setClient(c)
+        setForm({
+          clientCode: c.clientCode,
+          name: c.name || '',
+          email: c.email || '',
+          phone: c.phone || '',
+          shipFrom: { ...emptyAddress, ...(c.shipFrom ?? {}) },
+          returnAddress: { ...emptyAddress, ...(c.returnAddress ?? {}) },
+          returnSameAsShipFrom: c.returnSameAsShipFrom ?? true,
+        })
+        setAccounts(c.carrierAccounts ?? [])
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        notify.error(err instanceof Error ? err.message : 'Failed to load client.')
+        navigate('/settings/clients')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isEdit, editingCode, navigate])
+
+  useEffect(() => {
+    if (editingCode) void refreshAccounts(editingCode)
+  }, [editingCode])
+
+  const onSaved = (saved: Client) => {
+    // Create → redirect to the fresh /:code so subsequent tabs (warehouses
+    // etc.) work off a persisted client. Edit → stay put, refresh state.
+    if (!isEdit) {
+      navigate(`/settings/clients/${encodeURIComponent(saved.clientCode)}`, { replace: true })
+    } else {
+      setClient(saved)
+    }
+  }
+
+  const onClose = () => navigate('/settings/clients')
 
   const handleSave = async () => {
     if (!form.clientCode.trim() || !form.name.trim()) {
@@ -300,33 +361,33 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
     )
   }
 
+  if (loading) {
+    return (
+      <div className="flex h-64 items-center justify-center text-[12.5px] text-slate-500">
+        <FiLoader className="mr-2 h-4 w-4 animate-spin" /> Loading client…
+      </div>
+    )
+  }
+
   return (
-    <>
-      <div className="fixed inset-0 z-40 bg-slate-950/45 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
-      <aside
-        role="dialog"
-        aria-modal="true"
-        aria-label={isEdit ? `Edit client ${form.clientCode}` : 'Add a client'}
-        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[480px] flex-col border-l border-slate-200 bg-white shadow-[-18px_0_50px_rgba(8,14,26,0.18)]"
-      >
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
-          <div>
-            <p className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-slate-400">
-              {isEdit ? 'Edit client' : 'New client'}
-            </p>
-            <h3 className="mt-1 text-[15px] font-semibold text-slate-950">
-              {isEdit ? `${client?.name} (${form.clientCode})` : 'Register a client'}
-            </h3>
-          </div>
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+        <div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
-            aria-label="Close"
+            className="mb-1 inline-flex items-center gap-1 text-[11.5px] font-semibold text-slate-500 hover:text-slate-950"
           >
-            <FiX className="h-4 w-4" />
+            <FiArrowLeft className="h-3 w-3" /> Back to clients
           </button>
+          <p className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-slate-400">
+            {isEdit ? 'Edit client' : 'New client'}
+          </p>
+          <h3 className="mt-0.5 text-[16px] font-semibold text-slate-950">
+            {isEdit ? `${client?.name} (${form.clientCode})` : 'Register a client'}
+          </h3>
         </div>
+      </div>
 
         {/* Tab bar. Warehouses is disabled in create mode — nothing to attach a
             warehouse to until the client row exists. */}
@@ -403,8 +464,8 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
             <input
               value={form.clientCode}
               onChange={set('clientCode')}
-              readOnly={isEdit || Boolean(lockedCode)}
-              className={`${inputClassName} ${isEdit || lockedCode ? 'opacity-70' : ''} uppercase`}
+              readOnly={isEdit}
+              className={`${inputClassName} ${isEdit ? 'opacity-70' : ''} uppercase`}
               placeholder="MA1885"
             />
           </Field>
@@ -728,8 +789,7 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
             </button>
           </div>
         ) : null}
-      </aside>
-    </>
+    </div>
   )
 }
 

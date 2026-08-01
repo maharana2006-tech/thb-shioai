@@ -7,6 +7,7 @@ import WorkspaceLayout from '../components/layout/WorkspaceLayout'
 import SettingsLayout from '../components/layout/SettingsLayout'
 import CarrierPage from '../pages/CarrierPage'
 import ClientsPage from '../pages/ClientsPage'
+import ClientEditorPage from '../components/ClientEditorPage'
 import ImporterBrokerPage from '../components/ImporterBrokerPage'
 import LabelTemplatesListPage from '../components/LabelTemplatesListPage'
 import LabelTemplateEditorPage from '../components/LabelTemplateEditorPage'
@@ -47,6 +48,8 @@ export default function AppRoutes() {
             <Route path={workspacePaths.settings} element={<SettingsLayout />}>
               <Route index element={<Navigate to={settingsPaths.clients} replace />} />
               <Route path="clients" element={<ClientsPage />} />
+              <Route path="clients/new" element={<ClientEditorPage />} />
+              <Route path="clients/:clientCode" element={<ClientEditorPage />} />
               <Route path="warehouses" element={<WarehousesPage />} />
               <Route path="shipping-services" element={<ShippingServicesPage />} />
               <Route path="shipping-service-mapping" element={<ShippingServiceMappingPage />} />
