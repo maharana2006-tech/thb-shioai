@@ -30,6 +30,7 @@ import ClientAllowlistTab from './ClientAllowlistTab'
 import ClientDestinationsTab from './ClientDestinationsTab'
 import ClientPolicyTab from './ClientPolicyTab'
 import ClientMarkupTab from './ClientMarkupTab'
+import CarrierConnections from '../CarrierConnections'
 import ServiceDestinationsDrawer from './ServiceDestinationsDrawer'
 import ServiceWarehousesDrawer from './ServiceWarehousesDrawer'
 import ClientOwnedPackagesPanel from './ClientOwnedPackagesPanel'
@@ -37,6 +38,7 @@ import { FiMap } from 'react-icons/fi'
 
 type Tab =
   | 'details'
+  | 'carriers'
   | 'warehouses'
   | 'services'
   | 'packages'
@@ -336,6 +338,14 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
             tabId="details"
           />
           <TabButton
+            active={activeTab === 'carriers'}
+            onClick={() => setActiveTab('carriers')}
+            label="Carriers"
+            tabId="carriers"
+            disabled={!isEdit}
+            disabledHint="Save the client first to manage carrier accounts."
+          />
+          <TabButton
             active={activeTab === 'warehouses'}
             onClick={() => setActiveTab('warehouses')}
             label="Warehouses"
@@ -513,6 +523,18 @@ export default function ClientEditorModal({ client, lockedCode, onSaved, onClose
         ) : null}
 
         </div>
+        ) : null}
+
+        {activeTab === 'carriers' && client ? (
+          <div className="px-1 pt-2">
+            {/* CarrierConnections in embedded mode: skips the health-strip
+                page chrome, pre-scopes the table + Add-account drawer to
+                this client (customerNo locked to client.clientCode). */}
+            <CarrierConnections
+              initialClientFilter={client.clientCode}
+              embedded
+            />
+          </div>
         ) : null}
 
         {activeTab === 'warehouses' && client ? (

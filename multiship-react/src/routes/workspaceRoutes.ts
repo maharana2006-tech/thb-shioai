@@ -57,7 +57,11 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN', 'USER'] },
   { key: 'carriers', label: 'Carrier Accounts', to: settingsPaths.carriers, iconKey: 'carrier',
     description: 'Connect + verify live UPS / FedEx / USPS accounts (platform + client).',
-    roles: ['ADMIN'] },
+    // USER role can read/verify but backend `@PreAuthorize("hasRole('ADMIN')")`
+    // on POST /carriers/connect + /disconnect still gates write actions. Keeping
+    // both here so the menu bar renders — ADMIN-only writes surface as 403 at
+    // submit time with a clear error toast.
+    roles: ['ADMIN', 'USER'] },
   { key: 'shipping-services', label: 'Shipping Services', to: settingsPaths.shippingServices, iconKey: 'service',
     description: "The carrier service catalog per origin, and each service's allowed packages.",
     roles: ['ADMIN', 'USER'] },
