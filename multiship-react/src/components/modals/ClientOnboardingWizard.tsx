@@ -40,6 +40,11 @@ import { FiEdit3, FiPlus, FiTrash2 } from 'react-icons/fi'
 import { carrierEnvironmentOptions, type CarrierEnvironment } from '../../utils/carrierUtils'
 import CountrySelect from '../workspace/CountrySelect'
 import Select from '../workspace/Select'
+import {
+  CARRIER_ACCOUNT_RULES,
+  intersectionAddressCaps,
+  type CarrierCode,
+} from '../../utils/carrierFieldLimits'
 
 /**
  * Client onboarding wizard — 7 steps, skip on every step past the
@@ -714,6 +719,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
                 address={shipFrom}
                 onChange={setShipFrom}
                 inputRef={firstFieldRef}
+                enabledCarriers={Array.from(allowedCarriers)}
               />
             ) : null}
             {step === 3 ? (
@@ -723,6 +729,7 @@ export default function ClientOnboardingWizard({ onClose, onFinished }: Props) {
                 returnAddress={returnAddress}
                 setReturnAddress={setReturnAddress}
                 shipFrom={createdClient?.shipFrom ?? shipFrom}
+                enabledCarriers={Array.from(allowedCarriers)}
               />
             ) : null}
             {step === 4 ? (
@@ -922,12 +929,15 @@ function IdentityStep({
             type="text"
             value={identity.clientCode}
             disabled={locked}
+            maxLength={50}
+            pattern="[A-Za-z0-9_-]+"
+            autoCapitalize="characters"
             onChange={(e) => setIdentity((c) => ({ ...c, clientCode: e.target.value.toUpperCase() }))}
             placeholder="ARHDEV"
             className={inputCls}
           />
           <p className="mt-1 text-[11px] text-slate-400">
-            Uppercase. Orders link to this code — it can't be changed once created.
+            Uppercase, letters/digits/underscore/hyphen only. Orders link to this code — it can't be changed once created.
           </p>
         </div>
         <div>
@@ -935,6 +945,7 @@ function IdentityStep({
           <input
             type="text"
             value={identity.name}
+            maxLength={255}
             onChange={(e) => setIdentity((c) => ({ ...c, name: e.target.value }))}
             placeholder="Acme Fulfillment Inc."
             className={inputCls}
@@ -947,6 +958,7 @@ function IdentityStep({
           <input
             type="email"
             value={identity.email}
+            maxLength={120}
             onChange={(e) => setIdentity((c) => ({ ...c, email: e.target.value }))}
             placeholder="ops@acme.example"
             className={inputCls}
@@ -957,10 +969,14 @@ function IdentityStep({
           <input
             type="tel"
             value={identity.phone}
+            maxLength={30}
             onChange={(e) => setIdentity((c) => ({ ...c, phone: e.target.value }))}
             placeholder="+1 555 123 4567"
             className={inputCls}
           />
+          <p className="mt-1 text-[11px] text-slate-400">
+            This is a general contact phone. Ship-from + shipment phones are capped separately based on your carriers.
+          </p>
         </div>
       </div>
       {locked ? (
@@ -973,50 +989,60 @@ function IdentityStep({
 }
 
 function AddressStep({
-  title, caption, address, onChange, inputRef,
+  title, caption, address, onChange, inputRef, enabledCarriers,
 }: {
   title: string
   caption: string
   address: Address
   onChange: (a: Address) => void
   inputRef: React.RefObject<HTMLInputElement | null>
+  /** Carrier codes the client is (or will be) enabled for. Caps below are
+   *  the intersection so any label bought on any enabled carrier accepts
+   *  the value. See ../../utils/carrierFieldLimits.ts for the per-carrier
+   *  numbers this resolves to. */
+  enabledCarriers: readonly string[]
 }) {
   const set = (k: keyof Address) => (v: string) => onChange({ ...address, [k]: v })
+  const caps = intersectionAddressCaps(enabledCarriers)
   return (
     <div className="max-w-2xl space-y-3">
       <p className="text-[12.5px] text-slate-500">
         {caption} Fields are optional individually — but at least the street and city are needed to save.
       </p>
+      <p className="text-[11px] text-slate-400">
+        Field caps here match the intersection of your enabled carriers ({enabledCarriers.join(' · ') || 'none'}) —
+        name ≤ {caps.name}, address line ≤ {caps.line}, city ≤ {caps.city}, state ≤ {caps.state}, ZIP ≤ {caps.zip}, phone ≤ {caps.phone}.
+      </p>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label>Contact name</Label>
-          <input ref={inputRef} type="text" value={address.name || ''} onChange={(e) => set('name')(e.target.value)} className={inputCls} placeholder={title === 'Ship-from address' ? 'Warehouse name / label' : 'Return contact'} />
+          <input ref={inputRef} type="text" value={address.name || ''} maxLength={caps.name} onChange={(e) => set('name')(e.target.value)} className={inputCls} placeholder={title === 'Ship-from address' ? 'Warehouse name / label' : 'Return contact'} />
         </div>
         <div>
           <Label>Phone</Label>
-          <input type="tel" value={address.phone || ''} onChange={(e) => set('phone')(e.target.value)} className={inputCls} />
+          <input type="tel" value={address.phone || ''} maxLength={caps.phone} onChange={(e) => set('phone')(e.target.value)} className={inputCls} />
         </div>
       </div>
       <div>
         <Label>Street</Label>
-        <input type="text" value={address.line1 || ''} onChange={(e) => set('line1')(e.target.value)} className={inputCls} placeholder="123 Depot Way" />
+        <input type="text" value={address.line1 || ''} maxLength={caps.line} onChange={(e) => set('line1')(e.target.value)} className={inputCls} placeholder="123 Depot Way" />
       </div>
       <div>
         <Label>Suite / unit</Label>
-        <input type="text" value={address.line2 || ''} onChange={(e) => set('line2')(e.target.value)} className={inputCls} placeholder="Suite 200" />
+        <input type="text" value={address.line2 || ''} maxLength={caps.line} onChange={(e) => set('line2')(e.target.value)} className={inputCls} placeholder="Suite 200" />
       </div>
       <div className="grid grid-cols-4 gap-3">
         <div className="col-span-2">
           <Label>City</Label>
-          <input type="text" value={address.city || ''} onChange={(e) => set('city')(e.target.value)} className={inputCls} />
+          <input type="text" value={address.city || ''} maxLength={caps.city} onChange={(e) => set('city')(e.target.value)} className={inputCls} />
         </div>
         <div>
           <Label>State</Label>
-          <input type="text" value={address.state || ''} onChange={(e) => set('state')(e.target.value)} className={inputCls} />
+          <input type="text" value={address.state || ''} maxLength={caps.state} onChange={(e) => set('state')(e.target.value)} className={inputCls} />
         </div>
         <div>
           <Label>ZIP</Label>
-          <input type="text" value={address.zip || ''} onChange={(e) => set('zip')(e.target.value)} className={inputCls} />
+          <input type="text" value={address.zip || ''} maxLength={caps.zip} onChange={(e) => set('zip')(e.target.value)} className={inputCls} placeholder="10001 or 10001-1234" />
         </div>
       </div>
       <div>
@@ -1031,13 +1057,14 @@ function AddressStep({
 }
 
 function ReturnStep({
-  returnSameAsShipFrom, setReturnSameAsShipFrom, returnAddress, setReturnAddress, shipFrom,
+  returnSameAsShipFrom, setReturnSameAsShipFrom, returnAddress, setReturnAddress, shipFrom, enabledCarriers,
 }: {
   returnSameAsShipFrom: boolean
   setReturnSameAsShipFrom: (v: boolean) => void
   returnAddress: Address
   setReturnAddress: (a: Address) => void
   shipFrom: Address | null | undefined
+  enabledCarriers: readonly string[]
 }) {
   return (
     <div className="max-w-2xl space-y-4">
@@ -1070,6 +1097,7 @@ function ReturnStep({
           address={returnAddress}
           onChange={setReturnAddress}
           inputRef={{ current: null }}
+          enabledCarriers={enabledCarriers}
         />
       )}
     </div>
@@ -1094,6 +1122,12 @@ function CarrierStep({
   onAdd: () => Promise<boolean>
 }) {
   const set = (k: keyof typeof form) => (v: string) => setForm((c) => ({ ...c, [k]: v }))
+  // Per-carrier account rules — cap + placeholder + pattern all recompute
+  // when the carrier dropdown changes so the operator only sees legal
+  // formats for the current selection.
+  const accountRule =
+    CARRIER_ACCOUNT_RULES[(form.carrierCode as CarrierCode) ?? 'UPS'] ??
+    CARRIER_ACCOUNT_RULES.UPS
 
   return (
     <div className="max-w-2xl space-y-4">
@@ -1186,21 +1220,31 @@ function CarrierStep({
           <div className="mt-3 grid grid-cols-2 gap-3">
             <div>
               <Label required>Account number</Label>
-              <input ref={inputRef} type="text" value={form.accountNumber} onChange={(e) => set('accountNumber')(e.target.value)} className={inputCls} />
+              <input
+                ref={inputRef}
+                type="text"
+                value={form.accountNumber}
+                maxLength={accountRule.maxLength}
+                pattern={accountRule.pattern}
+                placeholder={accountRule.placeholder}
+                onChange={(e) => set('accountNumber')(e.target.value)}
+                className={inputCls}
+              />
+              <p className="mt-1 text-[11px] text-slate-400">{accountRule.helper}</p>
             </div>
             <div>
               <Label>Account name (optional)</Label>
-              <input type="text" value={form.accountName} onChange={(e) => set('accountName')(e.target.value)} className={inputCls} placeholder="e.g. Acme main UPS" />
+              <input type="text" value={form.accountName} maxLength={100} onChange={(e) => set('accountName')(e.target.value)} className={inputCls} placeholder="e.g. Acme main UPS" />
             </div>
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3">
             <div>
               <Label required>Client ID</Label>
-              <input type="text" value={form.clientId} onChange={(e) => set('clientId')(e.target.value)} className={inputCls} />
+              <input type="text" value={form.clientId} maxLength={255} onChange={(e) => set('clientId')(e.target.value)} className={inputCls} />
             </div>
             <div>
               <Label required>Client secret</Label>
-              <input type="password" value={form.clientSecret} onChange={(e) => set('clientSecret')(e.target.value)} className={inputCls} />
+              <input type="password" value={form.clientSecret} maxLength={255} onChange={(e) => set('clientSecret')(e.target.value)} className={inputCls} />
             </div>
           </div>
           <div className="mt-3 flex items-center justify-end gap-2">
@@ -1256,6 +1300,10 @@ function WarehouseAllowlistStep({
     () => ['UPS', 'FEDEX', 'USPS', 'DHL'] as const,
     [],
   )
+  // Warehouse-address caps recompute LIVE against the allowedCarriers set:
+  // uncheck UPS on this step and the caps relax to the FedEx/USPS/DHL
+  // intersection. Empty set falls back to DB caps (loose).
+  const warehouseCaps = intersectionAddressCaps(Array.from(allowedCarriers))
 
   return (
     <div className="max-w-2xl space-y-5">
@@ -1333,6 +1381,9 @@ function WarehouseAllowlistStep({
                 <input
                   type="text"
                   value={newWarehouse.code}
+                  maxLength={50}
+                  pattern="[A-Za-z0-9_-]+"
+                  autoCapitalize="characters"
                   onChange={(e) => setNewWarehouse((c) => ({ ...c, code: e.target.value.toUpperCase() }))}
                   className={inputCls}
                   placeholder="MAIN-DEPOT"
@@ -1343,24 +1394,29 @@ function WarehouseAllowlistStep({
                 <input
                   type="text"
                   value={newWarehouse.name}
+                  maxLength={255}
                   onChange={(e) => setNewWarehouse((c) => ({ ...c, name: e.target.value }))}
                   className={inputCls}
                   placeholder="Main depot"
                 />
               </div>
             </div>
+            <p className="text-[11px] text-slate-400">
+              Address caps match the intersection of the carriers ticked below —
+              line ≤ {warehouseCaps.line}, city ≤ {warehouseCaps.city}, ZIP ≤ {warehouseCaps.zip}.
+            </p>
             <div className="grid grid-cols-4 gap-3">
               <div className="col-span-2">
                 <Label>Street</Label>
-                <input type="text" value={newWarehouse.address.line1 || ''} onChange={(e) => setNewAddr('line1')(e.target.value)} className={inputCls} />
+                <input type="text" value={newWarehouse.address.line1 || ''} maxLength={warehouseCaps.line} onChange={(e) => setNewAddr('line1')(e.target.value)} className={inputCls} />
               </div>
               <div>
                 <Label>City</Label>
-                <input type="text" value={newWarehouse.address.city || ''} onChange={(e) => setNewAddr('city')(e.target.value)} className={inputCls} />
+                <input type="text" value={newWarehouse.address.city || ''} maxLength={warehouseCaps.city} onChange={(e) => setNewAddr('city')(e.target.value)} className={inputCls} />
               </div>
               <div>
                 <Label>ZIP</Label>
-                <input type="text" value={newWarehouse.address.zip || ''} onChange={(e) => setNewAddr('zip')(e.target.value)} className={inputCls} />
+                <input type="text" value={newWarehouse.address.zip || ''} maxLength={warehouseCaps.zip} onChange={(e) => setNewAddr('zip')(e.target.value)} className={inputCls} />
               </div>
             </div>
           </div>
@@ -1720,6 +1776,7 @@ function ZoneAliasList({
           <input
             type="text"
             value={draft.erpCode}
+            maxLength={40}
             onChange={(e) => setDraft((c) => ({ ...c, erpCode: e.target.value }))}
             placeholder={erpPlaceholder}
             className={`${inputCls} mt-1`}
@@ -1862,6 +1919,7 @@ function AliasList({
           <input
             type="text"
             value={draft.erpCode}
+            maxLength={40}
             onChange={(e) => setDraft((c) => ({ ...c, erpCode: e.target.value }))}
             placeholder={erpPlaceholder}
             className={inputCls}
