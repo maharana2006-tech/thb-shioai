@@ -85,8 +85,9 @@ public class WarehouseController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    @Operation(summary = "Toggle active flag")
-    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Toggle active flag",
+            description = "Ops-level action — accepts ADMIN or USER.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/{code}/toggle-active")
     public ResponseEntity<ApiResponse<WarehouseDTO>> toggleActive(@PathVariable String code) {
         ApiResponse<WarehouseDTO> response = warehouseService.toggleActive(code);

@@ -59,7 +59,7 @@ public class AccountRefController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/{accountId}/toggle-active")
     public ResponseEntity<ApiResponse<CarrierAccountRefDTO>> toggleActive(@PathVariable Long accountId) {
         ApiResponse<CarrierAccountRefDTO> response = accountRefService.toggleActive(accountId);

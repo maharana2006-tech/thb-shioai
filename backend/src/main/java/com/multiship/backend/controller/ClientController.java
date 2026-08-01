@@ -93,9 +93,10 @@ public class ClientController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    @Operation(summary = "Toggle ACTIVE/INACTIVE (ADMIN)",
-            description = "Labels cannot be generated for orders of an INACTIVE client.")
-    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Toggle ACTIVE/INACTIVE",
+            description = "Labels cannot be generated for orders of an INACTIVE client. " +
+                    "Ops-level action — accepts ADMIN or USER.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/{clientCode}/toggle-active")
     public ResponseEntity<ApiResponse<ClientDTO>> toggleActive(@PathVariable String clientCode) {
         ApiResponse<ClientDTO> response = clientService.toggleActive(clientCode);
