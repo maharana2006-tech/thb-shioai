@@ -372,7 +372,7 @@ export default function WarehousesPage() {
                 ) : null}
               </div>
             }
-            toolbarActions={admin ? (
+            toolbarActions={
               <button
                 type="button"
                 onClick={() => setEditor({ warehouse: null })}
@@ -380,7 +380,7 @@ export default function WarehousesPage() {
               >
                 <FiPlus className="h-3.5 w-3.5" /> Add Warehouse
               </button>
-            ) : null}
+            }
             caption={
               <p className="text-[11.5px] text-slate-400">
                 <FiHome className="mr-1 inline h-3 w-3 -translate-y-px" />
