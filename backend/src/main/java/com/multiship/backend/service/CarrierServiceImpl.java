@@ -1304,9 +1304,16 @@ public class CarrierServiceImpl implements CarrierService {
         boolean international = order.getShiptoCountryCd() != null && shipper.getCountryCode() != null
                 && !order.getShiptoCountryCd().trim().equalsIgnoreCase(shipper.getCountryCode().trim());
         String orderClient = firstNonBlank(order.getTenantId(), order.getCustNo());
+        // Origin warehouse: use the client's default attachment when we can
+        // find one, otherwise null (unrestricted rules still match). This is
+        // what feeds ShipMethodRuleWarehouse-based rule filtering.
+        Long originWarehouseId = orderClient != null
+                ? resolutionService.resolveWarehouse(orderClient, null)
+                        .map(com.multiship.backend.model.Warehouse::getId).orElse(null)
+                : null;
         com.multiship.backend.model.ShippingService resolvedService = shippingConfigService
                 .resolveService(connector.getCarrierCode(), orderClient, order.getShipviaCd(),
-                        order.getShiptoCountryCd(), international, shipper.getCountryCode())
+                        order.getShiptoCountryCd(), international, shipper.getCountryCode(), originWarehouseId)
                 .orElse(null);
         String serviceType = resolvedService != null ? resolvedService.getServiceCode()
                 : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");

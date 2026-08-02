@@ -69,7 +69,7 @@ public class ShippingConfigController {
         ApiResponse<ShipViaMapping> r = service.upsertRule(
                 body.getId(), body.getShipviaCd(), body.getClientCode(),
                 body.getDestType(), body.getDestValue(), body.getServiceId(),
-                body.getAllowedPresetIds());
+                body.getAllowedPresetIds(), body.getWarehouseIds());
         return ResponseEntity.status(r.getCode()).body(r);
     }
 

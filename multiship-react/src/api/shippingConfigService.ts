@@ -38,6 +38,9 @@ export interface ShipMethodRule {
   /** Phase 6: allowed packages on this rule. Round-trips through the entity
    *  as a transient field; persisted in ship_method_rule_package. */
   allowedPresetIds?: number[]
+  /** Origin warehouses this rule applies to; empty = matches any warehouse.
+   *  Round-trips as a transient field; persisted in ship_method_rule_warehouse. */
+  warehouseIds?: number[]
 }
 
 /** Phase 6: flat row from `rulePackages` in the catalog. Frontend groups by
@@ -46,6 +49,14 @@ export interface ShipMethodRulePackageLink {
   id?: number
   ruleId: number
   presetId: number
+}
+
+/** Flat row from `ruleWarehouses` in the catalog. Frontend groups by rule_id
+ *  to render the warehouse chips per rule. */
+export interface ShipMethodRuleWarehouseLink {
+  id?: number
+  ruleId: number
+  warehouseId: number
 }
 
 /** Service ↔ package link (which packages a service may ship in). */
@@ -185,6 +196,8 @@ export interface ShippingCatalog {
   links: ServicePackageLink[]
   /** Phase 6: allowed-package links per rule. */
   rulePackages: ShipMethodRulePackageLink[]
+  /** Origin-warehouse links per rule. */
+  ruleWarehouses: ShipMethodRuleWarehouseLink[]
   /** Distinct origin countries present in the catalog. */
   originCountries: string[]
 }
@@ -210,6 +223,7 @@ export const shippingConfigService = {
       rules: r.data?.rules ?? [],
       links: r.data?.links ?? [],
       rulePackages: r.data?.rulePackages ?? [],
+      ruleWarehouses: r.data?.ruleWarehouses ?? [],
       originCountries: r.data?.originCountries ?? [],
     }
   },

@@ -9,12 +9,15 @@ import {
   type WarehouseUpsertPayload,
 } from '../../api/warehouseService'
 import Select from '../workspace/Select'
+import AttachClientsStep from './AttachClientsStep'
 
 interface Props {
   /** null = create; otherwise edit. */
   warehouse: Warehouse | null
   onClose: () => void
-  onSaved: () => void
+  /** Fires after a successful save / attach step. The created (or updated)
+   *  warehouse is passed back so callers can react (e.g. auto-attach). */
+  onSaved: (saved?: Warehouse) => void
 }
 
 /** Create / edit a warehouse. Owner type switches the client picker on/off. */
@@ -38,6 +41,11 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
 
   const [clients, setClients] = useState<Client[]>([])
   const [saving, setSaving] = useState(false)
+
+  // After a successful create, the modal flips into an optional "attach clients"
+  // step so the operator can wire the new warehouse to one or more clients
+  // (and pick a default) without leaving the flow. Edit path skips this step.
+  const [created, setCreated] = useState<Warehouse | null>(null)
 
   // Load the client picker options only when we're in CLIENT mode. Pagination:
   // pull the first 200 by code so onboarding a warehouse to any client works
@@ -78,13 +86,21 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
         active,
       }
       if (isEdit && warehouse) {
-        await warehouseService.updateWarehouse(warehouse.code, payload)
+        const r = await warehouseService.updateWarehouse(warehouse.code, payload)
         notify.success(`Warehouse ${warehouse.code} updated.`)
+        onSaved(r.data)
       } else {
-        await warehouseService.createWarehouse(payload)
+        const r = await warehouseService.createWarehouse(payload)
         notify.success(`Warehouse ${payload.code} created.`)
+        const saved = r.data ?? { ...(payload as unknown as Warehouse), id: 0, attachedClientCount: 0, createdAt: null, updatedAt: null }
+        // Only PLATFORM warehouses need the follow-up attach step. CLIENT-owned
+        // warehouses are private to their owner and aren't attachable elsewhere.
+        if (payload.ownerType === 'PLATFORM') {
+          setCreated(saved)
+        } else {
+          onSaved(saved)
+        }
       }
-      onSaved()
     } catch (error) {
       if (error instanceof ApiError) {
         // Structured backend codes get bespoke copy; everything else falls to
@@ -106,39 +122,59 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
     }
   }
 
+  const closeAction = created ? () => onSaved(created) : onClose
+
   return (
-    <div
-      className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="warehouse-editor-title"
-    >
-      <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
-        <header className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-          <div className="flex items-center gap-2.5">
+    <>
+      <div
+        className="fixed inset-0 z-40 bg-slate-950/45"
+        onClick={closeAction}
+        aria-hidden="true"
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="warehouse-editor-title"
+        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[520px] flex-col border-l border-slate-200 bg-white shadow-[-18px_0_50px_rgba(8,14,26,0.18)]"
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+          <div className="flex items-start gap-2.5">
             <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#412d15]/10 text-[#412d15]">
               <FiHome className="h-4 w-4" />
             </span>
             <div>
-              <h2 id="warehouse-editor-title" className="text-[15px] font-semibold text-slate-950">
-                {isEdit ? `Edit warehouse ${warehouse!.code}` : 'Add warehouse'}
+              <p className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                Warehouses
+              </p>
+              <h2 id="warehouse-editor-title" className="mt-0.5 text-[15px] font-semibold text-slate-950">
+                {created
+                  ? `Attach ${created.code} to clients`
+                  : isEdit
+                    ? `Edit warehouse ${warehouse!.code}`
+                    : 'Add warehouse'}
               </h2>
               <p className="mt-0.5 text-[11.5px] text-slate-500">
-                Ship-from locations attach to clients; each client picks one default.
+                {created
+                  ? 'Optional — pick the clients that should see this warehouse.'
+                  : 'Ship-from locations attach to clients; each client picks one default.'}
               </p>
             </div>
           </div>
           <button
             type="button"
             aria-label="Close"
-            onClick={onClose}
-            className="rounded-lg border border-transparent p-1.5 text-slate-400 transition hover:border-slate-200 hover:text-slate-600"
+            onClick={closeAction}
+            className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
           >
             <FiX className="h-4 w-4" />
           </button>
         </header>
 
-        <div className="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-5">
+        {created ? (
+          <AttachClientsStep warehouse={created} onDone={() => onSaved(created)} />
+        ) : (
+        <>
+        <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
           {/* Identity */}
           <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Code" required hint="Uppercase; immutable after create.">
@@ -276,8 +312,10 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
             {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create warehouse'}
           </button>
         </footer>
-      </div>
-    </div>
+        </>
+        )}
+      </aside>
+    </>
   )
 }
 
@@ -305,3 +343,4 @@ function Field({
     </div>
   )
 }
+

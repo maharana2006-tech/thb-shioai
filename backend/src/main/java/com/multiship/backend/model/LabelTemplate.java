@@ -68,6 +68,21 @@ public class LabelTemplate {
     @Column(name = "show_items")
     private Boolean showItems = true;
 
+    /**
+     * Phase 1 drag-drop editor payload — a JSON tree of layout blocks
+     * (text / logo / address / items table / barcode / divider / spacer /
+     * totals / signature) with per-block config + data bindings. Null =
+     * template uses the legacy fields above (logo / color / header / footer
+     * / showItems). Non-null = the layout tree drives rendering once the
+     * Phase 2 renderer picks it up.
+     *
+     * <p>Stored as raw text so the schema doesn't fight Jackson on the
+     * versioned block shape; frontend + backend agree on the tree structure
+     * via the {@code TemplateLayout} TypeScript type.
+     */
+    @Column(name = "layout_json", columnDefinition = "text")
+    private String layoutJson;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 

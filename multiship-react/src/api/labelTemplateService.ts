@@ -19,6 +19,8 @@ export interface LabelTemplate {
    *  non-blank. Set even on list summaries (where logoBase64 itself is
    *  stripped for payload size). */
   hasLogo?: boolean | null
+  /** Phase 1 drag-drop editor payload. Serialized {@link TemplateLayout}. */
+  layoutJson?: string | null
   createdAt?: string | null
   updatedAt?: string | null
 }
@@ -48,6 +50,79 @@ export interface LabelTemplatePage {
 }
 
 const BASE = '/label-templates'
+
+/**
+ * Phase 2a preview call — POST the current layoutJson to /label-templates/preview
+ * and return the rendered HTML for display in an iframe. Uses the built-in
+ * sample shipment context on the backend (no shipment id needed yet).
+ *
+ * Not routed through apiClient because the response is text/html rather than
+ * JSON; the auth header is still attached by hand so the endpoint's
+ * @PreAuthorize passes.
+ */
+export async function previewTemplateHtml(layoutJson: string | null): Promise<string> {
+  const token = localStorage.getItem('multiship_token')
+  const response = await fetch(`${BASE_URL}${BASE}/preview`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ layoutJson }),
+  })
+  if (!response.ok) {
+    throw new Error(`Preview failed (HTTP ${response.status})`)
+  }
+  return response.text()
+}
+
+/**
+ * Phase 2b PDF preview — POST the current layoutJson and get back a Blob
+ * object URL suitable for a new-tab open or an <a download> click. Caller
+ * MUST revoke the returned URL when done so the Blob doesn't leak for the
+ * tab's lifetime.
+ */
+export async function previewTemplatePdfObjectUrl(layoutJson: string | null): Promise<string> {
+  const token = localStorage.getItem('multiship_token')
+  const response = await fetch(`${BASE_URL}${BASE}/preview.pdf`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ layoutJson }),
+  })
+  if (!response.ok) {
+    throw new Error(`PDF preview failed (HTTP ${response.status})`)
+  }
+  const blob = await response.blob()
+  return URL.createObjectURL(blob)
+}
+
+/**
+ * Phase 2c ZPL preview — POST the current layoutJson and get back the raw
+ * ZPL string. Caller can dump it to a Blob for download, or eventually
+ * pipe it to a WebUSB/print bridge. dpi selects 203 (default 4×6"
+ * shipping printer) or 300 (high-res thermal).
+ */
+export async function previewTemplateZpl(
+  layoutJson: string | null,
+  dpi: 203 | 300 = 203,
+): Promise<string> {
+  const token = localStorage.getItem('multiship_token')
+  const response = await fetch(`${BASE_URL}${BASE}/preview.zpl?dpi=${dpi}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ layoutJson }),
+  })
+  if (!response.ok) {
+    throw new Error(`ZPL preview failed (HTTP ${response.status})`)
+  }
+  return response.text()
+}
 
 export const labelTemplateService = {
   /**

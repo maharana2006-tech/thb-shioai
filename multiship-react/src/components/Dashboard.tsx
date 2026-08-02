@@ -167,7 +167,7 @@ export default function Dashboard() {
         okText: 'Every ship-method rule maps to an enabled service',
         warnText: `${health.rulesToDisabledServices} rule${health.rulesToDisabledServices === 1 ? '' : 's'} point at disabled services`,
         detail: '',
-        to: '/settings/shipping-services',
+        to: '/settings/shipping-catalog?tab=services',
       },
     ]
   }, [health])
