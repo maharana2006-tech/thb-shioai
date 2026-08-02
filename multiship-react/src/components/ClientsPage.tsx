@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import {
   FiActivity,
@@ -20,8 +20,6 @@ import { ApiError } from '../api/apiClient'
 import { clientService, type Client } from '../api/clientService'
 import { formatCarrierName } from '../utils/carrierUtils'
 import { countryName } from '../utils/countries'
-import ClientEditorModal from './modals/ClientEditorModal'
-import ClientOnboardingWizard from './modals/ClientOnboardingWizard'
 import PortalMenu from './workspace/PortalMenu'
 import CustomsProfileModal from './modals/CustomsProfileModal'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
@@ -35,6 +33,7 @@ const filterLabelClass =
 
 export default function ClientsPage() {
   const admin = isAdmin()
+  const navigate = useNavigate()
 
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
@@ -59,8 +58,6 @@ export default function ClientsPage() {
   const [busyId, setBusyId] = useState<number | null>(null)
 
   const [reloadToken, setReloadToken] = useState(0)
-  const [editor, setEditor] = useState<{ client: Client | null } | null>(null)
-  const [wizardOpen, setWizardOpen] = useState(false)
   const [customsClient, setCustomsClient] = useState<Client | null>(null)
 
   useEffect(() => {
@@ -353,7 +350,7 @@ export default function ClientsPage() {
             <RowActionsMenu
               admin={admin}
               onImporter={() => setCustomsClient(row.original)}
-              onEdit={() => setEditor({ client: row.original })}
+              onEdit={() => navigate(`/settings/clients/${encodeURIComponent(row.original.clientCode)}`)}
               onDelete={() => void handleDelete(row.original)}
             />
           </div>
@@ -504,7 +501,7 @@ export default function ClientsPage() {
             toolbarActions={
               <button
                 type="button"
-                onClick={() => setWizardOpen(true)}
+                onClick={() => navigate('/settings/clients/new')}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
               >
                 <FiPlus className="h-3.5 w-3.5" /> Add Client
@@ -525,29 +522,6 @@ export default function ClientsPage() {
         )}
       </section>
 
-      {editor ? (
-        <ClientEditorModal
-          client={editor.client}
-          onClose={() => setEditor(null)}
-          onSaved={() => {
-            setEditor(null)
-            refresh()
-          }}
-        />
-      ) : null}
-
-      {wizardOpen ? (
-        <ClientOnboardingWizard
-          onClose={() => {
-            setWizardOpen(false)
-            refresh()
-          }}
-          onFinished={() => {
-            setWizardOpen(false)
-            refresh()
-          }}
-        />
-      ) : null}
 
       {customsClient ? (
         <CustomsProfileModal

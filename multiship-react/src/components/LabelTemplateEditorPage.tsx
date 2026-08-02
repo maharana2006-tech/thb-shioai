@@ -14,20 +14,24 @@ import { clientService, type Client } from '../api/clientService'
 import { labelTemplateService, type LabelTemplate } from '../api/labelTemplateService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import Select from './workspace/Select'
+import LabelTemplateLayoutBuilder from './LabelTemplateLayoutBuilder'
+import { emptyLayout, type TemplateLayout } from '../utils/templateLayout'
 
 const PLATFORM_DEFAULT_VALUE = '__PLATFORM__'
 const DEFAULT_HEADER = 'PACKING SLIP'
 const DEFAULT_COLOR = '#1f150c'
-const TEMPLATE_TYPES = ['PACKING_SLIP', 'RETURN_COVER', 'COMMERCIAL_INVOICE']
+/** Template types the editor can create/edit. Wire values match the backend
+ *  {@code label_templates.template_type} enum; unique per (tenant, type). */
+const TEMPLATE_TYPES = ['SHIPPING_LABEL', 'PACKING_SLIP', 'COMMERCIAL_INVOICE', 'RETURN_COVER']
 
 const isAdmin = () =>
   (localStorage.getItem('multiship_role') || '').toUpperCase() === 'ADMIN'
 
 /**
  * Editor for a single label template. Two entry points:
- *   /settings/label-templates/new — create mode; tenant + type are
+ *   /settings/templates/new — create mode; tenant + type are
  *       editable selectors so the operator picks the scope
- *   /settings/label-templates/{id} — edit mode; tenant + type are
+ *   /settings/templates/{id} — edit mode; tenant + type are
  *       locked to the existing row's (tenantId, templateType) tuple
  *       because the DB has a unique constraint on that pair
  *
@@ -85,7 +89,7 @@ export default function LabelTemplateEditorPage() {
       setTemplateType(t.templateType ?? 'PACKING_SLIP')
     } catch (err: any) {
       notify.error(err?.message ?? 'Failed to load template.')
-      navigate('/settings/label-templates')
+      navigate('/settings/templates')
     } finally {
       setLoading(false)
     }
@@ -149,7 +153,7 @@ export default function LabelTemplateEditorPage() {
       // On create → navigate to the new row's edit URL so the operator
       // stays in-context and can keep tweaking.
       if (!isEdit && resp.data?.id != null) {
-        navigate(`/settings/label-templates/${resp.data.id}`, { replace: true })
+        navigate(`/settings/templates/${resp.data.id}`, { replace: true })
       }
     } catch (err: any) {
       notify.error(err?.message ?? 'Failed to save template.')
@@ -173,7 +177,7 @@ export default function LabelTemplateEditorPage() {
     try {
       await labelTemplateService.remove(template.id)
       notify.success('Template deleted.')
-      navigate('/settings/label-templates')
+      navigate('/settings/templates')
     } catch (err: any) {
       notify.error(err?.message ?? 'Failed to delete template.')
     }
@@ -196,7 +200,7 @@ export default function LabelTemplateEditorPage() {
       <div className="flex items-center justify-between">
         <button
           type="button"
-          onClick={() => navigate('/settings/label-templates')}
+          onClick={() => navigate('/settings/templates')}
           className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-slate-600 hover:text-slate-950"
         >
           <FiArrowLeft className="h-3.5 w-3.5" /> Back to templates
@@ -252,7 +256,7 @@ export default function LabelTemplateEditorPage() {
             <p className="mt-1 text-[11px] text-slate-400">
               {isEdit
                 ? 'Type is fixed after creation.'
-                : 'Currently only PACKING_SLIP is rendered — RETURN_COVER and COMMERCIAL_INVOICE reserved for later sprints.'}
+                : 'Per-tenant templates override the platform default for the picked (tenant, type) combo. Shipments use the tenant\'s row when present; otherwise the platform default.'}
             </p>
           </div>
         </div>
@@ -349,6 +353,47 @@ export default function LabelTemplateEditorPage() {
             onChange={(e) => updateField('footerText', e.target.value)}
             placeholder={'Thanks for your order!\nReturns accepted within 30 days.'}
             className={`${textInput} resize-none`}
+          />
+        </div>
+
+        {/* ===== Phase 1 drag-drop layout builder =====
+            Coexists with the legacy header/footer/logo fields above — the
+            renderer picks the layout tree over the legacy fields when
+            layoutJson is non-null. Phase 2 wires the actual PDF / ZPL
+            renderers to this tree. */}
+        <div className="mt-2 mb-5 rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[12.5px] font-semibold text-slate-950">Layout builder</p>
+              <p className="text-[11px] leading-4 text-slate-500">
+                Drag blocks into the canvas. Click a field on the right to insert a data binding at the cursor.
+                Once saved, the layout drives rendering; legacy header / footer / logo above are used as a fallback until layouts are populated.
+              </p>
+            </div>
+            {template.layoutJson ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (!window.confirm('Clear the whole layout? The legacy header / footer / logo fields will be used at render time until you rebuild.')) return
+                  setTemplate((prev) => ({ ...prev, layoutJson: null }))
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+              >
+                <FiTrash2 className="h-3 w-3" /> Clear layout
+              </button>
+            ) : null}
+          </div>
+          <LabelTemplateLayoutBuilder
+            value={(() => {
+              // Deserialize once per render. Falls back to the empty layout
+              // when the persisted blob is missing or corrupt (a bad parse
+              // shouldn't blank the operator's session; we just treat it
+              // as "no layout yet").
+              if (!template.layoutJson) return null
+              try { return JSON.parse(template.layoutJson) as TemplateLayout }
+              catch { return emptyLayout }
+            })()}
+            onChange={(next) => setTemplate((prev) => ({ ...prev, layoutJson: JSON.stringify(next) }))}
           />
         </div>
 

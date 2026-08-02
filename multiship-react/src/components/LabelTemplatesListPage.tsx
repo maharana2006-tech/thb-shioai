@@ -29,7 +29,10 @@ import PortalMenu from './workspace/PortalMenu'
 const isAdmin = () =>
   (localStorage.getItem('multiship_role') || '').toUpperCase() === 'ADMIN'
 
-const TEMPLATE_TYPES = ['PACKING_SLIP', 'RETURN_COVER', 'COMMERCIAL_INVOICE']
+/** Template types the platform models. Per-tenant rows overlay the platform
+ *  default per (tenant_id, template_type); at shipment time the render path
+ *  falls back to the platform row when a tenant hasn't defined its own. */
+const TEMPLATE_TYPES = ['SHIPPING_LABEL', 'PACKING_SLIP', 'COMMERCIAL_INVOICE', 'RETURN_COVER']
 
 const filterLabelClass =
   'mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
@@ -43,7 +46,7 @@ const textInput =
  * currently-saved template — keeps the ergonomic "type an order # and
  * see it" workflow the old editor page had, but standalone.
  *
- * The editor lives at /settings/label-templates/new + /:id.
+ * The editor lives at /settings/templates/new + /:id.
  */
 export default function LabelTemplatesListPage() {
   const admin = isAdmin()
@@ -148,7 +151,7 @@ export default function LabelTemplatesListPage() {
   // ===== row actions =====
   const handleEdit = (t: LabelTemplate) => {
     if (t.id == null) return
-    navigate(`/settings/label-templates/${t.id}`)
+    navigate(`/settings/templates/${t.id}`)
   }
 
   const handleDelete = async (t: LabelTemplate) => {
@@ -454,7 +457,7 @@ export default function LabelTemplatesListPage() {
             toolbarActions={
               <button
                 type="button"
-                onClick={() => navigate('/settings/label-templates/new')}
+                onClick={() => navigate('/settings/templates/new')}
                 className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black"
               >
                 <FiPlus className="h-3.5 w-3.5" /> Add template

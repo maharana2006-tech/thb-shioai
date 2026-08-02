@@ -35,6 +35,12 @@ import {
   normalizeCarrierCode,
   type CarrierEnvironment,
 } from '../utils/carrierUtils'
+import {
+  SHIPPING_PURPOSES,
+  clearanceOptionsForCarrier,
+  purposeLabel,
+  clearanceLabel,
+} from '../utils/customsOptions'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import CarrierLogo from './workspace/CarrierLogo'
@@ -134,6 +140,20 @@ interface DrawerState {
   customerNo: string
   environment: CarrierEnvironment
   clientDefault: boolean
+  /** International-shipment defaults — both optional; carriers fall back to
+   *  their own defaults when unset. Values come from ../utils/customsOptions. */
+  shippingPurpose: string
+  clearanceOption: string
+  /** Third-party billing default. Only shown / persisted when the operator
+   *  picked THIRD_PARTY for clearanceOption. All optional individually — a
+   *  future per-shipment override on Shipment can fill in what's missing. */
+  thirdPartyAccount: string
+  thirdPartyName: string
+  thirdPartyAddress1: string
+  thirdPartyCity: string
+  thirdPartyState: string
+  thirdPartyPostcode: string
+  thirdPartyCountry: string
 }
 
 const emptyDrawer: DrawerState = {
@@ -147,6 +167,15 @@ const emptyDrawer: DrawerState = {
   customerNo: '',
   environment: 'SANDBOX',
   clientDefault: false,
+  shippingPurpose: '',
+  clearanceOption: '',
+  thirdPartyAccount: '',
+  thirdPartyName: '',
+  thirdPartyAddress1: '',
+  thirdPartyCity: '',
+  thirdPartyState: '',
+  thirdPartyPostcode: '',
+  thirdPartyCountry: '',
 }
 
 const inputClassName =
@@ -392,6 +421,15 @@ export default function CarrierConnections({
         customerNo: account.customerNo || '',
         environment: account.environment === 'PRODUCTION' ? 'PRODUCTION' : 'SANDBOX',
         clientDefault: Boolean(account.clientDefault),
+        shippingPurpose: account.shippingPurpose || '',
+        clearanceOption: account.clearanceOption || '',
+        thirdPartyAccount:  account.thirdPartyAccount  || '',
+        thirdPartyName:     account.thirdPartyName     || '',
+        thirdPartyAddress1: account.thirdPartyAddress1 || '',
+        thirdPartyCity:     account.thirdPartyCity     || '',
+        thirdPartyState:    account.thirdPartyState    || '',
+        thirdPartyPostcode: account.thirdPartyPostcode || '',
+        thirdPartyCountry:  account.thirdPartyCountry  || '',
       })
       setRotatingCredentials(false)
     } else {
@@ -496,6 +534,22 @@ export default function CarrierConnections({
         environment: drawer.environment,
         customerNo: drawer.accountType === 'client' ? drawer.customerNo.trim() : undefined,
         clientDefault: drawer.accountType === 'client' ? drawer.clientDefault : undefined,
+        // International-shipment defaults; send null explicitly so a blank
+        // Select on edit clears the persisted value (backend treats null as
+        // "unset", empty string as "keep" — this matches the credentials rule).
+        shippingPurpose: drawer.shippingPurpose || null,
+        clearanceOption: drawer.clearanceOption || null,
+        // Third-party billing default. Only send the address when the picked
+        // clearance is THIRD_PARTY — flipping to SENDER/RECIPIENT explicitly
+        // clears the persisted third-party row (send empty strings so the
+        // backend's null-vs-empty rule wipes the columns).
+        thirdPartyAccount:  drawer.clearanceOption === 'THIRD_PARTY' ? (drawer.thirdPartyAccount  || null) : '',
+        thirdPartyName:     drawer.clearanceOption === 'THIRD_PARTY' ? (drawer.thirdPartyName     || null) : '',
+        thirdPartyAddress1: drawer.clearanceOption === 'THIRD_PARTY' ? (drawer.thirdPartyAddress1 || null) : '',
+        thirdPartyCity:     drawer.clearanceOption === 'THIRD_PARTY' ? (drawer.thirdPartyCity     || null) : '',
+        thirdPartyState:    drawer.clearanceOption === 'THIRD_PARTY' ? (drawer.thirdPartyState    || null) : '',
+        thirdPartyPostcode: drawer.clearanceOption === 'THIRD_PARTY' ? (drawer.thirdPartyPostcode || null) : '',
+        thirdPartyCountry:  drawer.clearanceOption === 'THIRD_PARTY' ? (drawer.thirdPartyCountry  || null) : '',
       }
       const response = await accountRefService.upsertAccount(payload)
       const savedId = response.data?.id
@@ -640,6 +694,40 @@ export default function CarrierConnections({
         },
       },
       {
+        id: 'shippingPurpose',
+        accessorFn: (a) => a.shippingPurpose || '',
+        header: 'Purpose',
+        cell: ({ row }) => {
+          const v = row.original.shippingPurpose
+          return v
+            ? <span className="text-[11.5px] font-semibold text-slate-700">{purposeLabel(v)}</span>
+            : <span className="text-[11px] italic text-slate-400">carrier default</span>
+        },
+        meta: {
+          headerLabel: 'Shipping purpose',
+          hideable: true,
+          exportValue: (a: CarrierAccountRef) => a.shippingPurpose || '',
+          editByPicker: (a: CarrierAccountRef) => openDrawer(a),
+        },
+      },
+      {
+        id: 'clearanceOption',
+        accessorFn: (a) => a.clearanceOption || '',
+        header: 'Clearance',
+        cell: ({ row }) => {
+          const a = row.original
+          return a.clearanceOption
+            ? <span className="text-[11.5px] font-semibold text-slate-700">{clearanceLabel(a.carrierCode, a.clearanceOption)}</span>
+            : <span className="text-[11px] italic text-slate-400">carrier default</span>
+        },
+        meta: {
+          headerLabel: 'Customs clearance',
+          hideable: true,
+          exportValue: (a: CarrierAccountRef) => a.clearanceOption || '',
+          editByPicker: (a: CarrierAccountRef) => openDrawer(a),
+        },
+      },
+      {
         id: 'status',
         // Sort key: verified true > pending > false so healthy accounts float up.
         accessorFn: (a) => (!a.complete ? -2 : !a.active ? -1 : a.verified === true ? 2 : a.verified === false ? 0 : 1),
@@ -745,6 +833,31 @@ export default function CarrierConnections({
               </span>
             </div>
           ))}
+        </section>
+      ) : null}
+
+      {/* ===== empty-state CTA (embedded + no accounts) — makes the "add
+             your first carrier account" action obvious in the client wizard's
+             Carriers step, where a bare empty table doesn't read as a call to
+             action. The button reuses the same drawer the toolbar opens. */}
+      {embedded && !loading && accounts.length === 0 ? (
+        <section className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 px-5 py-8 text-center">
+          <div className="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-xl bg-[#412d15]/10 text-[#412d15]">
+            <FiBox className="h-5 w-5" />
+          </div>
+          <p className="mt-2 text-[13.5px] font-semibold text-slate-950">No carrier accounts yet</p>
+          <p className="mx-auto mt-1 max-w-md text-[11.5px] leading-4 text-slate-500">
+            {scopedClient
+              ? `Add a carrier account for ${scopedClient} so shipments on this client can authenticate with UPS / FedEx / USPS.`
+              : 'Add a carrier account so shipments can authenticate with UPS / FedEx / USPS.'}
+          </p>
+          <button
+            type="button"
+            onClick={() => openDrawer()}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
+          >
+            <FiPlus className="h-3.5 w-3.5" /> Add carrier account
+          </button>
         </section>
       ) : null}
 
@@ -1193,6 +1306,128 @@ export default function CarrierConnections({
                     ))}
                   </Select>
                 </Field>
+
+                {/* International-shipment defaults — both optional. Rendered
+                    in the drawer regardless of destination (carrier account
+                    is not per-shipment); label is clear that they apply to
+                    international parcels only. Clearance options filter by
+                    the picked carrier. */}
+                <div className="mt-2 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+                  <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                    International defaults <span className="ml-1 rounded-full bg-white px-1.5 py-0.5 text-[9px] font-bold text-slate-500">optional</span>
+                  </p>
+                  <p className="mt-0.5 text-[10.5px] leading-4 text-slate-500">
+                    Applied to international shipments on this account. Leave blank to use the carrier's default.
+                  </p>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <Field label="Shipping purpose">
+                      <Select
+                        value={drawer.shippingPurpose}
+                        onChange={(e) => setDrawer((c) => ({ ...c, shippingPurpose: e.target.value }))}
+                      >
+                        <option value="">— carrier default —</option>
+                        {SHIPPING_PURPOSES.map((p) => (
+                          <option key={p.value} value={p.value}>{p.label}</option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="Customs clearance">
+                      <Select
+                        value={drawer.clearanceOption}
+                        onChange={(e) => setDrawer((c) => ({ ...c, clearanceOption: e.target.value }))}
+                        disabled={clearanceOptionsForCarrier(drawer.carrierCode).length === 0}
+                      >
+                        <option value="">— carrier default —</option>
+                        {clearanceOptionsForCarrier(drawer.carrierCode).map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </Select>
+                    </Field>
+                  </div>
+
+                  {/* Third-party billing sub-panel — only shown when the
+                      operator picks THIRD_PARTY. Every field is an
+                      account-level DEFAULT; per-shipment overrides go on the
+                      Shipment row (follow-up). Account # is the crucial
+                      field carriers need; the address fills billing details. */}
+                  {drawer.clearanceOption === 'THIRD_PARTY' ? (
+                    <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50/40 p-3">
+                      <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-amber-800">
+                        Third-party billing (default) <span className="ml-1 rounded-full bg-white px-1.5 py-0.5 text-[9px] font-bold text-amber-700">per-shipment override</span>
+                      </p>
+                      <p className="mt-0.5 text-[10.5px] leading-4 text-amber-900/70">
+                        Account-level default only. The account #, address, or both can be overridden per shipment
+                        (New Shipment form) — this is the fallback when no override is set.
+                      </p>
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <Field label="Third-party account #">
+                          <input
+                            value={drawer.thirdPartyAccount}
+                            onChange={(e) => setDrawer((c) => ({ ...c, thirdPartyAccount: e.target.value }))}
+                            maxLength={100}
+                            autoComplete="off"
+                            className={inputClassName}
+                          />
+                        </Field>
+                        <Field label="Party name">
+                          <input
+                            value={drawer.thirdPartyName}
+                            onChange={(e) => setDrawer((c) => ({ ...c, thirdPartyName: e.target.value }))}
+                            maxLength={255}
+                            className={inputClassName}
+                          />
+                        </Field>
+                        <div className="col-span-2">
+                          <Field label="Address line 1">
+                            <input
+                              value={drawer.thirdPartyAddress1}
+                              onChange={(e) => setDrawer((c) => ({ ...c, thirdPartyAddress1: e.target.value }))}
+                              maxLength={255}
+                              autoComplete="address-line1"
+                              className={inputClassName}
+                            />
+                          </Field>
+                        </div>
+                        <Field label="City">
+                          <input
+                            value={drawer.thirdPartyCity}
+                            onChange={(e) => setDrawer((c) => ({ ...c, thirdPartyCity: e.target.value }))}
+                            maxLength={100}
+                            autoComplete="address-level2"
+                            className={inputClassName}
+                          />
+                        </Field>
+                        <Field label="State / region">
+                          <input
+                            value={drawer.thirdPartyState}
+                            onChange={(e) => setDrawer((c) => ({ ...c, thirdPartyState: e.target.value }))}
+                            maxLength={50}
+                            autoComplete="address-level1"
+                            className={inputClassName}
+                          />
+                        </Field>
+                        <Field label="Postal code">
+                          <input
+                            value={drawer.thirdPartyPostcode}
+                            onChange={(e) => setDrawer((c) => ({ ...c, thirdPartyPostcode: e.target.value }))}
+                            maxLength={20}
+                            autoComplete="postal-code"
+                            className={inputClassName}
+                          />
+                        </Field>
+                        <Field label="Country (ISO-2)">
+                          <input
+                            value={drawer.thirdPartyCountry}
+                            onChange={(e) => setDrawer((c) => ({ ...c, thirdPartyCountry: e.target.value.toUpperCase() }))}
+                            maxLength={2}
+                            className={`${inputClassName} uppercase`}
+                            placeholder="US"
+                          />
+                        </Field>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </DrawerStep>
 
               <DrawerStep n="4" title="Verify & save">

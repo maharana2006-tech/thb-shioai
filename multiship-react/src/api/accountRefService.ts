@@ -21,6 +21,21 @@ export interface CarrierAccountRef {
   /** Usage: labels generated with this account and when it last shipped. */
   labelsGenerated: number | null
   lastUsedAt: string | null
+  /** International-shipment defaults per account. Wire values match
+   *  {@link ../utils/customsOptions}. Nullable — carriers apply their own
+   *  defaults when unset. */
+  shippingPurpose?: string | null
+  clearanceOption?: string | null
+  /** Third-party billing default — only meaningful when clearanceOption is
+   *  THIRD_PARTY. Nullable individually; per-shipment overrides live on the
+   *  Shipment row (follow-up). */
+  thirdPartyAccount?: string | null
+  thirdPartyName?: string | null
+  thirdPartyAddress1?: string | null
+  thirdPartyCity?: string | null
+  thirdPartyState?: string | null
+  thirdPartyPostcode?: string | null
+  thirdPartyCountry?: string | null
   createdAt: string | null
   updatedAt: string | null
 }
@@ -43,6 +58,20 @@ export interface AccountRefUpsertPayload {
   customerNo?: string
   /** Make this the linked client's default account. */
   clientDefault?: boolean
+  /** International-shipment defaults; both optional. Values validated by the
+   *  frontend against the enum in ../utils/customsOptions. */
+  shippingPurpose?: string | null
+  clearanceOption?: string | null
+  /** Third-party billing default (only sent when clearance = THIRD_PARTY).
+   *  Null on any field = clear the persisted value; omitting the field from
+   *  the payload entirely = keep the persisted value. */
+  thirdPartyAccount?: string | null
+  thirdPartyName?: string | null
+  thirdPartyAddress1?: string | null
+  thirdPartyCity?: string | null
+  thirdPartyState?: string | null
+  thirdPartyPostcode?: string | null
+  thirdPartyCountry?: string | null
 }
 
 /**

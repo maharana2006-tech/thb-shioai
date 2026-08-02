@@ -32,6 +32,20 @@ public class CarrierAccountRefDTO {
     /** Labels generated with this account and when it last shipped. */
     private Long labelsGenerated;
     private LocalDateTime lastUsedAt;
+    /** International-shipment defaults; wire values match the frontend's
+     *  {@code utils/customsOptions.ts}. Nullable — carriers apply their own
+     *  defaults when unset. */
+    private String shippingPurpose;
+    private String clearanceOption;
+    /** Third-party billing address (default, when clearanceOption=THIRD_PARTY).
+     *  Nullable — per-shipment overrides live on the Shipment row. */
+    private String thirdPartyAccount;
+    private String thirdPartyName;
+    private String thirdPartyAddress1;
+    private String thirdPartyCity;
+    private String thirdPartyState;
+    private String thirdPartyPostcode;
+    private String thirdPartyCountry;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

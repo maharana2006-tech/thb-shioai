@@ -30,7 +30,6 @@ import AccountScenarioBadge from './workspace/AccountScenarioBadge'
 import OrderStatusBadge from './workspace/OrderStatusBadge'
 import TablePagination from './workspace/TablePagination'
 import FillCarrierDetailsModal from './modals/FillCarrierDetailsModal'
-import ClientEditorModal from './modals/ClientEditorModal'
 import AccountPickerModal from './modals/AccountPickerModal'
 import OrderDetailsModal from './modals/OrderDetailsModal'
 import TrackingTimelineModal from './tracking/TrackingTimelineModal'
@@ -127,7 +126,6 @@ export default function OrdersWorkspace() {
     orderNo: number
     resolution: OrderAccountResolution
   } | null>(null)
-  const [addClientCode, setAddClientCode] = useState<string | null>(null)
   const [pickerTarget, setPickerTarget] = useState<Order | null>(null)
   const [pickerCarrier, setPickerCarrier] = useState<string | null>(null)
   const [pickerSuggested, setPickerSuggested] = useState<string | null>(null)
@@ -435,8 +433,10 @@ export default function OrdersWorkspace() {
           // CLIENT_NOT_FOUND (422): the order's client is unregistered —
           // open the add-client form prefilled with the code.
           if (error instanceof ApiError && error.errorCode === 'CLIENT_NOT_FOUND') {
-            if (orderNos.length === 1) {
-              setAddClientCode(data?.clientCode || null)
+            if (orderNos.length === 1 && data?.clientCode) {
+              // Navigate to the new-client page prefilled with the missing code
+              // (was ClientEditorModal with lockedCode before the page rewrite).
+              navigate(`/settings/clients/new?code=${encodeURIComponent(data.clientCode)}`)
             }
             return
           }
@@ -606,7 +606,7 @@ export default function OrdersWorkspace() {
       return (
         <button
           type="button"
-          onClick={() => setAddClientCode(order.orderDetails.customerCode)}
+          onClick={() => navigate(`/settings/clients/new?code=${encodeURIComponent(order.orderDetails.customerCode)}`)}
           className={`${ACTION_BASE} ${ACTION_OUTLINE}`}
         >
           <FiEdit3 className="h-3 w-3" />
@@ -1301,17 +1301,6 @@ export default function OrdersWorkspace() {
         />
       ) : null}
 
-      {addClientCode ? (
-        <ClientEditorModal
-          lockedCode={addClientCode}
-          onClose={() => setAddClientCode(null)}
-          onSaved={(client) => {
-            setAddClientCode(null)
-            notify.success(`Client ${client.clientCode} registered — its orders are ready to generate.`)
-            refreshQueues()
-          }}
-        />
-      ) : null}
 
       {fillDetailsTarget ? (
         <FillCarrierDetailsModal

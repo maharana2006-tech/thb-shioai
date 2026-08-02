@@ -5,6 +5,11 @@ import com.multiship.backend.dto.LabelTemplateDTO;
 import com.multiship.backend.dto.PageResponseDTO;
 import com.multiship.backend.model.LabelTemplate;
 import com.multiship.backend.service.LabelTemplateService;
+import com.multiship.backend.service.template.SampleShipmentContext;
+import com.multiship.backend.service.template.TemplateHtmlRenderer;
+import com.multiship.backend.service.template.TemplatePdfRenderer;
+import com.multiship.backend.service.template.TemplateZplRenderer;
+import org.springframework.http.MediaType;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -172,5 +177,85 @@ public class LabelTemplateController {
                 .code(HttpStatus.OK.value())
                 .message("Template deleted")
                 .build());
+    }
+
+    /**
+     * Phase 2a preview endpoint. Renders the given layout JSON to a
+     * self-contained HTML document using {@link SampleShipmentContext} for
+     * bindings. Powers the "Preview" panel in the drag-drop editor so the
+     * operator sees blocks resolve against realistic data as they build.
+     *
+     * <p>Accepts the layout in the request body so unsaved edits can be
+     * previewed without a round-trip through save+load. The response is
+     * always 200 with an HTML payload; a bad JSON body renders an inline
+     * placeholder (the frontend iframe never sees an error page).
+     */
+    @Operation(summary = "Render a template layout to HTML for preview",
+            description = "Uses the built-in sample shipment context. Real per-shipment " +
+                    "preview lands in Phase 2b when the Shipment-to-context adapter ships.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping(value = "/preview", produces = "text/html")
+    public ResponseEntity<String> previewLayout(@RequestBody(required = false) PreviewRequest body) {
+        String layoutJson = body == null ? null : body.getLayoutJson();
+        String html = TemplateHtmlRenderer.render(layoutJson, SampleShipmentContext.sample());
+        return ResponseEntity.ok().header("Content-Type", "text/html; charset=utf-8").body(html);
+    }
+
+    /**
+     * Phase 2b — same layout resolved to a PDF for download. The endpoint
+     * is separate from {@code /preview} because browsers render inline
+     * PDFs differently from raw HTML, and the frontend chooses the
+     * MIME type via which URL it fetches. Payload is the same
+     * PreviewRequest body so unsaved edits render without a save round-trip.
+     */
+    @Operation(summary = "Render a template layout to PDF for download",
+            description = "Uses the built-in sample shipment context, same as /preview.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping(value = "/preview.pdf", produces = MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> previewLayoutPdf(@RequestBody(required = false) PreviewRequest body) {
+        String layoutJson = body == null ? null : body.getLayoutJson();
+        byte[] pdf = TemplatePdfRenderer.render(layoutJson, SampleShipmentContext.sample());
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header("Content-Disposition", "inline; filename=\"template-preview.pdf\"")
+                .body(pdf);
+    }
+
+    /**
+     * Phase 2c — resolve the layout to ZPL II for direct printing on a
+     * Zebra-compatible thermal head. Returns text/plain so the raw string
+     * can be piped straight to a printer (via lpr / a raw socket / the
+     * carrier SDK's "print raw" endpoint) or saved and inspected.
+     *
+     * <p>Query {@code ?dpi=203} (default) or {@code ?dpi=300} to target
+     * different thermal head resolutions.
+     */
+    @Operation(summary = "Render a template layout to ZPL for a Zebra printer",
+            description = "Uses the built-in sample shipment context. Content-Type is text/plain " +
+                    "so the response body IS the raw ZPL — pipe it to the printer or save as .zpl.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping(value = "/preview.zpl", produces = MediaType.TEXT_PLAIN_VALUE)
+    public ResponseEntity<String> previewLayoutZpl(
+            @RequestBody(required = false) PreviewRequest body,
+            @RequestParam(name = "dpi", defaultValue = "203") int dpi) {
+        String layoutJson = body == null ? null : body.getLayoutJson();
+        // Clamp DPI to the two common thermal-head resolutions; other
+        // values would still math correctly but almost certainly indicate
+        // a client typo, so we normalise silently to 203.
+        int safeDpi = (dpi == 300) ? 300 : 203;
+        String zpl = TemplateZplRenderer.render(layoutJson,
+                SampleShipmentContext.sample(), safeDpi);
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_PLAIN)
+                .header("Content-Disposition", "inline; filename=\"template-preview.zpl\"")
+                .body(zpl);
+    }
+
+    /** Body shape for {@link #previewLayout} — thin wrapper so we can grow
+     *  the endpoint later without breaking clients (e.g. add a target
+     *  shipmentId for real-shipment preview in Phase 2b). */
+    @lombok.Data
+    public static class PreviewRequest {
+        private String layoutJson;
     }
 }

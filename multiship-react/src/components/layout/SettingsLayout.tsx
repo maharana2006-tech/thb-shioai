@@ -33,7 +33,7 @@ export default function SettingsLayout() {
     setRefresh(() => handler)
   }, [])
 
-  // Match nested routes (e.g. /settings/label-templates/{id}) to the parent
+  // Match nested routes (e.g. /settings/templates/{id}) to the parent
   // tab so navigating from list -> edit keeps the tab lit.
   const activeItem = useMemo(
     () =>
@@ -64,7 +64,7 @@ export default function SettingsLayout() {
         <div className="flex flex-wrap gap-0.5" role="tablist">
           {items.map((item) => {
             // NavLink's default exact match would drop the tab when the user
-            // navigates from /settings/label-templates → /settings/label-templates/{id}.
+            // navigates from /settings/templates → /settings/templates/{id}.
             // Manually flag active when the current path is the tab OR a
             // descendant of it.
             const active =

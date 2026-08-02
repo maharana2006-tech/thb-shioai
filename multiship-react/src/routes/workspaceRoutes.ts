@@ -14,11 +14,16 @@ export const settingsPaths = {
   clients: '/settings/clients',
   warehouses: '/settings/warehouses',
   carriers: '/settings/carriers',
-  shippingServices: '/settings/shipping-services',
+  /** Merged catalog: shipping services + packages under sub-tabs. Replaces
+   *  the old `shipping-services` and `packages` routes. Deep-link the tab
+   *  with `?tab=services` or `?tab=packages`. */
+  shippingCatalog: '/settings/shipping-catalog',
   shippingServiceMapping: '/settings/shipping-service-mapping',
-  packages: '/settings/packages',
   importerBroker: '/settings/importer-broker',
-  labelTemplates: '/settings/label-templates',
+  /** Tenant-branded document templates — shipping label, packing slip,
+   *  commercial invoice. Old `/settings/label-templates` still redirects
+   *  here. */
+  templates: '/settings/templates',
   customFields: '/settings/custom-fields',
   routingRules: '/settings/routing-rules',
   reports: '/settings/reports',
@@ -62,42 +67,32 @@ export const settingsNavItems: Array<{
     // both here so the menu bar renders — ADMIN-only writes surface as 403 at
     // submit time with a clear error toast.
     roles: ['ADMIN', 'USER'] },
-  { key: 'shipping-services', label: 'Shipping Services', to: settingsPaths.shippingServices, iconKey: 'service',
-    description: "The carrier service catalog per origin, and each service's allowed packages.",
+  { key: 'shipping-catalog', label: 'Shipping Catalog', to: settingsPaths.shippingCatalog, iconKey: 'service',
+    description: "Carrier services + packages per origin, and each item's allowed clients. Two sub-tabs share the origin filter and allowlist model.",
     roles: ['ADMIN', 'USER'] },
   { key: 'shipping-service-mapping', label: 'Shipping Service Mapping', to: settingsPaths.shippingServiceMapping, iconKey: 'mapping',
     description: "How order ship-methods resolve to a carrier service — most specific mapping wins.",
     roles: ['ADMIN', 'USER'] },
-  { key: 'packages', label: 'Packages', to: settingsPaths.packages, iconKey: 'package',
-    description: "Your own boxes plus each carrier's predefined packaging per ship-from country.",
-    roles: ['ADMIN', 'USER'] },
   { key: 'importer-broker', label: 'Importer / Broker', to: settingsPaths.importerBroker, iconKey: 'customs',
     description: 'Customs identities — importer/broker profiles applied per destination country.',
     roles: ['ADMIN', 'USER'] },
-  { key: 'label-templates', label: 'Label Templates', to: settingsPaths.labelTemplates, iconKey: 'apiDocs',
-    description: 'Tenant-branded packing slip that ships inside the parcel — logo, colour, header, footer.',
+  { key: 'templates', label: 'Templates', to: settingsPaths.templates, iconKey: 'apiDocs',
+    description: 'Per-client shipping label, packing slip and commercial invoice templates. Fall back to platform defaults when a client hasn\'t set one.',
     roles: ['ADMIN', 'USER'] },
   { key: 'custom-fields', label: 'Custom Fields', to: settingsPaths.customFields, iconKey: 'mapping',
     description: 'Per-tenant metadata on orders (PO number, department, marketplace order id) — flows through the form and order detail.',
     roles: ['ADMIN', 'USER'] },
-  { key: 'routing-rules', label: 'Routing Rules', to: settingsPaths.routingRules, iconKey: 'mapping',
-    description: 'Per-client rerouting / blocking rules applied after rate-shop, before label generation. Priority-ordered, dry-run supported.',
-    roles: ['ADMIN', 'USER'] },
-  { key: 'reports', label: 'Reports', to: settingsPaths.reports, iconKey: 'apiDocs',
-    description: 'On-demand CSV exports (orders, tracking, rate-shop, billing) plus scheduled recurring exports with dashboard / email / webhook delivery.',
-    roles: ['ADMIN', 'USER'] },
-  { key: 'webhook-subscriptions', label: 'Webhooks', to: settingsPaths.webhookSubs, iconKey: 'apiKey',
-    description: 'External-app webhook subscriptions per API key. Delivered with HMAC-SHA256 signature and retried on failure.',
-    roles: ['ADMIN', 'USER'] },
-  { key: 'code-maps', label: 'Code Maps', to: settingsPaths.codeMaps, iconKey: 'mapping',
-    description: "ERP↔platform aliases per client — how raw ERP codes translate into platform IDs on incoming orders.",
-    roles: ['ADMIN'] },
-  { key: 'api-keys', label: 'API Keys', to: settingsPaths.apiKeys, iconKey: 'apiKey',
-    description: 'Mint and revoke the msk_ tokens external systems use to call the public shipping API.',
-    roles: ['ADMIN'] },
-  { key: 'api-reference', label: 'API Reference', to: settingsPaths.apiReference, iconKey: 'apiDocs',
-    description: 'How external systems call the public shipping API — endpoints, examples, and error codes.',
-    roles: ['ADMIN'] },
+  // ===== Hidden from the Settings menu =====
+  // Routes below still resolve so direct URLs and any hard-coded links keep
+  // working — only the nav-menu entries are removed. Re-add an object to the
+  // array (matching the shape above) to bring one back.
+  //
+  // { key: 'routing-rules',        label: 'Routing Rules',      to: settingsPaths.routingRules,          iconKey: 'mapping', description: '…', roles: ['ADMIN', 'USER'] },
+  // { key: 'reports',              label: 'Reports',            to: settingsPaths.reports,               iconKey: 'apiDocs', description: '…', roles: ['ADMIN', 'USER'] },
+  // { key: 'webhook-subscriptions',label: 'Webhooks',           to: settingsPaths.webhookSubs,           iconKey: 'apiKey',  description: '…', roles: ['ADMIN', 'USER'] },
+  // { key: 'code-maps',            label: 'Code Maps',          to: settingsPaths.codeMaps,              iconKey: 'mapping', description: '…', roles: ['ADMIN']         },
+  // { key: 'api-keys',             label: 'API Keys',           to: settingsPaths.apiKeys,               iconKey: 'apiKey',  description: '…', roles: ['ADMIN']         },
+  // { key: 'api-reference',        label: 'API Reference',      to: settingsPaths.apiReference,          iconKey: 'apiDocs', description: '…', roles: ['ADMIN']         },
 ]
 
 export const getNavItemsForRole = (role: UserRole) => {
