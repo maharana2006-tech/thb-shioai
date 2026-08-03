@@ -1,4 +1,4 @@
-import { apiClient, BASE_URL } from './apiClient'
+import { apiClient, authFetch, BASE_URL } from './apiClient'
 import type { ApiResponse } from './orderService'
 
 export interface OrderImportRow {
@@ -67,15 +67,16 @@ export const orderImportService = {
   ): Promise<ApiResponse<OrderImportPreview>> => {
     const form = new FormData()
     form.append('file', file)
-    const token = localStorage.getItem('multiship_token')
     const qs = expectedAccountId != null ? `?expectedAccountId=${expectedAccountId}` : ''
-    const response = await fetch(`${BASE_URL}/orders/import/preview${qs}`, {
+    // authFetch attaches the Bearer token + surfaces the actual server
+    // error message on non-2xx (previously the caller got a raw JSON
+    // parse failure when Security returned 401 as HTML). 401 also
+    // auto-kicks to /login so an expired JWT doesn't stall the operator.
+    const response = await authFetch(`/orders/import/preview${qs}`, {
       method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: form,
     })
-    const json: ApiResponse<OrderImportPreview> = await response.json()
-    return json
+    return (await response.json()) as ApiResponse<OrderImportPreview>
   },
 
   commit: (rows: OrderImportRow[]) =>
@@ -95,19 +96,23 @@ export const orderImportService = {
    * Null accountId = generic template.
    */
   downloadXlsxTemplate: async (accountId?: number | null): Promise<void> => {
-    const token = localStorage.getItem('multiship_token')
     const qs = accountId != null ? `?accountId=${accountId}` : ''
-    const response = await fetch(`${BASE_URL}/orders/import/template.xlsx${qs}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-    if (!response.ok) {
-      throw new Error(`Template download failed (HTTP ${response.status})`)
-    }
+    // authFetch = Bearer attached + response-body-aware error message +
+    // auto-logout on 401. Previously threw "HTTP 401" with no server
+    // context, which hid expired-JWT vs missing-token vs role-denied.
+    const response = await authFetch(`/orders/import/template.xlsx${qs}`)
     const blob = await response.blob()
+    // Backend switches Content-Type to macroEnabled.12 + filename to
+    // .xlsm when the static resource is present; grab the filename
+    // from Content-Disposition when we can, else use our default.
+    const cd = response.headers.get('Content-Disposition') || ''
+    const nameMatch = /filename="?([^"]+)"?/i.exec(cd)
+    const filename = nameMatch
+      ? nameMatch[1]
+      : accountId != null
+        ? `order-import-template-account-${accountId}.xlsx`
+        : 'order-import-template-generic.xlsx'
     const url = URL.createObjectURL(blob)
-    const filename = accountId != null
-      ? `order-import-template-account-${accountId}.xlsx`
-      : 'order-import-template-generic.xlsx'
     const a = document.createElement('a')
     a.href = url
     a.download = filename

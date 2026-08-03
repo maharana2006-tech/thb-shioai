@@ -89,6 +89,68 @@ async function apiRequest<T>(endpoint: string, options: FetchOptions = {}): Prom
   }
 }
 
+/**
+ * Shared helper for non-JSON endpoints (binary downloads, HTML previews,
+ * multipart uploads) that {@link apiClient}'s JSON path doesn't cover.
+ * Attaches the Bearer token automatically and mirrors apiClient's 401
+ * behaviour: clears the local session + kicks the operator to /login so
+ * an expired JWT doesn't manifest as an opaque "HTTP 401" toast.
+ *
+ * Returns the {@link Response} on 2xx so callers decide how to consume
+ * the body ({@code response.blob()}, {@code .text()}, {@code .json()},
+ * etc.). Throws with the server's error message on non-2xx — the
+ * message we surface uses the response body's `message` field when
+ * present, falling back to a generic status line.
+ */
+export async function authFetch(endpoint: string, options: RequestInit = {}): Promise<Response> {
+  const token = localStorage.getItem('multiship_token');
+  const headers = new Headers(options.headers);
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  const response = await fetch(`${BASE_URL}${endpoint}`, { ...options, headers });
+  if (response.ok) return response;
+
+  // Non-2xx — try to surface a useful error message. Backend error
+  // responses are JSON with a `message` field; static/binary error
+  // responses (e.g., raw 401 pages) fall back to a generic line.
+  let serverMessage: string | null = null;
+  try {
+    const text = await response.clone().text();
+    if (text) {
+      try {
+        const body = JSON.parse(text);
+        serverMessage = body?.message ?? body?.error ?? null;
+      } catch {
+        // not JSON — treat the body as opaque
+        serverMessage = text.length < 200 ? text : null;
+      }
+    }
+  } catch {
+    // Body may be unreadable (already consumed by a wrapper); ignore.
+  }
+
+  // Same auto-logout as apiClient: an expired / invalid JWT should send
+  // the operator back to /login rather than showing a mystery toast.
+  // Skip on /auth/ endpoints so wrong-password on the login form doesn't
+  // trigger a redirect loop.
+  if (response.status === 401 && !endpoint.startsWith('/auth/')) {
+    localStorage.removeItem('multiship_token');
+    localStorage.removeItem('multiship_user');
+    localStorage.removeItem('multiship_role');
+    if (!window.location.pathname.startsWith('/login')) {
+      window.location.assign('/login');
+    }
+  }
+
+  const suffix = serverMessage ? ` — ${serverMessage}` : '';
+  throw new ApiError(
+    `HTTP ${response.status}${suffix}`,
+    response.status,
+    serverMessage ? { message: serverMessage } : {},
+  );
+}
+
 export const apiClient = {
   get: <T>(endpoint: string, options?: RequestInit) => 
     apiRequest<T>(endpoint, { method: 'GET', ...options }),
