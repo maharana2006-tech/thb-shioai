@@ -55,6 +55,10 @@ public class OrderRawCodes {
     @Column(name = "raw_package_code", length = 40)
     private String rawPackageCode;
 
+    /** The WMS's own order number, for tracing this shipment back to the caller's WMS. */
+    @Column(name = "ref_order_number", length = 60)
+    private String refOrderNumber;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;

@@ -70,12 +70,14 @@ const ENDPOINTS: Endpoint[] = [
     notes: [
       'Required: shipTo (with addressLine1) and parcel.weight (> 0). For a platform-wide (WMS) key, clientCode too. Everything else is optional.',
       'Optional with fallbacks — shipFrom: client’s configured ship-from, then the warehouse default. carrierCode (UPS / FEDEX / USPS): overrides the shipMethod rule. accountNumber: overrides the client’s default bill-to account. parcel.packagingCode: a package-preset name; omit to use the custom dims.',
+      'refOrderNumber: your WMS’s own order number, recorded server-side for traceability and echoed back unchanged on the response — use it to match this API call to the order in your WMS.',
       'International only (origin ≠ destination country): items (description, sku, hsCode, countryOfOrigin, quantity, unitValue, weight), declaredValue, currency, reasonForExport (SALE | GIFT | SAMPLE | RETURN | REPAIR) and incoterms (DAP | DDP) feed the commercial invoice.',
       'isReturn: true creates a return label. Addresses take name, company, phone, email, addressLine1/2, city, state, postalCode, countryCode (ISO alpha-2).',
     ],
     request: `{
   "clientCode": "ACME",
   "reference": "SO-12345",
+  "refOrderNumber": "REF-98765",
   "shipMethod": "F77",
   "carrierCode": "FEDEX",
   "accountNumber": "802255946",
@@ -113,6 +115,8 @@ const ENDPOINTS: Endpoint[] = [
   "status": "SUCCESS", "code": 201,
   "data": {
     "shipmentId": 900123,
+    "reference": "SO-12345",
+    "refOrderNumber": "REF-98765",
     "carrier": "FEDEX", "service": "FEDEX_GROUND",
     "trackingNumber": "794644790132",
     "trackingUrl": "https://...",

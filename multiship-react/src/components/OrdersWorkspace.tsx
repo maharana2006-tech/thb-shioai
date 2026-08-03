@@ -789,6 +789,17 @@ export default function OrdersWorkspace() {
   })
 
   columns.push({
+    id: 'refOrderNumber',
+    header: 'Ref Order #',
+    width: 120,
+    cell: (order) => (
+      <span className="block truncate font-mono text-[12px] text-[#5a4526]" title={order.orderDetails.refOrderNumber || undefined}>
+        {order.orderDetails.refOrderNumber || <span className="text-[#b3a583]">—</span>}
+      </span>
+    ),
+  })
+
+  columns.push({
     id: 'destination',
     header: 'Destination',
     sortKey: 'city',

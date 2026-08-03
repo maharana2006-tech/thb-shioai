@@ -12,6 +12,7 @@ import java.time.LocalDateTime;
 public class ExternalShipmentResponse {
     private Long shipmentId;
     private String reference;
+    private String refOrderNumber;
     private String clientCode;
     private String carrier;
     private String service;
