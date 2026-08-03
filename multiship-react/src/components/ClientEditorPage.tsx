@@ -216,6 +216,7 @@ const carrierOptions = [
   { code: 'UPS', label: 'UPS' },
   { code: 'FEDEX', label: 'FedEx' },
   { code: 'USPS', label: 'USPS' },
+  { code: 'DHL', label: 'DHL Express' },
 ]
 
 const emptyAddress: Address = { name: '', line1: '', line2: '', city: '', state: '', zip: '', country: 'US', phone: '' }
@@ -1813,9 +1814,9 @@ function CarrierDraftStep({
             <label className="block">
               <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Carrier *</span>
               <Select value={f.carrierCode} onChange={(e) => setF((c) => ({ ...c, carrierCode: e.target.value }))}>
-                <option value="UPS">UPS</option>
-                <option value="FEDEX">FedEx</option>
-                <option value="USPS">USPS</option>
+                {carrierOptions.map((option) => (
+                  <option key={option.code} value={option.code}>{option.label}</option>
+                ))}
               </Select>
             </label>
             <label className="block">
