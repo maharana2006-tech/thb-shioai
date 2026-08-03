@@ -25,7 +25,6 @@ import { ApiError } from '../api/apiClient'
 import { orderService, type Order, type QueueStats } from '../api/orderService'
 import { clientService } from '../api/clientService'
 import type { CarrierAccountRef, OrderAccountResolution } from '../api/accountRefService'
-import PageSectionHeader from './workspace/PageSectionHeader'
 import AccountScenarioBadge from './workspace/AccountScenarioBadge'
 import OrderStatusBadge from './workspace/OrderStatusBadge'
 import TablePagination from './workspace/TablePagination'
@@ -902,12 +901,8 @@ export default function OrdersWorkspace() {
     align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
 
   return (
-    <div className="space-y-4 pb-24">
-      <PageSectionHeader
-        eyebrow="Operations"
-        title="Orders & Labels"
-        description="Every order in one queue — generate in bulk, fix exceptions inline, review the archive."
-        actions={
+    <div className="pb-24">
+      <div className="flex flex-wrap items-center justify-end gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" onClick={refreshQueues} className={BTN_GHOST}>
               <FiRefreshCw className="h-3.5 w-3.5" />
@@ -954,9 +949,7 @@ export default function OrdersWorkspace() {
               New shipment
             </button>
           </div>
-        }
-      />
-
+      </div>
 
       {/* ===== workspace card ===== */}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

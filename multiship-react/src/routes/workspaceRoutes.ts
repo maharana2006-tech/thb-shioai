@@ -141,7 +141,7 @@ export const resolveBreadcrumb = (
     return { section: 'Operations', label: 'New Shipment', iconKey: 'orders' }
   }
   if (pathname === workspacePaths.orders || pathname === '/track-orders' || pathname.startsWith('/label/')) {
-    return { section: 'Operations', label: 'Orders & Labels', iconKey: 'orders' }
+    return { section: 'Operations', label: 'Shipment & Label', iconKey: 'orders' }
   }
   if (pathname.startsWith('/settings') || pathname === '/clients' || pathname === '/carrier') {
     const sub = settingsNavItems.find((i) => i.to === pathname)
