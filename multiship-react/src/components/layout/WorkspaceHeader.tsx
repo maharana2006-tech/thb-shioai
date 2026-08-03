@@ -69,7 +69,7 @@ export default function WorkspaceHeader() {
             <>
               <span className="hidden items-center gap-1.5 sm:flex">
                 <span className="h-2 w-2 shrink-0 rounded-full border-[1.5px] border-slate-400" />
-                <span className="whitespace-nowrap text-[9.5px] font-bold uppercase tracking-[0.18em] text-slate-400">
+                <span className="whitespace-nowrap text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400">
                   {crumb.section}
                 </span>
               </span>
@@ -83,7 +83,7 @@ export default function WorkspaceHeader() {
                   <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#412d15]" />
                 </span>
                 <span className="shrink-0 text-[#412d15]">{navIcons[crumb.iconKey] ?? null}</span>
-                <span className="truncate text-[13.5px] font-bold text-[#1f150c]">{crumb.label}</span>
+                <span className="truncate text-[16px] font-bold text-[#1f150c]">{crumb.label}</span>
               </span>
             </>
           ) : (
