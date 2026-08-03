@@ -606,15 +606,15 @@ export default function ClientEditorPage() {
   }), [form.clientCode, form.name, form.email, form.phone, codeConflict])
 
   const shipFromErrors = useMemo(
-    () => validateAddress(form.shipFrom as AddressLike, { required: true }),
-    [form.shipFrom],
+    () => validateAddress(form.shipFrom as AddressLike, { required: true, caps: addressCaps }),
+    [form.shipFrom, addressCaps],
   )
 
   const returnErrors = useMemo(() => {
     // Toggle on = return is "same as ship from"; no separate validation.
     if (form.returnSameAsShipFrom) return {}
-    return validateAddress(form.returnAddress as AddressLike, { required: true })
-  }, [form.returnSameAsShipFrom, form.returnAddress])
+    return validateAddress(form.returnAddress as AddressLike, { required: true, caps: addressCaps })
+  }, [form.returnSameAsShipFrom, form.returnAddress, addressCaps])
 
   const accountErrors = useMemo(() => {
     // In create mode when the operator opens the optional carrier form, all

@@ -112,11 +112,14 @@ export function validateCountry(value: string, required = false): string | null 
 }
 
 /** Country-aware zip check. Falls back to a permissive "alphanumeric ≥3" rule
- *  for unmodelled countries so we don't reject valid postcodes we can't spec. */
-export function validateZip(zip: string, country: string, required = false): string | null {
+ *  for unmodelled countries so we don't reject valid postcodes we can't spec.
+ *  `maxLength` overrides {@link FIELD_LIMITS.addr.zip} — used to enforce a
+ *  tighter per-carrier cap (e.g. UPS = 9). */
+export function validateZip(zip: string, country: string, required = false, maxLength?: number): string | null {
   const z = (zip || '').trim()
   if (!z) return required ? 'Postal code is required.' : null
-  if (z.length > FIELD_LIMITS.addr.zip) return `Postal code must be ${FIELD_LIMITS.addr.zip} characters or fewer.`
+  const cap = maxLength ?? FIELD_LIMITS.addr.zip
+  if (z.length > cap) return `Postal code must be ${cap} characters or fewer.`
   const iso = (country || '').trim().toUpperCase()
   const re = ZIP_PATTERNS[iso]
   if (re) {
@@ -157,25 +160,72 @@ export type AddressLike = {
   phone?: string | null
 }
 
-/** Compact per-field errors for an address block. All fields required by
- *  default because a shippable address needs at minimum line1/city/state/zip/
- *  country. `contactName` is treated as required too — carrier labels demand it. */
+/**
+ * Optional length caps that override the loose DB-column defaults in
+ * {@link FIELD_LIMITS.addr}. Shape is structurally compatible with the
+ * per-carrier {@code AddressCaps} from utils/carrierFieldLimits, so a
+ * caller with per-carrier intersection caps can pass them straight in
+ * without a translation step. `line` covers BOTH line1 and line2 (carriers
+ * enforce the same cap on either street-address line).
+ */
+export interface AddressLengthCaps {
+  name?: number
+  line?: number
+  city?: number
+  state?: number
+  zip?: number
+  phone?: number
+}
+
+/**
+ * Length-cap variant of {@link validatePhone} that respects an override.
+ * Falls back to FIELD_LIMITS.phone when no override is provided so the
+ * default behaviour is unchanged.
+ */
+function validatePhoneCap(value: string, maxLength?: number, required = false): string | null {
+  const v = (value || '').trim()
+  if (!v) return required ? 'Phone is required.' : null
+  const cap = maxLength ?? FIELD_LIMITS.phone
+  if (v.length > cap) return `Phone must be ${cap} characters or fewer.`
+  if (!PHONE_RE.test(v)) return 'Enter a valid phone (digits, spaces, +, -, (), . only).'
+  const digits = v.replace(/\D/g, '')
+  if (digits.length < 7) return 'Phone needs at least 7 digits.'
+  if (digits.length > 15) return 'Phone must not exceed 15 digits (E.164 max).'
+  return null
+}
+
+/**
+ * Compact per-field errors for an address block. All fields required by
+ * default because a shippable address needs at minimum line1/city/state/zip/
+ * country. `contactName` is treated as required too — carrier labels demand it.
+ *
+ * When {@code caps} is provided, length checks use those tighter values
+ * (e.g. the intersection of every enabled carrier's per-field cap) instead
+ * of the loose DB-column defaults. Otherwise falls back to
+ * {@link FIELD_LIMITS.addr}, preserving legacy behaviour.
+ */
 export function validateAddress(
   addr: AddressLike | null | undefined,
-  { required = true }: { required?: boolean } = {},
+  { required = true, caps }: { required?: boolean; caps?: AddressLengthCaps } = {},
 ): Partial<Record<keyof AddressLike, string>> {
   const errors: Partial<Record<keyof AddressLike, string>> = {}
   const a = addr ?? {}
+  const nameMax  = caps?.name  ?? FIELD_LIMITS.addr.name
+  const lineMax  = caps?.line  ?? FIELD_LIMITS.addr.line1
+  const cityMax  = caps?.city  ?? FIELD_LIMITS.addr.city
+  const stateMax = caps?.state ?? FIELD_LIMITS.addr.state
+  const zipMax   = caps?.zip   ?? FIELD_LIMITS.addr.zip
+  const phoneMax = caps?.phone ?? FIELD_LIMITS.addr.phone
   if (required) {
-    const nameErr = validateLength(a.name || '', FIELD_LIMITS.addr.name, 'Contact / company', true)
+    const nameErr = validateLength(a.name || '', nameMax, 'Contact / company', true)
     if (nameErr) errors.name = nameErr
-    const line1Err = validateLength(a.line1 || '', FIELD_LIMITS.addr.line1, 'Street address', true)
+    const line1Err = validateLength(a.line1 || '', lineMax, 'Street address', true)
     if (line1Err) errors.line1 = line1Err
-    const cityErr = validateLength(a.city || '', FIELD_LIMITS.addr.city, 'City', true)
+    const cityErr = validateLength(a.city || '', cityMax, 'City', true)
     if (cityErr) errors.city = cityErr
-    const stateErr = validateLength(a.state || '', FIELD_LIMITS.addr.state, 'State / region', true)
+    const stateErr = validateLength(a.state || '', stateMax, 'State / region', true)
     if (stateErr) errors.state = stateErr
-    const zipErr = validateZip(a.zip || '', a.country || '', true)
+    const zipErr = validateZip(a.zip || '', a.country || '', true, zipMax)
     if (zipErr) errors.zip = zipErr
     const countryErr = validateCountry(a.country || '', true)
     if (countryErr) errors.country = countryErr
@@ -183,7 +233,7 @@ export function validateAddress(
     // Non-required address (e.g. Return when "same as Ship From" is off but
     // fields have some content) — validate only what's typed.
     if (a.zip) {
-      const zipErr = validateZip(a.zip, a.country || '', false)
+      const zipErr = validateZip(a.zip, a.country || '', false, zipMax)
       if (zipErr) errors.zip = zipErr
     }
     if (a.country) {
@@ -193,11 +243,11 @@ export function validateAddress(
   }
   // Optional line2 length is bounded either way.
   if (a.line2) {
-    const line2Err = validateLength(a.line2, FIELD_LIMITS.addr.line2, 'Suite / unit', false)
+    const line2Err = validateLength(a.line2, lineMax, 'Suite / unit', false)
     if (line2Err) errors.line2 = line2Err
   }
   if (a.phone) {
-    const phoneErr = validatePhone(a.phone, false)
+    const phoneErr = validatePhoneCap(a.phone, phoneMax, false)
     if (phoneErr) errors.phone = phoneErr
   }
   return errors
