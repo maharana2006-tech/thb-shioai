@@ -45,13 +45,19 @@ public class OrderImportController {
     @Operation(summary = "Preview a CSV / XLSX upload",
             description = "Parses the file into a preview list, one entry per row, with per-row " +
                     "validation. The client renders the preview and lets the operator edit / discard " +
-                    "bad rows before hitting the commit endpoint.")
+                    "bad rows before hitting the commit endpoint. When `expectedAccountId` is " +
+                    "supplied (i.e. the operator downloaded a scoped .xlsx template first), any " +
+                    "row whose accountNumber diverges from that account's number gets a non-fatal " +
+                    "warning.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping(value = "/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResponse<OrderImportPreviewDTO>> preview(
-            @RequestParam("file") MultipartFile file) throws java.io.IOException {
+            @RequestParam("file") MultipartFile file,
+            @io.swagger.v3.oas.annotations.Parameter(description = "Optional — the account id the .xlsx template was scoped to. Rows whose accountNumber differs get a non-fatal warning.")
+            @RequestParam(value = "expectedAccountId", required = false) Long expectedAccountId)
+            throws java.io.IOException {
         ApiResponse<OrderImportPreviewDTO> response = orderImportService.preview(
-                file.getOriginalFilename(), file.getInputStream());
+                file.getOriginalFilename(), file.getInputStream(), expectedAccountId);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 

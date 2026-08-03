@@ -133,6 +133,11 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     @Override
     public ApiResponse<OrderImportPreviewDTO> preview(String filename, InputStream body) {
+        return preview(filename, body, null);
+    }
+
+    @Override
+    public ApiResponse<OrderImportPreviewDTO> preview(String filename, InputStream body, Long expectedAccountId) {
         String ext = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
         try {
             List<OrderImportRowDTO> rows;
@@ -143,6 +148,30 @@ public class OrderImportServiceImpl implements OrderImportService {
             } else {
                 return failure(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                         "Only .csv, .txt, and .xlsx files are supported.");
+            }
+            // Sprint 48 — divergence warning. Resolve the expected account
+            // once, then annotate every row whose accountNumber deviates.
+            // Non-fatal: warnings never block commit; operators may edit
+            // rows deliberately to bill a different account.
+            if (expectedAccountId != null && accountRefRepository != null) {
+                CarrierAccountRef expected = accountRefRepository.findById(expectedAccountId).orElse(null);
+                if (expected != null && StringUtils.hasText(expected.getAccountNumber())) {
+                    String expectedNumber = expected.getAccountNumber().trim();
+                    for (OrderImportRowDTO row : rows) {
+                        // Only warn when the row DOES carry an account and it
+                        // differs — blank accountNumber inherits the template
+                        // default at commit time, that's fine.
+                        String rowNumber = row.getAccountNumber();
+                        if (StringUtils.hasText(rowNumber)
+                                && !rowNumber.trim().equalsIgnoreCase(expectedNumber)) {
+                            List<String> warnings = new ArrayList<>(
+                                    row.getWarnings() == null ? List.of() : row.getWarnings());
+                            warnings.add("Template account = " + expectedNumber
+                                    + " but row uses " + rowNumber + ". Row wins at commit.");
+                            row.setWarnings(warnings);
+                        }
+                    }
+                }
             }
             return success(buildPreview(rows), rows.size() + " row(s) parsed.");
         } catch (Exception ex) {

@@ -20,6 +20,19 @@ public interface OrderImportService {
      *  error row so the caller sees them in the UI. */
     ApiResponse<OrderImportPreviewDTO> preview(String filename, InputStream body);
 
+    /**
+     * Sprint 48 — same as {@link #preview(String, InputStream)} but attaches
+     * a non-fatal warning to every row whose accountNumber differs from
+     * the account the .xlsx template was scoped to. Frontend passes this
+     * so operator edits that diverge from the template default are
+     * visible without blocking the commit.
+     *
+     * <p>{@code expectedAccountId} null (or resolves to a missing / blank
+     * account) = no divergence check; behaves exactly like the 2-arg
+     * overload above.
+     */
+    ApiResponse<OrderImportPreviewDTO> preview(String filename, InputStream body, Long expectedAccountId);
+
     /** Persist a list of previewed rows. Rows with errors are skipped
      *  (validity is the client's responsibility to check first). */
     ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy);

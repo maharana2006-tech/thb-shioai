@@ -71,7 +71,7 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
     setUploading(true)
     setError(null)
     try {
-      const response = await orderImportService.preview(file)
+      const response = await orderImportService.preview(file, selectedAccountId)
       if (response.status === 'success' && response.data) {
         setPreview(response.data)
       } else {
@@ -293,6 +293,17 @@ function PreviewStep({ preview }: { preview: OrderImportPreview }) {
             ✗ {preview.invalidRows} with errors
           </span>
         ) : null}
+        {/* Sprint 48 — warnings pill (e.g. row account diverges from
+             the template's default). Non-blocking; commit still allowed. */}
+        {(() => {
+          const warned = preview.rows.filter((r) => (r.warnings?.length ?? 0) > 0).length
+          if (warned === 0) return null
+          return (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">
+              ⚠ {warned} with warnings
+            </span>
+          )
+        })()}
       </div>
 
       <div className="overflow-auto rounded-xl border border-slate-200">
@@ -346,6 +357,14 @@ function PreviewStep({ preview }: { preview: OrderImportPreview }) {
                         {r.errors.join(', ')}
                       </span>
                     )}
+                    {/* Non-blocking warnings sit under the status pill so
+                         operators see divergence hints without them being
+                         mistaken for errors. */}
+                    {r.warnings && r.warnings.length > 0 ? (
+                      <p className="mt-1 text-[9.5px] font-semibold text-amber-700">
+                        ⚠ {r.warnings.join('; ')}
+                      </p>
+                    ) : null}
                   </td>
                 </tr>
               )

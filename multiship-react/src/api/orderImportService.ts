@@ -55,12 +55,21 @@ export interface OrderImportPreview {
 }
 
 export const orderImportService = {
-  /** Multipart upload — client passes a File; we wrap in FormData. */
-  preview: async (file: File): Promise<ApiResponse<OrderImportPreview>> => {
+  /**
+   * Multipart upload — client passes a File; we wrap in FormData.
+   * `expectedAccountId`, when the operator downloaded a scoped .xlsx
+   * template first, drives the backend's per-row divergence warning
+   * (any row whose accountNumber differs gets a non-fatal warning).
+   */
+  preview: async (
+    file: File,
+    expectedAccountId?: number | null,
+  ): Promise<ApiResponse<OrderImportPreview>> => {
     const form = new FormData()
     form.append('file', file)
     const token = localStorage.getItem('multiship_token')
-    const response = await fetch(`${BASE_URL}/orders/import/preview`, {
+    const qs = expectedAccountId != null ? `?expectedAccountId=${expectedAccountId}` : ''
+    const response = await fetch(`${BASE_URL}/orders/import/preview${qs}`, {
       method: 'POST',
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: form,
