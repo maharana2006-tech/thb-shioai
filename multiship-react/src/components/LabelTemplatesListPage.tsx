@@ -13,6 +13,7 @@ import {
   FiTrash2,
   FiX,
 } from 'react-icons/fi'
+import { createPortal } from 'react-dom'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { ApiError } from '../api/apiClient'
 import {
@@ -41,10 +42,12 @@ const textInput =
 
 /**
  * Settings → Label Templates list page. Cross-tenant table, filters,
- * pagination, per-row Edit/Delete + Add-new. Below the table: a global
- * Live-preview panel that renders any order's packing slip PDF via the
- * currently-saved template — keeps the ergonomic "type an order # and
- * see it" workflow the old editor page had, but standalone.
+ * pagination, per-row Edit / Preview / Delete + Add-new. The Preview
+ * action opens a modal with an order-number input that renders the
+ * order's packing slip PDF using the tenant's currently-saved template
+ * (falls back to the platform default) — same "type an order # and
+ * see it" workflow that used to live in a permanent panel below the
+ * table, now behind a row action so the list stays compact.
  *
  * The editor lives at /settings/templates/new + /:id.
  */
@@ -321,6 +324,7 @@ export default function LabelTemplatesListPage() {
               busy={busyId === row.original.id}
               admin={admin}
               onEdit={() => handleEdit(row.original)}
+              onPreview={() => openPreviewFor(row.original)}
               onDelete={() => void handleDelete(row.original)}
             />
           </div>
@@ -334,11 +338,33 @@ export default function LabelTemplatesListPage() {
     [admin, busyId],
   )
 
-  // ===== live-preview state (below table) =====
+  // ===== preview modal state =====
+  // The preview is order-scoped (renders that order's packing slip against
+  // the currently-saved template). previewContext is the row the user
+  // clicked Preview on — used only to caption the modal so operators know
+  // which template's rendering they're checking.
+  const [previewContext, setPreviewContext] = useState<LabelTemplate | null>(null)
   const [previewOrderNo, setPreviewOrderNo] = useState('')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewing, setPreviewing] = useState(false)
-  const openPreview = async () => {
+
+  const openPreviewFor = (t: LabelTemplate) => {
+    setPreviewContext(t)
+    setPreviewOrderNo('')
+    setPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return null
+    })
+  }
+  const closePreview = () => {
+    setPreviewContext(null)
+    setPreviewOrderNo('')
+    setPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return null
+    })
+  }
+  const runPreview = async () => {
     const orderNo = previewOrderNo.trim()
     if (!orderNo) {
       notify.error('Enter an order number to preview.')
@@ -359,6 +385,7 @@ export default function LabelTemplatesListPage() {
       setPreviewing(false)
     }
   }
+  // Always revoke on unmount so a Blob URL doesn't leak for the tab's lifetime.
   useEffect(() => {
     return () => {
       if (previewUrl) URL.revokeObjectURL(previewUrl)
@@ -479,26 +506,88 @@ export default function LabelTemplatesListPage() {
         )}
       </section>
 
-      {/* ===== Live preview (standalone tool) ===== */}
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="mb-1 text-base font-semibold text-slate-900">Live preview</h2>
-        <p className="mb-3 text-[12.5px] text-slate-500">
-          Enter any order number to render its packing slip PDF with the tenant's
-          currently-saved template (falls back to the platform default).
-        </p>
-        <div className="mb-3 flex gap-2">
+      {/* Preview modal — only mounted while a row is active. Portalled to
+          document.body so it escapes any settings-layout stacking contexts. */}
+      {previewContext ? (
+        <PreviewModal
+          template={previewContext}
+          orderNo={previewOrderNo}
+          onOrderNoChange={setPreviewOrderNo}
+          previewUrl={previewUrl}
+          previewing={previewing}
+          onRun={() => void runPreview()}
+          onClose={closePreview}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function PreviewModal({
+  template,
+  orderNo,
+  onOrderNoChange,
+  previewUrl,
+  previewing,
+  onRun,
+  onClose,
+}: {
+  template: LabelTemplate
+  orderNo: string
+  onOrderNoChange: (v: string) => void
+  previewUrl: string | null
+  previewing: boolean
+  onRun: () => void
+  onClose: () => void
+}) {
+  // ESC to close, Enter (in the order-# field) to run.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const scopeLabel = template.tenantId
+    ? `${template.tenantId} · ${template.templateType ?? ''}`
+    : `Platform default · ${template.templateType ?? ''}`
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+      <div className="flex h-full max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Preview template</h2>
+            <p className="text-[12px] text-slate-500">
+              {scopeLabel} — enter an order number to render its packing slip PDF with the
+              tenant's saved template (falls back to platform default).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close preview"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+          >
+            <FiX className="h-4 w-4" />
+          </button>
+        </header>
+        <div className="flex gap-2 border-b border-slate-100 bg-slate-50/60 px-5 py-3">
           <input
             type="text"
-            value={previewOrderNo}
-            onChange={(e) => setPreviewOrderNo(e.target.value)}
+            value={orderNo}
+            onChange={(e) => onOrderNoChange(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onRun() } }}
             placeholder="Order number, e.g. 100"
             className={textInput}
+            autoFocus
           />
           <button
             type="button"
-            onClick={() => void openPreview()}
+            onClick={onRun}
             disabled={previewing}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white transition hover:bg-black disabled:opacity-50"
           >
             {previewing ? <FiLoader className="animate-spin" /> : <FiEye />}
             {previewing ? 'Loading…' : 'Preview'}
@@ -506,7 +595,7 @@ export default function LabelTemplatesListPage() {
           {previewUrl ? (
             <button
               type="button"
-              onClick={() => void openPreview()}
+              onClick={onRun}
               disabled={previewing}
               className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             >
@@ -514,21 +603,24 @@ export default function LabelTemplatesListPage() {
             </button>
           ) : null}
         </div>
-        {previewUrl ? (
-          <iframe
-            src={previewUrl}
-            title="Packing slip preview"
-            className="h-[520px] w-full rounded-lg border border-slate-200 bg-slate-50"
-          />
-        ) : (
-          <div className="flex h-[520px] items-center justify-center rounded-lg border border-dashed border-slate-200 text-[12.5px] text-slate-400">
-            <span className="inline-flex items-center gap-1.5">
-              <FiInfo /> Enter an order number above to render a preview.
-            </span>
-          </div>
-        )}
-      </section>
-    </div>
+        <div className="flex-1 overflow-hidden bg-slate-100 p-3">
+          {previewUrl ? (
+            <iframe
+              src={previewUrl}
+              title="Packing slip preview"
+              className="h-full w-full rounded-lg border border-slate-200 bg-white"
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-slate-200 bg-white text-[12.5px] text-slate-400">
+              <span className="inline-flex items-center gap-1.5">
+                <FiInfo /> Enter an order number above to render a preview.
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -554,11 +646,13 @@ function RowMenu({
   admin,
   busy,
   onEdit,
+  onPreview,
   onDelete,
 }: {
   admin: boolean
   busy: boolean
   onEdit: () => void
+  onPreview: () => void
   onDelete: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -587,6 +681,14 @@ function RowMenu({
           className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
         >
           <FiEdit3 className="h-3.5 w-3.5 text-slate-500" /> Edit
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => { close(); onPreview() }}
+          className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50"
+        >
+          <FiEye className="h-3.5 w-3.5 text-slate-500" /> Preview
         </button>
         {admin ? (
           <button
