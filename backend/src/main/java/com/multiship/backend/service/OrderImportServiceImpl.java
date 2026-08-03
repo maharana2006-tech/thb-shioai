@@ -4,6 +4,10 @@ import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.OrderImportPreviewDTO;
 import com.multiship.backend.dto.OrderImportRowDTO;
+import com.multiship.backend.model.CarrierAccountRef;
+import com.multiship.backend.repository.CarrierAccountRefRepository;
+import com.multiship.backend.repository.PackagePresetRepository;
+import com.multiship.backend.repository.ShippingServiceRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
@@ -54,17 +58,45 @@ import java.util.Map;
 public class OrderImportServiceImpl implements OrderImportService {
 
     private final CarrierService carrierService;
+    /** Sprint 48 — used to bake account-scoped defaults + dropdowns into
+     *  the .xlsx template. Optional (null in the no-arg test constructor). */
+    private final CarrierAccountRefRepository accountRefRepository;
+    /** Sprint 48 — service catalog for the template's serviceType dropdown. */
+    private final ShippingServiceRepository shippingServiceRepository;
+    /** Sprint 48 — package presets for the template's packageType dropdown. */
+    private final PackagePresetRepository packagePresetRepository;
 
     // Constructor with @Autowired handles the CarrierService injection.
     // Second no-arg constructor kept for the Sprint 40 test suite that
     // exercises parsing / validation in isolation.
     @org.springframework.beans.factory.annotation.Autowired
-    public OrderImportServiceImpl(CarrierService carrierService) {
+    public OrderImportServiceImpl(CarrierService carrierService,
+                                  CarrierAccountRefRepository accountRefRepository,
+                                  ShippingServiceRepository shippingServiceRepository,
+                                  PackagePresetRepository packagePresetRepository) {
         this.carrierService = carrierService;
+        this.accountRefRepository = accountRefRepository;
+        this.shippingServiceRepository = shippingServiceRepository;
+        this.packagePresetRepository = packagePresetRepository;
     }
 
     public OrderImportServiceImpl() {
         this.carrierService = null;
+        this.accountRefRepository = null;
+        this.shippingServiceRepository = null;
+        this.packagePresetRepository = null;
+    }
+
+    /**
+     * Legacy Sprint-41 test constructor — wire only the carrier service,
+     * leave the .xlsx-template repositories null (template-generation
+     * paths are dead in these tests anyway).
+     */
+    OrderImportServiceImpl(CarrierService carrierService) {
+        this.carrierService = carrierService;
+        this.accountRefRepository = null;
+        this.shippingServiceRepository = null;
+        this.packagePresetRepository = null;
     }
 
     /** Canonical header ordering used for the template + parser column
@@ -297,6 +329,21 @@ public class OrderImportServiceImpl implements OrderImportService {
                 || StringUtils.hasText(row.getCountryOfOrigin())
                 || row.getItemQuantity() != null
                 || row.getItemUnitValue() != null;
+    }
+
+    @Override
+    public byte[] xlsxTemplate(Long accountId) {
+        CarrierAccountRef account = null;
+        if (accountId != null && accountRefRepository != null) {
+            account = accountRefRepository.findById(accountId).orElse(null);
+        }
+        List<com.multiship.backend.model.ShippingService> services = shippingServiceRepository != null
+                ? shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()
+                : List.of();
+        List<com.multiship.backend.model.PackagePreset> presets = packagePresetRepository != null
+                ? packagePresetRepository.findAllByOrderByIsDefaultDescNameAsc()
+                : List.of();
+        return OrderImportTemplateBuilder.build(HEADERS, account, services, presets);
     }
 
     @Override

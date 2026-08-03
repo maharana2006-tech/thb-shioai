@@ -81,4 +81,26 @@ public class OrderImportController {
                 .contentType(MediaType.parseMediaType("text/csv"))
                 .body(csv);
     }
+
+    @Operation(summary = "Download the XLSX template (data-validation dropdowns + samples)",
+            description = "Sprint 48 — richer template with dropdowns, sample multi-row order, " +
+                    "and an instructions sheet. When `accountId` is supplied the sample rows " +
+                    "prefill accountNumber + carrierCode and the serviceType / packageType " +
+                    "dropdowns narrow to that carrier's options only. Requires authentication " +
+                    "because accountId resolves against private account data.")
+    @org.springframework.security.access.prepost.PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping(value = "/template.xlsx",
+            produces = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    public ResponseEntity<byte[]> templateXlsx(
+            @io.swagger.v3.oas.annotations.Parameter(description = "Optional carrier account id to scope the template to.")
+            @org.springframework.web.bind.annotation.RequestParam(required = false) Long accountId) {
+        byte[] xlsx = orderImportService.xlsxTemplate(accountId);
+        String filenameSuffix = accountId == null ? "generic" : ("account-" + accountId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"order-import-template-" + filenameSuffix + ".xlsx\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(xlsx);
+    }
 }

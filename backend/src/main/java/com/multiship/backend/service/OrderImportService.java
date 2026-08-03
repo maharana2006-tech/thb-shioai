@@ -27,4 +27,18 @@ public interface OrderImportService {
     /** Canonical CSV template — comma-separated header line + one
      *  sample row. Returned as a byte[] with UTF-8 encoding. */
     byte[] csvTemplate();
+
+    /**
+     * Sprint 48 — .xlsx template with data validation dropdowns, sample
+     * rows, and an operator-facing instructions block. When {@code accountId}
+     * is supplied, the template is scoped to that account: the sample
+     * accountNumber cell is prefilled, carrierCode is locked to the
+     * account's carrier, and the serviceType / packageType dropdowns
+     * only list options for that carrier. Null accountId = generic
+     * template with every enabled carrier's options offered.
+     *
+     * <p>Returns the raw .xlsx bytes; the controller wires the
+     * Content-Type / filename headers.
+     */
+    byte[] xlsxTemplate(Long accountId);
 }
