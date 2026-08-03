@@ -52,6 +52,28 @@ import WarehouseEditorModal from './modals/WarehouseEditorModal'
 import ClientShippingMappingTab from './modals/ClientShippingMappingTab'
 import CustomsProfileModal from './modals/CustomsProfileModal'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
+import {
+  CARRIER_ACCOUNT_RULES,
+  intersectionAddressCaps,
+  bindingCarriers,
+  type AddressCaps,
+  type CarrierAccountRule,
+  type CarrierCode,
+} from '../utils/carrierFieldLimits'
+
+/**
+ * Look up the account-number rule for a carrier code. Returns null when
+ * the code isn't one of the utility's four known carriers (UPS / FEDEX /
+ * USPS / DHL) — callers fall back to their pre-existing maxLength in
+ * that case so a novel carrier code doesn't lock the input out.
+ */
+function accountRuleFor(code: string): CarrierAccountRule | null {
+  const upper = code.toUpperCase()
+  if (upper === 'UPS' || upper === 'FEDEX' || upper === 'USPS' || upper === 'DHL') {
+    return CARRIER_ACCOUNT_RULES[upper as CarrierCode]
+  }
+  return null
+}
 
 /** Wizard step keys — trimmed to the mandatory onboarding path:
  *    identity → shipFrom → return → carriers → mapping
@@ -297,6 +319,43 @@ export default function ClientEditorPage() {
       ...((draft?.carrierDrafts ?? []).map((d) => d.id)),
       ...((draft?.mappingDrafts ?? []).map((d) => d.id)),
     ) + 1,
+  )
+
+  /**
+   * Union of every carrier this client is (or would be) wired for — used to
+   * intersect address caps in the AddressGrid. Sources:
+   *   - {@link accounts}       (edit mode: existing rows fetched from server)
+   *   - {@link carrierDrafts}  (create mode: staged accounts pending commit)
+   *   - {@link accountForm}    (create mode: Identity-step inline account being typed)
+   *
+   * Kept as a set of raw carrier code strings — the utility upper-cases and
+   * filters to known codes (UPS / FEDEX / USPS / DHL) internally.
+   */
+  const enabledCarrierCodes = useMemo<string[]>(() => {
+    const set = new Set<string>()
+    accounts.forEach((a) => { if (a.carrierCode) set.add(a.carrierCode) })
+    carrierDrafts.forEach((d) => { if (d.carrierCode) set.add(d.carrierCode) })
+    // Only count the inline form if the operator has actually opened it in
+    // create mode — an empty carrierCode from accountForm's initial state
+    // shouldn't influence caps.
+    if (!isEdit && showAccountForm && accountForm.carrierCode) set.add(accountForm.carrierCode)
+    return Array.from(set)
+  }, [accounts, carrierDrafts, showAccountForm, accountForm.carrierCode, isEdit])
+
+  /** Intersection of per-carrier address caps — the strictest limit per
+   *  field across every enabled carrier. Empty set falls back to the loose
+   *  DB-column defaults inside the utility. */
+  const addressCaps = useMemo<AddressCaps>(
+    () => intersectionAddressCaps(enabledCarrierCodes),
+    [enabledCarrierCodes],
+  )
+
+  /** Which carriers set the currently-binding cap on a given address field?
+   *  Powers the "cap set by UPS/FEDEX" helper text under each input. */
+  const bindingHint = useCallback(
+    (field: keyof AddressCaps): CarrierCode[] =>
+      bindingCarriers(addressCaps, enabledCarrierCodes, field),
+    [addressCaps, enabledCarrierCodes],
   )
 
   /** Per-field "have you interacted?" flags — a field only renders its error
@@ -1231,6 +1290,8 @@ export default function ClientEditorPage() {
             touched={touched}
             markTouched={markTouched}
             setAddr={setAddr}
+            caps={addressCaps}
+            bindingHint={bindingHint}
           />
         ) : null}
 
@@ -1544,18 +1605,30 @@ function IdentityStep({
                   ))}
                 </Select>
               </Field>
-              <Field label="Account number" required error={aErr('accountNumber')}>
-                <input
-                  value={accountForm.accountNumber}
-                  onChange={(e) => setAccountForm((cur) => ({ ...cur, accountNumber: e.target.value }))}
-                  onBlur={() => markTouched('account.accountNumber')}
-                  maxLength={100}
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-invalid={aErr('accountNumber') ? true : undefined}
-                  className={`${inputBaseClass} ${aErr('accountNumber') ? inputErr : inputOk}`}
-                />
-              </Field>
+              {(() => {
+                const rule = accountRuleFor(accountForm.carrierCode)
+                return (
+                  <Field
+                    label="Account number"
+                    required
+                    error={aErr('accountNumber')}
+                    hint={rule?.helper}
+                  >
+                    <input
+                      value={accountForm.accountNumber}
+                      onChange={(e) => setAccountForm((cur) => ({ ...cur, accountNumber: e.target.value }))}
+                      onBlur={() => markTouched('account.accountNumber')}
+                      maxLength={rule?.maxLength ?? 100}
+                      pattern={rule?.pattern}
+                      placeholder={rule?.placeholder}
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-invalid={aErr('accountNumber') ? true : undefined}
+                      className={`${inputBaseClass} ${aErr('accountNumber') ? inputErr : inputOk}`}
+                    />
+                  </Field>
+                )
+              })()}
               <Field label="Client ID" required error={aErr('clientId')}>
                 <input
                   value={accountForm.clientId}
@@ -1747,13 +1820,25 @@ function CarrierDraftStep({
             </label>
             <label className="block">
               <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Account number *</span>
-              <input
-                value={f.accountNumber}
-                onChange={(e) => setF((c) => ({ ...c, accountNumber: e.target.value }))}
-                maxLength={100}
-                autoComplete="off"
-                className={`${inputBaseClass} ${inputOk}`}
-              />
+              {(() => {
+                const rule = accountRuleFor(f.carrierCode)
+                return (
+                  <>
+                    <input
+                      value={f.accountNumber}
+                      onChange={(e) => setF((c) => ({ ...c, accountNumber: e.target.value }))}
+                      maxLength={rule?.maxLength ?? 100}
+                      pattern={rule?.pattern}
+                      placeholder={rule?.placeholder}
+                      autoComplete="off"
+                      className={`${inputBaseClass} ${inputOk}`}
+                    />
+                    {rule ? (
+                      <span className="mt-0.5 block text-[10.5px] leading-4 text-slate-500">{rule.helper}</span>
+                    ) : null}
+                  </>
+                )
+              })()}
             </label>
             <label className="block">
               <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Environment</span>
@@ -2305,6 +2390,8 @@ function ReturnStep({
   touched,
   markTouched,
   setAddr,
+  caps,
+  bindingHint,
 }: {
   block: Address
   same: boolean
@@ -2313,6 +2400,8 @@ function ReturnStep({
   touched: Record<string, boolean>
   markTouched: (key: string) => void
   setAddr: (block: 'shipFrom' | 'returnAddress', key: keyof Address) => (e: { target: { value: string } }) => void
+  caps: AddressCaps
+  bindingHint: (field: keyof AddressCaps) => CarrierCode[]
 }) {
   const err = (k: keyof AddressLike) => (touched[`returnAddress.${k}`] ? errors[k] || null : null)
   return (
@@ -2347,6 +2436,8 @@ function ReturnStep({
               err={err}
               markTouched={markTouched}
               setAddr={setAddr}
+              caps={caps}
+              bindingHint={bindingHint}
             />
           </div>
         )}
@@ -2361,12 +2452,16 @@ function AddressGrid({
   err,
   markTouched,
   setAddr,
+  caps,
+  bindingHint,
 }: {
   block: Address
   addressKey: 'shipFrom' | 'returnAddress'
   err: (k: keyof AddressLike) => string | null
   markTouched: (key: string) => void
   setAddr: (block: 'shipFrom' | 'returnAddress', key: keyof Address) => (e: { target: { value: string } }) => void
+  caps: AddressCaps
+  bindingHint: (field: keyof AddressCaps) => CarrierCode[]
 }) {
   const a = block
   const cls = (k: keyof AddressLike) => `${inputBaseClass} ${err(k) ? inputErr : inputOk}`
@@ -2380,80 +2475,90 @@ function AddressGrid({
       : country === 'BR' ? 'e.g. 01310-100'
       : undefined
     : undefined
+  // Small "cap set by <carriers>" line under each capped input. Skipped
+  // when no carrier is enabled yet — the caps degrade to loose DB defaults
+  // in that case and the extra text is noise.
+  const capHint = (field: keyof AddressCaps): string | undefined => {
+    const carriers = bindingHint(field)
+    if (carriers.length === 0) return undefined
+    return `max ${caps[field]} chars · ${carriers.join(' / ')}`
+  }
+  const joinHint = (...parts: Array<string | undefined>) =>
+    parts.filter((p): p is string => !!p && p.length > 0).join(' · ') || undefined
   return (
     <div className="grid grid-cols-3 gap-2">
       <div className="col-span-3">
-        <Field label="Attention / company" required error={err('name')}>
+        <Field label="Attention / company" required error={err('name')} hint={capHint('name')}>
           <input
             value={a.name ?? ''}
             onChange={setAddr(addressKey, 'name')}
             onBlur={() => markTouched(`${addressKey}.name`)}
             className={cls('name')}
             placeholder="Warehouse / contact name"
-            maxLength={FIELD_LIMITS.addr.name}
+            maxLength={caps.name}
             autoComplete="organization"
             aria-invalid={err('name') ? true : undefined}
           />
         </Field>
       </div>
       <div className="col-span-2">
-        <Field label="Street address" required error={err('line1')}>
+        <Field label="Street address" required error={err('line1')} hint={capHint('line')}>
           <input
             value={a.line1 ?? ''}
             onChange={setAddr(addressKey, 'line1')}
             onBlur={() => markTouched(`${addressKey}.line1`)}
             className={cls('line1')}
             placeholder="123 Industrial Blvd"
-            maxLength={FIELD_LIMITS.addr.line1}
+            maxLength={caps.line}
             autoComplete="address-line1"
             aria-invalid={err('line1') ? true : undefined}
           />
         </Field>
       </div>
-      <Field label="Suite / unit" error={err('line2')}>
+      <Field label="Suite / unit" error={err('line2')} hint={capHint('line')}>
         <input
           value={a.line2 ?? ''}
           onChange={setAddr(addressKey, 'line2')}
           onBlur={() => markTouched(`${addressKey}.line2`)}
           className={cls('line2')}
           placeholder="Suite 400"
-          maxLength={FIELD_LIMITS.addr.line2}
+          maxLength={caps.line}
           autoComplete="address-line2"
           aria-invalid={err('line2') ? true : undefined}
         />
       </Field>
-      <Field label="City" required error={err('city')}>
+      <Field label="City" required error={err('city')} hint={capHint('city')}>
         <input
           value={a.city ?? ''}
           onChange={setAddr(addressKey, 'city')}
           onBlur={() => markTouched(`${addressKey}.city`)}
           className={cls('city')}
           placeholder="Chicago"
-          maxLength={FIELD_LIMITS.addr.city}
+          maxLength={caps.city}
           autoComplete="address-level2"
           aria-invalid={err('city') ? true : undefined}
         />
       </Field>
-      <Field label="State" required error={err('state')}>
+      <Field label="State" required error={err('state')} hint={capHint('state')}>
         <input
           value={a.state ?? ''}
           onChange={setAddr(addressKey, 'state')}
           onBlur={() => markTouched(`${addressKey}.state`)}
           className={cls('state')}
           placeholder="IL"
-          maxLength={FIELD_LIMITS.addr.state}
+          maxLength={caps.state}
           autoComplete="address-level1"
           aria-invalid={err('state') ? true : undefined}
         />
       </Field>
-      <Field label="Zip" required error={err('zip')} hint={zipHint}>
+      <Field label="Zip" required error={err('zip')} hint={joinHint(zipHint, capHint('zip'))}>
         <input
           value={a.zip ?? ''}
           onChange={setAddr(addressKey, 'zip')}
           onBlur={() => markTouched(`${addressKey}.zip`)}
           className={cls('zip')}
           placeholder="60601"
-          maxLength={FIELD_LIMITS.addr.zip}
+          maxLength={caps.zip}
           autoComplete="postal-code"
           aria-invalid={err('zip') ? true : undefined}
         />
@@ -2472,7 +2577,7 @@ function AddressGrid({
           />
         </Field>
       </div>
-      <Field label="Phone" error={err('phone')}>
+      <Field label="Phone" error={err('phone')} hint={capHint('phone')}>
         <input
           type="tel"
           value={a.phone ?? ''}
@@ -2480,7 +2585,7 @@ function AddressGrid({
           onBlur={() => markTouched(`${addressKey}.phone`)}
           className={cls('phone')}
           placeholder="+1 555-123-4567"
-          maxLength={FIELD_LIMITS.addr.phone}
+          maxLength={caps.phone}
           autoComplete="tel"
           inputMode="tel"
           aria-invalid={err('phone') ? true : undefined}
