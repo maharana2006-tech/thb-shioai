@@ -26,6 +26,15 @@ public class OrderImportRowDTO {
     /** 1-based row number in the source file (excluding header). */
     private int rowNumber;
 
+    /**
+     * Sprint 48 — order-group key. Multiple rows sharing a non-blank
+     * {@code orderRef} fold into a single shipment: the first row supplies
+     * recipient / carrier / service, subsequent rows contribute additional
+     * customs line-items. Blank {@code orderRef} = standalone single-item
+     * shipment (same as pre-Sprint-48 behaviour).
+     */
+    private String orderRef;
+
     // Recipient
     private String recipientName;
     private String recipientCompany;
@@ -53,9 +62,37 @@ public class OrderImportRowDTO {
     private String reference;
     private String goodsDescription;
 
+    // ===== Sprint 48 — per-item customs fields =====
+    /** Line-item description (e.g. "Silk lining, natural"). When {@link
+     *  #orderRef} groups multiple rows into one shipment, each row's
+     *  itemDescription becomes one CustomsCommodityDTO. Blank on a
+     *  domestic-only row is fine — customs block is skipped. */
+    private String itemDescription;
+    /** Optional SKU / part number on the line item. */
+    private String itemSku;
+    /** Line-item quantity. Defaults to 1 when blank + the row carries any
+     *  item-level data. Skipped entirely when no item fields present. */
+    private Integer itemQuantity;
+    /** Per-unit value in the shipment's {@link #currency}. */
+    private BigDecimal itemUnitValue;
+    /** Harmonised System code (up to 12 chars); required by every
+     *  international carrier connector. Blank OK for domestic. */
+    private String hsCode;
+    /** ISO-2 country of origin / manufacture. Blank OK for domestic. */
+    private String countryOfOrigin;
+
     /** Per-row validation errors. Empty when the row is valid. */
     @Builder.Default
     private List<String> errors = List.of();
+
+    /**
+     * Sprint 48 — non-fatal warnings surfaced on the preview UI (e.g.
+     * "template account = ACC-A but row uses ACC-B"). Empty by default;
+     * committing rows with warnings is allowed unless {@link #errors}
+     * also fires.
+     */
+    @Builder.Default
+    private List<String> warnings = List.of();
 
     // ===== Sprint 41 — populated on successful commit only. Null on
     //       preview and on rows that failed to generate a label. =====

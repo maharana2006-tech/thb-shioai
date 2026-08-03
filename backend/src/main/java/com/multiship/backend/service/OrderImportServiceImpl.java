@@ -68,15 +68,31 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /** Canonical header ordering used for the template + parser column
-     *  discovery. Column names are normalised to lowercase on match. */
+     *  discovery. Column names are normalised to lowercase on match.
+     *
+     *  <p>Sprint 48 adds:
+     *  <ul>
+     *    <li>{@code orderRef} — order-group key. Rows sharing a non-blank
+     *        orderRef fold into a single shipment; the first row supplies
+     *        recipient / carrier / service, subsequent rows carry additional
+     *        customs line-items.</li>
+     *    <li>{@code itemDescription}, {@code itemSku}, {@code itemQuantity},
+     *        {@code itemUnitValue}, {@code hsCode}, {@code countryOfOrigin}
+     *        — per-line-item customs data. Optional; blank rows just skip
+     *        the customs commodity block (domestic-only shipments).</li>
+     *  </ul>
+     */
     static final List<String> HEADERS = List.of(
+            "orderRef",
             "recipientName", "recipientCompany", "recipientPhone", "recipientEmail",
             "addressLine1", "addressLine2",
             "city", "state", "postalCode", "countryCode",
             "carrierCode", "accountNumber", "serviceType", "packageType",
             "weight", "weightUnit",
             "declaredValue", "currency",
-            "reference", "goodsDescription");
+            "reference", "goodsDescription",
+            "itemDescription", "itemSku", "itemQuantity", "itemUnitValue",
+            "hsCode", "countryOfOrigin");
 
     /** Column names required for a valid row. */
     static final List<String> REQUIRED_COLUMNS = List.of(
@@ -114,46 +130,73 @@ public class OrderImportServiceImpl implements OrderImportService {
         int invalid = 0;
         int generated = 0;
 
+        // Sprint 48 — group rows by orderRef so multi-row orders (one
+        // shipment, N line-items) fold into a single label call. Rows
+        // WITHOUT orderRef stay standalone (pre-Sprint-48 behaviour).
+        // Ordering is preserved so preview and commit rows line up 1:1.
+        // The first row of each group is the "leader" — its recipient +
+        // shipment fields drive the request; subsequent rows contribute
+        // only customs line-items.
+        Map<String, List<OrderImportRowDTO>> groups = new LinkedHashMap<>();
         for (OrderImportRowDTO row : rows) {
-            // Re-validate — the frontend may have edited rows.
-            List<String> errors = validateRow(row);
-            row.setErrors(errors);
+            String key = StringUtils.hasText(row.getOrderRef())
+                    ? row.getOrderRef().trim()
+                    : "__row_" + row.getRowNumber(); // unique standalone key
+            groups.computeIfAbsent(key, k -> new ArrayList<>()).add(row);
+        }
+
+        for (Map.Entry<String, List<OrderImportRowDTO>> entry : groups.entrySet()) {
+            List<OrderImportRowDTO> group = entry.getValue();
+            OrderImportRowDTO leader = group.get(0);
+            // Re-validate the leader (has recipient + shipment fields);
+            // item-only rows don't need those, so skip their re-validate.
+            List<String> errors = validateRow(leader);
+            leader.setErrors(errors);
             if (!errors.isEmpty()) {
-                invalid++;
+                // Whole group is invalid; count each row so the summary
+                // stays accurate.
+                invalid += group.size();
+                for (int i = 1; i < group.size(); i++) {
+                    group.get(i).setErrors(List.of("orderRef leader failed validation"));
+                }
                 continue;
             }
-            valid++;
-
-            // Sprint 41 — actually generate the label via the manual
-            // shipment path. When carrierService isn't wired (test-only
-            // no-arg constructor), fall through and just report the
-            // "would commit" summary.
+            valid += group.size();
             if (carrierService == null) continue;
 
             try {
-                com.multiship.backend.dto.ManualShipmentRequest req = toManualShipmentRequest(row);
+                com.multiship.backend.dto.ManualShipmentRequest req = toManualShipmentRequest(group);
                 ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
                         carrierService.generateManualLabel(req, null);
                 com.multiship.backend.dto.LabelGenerationResponse data =
                         resp == null ? null : resp.getData();
                 if (resp != null && "success".equalsIgnoreCase(resp.getStatus()) && data != null
                         && StringUtils.hasText(data.getTrackingNumber())) {
-                    row.setGeneratedOrderNo(data.getOrderNo() == null ? null : data.getOrderNo().intValue());
-                    row.setGeneratedTrackingNumber(data.getTrackingNumber());
-                    row.setGeneratedStatus("GENERATED");
-                    row.setGeneratedMessage(data.getMessage());
+                    // Stamp the whole group so operators see the label
+                    // outcome on every line-item row, not just the leader.
+                    Integer orderNo = data.getOrderNo() == null ? null : data.getOrderNo().intValue();
+                    for (OrderImportRowDTO gr : group) {
+                        gr.setGeneratedOrderNo(orderNo);
+                        gr.setGeneratedTrackingNumber(data.getTrackingNumber());
+                        gr.setGeneratedStatus("GENERATED");
+                        gr.setGeneratedMessage(data.getMessage());
+                    }
                     generated++;
                 } else {
-                    row.setGeneratedStatus("FAILED");
-                    row.setGeneratedMessage(resp == null ? "no response"
-                            : resp.getMessage());
+                    String msg = resp == null ? "no response" : resp.getMessage();
+                    for (OrderImportRowDTO gr : group) {
+                        gr.setGeneratedStatus("FAILED");
+                        gr.setGeneratedMessage(msg);
+                    }
                 }
             } catch (Exception ex) {
-                log.warn("Order import row {} failed at label generation: {}",
-                        row.getRowNumber(), ex.getMessage());
-                row.setGeneratedStatus("FAILED");
-                row.setGeneratedMessage(ex.getMessage() == null
-                        ? ex.getClass().getSimpleName() : ex.getMessage());
+                log.warn("Order import group (leader row {}) failed at label generation: {}",
+                        leader.getRowNumber(), ex.getMessage());
+                String msg = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+                for (OrderImportRowDTO gr : group) {
+                    gr.setGeneratedStatus("FAILED");
+                    gr.setGeneratedMessage(msg);
+                }
             }
         }
 
@@ -174,50 +217,107 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /**
-     * Sprint 41 — convert an import row to a ManualShipmentRequest.
-     * Recipient block from the row's address fields; sender left null
-     * so the CarrierService cascade uses the tenant's default ship-from.
-     * accountNumber / accountId → row's accountNumber; when the row
-     * doesn't carry one, the manual-shipment path errors clearly and
-     * the row is marked FAILED.
+     * Sprint 41 — convert a single import row to a ManualShipmentRequest.
+     * Kept for tests / legacy call paths; the commit loop uses the
+     * {@link #toManualShipmentRequest(List)} group overload so multi-row
+     * orders fold into one shipment with a customs items[] array.
      */
     static com.multiship.backend.dto.ManualShipmentRequest toManualShipmentRequest(OrderImportRowDTO row) {
+        return toManualShipmentRequest(List.of(row));
+    }
+
+    /**
+     * Sprint 48 — convert an orderRef group (leader + item rows) into one
+     * ManualShipmentRequest. Recipient / carrier / weight / service come
+     * from the group's leader (row 0). Every row in the group contributes
+     * a customs {@code Item} when it carries any item-level data
+     * (description, HS code, SKU, quantity, or unit value).
+     *
+     * <p>Domestic-only groups (no item-level data on any row) send the
+     * legacy single-goods block — no customs items array — so we don't
+     * force customs data on shipments that don't need it.
+     */
+    static com.multiship.backend.dto.ManualShipmentRequest toManualShipmentRequest(List<OrderImportRowDTO> group) {
+        OrderImportRowDTO leader = group.get(0);
         com.multiship.backend.dto.ManualShipmentRequest req =
                 new com.multiship.backend.dto.ManualShipmentRequest();
         com.multiship.backend.dto.ManualShipmentRequest.Address recipient =
                 new com.multiship.backend.dto.ManualShipmentRequest.Address();
-        recipient.setName(row.getRecipientName());
-        recipient.setCompany(row.getRecipientCompany());
-        recipient.setPhone(row.getRecipientPhone());
-        recipient.setEmail(row.getRecipientEmail());
-        recipient.setAddressLine1(row.getAddressLine1());
-        recipient.setAddressLine2(row.getAddressLine2());
-        recipient.setCity(row.getCity());
-        recipient.setState(row.getState());
-        recipient.setPostalCode(row.getPostalCode());
-        recipient.setCountryCode(row.getCountryCode());
+        recipient.setName(leader.getRecipientName());
+        recipient.setCompany(leader.getRecipientCompany());
+        recipient.setPhone(leader.getRecipientPhone());
+        recipient.setEmail(leader.getRecipientEmail());
+        recipient.setAddressLine1(leader.getAddressLine1());
+        recipient.setAddressLine2(leader.getAddressLine2());
+        recipient.setCity(leader.getCity());
+        recipient.setState(leader.getState());
+        recipient.setPostalCode(leader.getPostalCode());
+        recipient.setCountryCode(leader.getCountryCode());
         req.setRecipient(recipient);
 
-        req.setCarrierCode(row.getCarrierCode());
-        req.setAccountNumber(row.getAccountNumber());
-        req.setWeight(row.getWeight());
-        req.setWeightUnit(row.getWeightUnit());
-        req.setDeclaredValue(row.getDeclaredValue());
-        req.setCurrency(row.getCurrency());
-        req.setReference(row.getReference());
-        req.setGoodsDescription(row.getGoodsDescription());
+        req.setCarrierCode(leader.getCarrierCode());
+        req.setAccountNumber(leader.getAccountNumber());
+        req.setWeight(leader.getWeight());
+        req.setWeightUnit(leader.getWeightUnit());
+        req.setDeclaredValue(leader.getDeclaredValue());
+        req.setCurrency(leader.getCurrency());
+        req.setReference(leader.getReference());
+        req.setGoodsDescription(leader.getGoodsDescription());
         req.setSource("API");
+
+        // Customs items: any row (leader OR item rows) that carries
+        // item-level data becomes one Item on the invoice. Skip rows
+        // that are purely shipment-level (domestic-only leader with no
+        // customs data).
+        List<com.multiship.backend.dto.ManualShipmentRequest.Item> items = new ArrayList<>();
+        for (OrderImportRowDTO row : group) {
+            if (!rowHasItemData(row)) continue;
+            com.multiship.backend.dto.ManualShipmentRequest.Item it =
+                    new com.multiship.backend.dto.ManualShipmentRequest.Item();
+            it.setDescription(row.getItemDescription() != null
+                    ? row.getItemDescription()
+                    : row.getGoodsDescription());
+            it.setHsCode(row.getHsCode());
+            it.setCountryOfOrigin(row.getCountryOfOrigin());
+            it.setQuantity(row.getItemQuantity() != null ? row.getItemQuantity() : 1);
+            it.setUnitValue(row.getItemUnitValue());
+            it.setSku(row.getItemSku());
+            items.add(it);
+        }
+        if (!items.isEmpty()) req.setItems(items);
         return req;
+    }
+
+    /** True when the row carries any per-item data. Blank-rows shouldn't
+     *  become empty customs entries. */
+    private static boolean rowHasItemData(OrderImportRowDTO row) {
+        return StringUtils.hasText(row.getItemDescription())
+                || StringUtils.hasText(row.getItemSku())
+                || StringUtils.hasText(row.getHsCode())
+                || StringUtils.hasText(row.getCountryOfOrigin())
+                || row.getItemQuantity() != null
+                || row.getItemUnitValue() != null;
     }
 
     @Override
     public byte[] csvTemplate() {
         StringBuilder sb = new StringBuilder();
         sb.append(String.join(",", HEADERS)).append('\n');
-        // Sample row — realistic domestic US shipment.
-        sb.append("Acme Warehouse,Acme Ltd,5551234567,ops@acme.com,")
+        // Sample 1 — domestic US shipment, no customs, single row (no orderRef).
+        // Uses empty orderRef so the row commits standalone (pre-Sprint-48 behaviour).
+        sb.append(",Acme Warehouse,Acme Ltd,5551234567,ops@acme.com,")
                 .append("1 Warehouse Way,,Louisville,KY,40209,US,")
-                .append("UPS,A12345,03,02,2.5,LB,100.00,USD,PO-1001,General merchandise\n");
+                .append("UPS,A12345,03,02,2.5,LB,100.00,USD,PO-1001,General merchandise,")
+                // itemDescription / itemSku / itemQuantity / itemUnitValue / hsCode / countryOfOrigin
+                .append(",,,,,\n");
+        // Sample 2 — international UK shipment, 2 line-items, grouped by orderRef "ORD-2001".
+        // Row A carries recipient + shipment + item 1; row B carries only orderRef + item 2.
+        sb.append("ORD-2001,Ava Chen,,4402071234567,ava.chen@example.co.uk,")
+                .append("221B Baker Street,,London,LDN,NW1 6XE,GB,")
+                .append("FEDEX,F98765,INTERNATIONAL_PRIORITY,YOUR_PACKAGING,3.2,LB,275.00,USD,ORD-2001,Silk garments + accessories,")
+                .append("Silk lining natural,SKU-100,2,45.00,5007.20,IT\n");
+        sb.append("ORD-2001,,,,,,,,,,,,,,,,,,,")
+                .append("Cotton canvas cream,SKU-200,1,60.00,5209.11,IN\n");
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }
 
@@ -225,7 +325,22 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     private List<OrderImportRowDTO> parseCsv(InputStream body) throws Exception {
         List<OrderImportRowDTO> out = new ArrayList<>();
-        try (InputStreamReader reader = new InputStreamReader(body, StandardCharsets.UTF_8);
+        // Wrap in a PushbackInputStream so we can peek + swallow a UTF-8
+        // BOM (0xEF 0xBB 0xBF) — Excel writes one when Save As CSV, and
+        // without stripping it the first header column reads as "﻿orderRef"
+        // instead of "orderRef" and every value on that column comes back null.
+        java.io.PushbackInputStream pb = new java.io.PushbackInputStream(body, 3);
+        int b1 = pb.read();
+        if (b1 != -1) {
+            int b2 = pb.read();
+            int b3 = pb.read();
+            if (b1 != 0xEF || b2 != 0xBB || b3 != 0xBF) {
+                if (b3 != -1) pb.unread(b3);
+                if (b2 != -1) pb.unread(b2);
+                pb.unread(b1);
+            }
+        }
+        try (InputStreamReader reader = new InputStreamReader(pb, StandardCharsets.UTF_8);
              CSVParser parser = CSVFormat.DEFAULT.builder()
                      .setHeader().setSkipHeaderRecord(true)
                      .setIgnoreEmptyLines(true).setTrim(true)
@@ -320,30 +435,73 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     OrderImportRowDTO buildRow(int rowNumber, ColumnReader r) {
+        // Wrap every read in sanitise() so downstream validators + carrier
+        // connectors see clean strings — no control chars, no carrier-
+        // forbidden characters. sanitise() returns null for whitespace-only
+        // input, preserving today's "blank = null" semantics.
+        ColumnReader s = name -> sanitise(r.read(name));
         OrderImportRowDTO out = new OrderImportRowDTO();
         out.setRowNumber(rowNumber);
-        out.setRecipientName(r.read("recipientName"));
-        out.setRecipientCompany(r.read("recipientCompany"));
-        out.setRecipientPhone(r.read("recipientPhone"));
-        out.setRecipientEmail(r.read("recipientEmail"));
-        out.setAddressLine1(r.read("addressLine1"));
-        out.setAddressLine2(r.read("addressLine2"));
-        out.setCity(r.read("city"));
-        out.setState(r.read("state"));
-        out.setPostalCode(r.read("postalCode"));
-        out.setCountryCode(upper(r.read("countryCode")));
-        out.setCarrierCode(upper(r.read("carrierCode")));
-        out.setAccountNumber(r.read("accountNumber"));
-        out.setServiceType(r.read("serviceType"));
-        out.setPackageType(r.read("packageType"));
-        out.setWeight(parseDecimal(r.read("weight")));
-        out.setWeightUnit(upper(r.read("weightUnit")));
-        out.setDeclaredValue(parseDecimal(r.read("declaredValue")));
-        out.setCurrency(upper(r.read("currency")));
-        out.setReference(r.read("reference"));
-        out.setGoodsDescription(r.read("goodsDescription"));
+        out.setOrderRef(s.read("orderRef"));
+        out.setRecipientName(s.read("recipientName"));
+        out.setRecipientCompany(s.read("recipientCompany"));
+        out.setRecipientPhone(s.read("recipientPhone"));
+        out.setRecipientEmail(s.read("recipientEmail"));
+        out.setAddressLine1(s.read("addressLine1"));
+        out.setAddressLine2(s.read("addressLine2"));
+        out.setCity(s.read("city"));
+        out.setState(s.read("state"));
+        out.setPostalCode(s.read("postalCode"));
+        out.setCountryCode(upper(s.read("countryCode")));
+        out.setCarrierCode(upper(s.read("carrierCode")));
+        out.setAccountNumber(s.read("accountNumber"));
+        out.setServiceType(s.read("serviceType"));
+        out.setPackageType(s.read("packageType"));
+        out.setWeight(parseDecimal(s.read("weight")));
+        out.setWeightUnit(upper(s.read("weightUnit")));
+        out.setDeclaredValue(parseDecimal(s.read("declaredValue")));
+        out.setCurrency(upper(s.read("currency")));
+        out.setReference(s.read("reference"));
+        out.setGoodsDescription(s.read("goodsDescription"));
+        // Sprint 48 — per-item customs data.
+        out.setItemDescription(s.read("itemDescription"));
+        out.setItemSku(s.read("itemSku"));
+        out.setItemQuantity(parseInt(s.read("itemQuantity")));
+        out.setItemUnitValue(parseDecimal(s.read("itemUnitValue")));
+        out.setHsCode(s.read("hsCode"));
+        out.setCountryOfOrigin(upper(s.read("countryOfOrigin")));
         out.setErrors(validateRow(out));
         return out;
+    }
+
+    /**
+     * Strip control characters (0x00–0x1F, 0x7F) and carrier-forbidden
+     * chars ({@code < > \ | `}) from a user-supplied string. Returns null
+     * when the result is blank so downstream code can treat "just noise"
+     * the same as "not supplied at all".
+     *
+     * <p>Sprint 48 — needed because CSV uploads and Excel paste-in flows
+     * routinely carry stray control characters (BOMs, non-breaking
+     * spaces sneak in as 0x00 in some exports), and UPS + FedEx reject
+     * name / address fields containing any of the punctuation set.
+     */
+    static String sanitise(String s) {
+        if (s == null) return null;
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c <= 0x1F || c == 0x7F) continue;
+            if (c == '<' || c == '>' || c == '\\' || c == '|' || c == '`') continue;
+            sb.append(c);
+        }
+        String out = sb.toString().trim();
+        return out.isEmpty() ? null : out;
+    }
+
+    private static Integer parseInt(String s) {
+        if (!StringUtils.hasText(s)) return null;
+        try { return Integer.parseInt(s.trim().replace(",", "")); }
+        catch (NumberFormatException ex) { return null; }
     }
 
     static List<String> validateRow(OrderImportRowDTO row) {
