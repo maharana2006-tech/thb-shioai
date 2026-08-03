@@ -137,6 +137,9 @@ export const resolveBreadcrumb = (
   if (pathname === workspacePaths.dashboard) {
     return { section: 'Overview', label: 'Dashboard', iconKey: 'dashboard' }
   }
+  if (pathname === '/orders/new') {
+    return { section: 'Operations', label: 'New Shipment', iconKey: 'orders' }
+  }
   if (pathname === workspacePaths.orders || pathname === '/track-orders' || pathname.startsWith('/label/')) {
     return { section: 'Operations', label: 'Orders & Labels', iconKey: 'orders' }
   }

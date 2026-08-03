@@ -26,7 +26,6 @@ import {
   type ClientDestinationRules,
 } from '../api/clientPolicyService'
 import { aiService, type ShipmentWarning } from '../api/aiService'
-import PageSectionHeader from './workspace/PageSectionHeader'
 import ShipmentPartiesOverrideModal, { type Party } from './modals/ShipmentPartiesOverrideModal'
 import CustomFieldsSection from './shared/CustomFieldsSection'
 import { customFieldService } from '../api/customFieldService'
@@ -1339,23 +1338,7 @@ export default function NewShipmentPage() {
   const noCarriers = !loading && carrierOptions.length === 0
 
   return (
-    <div className="space-y-4 pb-6">
-      <PageSectionHeader
-        eyebrow="Operations"
-        title="New shipment"
-        description="Manually enter a shipment — pick the client, carrier, addresses and package, then generate its label in one step."
-        actions={
-          <button
-            type="button"
-            onClick={() => navigate('/orders')}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-          >
-            <FiArrowLeft className="h-3.5 w-3.5" />
-            Back to orders
-          </button>
-        }
-      />
-
+    <div className="pb-6">
       <div className="w-full space-y-4">
         {loading ? (
           <section className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-[#8a7959] shadow-sm">
@@ -1372,27 +1355,37 @@ export default function NewShipmentPage() {
         ) : (
           <>
             {/* ── Shipment / Return toggle ── */}
-            <div className="flex items-center gap-3">
-              <div className="inline-flex items-center gap-1 rounded-2xl border border-[#e3d9c4] bg-white p-1 shadow-sm">
-                {(['SHIPMENT', 'RETURN'] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => switchMode(m)}
-                    className={`inline-flex items-center justify-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold transition ${
-                      mode === m ? 'bg-[#1f150c] text-[#f4eede] shadow-sm' : 'text-[#5a4526] hover:bg-[#faf7f0]'
-                    }`}
-                  >
-                    {m === 'SHIPMENT' ? <FiTruck className="h-3.5 w-3.5" /> : <FiRotateCcw className="h-3.5 w-3.5" />}
-                    {m === 'SHIPMENT' ? 'Shipment' : 'Return'}
-                  </button>
-                ))}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="inline-flex items-center gap-1 rounded-2xl border border-[#e3d9c4] bg-white p-1 shadow-sm">
+                  {(['SHIPMENT', 'RETURN'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => switchMode(m)}
+                      className={`inline-flex items-center justify-center gap-1.5 rounded-xl px-4 py-2 text-[12.5px] font-semibold transition ${
+                        mode === m ? 'bg-[#1f150c] text-[#f4eede] shadow-sm' : 'text-[#5a4526] hover:bg-[#faf7f0]'
+                      }`}
+                    >
+                      {m === 'SHIPMENT' ? <FiTruck className="h-3.5 w-3.5" /> : <FiRotateCcw className="h-3.5 w-3.5" />}
+                      {m === 'SHIPMENT' ? 'Shipment' : 'Return'}
+                    </button>
+                  ))}
+                </div>
+                {isReturn ? (
+                  <span className="text-[12px] text-[#8a7959]">
+                    Reverse label — the customer ships back to your address. Billed to your account.
+                  </span>
+                ) : null}
               </div>
-              {isReturn ? (
-                <span className="text-[12px] text-[#8a7959]">
-                  Reverse label — the customer ships back to your address. Billed to your account.
-                </span>
-              ) : null}
+              <button
+                type="button"
+                onClick={() => navigate('/orders')}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+              >
+                <FiArrowLeft className="h-3.5 w-3.5" />
+                Back to orders
+              </button>
             </div>
 
             {/* ── Top: client · reason of export · currency ── */}
