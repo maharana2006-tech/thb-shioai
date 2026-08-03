@@ -307,24 +307,41 @@ function PreviewStep({ preview }: { preview: OrderImportPreview }) {
       </div>
 
       <div className="overflow-auto rounded-xl border border-slate-200">
-        <table className="w-full min-w-[800px] text-left text-[11px] text-slate-700">
+        <table className="w-full min-w-[960px] text-left text-[11px] text-slate-700">
           <thead className="bg-slate-50 text-[9.5px] uppercase tracking-[0.14em] text-slate-500">
             <tr>
               <th className="p-2">#</th>
+              {/* Sprint 48 — orderRef ties multi-row shipments together. */}
+              <th className="p-2">Order ref</th>
               <th className="p-2">Recipient</th>
               <th className="p-2">Address</th>
               <th className="p-2">City / Postal</th>
               <th className="p-2">Carrier</th>
               <th className="p-2 text-right">Weight</th>
+              {/* Sprint 48 — item / customs data on this row. Renders empty
+                   for pure shipment-only rows and pure item-only rows show
+                   only these fields. */}
+              <th className="p-2">Item / Customs</th>
               <th className="p-2">Status</th>
             </tr>
           </thead>
           <tbody>
             {preview.rows.map((r) => {
               const ok = r.errors.length === 0
+              // Item / customs — surface the fields the operator most needs
+              // to eyeball (description + HS + country + qty). Displayed
+              // compactly in the shared "Item / Customs" cell; empty for
+              // pure shipment rows.
+              const hasItem = !!(
+                r.itemDescription || r.itemSku || r.hsCode
+                || r.countryOfOrigin || r.itemQuantity != null || r.itemUnitValue != null
+              )
               return (
                 <tr key={r.rowNumber} className="border-t border-slate-100">
                   <td className="p-2 font-mono text-[10.5px]">{r.rowNumber}</td>
+                  <td className="p-2 font-mono text-[10.5px] text-slate-600">
+                    {r.orderRef ?? '—'}
+                  </td>
                   <td className="p-2">
                     <p className="font-semibold text-slate-950">{r.recipientName ?? '—'}</p>
                     {r.recipientCompany ? (
@@ -344,6 +361,40 @@ function PreviewStep({ preview }: { preview: OrderImportPreview }) {
                   </td>
                   <td className="p-2 text-right">
                     {r.weight ?? '—'} {r.weightUnit ?? ''}
+                  </td>
+                  <td className="p-2">
+                    {hasItem ? (
+                      <div className="space-y-0.5">
+                        {r.itemDescription ? (
+                          <p className="max-w-[220px] truncate font-semibold text-slate-950">
+                            {r.itemDescription}
+                          </p>
+                        ) : null}
+                        <p className="text-[9.5px] text-slate-500">
+                          {r.itemSku ? <span className="font-mono">{r.itemSku}</span> : null}
+                          {r.itemQuantity != null ? (
+                            <span>
+                              {r.itemSku ? ' · ' : ''}qty {r.itemQuantity}
+                            </span>
+                          ) : null}
+                          {r.itemUnitValue != null ? (
+                            <span>
+                              {(r.itemSku || r.itemQuantity != null) ? ' · ' : ''}
+                              @{r.itemUnitValue}
+                            </span>
+                          ) : null}
+                        </p>
+                        {(r.hsCode || r.countryOfOrigin) ? (
+                          <p className="text-[9.5px] text-slate-500">
+                            {r.hsCode ? <span className="font-mono">HS {r.hsCode}</span> : null}
+                            {r.hsCode && r.countryOfOrigin ? ' · ' : ''}
+                            {r.countryOfOrigin ? <span>from {r.countryOfOrigin}</span> : null}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
                   </td>
                   <td className="p-2">
                     {ok ? (

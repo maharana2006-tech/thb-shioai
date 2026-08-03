@@ -93,13 +93,38 @@ public class OrderImportController {
                     "and an instructions sheet. When `accountId` is supplied the sample rows " +
                     "prefill accountNumber + carrierCode and the serviceType / packageType " +
                     "dropdowns narrow to that carrier's options only. Requires authentication " +
-                    "because accountId resolves against private account data.")
+                    "because accountId resolves against private account data. " +
+                    "For generic (unscoped) downloads, if an admin has dropped a macro-enabled " +
+                    "workbook at resources/templates/order-import-template.xlsm, that file is " +
+                    "served in place of the POI-generated .xlsx — same download URL, richer " +
+                    "in-workbook UX (Save-as-CSV + Validate-All buttons). Account-scoped " +
+                    "downloads always use the dynamic .xlsx generator.")
     @org.springframework.security.access.prepost.PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping(value = "/template.xlsx",
-            produces = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            produces = {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "application/vnd.ms-excel.sheet.macroEnabled.12"
+            })
     public ResponseEntity<byte[]> templateXlsx(
             @io.swagger.v3.oas.annotations.Parameter(description = "Optional carrier account id to scope the template to.")
-            @org.springframework.web.bind.annotation.RequestParam(required = false) Long accountId) {
+            @org.springframework.web.bind.annotation.RequestParam(required = false) Long accountId) throws java.io.IOException {
+        // Prefer the static .xlsm resource ONLY for generic downloads —
+        // it can't reflect per-account scoping (dropdown restrictions +
+        // prefill), so scoped downloads always go through the dynamic
+        // POI generator regardless.
+        if (accountId == null) {
+            org.springframework.core.io.Resource xlsm =
+                    new org.springframework.core.io.ClassPathResource("templates/order-import-template.xlsm");
+            if (xlsm.exists()) {
+                byte[] bytes = xlsm.getInputStream().readAllBytes();
+                return ResponseEntity.ok()
+                        .header(HttpHeaders.CONTENT_DISPOSITION,
+                                "attachment; filename=\"order-import-template.xlsm\"")
+                        .contentType(MediaType.parseMediaType(
+                                "application/vnd.ms-excel.sheet.macroEnabled.12"))
+                        .body(bytes);
+            }
+        }
         byte[] xlsx = orderImportService.xlsxTemplate(accountId);
         String filenameSuffix = accountId == null ? "generic" : ("account-" + accountId);
         return ResponseEntity.ok()
