@@ -31,6 +31,7 @@ export const settingsPaths = {
   codeMaps: '/settings/code-maps',
   apiKeys: '/settings/api-keys',
   apiReference: '/settings/api-reference',
+  auditLog: '/settings/audit-log',
 } as const
 
 export const workspaceNavItems: Array<{

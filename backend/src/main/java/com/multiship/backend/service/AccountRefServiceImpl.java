@@ -34,6 +34,7 @@ public class AccountRefServiceImpl implements AccountRefService {
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     private final OrderTrackingRepository orderTrackingRepository;
     private final CarrierService carrierService;
+    private final AuditService auditService;
 
     private record Usage(long labels, LocalDateTime lastUsed) {}
 
@@ -221,6 +222,13 @@ public class AccountRefServiceImpl implements AccountRefService {
         }
 
         carrierAccountRefRepository.save(account);
+        auditService.record(isNewAccount ? AuditService.CREATE : AuditService.UPDATE,
+                AuditService.CARRIER_ACCOUNT, account.getId(),
+                carrierCode + " · " + accountNumber, toDTO(account),
+                (isNewAccount ? "Carrier account created: " : "Carrier account updated: ")
+                        + carrierCode + "/" + accountNumber
+                        + (StringUtils.hasText(account.getCustomerNo())
+                                ? " (client " + account.getCustomerNo() + ")" : " (platform)"));
         return success("Carrier account saved to the reference book.", toDTO(account));
     }
 
@@ -278,6 +286,12 @@ public class AccountRefServiceImpl implements AccountRefService {
         account.setActive(nextActive);
 
         carrierAccountRefRepository.save(account);
+        auditService.record(AuditService.TOGGLE_ACTIVE, AuditService.CARRIER_ACCOUNT,
+                account.getId(),
+                account.getCarrierCode() + " · " + account.getAccountNumber(),
+                java.util.Map.of("active", nextActive, "customerNo", account.getCustomerNo()),
+                (nextActive ? "Carrier account activated: " : "Carrier account deactivated: ")
+                        + account.getCarrierCode() + "/" + account.getAccountNumber());
         return success(nextActive ? "Account activated." : "Account deactivated.", toDTO(account));
     }
 
@@ -381,7 +395,13 @@ public class AccountRefServiceImpl implements AccountRefService {
                     "Account " + account.getAccountNumber() + " has generated " + labels
                             + " label(s) — deactivate it instead to preserve the audit trail.");
         }
+        Long deletedId = account.getId();
+        String deletedCarrier = account.getCarrierCode();
+        String deletedNumber = account.getAccountNumber();
         carrierAccountRefRepository.delete(account);
+        auditService.record(AuditService.DELETE, AuditService.CARRIER_ACCOUNT,
+                deletedId, deletedCarrier + " · " + deletedNumber, null,
+                "Carrier account deleted: " + deletedCarrier + "/" + deletedNumber);
         return success("Account " + account.getAccountNumber() + " removed from the account book.", null);
     }
 
