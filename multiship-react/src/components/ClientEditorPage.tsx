@@ -60,6 +60,7 @@ import {
   type CarrierAccountRule,
   type CarrierCode,
 } from '../utils/carrierFieldLimits'
+import { computeAllowedCarriers, platformAccounts as platformAccountsFrom } from '../utils/allowedCarriers'
 
 /**
  * Look up the account-number rule for a carrier code. Returns null when
@@ -1325,6 +1326,8 @@ export default function ClientEditorPage() {
           <MappingDraftStep
             drafts={mappingDrafts}
             services={servicesCatalog}
+            carrierDrafts={carrierDrafts}
+            accounts={accounts}
             addDraft={(d) => {
               setMappingDrafts((cur) => [
                 ...cur,
@@ -2092,22 +2095,59 @@ function MappingDraftStep({
   services,
   addDraft,
   removeDraft,
+  carrierDrafts,
+  accounts,
 }: {
   drafts: MappingRuleDraft[]
   services: ShippingServiceItem[]
   addDraft: (d: Omit<MappingRuleDraft, 'id'>) => void
   removeDraft: (id: number) => void
+  /** Staged carrier accounts from the Carriers step. In create mode nothing
+   *  is persisted yet, so this is the source for "the client's carriers". */
+  carrierDrafts: CarrierAccountDraft[]
+  /** All carrier accounts fetched from the server — used to surface the
+   *  platform-account picker (client-owned entries here are irrelevant in
+   *  create mode; only platform rows are used). */
+  accounts: CarrierAccountRef[]
 }) {
   const [adding, setAdding] = useState(false)
   const [shipviaCd, setShipviaCd] = useState('')
   const [serviceId, setServiceId] = useState('')
+  /** Optional platform account picked to seed / extend the allowed carrier
+   *  set — same UX as ClientShippingMappingTab. */
+  const [platformAccountId, setPlatformAccountId] = useState<number | null>(null)
 
-  const canSave = !!shipviaCd.trim() && !!serviceId
   const svcById = useMemo(() => new Map(services.map((s) => [s.id, s])), [services])
+  const platformAccountList = useMemo(() => platformAccountsFrom(accounts), [accounts])
+  /** In create mode we drive the "client's carriers" set from the staged
+   *  drafts — the client has no persisted accounts yet. */
+  const allowed = useMemo(
+    () => computeAllowedCarriers({
+      clientCarrierDrafts: carrierDrafts.map((d) => ({ carrierCode: d.carrierCode })),
+      accounts,
+      platformAccountId,
+    }),
+    [carrierDrafts, accounts, platformAccountId],
+  )
+  const filteredServices = useMemo(
+    () => services.filter((s) => {
+      if (!s.enabled) return false
+      if (allowed.carriers.size === 0) return false
+      return allowed.carriers.has((s.carrier || '').toUpperCase())
+    }),
+    [services, allowed.carriers],
+  )
+  // Drop a stale serviceId at render time when the filter no longer includes it.
+  const effectiveServiceId = useMemo(() => {
+    if (!serviceId) return ''
+    return filteredServices.some((s) => String(s.id) === serviceId) ? serviceId : ''
+  }, [serviceId, filteredServices])
+
+  const canSave = !!shipviaCd.trim() && !!effectiveServiceId
 
   const save = () => {
     if (!canSave) return
-    addDraft({ shipviaCd: shipviaCd.trim(), serviceId: Number(serviceId) })
+    addDraft({ shipviaCd: shipviaCd.trim(), serviceId: Number(effectiveServiceId) })
     setShipviaCd('')
     setServiceId('')
     setAdding(false)
@@ -2137,7 +2177,7 @@ function MappingDraftStep({
 
       {adding ? (
         <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
             <label className="block">
               <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Order Ship Via *</span>
               <input
@@ -2148,10 +2188,50 @@ function MappingDraftStep({
               />
             </label>
             <label className="block">
+              <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                Platform carrier account
+                <span className="ml-1 normal-case font-normal tracking-normal text-slate-400">
+                  · {allowed.hasClientCarriers ? 'optional' : 'required'}
+                </span>
+              </span>
+              <Select
+                value={platformAccountId == null ? '' : String(platformAccountId)}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  setPlatformAccountId(raw ? Number(raw) : null)
+                  setServiceId('')
+                }}
+                title={
+                  allowed.hasClientCarriers
+                    ? "Optional — pick to also allow this platform account's carrier."
+                    : 'Add a carrier account to the client, or pick a platform account here to see Ship Via options.'
+                }
+              >
+                <option value="">
+                  {platformAccountList.length === 0
+                    ? 'No platform accounts'
+                    : allowed.hasClientCarriers
+                      ? '+ platform account (optional)'
+                      : 'Pick to filter Ship Via'}
+                </option>
+                {platformAccountList.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {formatCarrierName(a.carrierCode)} · {a.accountNumber}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            <label className="block">
               <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Carrier Ship Via *</span>
-              <Select value={serviceId} onChange={(e) => setServiceId(e.target.value)}>
-                <option value="">Pick a carrier service…</option>
-                {services.filter((s) => s.enabled).map((s) => (
+              <Select value={effectiveServiceId} onChange={(e) => setServiceId(e.target.value)}>
+                <option value="">
+                  {allowed.carriers.size === 0
+                    ? 'Add a carrier account first —'
+                    : filteredServices.length === 0
+                      ? 'No services for the allowed carrier(s) —'
+                      : 'Pick a carrier service…'}
+                </option>
+                {filteredServices.map((s) => (
                   <option key={s.id} value={s.id}>
                     {formatCarrierName(s.carrier)} — {s.name}
                   </option>

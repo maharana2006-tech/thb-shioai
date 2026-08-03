@@ -11,6 +11,8 @@ import {
 } from '../api/shippingConfigService'
 import { clientService, type Client } from '../api/clientService'
 import { warehouseService, type Warehouse } from '../api/warehouseService'
+import { accountRefService, type CarrierAccountRef } from '../api/accountRefService'
+import { computeAllowedCarriers, platformAccounts as platformAccountsFrom } from '../utils/allowedCarriers'
 import { countriesInRegion, countryName, groupByRegion, regionOf, REGIONS, type Region } from '../utils/countries'
 import { formatCarrierName } from '../utils/carrierUtils'
 import {
@@ -280,8 +282,14 @@ export default function ShippingServiceMappingPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [presets, setPresets] = useState<PackagePreset[]>([])
+  /** Carrier accounts (client + platform) — narrows Ship Via to services
+   *  the mapping can actually ship on. */
+  const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
   const [loading, setLoading] = useState(true)
   const [newRule, setNewRule] = useState({ ...blankRule })
+  /** Platform account the operator picked to seed / extend the new-rule
+   *  Ship Via carrier filter. Reset whenever the client changes. */
+  const [newRulePlatformAccountId, setNewRulePlatformAccountId] = useState<number | null>(null)
   /** Zone modal target: 'new' = the add-row, otherwise the rule being edited. */
   const [zoneFor, setZoneFor] = useState<'new' | ShipMethodRule | null>(null)
   const [zoneCodes, setZoneCodes] = useState<string[]>([])
@@ -340,17 +348,19 @@ export default function ShippingServiceMappingPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [catalog, clientPage, whPage, presetList] = await Promise.all([
+      const [catalog, clientPage, whPage, presetList, accountList] = await Promise.all([
         shippingConfigService.catalog(),
         clientService.listClients({ size: 200 }),
         warehouseService.listWarehouses({ size: 500 }),
         shippingConfigService.listPresets(),
+        accountRefService.listAccounts(),
       ])
       setServices(catalog.services)
       setRules(catalog.rules)
       setClients(clientPage.data?.content ?? [])
       setWarehouses(whPage.data?.content ?? [])
       setPresets(presetList)
+      setAccounts(accountList)
       // Phase 6 — group flat rulePackages by ruleId for chip rendering.
       const grouped = new Map<number, number[]>()
       for (const l of catalog.rulePackages ?? []) {
@@ -443,6 +453,20 @@ export default function ShippingServiceMappingPage() {
     [clientByCode],
   )
 
+  // ===== Carrier account driven allowed-carriers filter =====
+  // Union of client's own active + complete accounts + (optional) the platform
+  // account the operator picked to seed or extend the filter. Empty means the
+  // Ship Via list should render blank + a hint to pick a platform account.
+  const platformAccountList = useMemo(() => platformAccountsFrom(accounts), [accounts])
+  const draftAllowed = useMemo(
+    () => computeAllowedCarriers({
+      clientCode: newRule.clientCode,
+      accounts,
+      platformAccountId: newRulePlatformAccountId,
+    }),
+    [accounts, newRule.clientCode, newRulePlatformAccountId],
+  )
+
   // ===== Draft-side cascading filters (add-strip + popout modal share these) =====
   // Declared AFTER domesticFor so the TDZ isn't tripped — draftOrigins reads
   // domesticFor when the rule targets a client but has no warehouse pinned.
@@ -465,13 +489,20 @@ export default function ShippingServiceMappingPage() {
         if (!s.enabled) return false
         const svcOrigin = (s.originCountry || '').toUpperCase()
         if (svcOrigin && draftOrigins.size > 0 && !draftOrigins.has(svcOrigin)) return false
+        // Carrier filter: services outside the allowed set are hidden. Empty
+        // set = operator hasn't picked a platform account for an Any-client /
+        // no-account client yet; render blank so they're prompted to pick one.
+        if (draftAllowed.carriers.size > 0
+            && !draftAllowed.carriers.has((s.carrier || '').toUpperCase())) {
+          return false
+        }
         if (draftScope === 'ANY') return true
         if (s.scope === 'BOTH' || draftScope === 'BOTH') return true
         return s.scope === draftScope
       }),
       draftOrigins,
     ),
-    [services, draftOrigins, draftScope],
+    [services, draftOrigins, draftScope, draftAllowed.carriers],
   )
 
   const draftEligibleServiceIds = useMemo(() => {
@@ -856,6 +887,14 @@ export default function ShippingServiceMappingPage() {
                   return s
                 })()
             const scope = inferScope(ruleCodes(p.row), origins)
+            // Row-level carrier scope — client's own active accounts. Row
+            // editor has no inline platform-account picker (too little space);
+            // any-client / no-account rows keep the current service visible
+            // via the currentKey fallback below so operators can still edit.
+            const allowed = computeAllowedCarriers({
+              clientCode: p.row.clientCode,
+              accounts,
+            }).carriers
             // Filter + dedupe: one option per (carrier, service_code) so origin
             // siblings collapse; carrier-switch confirmation kicks in inside
             // saveRuleService when the carrier changes.
@@ -863,6 +902,7 @@ export default function ShippingServiceMappingPage() {
               services.filter((s) => s.enabled).filter((s) => {
                 const svcOrigin = (s.originCountry || '').toUpperCase()
                 if (svcOrigin && origins.size > 0 && !origins.has(svcOrigin)) return false
+                if (allowed.size > 0 && !allowed.has((s.carrier || '').toUpperCase())) return false
                 if (scope === 'ANY') return true
                 if (s.scope === 'BOTH' || scope === 'BOTH') return true
                 return s.scope === scope
@@ -1126,17 +1166,57 @@ export default function ShippingServiceMappingPage() {
                   <div className="min-w-[130px] flex-1">
                     <Select
                       value={newRule.clientCode}
-                      onChange={(e) => setNewRule((c) => ({
-                        ...c,
-                        clientCode: e.target.value,
-                        // Client change may invalidate previously picked warehouses
-                        // (CLIENT-owned ones); safest is to reset the picker.
-                        warehouseIds: [],
-                        presetIds: [],
-                      }))}
+                      onChange={(e) => {
+                        setNewRulePlatformAccountId(null)
+                        setNewRule((c) => ({
+                          ...c,
+                          clientCode: e.target.value,
+                          // Client change may invalidate previously picked warehouses
+                          // (CLIENT-owned ones); safest is to reset the picker.
+                          warehouseIds: [],
+                          presetIds: [],
+                          // Carrier context changes with the client too — drop
+                          // any stale service id.
+                          serviceId: '',
+                        }))
+                      }}
                     >
                       <option value="">Any client</option>
                       {clients.map((c) => (<option key={c.clientCode} value={c.clientCode}>{c.clientCode}</option>))}
+                    </Select>
+                  </div>
+                  {/* Platform-account picker — always visible.
+                       * When client has no carriers, filter is EMPTY without a
+                         pick, so the operator must pick one to see options.
+                       * When client HAS carriers, picking a platform account
+                         EXTENDS the allowed set (adds that carrier). */}
+                  <div className="min-w-[170px] shrink-0">
+                    <Select
+                      value={newRulePlatformAccountId == null ? '' : String(newRulePlatformAccountId)}
+                      onChange={(e) => {
+                        const raw = e.target.value
+                        setNewRulePlatformAccountId(raw ? Number(raw) : null)
+                        setNewRule((c) => ({ ...c, serviceId: '' }))
+                      }}
+                      aria-label="Platform carrier account"
+                      title={
+                        draftAllowed.hasClientCarriers
+                          ? "Optional — pick to also allow this platform account's carrier in the Ship Via list."
+                          : 'Pick a platform account to seed the Ship Via carrier filter.'
+                      }
+                    >
+                      <option value="">
+                        {platformAccountList.length === 0
+                          ? 'No platform accounts'
+                          : draftAllowed.hasClientCarriers
+                            ? '+ platform account (optional)'
+                            : 'Platform account — pick to filter'}
+                      </option>
+                      {platformAccountList.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {formatCarrierName(a.carrierCode)} · {a.accountNumber}
+                        </option>
+                      ))}
                     </Select>
                   </div>
                   <input
@@ -1392,15 +1472,50 @@ export default function ShippingServiceMappingPage() {
                 </span>
                 <Select
                   value={newRule.clientCode}
-                  onChange={(e) => setNewRule((c) => ({
-                    ...c,
-                    clientCode: e.target.value,
-                    warehouseIds: [],
-                    presetIds: [],
-                  }))}
+                  onChange={(e) => {
+                    setNewRulePlatformAccountId(null)
+                    setNewRule((c) => ({
+                      ...c,
+                      clientCode: e.target.value,
+                      warehouseIds: [],
+                      presetIds: [],
+                      serviceId: '',
+                    }))
+                  }}
                 >
                   <option value="">Any client</option>
                   {clients.map((c) => (<option key={c.clientCode} value={c.clientCode}>{c.clientCode}</option>))}
+                </Select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+                  Platform carrier account
+                  <span className="ml-1 normal-case font-normal tracking-normal text-slate-400">
+                    · {draftAllowed.hasClientCarriers
+                      ? 'optional — extends allowed carriers'
+                      : 'required — seeds the Ship Via filter'}
+                  </span>
+                </span>
+                <Select
+                  value={newRulePlatformAccountId == null ? '' : String(newRulePlatformAccountId)}
+                  onChange={(e) => {
+                    const raw = e.target.value
+                    setNewRulePlatformAccountId(raw ? Number(raw) : null)
+                    setNewRule((c) => ({ ...c, serviceId: '' }))
+                  }}
+                >
+                  <option value="">
+                    {platformAccountList.length === 0
+                      ? 'No platform accounts'
+                      : draftAllowed.hasClientCarriers
+                        ? '— none —'
+                        : 'Pick to filter Ship Via —'}
+                  </option>
+                  {platformAccountList.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {formatCarrierName(a.carrierCode)} · {a.accountNumber}
+                    </option>
+                  ))}
                 </Select>
               </label>
               <label className="block">

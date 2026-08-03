@@ -12,6 +12,8 @@ import {
   type ClientWarehouse,
   type Warehouse,
 } from '../../api/warehouseService'
+import { accountRefService, type CarrierAccountRef } from '../../api/accountRefService'
+import { computeAllowedCarriers, platformAccounts as platformAccountsFrom } from '../../utils/allowedCarriers'
 import { countriesInRegion, countryName, groupByRegion, type Region } from '../../utils/countries'
 import { formatCarrierName } from '../../utils/carrierUtils'
 import {
@@ -91,6 +93,13 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
   const [rules, setRules] = useState<ShipMethodRule[]>([])
   const [services, setServices] = useState<ShippingServiceItem[]>([])
   const [presets, setPresets] = useState<PackagePreset[]>([])
+  /** Carrier accounts (client-owned + platform) — used to narrow the draft
+   *  Ship Via list to services the client can actually ship on. */
+  const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
+  /** Optional platform account the operator picked to extend the allowed
+   *  carrier set — visible always so operators can add a platform-only
+   *  carrier on top of the client's own accounts. */
+  const [draftPlatformAccountId, setDraftPlatformAccountId] = useState<number | null>(null)
   const [attached, setAttached] = useState<ClientWarehouse[]>([])
   const [ruleWarehouseMap, setRuleWarehouseMap] = useState<Map<number, number[]>>(new Map())
   const [ruleIdToPresets, setRuleIdToPresets] = useState<Map<number, number[]>>(new Map())
@@ -111,15 +120,17 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [catalog, attachedResp, presetList] = await Promise.all([
+      const [catalog, attachedResp, presetList, accountList] = await Promise.all([
         shippingConfigService.catalog(),
         clientWarehouseService.listForClient(clientCode),
         shippingConfigService.listPresets(),
+        accountRefService.listAccounts(),
       ])
       setServices(catalog.services)
       setPresets(presetList)
       setRules(catalog.rules.filter((r) => (r.clientCode || '') === clientCode))
       setAttached(attachedResp.data ?? [])
+      setAccounts(accountList)
       const groupedWh = new Map<number, number[]>()
       for (const link of catalog.ruleWarehouses ?? []) {
         const cur = groupedWh.get(link.ruleId) ?? []
@@ -200,12 +211,32 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
     [draft.warehouseIds, warehouseById, clientOrigins],
   )
   const draftScope = useMemo(() => inferScope(draft.destCodes, draftOrigins), [draft.destCodes, draftOrigins])
+  // Carrier scope for this client — active + complete accounts, extended by
+  // the optional platform account the operator picked.
+  const platformAccountList = useMemo(() => platformAccountsFrom(accounts), [accounts])
+  const draftAllowed = useMemo(
+    () => computeAllowedCarriers({
+      clientCode,
+      accounts,
+      platformAccountId: draftPlatformAccountId,
+    }),
+    [clientCode, accounts, draftPlatformAccountId],
+  )
   const draftServiceGroups = useMemo(
     () => groupServiceVariants(
-      services.filter((s) => serviceEligible(s, draftOrigins, draftScope)),
+      services.filter((s) => {
+        if (!serviceEligible(s, draftOrigins, draftScope)) return false
+        // Carrier filter — hide services whose carrier isn't in the allowed
+        // set. Empty set = the client has no accounts and nothing was picked
+        // via the platform-account extension; dropdown renders blank and
+        // prompts the operator.
+        if (draftAllowed.carriers.size > 0
+            && !draftAllowed.carriers.has((s.carrier || '').toUpperCase())) return false
+        return true
+      }),
       draftOrigins,
     ),
-    [services, draftOrigins, draftScope],
+    [services, draftOrigins, draftScope, draftAllowed.carriers],
   )
   /** All service ids that belong to one of the deduped groups above — used
    *  to validate the currently-picked draft serviceId still fits the filter. */
@@ -531,6 +562,40 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
                   : 'Ship to · any'}
               </span>
             </button>
+
+            {/* 3b) Optional platform-account picker — extends the Carrier Ship
+                    Via filter with the picked account's carrier. Also the
+                    only way to see ANY services when the client has no
+                    carrier accounts of their own. */}
+            <div className="min-w-[170px]">
+              <Select
+                value={draftPlatformAccountId == null ? '' : String(draftPlatformAccountId)}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  setDraftPlatformAccountId(raw ? Number(raw) : null)
+                  setDraft((c) => ({ ...c, serviceId: '', presetIds: [] }))
+                }}
+                aria-label="Platform carrier account"
+                title={
+                  draftAllowed.hasClientCarriers
+                    ? "Optional — pick to also allow this platform account's carrier."
+                    : 'Pick a platform account to seed the Ship Via filter.'
+                }
+              >
+                <option value="">
+                  {platformAccountList.length === 0
+                    ? 'No platform accounts'
+                    : draftAllowed.hasClientCarriers
+                      ? '+ platform account (optional)'
+                      : 'Platform account — pick to filter'}
+                </option>
+                {platformAccountList.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {formatCarrierName(a.carrierCode)} · {a.accountNumber}
+                  </option>
+                ))}
+              </Select>
+            </div>
 
             {/* 4) Carrier Ship Via — Select. Options deduped by (carrier,
                    service_code) so origin siblings collapse into one row. */}
