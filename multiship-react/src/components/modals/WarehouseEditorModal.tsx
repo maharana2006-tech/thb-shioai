@@ -62,8 +62,18 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
   const canSubmit = useMemo(() => {
     if (!code.trim() || !name.trim()) return false
     if (ownerType === 'CLIENT' && !ownerClientCode.trim()) return false
+    // Address + phone are required going forward — every integrated carrier
+    // rejects the label if the shipper (warehouse) address block is
+    // incomplete. Existing rows load fine but this gate fires on the next
+    // save, forcing back-fill before the warehouse can be reused.
+    if (!line1.trim()) return false
+    if (!city.trim()) return false
+    if (!state.trim()) return false
+    if (!zip.trim()) return false
+    if (!country.trim()) return false
+    if (!phone.trim()) return false
     return true
-  }, [code, name, ownerType, ownerClientCode])
+  }, [code, name, ownerType, ownerClientCode, line1, city, state, zip, country, phone])
 
   const submit = async () => {
     if (!canSubmit || saving) return
@@ -73,13 +83,13 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
         code: code.trim().toUpperCase(),
         name: name.trim(),
         address: {
-          line1: line1.trim() || undefined,
+          line1: line1.trim(),
           line2: line2.trim() || undefined,
-          city: city.trim() || undefined,
-          state: state.trim() || undefined,
-          zip: zip.trim() || undefined,
+          city: city.trim(),
+          state: state.trim(),
+          zip: zip.trim(),
           country: country.trim().toUpperCase() || 'US',
-          phone: phone.trim() || undefined,
+          phone: phone.trim(),
         },
         ownerType,
         ownerClientCode: ownerType === 'CLIENT' ? ownerClientCode.trim().toUpperCase() : undefined,
@@ -249,7 +259,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
               Address
             </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label="Line 1" span={2}>
+              <Field label="Line 1" required span={2}>
                 <input value={line1} onChange={(e) => setLine1(e.target.value)} placeholder="1 Warehouse Way"
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
@@ -257,15 +267,15 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
                 <input value={line2} onChange={(e) => setLine2(e.target.value)} placeholder="Suite / floor"
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
-              <Field label="City">
+              <Field label="City" required>
                 <input value={city} onChange={(e) => setCity(e.target.value)}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
-              <Field label="State / region">
+              <Field label="State / region" required>
                 <input value={state} onChange={(e) => setState(e.target.value)}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
-              <Field label="Postal code">
+              <Field label="Postal code" required>
                 <input value={zip} onChange={(e) => setZip(e.target.value)}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
@@ -273,7 +283,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
                 <input value={country} onChange={(e) => setCountry(e.target.value.toUpperCase())} maxLength={2}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold uppercase text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
-              <Field label="Phone" span={2}>
+              <Field label="Phone" required span={2} hint="Required by UPS, FedEx and DHL on both domestic and international labels.">
                 <input value={phone} onChange={(e) => setPhone(e.target.value)}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
