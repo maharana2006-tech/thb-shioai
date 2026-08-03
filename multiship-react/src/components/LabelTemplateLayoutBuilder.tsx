@@ -8,7 +8,6 @@ import {
   FiCopy,
   FiDownload,
   FiEye,
-  FiEyeOff,
   FiFileText,
   FiGrid,
   FiImage,
@@ -19,7 +18,9 @@ import {
   FiRefreshCw,
   FiTrash2,
   FiType,
+  FiX,
 } from 'react-icons/fi'
+import { createPortal } from 'react-dom'
 import { notify } from '../utils/notify'
 import { previewTemplateHtml, previewTemplatePdfObjectUrl, previewTemplateZpl } from '../api/labelTemplateService'
 import {
@@ -285,77 +286,35 @@ export default function LabelTemplateLayoutBuilder({
 
   return (
     <div className="space-y-3">
-      {/* ===== Preview toolbar + iframe (Phase 2a) =====
-          Backend endpoint /label-templates/preview renders the layout with a
-          built-in sample shipment context so operators can see bindings
-          resolve as they build. Debounced auto-refresh when panel is open. */}
+      {/* ===== Preview toolbar =====
+          Single Preview button — opens a modal containing the HTML iframe
+          plus Open-as-PDF and Download-ZPL actions. The always-visible
+          inline iframe was removed so the builder gets more vertical room. */}
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
         <button
           type="button"
-          onClick={() => setPreviewOpen((c) => !c)}
-          className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition ${
-            previewOpen
-              ? 'border-[#1f150c] bg-[#1f150c] text-white'
-              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-          }`}
+          onClick={() => setPreviewOpen(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[#1f150c] bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-black"
         >
-          {previewOpen ? <FiEyeOff className="h-3.5 w-3.5" /> : <FiEye className="h-3.5 w-3.5" />}
-          {previewOpen ? 'Hide preview' : 'Show preview'}
-        </button>
-        {previewOpen ? (
-          <button
-            type="button"
-            onClick={() => void refreshPreview()}
-            disabled={previewLoading}
-            title="Refresh preview against the sample shipment context"
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
-          >
-            {previewLoading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiRefreshCw className="h-3.5 w-3.5" />}
-            Refresh
-          </button>
-        ) : null}
-        <button
-          type="button"
-          onClick={() => void openPdf()}
-          disabled={pdfLoading}
-          title="Open the same layout rendered as PDF in a new tab"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
-        >
-          {pdfLoading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiDownload className="h-3.5 w-3.5" />}
-          Open as PDF
-        </button>
-        <button
-          type="button"
-          onClick={() => void downloadZpl()}
-          disabled={zplLoading}
-          title="Download the layout as ZPL for a 203-dpi Zebra thermal printer (paste into labelary.com/viewer.html to visualise)"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
-        >
-          {zplLoading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiCode className="h-3.5 w-3.5" />}
-          Download ZPL
+          <FiEye className="h-3.5 w-3.5" />
+          Preview
         </button>
         <span className="text-[10.5px] text-slate-500">
-          Renders against a built-in sample shipment. Per-shipment preview uses the real Shipment context.
+          Opens a modal with HTML, PDF, and ZPL renders against a built-in sample shipment.
         </span>
       </div>
 
       {previewOpen ? (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
-          {previewHtml ? (
-            <iframe
-              // srcDoc keeps everything self-contained — the endpoint returns a
-              // full HTML document; no external assets to sandbox.
-              srcDoc={previewHtml}
-              title="Template preview"
-              className="h-[520px] w-full border-0"
-              sandbox=""
-            />
-          ) : (
-            <div className="flex h-40 items-center justify-center text-[11.5px] text-slate-500">
-              {previewLoading ? 'Loading preview…' : 'Preview will render once the backend responds.'}
-            </div>
-          )}
-        </div>
+        <PreviewModal
+          previewHtml={previewHtml}
+          previewLoading={previewLoading}
+          pdfLoading={pdfLoading}
+          zplLoading={zplLoading}
+          onRefresh={() => void refreshPreview()}
+          onOpenPdf={() => void openPdf()}
+          onDownloadZpl={() => void downloadZpl()}
+          onClose={() => setPreviewOpen(false)}
+        />
       ) : null}
 
       <div className="grid grid-cols-12 gap-3">
@@ -541,6 +500,115 @@ export default function LabelTemplateLayoutBuilder({
 // ==========================================================================
 // Sub-components
 // ==========================================================================
+
+/**
+ * Full-screen preview modal. Owns none of the fetch state — the parent
+ * builder already runs debounced auto-refresh on layout edits (bound to
+ * previewOpen), so the modal just projects whatever HTML is currently in
+ * scope and offers the PDF / ZPL exports alongside it.
+ *
+ * ESC closes; the toolbar buttons stay disabled while their respective
+ * fetches are in flight so operators can't stack requests.
+ */
+function PreviewModal({
+  previewHtml,
+  previewLoading,
+  pdfLoading,
+  zplLoading,
+  onRefresh,
+  onOpenPdf,
+  onDownloadZpl,
+  onClose,
+}: {
+  previewHtml: string
+  previewLoading: boolean
+  pdfLoading: boolean
+  zplLoading: boolean
+  onRefresh: () => void
+  onOpenPdf: () => void
+  onDownloadZpl: () => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+      <div className="flex h-full max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Template preview</h2>
+            <p className="text-[12px] text-slate-500">
+              Rendered against the built-in sample shipment context. Edits re-render automatically.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close preview"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+          >
+            <FiX className="h-4 w-4" />
+          </button>
+        </header>
+        <div className="flex flex-wrap gap-2 border-b border-slate-100 bg-slate-50/60 px-5 py-3">
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={previewLoading}
+            title="Force-refresh HTML preview"
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+          >
+            {previewLoading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiRefreshCw className="h-3.5 w-3.5" />}
+            Refresh HTML
+          </button>
+          <button
+            type="button"
+            onClick={onOpenPdf}
+            disabled={pdfLoading}
+            title="Open the same layout rendered as PDF in a new tab"
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+          >
+            {pdfLoading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiDownload className="h-3.5 w-3.5" />}
+            Open as PDF
+          </button>
+          <button
+            type="button"
+            onClick={onDownloadZpl}
+            disabled={zplLoading}
+            title="Download the layout as ZPL for a 203-dpi Zebra thermal printer (paste into labelary.com/viewer.html to visualise)"
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+          >
+            {zplLoading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiCode className="h-3.5 w-3.5" />}
+            Download ZPL
+          </button>
+        </div>
+        <div className="flex-1 overflow-hidden bg-slate-100 p-3">
+          {previewHtml ? (
+            <iframe
+              // srcDoc keeps everything self-contained — the endpoint returns
+              // a full HTML document; no external assets to sandbox.
+              srcDoc={previewHtml}
+              title="Template preview"
+              className="h-full w-full rounded-lg border border-slate-200 bg-white"
+              sandbox=""
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-slate-200 bg-white text-[12.5px] text-slate-500">
+              {previewLoading ? 'Loading preview…' : 'Preview will render once the backend responds.'}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
 
 function BlockPreview({ block }: { block: TemplateBlock }) {
   switch (block.kind) {
