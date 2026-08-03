@@ -25,7 +25,22 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
   const [job, setJob] = useState<BulkLabelJob | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const pollTimer = useRef<number | null>(null)
+
+  const downloadZip = async (jobId: number) => {
+    if (downloading) return
+    setDownloading(true)
+    try {
+      await bulkLabelService.download(jobId, `bulk-labels-${jobId}.zip`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Bulk-label ZIP download failed.'
+      setError(msg)
+      notify.error(msg)
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   const clearPoll = () => {
     if (pollTimer.current != null) {
@@ -153,13 +168,15 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
 
         <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-5 py-3">
           {job?.downloadable ? (
-            <a
-              href={bulkLabelService.downloadUrl(job.id)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-[12px] font-semibold text-emerald-800 hover:bg-emerald-100"
+            <button
+              type="button"
+              onClick={() => void downloadZip(job.id)}
+              disabled={downloading}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-[12px] font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-40"
             >
               <FiDownload className="h-3 w-3" />
-              Download {job.successfulCount} labels (zip)
-            </a>
+              {downloading ? 'Downloading…' : `Download ${job.successfulCount} labels (zip)`}
+            </button>
           ) : null}
           <button
             type="button"
