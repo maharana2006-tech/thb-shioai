@@ -195,10 +195,15 @@ function AddressBlock({
   value,
   onChange,
   withEmail,
+  hideLine3,
+  extraAction,
 }: {
   value: ManualShipmentAddress
   onChange: (patch: Partial<ManualShipmentAddress>) => void
   withEmail?: boolean
+  hideLine3?: boolean
+  /** Extra control (e.g. address-book search) placed on the same line as "Paste & autofill with AI". */
+  extraAction?: ReactNode
 }) {
   const [pasteOpen, setPasteOpen] = useState(false)
   const [pasteText, setPasteText] = useState('')
@@ -270,14 +275,17 @@ function AddressBlock({
             </div>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={() => setPasteOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#412d15] hover:bg-[#faf7f0]"
-          >
-            <FiZap className="h-3.5 w-3.5" />
-            Paste &amp; autofill with AI
-          </button>
+          <div className="flex items-center gap-2">
+            {extraAction ? <div className="min-w-0 flex-1">{extraAction}</div> : null}
+            <button
+              type="button"
+              onClick={() => setPasteOpen(true)}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#412d15] hover:bg-[#faf7f0]"
+            >
+              <FiZap className="h-3.5 w-3.5" />
+              Paste &amp; autofill with AI
+            </button>
+          </div>
         )}
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -293,7 +301,7 @@ function AddressBlock({
       <Field label="Address line 2" className="col-span-2">
         <input className={inputCls} value={value.addressLine2} onChange={(e) => onChange({ addressLine2: e.target.value })} placeholder="Suite 400" />
       </Field>
-      {value.addressLine2 || value.addressLine3 ? (
+      {!hideLine3 && (value.addressLine2 || value.addressLine3) ? (
         <Field
           label="Address line 3"
           title="Needed for some JP / CN / IN addresses that span three street lines"
@@ -307,48 +315,54 @@ function AddressBlock({
           />
         </Field>
       ) : null}
-      <Field label="City" required>
-        <input className={inputCls} value={value.city} onChange={(e) => onChange({ city: e.target.value })} placeholder="Buffalo" />
-      </Field>
-      <Field label="State / region">
-        <input className={inputCls} value={value.state} onChange={(e) => onChange({ state: e.target.value })} placeholder="NY" />
-      </Field>
-      <Field label="Postal code" required>
-        <input className={inputCls} value={value.postalCode} onChange={(e) => onChange({ postalCode: e.target.value })} placeholder="14201" />
-      </Field>
-      <Field label="Country" required>
-        <CountrySelect value={value.countryCode} onChange={(code) => onChange({ countryCode: code })} />
-      </Field>
-      <Field label="Phone country code" title="ISO dial code without the plus — e.g. 1 for US, 44 for GB, 91 for IN">
-        <input
-          className={inputCls}
-          value={value.phoneCountryCode ?? ''}
-          onChange={(e) => onChange({ phoneCountryCode: e.target.value.replace(/[^\d]/g, '') })}
-          placeholder="44"
-          inputMode="numeric"
-          maxLength={4}
-        />
-      </Field>
-      <Field label="Phone">
-        <input className={inputCls} value={value.phone} onChange={(e) => onChange({ phone: e.target.value })} placeholder="2125550100" />
-      </Field>
-      {withEmail ? (
-        <Field label="Email">
-          <input className={inputCls} value={value.email} onChange={(e) => onChange({ email: e.target.value })} placeholder="jane@acme.com" />
+      <div className="col-span-2 grid grid-cols-3 gap-3">
+        <Field label="City" required>
+          <input className={inputCls} value={value.city} onChange={(e) => onChange({ city: e.target.value })} placeholder="Buffalo" />
         </Field>
-      ) : null}
-      <label className="col-span-2 mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] font-semibold text-slate-700">
-        <input
-          type="checkbox"
-          checked={Boolean(value.residential)}
-          onChange={(e) => onChange({ residential: e.target.checked })}
-          className="h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
-        />
-        <span>Residential address</span>
-        <span className="ml-auto text-[10.5px] font-normal text-slate-400">
-          UPS + FedEx charge a residential surcharge on international to homes
-        </span>
-      </label>
+        <Field label="State / region">
+          <input className={inputCls} value={value.state} onChange={(e) => onChange({ state: e.target.value })} placeholder="NY" />
+        </Field>
+        <Field label="Postal code" required>
+          <input className={inputCls} value={value.postalCode} onChange={(e) => onChange({ postalCode: e.target.value })} placeholder="14201" />
+        </Field>
+      </div>
+      <div className="col-span-2 grid grid-cols-3 gap-3">
+        <Field label="Country" required>
+          <CountrySelect value={value.countryCode} onChange={(code) => onChange({ countryCode: code })} />
+        </Field>
+        <Field label="Phone country code" title="ISO dial code without the plus — e.g. 1 for US, 44 for GB, 91 for IN">
+          <input
+            className={inputCls}
+            value={value.phoneCountryCode ?? ''}
+            onChange={(e) => onChange({ phoneCountryCode: e.target.value.replace(/[^\d]/g, '') })}
+            placeholder="44"
+            inputMode="numeric"
+            maxLength={4}
+          />
+        </Field>
+        <Field label="Phone">
+          <input className={inputCls} value={value.phone} onChange={(e) => onChange({ phone: e.target.value })} placeholder="2125550100" />
+        </Field>
+      </div>
+      <div className="col-span-2 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:items-end">
+        {withEmail ? (
+          <Field label="Email">
+            <input className={inputCls} value={value.email} onChange={(e) => onChange({ email: e.target.value })} placeholder="jane@acme.com" />
+          </Field>
+        ) : null}
+        <label
+          className={`mt-1 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] font-semibold text-slate-700 ${withEmail ? '' : 'sm:col-span-2'}`}
+          title="UPS + FedEx charge a residential surcharge on international to homes"
+        >
+          <input
+            type="checkbox"
+            checked={Boolean(value.residential)}
+            onChange={(e) => onChange({ residential: e.target.checked })}
+            className="h-4 w-4 shrink-0 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
+          />
+          <span>Residential address</span>
+        </label>
+      </div>
       </div>
     </>
   )
@@ -1512,53 +1526,60 @@ export default function NewShipmentPage() {
                   </div>
                 }
               >
-                {/* Sprint 38 — address-book combobox. Type ≥ 2 chars to
-                    search; picking a suggestion overwrites every field
-                    in the recipient block below. */}
-                <div className="relative mb-3">
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={recipientSearch}
-                      onChange={(e) => void runRecipientSearch(e.target.value)}
-                      onFocus={() => recipientSuggestions.length > 0 && setRecipientDropdownOpen(true)}
-                      onBlur={() => setTimeout(() => setRecipientDropdownOpen(false), 150)}
-                      placeholder="Search address book (name, city, postal code)…"
-                      className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 pl-8 text-[12px] outline-none focus:border-[#1f150c]"
-                    />
-                    <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[#8a7959]" />
-                  </div>
-                  {recipientDropdownOpen && recipientSuggestions.length > 0 ? (
-                    <ul className="absolute z-10 mt-0.5 max-h-64 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-                      {recipientSuggestions.map((s) => (
-                        <li key={s.id}>
-                          <button
-                            type="button"
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => applySavedRecipient(s)}
-                            className="flex w-full items-start justify-between gap-2 px-2.5 py-1.5 text-left text-[11.5px] hover:bg-slate-50"
-                          >
-                            <div className="min-w-0">
-                              <p className="truncate font-semibold text-slate-950">{s.name}</p>
-                              <p className="truncate text-[10.5px] text-slate-500">
-                                {s.addressLine1}
-                                {s.city ? `, ${s.city}` : ''}
-                                {s.state ? `, ${s.state}` : ''}
-                                {' '}{s.postalCode} {s.countryCode}
-                              </p>
-                            </div>
-                            {s.tag ? (
-                              <span className="whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-500">
-                                {s.tag}
-                              </span>
-                            ) : null}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </div>
-                <AddressBlock value={recipient} onChange={(patch) => setRecipient((r) => ({ ...r, ...patch }))} withEmail={!isReturn} />
+                <AddressBlock
+                  value={recipient}
+                  onChange={(patch) => setRecipient((r) => ({ ...r, ...patch }))}
+                  withEmail={!isReturn}
+                  hideLine3
+                  extraAction={
+                    // Sprint 38 — address-book combobox. Type ≥ 2 chars to
+                    // search; picking a suggestion overwrites every field
+                    // in the recipient block below.
+                    <div className="relative">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={recipientSearch}
+                          onChange={(e) => void runRecipientSearch(e.target.value)}
+                          onFocus={() => recipientSuggestions.length > 0 && setRecipientDropdownOpen(true)}
+                          onBlur={() => setTimeout(() => setRecipientDropdownOpen(false), 150)}
+                          placeholder="Search address book (name, city, postal code)…"
+                          className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 pl-8 text-[12px] outline-none focus:border-[#1f150c]"
+                        />
+                        <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[#8a7959]" />
+                      </div>
+                      {recipientDropdownOpen && recipientSuggestions.length > 0 ? (
+                        <ul className="absolute z-10 mt-0.5 max-h-64 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                          {recipientSuggestions.map((s) => (
+                            <li key={s.id}>
+                              <button
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => applySavedRecipient(s)}
+                                className="flex w-full items-start justify-between gap-2 px-2.5 py-1.5 text-left text-[11.5px] hover:bg-slate-50"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate font-semibold text-slate-950">{s.name}</p>
+                                  <p className="truncate text-[10.5px] text-slate-500">
+                                    {s.addressLine1}
+                                    {s.city ? `, ${s.city}` : ''}
+                                    {s.state ? `, ${s.state}` : ''}
+                                    {' '}{s.postalCode} {s.countryCode}
+                                  </p>
+                                </div>
+                                {s.tag ? (
+                                  <span className="whitespace-nowrap rounded-full bg-slate-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-slate-500">
+                                    {s.tag}
+                                  </span>
+                                ) : null}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  }
+                />
                 {!destAllowed && destRules?.mode && recipient.countryCode ? (
                   <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
                     <p className="flex items-center gap-2 font-semibold">
