@@ -81,10 +81,12 @@ public class OrderImportRowDTO {
     private String packageType;
     private BigDecimal weight;
     private String weightUnit;
-    private BigDecimal declaredValue;
     private String currency;
     private String reference;
-    private String goodsDescription;
+    // Sprint 48 revision — declaredValue + goodsDescription removed from
+    // the import schema. Backend derives them at commit time from the
+    // item rows: declaredValue = SUM(itemUnitValue × itemQuantity),
+    // goodsDescription = first itemDescription in the orderRef group.
 
     // ===== Sprint 48 — per-item customs fields =====
     /** Line-item description (e.g. "Silk lining, natural"). When {@link

@@ -133,19 +133,21 @@ public class OrderImportServiceImpl implements OrderImportService {
      */
     static final List<String> HEADERS = List.of(
             "orderRef",
-            // Sprint 48 — clientCode + billTo + warehouseCode are the
-            // universal-template additions. clientCode drives the cascading
-            // dropdowns in the workbook; billTo unlocks the accountNumber
-            // free-text mode when THIRD_PARTY; warehouseCode picks a specific
-            // origin (blank = client's default cascade).
+            // Sprint 48 — clientCode + billTo + warehouseCode drive the
+            // cascading dropdowns in the workbook. billTo unlocks
+            // accountNumber free-text when THIRD_PARTY; warehouseCode
+            // picks a specific origin (blank = client's default cascade).
             "clientCode", "billTo", "warehouseCode",
             "recipientName", "recipientCompany", "recipientPhone", "recipientEmail",
             "addressLine1", "addressLine2",
             "city", "state", "postalCode", "countryCode",
             "carrierCode", "accountNumber", "serviceType", "packageType",
-            "weight", "weightUnit",
-            "declaredValue", "currency",
-            "reference", "goodsDescription",
+            "weight", "weightUnit", "currency",
+            "reference",
+            // Sprint 48 revision — declaredValue derived at commit as
+            // SUM(itemUnitValue × itemQuantity) so operators don't type
+            // both; goodsDescription derived from the leader row's
+            // itemDescription for the shipment-level description slot.
             "itemDescription", "itemSku", "itemQuantity", "itemUnitValue",
             "hsCode", "countryOfOrigin");
 
@@ -415,10 +417,31 @@ public class OrderImportServiceImpl implements OrderImportService {
         req.setAccountNumber(leader.getAccountNumber());
         req.setWeight(leader.getWeight());
         req.setWeightUnit(leader.getWeightUnit());
-        req.setDeclaredValue(leader.getDeclaredValue());
         req.setCurrency(leader.getCurrency());
         req.setReference(leader.getReference());
-        req.setGoodsDescription(leader.getGoodsDescription());
+        // Sprint 48 revision — declaredValue is derived from item rows
+        // rather than a per-row column. Sum unitValue × quantity across
+        // every row in the group that carries item data; blank when the
+        // group has no item data at all (domestic single-item shipment).
+        java.math.BigDecimal derivedValue = java.math.BigDecimal.ZERO;
+        boolean sawItemValue = false;
+        for (OrderImportRowDTO row : group) {
+            if (row.getItemUnitValue() == null) continue;
+            int qty = row.getItemQuantity() != null ? row.getItemQuantity() : 1;
+            derivedValue = derivedValue.add(row.getItemUnitValue()
+                    .multiply(java.math.BigDecimal.valueOf(qty)));
+            sawItemValue = true;
+        }
+        if (sawItemValue) req.setDeclaredValue(derivedValue);
+        // goodsDescription — shipment-level description slot. Use the
+        // first non-blank itemDescription across the group so operators
+        // don't retype (removed goodsDescription column).
+        for (OrderImportRowDTO row : group) {
+            if (StringUtils.hasText(row.getItemDescription())) {
+                req.setGoodsDescription(row.getItemDescription());
+                break;
+            }
+        }
         req.setSource("API");
 
         // Customs items: any row (leader OR item rows) that carries
@@ -430,9 +453,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (!rowHasItemData(row)) continue;
             com.multiship.backend.dto.ManualShipmentRequest.Item it =
                     new com.multiship.backend.dto.ManualShipmentRequest.Item();
-            it.setDescription(row.getItemDescription() != null
-                    ? row.getItemDescription()
-                    : row.getGoodsDescription());
+            it.setDescription(row.getItemDescription());
             it.setHsCode(row.getHsCode());
             it.setCountryOfOrigin(row.getCountryOfOrigin());
             it.setQuantity(row.getItemQuantity() != null ? row.getItemQuantity() : 1);
@@ -523,14 +544,16 @@ public class OrderImportServiceImpl implements OrderImportService {
         StringBuilder sb = new StringBuilder();
         sb.append(String.join(",", HEADERS)).append('\n');
         // Sample row — international UK shipment with 1 line-item so
-        // operators see all the columns exercised in one go.
+        // operators see all the columns exercised in one go. Column
+        // ordering must match HEADERS exactly (Sprint 48 revision:
+        // declaredValue + goodsDescription no longer present).
         sb.append("ORD-2001,")                              // orderRef
                 .append("MA1885,SENDER,WH-EAST,")           // clientCode, billTo, warehouseCode
                 .append("Ava Chen,,4402071234567,ava.chen@example.co.uk,")  // recipient
                 .append("221B Baker Street,,London,LDN,NW1 6XE,GB,")         // address
                 .append("FEDEX,F98765,INTERNATIONAL_PRIORITY,YOUR_PACKAGING,")// carrier + service
-                .append("3.2,LB,275.00,USD,")                                 // weight + value
-                .append("ORD-2001,Silk garments,")                            // reference + goods
+                .append("3.2,LB,USD,")                                        // weight + currency
+                .append("ORD-2001,")                                          // reference
                 .append("Silk lining natural,SKU-100,2,45.00,5007.20,IT\n"); // per-item customs
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }
@@ -677,10 +700,10 @@ public class OrderImportServiceImpl implements OrderImportService {
         out.setPackageType(s.read("packageType"));
         out.setWeight(parseDecimal(s.read("weight")));
         out.setWeightUnit(upper(s.read("weightUnit")));
-        out.setDeclaredValue(parseDecimal(s.read("declaredValue")));
         out.setCurrency(upper(s.read("currency")));
         out.setReference(s.read("reference"));
-        out.setGoodsDescription(s.read("goodsDescription"));
+        // Sprint 48 revision — declaredValue + goodsDescription removed
+        // from HEADERS; derived at commit time from item rows.
         // Sprint 48 — per-item customs data.
         out.setItemDescription(s.read("itemDescription"));
         out.setItemSku(s.read("itemSku"));

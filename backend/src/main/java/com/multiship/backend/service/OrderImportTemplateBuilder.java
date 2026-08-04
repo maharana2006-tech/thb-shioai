@@ -20,6 +20,7 @@ import org.apache.poi.ss.usermodel.Name;
 import org.apache.poi.ss.usermodel.PatternFormatting;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.SheetConditionalFormatting;
+import org.apache.poi.ss.usermodel.SheetVisibility;
 import org.apache.poi.ss.usermodel.VerticalAlignment;
 import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.ss.util.CellRangeAddressList;
@@ -134,6 +135,12 @@ final class OrderImportTemplateBuilder {
             XSSFSheet data = wb.createSheet("Import");
             XSSFSheet ref = wb.createSheet("Reference");
             XSSFSheet notes = wb.createSheet("How to use");
+            // Hide the Reference sheet from the Excel UI. VERY_HIDDEN is
+            // the strict level — the sheet can't be un-hidden via
+            // right-click; only VBA can flip it back. Named ranges keep
+            // resolving because they're workbook-scoped, so cascading
+            // dropdowns on the Import sheet still work.
+            wb.setSheetVisibility(wb.getSheetIndex(ref), SheetVisibility.VERY_HIDDEN);
 
             CellStyle headerStyle = headerStyle(wb);
             CellStyle sampleStyle = sampleStyle(wb);
@@ -223,6 +230,29 @@ final class OrderImportTemplateBuilder {
                 applyMismatchCF(data, wb, serviceCol, countryCol, cfFormula);
             }
 
+            // ===== Conditional formatting — invalid account (strict except THIRD_PARTY) =====
+            // The accountNumber cell keeps its LIST validation with INFO
+            // alert (dropdown works + Excel allows any typed value). This
+            // CF rule paints the cell red when the operator types an
+            // account that isn't in the (client, carrier) list AND billTo
+            // isn't THIRD_PARTY — the only case where free-text is
+            // legitimate. IFERROR wraps so a missing named range
+            // (_Accounts_MA1885_DHL when the client has no DHL account)
+            // reads as "no match" instead of #REF!.
+            int billToCol = headers.indexOf("billTo");
+            int accountCol = headers.indexOf("accountNumber");
+            if (billToCol >= 0 && accountCol >= 0) {
+                String billRef = colLetter(billToCol) + "2";
+                String acctRef = colLetter(accountCol) + "2";
+                String acctCf = "AND("
+                        + acctRef + "<>\"\","
+                        + billRef + "<>\"THIRD_PARTY\","
+                        + "IFERROR(ISNA(MATCH(" + acctRef
+                        + ",INDIRECT(\"_Accounts_\"&" + normalizedClient
+                        + "&\"_\"&" + carrierRef + "),0)),TRUE))";
+                applySingleColumnCF(data, accountCol, acctCf);
+            }
+
             // ===== Instructions sheet =====
             writeInstructionsSheet(notes, headerStyle);
 
@@ -236,6 +266,23 @@ final class OrderImportTemplateBuilder {
         } catch (IOException e) {
             throw new IllegalStateException("Failed to build order-import .xlsx template", e);
         }
+    }
+
+    /**
+     * Paint a single column red on every data row when the CF formula
+     * evaluates to TRUE. Same range-scoped semantics as
+     * {@link #applyMismatchCF} but for one cell (used for the
+     * accountNumber strict-except-THIRD_PARTY highlight).
+     */
+    private static void applySingleColumnCF(XSSFSheet sheet, int col, String formula) {
+        SheetConditionalFormatting scf = sheet.getSheetConditionalFormatting();
+        ConditionalFormattingRule rule = scf.createConditionalFormattingRule(formula);
+        PatternFormatting pf = rule.createPatternFormatting();
+        pf.setFillBackgroundColor(IndexedColors.ROSE.getIndex());
+        pf.setFillPattern(PatternFormatting.SOLID_FOREGROUND);
+        scf.addConditionalFormatting(
+                new CellRangeAddress[] { new CellRangeAddress(1, DATA_ROW_LIMIT, col, col) },
+                rule);
     }
 
     /**
@@ -619,7 +666,12 @@ final class OrderImportTemplateBuilder {
         setCellNumber(r, headers, "weight", 2.5, sampleStyle);
         setCell(r, headers, "weightUnit", "LB", sampleStyle);
         setCell(r, headers, "currency", "USD", sampleStyle);
-        setCell(r, headers, "goodsDescription", "General merchandise", sampleStyle);
+        // Sample item — declaredValue + goodsDescription are derived at
+        // commit from these item fields, so we don't fill them explicitly.
+        setCell(r, headers, "itemDescription", "Silk lining natural", sampleStyle);
+        setCell(r, headers, "itemSku", "SKU-100", sampleStyle);
+        setCellNumber(r, headers, "itemQuantity", 1, sampleStyle);
+        setCellNumber(r, headers, "itemUnitValue", 45.00, sampleStyle);
     }
 
     // ===== styling =====
@@ -686,14 +738,14 @@ final class OrderImportTemplateBuilder {
             case "orderRef", "clientCode", "billTo", "warehouseCode",
                     "reference" -> 3200;
             case "recipientName", "recipientCompany", "recipientEmail",
-                    "addressLine1", "addressLine2", "goodsDescription",
+                    "addressLine1", "addressLine2",
                     "itemDescription" -> 6000;
             case "serviceType", "packageType", "city" -> 5000;
             case "state", "postalCode", "carrierCode",
                     "accountNumber", "countryCode", "countryOfOrigin",
                     "recipientPhone", "weightUnit", "currency",
                     "hsCode", "itemSku" -> 3000;
-            case "weight", "declaredValue", "itemQuantity",
+            case "weight", "itemQuantity",
                     "itemUnitValue" -> 3200;
             default -> 4000;
         };
