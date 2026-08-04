@@ -1,6 +1,7 @@
 package com.multiship.backend.service;
 
 import com.multiship.backend.model.CarrierAccountRef;
+import com.multiship.backend.model.Client;
 import com.multiship.backend.model.PackagePreset;
 import com.multiship.backend.model.ShippingService;
 import org.apache.poi.ss.usermodel.BorderStyle;
@@ -13,10 +14,11 @@ import org.apache.poi.ss.usermodel.FillPatternType;
 import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.HorizontalAlignment;
 import org.apache.poi.ss.usermodel.IndexedColors;
+import org.apache.poi.ss.usermodel.Name;
 import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.VerticalAlignment;
 import org.apache.poi.ss.util.CellRangeAddressList;
+import org.apache.poi.ss.util.CellReference;
 import org.apache.poi.xssf.usermodel.XSSFDataValidationHelper;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -24,35 +26,54 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
- * Sprint 48 — POI-generated .xlsx template for the order-import upload
- * flow. Serves the same schema as {@link OrderImportServiceImpl#HEADERS}
- * but with dropdown data validation, sample rows, and an operator-
- * facing instructions block on a second sheet.
+ * Sprint 48 — universal .xlsx template for the order-import upload flow.
  *
- * <p>When {@code accountId} scopes the download to a specific carrier
- * account, the template pre-fills the accountNumber cell + restricts
- * the carrierCode / serviceType / packageType dropdowns to that
- * account's carrier only. Generic (accountId null) templates offer
- * every enabled carrier's options.
+ * <p>One workbook covers every client in the platform. Each data row
+ * picks its own {@code clientCode} from a dropdown; the {@code carrierCode},
+ * {@code accountNumber}, {@code warehouseCode}, {@code serviceType}, and
+ * {@code packageType} dropdowns cascade off it via Excel {@code INDIRECT()}
+ * formulas on named ranges. Operators can prepare imports for multiple
+ * clients in a single spreadsheet without downloading a template per client.
  *
- * <p>Cascading dropdowns are avoided in favour of server-side scoping
- * — the operator picks an account in the app, downloads a template
- * baked for that account, and each cell's dropdown lists only the
- * relevant options. Simpler formulas, no INDIRECT() gymnastics.
+ * <p>Design notes:
+ * <ul>
+ *   <li>Named ranges are the mechanism for cascading validation. For each
+ *       client {@code C} we define {@code _Carriers_C}, {@code _Warehouses_C},
+ *       and {@code _Accounts_C_K} (per carrier {@code K}) pointing at
+ *       columns on the Reference sheet. Data validation on the row cells
+ *       uses {@code INDIRECT("_Carriers_" & clientCell)} etc. so as soon
+ *       as the client is picked the downstream dropdowns re-scope.</li>
+ *   <li>Client codes may contain hyphens (regex {@code [A-Z0-9_-]+}); Excel
+ *       named-range identifiers treat {@code -} as an operator, so we
+ *       {@code SUBSTITUTE(clientCell, "-", "_")} inside the INDIRECT
+ *       formula and normalize the same way when creating the named range.
+ *       The dropdown still shows the natural client code.</li>
+ *   <li>{@code accountNumber} validation uses <b>WARN</b> (info alert)
+ *       rather than <b>STOP</b> so operators can enter a third-party
+ *       account manually when {@code billTo=THIRD_PARTY}. Every other
+ *       cascading dropdown uses STOP.</li>
+ *   <li>Service + package dropdowns show human names ("UPS Ground") not
+ *       wire codes ("03"). The parser resolves names → wire codes
+ *       on preview / commit via {@link OrderImportServiceImpl#resolveNamesToCodes}.
+ *       Ambiguity risk if two services share a name across carriers,
+ *       but the row's carrier column disambiguates.</li>
+ * </ul>
  */
 final class OrderImportTemplateBuilder {
 
     private OrderImportTemplateBuilder() { /* static-only */ }
 
-    // ISO-2 country list — the ~30 destinations we ship to most.
-    // Longer lists overflow Excel's inline validation-list cap (~255 chars);
-    // this set is small enough to fit inline for the country column.
+    /** ISO-2 destinations we ship to often — fits in Excel's inline
+     *  validation-list source cap (~255 chars) for the countryCode dropdown. */
     static final List<String> COUNTRIES = List.of(
             "US", "CA", "MX", "GB", "IE",
             "DE", "FR", "IT", "ES", "NL", "BE", "PT", "AT", "FI", "GR", "PL", "CH",
@@ -69,22 +90,32 @@ final class OrderImportTemplateBuilder {
             "INR", "MXN", "BRL", "SGD", "CHF"
     );
 
+    static final List<String> BILL_TO = List.of("SENDER", "RECIPIENT", "THIRD_PARTY");
+
+    /** Highest data row on the Import sheet that gets validation applied.
+     *  Anything past this the operator can still fill but the dropdowns
+     *  won't be attached. 1000 is comfortable for a single upload. */
+    private static final int DATA_ROW_LIMIT = 1000;
+
     /**
-     * Build the .xlsx bytes.
+     * Build the universal template.
      *
-     * @param headers  column ordering — must match {@link OrderImportServiceImpl#HEADERS}
-     *                 so downstream parsing lines up on both name and index.
-     * @param account  optional carrier account to scope the template to.
-     *                 When non-null: sample accountNumber prefilled, carrierCode
-     *                 locked to account.carrierCode, service/package dropdowns
-     *                 narrowed to that carrier's rows.
-     * @param services every ShippingService row in the platform catalog;
-     *                 the builder filters internally per account/carrier.
-     * @param presets  every PackagePreset in the platform catalog; same
-     *                 filtering.
+     * @param headers   column ordering — must match {@link OrderImportServiceImpl#HEADERS}
+     *                  so downstream parsing lines up.
+     * @param clients   every client on the platform (drives per-client cascades).
+     * @param accounts  every active + complete carrier account.
+     * @param clientWarehouseCodes per-client warehouse codes (upper-case
+     *                  client-code key → list of attached warehouse codes)
+     *                  — drives the warehouseCode dropdown per client.
+     * @param services  every enabled ShippingService (for per-carrier service
+     *                  name dropdowns).
+     * @param presets   every enabled PackagePreset (for per-carrier package
+     *                  name dropdowns).
      */
     static byte[] build(List<String> headers,
-                        CarrierAccountRef account,
+                        List<Client> clients,
+                        List<CarrierAccountRef> accounts,
+                        Map<String, List<String>> clientWarehouseCodes,
                         List<ShippingService> services,
                         List<PackagePreset> presets) {
         try (XSSFWorkbook wb = new XSSFWorkbook();
@@ -94,68 +125,74 @@ final class OrderImportTemplateBuilder {
             XSSFSheet ref = wb.createSheet("Reference");
             XSSFSheet notes = wb.createSheet("How to use");
 
-            // ===== Styles =====
-            CellStyle headerStyle = wb.createCellStyle();
-            Font headerFont = wb.createFont();
-            headerFont.setBold(true);
-            headerFont.setColor(IndexedColors.WHITE.getIndex());
-            headerStyle.setFont(headerFont);
-            headerStyle.setFillForegroundColor(IndexedColors.DARK_BLUE.getIndex());
-            headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-            headerStyle.setAlignment(HorizontalAlignment.CENTER);
-            headerStyle.setVerticalAlignment(VerticalAlignment.CENTER);
-            headerStyle.setBorderBottom(BorderStyle.THIN);
+            CellStyle headerStyle = headerStyle(wb);
+            CellStyle sampleStyle = sampleStyle(wb);
+            CellStyle refHeaderStyle = refHeaderStyle(wb);
 
-            CellStyle sampleStyle = wb.createCellStyle();
-            sampleStyle.setFillForegroundColor(IndexedColors.LIGHT_YELLOW.getIndex());
-            sampleStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-
-            CellStyle prefilledStyle = wb.createCellStyle();
-            prefilledStyle.setFillForegroundColor(IndexedColors.LIGHT_GREEN.getIndex());
-            prefilledStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-            Font prefilledFont = wb.createFont();
-            prefilledFont.setBold(true);
-            prefilledStyle.setFont(prefilledFont);
-
-            // ===== Header row =====
+            // ===== Data sheet: header row + sample rows =====
             Row headerRow = data.createRow(0);
             for (int i = 0; i < headers.size(); i++) {
                 Cell c = headerRow.createCell(i);
                 c.setCellValue(headers.get(i));
                 c.setCellStyle(headerStyle);
-                // Sensible column widths — wider for freeform, narrower for codes.
                 data.setColumnWidth(i, columnWidthFor(headers.get(i)));
             }
             data.createFreezePane(0, 1);
+            addSampleRows(data, headers, clients, accounts, sampleStyle);
 
-            // ===== Sample rows =====
-            // Row 1: domestic US, single row, no orderRef.
-            // Row 2 + 3: international UK, grouped by ORD-2001, two line-items.
-            addSampleRows(data, headers, account, sampleStyle, prefilledStyle);
-
-            // ===== Reference sheet (dropdown lookup data) =====
-            List<String> allowedCarriers = allowedCarriers(account);
-            List<String> allowedServices = filterServices(services, account);
-            List<String> allowedPackages = filterPackages(presets, account);
-            writeReferenceSheet(ref, allowedCarriers, allowedServices, allowedPackages, headerStyle);
+            // ===== Reference sheet: build lookup ranges + name them =====
+            Map<String, CellRangeInfo> namedRanges = writeReferenceSheet(
+                    ref, refHeaderStyle, clients, accounts, clientWarehouseCodes, services, presets);
+            for (Map.Entry<String, CellRangeInfo> entry : namedRanges.entrySet()) {
+                Name n = wb.createName();
+                n.setNameName(entry.getKey());
+                n.setRefersToFormula(entry.getValue().toAbsoluteFormula(ref.getSheetName()));
+            }
 
             // ===== Data validation on each column =====
-            applyDropdown(data, headers, "countryCode", COUNTRIES);
-            applyDropdown(data, headers, "carrierCode", allowedCarriers);
-            applyDropdown(data, headers, "serviceType", allowedServices);
-            applyDropdown(data, headers, "packageType", allowedPackages);
-            applyDropdown(data, headers, "weightUnit", WEIGHT_UNITS);
-            applyDropdown(data, headers, "currency", CURRENCIES);
-            applyDropdown(data, headers, "countryOfOrigin", COUNTRIES);
+            // clientCode → static list of client codes via _Clients name.
+            applyListValidation(data, headers, "clientCode", "=_Clients", true);
+            // billTo → static SENDER/RECIPIENT/THIRD_PARTY inline (short enough).
+            applyExplicitListValidation(data, headers, "billTo", BILL_TO, true);
+            // countryCode / countryOfOrigin → shared _Countries range.
+            applyListValidation(data, headers, "countryCode", "=_Countries", true);
+            applyListValidation(data, headers, "countryOfOrigin", "=_Countries", false);
+            applyExplicitListValidation(data, headers, "weightUnit", WEIGHT_UNITS, true);
+            applyExplicitListValidation(data, headers, "currency", CURRENCIES, true);
+
+            // Cascading validations — each formula references the row's
+            // client (col A of clientCode) and/or carrier (col A of
+            // carrierCode) via INDIRECT. Client codes are SUBSTITUTE'd to
+            // swap hyphens for underscores because named ranges parse "-"
+            // as an operator.
+            int clientCol = headers.indexOf("clientCode");
+            int carrierCol = headers.indexOf("carrierCode");
+            String clientRef = colLetter(clientCol) + "2"; // first data row cell
+            String carrierRef = colLetter(carrierCol) + "2";
+            String normalizedClient = "SUBSTITUTE(SUBSTITUTE(" + clientRef + ",\"-\",\"_\"),\".\",\"_\")";
+
+            applyFormulaValidation(data, headers, "carrierCode",
+                    "INDIRECT(\"_Carriers_\"&" + normalizedClient + ")", true);
+            applyFormulaValidation(data, headers, "warehouseCode",
+                    "INDIRECT(\"_Warehouses_\"&" + normalizedClient + ")", false);
+            // accountNumber — WARN (info) not STOP so THIRD_PARTY free-text
+            // works. Operator sees the client's account list as suggestions.
+            applyFormulaValidation(data, headers, "accountNumber",
+                    "INDIRECT(\"_Accounts_\"&" + normalizedClient + "&\"_\"&" + carrierRef + ")",
+                    /*stop=*/ false);
+            // Service + package cascade off carrier only (same for every client).
+            applyFormulaValidation(data, headers, "serviceType",
+                    "INDIRECT(\"_Services_\"&" + carrierRef + ")", true);
+            applyFormulaValidation(data, headers, "packageType",
+                    "INDIRECT(\"_Packages_\"&" + carrierRef + ")", true);
 
             // ===== Instructions sheet =====
-            writeInstructionsSheet(notes, account, headerStyle);
+            writeInstructionsSheet(notes, headerStyle);
 
-            // Auto-size the reference sheet + notes sheet columns so text
-            // isn't chopped on open. Import sheet uses fixed widths (auto-
-            // size on 100 rows would be slow + inconsistent).
-            for (int i = 0; i < 3; i++) ref.autoSizeColumn(i);
-            for (int i = 0; i < 2; i++) notes.autoSizeColumn(i);
+            // Auto-size reference sheet + instructions for readability.
+            for (int i = 0; i < 4; i++) notes.autoSizeColumn(i);
+            // (Skip auto-size on the Reference sheet — it can have 40+ columns
+            //  and auto-sizing all of them slows the download noticeably.)
 
             wb.write(out);
             return out.toByteArray();
@@ -164,16 +201,335 @@ final class OrderImportTemplateBuilder {
         }
     }
 
-    // ===== helpers =====
+    // ===== Reference-sheet layout =====
+
+    /** A single named range's rectangle on the Reference sheet. */
+    private record CellRangeInfo(int firstCol, int firstRow, int lastRow) {
+        String toAbsoluteFormula(String sheetName) {
+            String col = colLetter(firstCol);
+            return "'" + sheetName + "'!$" + col + "$" + (firstRow + 1)
+                    + ":$" + col + "$" + (lastRow + 1);
+        }
+    }
+
+    /**
+     * Populate the Reference sheet with one column per named range, and
+     * return the map of range-name → cell rectangle. Layout:
+     * <pre>
+     *   Col 0:  _Clients                    (all client codes)
+     *   Col 1:  _Carriers_&lt;client-1&gt;
+     *   Col 2:  _Warehouses_&lt;client-1&gt;
+     *   Col 3+: _Accounts_&lt;client-1&gt;_&lt;carrier-A&gt;, _Accounts_&lt;client-1&gt;_&lt;carrier-B&gt;, ...
+     *   ...    (repeat for each client)
+     *   Then per carrier globally:
+     *   Col X:  _Services_UPS
+     *   Col X+1:_Packages_UPS
+     *   ...
+     * </pre>
+     * Row 0 = a friendly header showing the range's name so operators
+     * peeking at the Reference sheet can understand what's there.
+     */
+    private static Map<String, CellRangeInfo> writeReferenceSheet(
+            XSSFSheet ref, CellStyle refHeaderStyle,
+            List<Client> clients, List<CarrierAccountRef> accounts,
+            Map<String, List<String>> clientWarehouseCodes,
+            List<ShippingService> services, List<PackagePreset> presets) {
+
+        Map<String, CellRangeInfo> out = new LinkedHashMap<>();
+        int col = 0;
+
+        // Col 0 — _Clients: sorted, distinct, active client codes.
+        List<String> clientCodes = clients.stream()
+                .map(Client::getClientCode)
+                .filter(c -> c != null && !c.isBlank())
+                .distinct()
+                .sorted()
+                .toList();
+        col = writeRefColumn(ref, refHeaderStyle, col, "_Clients", clientCodes, out);
+
+        // Per-client blocks.
+        for (String clientCode : clientCodes) {
+            String key = normalizeForName(clientCode);
+            // Client's active + complete carrier codes (unique).
+            Set<String> carriers = new LinkedHashSet<>();
+            for (CarrierAccountRef a : accounts) {
+                if (!Boolean.TRUE.equals(a.getActive()) || !a.isComplete()) continue;
+                if (a.getCustomerNo() == null) continue;
+                if (!a.getCustomerNo().equalsIgnoreCase(clientCode)) continue;
+                if (a.getCarrierCode() != null) carriers.add(a.getCarrierCode().toUpperCase(Locale.ROOT));
+            }
+            col = writeRefColumn(ref, refHeaderStyle, col, "_Carriers_" + key, carriers, out);
+
+            // Client's attached warehouse codes — caller resolved these
+            // ClientWarehouse.warehouseId → Warehouse.code up-front so we
+            // don't need a warehouse repo here.
+            List<String> warehouseCodes = clientWarehouseCodes.getOrDefault(
+                    clientCode.toUpperCase(Locale.ROOT), List.of());
+            col = writeRefColumn(ref, refHeaderStyle, col, "_Warehouses_" + key, warehouseCodes, out);
+
+            // Per-carrier account numbers for this client.
+            for (String carrier : carriers) {
+                List<String> accountNumbers = new ArrayList<>();
+                for (CarrierAccountRef a : accounts) {
+                    if (!Boolean.TRUE.equals(a.getActive()) || !a.isComplete()) continue;
+                    if (a.getCustomerNo() == null
+                            || !a.getCustomerNo().equalsIgnoreCase(clientCode)) continue;
+                    if (a.getCarrierCode() == null
+                            || !a.getCarrierCode().equalsIgnoreCase(carrier)) continue;
+                    if (a.getAccountNumber() != null) accountNumbers.add(a.getAccountNumber());
+                }
+                col = writeRefColumn(ref, refHeaderStyle, col,
+                        "_Accounts_" + key + "_" + carrier, accountNumbers, out);
+            }
+        }
+
+        // Per-carrier globals — service + package NAMES (not wire codes).
+        Set<String> carriers = new LinkedHashSet<>();
+        for (ShippingService s : services) {
+            if (s.isEnabled() && s.getCarrier() != null) carriers.add(s.getCarrier().toUpperCase(Locale.ROOT));
+        }
+        for (String carrier : carriers) {
+            List<String> serviceNames = new ArrayList<>();
+            for (ShippingService s : services) {
+                if (!s.isEnabled()) continue;
+                if (!carrier.equalsIgnoreCase(s.getCarrier())) continue;
+                if (s.getName() != null && !s.getName().isBlank()) serviceNames.add(s.getName());
+            }
+            // Dedupe (names can repeat across origins).
+            serviceNames = distinct(serviceNames);
+            col = writeRefColumn(ref, refHeaderStyle, col, "_Services_" + carrier, serviceNames, out);
+
+            List<String> packageNames = new ArrayList<>();
+            for (PackagePreset p : presets) {
+                if (!Boolean.TRUE.equals(p.getEnabled())) continue;
+                // Preset carrier may be null (usable with any); include in every carrier's list.
+                if (p.getCarrier() != null && !carrier.equalsIgnoreCase(p.getCarrier())) continue;
+                if (p.getName() != null && !p.getName().isBlank()) packageNames.add(p.getName());
+            }
+            packageNames = distinct(packageNames);
+            col = writeRefColumn(ref, refHeaderStyle, col, "_Packages_" + carrier, packageNames, out);
+        }
+
+        // Static _Countries and _Currencies too (so we can validate against a
+        // named range even if the list grows past the inline cap in the
+        // future).
+        col = writeRefColumn(ref, refHeaderStyle, col, "_Countries", COUNTRIES, out);
+        col = writeRefColumn(ref, refHeaderStyle, col, "_Currencies", CURRENCIES, out);
+
+        return out;
+    }
+
+    /**
+     * Write a single column on the Reference sheet — header row 0 = the
+     * range name, then data rows 1..N. Registers the range in {@code out}
+     * and returns the next free column index.
+     *
+     * <p>Empty lists still get a header cell + one blank data row so the
+     * named range resolves (empty list = INDIRECT returns #REF! which
+     * breaks the dropdown).
+     */
+    private static int writeRefColumn(XSSFSheet ref, CellStyle headerStyle,
+                                       int col, String rangeName, Collection<String> values,
+                                       Map<String, CellRangeInfo> out) {
+        Row headerRow = ref.getRow(0);
+        if (headerRow == null) headerRow = ref.createRow(0);
+        Cell hc = headerRow.createCell(col);
+        hc.setCellValue(rangeName);
+        hc.setCellStyle(headerStyle);
+
+        int rowIdx = 1;
+        if (values.isEmpty()) {
+            // Placeholder blank cell so the named range resolves to a
+            // valid (empty) range — INDIRECT returns "" instead of #REF!
+            // which keeps the dropdown from erroring out.
+            Row r = ensureRow(ref, rowIdx);
+            r.createCell(col).setCellValue("");
+            out.put(rangeName, new CellRangeInfo(col, rowIdx, rowIdx));
+        } else {
+            int firstRow = rowIdx;
+            for (String v : values) {
+                Row r = ensureRow(ref, rowIdx);
+                r.createCell(col).setCellValue(v);
+                rowIdx++;
+            }
+            out.put(rangeName, new CellRangeInfo(col, firstRow, rowIdx - 1));
+        }
+        return col + 1;
+    }
+
+    // ===== Validation helpers =====
+
+    /** Attach a dropdown backed by a named-range formula (e.g. {@code =_Clients}). */
+    private static void applyListValidation(XSSFSheet sheet, List<String> headers,
+                                             String col, String formula, boolean stop) {
+        int idx = headers.indexOf(col);
+        if (idx < 0) return;
+        DataValidationHelper helper = new XSSFDataValidationHelper(sheet);
+        DataValidationConstraint constraint = helper.createFormulaListConstraint(formula);
+        CellRangeAddressList range = new CellRangeAddressList(1, DATA_ROW_LIMIT, idx, idx);
+        DataValidation validation = helper.createValidation(constraint, range);
+        validation.setSuppressDropDownArrow(false);
+        validation.setShowErrorBox(stop);
+        if (stop) {
+            validation.setErrorStyle(DataValidation.ErrorStyle.STOP);
+        }
+        sheet.addValidationData(validation);
+    }
+
+    /** Attach a dropdown backed by an inline value list (short lists only —
+     *  Excel caps the source string at ~255 chars). */
+    private static void applyExplicitListValidation(XSSFSheet sheet, List<String> headers,
+                                                     String col, List<String> values, boolean stop) {
+        int idx = headers.indexOf(col);
+        if (idx < 0 || values == null || values.isEmpty()) return;
+        DataValidationHelper helper = new XSSFDataValidationHelper(sheet);
+        DataValidationConstraint constraint = helper.createExplicitListConstraint(values.toArray(new String[0]));
+        CellRangeAddressList range = new CellRangeAddressList(1, DATA_ROW_LIMIT, idx, idx);
+        DataValidation validation = helper.createValidation(constraint, range);
+        validation.setSuppressDropDownArrow(false);
+        validation.setShowErrorBox(stop);
+        if (stop) {
+            validation.setErrorStyle(DataValidation.ErrorStyle.STOP);
+        }
+        sheet.addValidationData(validation);
+    }
+
+    /**
+     * Attach a cascading dropdown driven by an INDIRECT() formula. The
+     * formula is applied to every row in the validation range and Excel
+     * auto-adjusts the cell references per row.
+     *
+     * <p>{@code stop=false} uses the INFO error style so operators can
+     * type a value outside the list (needed for third-party accountNumber).
+     */
+    private static void applyFormulaValidation(XSSFSheet sheet, List<String> headers,
+                                                String col, String formula, boolean stop) {
+        int idx = headers.indexOf(col);
+        if (idx < 0) return;
+        DataValidationHelper helper = new XSSFDataValidationHelper(sheet);
+        // POI's createFormulaListConstraint wraps the formula in the OOXML
+        // <formula1> element automatically. Formulas here reference the
+        // FIRST data row (e.g. B2); Excel adjusts subsequent rows.
+        DataValidationConstraint constraint = helper.createFormulaListConstraint(formula);
+        CellRangeAddressList range = new CellRangeAddressList(1, DATA_ROW_LIMIT, idx, idx);
+        DataValidation validation = helper.createValidation(constraint, range);
+        validation.setSuppressDropDownArrow(false);
+        validation.setShowErrorBox(true);
+        validation.setErrorStyle(stop
+                ? DataValidation.ErrorStyle.STOP
+                : DataValidation.ErrorStyle.INFO);
+        sheet.addValidationData(validation);
+    }
+
+    // ===== Sample rows =====
+
+    private static void addSampleRows(XSSFSheet data, List<String> headers,
+                                       List<Client> clients, List<CarrierAccountRef> accounts,
+                                       CellStyle sampleStyle) {
+        // Pick a plausible sample client — the first client with at least
+        // one active + complete account. Falls back to nothing when the
+        // catalog is empty so we don't try to guess.
+        String sampleClient = null;
+        String sampleCarrier = null;
+        String sampleAccount = null;
+        for (Client cl : clients) {
+            for (CarrierAccountRef a : accounts) {
+                if (Boolean.TRUE.equals(a.getActive()) && a.isComplete()
+                        && a.getCustomerNo() != null
+                        && a.getCustomerNo().equalsIgnoreCase(cl.getClientCode())) {
+                    sampleClient = cl.getClientCode();
+                    sampleCarrier = a.getCarrierCode();
+                    sampleAccount = a.getAccountNumber();
+                    break;
+                }
+            }
+            if (sampleClient != null) break;
+        }
+
+        Row r = data.createRow(1);
+        setCell(r, headers, "clientCode", sampleClient == null ? "" : sampleClient, sampleStyle);
+        setCell(r, headers, "billTo", "SENDER", sampleStyle);
+        setCell(r, headers, "recipientName", "Ava Chen", sampleStyle);
+        setCell(r, headers, "addressLine1", "42 Sample Way", sampleStyle);
+        setCell(r, headers, "city", "Portland", sampleStyle);
+        setCell(r, headers, "state", "OR", sampleStyle);
+        setCell(r, headers, "postalCode", "97201", sampleStyle);
+        setCell(r, headers, "countryCode", "US", sampleStyle);
+        setCell(r, headers, "carrierCode", sampleCarrier == null ? "" : sampleCarrier, sampleStyle);
+        setCell(r, headers, "accountNumber", sampleAccount == null ? "" : sampleAccount, sampleStyle);
+        setCellNumber(r, headers, "weight", 2.5, sampleStyle);
+        setCell(r, headers, "weightUnit", "LB", sampleStyle);
+        setCell(r, headers, "currency", "USD", sampleStyle);
+        setCell(r, headers, "goodsDescription", "General merchandise", sampleStyle);
+    }
+
+    // ===== styling =====
+
+    private static CellStyle headerStyle(XSSFWorkbook wb) {
+        CellStyle s = wb.createCellStyle();
+        Font f = wb.createFont();
+        f.setBold(true);
+        f.setColor(IndexedColors.WHITE.getIndex());
+        s.setFont(f);
+        s.setFillForegroundColor(IndexedColors.DARK_BLUE.getIndex());
+        s.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        s.setAlignment(HorizontalAlignment.CENTER);
+        s.setVerticalAlignment(VerticalAlignment.CENTER);
+        s.setBorderBottom(BorderStyle.THIN);
+        return s;
+    }
+
+    private static CellStyle sampleStyle(XSSFWorkbook wb) {
+        CellStyle s = wb.createCellStyle();
+        s.setFillForegroundColor(IndexedColors.LIGHT_YELLOW.getIndex());
+        s.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        return s;
+    }
+
+    private static CellStyle refHeaderStyle(XSSFWorkbook wb) {
+        CellStyle s = wb.createCellStyle();
+        Font f = wb.createFont();
+        f.setBold(true);
+        f.setColor(IndexedColors.WHITE.getIndex());
+        s.setFont(f);
+        s.setFillForegroundColor(IndexedColors.GREY_50_PERCENT.getIndex());
+        s.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        return s;
+    }
+
+    // ===== instructions sheet =====
+
+    private static void writeInstructionsSheet(XSSFSheet notes, CellStyle headerStyle) {
+        Row head = notes.createRow(0);
+        Cell hc = head.createCell(0);
+        hc.setCellValue("How to fill this template");
+        hc.setCellStyle(headerStyle);
+        notes.createRow(1).createCell(0).setCellValue(
+                "1. Pick a Client from the clientCode dropdown. The carrierCode, accountNumber, warehouseCode dropdowns re-scope automatically.");
+        notes.createRow(2).createCell(0).setCellValue(
+                "2. Pick a Carrier from that client's carriers. The serviceType and packageType dropdowns re-scope.");
+        notes.createRow(3).createCell(0).setCellValue(
+                "3. accountNumber accepts either a value from the dropdown OR a free-text third-party account when billTo = THIRD_PARTY.");
+        notes.createRow(4).createCell(0).setCellValue(
+                "4. serviceType and packageType show human names (\"UPS Ground\", \"UPS Letter\"). The importer resolves them to wire codes at commit time.");
+        notes.createRow(5).createCell(0).setCellValue(
+                "5. For international shipments with multiple line-items, set the same orderRef on every row of the group. The first row carries recipient + shipment fields; later rows only need orderRef + item columns.");
+        notes.createRow(6).createCell(0).setCellValue(
+                "6. hsCode + countryOfOrigin are required for international shipments; leave blank for domestic.");
+        notes.createRow(7).createCell(0).setCellValue(
+                "7. Save as CSV (UTF-8) before uploading — File → Save As → CSV UTF-8. The importer also accepts this .xlsx directly.");
+    }
+
+    // ===== small helpers =====
 
     private static int columnWidthFor(String header) {
-        // POI widths are in units of 1/256th of a "0" character; 4000 ≈ 16 chars.
         return switch (header) {
-            case "orderRef", "reference" -> 3200;
+            case "orderRef", "clientCode", "billTo", "warehouseCode",
+                    "reference" -> 3200;
             case "recipientName", "recipientCompany", "recipientEmail",
                     "addressLine1", "addressLine2", "goodsDescription",
                     "itemDescription" -> 6000;
-            case "city", "serviceType", "packageType" -> 4500;
+            case "serviceType", "packageType", "city" -> 5000;
             case "state", "postalCode", "carrierCode",
                     "accountNumber", "countryCode", "countryOfOrigin",
                     "recipientPhone", "weightUnit", "currency",
@@ -182,80 +538,6 @@ final class OrderImportTemplateBuilder {
                     "itemUnitValue" -> 3200;
             default -> 4000;
         };
-    }
-
-    private static void addSampleRows(XSSFSheet data, List<String> headers,
-                                      CarrierAccountRef account,
-                                      CellStyle sampleStyle, CellStyle prefilledStyle) {
-        String defaultCarrier = account != null && account.getCarrierCode() != null
-                ? account.getCarrierCode().toUpperCase(Locale.ROOT)
-                : "UPS";
-        String defaultAccount = account != null ? account.getAccountNumber() : "A12345";
-
-        // Sample 1: domestic US (no customs)
-        Row r1 = data.createRow(1);
-        setCell(r1, headers, "orderRef", "", sampleStyle);
-        setCell(r1, headers, "recipientName", "Acme Warehouse", sampleStyle);
-        setCell(r1, headers, "recipientCompany", "Acme Ltd", sampleStyle);
-        setCell(r1, headers, "recipientPhone", "5551234567", sampleStyle);
-        setCell(r1, headers, "recipientEmail", "ops@acme.com", sampleStyle);
-        setCell(r1, headers, "addressLine1", "1 Warehouse Way", sampleStyle);
-        setCell(r1, headers, "city", "Louisville", sampleStyle);
-        setCell(r1, headers, "state", "KY", sampleStyle);
-        setCell(r1, headers, "postalCode", "40209", sampleStyle);
-        setCell(r1, headers, "countryCode", "US", sampleStyle);
-        setCell(r1, headers, "carrierCode", defaultCarrier,
-                account != null ? prefilledStyle : sampleStyle);
-        setCell(r1, headers, "accountNumber", defaultAccount,
-                account != null ? prefilledStyle : sampleStyle);
-        setCell(r1, headers, "serviceType", "GROUND", sampleStyle);
-        setCell(r1, headers, "packageType", "YOUR_PACKAGING", sampleStyle);
-        setCellNumber(r1, headers, "weight", 2.5, sampleStyle);
-        setCell(r1, headers, "weightUnit", "LB", sampleStyle);
-        setCellNumber(r1, headers, "declaredValue", 100.00, sampleStyle);
-        setCell(r1, headers, "currency", "USD", sampleStyle);
-        setCell(r1, headers, "reference", "PO-1001", sampleStyle);
-        setCell(r1, headers, "goodsDescription", "General merchandise", sampleStyle);
-
-        // Sample 2: international UK, group ORD-2001 line 1
-        Row r2 = data.createRow(2);
-        setCell(r2, headers, "orderRef", "ORD-2001", sampleStyle);
-        setCell(r2, headers, "recipientName", "Ava Chen", sampleStyle);
-        setCell(r2, headers, "recipientPhone", "4402071234567", sampleStyle);
-        setCell(r2, headers, "recipientEmail", "ava.chen@example.co.uk", sampleStyle);
-        setCell(r2, headers, "addressLine1", "221B Baker Street", sampleStyle);
-        setCell(r2, headers, "city", "London", sampleStyle);
-        setCell(r2, headers, "state", "LDN", sampleStyle);
-        setCell(r2, headers, "postalCode", "NW1 6XE", sampleStyle);
-        setCell(r2, headers, "countryCode", "GB", sampleStyle);
-        setCell(r2, headers, "carrierCode", defaultCarrier,
-                account != null ? prefilledStyle : sampleStyle);
-        setCell(r2, headers, "accountNumber", defaultAccount,
-                account != null ? prefilledStyle : sampleStyle);
-        setCell(r2, headers, "serviceType", "INTERNATIONAL_PRIORITY", sampleStyle);
-        setCell(r2, headers, "packageType", "YOUR_PACKAGING", sampleStyle);
-        setCellNumber(r2, headers, "weight", 3.2, sampleStyle);
-        setCell(r2, headers, "weightUnit", "LB", sampleStyle);
-        setCellNumber(r2, headers, "declaredValue", 275.00, sampleStyle);
-        setCell(r2, headers, "currency", "USD", sampleStyle);
-        setCell(r2, headers, "reference", "ORD-2001", sampleStyle);
-        setCell(r2, headers, "goodsDescription", "Silk garments + accessories", sampleStyle);
-        setCell(r2, headers, "itemDescription", "Silk lining natural", sampleStyle);
-        setCell(r2, headers, "itemSku", "SKU-100", sampleStyle);
-        setCellNumber(r2, headers, "itemQuantity", 2, sampleStyle);
-        setCellNumber(r2, headers, "itemUnitValue", 45.00, sampleStyle);
-        setCell(r2, headers, "hsCode", "5007.20", sampleStyle);
-        setCell(r2, headers, "countryOfOrigin", "IT", sampleStyle);
-
-        // Sample 3: item-only continuation of ORD-2001 (only orderRef + item data)
-        Row r3 = data.createRow(3);
-        setCell(r3, headers, "orderRef", "ORD-2001", sampleStyle);
-        setCell(r3, headers, "itemDescription", "Cotton canvas cream", sampleStyle);
-        setCell(r3, headers, "itemSku", "SKU-200", sampleStyle);
-        setCellNumber(r3, headers, "itemQuantity", 1, sampleStyle);
-        setCellNumber(r3, headers, "itemUnitValue", 60.00, sampleStyle);
-        setCell(r3, headers, "hsCode", "5209.11", sampleStyle);
-        setCell(r3, headers, "countryOfOrigin", "IN", sampleStyle);
     }
 
     private static void setCell(Row row, List<String> headers, String col, String value, CellStyle style) {
@@ -274,135 +556,30 @@ final class OrderImportTemplateBuilder {
         if (style != null) c.setCellStyle(style);
     }
 
-    /**
-     * Attach a data-validation dropdown to every data cell in a column
-     * (row 1 through 100). Rows past 100 render without validation — the
-     * operator can add more but they won't get the dropdown affordance.
-     *
-     * <p>Excel's inline validation-list source is capped at ~255 chars.
-     * Long value lists get quietly truncated here — that's a tradeoff
-     * for keeping the template a single self-contained workbook. Very
-     * long lists (100+ items) would need a Named Range referencing the
-     * Reference sheet, which we can add later if the platform grows.
-     */
-    private static void applyDropdown(XSSFSheet sheet, List<String> headers,
-                                      String col, List<String> values) {
-        int idx = headers.indexOf(col);
-        if (idx < 0 || values == null || values.isEmpty()) return;
-        String source = String.join(",", values);
-        if (source.length() > 250) source = source.substring(0, 247) + "..."; // Excel cap safety
-        DataValidationHelper helper = new XSSFDataValidationHelper(sheet);
-        DataValidationConstraint constraint = helper.createExplicitListConstraint(values.toArray(new String[0]));
-        CellRangeAddressList range = new CellRangeAddressList(1, 100, idx, idx);
-        DataValidation validation = helper.createValidation(constraint, range);
-        validation.setShowErrorBox(false); // permissive — highlight but don't block edits
-        validation.setSuppressDropDownArrow(false);
-        sheet.addValidationData(validation);
-    }
-
-    private static void writeReferenceSheet(XSSFSheet ref,
-                                            List<String> carriers,
-                                            List<String> services,
-                                            List<String> packages,
-                                            CellStyle headerStyle) {
-        Row head = ref.createRow(0);
-        String[] titles = {"Carriers", "Services", "Packages"};
-        for (int i = 0; i < titles.length; i++) {
-            Cell c = head.createCell(i);
-            c.setCellValue(titles[i]);
-            c.setCellStyle(headerStyle);
-        }
-        int rowCount = Math.max(Math.max(carriers.size(), services.size()), packages.size());
-        for (int i = 0; i < rowCount; i++) {
-            Row r = ref.createRow(i + 1);
-            if (i < carriers.size()) r.createCell(0).setCellValue(carriers.get(i));
-            if (i < services.size()) r.createCell(1).setCellValue(services.get(i));
-            if (i < packages.size()) r.createCell(2).setCellValue(packages.get(i));
-        }
-    }
-
-    private static void writeInstructionsSheet(XSSFSheet notes, CarrierAccountRef account,
-                                               CellStyle headerStyle) {
-        Row head = notes.createRow(0);
-        Cell hc = head.createCell(0);
-        hc.setCellValue("How to fill this template");
-        hc.setCellStyle(headerStyle);
-        notes.createRow(1).createCell(0).setCellValue(
-                "1. One row per shipment for domestic (no customs). Fill every required column.");
-        notes.createRow(2).createCell(0).setCellValue(
-                "2. For international shipments with multiple line-items, set the same orderRef on every row of the group.");
-        notes.createRow(3).createCell(0).setCellValue(
-                "3. The FIRST row of an orderRef group carries recipient + shipment fields; item-only rows only need orderRef + item columns.");
-        notes.createRow(4).createCell(0).setCellValue(
-                "4. hsCode + countryOfOrigin are required for international shipments; leave blank for domestic.");
-        notes.createRow(5).createCell(0).setCellValue(
-                "5. Save as CSV (UTF-8) before uploading — Excel: File → Save As → CSV UTF-8. The importer also accepts this .xlsx directly.");
-        notes.createRow(6).createCell(0).setCellValue(
-                "6. Dropdowns show the allowed values. Editing outside a dropdown is fine; the server re-validates on preview.");
-        if (account != null) {
-            Row ac = notes.createRow(8);
-            Cell acc = ac.createCell(0);
-            acc.setCellValue("Account context: this template is scoped to account "
-                    + account.getAccountNumber() + " on " + account.getCarrierCode()
-                    + (account.getCustomerNo() == null || account.getCustomerNo().isBlank()
-                        ? " (PLATFORM)"
-                        : " (client " + account.getCustomerNo() + ")"));
-        }
+    private static Row ensureRow(XSSFSheet sheet, int rowIdx) {
+        Row r = sheet.getRow(rowIdx);
+        if (r == null) r = sheet.createRow(rowIdx);
+        return r;
     }
 
     /**
-     * Which carrier codes should the carrierCode dropdown offer? Scoped
-     * to the account's carrier when one is provided; otherwise every
-     * carrier that appears in the current service catalog (falls back
-     * to the four we integrate today).
+     * Normalize an identifier so it's a valid Excel named-range key.
+     * Named-range keys allow letters, digits, and underscore; hyphens
+     * (allowed in client codes) get treated as arithmetic operators, so
+     * we swap them for underscores. Same for periods.
      */
-    private static List<String> allowedCarriers(CarrierAccountRef account) {
-        if (account != null && account.getCarrierCode() != null) {
-            return List.of(account.getCarrierCode().toUpperCase(Locale.ROOT));
-        }
-        return List.of("UPS", "FEDEX", "USPS", "DHL");
+    private static String normalizeForName(String s) {
+        if (s == null) return "";
+        return s.replaceAll("[^A-Za-z0-9_]", "_");
     }
 
-    /** Distinct enabled service codes for the account's carrier (or every
-     *  carrier when unscoped). Preserves catalog display order via
-     *  LinkedHashSet. */
-    private static List<String> filterServices(List<ShippingService> services, CarrierAccountRef account) {
-        String scope = account == null ? null
-                : (account.getCarrierCode() == null ? null : account.getCarrierCode().toUpperCase(Locale.ROOT));
-        Set<String> out = new LinkedHashSet<>();
-        for (ShippingService s : services) {
-            if (!s.isEnabled()) continue;
-            if (scope != null && !scope.equalsIgnoreCase(s.getCarrier())) continue;
-            if (s.getServiceCode() != null && !s.getServiceCode().isBlank()) out.add(s.getServiceCode());
-        }
-        // Common fallback when the platform hasn't seeded services yet —
-        // don't leave the dropdown empty, operators need something to pick.
-        if (out.isEmpty()) return List.of("GROUND", "STANDARD", "PRIORITY");
-        return new ArrayList<>(out);
+    /** Excel column letter for a 0-based index (0→A, 25→Z, 26→AA, ...). */
+    private static String colLetter(int idx) {
+        return CellReference.convertNumToColString(idx);
     }
 
-    /** Distinct enabled package presets. Since presets aren't strictly
-     *  carrier-scoped in the model, we surface every enabled preset by
-     *  code when unscoped, and every preset whose carrier matches the
-     *  account when scoped. */
-    private static List<String> filterPackages(List<PackagePreset> presets, CarrierAccountRef account) {
-        String scope = account == null ? null
-                : (account.getCarrierCode() == null ? null : account.getCarrierCode().toUpperCase(Locale.ROOT));
-        Set<String> out = new LinkedHashSet<>();
-        for (PackagePreset p : presets) {
-            if (!Boolean.TRUE.equals(p.getEnabled())) continue;
-            if (scope != null && p.getCarrier() != null
-                    && !scope.equalsIgnoreCase(p.getCarrier())) continue;
-            // CARRIER kind presets have a carrier-specific packaging code
-            // ("01" = UPS Letter, "FEDEX_PAK" etc.). CUSTOM presets don't
-            // carry one — they map to the "your own box" fallback on the
-            // carrier side, so surface their friendly name instead so the
-            // dropdown still looks operator-friendly.
-            String code = p.getCarrierPackageCode();
-            if (code == null || code.isBlank()) code = p.getName();
-            if (code != null && !code.isBlank()) out.add(code);
-        }
-        if (out.isEmpty()) return List.of("YOUR_PACKAGING", "FEDEX_BOX_10KG", "UPS_LETTER");
-        return new ArrayList<>(out);
+    private static List<String> distinct(List<String> in) {
+        Set<String> seen = new LinkedHashSet<>(in);
+        return new ArrayList<>(seen);
     }
 }

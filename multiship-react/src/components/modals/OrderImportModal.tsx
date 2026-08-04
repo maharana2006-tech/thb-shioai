@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   FiAlertCircle,
   FiCheckCircle,
@@ -13,10 +13,7 @@ import {
   type OrderImportPreview,
   type OrderImportRow,
 } from '../../api/orderImportService'
-import { accountRefService, type CarrierAccountRef } from '../../api/accountRefService'
-import { formatCarrierName } from '../../utils/carrierUtils'
 import { notify } from '../../utils/notify'
-import Select from '../workspace/Select'
 
 /**
  * Sprint 40 — CSV / XLSX order import modal. Three steps:
@@ -35,30 +32,17 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
   const [uploading, setUploading] = useState(false)
   const [committing, setCommitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  /** Sprint 48 — carrier accounts loaded once on mount so the operator
-   *  can pick which account the .xlsx template is scoped to. Only active
-   *  + complete accounts are surfaced (incomplete ones can't ship a
-   *  label anyway). */
-  const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
-  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null)
+  /** Sprint 48 (revised) — the template is universal now. One workbook
+   *  covers every client, and each row picks its own clientCode / carrier /
+   *  account inside the workbook via cascading dropdowns. The per-account
+   *  picker that was here previously is redundant. */
   const [downloadingXlsx, setDownloadingXlsx] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    accountRefService.listAccounts()
-      .then((list) => {
-        if (cancelled) return
-        setAccounts(list.filter((a) => a.active && a.complete))
-      })
-      .catch(() => { /* dropdown just stays empty; picker still works */ })
-    return () => { cancelled = true }
-  }, [])
 
   const downloadXlsx = async () => {
     if (downloadingXlsx) return
     setDownloadingXlsx(true)
     try {
-      await orderImportService.downloadXlsxTemplate(selectedAccountId)
+      await orderImportService.downloadXlsxTemplate(null)
     } catch (e) {
       notify.error(e instanceof Error ? e.message : 'Template download failed.')
     } finally {
@@ -71,7 +55,7 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
     setUploading(true)
     setError(null)
     try {
-      const response = await orderImportService.preview(file, selectedAccountId)
+      const response = await orderImportService.preview(file)
       if (response.status === 'success' && response.data) {
         setPreview(response.data)
       } else {
@@ -164,47 +148,29 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-5 py-3">
-          {/* Sprint 48 — richer template picker.
-                * Account dropdown scopes the .xlsx to a specific carrier
-                  account (carrier locked, service/package dropdowns narrowed).
-                * XLSX button hits the auth-gated /template.xlsx endpoint via
-                  fetch + Blob download so the Bearer token is attached.
+          {/* Sprint 48 (revised) — universal template.
+                * One workbook covers every client. Each row picks its own
+                  clientCode + carrier + account via cascading dropdowns
+                  in the workbook (no per-download scoping).
+                * XLSX button hits the auth-gated /template.xlsx endpoint
+                  via fetch + Blob download so the Bearer token is attached.
                 * CSV link stays for operators who want the flat public
-                  template (no validation, no samples). */}
+                  template (no validation, no dropdowns). */}
           <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500">
-              Account:
-              <Select
-                value={selectedAccountId == null ? '' : String(selectedAccountId)}
-                onChange={(e) => {
-                  const raw = e.target.value
-                  setSelectedAccountId(raw ? Number(raw) : null)
-                }}
-                className="min-w-[180px] text-[12px]"
-              >
-                <option value="">Generic (all carriers)</option>
-                {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {formatCarrierName(a.carrierCode)} · {a.accountNumber}
-                    {a.customerNo ? ` · ${a.customerNo}` : ' · PLATFORM'}
-                  </option>
-                ))}
-              </Select>
-            </label>
             <button
               type="button"
               onClick={() => void downloadXlsx()}
               disabled={downloadingXlsx}
               className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-              title="Download the .xlsx template with dropdowns + samples, scoped to the picked account."
+              title="Download the universal .xlsx template — cascading dropdowns pick per-row Client / Carrier / Account inside the workbook."
             >
               {downloadingXlsx ? <FiLoader className="h-3 w-3 animate-spin" /> : <FiDownload className="h-3 w-3" />}
-              Download XLSX
+              Download XLSX template
             </button>
             <a
               href={orderImportService.templateUrl()}
               className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-slate-950"
-              title="Flat CSV template — no validation, no samples."
+              title="Flat CSV template — no validation, no dropdowns."
             >
               <FiDownload className="h-3 w-3" />
               CSV

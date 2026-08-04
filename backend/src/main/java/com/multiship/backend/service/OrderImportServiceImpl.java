@@ -5,9 +5,15 @@ import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.OrderImportPreviewDTO;
 import com.multiship.backend.dto.OrderImportRowDTO;
 import com.multiship.backend.model.CarrierAccountRef;
+import com.multiship.backend.model.Client;
+import com.multiship.backend.model.ClientWarehouse;
+import com.multiship.backend.model.Warehouse;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
+import com.multiship.backend.repository.ClientRepository;
+import com.multiship.backend.repository.ClientWarehouseRepository;
 import com.multiship.backend.repository.PackagePresetRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
+import com.multiship.backend.repository.WarehouseRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
@@ -58,26 +64,35 @@ import java.util.Map;
 public class OrderImportServiceImpl implements OrderImportService {
 
     private final CarrierService carrierService;
-    /** Sprint 48 — used to bake account-scoped defaults + dropdowns into
-     *  the .xlsx template. Optional (null in the no-arg test constructor). */
+    /** Sprint 48 — used to bake per-client account dropdowns into the
+     *  .xlsx template. Optional (null in the no-arg test constructor). */
     private final CarrierAccountRefRepository accountRefRepository;
     /** Sprint 48 — service catalog for the template's serviceType dropdown. */
     private final ShippingServiceRepository shippingServiceRepository;
     /** Sprint 48 — package presets for the template's packageType dropdown. */
     private final PackagePresetRepository packagePresetRepository;
+    /** Sprint 48 — client list for the universal-template clientCode dropdown. */
+    private final ClientRepository clientRepository;
+    /** Sprint 48 — per-client warehouse attachments for the warehouseCode dropdown. */
+    private final ClientWarehouseRepository clientWarehouseRepository;
+    /** Sprint 48 — warehouse-code lookup for resolving ClientWarehouse.warehouseId → Warehouse.code. */
+    private final WarehouseRepository warehouseRepository;
 
-    // Constructor with @Autowired handles the CarrierService injection.
-    // Second no-arg constructor kept for the Sprint 40 test suite that
-    // exercises parsing / validation in isolation.
     @org.springframework.beans.factory.annotation.Autowired
     public OrderImportServiceImpl(CarrierService carrierService,
                                   CarrierAccountRefRepository accountRefRepository,
                                   ShippingServiceRepository shippingServiceRepository,
-                                  PackagePresetRepository packagePresetRepository) {
+                                  PackagePresetRepository packagePresetRepository,
+                                  ClientRepository clientRepository,
+                                  ClientWarehouseRepository clientWarehouseRepository,
+                                  WarehouseRepository warehouseRepository) {
         this.carrierService = carrierService;
         this.accountRefRepository = accountRefRepository;
         this.shippingServiceRepository = shippingServiceRepository;
         this.packagePresetRepository = packagePresetRepository;
+        this.clientRepository = clientRepository;
+        this.clientWarehouseRepository = clientWarehouseRepository;
+        this.warehouseRepository = warehouseRepository;
     }
 
     public OrderImportServiceImpl() {
@@ -85,18 +100,20 @@ public class OrderImportServiceImpl implements OrderImportService {
         this.accountRefRepository = null;
         this.shippingServiceRepository = null;
         this.packagePresetRepository = null;
+        this.clientRepository = null;
+        this.clientWarehouseRepository = null;
+        this.warehouseRepository = null;
     }
 
-    /**
-     * Legacy Sprint-41 test constructor — wire only the carrier service,
-     * leave the .xlsx-template repositories null (template-generation
-     * paths are dead in these tests anyway).
-     */
+    /** Legacy Sprint-41 test constructor. */
     OrderImportServiceImpl(CarrierService carrierService) {
         this.carrierService = carrierService;
         this.accountRefRepository = null;
         this.shippingServiceRepository = null;
         this.packagePresetRepository = null;
+        this.clientRepository = null;
+        this.clientWarehouseRepository = null;
+        this.warehouseRepository = null;
     }
 
     /** Canonical header ordering used for the template + parser column
@@ -116,6 +133,12 @@ public class OrderImportServiceImpl implements OrderImportService {
      */
     static final List<String> HEADERS = List.of(
             "orderRef",
+            // Sprint 48 — clientCode + billTo + warehouseCode are the
+            // universal-template additions. clientCode drives the cascading
+            // dropdowns in the workbook; billTo unlocks the accountNumber
+            // free-text mode when THIRD_PARTY; warehouseCode picks a specific
+            // origin (blank = client's default cascade).
+            "clientCode", "billTo", "warehouseCode",
             "recipientName", "recipientCompany", "recipientPhone", "recipientEmail",
             "addressLine1", "addressLine2",
             "city", "state", "postalCode", "countryCode",
@@ -136,6 +159,69 @@ public class OrderImportServiceImpl implements OrderImportService {
         return preview(filename, body, null);
     }
 
+    /**
+     * Sprint 48 — reverse-lookup human names to wire codes on serviceType
+     * and packageType. The universal template writes the user-friendly
+     * name (e.g. "UPS Ground") into the cell, but every carrier connector
+     * expects the wire code (e.g. "03"). We match on (carrier, name) via
+     * the platform catalog. If the value already looks like a wire code
+     * (uppercase alphanumeric, no spaces) or the lookup misses, we leave
+     * the value untouched — operators overriding with a raw code still
+     * work.
+     */
+    private void resolveNamesToCodes(List<OrderImportRowDTO> rows) {
+        if (shippingServiceRepository == null || rows.isEmpty()) return;
+        List<com.multiship.backend.model.ShippingService> services =
+                shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc();
+        List<com.multiship.backend.model.PackagePreset> presets = packagePresetRepository == null
+                ? List.of()
+                : packagePresetRepository.findAllByOrderByIsDefaultDescNameAsc();
+        for (OrderImportRowDTO row : rows) {
+            String carrier = row.getCarrierCode();
+            if (!StringUtils.hasText(carrier)) continue;
+            String carrierU = carrier.toUpperCase(Locale.ROOT);
+            // Service: (carrier, name) case-insensitive match. Skip lookup
+            // when the value looks like a wire code already (no space,
+            // ≤6 chars) so a raw "03" override stays untouched.
+            String svcRaw = row.getServiceType();
+            if (looksLikeName(svcRaw)) {
+                for (com.multiship.backend.model.ShippingService s : services) {
+                    if (!carrierU.equalsIgnoreCase(s.getCarrier())) continue;
+                    if (svcRaw.equalsIgnoreCase(s.getName())) {
+                        row.setServiceType(s.getServiceCode());
+                        break;
+                    }
+                }
+            }
+            // Package: (carrier, name) match against PackagePreset.name;
+            // carrierPackageCode wins when present, else fall back to name.
+            String pkgRaw = row.getPackageType();
+            if (looksLikeName(pkgRaw)) {
+                for (com.multiship.backend.model.PackagePreset p : presets) {
+                    if (p.getCarrier() != null
+                            && !carrierU.equalsIgnoreCase(p.getCarrier())) continue;
+                    if (pkgRaw.equalsIgnoreCase(p.getName())) {
+                        String code = p.getCarrierPackageCode();
+                        row.setPackageType(code != null && !code.isBlank() ? code : p.getName());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /** Heuristic — treat a value as a display name when it contains a
+     *  space or a lowercase letter. Wire codes are UPPER + digits by
+     *  convention across UPS / FedEx / DHL. */
+    private static boolean looksLikeName(String v) {
+        if (!StringUtils.hasText(v)) return false;
+        for (int i = 0; i < v.length(); i++) {
+            char c = v.charAt(i);
+            if (c == ' ' || (c >= 'a' && c <= 'z')) return true;
+        }
+        return false;
+    }
+
     @Override
     public ApiResponse<OrderImportPreviewDTO> preview(String filename, InputStream body, Long expectedAccountId) {
         String ext = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
@@ -149,6 +235,10 @@ public class OrderImportServiceImpl implements OrderImportService {
                 return failure(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                         "Only .csv, .txt, and .xlsx files are supported.");
             }
+            // Sprint 48 — reverse-lookup human names ("UPS Ground") to
+            // wire codes ("03") on service / package cells. The universal
+            // template writes names; every carrier connector expects codes.
+            resolveNamesToCodes(rows);
             // Sprint 48 — divergence warning. Resolve the expected account
             // once, then annotate every row whose accountNumber deviates.
             // Non-fatal: warnings never block commit; operators may edit
@@ -186,6 +276,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
         }
+        // Frontend may edit rows post-preview; re-run the name→code
+        // reverse-lookup here so a value the operator pasted in
+        // ("UPS Ground") still resolves to the wire code before the
+        // carrier connector sees it.
+        resolveNamesToCodes(rows);
 
         int valid = 0;
         int invalid = 0;
@@ -362,38 +457,81 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     @Override
     public byte[] xlsxTemplate(Long accountId) {
-        CarrierAccountRef account = null;
-        if (accountId != null && accountRefRepository != null) {
-            account = accountRefRepository.findById(accountId).orElse(null);
-        }
+        // Sprint 48 — accountId is retained on the signature for backwards
+        // compatibility with existing callers but the universal template
+        // doesn't scope to a single account any more. Every client + every
+        // carrier account + every warehouse gets baked into the reference
+        // sheet with cascading dropdowns; operators pick per-row inside the
+        // workbook.
+        List<Client> clients = clientRepository != null
+                ? clientRepository.findAll()
+                : List.of();
+        List<CarrierAccountRef> accounts = accountRefRepository != null
+                ? accountRefRepository.findAll()
+                : List.of();
         List<com.multiship.backend.model.ShippingService> services = shippingServiceRepository != null
                 ? shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()
                 : List.of();
         List<com.multiship.backend.model.PackagePreset> presets = packagePresetRepository != null
                 ? packagePresetRepository.findAllByOrderByIsDefaultDescNameAsc()
                 : List.of();
-        return OrderImportTemplateBuilder.build(HEADERS, account, services, presets);
+        // Precompute clientCode → List<warehouseCode>. ClientWarehouse only
+        // carries warehouseId; resolve to Warehouse.code once via a single
+        // findAll on WarehouseRepository so the builder doesn't need a repo
+        // dependency (avoids test-constructor fanout).
+        java.util.Map<Long, String> warehouseCodeById = new java.util.HashMap<>();
+        if (warehouseRepository != null) {
+            for (Warehouse w : warehouseRepository.findAll()) {
+                if (w.getId() != null && w.getCode() != null
+                        && Boolean.TRUE.equals(w.getActive())) {
+                    warehouseCodeById.put(w.getId(), w.getCode());
+                }
+            }
+        }
+        java.util.Map<String, List<String>> clientWarehouseCodes = new java.util.HashMap<>();
+        if (clientWarehouseRepository != null) {
+            for (Client c : clients) {
+                String code = c.getClientCode();
+                if (code == null || code.isBlank()) continue;
+                List<ClientWarehouse> attached = clientWarehouseRepository
+                        .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(code);
+                List<String> codes = new java.util.ArrayList<>();
+                for (ClientWarehouse cw : attached) {
+                    String whCode = warehouseCodeById.get(cw.getWarehouseId());
+                    if (whCode != null) codes.add(whCode);
+                }
+                clientWarehouseCodes.put(code.toUpperCase(Locale.ROOT), codes);
+            }
+        }
+        // accountId parameter is ignored — universal template.
+        if (accountId != null) log.debug("xlsxTemplate ignored accountId={} (universal template)", accountId);
+        return OrderImportTemplateBuilder.build(
+                HEADERS, clients, accounts, clientWarehouseCodes, services, presets);
     }
 
     @Override
     public byte[] csvTemplate() {
+        // CSV template lags the XLSX template in features (no in-workbook
+        // dropdowns). It's a plain schema dump + one representative sample
+        // row so operators know the column ordering; the .xlsx template
+        // is the recommended path (dropdowns + cascading + samples).
+        //
+        // Sprint 48 column ordering: orderRef, clientCode, billTo,
+        // warehouseCode, recipientName, ..., itemDescription, hsCode,
+        // countryOfOrigin (see HEADERS). Row values below must stay in
+        // that exact positional order.
         StringBuilder sb = new StringBuilder();
         sb.append(String.join(",", HEADERS)).append('\n');
-        // Sample 1 — domestic US shipment, no customs, single row (no orderRef).
-        // Uses empty orderRef so the row commits standalone (pre-Sprint-48 behaviour).
-        sb.append(",Acme Warehouse,Acme Ltd,5551234567,ops@acme.com,")
-                .append("1 Warehouse Way,,Louisville,KY,40209,US,")
-                .append("UPS,A12345,03,02,2.5,LB,100.00,USD,PO-1001,General merchandise,")
-                // itemDescription / itemSku / itemQuantity / itemUnitValue / hsCode / countryOfOrigin
-                .append(",,,,,\n");
-        // Sample 2 — international UK shipment, 2 line-items, grouped by orderRef "ORD-2001".
-        // Row A carries recipient + shipment + item 1; row B carries only orderRef + item 2.
-        sb.append("ORD-2001,Ava Chen,,4402071234567,ava.chen@example.co.uk,")
-                .append("221B Baker Street,,London,LDN,NW1 6XE,GB,")
-                .append("FEDEX,F98765,INTERNATIONAL_PRIORITY,YOUR_PACKAGING,3.2,LB,275.00,USD,ORD-2001,Silk garments + accessories,")
-                .append("Silk lining natural,SKU-100,2,45.00,5007.20,IT\n");
-        sb.append("ORD-2001,,,,,,,,,,,,,,,,,,,")
-                .append("Cotton canvas cream,SKU-200,1,60.00,5209.11,IN\n");
+        // Sample row — international UK shipment with 1 line-item so
+        // operators see all the columns exercised in one go.
+        sb.append("ORD-2001,")                              // orderRef
+                .append("MA1885,SENDER,WH-EAST,")           // clientCode, billTo, warehouseCode
+                .append("Ava Chen,,4402071234567,ava.chen@example.co.uk,")  // recipient
+                .append("221B Baker Street,,London,LDN,NW1 6XE,GB,")         // address
+                .append("FEDEX,F98765,INTERNATIONAL_PRIORITY,YOUR_PACKAGING,")// carrier + service
+                .append("3.2,LB,275.00,USD,")                                 // weight + value
+                .append("ORD-2001,Silk garments,")                            // reference + goods
+                .append("Silk lining natural,SKU-100,2,45.00,5007.20,IT\n"); // per-item customs
         return sb.toString().getBytes(StandardCharsets.UTF_8);
     }
 
@@ -519,6 +657,10 @@ public class OrderImportServiceImpl implements OrderImportService {
         OrderImportRowDTO out = new OrderImportRowDTO();
         out.setRowNumber(rowNumber);
         out.setOrderRef(s.read("orderRef"));
+        // Sprint 48 — universal-template columns.
+        out.setClientCode(upper(s.read("clientCode")));
+        out.setBillTo(upper(s.read("billTo")));
+        out.setWarehouseCode(upper(s.read("warehouseCode")));
         out.setRecipientName(s.read("recipientName"));
         out.setRecipientCompany(s.read("recipientCompany"));
         out.setRecipientPhone(s.read("recipientPhone"));

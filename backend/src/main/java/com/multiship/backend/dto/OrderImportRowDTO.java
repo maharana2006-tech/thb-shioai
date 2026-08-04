@@ -35,6 +35,30 @@ public class OrderImportRowDTO {
      */
     private String orderRef;
 
+    /**
+     * Sprint 48 — client the row ships for. Universal template model:
+     * one workbook covers multiple clients, each row picks its own client
+     * and the carrier / account / warehouse dropdowns cascade off it.
+     * Blank = fall back to the pre-Sprint-48 "any client" resolution.
+     */
+    private String clientCode;
+
+    /**
+     * Sprint 48 — bill-to party for the shipment. SENDER / RECIPIENT /
+     * THIRD_PARTY. When THIRD_PARTY, {@link #accountNumber} may be a
+     * third-party account (free-text, not from the client's own book).
+     * Backend defaults to SENDER when blank (existing behaviour).
+     */
+    private String billTo;
+
+    /**
+     * Sprint 48 — warehouse code the shipment ships from. Optional; blank
+     * lets the label-generation cascade pick the client's default. When
+     * populated, must match an active warehouse code (PLATFORM or client-
+     * owned) attached to {@link #clientCode}.
+     */
+    private String warehouseCode;
+
     // Recipient
     private String recipientName;
     private String recipientCompany;
