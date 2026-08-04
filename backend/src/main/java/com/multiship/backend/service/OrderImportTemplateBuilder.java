@@ -7,6 +7,8 @@ import com.multiship.backend.model.ShippingService;
 import org.apache.poi.ss.usermodel.BorderStyle;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.ComparisonOperator;
+import org.apache.poi.ss.usermodel.ConditionalFormattingRule;
 import org.apache.poi.ss.usermodel.DataValidation;
 import org.apache.poi.ss.usermodel.DataValidationConstraint;
 import org.apache.poi.ss.usermodel.DataValidationHelper;
@@ -15,16 +17,21 @@ import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.HorizontalAlignment;
 import org.apache.poi.ss.usermodel.IndexedColors;
 import org.apache.poi.ss.usermodel.Name;
+import org.apache.poi.ss.usermodel.PatternFormatting;
 import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.SheetConditionalFormatting;
 import org.apache.poi.ss.usermodel.VerticalAlignment;
+import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.ss.util.CellRangeAddressList;
 import org.apache.poi.ss.util.CellReference;
 import org.apache.poi.xssf.usermodel.XSSFDataValidationHelper;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -33,6 +40,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Sprint 48 — universal .xlsx template for the order-import upload flow.
@@ -171,8 +181,13 @@ final class OrderImportTemplateBuilder {
             String carrierRef = colLetter(carrierCol) + "2";
             String normalizedClient = "SUBSTITUTE(SUBSTITUTE(" + clientRef + ",\"-\",\"_\"),\".\",\"_\")";
 
-            applyFormulaValidation(data, headers, "carrierCode",
-                    "INDIRECT(\"_Carriers_\"&" + normalizedClient + ")", true);
+            // Carrier code is a static list of every carrier the platform
+            // has an active + complete account for (union across all
+            // clients + platform accounts). Sprint 48 revision — was
+            // per-client cascade previously; operators want to see every
+            // integrated carrier regardless of which client is on the row
+            // (a client may add a new carrier before the template refresh).
+            applyListValidation(data, headers, "carrierCode", "=_Carriers", true);
             applyFormulaValidation(data, headers, "warehouseCode",
                     "INDIRECT(\"_Warehouses_\"&" + normalizedClient + ")", false);
             // accountNumber — WARN (info) not STOP so THIRD_PARTY free-text
@@ -186,6 +201,28 @@ final class OrderImportTemplateBuilder {
             applyFormulaValidation(data, headers, "packageType",
                     "INDIRECT(\"_Packages_\"&" + carrierRef + ")", true);
 
+            // ===== Conditional formatting — ship-to country vs service scope =====
+            // Highlight serviceType + countryCode cells red when the picked
+            // service is DOMESTIC-only and the destination country doesn't
+            // match its origin. Uses the _ServiceNames / _ServiceOrigins /
+            // _ServiceScopes parallel columns emitted on the Reference sheet.
+            int serviceCol = headers.indexOf("serviceType");
+            int countryCol = headers.indexOf("countryCode");
+            if (serviceCol >= 0 && countryCol >= 0) {
+                String serviceRef = colLetter(serviceCol) + "2";
+                String countryRef = colLetter(countryCol) + "2";
+                // MATCH → INDEX pattern; IFERROR wraps so unknown service
+                // names (typos, carrier custom codes) don't paint red on
+                // NA errors.
+                String cfFormula = "IFERROR(AND("
+                        + serviceRef + "<>\"\","
+                        + countryRef + "<>\"\","
+                        + "INDEX(_ServiceScopes,MATCH(" + serviceRef + ",_ServiceNames,0))=\"DOMESTIC\","
+                        + "INDEX(_ServiceOrigins,MATCH(" + serviceRef + ",_ServiceNames,0))<>" + countryRef
+                        + "),FALSE)";
+                applyMismatchCF(data, wb, serviceCol, countryCol, cfFormula);
+            }
+
             // ===== Instructions sheet =====
             writeInstructionsSheet(notes, headerStyle);
 
@@ -195,9 +232,91 @@ final class OrderImportTemplateBuilder {
             //  and auto-sizing all of them slows the download noticeably.)
 
             wb.write(out);
-            return out.toByteArray();
+            return fixDropdownArrowAttribute(out.toByteArray());
         } catch (IOException e) {
             throw new IllegalStateException("Failed to build order-import .xlsx template", e);
+        }
+    }
+
+    /**
+     * Paint two cells red (serviceType + countryCode) on every data row
+     * when the CF formula evaluates to TRUE. Range-scoped so relative
+     * references in the formula auto-adjust per row.
+     */
+    private static void applyMismatchCF(XSSFSheet sheet, XSSFWorkbook wb,
+                                         int serviceCol, int countryCol, String formula) {
+        SheetConditionalFormatting scf = sheet.getSheetConditionalFormatting();
+        ConditionalFormattingRule rule = scf.createConditionalFormattingRule(formula);
+        // Newer POI: createConditionalFormattingRule already returns a rule
+        // with the FORMULA operator when constructed from a formula string.
+        // Older builds require setting explicitly; harmless when redundant.
+        try {
+            java.lang.reflect.Method setOp = rule.getClass().getMethod(
+                    "setComparisonOperation", byte.class);
+            setOp.invoke(rule, ComparisonOperator.NO_COMPARISON);
+        } catch (Exception ignored) { /* method absent on older POI */ }
+        PatternFormatting pf = rule.createPatternFormatting();
+        // IndexedColors.ROSE — a soft red that reads on white without
+        // being alarming. LIGHT_ORANGE reads similar on Excel default themes.
+        pf.setFillBackgroundColor(IndexedColors.ROSE.getIndex());
+        pf.setFillPattern(PatternFormatting.SOLID_FOREGROUND);
+        // Apply to both cells across every data row (2..1001).
+        CellRangeAddress[] ranges = new CellRangeAddress[] {
+                new CellRangeAddress(1, DATA_ROW_LIMIT, serviceCol, serviceCol),
+                new CellRangeAddress(1, DATA_ROW_LIMIT, countryCol, countryCol),
+        };
+        scf.addConditionalFormatting(ranges, rule);
+        // Suppress unused-import warning on the workbook parameter.
+        if (wb == null) throw new IllegalStateException();
+    }
+
+    /**
+     * POI's {@code setSuppressDropDownArrow(false)} writes
+     * {@code showDropDown="true"} on every dataValidation element — a
+     * long-standing inversion vs the OOXML spec. In OOXML,
+     * {@code showDropDown="true"} means SUPPRESS the arrow, so Excel
+     * renders the validated cells without any dropdown affordance and
+     * operators can't see the picker. Reported flavours of this bug
+     * predate POI 4; still present in 5.x.
+     *
+     * <p>We rewrite the xlsx (ZIP) after generation and swap
+     * {@code showDropDown="true"} → {@code showDropDown="false"} on
+     * every worksheet part. Structurally cheap (one string replace per
+     * sheet entry), no other bytes are touched, and the resulting file
+     * loads identically in Excel except that the dropdown arrows now
+     * appear.
+     */
+    private static byte[] fixDropdownArrowAttribute(byte[] input) {
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(input);
+             ZipInputStream zis = new ZipInputStream(bais);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream(input.length);
+             ZipOutputStream zos = new ZipOutputStream(baos)) {
+            ZipEntry entry;
+            byte[] buf = new byte[8192];
+            while ((entry = zis.getNextEntry()) != null) {
+                ByteArrayOutputStream body = new ByteArrayOutputStream();
+                int n;
+                while ((n = zis.read(buf)) > 0) body.write(buf, 0, n);
+                byte[] content = body.toByteArray();
+                if (entry.getName().startsWith("xl/worksheets/sheet")) {
+                    String xml = new String(content, StandardCharsets.UTF_8);
+                    xml = xml.replace("showDropDown=\"true\"", "showDropDown=\"false\"");
+                    content = xml.getBytes(StandardCharsets.UTF_8);
+                }
+                ZipEntry outEntry = new ZipEntry(entry.getName());
+                outEntry.setTime(entry.getTime());
+                zos.putNextEntry(outEntry);
+                zos.write(content);
+                zos.closeEntry();
+            }
+            zos.finish();
+            return baos.toByteArray();
+        } catch (IOException e) {
+            // Fall back to the original bytes so we don't lose the whole
+            // download if the rewrite fails — dropdown arrows will still
+            // be missing but the schema + samples + reference sheet are
+            // still usable.
+            return input;
         }
     }
 
@@ -247,28 +366,41 @@ final class OrderImportTemplateBuilder {
                 .toList();
         col = writeRefColumn(ref, refHeaderStyle, col, "_Clients", clientCodes, out);
 
-        // Per-client blocks.
+        // Global _Carriers list — every carrier the platform has an active
+        // + complete account for. Replaces per-client _Carriers_<CLIENT>
+        // in this revision: operators want to see every integrated
+        // carrier regardless of which client is on the row.
+        Set<String> platformCarriers = new LinkedHashSet<>();
+        for (CarrierAccountRef a : accounts) {
+            if (!Boolean.TRUE.equals(a.getActive()) || !a.isComplete()) continue;
+            if (a.getCarrierCode() != null) {
+                platformCarriers.add(a.getCarrierCode().toUpperCase(Locale.ROOT));
+            }
+        }
+        col = writeRefColumn(ref, refHeaderStyle, col, "_Carriers", platformCarriers, out);
+
+        // Per-client blocks — warehouses + per-carrier accounts. No more
+        // per-client _Carriers_<CLIENT> range (superseded by global _Carriers).
         for (String clientCode : clientCodes) {
             String key = normalizeForName(clientCode);
-            // Client's active + complete carrier codes (unique).
-            Set<String> carriers = new LinkedHashSet<>();
+            // Determine which carriers this client actually has accounts for
+            // (we still need this to know which _Accounts_<CLIENT>_<CARRIER>
+            // ranges to emit — no point emitting for carriers with 0 accounts).
+            Set<String> clientCarriers = new LinkedHashSet<>();
             for (CarrierAccountRef a : accounts) {
                 if (!Boolean.TRUE.equals(a.getActive()) || !a.isComplete()) continue;
                 if (a.getCustomerNo() == null) continue;
                 if (!a.getCustomerNo().equalsIgnoreCase(clientCode)) continue;
-                if (a.getCarrierCode() != null) carriers.add(a.getCarrierCode().toUpperCase(Locale.ROOT));
+                if (a.getCarrierCode() != null) clientCarriers.add(a.getCarrierCode().toUpperCase(Locale.ROOT));
             }
-            col = writeRefColumn(ref, refHeaderStyle, col, "_Carriers_" + key, carriers, out);
 
-            // Client's attached warehouse codes — caller resolved these
-            // ClientWarehouse.warehouseId → Warehouse.code up-front so we
-            // don't need a warehouse repo here.
+            // Client's attached warehouse codes.
             List<String> warehouseCodes = clientWarehouseCodes.getOrDefault(
                     clientCode.toUpperCase(Locale.ROOT), List.of());
             col = writeRefColumn(ref, refHeaderStyle, col, "_Warehouses_" + key, warehouseCodes, out);
 
             // Per-carrier account numbers for this client.
-            for (String carrier : carriers) {
+            for (String carrier : clientCarriers) {
                 List<String> accountNumbers = new ArrayList<>();
                 for (CarrierAccountRef a : accounts) {
                     if (!Boolean.TRUE.equals(a.getActive()) || !a.isComplete()) continue;
@@ -315,6 +447,33 @@ final class OrderImportTemplateBuilder {
         // future).
         col = writeRefColumn(ref, refHeaderStyle, col, "_Countries", COUNTRIES, out);
         col = writeRefColumn(ref, refHeaderStyle, col, "_Currencies", CURRENCIES, out);
+
+        // Sprint 48 — service metadata triple, parallel columns so
+        // conditional formatting on ship-to country vs service type can
+        // MATCH the picked service name against _ServiceNames and INDEX
+        // into _ServiceOrigins + _ServiceScopes to look up whether the
+        // service can actually ship to the picked country.
+        //
+        // Row order across the three ranges must match — writeRefColumn
+        // preserves iteration order, and each service is emitted once
+        // (by (carrier, name)) so ambiguity only surfaces if two carriers
+        // share both a service name and different origins, which is rare.
+        List<String> svcNames = new ArrayList<>();
+        List<String> svcOrigins = new ArrayList<>();
+        List<String> svcScopes = new ArrayList<>();
+        Set<String> seenKeys = new LinkedHashSet<>();
+        for (ShippingService s : services) {
+            if (!s.isEnabled() || s.getName() == null || s.getName().isBlank()) continue;
+            String key = (s.getCarrier() == null ? "" : s.getCarrier().toUpperCase(Locale.ROOT))
+                    + "|" + s.getName();
+            if (!seenKeys.add(key)) continue;
+            svcNames.add(s.getName());
+            svcOrigins.add(s.getOriginCountry() == null ? "" : s.getOriginCountry().toUpperCase(Locale.ROOT));
+            svcScopes.add(s.getScope() == null ? "BOTH" : s.getScope().toUpperCase(Locale.ROOT));
+        }
+        col = writeRefColumn(ref, refHeaderStyle, col, "_ServiceNames", svcNames, out);
+        col = writeRefColumn(ref, refHeaderStyle, col, "_ServiceOrigins", svcOrigins, out);
+        col = writeRefColumn(ref, refHeaderStyle, col, "_ServiceScopes", svcScopes, out);
 
         return out;
     }
