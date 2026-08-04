@@ -37,6 +37,26 @@ public interface OrderImportService {
      *  (validity is the client's responsibility to check first). */
     ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy);
 
+    /**
+     * Sprint 48 — dry-run validation on rows the operator may have edited
+     * post-preview. Runs the same pipeline as {@link #preview(String, InputStream)}
+     * (sanitize → resolveNamesToCodes → validateRow → validateInternationalItems)
+     * without touching a file OR persisting anything. Returns rows with
+     * updated {@code errors}/{@code warnings} lists so the preview table
+     * can refresh in place.
+     */
+    ApiResponse<OrderImportPreviewDTO> validate(List<OrderImportRowDTO> rows);
+
+    /**
+     * Sprint 48 — per-row address validation via each row's picked
+     * carrier. For every row with a recipient block + carrierCode, calls
+     * the carrier's {@code validateAddress} connector. Invalid rows get
+     * a non-blocking warning appended. Rows without a picked carrier
+     * are skipped silently. Never mutates errors — this is a WARNING
+     * layer, not a hard-block.
+     */
+    ApiResponse<OrderImportPreviewDTO> validateAddresses(List<OrderImportRowDTO> rows);
+
     /** Canonical CSV template — comma-separated header line + one
      *  sample row. Returned as a byte[] with UTF-8 encoding. */
     byte[] csvTemplate();

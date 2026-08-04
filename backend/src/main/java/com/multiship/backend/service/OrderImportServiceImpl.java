@@ -77,6 +77,10 @@ public class OrderImportServiceImpl implements OrderImportService {
     private final ClientWarehouseRepository clientWarehouseRepository;
     /** Sprint 48 — warehouse-code lookup for resolving ClientWarehouse.warehouseId → Warehouse.code. */
     private final WarehouseRepository warehouseRepository;
+    /** Sprint 48 — carrier address-validation service used by
+     *  {@link #validateAddresses(List)}. Optional (null in test constructors). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AddressValidationService addressValidationService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public OrderImportServiceImpl(CarrierService carrierService,
@@ -241,6 +245,9 @@ public class OrderImportServiceImpl implements OrderImportService {
             // wire codes ("03") on service / package cells. The universal
             // template writes names; every carrier connector expects codes.
             resolveNamesToCodes(rows);
+            // Sprint 48 — international shipments must carry customs
+            // commodity data on at least one row in the group.
+            validateInternationalItems(rows);
             // Sprint 48 — divergence warning. Resolve the expected account
             // once, then annotate every row whose accountNumber deviates.
             // Non-fatal: warnings never block commit; operators may edit
@@ -274,6 +281,88 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     @Override
+    public ApiResponse<OrderImportPreviewDTO> validate(List<OrderImportRowDTO> rows) {
+        if (rows == null) rows = List.of();
+        // Re-run the sanitize → name-lookup → per-row → international
+        // pipeline over the (possibly-edited) rows. We DON'T re-parse
+        // strings through sanitise() here because the payload is JSON,
+        // not raw CSV, and the frontend has already trimmed. But we
+        // do re-run validateRow so any missing required fields the
+        // operator introduced by editing get flagged.
+        for (OrderImportRowDTO row : rows) {
+            row.setErrors(validateRow(row));
+            row.setWarnings(List.of()); // clear warnings; will be re-added by validators below
+        }
+        resolveNamesToCodes(rows);
+        validateInternationalItems(rows);
+        return success(buildPreview(rows), rows.size() + " row(s) validated.");
+    }
+
+    @Override
+    public ApiResponse<OrderImportPreviewDTO> validateAddresses(List<OrderImportRowDTO> rows) {
+        if (rows == null) rows = List.of();
+        if (addressValidationService == null) {
+            return failure(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Address validation service not wired.");
+        }
+        // Per-row: build an AddressValidationRequestDTO from the recipient
+        // block, call the carrier's validateAddress, append a warning if
+        // the carrier reports the address as invalid. Rows without a
+        // picked carrier are skipped silently — no picked-carrier =
+        // nothing to validate against.
+        for (OrderImportRowDTO row : rows) {
+            if (!StringUtils.hasText(row.getCarrierCode())) continue;
+            if (!StringUtils.hasText(row.getAddressLine1())
+                    || !StringUtils.hasText(row.getCity())
+                    || !StringUtils.hasText(row.getPostalCode())
+                    || !StringUtils.hasText(row.getCountryCode())) continue;
+            com.multiship.backend.dto.AddressValidationRequestDTO req =
+                    new com.multiship.backend.dto.AddressValidationRequestDTO();
+            req.setCarrierCode(row.getCarrierCode());
+            req.setCustomerNo(row.getClientCode());
+            req.setName(row.getRecipientName());
+            req.setCompany(row.getRecipientCompany());
+            req.setAddressLine1(row.getAddressLine1());
+            req.setAddressLine2(row.getAddressLine2());
+            req.setCity(row.getCity());
+            req.setState(row.getState());
+            req.setPostalCode(row.getPostalCode());
+            req.setCountryCode(row.getCountryCode());
+            try {
+                ApiResponse<com.multiship.backend.dto.AddressValidationResponseDTO> resp =
+                        addressValidationService.validate(req);
+                com.multiship.backend.dto.AddressValidationResponseDTO data =
+                        resp == null ? null : resp.getData();
+                if (data != null && !data.isValid()) {
+                    List<String> warnings = new ArrayList<>(
+                            row.getWarnings() == null ? List.of() : row.getWarnings());
+                    String suggested = "";
+                    if (data.getSuggested() != null
+                            && data.getSuggested().getAddressLine1() != null) {
+                        suggested = " Suggested: "
+                                + data.getSuggested().getAddressLine1()
+                                + " " + (data.getSuggested().getCity() == null ? "" : data.getSuggested().getCity())
+                                + " " + (data.getSuggested().getPostalCode() == null ? "" : data.getSuggested().getPostalCode());
+                    }
+                    warnings.add("Address invalid ("
+                            + row.getCarrierCode() + "): "
+                            + (data.getMessage() == null ? "carrier rejected" : data.getMessage())
+                            + suggested);
+                    row.setWarnings(warnings);
+                }
+            } catch (Exception ex) {
+                log.warn("Address validation failed for row {}: {}",
+                        row.getRowNumber(), ex.getMessage());
+                List<String> warnings = new ArrayList<>(
+                        row.getWarnings() == null ? List.of() : row.getWarnings());
+                warnings.add("Address validation call failed: " + ex.getMessage());
+                row.setWarnings(warnings);
+            }
+        }
+        return success(buildPreview(rows), rows.size() + " row(s) address-checked.");
+    }
+
+    @Override
     public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy) {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
@@ -283,6 +372,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         // ("UPS Ground") still resolves to the wire code before the
         // carrier connector sees it.
         resolveNamesToCodes(rows);
+        // Same for the international-item rule — operator edits could
+        // have introduced a new international row without customs data.
+        validateInternationalItems(rows);
 
         int valid = 0;
         int invalid = 0;
@@ -766,6 +858,57 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (!StringUtils.hasText(s)) return null;
         try { return new BigDecimal(s.trim().replace(",", "")); }
         catch (NumberFormatException ex) { return null; }
+    }
+
+    /**
+     * Sprint 48 revision — international-shipment rule: when a group
+     * ships to a country other than the shipper's origin, the group MUST
+     * have at least one row with complete customs details
+     * (itemDescription + hsCode + countryOfOrigin + itemQuantity +
+     * itemUnitValue). Without those, every int'l carrier connector
+     * fails at the customs block.
+     *
+     * <p>We heuristic "domestic" as {@code countryCode == "US"} for now.
+     * When ship-from resolution lands the shipper origin will drive this
+     * per row; today the "was your destination equal to the shipper's
+     * home country" check is a US-centric approximation but the vast
+     * majority of tenants ship US-domestic.
+     */
+    private static void validateInternationalItems(List<OrderImportRowDTO> rows) {
+        Map<String, List<OrderImportRowDTO>> groups = new LinkedHashMap<>();
+        for (OrderImportRowDTO row : rows) {
+            String key = StringUtils.hasText(row.getOrderRef())
+                    ? row.getOrderRef().trim()
+                    : "__row_" + row.getRowNumber();
+            groups.computeIfAbsent(key, k -> new ArrayList<>()).add(row);
+        }
+        for (List<OrderImportRowDTO> group : groups.values()) {
+            OrderImportRowDTO leader = group.get(0);
+            String country = leader.getCountryCode();
+            if (!StringUtils.hasText(country)) continue; // country-required error fires elsewhere
+            if ("US".equalsIgnoreCase(country.trim())) continue; // domestic heuristic
+            // International — need at least one row with full customs
+            // commodity data.
+            boolean hasFullItem = false;
+            for (OrderImportRowDTO row : group) {
+                if (StringUtils.hasText(row.getItemDescription())
+                        && StringUtils.hasText(row.getHsCode())
+                        && StringUtils.hasText(row.getCountryOfOrigin())
+                        && row.getItemQuantity() != null
+                        && row.getItemUnitValue() != null) {
+                    hasFullItem = true;
+                    break;
+                }
+            }
+            if (!hasFullItem) {
+                List<String> errs = new ArrayList<>(
+                        leader.getErrors() == null ? List.of() : leader.getErrors());
+                errs.add("International shipment (countryCode=" + country
+                        + ") requires at least one row with itemDescription + hsCode"
+                        + " + countryOfOrigin + itemQuantity + itemUnitValue");
+                leader.setErrors(errs);
+            }
+        }
     }
 
     private static OrderImportPreviewDTO buildPreview(List<OrderImportRowDTO> rows) {

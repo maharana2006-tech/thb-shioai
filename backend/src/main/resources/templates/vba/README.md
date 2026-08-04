@@ -5,13 +5,14 @@ instructions sheet) at `GET /api/v1/orders/import/template.xlsx`. That is the
 recommended path for most operators — no macros, portable across Excel /
 LibreOffice / Google Sheets.
 
-The two `.bas` files in this directory are **optional add-ons** for teams that
+The three `.bas` files in this directory are **optional add-ons** for teams that
 want an `.xlsm` variant with in-workbook buttons for:
 
-| Macro         | Button label     | What it does |
-|---------------|------------------|--------------|
-| `SaveAsCsv`   | *Save as CSV*    | Writes a UTF-8 CSV next to the workbook — plain RFC-4180 escaping, no `=` armour, BOM prefix. |
-| `ValidateAll` | *Validate All*   | Marks blank required cells / bad HS format / bad country codes / non-integer quantities. Colour-codes red (error) and yellow (warning). Backend re-validates anyway; this is operator ergonomics. |
+| Macro              | Button label         | What it does |
+|--------------------|----------------------|--------------|
+| `SaveAsCsv`        | *Save as CSV*        | Writes a UTF-8 CSV next to the workbook — plain RFC-4180 escaping, no `=` armour, BOM prefix. |
+| `ValidateAll`      | *Validate Data*      | Two-phase check. Phase 1 (local): required fields, billTo enum, HS shape, ISO-2 country codes, integer qty, international-item rule. Phase 2 (network): POSTs current rows to `/api/v1/orders/import/validate` and merges backend errors + warnings. Colour-codes red / yellow / green. |
+| `ValidateAddresses`| *Validate Addresses* | POSTs current rows to `/api/v1/orders/import/validate-addresses`; backend calls each row's picked carrier's address-validation API. Paints recipient / address cells yellow when the carrier flags the address. |
 
 ## One-time setup — inject macros into an `.xlsm`
 

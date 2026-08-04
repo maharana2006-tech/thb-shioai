@@ -75,6 +75,31 @@ public class OrderImportController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
+    @Operation(summary = "Re-validate rows (dry-run, JSON in / JSON out)",
+            description = "Sprint 48 — same pipeline as /preview (required fields, name→code " +
+                    "resolution, international-item rule) but takes JSON rows directly so the " +
+                    "operator can re-check edits without re-uploading a file.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/validate")
+    public ResponseEntity<ApiResponse<OrderImportPreviewDTO>> validate(
+            @RequestBody List<OrderImportRowDTO> rows) {
+        ApiResponse<OrderImportPreviewDTO> response = orderImportService.validate(rows);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Address-check each row against its picked carrier",
+            description = "Sprint 48 — for every row that carries a carrierCode + recipient " +
+                    "address block, calls the picked carrier's own address-validation API via " +
+                    "AddressValidationService. Invalid addresses append a NON-FATAL warning; " +
+                    "the row's errors list stays untouched so operators still commit at will.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/validate-addresses")
+    public ResponseEntity<ApiResponse<OrderImportPreviewDTO>> validateAddresses(
+            @RequestBody List<OrderImportRowDTO> rows) {
+        ApiResponse<OrderImportPreviewDTO> response = orderImportService.validateAddresses(rows);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
     @Operation(summary = "Download the CSV template",
             description = "Public — the template is static schema (headers + one dummy row) " +
                     "and downloads via a browser <a href> that carries no Authorization header.")

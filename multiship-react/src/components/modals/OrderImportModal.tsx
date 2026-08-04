@@ -89,6 +89,46 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
     }
   }
 
+  // Sprint 48 — two validation actions available once a preview is loaded.
+  // Both re-POST the current row state and merge the returned rows back
+  // into the preview so the summary strip + row table refresh with the
+  // updated errors + warnings.
+  const [validating, setValidating] = useState<'data' | 'addresses' | null>(null)
+  const runReValidate = async () => {
+    if (!preview) return
+    setValidating('data')
+    try {
+      const response = await orderImportService.validate(preview.rows)
+      if (response.status === 'success' && response.data) {
+        setPreview(response.data)
+        notify.success(response.message ?? 'Rows re-validated.')
+      } else {
+        notify.error(response.message ?? 'Validation failed.')
+      }
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Validation failed.')
+    } finally {
+      setValidating(null)
+    }
+  }
+  const runValidateAddresses = async () => {
+    if (!preview) return
+    setValidating('addresses')
+    try {
+      const response = await orderImportService.validateAddresses(preview.rows)
+      if (response.status === 'success' && response.data) {
+        setPreview(response.data)
+        notify.success(response.message ?? 'Addresses checked.')
+      } else {
+        notify.error(response.message ?? 'Address validation failed.')
+      }
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Address validation failed.')
+    } finally {
+      setValidating(null)
+    }
+  }
+
   return (
     <div
       role="dialog"
@@ -176,7 +216,7 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
               CSV
             </a>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={onClose}
@@ -184,16 +224,42 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
             >
               Close
             </button>
+            {/* Sprint 48 — two post-preview validation actions. Both
+                re-POST current row state and refresh preview in place
+                (updated errors + warnings appear on the summary strip
+                and per-row status column). */}
             {preview && !committedSummary ? (
-              <button
-                type="button"
-                onClick={() => void submitCommit()}
-                disabled={committing || preview.validRows === 0}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
-              >
-                <FiCheckCircle className="h-3 w-3" />
-                {committing ? 'Committing…' : `Commit ${preview.validRows} valid row(s)`}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => void runReValidate()}
+                  disabled={validating != null || committing}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
+                  title="Re-run required-field + name-code + international-item checks on the current row state."
+                >
+                  {validating === 'data' ? <FiLoader className="h-3 w-3 animate-spin" /> : <FiCheckCircle className="h-3 w-3" />}
+                  {validating === 'data' ? 'Validating…' : 'Re-validate data'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runValidateAddresses()}
+                  disabled={validating != null || committing}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
+                  title="Address-check every row against its picked carrier's own validation API."
+                >
+                  {validating === 'addresses' ? <FiLoader className="h-3 w-3 animate-spin" /> : <FiCheckCircle className="h-3 w-3" />}
+                  {validating === 'addresses' ? 'Checking…' : 'Validate addresses'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void submitCommit()}
+                  disabled={committing || preview.validRows === 0 || validating != null}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
+                >
+                  <FiCheckCircle className="h-3 w-3" />
+                  {committing ? 'Committing…' : `Commit ${preview.validRows} valid row(s)`}
+                </button>
+              </>
             ) : null}
           </div>
         </div>

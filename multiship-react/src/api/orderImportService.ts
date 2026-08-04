@@ -82,6 +82,24 @@ export const orderImportService = {
   commit: (rows: OrderImportRow[]) =>
     apiClient.post<ApiResponse<OrderImportPreview>>('/orders/import/commit', rows),
 
+  /**
+   * Sprint 48 — re-validate rows the operator edited in the preview
+   * table without re-uploading the file. Backend re-runs required-field
+   * checks, name→code resolution, and the international-item rule.
+   * Errors + warnings on each row are refreshed in place.
+   */
+  validate: (rows: OrderImportRow[]) =>
+    apiClient.post<ApiResponse<OrderImportPreview>>('/orders/import/validate', rows),
+
+  /**
+   * Sprint 48 — address-validate every row against its picked carrier's
+   * own address-validation API (UPS / FedEx / USPS / DHL). Invalid
+   * addresses append a NON-FATAL warning; errors list stays untouched
+   * so operators can commit whether or not addresses check out.
+   */
+  validateAddresses: (rows: OrderImportRow[]) =>
+    apiClient.post<ApiResponse<OrderImportPreview>>('/orders/import/validate-addresses', rows),
+
   templateUrl: () => `${BASE_URL}/orders/import/template.csv`,
 
   /**
