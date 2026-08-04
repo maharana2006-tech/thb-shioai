@@ -41,6 +41,15 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // Open endpoints
                         .requestMatchers("/api/v1/auth/**").permitAll()
+                        // The container's internal forward to /error when a controller
+                        // throws (e.g. ResponseStatusException) doesn't run
+                        // JwtAuthenticationFilter — OncePerRequestFilter skips ERROR
+                        // dispatches by default — so the security context is empty on
+                        // that forward. Without this, anyRequest().authenticated() fails
+                        // for /error and the entry point overwrites the real status (e.g.
+                        // 503/422/502 from the AI endpoints) with a bogus 401, which the
+                        // frontend treats as an expired session and force-logs-out.
+                        .requestMatchers("/error").permitAll()
                         // Sprint 46 — OAuth 2.0 token endpoint is public; the
                         // caller authenticates with client credentials in the
                         // body, not with a Bearer token.
