@@ -45,13 +45,19 @@ public class OrderImportController {
     @Operation(summary = "Preview a CSV / XLSX upload",
             description = "Parses the file into a preview list, one entry per row, with per-row " +
                     "validation. The client renders the preview and lets the operator edit / discard " +
-                    "bad rows before hitting the commit endpoint.")
+                    "bad rows before hitting the commit endpoint. When `expectedAccountId` is " +
+                    "supplied (i.e. the operator downloaded a scoped .xlsx template first), any " +
+                    "row whose accountNumber diverges from that account's number gets a non-fatal " +
+                    "warning.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping(value = "/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResponse<OrderImportPreviewDTO>> preview(
-            @RequestParam("file") MultipartFile file) throws java.io.IOException {
+            @RequestParam("file") MultipartFile file,
+            @io.swagger.v3.oas.annotations.Parameter(description = "Optional — the account id the .xlsx template was scoped to. Rows whose accountNumber differs get a non-fatal warning.")
+            @RequestParam(value = "expectedAccountId", required = false) Long expectedAccountId)
+            throws java.io.IOException {
         ApiResponse<OrderImportPreviewDTO> response = orderImportService.preview(
-                file.getOriginalFilename(), file.getInputStream());
+                file.getOriginalFilename(), file.getInputStream(), expectedAccountId);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
@@ -69,8 +75,34 @@ public class OrderImportController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    @Operation(summary = "Download the CSV template")
+    @Operation(summary = "Re-validate rows (dry-run, JSON in / JSON out)",
+            description = "Sprint 48 — same pipeline as /preview (required fields, name→code " +
+                    "resolution, international-item rule) but takes JSON rows directly so the " +
+                    "operator can re-check edits without re-uploading a file.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/validate")
+    public ResponseEntity<ApiResponse<OrderImportPreviewDTO>> validate(
+            @RequestBody List<OrderImportRowDTO> rows) {
+        ApiResponse<OrderImportPreviewDTO> response = orderImportService.validate(rows);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Address-check each row against its picked carrier",
+            description = "Sprint 48 — for every row that carries a carrierCode + recipient " +
+                    "address block, calls the picked carrier's own address-validation API via " +
+                    "AddressValidationService. Invalid addresses append a NON-FATAL warning; " +
+                    "the row's errors list stays untouched so operators still commit at will.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/validate-addresses")
+    public ResponseEntity<ApiResponse<OrderImportPreviewDTO>> validateAddresses(
+            @RequestBody List<OrderImportRowDTO> rows) {
+        ApiResponse<OrderImportPreviewDTO> response = orderImportService.validateAddresses(rows);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Download the CSV template",
+            description = "Public — the template is static schema (headers + one dummy row) " +
+                    "and downloads via a browser <a href> that carries no Authorization header.")
     @GetMapping(value = "/template.csv", produces = "text/csv")
     public ResponseEntity<byte[]> template() {
         byte[] csv = orderImportService.csvTemplate();
@@ -79,5 +111,52 @@ public class OrderImportController {
                         "attachment; filename=\"order-import-template.csv\"")
                 .contentType(MediaType.parseMediaType("text/csv"))
                 .body(csv);
+    }
+
+    @Operation(summary = "Download the XLSX template (data-validation dropdowns + samples)",
+            description = "Sprint 48 — richer template with dropdowns, sample multi-row order, " +
+                    "and an instructions sheet. When `accountId` is supplied the sample rows " +
+                    "prefill accountNumber + carrierCode and the serviceType / packageType " +
+                    "dropdowns narrow to that carrier's options only. Requires authentication " +
+                    "because accountId resolves against private account data. " +
+                    "For generic (unscoped) downloads, if an admin has dropped a macro-enabled " +
+                    "workbook at resources/templates/order-import-template.xlsm, that file is " +
+                    "served in place of the POI-generated .xlsx — same download URL, richer " +
+                    "in-workbook UX (Save-as-CSV + Validate-All buttons). Account-scoped " +
+                    "downloads always use the dynamic .xlsx generator.")
+    @org.springframework.security.access.prepost.PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping(value = "/template.xlsx",
+            produces = {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "application/vnd.ms-excel.sheet.macroEnabled.12"
+            })
+    public ResponseEntity<byte[]> templateXlsx(
+            @io.swagger.v3.oas.annotations.Parameter(description = "Optional carrier account id to scope the template to.")
+            @org.springframework.web.bind.annotation.RequestParam(required = false) Long accountId) throws java.io.IOException {
+        // Prefer the static .xlsm resource ONLY for generic downloads —
+        // it can't reflect per-account scoping (dropdown restrictions +
+        // prefill), so scoped downloads always go through the dynamic
+        // POI generator regardless.
+        if (accountId == null) {
+            org.springframework.core.io.Resource xlsm =
+                    new org.springframework.core.io.ClassPathResource("templates/order-import-template.xlsm");
+            if (xlsm.exists()) {
+                byte[] bytes = xlsm.getInputStream().readAllBytes();
+                return ResponseEntity.ok()
+                        .header(HttpHeaders.CONTENT_DISPOSITION,
+                                "attachment; filename=\"order-import-template.xlsm\"")
+                        .contentType(MediaType.parseMediaType(
+                                "application/vnd.ms-excel.sheet.macroEnabled.12"))
+                        .body(bytes);
+            }
+        }
+        byte[] xlsx = orderImportService.xlsxTemplate(accountId);
+        String filenameSuffix = accountId == null ? "generic" : ("account-" + accountId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"order-import-template-" + filenameSuffix + ".xlsx\"")
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(xlsx);
     }
 }

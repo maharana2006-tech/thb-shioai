@@ -94,6 +94,9 @@ public enum ErrorCode {
     /** Service is allowed for the client, but not from this warehouse. */
     SERVICE_NOT_ALLOWED_FOR_WAREHOUSE,
 
+    // ===== Split-shipment groups (Sprint 47) =====
+    SHIPMENT_GROUP_NOT_FOUND,
+
     // ===== Fallback =====
     INTERNAL_ERROR
 }

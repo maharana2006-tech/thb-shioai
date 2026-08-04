@@ -252,18 +252,4 @@ public class MultiWarehouseLabelServiceImpl implements MultiWarehouseLabelServic
                 .message(message).build();
     }
 
-    /**
-     * Thrown when a child shipment fails, so @Transactional rolls back all
-     * sibling children AND the group row. Carries the failing warehouse +
-     * message so the caller's error envelope can be specific.
-     */
-    static class SplitAbortException extends RuntimeException {
-        final String warehouseCode;
-        final String detail;
-        SplitAbortException(String message, String warehouseCode, String detail) {
-            super(message);
-            this.warehouseCode = warehouseCode;
-            this.detail = detail;
-        }
-    }
 }

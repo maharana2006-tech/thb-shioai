@@ -67,16 +67,17 @@ public class WarehouseController {
     }
 
     @Operation(summary = "Create a warehouse",
-            description = "409 WAREHOUSE_CODE_TAKEN if the code exists; 400 WAREHOUSE_OWNER_INVALID if PLATFORM/CLIENT owner fields are inconsistent.")
-    @PreAuthorize("hasRole('ADMIN')")
+            description = "Ops-level action — accepts ADMIN or USER. 409 WAREHOUSE_CODE_TAKEN if the code exists; 400 WAREHOUSE_OWNER_INVALID if PLATFORM/CLIENT owner fields are inconsistent.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping
     public ResponseEntity<ApiResponse<WarehouseDTO>> createWarehouse(@Valid @RequestBody WarehouseUpsertRequest request) {
         ApiResponse<WarehouseDTO> response = warehouseService.createWarehouse(request);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    @Operation(summary = "Update a warehouse", description = "The code is immutable (linkage key to client_warehouse and shipvia_service_mapping).")
-    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Update a warehouse",
+            description = "Ops-level action — accepts ADMIN or USER. The code is immutable (linkage key to client_warehouse and shipvia_service_mapping).")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PutMapping("/{code}")
     public ResponseEntity<ApiResponse<WarehouseDTO>> updateWarehouse(
             @PathVariable String code,
@@ -85,8 +86,9 @@ public class WarehouseController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    @Operation(summary = "Toggle active flag")
-    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Toggle active flag",
+            description = "Ops-level action — accepts ADMIN or USER.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/{code}/toggle-active")
     public ResponseEntity<ApiResponse<WarehouseDTO>> toggleActive(@PathVariable String code) {
         ApiResponse<WarehouseDTO> response = warehouseService.toggleActive(code);

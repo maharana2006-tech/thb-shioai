@@ -50,3 +50,10 @@ build/
 .vscode/
 /storage
 /.m2
+
+### Runtime + local tool state ###
+# Regenerated every backend run — never useful in git history.
+backend/backend-dev.log
+*.log
+# Per-user Claude Code settings (permissions, hooks, etc.).
+.claude/settings.local.json

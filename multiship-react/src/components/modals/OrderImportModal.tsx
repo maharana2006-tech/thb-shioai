@@ -4,6 +4,7 @@ import {
   FiCheckCircle,
   FiDownload,
   FiFileText,
+  FiLoader,
   FiUpload,
   FiX,
 } from 'react-icons/fi'
@@ -31,6 +32,23 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
   const [uploading, setUploading] = useState(false)
   const [committing, setCommitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** Sprint 48 (revised) — the template is universal now. One workbook
+   *  covers every client, and each row picks its own clientCode / carrier /
+   *  account inside the workbook via cascading dropdowns. The per-account
+   *  picker that was here previously is redundant. */
+  const [downloadingXlsx, setDownloadingXlsx] = useState(false)
+
+  const downloadXlsx = async () => {
+    if (downloadingXlsx) return
+    setDownloadingXlsx(true)
+    try {
+      await orderImportService.downloadXlsxTemplate(null)
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Template download failed.')
+    } finally {
+      setDownloadingXlsx(false)
+    }
+  }
 
   const submitPreview = async () => {
     if (!file) return
@@ -68,6 +86,46 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
       notify.error(e instanceof Error ? e.message : 'Commit failed.')
     } finally {
       setCommitting(false)
+    }
+  }
+
+  // Sprint 48 — two validation actions available once a preview is loaded.
+  // Both re-POST the current row state and merge the returned rows back
+  // into the preview so the summary strip + row table refresh with the
+  // updated errors + warnings.
+  const [validating, setValidating] = useState<'data' | 'addresses' | null>(null)
+  const runReValidate = async () => {
+    if (!preview) return
+    setValidating('data')
+    try {
+      const response = await orderImportService.validate(preview.rows)
+      if (response.status === 'success' && response.data) {
+        setPreview(response.data)
+        notify.success(response.message ?? 'Rows re-validated.')
+      } else {
+        notify.error(response.message ?? 'Validation failed.')
+      }
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Validation failed.')
+    } finally {
+      setValidating(null)
+    }
+  }
+  const runValidateAddresses = async () => {
+    if (!preview) return
+    setValidating('addresses')
+    try {
+      const response = await orderImportService.validateAddresses(preview.rows)
+      if (response.status === 'success' && response.data) {
+        setPreview(response.data)
+        notify.success(response.message ?? 'Addresses checked.')
+      } else {
+        notify.error(response.message ?? 'Address validation failed.')
+      }
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Address validation failed.')
+    } finally {
+      setValidating(null)
     }
   }
 
@@ -129,15 +187,36 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
           ) : null}
         </div>
 
-        <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-5 py-3">
-          <a
-            href={orderImportService.templateUrl()}
-            className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-600 hover:text-slate-950"
-          >
-            <FiDownload className="h-3 w-3" />
-            Download CSV template
-          </a>
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-5 py-3">
+          {/* Sprint 48 (revised) — universal template.
+                * One workbook covers every client. Each row picks its own
+                  clientCode + carrier + account via cascading dropdowns
+                  in the workbook (no per-download scoping).
+                * XLSX button hits the auth-gated /template.xlsx endpoint
+                  via fetch + Blob download so the Bearer token is attached.
+                * CSV link stays for operators who want the flat public
+                  template (no validation, no dropdowns). */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void downloadXlsx()}
+              disabled={downloadingXlsx}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+              title="Download the universal .xlsx template — cascading dropdowns pick per-row Client / Carrier / Account inside the workbook."
+            >
+              {downloadingXlsx ? <FiLoader className="h-3 w-3 animate-spin" /> : <FiDownload className="h-3 w-3" />}
+              Download XLSX template
+            </button>
+            <a
+              href={orderImportService.templateUrl()}
+              className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-slate-950"
+              title="Flat CSV template — no validation, no dropdowns."
+            >
+              <FiDownload className="h-3 w-3" />
+              CSV
+            </a>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={onClose}
@@ -145,16 +224,42 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
             >
               Close
             </button>
+            {/* Sprint 48 — two post-preview validation actions. Both
+                re-POST current row state and refresh preview in place
+                (updated errors + warnings appear on the summary strip
+                and per-row status column). */}
             {preview && !committedSummary ? (
-              <button
-                type="button"
-                onClick={() => void submitCommit()}
-                disabled={committing || preview.validRows === 0}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
-              >
-                <FiCheckCircle className="h-3 w-3" />
-                {committing ? 'Committing…' : `Commit ${preview.validRows} valid row(s)`}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => void runReValidate()}
+                  disabled={validating != null || committing}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
+                  title="Re-run required-field + name-code + international-item checks on the current row state."
+                >
+                  {validating === 'data' ? <FiLoader className="h-3 w-3 animate-spin" /> : <FiCheckCircle className="h-3 w-3" />}
+                  {validating === 'data' ? 'Validating…' : 'Re-validate data'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runValidateAddresses()}
+                  disabled={validating != null || committing}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
+                  title="Address-check every row against its picked carrier's own validation API."
+                >
+                  {validating === 'addresses' ? <FiLoader className="h-3 w-3 animate-spin" /> : <FiCheckCircle className="h-3 w-3" />}
+                  {validating === 'addresses' ? 'Checking…' : 'Validate addresses'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void submitCommit()}
+                  disabled={committing || preview.validRows === 0 || validating != null}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-40"
+                >
+                  <FiCheckCircle className="h-3 w-3" />
+                  {committing ? 'Committing…' : `Commit ${preview.validRows} valid row(s)`}
+                </button>
+              </>
             ) : null}
           </div>
         </div>
@@ -220,27 +325,55 @@ function PreviewStep({ preview }: { preview: OrderImportPreview }) {
             ✗ {preview.invalidRows} with errors
           </span>
         ) : null}
+        {/* Sprint 48 — warnings pill (e.g. row account diverges from
+             the template's default). Non-blocking; commit still allowed. */}
+        {(() => {
+          const warned = preview.rows.filter((r) => (r.warnings?.length ?? 0) > 0).length
+          if (warned === 0) return null
+          return (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">
+              ⚠ {warned} with warnings
+            </span>
+          )
+        })()}
       </div>
 
       <div className="overflow-auto rounded-xl border border-slate-200">
-        <table className="w-full min-w-[800px] text-left text-[11px] text-slate-700">
+        <table className="w-full min-w-[960px] text-left text-[11px] text-slate-700">
           <thead className="bg-slate-50 text-[9.5px] uppercase tracking-[0.14em] text-slate-500">
             <tr>
               <th className="p-2">#</th>
+              {/* Sprint 48 — orderRef ties multi-row shipments together. */}
+              <th className="p-2">Order ref</th>
               <th className="p-2">Recipient</th>
               <th className="p-2">Address</th>
               <th className="p-2">City / Postal</th>
               <th className="p-2">Carrier</th>
               <th className="p-2 text-right">Weight</th>
+              {/* Sprint 48 — item / customs data on this row. Renders empty
+                   for pure shipment-only rows and pure item-only rows show
+                   only these fields. */}
+              <th className="p-2">Item / Customs</th>
               <th className="p-2">Status</th>
             </tr>
           </thead>
           <tbody>
             {preview.rows.map((r) => {
               const ok = r.errors.length === 0
+              // Item / customs — surface the fields the operator most needs
+              // to eyeball (description + HS + country + qty). Displayed
+              // compactly in the shared "Item / Customs" cell; empty for
+              // pure shipment rows.
+              const hasItem = !!(
+                r.itemDescription || r.itemSku || r.hsCode
+                || r.countryOfOrigin || r.itemQuantity != null || r.itemUnitValue != null
+              )
               return (
                 <tr key={r.rowNumber} className="border-t border-slate-100">
                   <td className="p-2 font-mono text-[10.5px]">{r.rowNumber}</td>
+                  <td className="p-2 font-mono text-[10.5px] text-slate-600">
+                    {r.orderRef ?? '—'}
+                  </td>
                   <td className="p-2">
                     <p className="font-semibold text-slate-950">{r.recipientName ?? '—'}</p>
                     {r.recipientCompany ? (
@@ -262,6 +395,40 @@ function PreviewStep({ preview }: { preview: OrderImportPreview }) {
                     {r.weight ?? '—'} {r.weightUnit ?? ''}
                   </td>
                   <td className="p-2">
+                    {hasItem ? (
+                      <div className="space-y-0.5">
+                        {r.itemDescription ? (
+                          <p className="max-w-[220px] truncate font-semibold text-slate-950">
+                            {r.itemDescription}
+                          </p>
+                        ) : null}
+                        <p className="text-[9.5px] text-slate-500">
+                          {r.itemSku ? <span className="font-mono">{r.itemSku}</span> : null}
+                          {r.itemQuantity != null ? (
+                            <span>
+                              {r.itemSku ? ' · ' : ''}qty {r.itemQuantity}
+                            </span>
+                          ) : null}
+                          {r.itemUnitValue != null ? (
+                            <span>
+                              {(r.itemSku || r.itemQuantity != null) ? ' · ' : ''}
+                              @{r.itemUnitValue}
+                            </span>
+                          ) : null}
+                        </p>
+                        {(r.hsCode || r.countryOfOrigin) ? (
+                          <p className="text-[9.5px] text-slate-500">
+                            {r.hsCode ? <span className="font-mono">HS {r.hsCode}</span> : null}
+                            {r.hsCode && r.countryOfOrigin ? ' · ' : ''}
+                            {r.countryOfOrigin ? <span>from {r.countryOfOrigin}</span> : null}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </td>
+                  <td className="p-2">
                     {ok ? (
                       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-emerald-800">
                         <FiCheckCircle className="h-2.5 w-2.5" />
@@ -273,6 +440,14 @@ function PreviewStep({ preview }: { preview: OrderImportPreview }) {
                         {r.errors.join(', ')}
                       </span>
                     )}
+                    {/* Non-blocking warnings sit under the status pill so
+                         operators see divergence hints without them being
+                         mistaken for errors. */}
+                    {r.warnings && r.warnings.length > 0 ? (
+                      <p className="mt-1 text-[9.5px] font-semibold text-amber-700">
+                        ⚠ {r.warnings.join('; ')}
+                      </p>
+                    ) : null}
                   </td>
                 </tr>
               )

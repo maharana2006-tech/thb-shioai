@@ -147,12 +147,15 @@ class OrderImportServiceImplTest {
 
     @Test
     void csvParserToleratesCommasInDecimals() {
-        String csv = "recipientName,addressLine1,city,postalCode,countryCode,weight,declaredValue\n"
+        // Sprint 48 revision — declaredValue is derived from items at
+        // commit rather than parsed as a top-level column. Exercise the
+        // same parseDecimal(",") tolerance via itemUnitValue instead.
+        String csv = "recipientName,addressLine1,city,postalCode,countryCode,weight,itemUnitValue\n"
                 + "Jane,42 Broadway,NYC,10001,US,2.5,\"1,000.00\"\n";
         OrderImportPreviewDTO data = service.preview("test.csv",
                 new ByteArrayInputStream(csv.getBytes(StandardCharsets.UTF_8))).getData();
         assertEquals(1, data.getValidRows());
-        assertEquals(0, new BigDecimal("1000.00").compareTo(data.getRows().get(0).getDeclaredValue()));
+        assertEquals(0, new BigDecimal("1000.00").compareTo(data.getRows().get(0).getItemUnitValue()));
     }
 
     /* -------------------------- XLSX parsing -------------------------- */

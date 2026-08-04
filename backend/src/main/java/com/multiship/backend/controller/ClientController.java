@@ -93,12 +93,28 @@ public class ClientController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    @Operation(summary = "Toggle ACTIVE/INACTIVE (ADMIN)",
-            description = "Labels cannot be generated for orders of an INACTIVE client.")
-    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Toggle ACTIVE/INACTIVE with cascade",
+            description = "Ops-level action — accepts ADMIN or USER. " +
+                    "On DISABLE: refuses (409 CLIENT_HAS_ORDERS) if pending orders exist; " +
+                    "otherwise cascades — deactivates carrier accounts (customerNo=X), " +
+                    "client-owned warehouses, and drops attachment links. Snapshot goes to " +
+                    "audit_log so ENABLE restores only these rows.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/{clientCode}/toggle-active")
     public ResponseEntity<ApiResponse<ClientDTO>> toggleActive(@PathVariable String clientCode) {
         ApiResponse<ClientDTO> response = clientService.toggleActive(clientCode);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Preview client-disable cascade",
+            description = "Returns pending-order count (hard-block on disable when >0) plus " +
+                    "counts of the associated rows a disable would deactivate. Read-only.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/{clientCode}/cascade-preview")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.ClientCascadePreviewDTO>> previewCascade(
+            @PathVariable String clientCode) {
+        ApiResponse<com.multiship.backend.dto.ClientCascadePreviewDTO> response =
+                clientService.previewCascade(clientCode);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 

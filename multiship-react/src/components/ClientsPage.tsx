@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useNavigate, useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import {
   FiActivity,
@@ -20,8 +20,6 @@ import { ApiError } from '../api/apiClient'
 import { clientService, type Client } from '../api/clientService'
 import { formatCarrierName } from '../utils/carrierUtils'
 import { countryName } from '../utils/countries'
-import ClientEditorModal from './modals/ClientEditorModal'
-import ClientOnboardingWizard from './modals/ClientOnboardingWizard'
 import PortalMenu from './workspace/PortalMenu'
 import CustomsProfileModal from './modals/CustomsProfileModal'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
@@ -35,6 +33,7 @@ const filterLabelClass =
 
 export default function ClientsPage() {
   const admin = isAdmin()
+  const navigate = useNavigate()
 
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
@@ -59,8 +58,6 @@ export default function ClientsPage() {
   const [busyId, setBusyId] = useState<number | null>(null)
 
   const [reloadToken, setReloadToken] = useState(0)
-  const [editor, setEditor] = useState<{ client: Client | null } | null>(null)
-  const [wizardOpen, setWizardOpen] = useState(false)
   const [customsClient, setCustomsClient] = useState<Client | null>(null)
 
   useEffect(() => {
@@ -149,13 +146,52 @@ export default function ClientsPage() {
   }
 
   const handleToggleActive = async (client: Client) => {
+    // Disable path goes through cascade-preview first: hard block on
+    // pending orders, otherwise confirm with the caller so they know
+    // how many carrier accounts / warehouses will be deactivated too.
+    // Enable path is trivial — no cascade blockers.
+    const goingInactive = client.status === 'ACTIVE'
+    if (goingInactive) {
+      try {
+        const preview = (await clientService.cascadePreview(client.clientCode)).data
+        if (!preview) throw new Error('Preview returned no data.')
+        if (preview.pendingOrderCount > 0) {
+          notify.error(
+            `${client.clientCode} has ${preview.pendingOrderCount} pending order(s). ` +
+              `Complete or void them before deactivating.`,
+          )
+          return
+        }
+        const summary =
+          `Deactivating ${client.clientCode} will also disable:\n` +
+          `• ${preview.activeCarrierAccountCount} carrier account(s)\n` +
+          `• ${preview.clientOwnedWarehouseCount} client-owned warehouse(s)\n` +
+          `• ${preview.clientWarehouseLinkCount} warehouse attachment(s)\n\n` +
+          `Re-enabling later restores exactly these rows.`
+        const ok = await notify.confirm(summary, {
+          title: `Deactivate ${client.clientCode}?`,
+          confirmLabel: 'Deactivate',
+          danger: true,
+        })
+        if (!ok) return
+      } catch (error) {
+        notify.error(error instanceof Error ? error.message : 'Failed to preview the cascade.')
+        return
+      }
+    }
+
     setBusyId(client.id)
     try {
       const r = await clientService.toggleActive(client.clientCode)
       notify.success(`${client.clientCode} is now ${r.data.status}.`)
       refresh()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to update the client status.')
+      if (error instanceof ApiError && error.errorCode === 'CLIENT_HAS_ORDERS') {
+        // Race: someone created a pending order between preview and toggle.
+        notify.error(error.message)
+      } else {
+        notify.error(error instanceof Error ? error.message : 'Failed to update the client status.')
+      }
     } finally {
       setBusyId(null)
     }
@@ -326,7 +362,7 @@ export default function ClientsPage() {
               <ActiveToggle
                 active={active}
                 busy={busyId !== null}
-                disabled={!admin}
+                disabled={false}
                 onToggle={(e) => { e.stopPropagation(); void handleToggleActive(client) }}
               />
               <span
@@ -353,7 +389,7 @@ export default function ClientsPage() {
             <RowActionsMenu
               admin={admin}
               onImporter={() => setCustomsClient(row.original)}
-              onEdit={() => setEditor({ client: row.original })}
+              onEdit={() => navigate(`/settings/clients/${encodeURIComponent(row.original.clientCode)}`)}
               onDelete={() => void handleDelete(row.original)}
             />
           </div>
@@ -504,7 +540,7 @@ export default function ClientsPage() {
             toolbarActions={
               <button
                 type="button"
-                onClick={() => setWizardOpen(true)}
+                onClick={() => navigate('/settings/clients/new')}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
               >
                 <FiPlus className="h-3.5 w-3.5" /> Add Client
@@ -525,29 +561,6 @@ export default function ClientsPage() {
         )}
       </section>
 
-      {editor ? (
-        <ClientEditorModal
-          client={editor.client}
-          onClose={() => setEditor(null)}
-          onSaved={() => {
-            setEditor(null)
-            refresh()
-          }}
-        />
-      ) : null}
-
-      {wizardOpen ? (
-        <ClientOnboardingWizard
-          onClose={() => {
-            setWizardOpen(false)
-            refresh()
-          }}
-          onFinished={() => {
-            setWizardOpen(false)
-            refresh()
-          }}
-        />
-      ) : null}
 
       {customsClient ? (
         <CustomsProfileModal

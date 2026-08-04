@@ -34,6 +34,7 @@ public class AccountRefServiceImpl implements AccountRefService {
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     private final OrderTrackingRepository orderTrackingRepository;
     private final CarrierService carrierService;
+    private final AuditService auditService;
 
     private record Usage(long labels, LocalDateTime lastUsed) {}
 
@@ -181,6 +182,38 @@ public class AccountRefServiceImpl implements AccountRefService {
             account.setEnvironment(request.getEnvironment().trim().toUpperCase(Locale.ROOT));
         }
 
+        // International-shipment defaults — both nullable. Non-null string
+        // (including blank after trim) writes through; null in the request =
+        // "keep the persisted value" (client omitted the field entirely).
+        // Frontend explicitly sends null when clearing, which arrives here as
+        // a null Java reference — same effect as omission: keep. If the
+        // operator actually cleared it, we still want to clear it. To make
+        // "explicit null = clear" work, differentiate: any request that
+        // reaches this method with the field set to an EMPTY STRING means
+        // "clear" (we normalize to null); a null reference means "unchanged".
+        String purpose = request.getShippingPurpose();
+        if (purpose != null) {
+            String p = purpose.trim();
+            account.setShippingPurpose(p.isEmpty() ? null : p.toUpperCase(Locale.ROOT));
+        }
+        String clearance = request.getClearanceOption();
+        if (clearance != null) {
+            String c = clearance.trim();
+            account.setClearanceOption(c.isEmpty() ? null : c.toUpperCase(Locale.ROOT));
+        }
+
+        // Third-party billing defaults. Same null-vs-empty-string semantics:
+        // null in request = keep persisted; non-null (incl. empty) = write
+        // through with empty normalized to null. Country is upper-cased to
+        // match the ISO-2 convention we apply to the client's Ship From.
+        applyTrimmable(request.getThirdPartyAccount(), account::setThirdPartyAccount, false);
+        applyTrimmable(request.getThirdPartyName(),    account::setThirdPartyName,    false);
+        applyTrimmable(request.getThirdPartyAddress1(),account::setThirdPartyAddress1,false);
+        applyTrimmable(request.getThirdPartyCity(),    account::setThirdPartyCity,    false);
+        applyTrimmable(request.getThirdPartyState(),   account::setThirdPartyState,   false);
+        applyTrimmable(request.getThirdPartyPostcode(),account::setThirdPartyPostcode,false);
+        applyTrimmable(request.getThirdPartyCountry(), account::setThirdPartyCountry, true);
+
         account.setActive(true);
 
         if (Boolean.TRUE.equals(request.getClientDefault()) && StringUtils.hasText(account.getCustomerNo())) {
@@ -189,6 +222,13 @@ public class AccountRefServiceImpl implements AccountRefService {
         }
 
         carrierAccountRefRepository.save(account);
+        auditService.record(isNewAccount ? AuditService.CREATE : AuditService.UPDATE,
+                AuditService.CARRIER_ACCOUNT, account.getId(),
+                carrierCode + " · " + accountNumber, toDTO(account),
+                (isNewAccount ? "Carrier account created: " : "Carrier account updated: ")
+                        + carrierCode + "/" + accountNumber
+                        + (StringUtils.hasText(account.getCustomerNo())
+                                ? " (client " + account.getCustomerNo() + ")" : " (platform)"));
         return success("Carrier account saved to the reference book.", toDTO(account));
     }
 
@@ -246,6 +286,12 @@ public class AccountRefServiceImpl implements AccountRefService {
         account.setActive(nextActive);
 
         carrierAccountRefRepository.save(account);
+        auditService.record(AuditService.TOGGLE_ACTIVE, AuditService.CARRIER_ACCOUNT,
+                account.getId(),
+                account.getCarrierCode() + " · " + account.getAccountNumber(),
+                java.util.Map.of("active", nextActive, "customerNo", account.getCustomerNo()),
+                (nextActive ? "Carrier account activated: " : "Carrier account deactivated: ")
+                        + account.getCarrierCode() + "/" + account.getAccountNumber());
         return success(nextActive ? "Account activated." : "Account deactivated.", toDTO(account));
     }
 
@@ -273,9 +319,31 @@ public class AccountRefServiceImpl implements AccountRefService {
                 .clientIdPreview(maskClientId(account.getClientId()))
                 .verified(account.getVerified())
                 .lastVerifiedAt(account.getLastVerifiedAt())
+                .shippingPurpose(account.getShippingPurpose())
+                .clearanceOption(account.getClearanceOption())
+                .thirdPartyAccount(account.getThirdPartyAccount())
+                .thirdPartyName(account.getThirdPartyName())
+                .thirdPartyAddress1(account.getThirdPartyAddress1())
+                .thirdPartyCity(account.getThirdPartyCity())
+                .thirdPartyState(account.getThirdPartyState())
+                .thirdPartyPostcode(account.getThirdPartyPostcode())
+                .thirdPartyCountry(account.getThirdPartyCountry())
                 .createdAt(account.getCreatedAt())
                 .updatedAt(account.getUpdatedAt())
                 .build();
+    }
+
+    /**
+     * Null-safe field setter helper for the upsert flow — null value = "keep
+     * persisted" (client didn't send this field), non-null = write through
+     * (empty string clears the DB column). Reused for every third-party
+     * billing field so the null / clear semantics stay consistent.
+     */
+    private static void applyTrimmable(String value, java.util.function.Consumer<String> setter, boolean upper) {
+        if (value == null) return;
+        String v = value.trim();
+        if (v.isEmpty()) { setter.accept(null); return; }
+        setter.accept(upper ? v.toUpperCase(Locale.ROOT) : v);
     }
 
     private String maskClientId(String clientId) {
@@ -327,7 +395,13 @@ public class AccountRefServiceImpl implements AccountRefService {
                     "Account " + account.getAccountNumber() + " has generated " + labels
                             + " label(s) — deactivate it instead to preserve the audit trail.");
         }
+        Long deletedId = account.getId();
+        String deletedCarrier = account.getCarrierCode();
+        String deletedNumber = account.getAccountNumber();
         carrierAccountRefRepository.delete(account);
+        auditService.record(AuditService.DELETE, AuditService.CARRIER_ACCOUNT,
+                deletedId, deletedCarrier + " · " + deletedNumber, null,
+                "Carrier account deleted: " + deletedCarrier + "/" + deletedNumber);
         return success("Account " + account.getAccountNumber() + " removed from the account book.", null);
     }
 

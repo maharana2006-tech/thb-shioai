@@ -29,13 +29,13 @@ import AccountScenarioBadge from './workspace/AccountScenarioBadge'
 import OrderStatusBadge from './workspace/OrderStatusBadge'
 import TablePagination from './workspace/TablePagination'
 import FillCarrierDetailsModal from './modals/FillCarrierDetailsModal'
-import ClientEditorModal from './modals/ClientEditorModal'
 import AccountPickerModal from './modals/AccountPickerModal'
 import OrderDetailsModal from './modals/OrderDetailsModal'
 import TrackingTimelineModal from './tracking/TrackingTimelineModal'
 import SchedulePickupModal from './modals/SchedulePickupModal'
 import CloseOutModal from './modals/CloseOutModal'
 import BulkLabelModal from './modals/BulkLabelModal'
+import MultiWarehouseSplitModal from './modals/MultiWarehouseSplitModal'
 import OrderImportModal from './modals/OrderImportModal'
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
@@ -126,7 +126,6 @@ export default function OrdersWorkspace() {
     orderNo: number
     resolution: OrderAccountResolution
   } | null>(null)
-  const [addClientCode, setAddClientCode] = useState<string | null>(null)
   const [pickerTarget, setPickerTarget] = useState<Order | null>(null)
   const [pickerCarrier, setPickerCarrier] = useState<string | null>(null)
   const [pickerSuggested, setPickerSuggested] = useState<string | null>(null)
@@ -143,6 +142,7 @@ export default function OrdersWorkspace() {
   const [closeOutOpen, setCloseOutOpen] = useState(false)
   // Sprint 37 — bulk-label modal.
   const [bulkLabelOpen, setBulkLabelOpen] = useState(false)
+  const [splitOpen, setSplitOpen] = useState(false)
   // Sprint 40 — CSV / XLSX import modal.
   const [importOpen, setImportOpen] = useState(false)
 
@@ -434,8 +434,10 @@ export default function OrdersWorkspace() {
           // CLIENT_NOT_FOUND (422): the order's client is unregistered —
           // open the add-client form prefilled with the code.
           if (error instanceof ApiError && error.errorCode === 'CLIENT_NOT_FOUND') {
-            if (orderNos.length === 1) {
-              setAddClientCode(data?.clientCode || null)
+            if (orderNos.length === 1 && data?.clientCode) {
+              // Navigate to the new-client page prefilled with the missing code
+              // (was ClientEditorModal with lockedCode before the page rewrite).
+              navigate(`/settings/clients/new?code=${encodeURIComponent(data.clientCode)}`)
             }
             return
           }
@@ -605,7 +607,7 @@ export default function OrdersWorkspace() {
       return (
         <button
           type="button"
-          onClick={() => setAddClientCode(order.orderDetails.customerCode)}
+          onClick={() => navigate(`/settings/clients/new?code=${encodeURIComponent(order.orderDetails.customerCode)}`)}
           className={`${ACTION_BASE} ${ACTION_OUTLINE}`}
         >
           <FiEdit3 className="h-3 w-3" />
@@ -936,6 +938,13 @@ export default function OrdersWorkspace() {
                     title="Generate labels for every visible row and download a ZIP">
               <FiPackage className="h-3.5 w-3.5" />
               Bulk labels ({rows.length})
+            </button>
+            <button type="button"
+                    onClick={() => setSplitOpen(true)}
+                    className={BTN_GHOST}
+                    title="Split one shipment across multiple warehouses (Sprint 47)">
+              <FiTruck className="h-3.5 w-3.5" />
+              Split across warehouses
             </button>
             <button type="button"
                     onClick={() => setImportOpen(true)}
@@ -1305,17 +1314,6 @@ export default function OrdersWorkspace() {
         />
       ) : null}
 
-      {addClientCode ? (
-        <ClientEditorModal
-          lockedCode={addClientCode}
-          onClose={() => setAddClientCode(null)}
-          onSaved={(client) => {
-            setAddClientCode(null)
-            notify.success(`Client ${client.clientCode} registered — its orders are ready to generate.`)
-            refreshQueues()
-          }}
-        />
-      ) : null}
 
       {fillDetailsTarget ? (
         <FillCarrierDetailsModal
@@ -1353,6 +1351,8 @@ export default function OrdersWorkspace() {
           orderNumbers={rows.map((o) => o.orderDetails.orderNo)}
         />
       ) : null}
+
+      {splitOpen ? <MultiWarehouseSplitModal onClose={() => setSplitOpen(false)} /> : null}
 
       {importOpen ? (
         <OrderImportModal onClose={() => setImportOpen(false)} />

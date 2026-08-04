@@ -62,6 +62,12 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.PackingSlipService packingSlipService;
 
+    @Autowired
+    private com.multiship.backend.service.shipment.MultiWarehouseLabelService multiWarehouseLabelService;
+
+    @Autowired
+    private com.multiship.backend.service.shipment.MultiWarehousePreviewService multiWarehousePreviewService;
+
     /** Map a client Address value object into the label payload shape. */
     private Map<String, Object> addressMap(com.multiship.backend.model.Address a, String fallbackName) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -589,6 +595,55 @@ public class OrderController {
             @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
         ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> response =
                 carrierService.generateManualLabel(request, userDetails);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Generate labels for a shipment split across warehouses (Sprint 47)",
+            description = "Groups the input `lines` by `warehouseCode`, calls the single-shipment " +
+                    "label generator once per group, and returns a `ShipmentGroup` id plus one " +
+                    "`ChildShipment` per warehouse. Fail-all rollback: any child failure aborts " +
+                    "the whole batch — no partial persistence. Existing `/manual-label` endpoint " +
+                    "still handles single-warehouse cases; this endpoint is opt-in.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Group + child shipments created")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation error — missing clientCode / lines / per-line warehouseCode")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "One of the child shipments failed; batch aborted")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/multi-warehouse-label")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.MultiWarehouseLabelResponse>> generateMultiWarehouseLabel(
+            @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.MultiWarehouseLabelRequest request,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
+        try {
+            ApiResponse<com.multiship.backend.dto.MultiWarehouseLabelResponse> response =
+                    multiWarehouseLabelService.generate(request, userDetails);
+            return ResponseEntity.status(response.getCode()).body(response);
+        } catch (com.multiship.backend.service.shipment.SplitAbortException ex) {
+            // The service throws when any child fails so @Transactional rolls
+            // back everything. Map to a 422 with the offending warehouse +
+            // detail so the operator can see exactly which one aborted.
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY).body(
+                    ApiResponse.<com.multiship.backend.dto.MultiWarehouseLabelResponse>builder()
+                            .status("error")
+                            .code(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY.value())
+                            .errorCode(com.multiship.backend.dto.ErrorCode.CARRIER_FAILURE.name())
+                            .message("Split aborted at warehouse " + ex.getWarehouseCode()
+                                    + ": " + ex.getDetail() + ". No labels were bought.")
+                            .build());
+        }
+    }
+
+    @Operation(summary = "Preview a multi-warehouse split without generating labels (Sprint 47)",
+            description = "Dry-run for /multi-warehouse-label. Runs the G3 nearest-warehouse selector on every " +
+                    "line missing a warehouseCode and returns the resulting split plan: how many child shipments " +
+                    "would be generated, per-line assignment trace (EXPLICIT / AUTO / NONE), and a rollup grouped " +
+                    "by warehouse. No labels bought, no rows written.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Preview generated")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation error — missing clientCode / lines")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/multi-warehouse-preview")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.MultiWarehousePreviewResponse>> previewMultiWarehouseSplit(
+            @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.MultiWarehouseLabelRequest request) {
+        ApiResponse<com.multiship.backend.dto.MultiWarehousePreviewResponse> response =
+                multiWarehousePreviewService.preview(request);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 

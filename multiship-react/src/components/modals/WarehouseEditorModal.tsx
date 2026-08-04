@@ -9,12 +9,15 @@ import {
   type WarehouseUpsertPayload,
 } from '../../api/warehouseService'
 import Select from '../workspace/Select'
+import AttachClientsStep from './AttachClientsStep'
 
 interface Props {
   /** null = create; otherwise edit. */
   warehouse: Warehouse | null
   onClose: () => void
-  onSaved: () => void
+  /** Fires after a successful save / attach step. The created (or updated)
+   *  warehouse is passed back so callers can react (e.g. auto-attach). */
+  onSaved: (saved?: Warehouse) => void
 }
 
 /** Create / edit a warehouse. Owner type switches the client picker on/off. */
@@ -39,6 +42,11 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
   const [clients, setClients] = useState<Client[]>([])
   const [saving, setSaving] = useState(false)
 
+  // After a successful create, the modal flips into an optional "attach clients"
+  // step so the operator can wire the new warehouse to one or more clients
+  // (and pick a default) without leaving the flow. Edit path skips this step.
+  const [created, setCreated] = useState<Warehouse | null>(null)
+
   // Load the client picker options only when we're in CLIENT mode. Pagination:
   // pull the first 200 by code so onboarding a warehouse to any client works
   // without introducing a full typeahead in this modal.
@@ -54,8 +62,18 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
   const canSubmit = useMemo(() => {
     if (!code.trim() || !name.trim()) return false
     if (ownerType === 'CLIENT' && !ownerClientCode.trim()) return false
+    // Address + phone are required going forward — every integrated carrier
+    // rejects the label if the shipper (warehouse) address block is
+    // incomplete. Existing rows load fine but this gate fires on the next
+    // save, forcing back-fill before the warehouse can be reused.
+    if (!line1.trim()) return false
+    if (!city.trim()) return false
+    if (!state.trim()) return false
+    if (!zip.trim()) return false
+    if (!country.trim()) return false
+    if (!phone.trim()) return false
     return true
-  }, [code, name, ownerType, ownerClientCode])
+  }, [code, name, ownerType, ownerClientCode, line1, city, state, zip, country, phone])
 
   const submit = async () => {
     if (!canSubmit || saving) return
@@ -65,26 +83,34 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
         code: code.trim().toUpperCase(),
         name: name.trim(),
         address: {
-          line1: line1.trim() || undefined,
+          line1: line1.trim(),
           line2: line2.trim() || undefined,
-          city: city.trim() || undefined,
-          state: state.trim() || undefined,
-          zip: zip.trim() || undefined,
+          city: city.trim(),
+          state: state.trim(),
+          zip: zip.trim(),
           country: country.trim().toUpperCase() || 'US',
-          phone: phone.trim() || undefined,
+          phone: phone.trim(),
         },
         ownerType,
         ownerClientCode: ownerType === 'CLIENT' ? ownerClientCode.trim().toUpperCase() : undefined,
         active,
       }
       if (isEdit && warehouse) {
-        await warehouseService.updateWarehouse(warehouse.code, payload)
+        const r = await warehouseService.updateWarehouse(warehouse.code, payload)
         notify.success(`Warehouse ${warehouse.code} updated.`)
+        onSaved(r.data)
       } else {
-        await warehouseService.createWarehouse(payload)
+        const r = await warehouseService.createWarehouse(payload)
         notify.success(`Warehouse ${payload.code} created.`)
+        const saved = r.data ?? { ...(payload as unknown as Warehouse), id: 0, attachedClientCount: 0, createdAt: null, updatedAt: null }
+        // Only PLATFORM warehouses need the follow-up attach step. CLIENT-owned
+        // warehouses are private to their owner and aren't attachable elsewhere.
+        if (payload.ownerType === 'PLATFORM') {
+          setCreated(saved)
+        } else {
+          onSaved(saved)
+        }
       }
-      onSaved()
     } catch (error) {
       if (error instanceof ApiError) {
         // Structured backend codes get bespoke copy; everything else falls to
@@ -106,39 +132,59 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
     }
   }
 
+  const closeAction = created ? () => onSaved(created) : onClose
+
   return (
-    <div
-      className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="warehouse-editor-title"
-    >
-      <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
-        <header className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-          <div className="flex items-center gap-2.5">
+    <>
+      <div
+        className="fixed inset-0 z-40 bg-slate-950/45"
+        onClick={closeAction}
+        aria-hidden="true"
+      />
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="warehouse-editor-title"
+        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-[520px] flex-col border-l border-slate-200 bg-white shadow-[-18px_0_50px_rgba(8,14,26,0.18)]"
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+          <div className="flex items-start gap-2.5">
             <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#412d15]/10 text-[#412d15]">
               <FiHome className="h-4 w-4" />
             </span>
             <div>
-              <h2 id="warehouse-editor-title" className="text-[15px] font-semibold text-slate-950">
-                {isEdit ? `Edit warehouse ${warehouse!.code}` : 'Add warehouse'}
+              <p className="text-[10.5px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                Warehouses
+              </p>
+              <h2 id="warehouse-editor-title" className="mt-0.5 text-[15px] font-semibold text-slate-950">
+                {created
+                  ? `Attach ${created.code} to clients`
+                  : isEdit
+                    ? `Edit warehouse ${warehouse!.code}`
+                    : 'Add warehouse'}
               </h2>
               <p className="mt-0.5 text-[11.5px] text-slate-500">
-                Ship-from locations attach to clients; each client picks one default.
+                {created
+                  ? 'Optional — pick the clients that should see this warehouse.'
+                  : 'Ship-from locations attach to clients; each client picks one default.'}
               </p>
             </div>
           </div>
           <button
             type="button"
             aria-label="Close"
-            onClick={onClose}
-            className="rounded-lg border border-transparent p-1.5 text-slate-400 transition hover:border-slate-200 hover:text-slate-600"
+            onClick={closeAction}
+            className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
           >
             <FiX className="h-4 w-4" />
           </button>
         </header>
 
-        <div className="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-5">
+        {created ? (
+          <AttachClientsStep warehouse={created} onDone={() => onSaved(created)} />
+        ) : (
+        <>
+        <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
           {/* Identity */}
           <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Code" required hint="Uppercase; immutable after create.">
@@ -213,7 +259,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
               Address
             </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label="Line 1" span={2}>
+              <Field label="Line 1" required span={2}>
                 <input value={line1} onChange={(e) => setLine1(e.target.value)} placeholder="1 Warehouse Way"
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
@@ -221,15 +267,15 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
                 <input value={line2} onChange={(e) => setLine2(e.target.value)} placeholder="Suite / floor"
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
-              <Field label="City">
+              <Field label="City" required>
                 <input value={city} onChange={(e) => setCity(e.target.value)}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
-              <Field label="State / region">
+              <Field label="State / region" required>
                 <input value={state} onChange={(e) => setState(e.target.value)}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
-              <Field label="Postal code">
+              <Field label="Postal code" required>
                 <input value={zip} onChange={(e) => setZip(e.target.value)}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
@@ -237,7 +283,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
                 <input value={country} onChange={(e) => setCountry(e.target.value.toUpperCase())} maxLength={2}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold uppercase text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
-              <Field label="Phone" span={2}>
+              <Field label="Phone" required span={2} hint="Required by UPS, FedEx and DHL on both domestic and international labels.">
                 <input value={phone} onChange={(e) => setPhone(e.target.value)}
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15]" />
               </Field>
@@ -276,8 +322,10 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
             {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create warehouse'}
           </button>
         </footer>
-      </div>
-    </div>
+        </>
+        )}
+      </aside>
+    </>
   )
 }
 
@@ -305,3 +353,4 @@ function Field({
     </div>
   )
 }
+

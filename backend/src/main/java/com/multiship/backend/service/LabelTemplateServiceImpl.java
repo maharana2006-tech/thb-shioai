@@ -3,6 +3,8 @@ package com.multiship.backend.service;
 import com.multiship.backend.model.LabelTemplate;
 import com.multiship.backend.repository.LabelTemplateRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -16,6 +18,11 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
     @Autowired
     public LabelTemplateServiceImpl(LabelTemplateRepository repo) {
         this.repo = repo;
+    }
+
+    @Override
+    public Optional<LabelTemplate> findById(Long id) {
+        return repo.findById(id);
     }
 
     @Override
@@ -52,5 +59,17 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
     @Override
     public void delete(Long id) {
         repo.deleteById(id);
+    }
+
+    @Override
+    public Page<LabelTemplate> list(String search, String templateType, String hasLogo, Pageable pageable) {
+        // Normalise to empty-string sentinels so the JPQL '= ''' branches
+        // skip cleanly. Nulls would bind as bytea under Postgres +
+        // Hibernate and blow up any LOWER(...) call in the query.
+        String s = search == null ? "" : search.trim();
+        String t = templateType == null ? "" : templateType.trim();
+        String h = hasLogo == null ? "" : hasLogo.trim().toUpperCase();
+        if (!h.isEmpty() && !"Y".equals(h) && !"N".equals(h)) h = "";
+        return repo.search(s, t, h, pageable);
     }
 }

@@ -90,6 +90,18 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
     @Query(value = "SELECT AVG(weight) FROM label_batch WHERE weight IS NOT NULL", nativeQuery = true)
     List<Object[]> getAverageWeight();
 
+    /**
+     * Pending (unlabelled) order count for a client — powers the
+     * client-disable cascade guard. Match by tenant_id when set,
+     * else cust_no (mirrors the resolution in every other order query).
+     */
+    @Query(value = """
+        SELECT COUNT(*) FROM label_batch b
+        WHERE UPPER(COALESCE(b.tenant_id, b.cust_no)) = UPPER(:clientCode)
+          AND (b.is_label_generated IS NULL OR b.is_label_generated = false)
+    """, nativeQuery = true)
+    long countPendingByClient(@org.springframework.data.repository.query.Param("clientCode") String clientCode);
+
     // ===== UNIFIED LIST QUERY =====
     // One server-side query for every order list in the app. Filters use ''
     // as the "not set" sentinel (Postgres cannot type bare null parameters).

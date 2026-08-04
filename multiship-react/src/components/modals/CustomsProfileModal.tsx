@@ -22,8 +22,49 @@ import {
   type Region,
 } from '../../utils/countries'
 import { taxIdentityFor, taxIdentityTitle } from '../../utils/taxIdentity'
+import { SHIPPING_PURPOSES } from '../../utils/customsOptions'
 import Select from '../workspace/Select'
 import RegionCountryPicker from '../workspace/RegionCountryPicker'
+
+/**
+ * ISO-4217 currency codes accepted by the customs-profile Currency picker.
+ * The set covers the countries our carriers most commonly ship from and
+ * corresponds 1:1 with the {@link CURRENCY_BY_COUNTRY} preselect map — any
+ * addition here that isn't reachable from a country default is fine; the
+ * reverse (a country code that maps to a currency missing here) is not.
+ */
+const CUSTOMS_CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'NZD', 'JPY', 'CNY', 'HKD', 'INR', 'MXN', 'BRL', 'SGD', 'CHF'] as const
+
+/**
+ * ISO-2 country → default currency mapping used to preselect the
+ * customs-profile currency from the client's ship-from country. Only
+ * covers the origins we actively ship from; anything unlisted defaults
+ * to USD.
+ */
+const CURRENCY_BY_COUNTRY: Record<string, string> = {
+  US: 'USD',
+  CA: 'CAD',
+  GB: 'GBP',
+  UK: 'GBP',
+  IE: 'EUR', DE: 'EUR', FR: 'EUR', IT: 'EUR', ES: 'EUR', NL: 'EUR', BE: 'EUR', PT: 'EUR', AT: 'EUR', FI: 'EUR',
+  GR: 'EUR', LU: 'EUR', SK: 'EUR', SI: 'EUR', EE: 'EUR', LV: 'EUR', LT: 'EUR', CY: 'EUR', MT: 'EUR', HR: 'EUR',
+  AU: 'AUD',
+  NZ: 'NZD',
+  JP: 'JPY',
+  CN: 'CNY',
+  HK: 'HKD',
+  IN: 'INR',
+  MX: 'MXN',
+  BR: 'BRL',
+  SG: 'SGD',
+  CH: 'CHF',
+}
+
+/** Best-guess default currency for a given ship-from country (ISO-2). */
+function defaultCurrencyForCountry(country: string | null | undefined): string {
+  if (!country) return 'USD'
+  return CURRENCY_BY_COUNTRY[country.trim().toUpperCase()] ?? 'USD'
+}
 
 interface CustomsProfileModalProps {
   /** All clients — feeds the client picker. */
@@ -215,6 +256,21 @@ export default function CustomsProfileModal({
 
   const set = (key: keyof CustomsProfile) => (e: { target: { value: string } }) =>
     setForm((cur) => ({ ...cur, [key]: e.target.value }))
+
+  /**
+   * Preselect the customs-defaults currency from the picked client's
+   * Ship-From country. Only fills when the operator hasn't already picked
+   * a currency (create mode + blank field) — never overrides an explicit
+   * choice or an existing profile's persisted value.
+   */
+  useEffect(() => {
+    if (editing) return
+    if (form.currency && form.currency.trim()) return
+    const originCountry = client?.shipFrom?.country ?? null
+    if (!originCountry) return
+    setForm((cur) => ({ ...cur, currency: defaultCurrencyForCountry(originCountry) }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client?.shipFrom?.country, editing])
 
   // Countries already owned by ANOTHER profile of this client — cannot double-book.
   const disabledCodes = useMemo(() => {
@@ -598,10 +654,80 @@ export default function CustomsProfileModal({
             ) : null}
           </Section>
 
-          {/* Shipment defaults (incoterms/duties/reason/currency) are HIDDEN
-              from this form per client request — they will be managed from a
-              separate module. The backend fields, existing values, and all
-              document rendering (invoice/label/drawer) remain wired. */}
+          {/* 4 — Customs defaults (shipment-level fields the carriers pick up
+              when a shipment on this client + destination doesn't carry its
+              own overrides). Every field is optional; blank = carrier
+              default. Currency is preseeded from the client's ship-from
+              country when the operator hasn't chosen one yet. */}
+          <Section
+            step="4"
+            icon={<FiGlobe className="h-3.5 w-3.5" />}
+            tone="bg-emerald-50 text-emerald-700"
+            title="Customs defaults"
+            hint="Applied to every international shipment on this client + destination when the shipment itself doesn't override. All optional — blank = carrier default (SALE / DAP / RECIPIENT / USD)."
+          >
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <Field label="Shipping purpose">
+                <Select
+                  value={form.reasonForExport ?? ''}
+                  onChange={(e) => setForm((c) => ({ ...c, reasonForExport: e.target.value || null }))}
+                >
+                  <option value="">— carrier default (SALE) —</option>
+                  {SHIPPING_PURPOSES.map((p) => (
+                    <option key={p.value} value={p.value}>{p.label}</option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Incoterms">
+                <Select
+                  value={form.incoterms ?? ''}
+                  onChange={(e) => setForm((c) => ({ ...c, incoterms: e.target.value || null }))}
+                >
+                  <option value="">— carrier default (DAP) —</option>
+                  <option value="DDP">DDP — Delivered Duty Paid</option>
+                  <option value="DAP">DAP — Delivered At Place</option>
+                  <option value="DDU">DDU — Delivered Duty Unpaid</option>
+                </Select>
+              </Field>
+              <Field label="Duty billing">
+                <Select
+                  value={form.dutiesBillTo ?? ''}
+                  onChange={(e) => setForm((c) => ({ ...c, dutiesBillTo: e.target.value || null }))}
+                >
+                  <option value="">— carrier default —</option>
+                  <option value="SENDER">Sender pays</option>
+                  <option value="RECIPIENT">Recipient pays</option>
+                  <option value="THIRD_PARTY">Third party</option>
+                </Select>
+              </Field>
+              <Field label="Customs currency">
+                <Select
+                  value={form.currency ?? ''}
+                  onChange={(e) => setForm((c) => ({ ...c, currency: e.target.value || null }))}
+                >
+                  <option value="">— carrier default (USD) —</option>
+                  {CUSTOMS_CURRENCIES.map((code) => (
+                    <option key={code} value={code}>{code}</option>
+                  ))}
+                </Select>
+              </Field>
+              {/* Third-party duty account — only meaningful when Duty billing
+                   = THIRD_PARTY. Kept in the same section so operators see
+                   the pairing. */}
+              {form.dutiesBillTo === 'THIRD_PARTY' ? (
+                <div className="col-span-2 md:col-span-4">
+                  <Field label="Third-party duty account #">
+                    <input
+                      value={form.dutiesAccount ?? ''}
+                      onChange={set('dutiesAccount')}
+                      placeholder="Payer's carrier account #"
+                      className={inputClassName}
+                    />
+                  </Field>
+                </div>
+              ) : null}
+            </div>
+          </Section>
         </div>
 
         {/* footer */}

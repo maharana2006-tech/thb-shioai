@@ -86,6 +86,16 @@ public class ShipViaMapping {
     @Transient
     private java.util.List<Long> allowedPresetIds;
 
+    /**
+     * Origin warehouses this rule applies to. Persisted in
+     * {@link ShipMethodRuleWarehouse}; here it's a Jackson round-trip field
+     * for the API only. Empty = matches any origin warehouse. Supersedes the
+     * single-value {@link #warehouseId} column (kept for backwards
+     * compatibility only — not surfaced from new upserts).
+     */
+    @Transient
+    private java.util.List<Long> warehouseIds;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;

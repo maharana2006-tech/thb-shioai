@@ -79,6 +79,55 @@ public class CarrierAccountRef {
     @Column(name = "last_verified_at")
     private LocalDateTime lastVerifiedAt;
 
+    /**
+     * International-shipment defaults captured per account. Both are optional
+     * (nullable) — carriers apply their own defaults when unset. Values are
+     * validated at the frontend against a fixed enum / per-carrier list so
+     * these columns only ever see known wire codes.
+     *
+     * shippingPurpose: SALE | GIFT | SAMPLE | REPAIR_AND_RETURN | DOCUMENTS |
+     *   MERCHANDISE | PERSONAL_USE | RETURN
+     * clearanceOption: per-carrier — UPS SENDER/RECEIVER/THIRD_PARTY,
+     *   FEDEX SENDER/RECIPIENT/THIRD_PARTY, USPS DDU/DDP.
+     */
+    @Column(name = "shipping_purpose", length = 30)
+    private String shippingPurpose;
+
+    @Column(name = "clearance_option", length = 30)
+    private String clearanceOption;
+
+    /**
+     * Third-party billing party — used only when clearanceOption is THIRD_PARTY
+     * (UPS / FedEx). Acts as the ACCOUNT-LEVEL DEFAULT for every shipment on
+     * this account; per-shipment overrides live on the Shipment row (follow-up
+     * PR). Semantically nullable throughout — carriers reject third-party
+     * shipments that omit at least the account number, but we let the row save
+     * with partial values so the operator can fill in what they know.
+     *
+     * Postal codes vary by country; keep long enough for GB-style codes.
+     * Country is ISO-2 (10 chars matches the {@code shipFrom.country} width).
+     */
+    @Column(name = "third_party_account", length = 100)
+    private String thirdPartyAccount;
+
+    @Column(name = "third_party_name", length = 255)
+    private String thirdPartyName;
+
+    @Column(name = "third_party_address1", length = 255)
+    private String thirdPartyAddress1;
+
+    @Column(name = "third_party_city", length = 100)
+    private String thirdPartyCity;
+
+    @Column(name = "third_party_state", length = 50)
+    private String thirdPartyState;
+
+    @Column(name = "third_party_postcode", length = 20)
+    private String thirdPartyPostcode;
+
+    @Column(name = "third_party_country", length = 10)
+    private String thirdPartyCountry;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
