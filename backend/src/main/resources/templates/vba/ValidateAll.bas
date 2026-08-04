@@ -38,15 +38,14 @@
 
 Option Explicit
 
-Private Const BACKEND_BASE_URL As String = "http://localhost:8080"
-Private Const BEARER_PROMPT As Boolean = True
+' Sprint 48 revision — backend URL + Bearer token resolved through
+' BackendConfig.bas so both macros stay in sync. URL comes from
+' Reference!Z1 (admin sets once, workbook remembers), token prompted
+' once per Excel session.
 
 Private Const COLOR_ERROR As Long = &HCCCCFF     ' RGB 255,204,204 (red)
 Private Const COLOR_WARN  As Long = &HCCF3FF     ' RGB 255,243,204 (yellow)
 Private Const COLOR_OK    As Long = &HDCFFDC     ' RGB 220,255,220 (green)
-
-' Session-cached token so the operator doesn't get prompted per row.
-Private cachedBearer As String
 
 Public Sub ValidateAll()
     Dim src As Worksheet
@@ -218,7 +217,7 @@ Private Function CallBackendValidate(ByRef src As Worksheet, ByRef headers As Ob
                                       ByVal lastRow As Long, ByVal lastCol As Long, _
                                       ByRef errorCount As Long, ByRef warnCount As Long) As String
     Dim token As String
-    token = ResolveBearer()
+    token = BearerToken()  ' BackendConfig.bas
     If Len(token) = 0 Then
         CallBackendValidate = "Backend re-validation skipped (no Bearer token supplied)."
         Exit Function
@@ -229,7 +228,7 @@ Private Function CallBackendValidate(ByRef src As Worksheet, ByRef headers As Ob
 
     Dim http As Object
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
-    http.Open "POST", BACKEND_BASE_URL & "/api/v1/orders/import/validate", False
+    http.Open "POST", BackendUrl() & "/api/v1/orders/import/validate", False  ' BackendConfig.bas
     http.setRequestHeader "Content-Type", "application/json"
     http.setRequestHeader "Authorization", "Bearer " & token
     On Error Resume Next
@@ -274,21 +273,7 @@ Private Function CallBackendValidate(ByRef src As Worksheet, ByRef headers As Ob
     CallBackendValidate = "Backend: " & backendErrors & " error(s), " & backendWarnings & " warning(s)."
 End Function
 
-Private Function ResolveBearer() As String
-    If Len(cachedBearer) > 0 Then
-        ResolveBearer = cachedBearer
-        Exit Function
-    End If
-    If Not BEARER_PROMPT Then
-        ResolveBearer = ""
-        Exit Function
-    End If
-    Dim t As String
-    t = InputBox("Paste your Bearer token (from browser localStorage 'multiship_token'):", _
-                 "Backend token")
-    cachedBearer = t
-    ResolveBearer = t
-End Function
+' (URL + token resolution moved to BackendConfig.bas — shared with ValidateAddresses.)
 
 ' Serialise every non-blank row from row 2..lastRow to a JSON array. Header
 ' names map 1:1 to backend OrderImportRowDTO field names.

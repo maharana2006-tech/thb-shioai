@@ -28,7 +28,11 @@
 
 Option Explicit
 
-Private Const BACKEND_BASE_URL As String = "http://localhost:8080"
+' Sprint 48 revision — backend URL + Bearer token resolved through
+' BackendConfig.bas so both macros stay in sync. URL comes from
+' Reference!Z1 (admin sets once, workbook remembers), token prompted
+' once per Excel session (cached across both macros).
+
 Private Const COLOR_WARN As Long = &HCCF3FF  ' RGB 255,243,204
 
 Public Sub ValidateAddresses()
@@ -57,12 +61,10 @@ Public Sub ValidateAddresses()
         headers(CStr(src.Cells(1, c).Value)) = c
     Next c
 
-    ' Prompt for token — reuses no session cache since this is a separate
-    ' module. If ValidateAll ran first that session, the token typed there
-    ' is NOT accessible here (VBA doesn't share module-scope statics).
+    ' Token + URL come from BackendConfig.bas — shared with ValidateAll so
+    ' operators aren't prompted twice per session.
     Dim token As String
-    token = InputBox("Paste your Bearer token (from browser localStorage 'multiship_token'):", _
-                     "Backend token")
+    token = BearerToken()
     If Len(token) = 0 Then
         MsgBox "Cancelled — no token supplied.", vbExclamation, "ValidateAddresses"
         Exit Sub
@@ -73,7 +75,7 @@ Public Sub ValidateAddresses()
 
     Dim http As Object
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
-    http.Open "POST", BACKEND_BASE_URL & "/api/v1/orders/import/validate-addresses", False
+    http.Open "POST", BackendUrl() & "/api/v1/orders/import/validate-addresses", False
     http.setRequestHeader "Content-Type", "application/json"
     http.setRequestHeader "Authorization", "Bearer " & token
     On Error Resume Next

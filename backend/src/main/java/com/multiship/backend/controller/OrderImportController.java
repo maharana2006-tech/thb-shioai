@@ -137,17 +137,32 @@ public class OrderImportController {
         // it can't reflect per-account scoping (dropdown restrictions +
         // prefill), so scoped downloads always go through the dynamic
         // POI generator regardless.
+        //
+        // Two accepted paths: `order-import-template.xlsm` (canonical) or
+        // `order-import-template-generic.xlsm` (the name suggested by the
+        // dynamic download's filename convention — some admins upload
+        // under the `-generic` name to mirror what they downloaded).
+        // First match wins.
         if (accountId == null) {
-            org.springframework.core.io.Resource xlsm =
-                    new org.springframework.core.io.ClassPathResource("templates/order-import-template.xlsm");
-            if (xlsm.exists()) {
-                byte[] bytes = xlsm.getInputStream().readAllBytes();
-                return ResponseEntity.ok()
-                        .header(HttpHeaders.CONTENT_DISPOSITION,
-                                "attachment; filename=\"order-import-template.xlsm\"")
-                        .contentType(MediaType.parseMediaType(
-                                "application/vnd.ms-excel.sheet.macroEnabled.12"))
-                        .body(bytes);
+            String[] candidates = {
+                    "templates/order-import-template.xlsm",
+                    "templates/order-import-template-generic.xlsm",
+            };
+            for (String path : candidates) {
+                org.springframework.core.io.Resource xlsm =
+                        new org.springframework.core.io.ClassPathResource(path);
+                if (xlsm.exists()) {
+                    byte[] bytes = xlsm.getInputStream().readAllBytes();
+                    // Serve under the canonical filename regardless of which
+                    // resource path matched, so downstream tooling / URLs
+                    // don't diverge on the `-generic` suffix.
+                    return ResponseEntity.ok()
+                            .header(HttpHeaders.CONTENT_DISPOSITION,
+                                    "attachment; filename=\"order-import-template.xlsm\"")
+                            .contentType(MediaType.parseMediaType(
+                                    "application/vnd.ms-excel.sheet.macroEnabled.12"))
+                            .body(bytes);
+                }
             }
         }
         byte[] xlsx = orderImportService.xlsxTemplate(accountId);
