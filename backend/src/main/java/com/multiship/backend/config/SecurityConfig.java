@@ -113,6 +113,15 @@ public class SecurityConfig {
         ));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Cache-Control", "Idempotency-Key", "X-API-Key"));
+        // Headers the browser must expose to JS via response.headers.get().
+        // Content-Disposition is critical for binary downloads (order-import
+        // template.xlsm, packing-slip PDF, template preview PDF, bulk-label
+        // ZIP, etc.) — without it, fetch-based downloads fall back to a
+        // default filename that doesn't match the file's actual type, and
+        // Excel refuses to open the .xlsm with "file format or extension
+        // is not valid" because the browser saved a .xlsm as .xlsx.
+        configuration.setExposedHeaders(Arrays.asList(
+                "Content-Disposition", "Content-Length", "Content-Type"));
         configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
