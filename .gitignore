@@ -57,3 +57,8 @@ backend/backend-dev.log
 *.log
 # Per-user Claude Code settings (permissions, hooks, etc.).
 .claude/settings.local.json
+# Excel owner-lock files — created transparently while a workbook is
+# open; never useful in git.
+~$*.xls*
+# Local safety-net backups.
+*.bak
