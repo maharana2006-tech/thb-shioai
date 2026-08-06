@@ -11,6 +11,7 @@ import com.multiship.backend.model.Warehouse;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.repository.ClientWarehouseRepository;
+import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.PackagePresetRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
 import com.multiship.backend.repository.WarehouseRepository;
@@ -77,6 +78,9 @@ public class OrderImportServiceImpl implements OrderImportService {
     private final ClientWarehouseRepository clientWarehouseRepository;
     /** Sprint 48 — warehouse-code lookup for resolving ClientWarehouse.warehouseId → Warehouse.code. */
     private final WarehouseRepository warehouseRepository;
+    /** Used to mint + stamp the shared import-batch id on every order generated
+     *  from one commit() call (one CSV/XLSX file upload). */
+    private final OrderRepository orderRepository;
     /** Sprint 48 — carrier address-validation service used by
      *  {@link #validateAddresses(List)}. Optional (null in test constructors). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -89,7 +93,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                                   PackagePresetRepository packagePresetRepository,
                                   ClientRepository clientRepository,
                                   ClientWarehouseRepository clientWarehouseRepository,
-                                  WarehouseRepository warehouseRepository) {
+                                  WarehouseRepository warehouseRepository,
+                                  OrderRepository orderRepository) {
         this.carrierService = carrierService;
         this.accountRefRepository = accountRefRepository;
         this.shippingServiceRepository = shippingServiceRepository;
@@ -97,6 +102,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         this.clientRepository = clientRepository;
         this.clientWarehouseRepository = clientWarehouseRepository;
         this.warehouseRepository = warehouseRepository;
+        this.orderRepository = orderRepository;
     }
 
     public OrderImportServiceImpl() {
@@ -107,6 +113,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         this.clientRepository = null;
         this.clientWarehouseRepository = null;
         this.warehouseRepository = null;
+        this.orderRepository = null;
     }
 
     /** Legacy Sprint-41 test constructor. */
@@ -118,6 +125,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         this.clientRepository = null;
         this.clientWarehouseRepository = null;
         this.warehouseRepository = null;
+        this.orderRepository = null;
     }
 
     /** Canonical header ordering used for the template + parser column
@@ -241,6 +249,16 @@ public class OrderImportServiceImpl implements OrderImportService {
                 return failure(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                         "Only .csv, .txt, and .xlsx files are supported.");
             }
+            // Mint one batch id for this file upload right away and stamp
+            // every row with it, so the whole sheet is grouped together
+            // from the moment it's uploaded — commit() re-uses this same
+            // id (rows round-trip it back) instead of minting a new one.
+            if (orderRepository != null && !rows.isEmpty()) {
+                Integer batchId = orderRepository.findMaxBatchId() + 1;
+                for (OrderImportRowDTO row : rows) {
+                    row.setBatchId(batchId);
+                }
+            }
             // Sprint 48 — reverse-lookup human names ("UPS Ground") to
             // wire codes ("03") on service / package cells. The universal
             // template writes names; every carrier connector expects codes.
@@ -272,7 +290,9 @@ public class OrderImportServiceImpl implements OrderImportService {
                     }
                 }
             }
-            return success(buildPreview(rows), rows.size() + " row(s) parsed.");
+            OrderImportPreviewDTO preview = buildPreview(rows);
+            preview.setBatchId(rows.isEmpty() ? null : rows.get(0).getBatchId());
+            return success(preview, rows.size() + " row(s) parsed.");
         } catch (Exception ex) {
             log.warn("Order import parse failed for {}: {}", filename, ex.getMessage());
             return failure(HttpStatus.BAD_REQUEST,
@@ -367,6 +387,18 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
         }
+        // One id per file upload — every order this commit() call generates a
+        // label for gets stamped with the same batchId, so the whole sheet's
+        // orders can be found/grouped together later. preview() already
+        // minted + stamped one on every row when the file was first
+        // uploaded; reuse that so preview and commit agree on the number.
+        // Fall back to minting a fresh one only if rows arrive without it
+        // (e.g. commit called directly, bypassing preview).
+        Integer batchId = rows.stream()
+                .map(OrderImportRowDTO::getBatchId)
+                .filter(java.util.Objects::nonNull)
+                .findFirst()
+                .orElse(orderRepository == null ? null : orderRepository.findMaxBatchId() + 1);
         // Frontend may edit rows post-preview; re-run the name→code
         // reverse-lookup here so a value the operator pasted in
         // ("UPS Ground") still resolves to the wire code before the
@@ -430,6 +462,13 @@ public class OrderImportServiceImpl implements OrderImportService {
                         gr.setGeneratedTrackingNumber(data.getTrackingNumber());
                         gr.setGeneratedStatus("GENERATED");
                         gr.setGeneratedMessage(data.getMessage());
+                        gr.setBatchId(batchId);
+                    }
+                    if (orderNo != null && batchId != null) {
+                        orderRepository.findByOrderNo(orderNo).ifPresent(order -> {
+                            order.setBatchId(batchId);
+                            orderRepository.save(order);
+                        });
                     }
                     generated++;
                 } else {
@@ -456,6 +495,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .totalRows(rows.size())
                 .validRows(valid)
                 .invalidRows(invalid)
+                .batchId(generated > 0 ? batchId : null)
                 .rows(rows)
                 .build(),
                 generated > 0
@@ -534,7 +574,10 @@ public class OrderImportServiceImpl implements OrderImportService {
                 break;
             }
         }
-        req.setSource("API");
+        // Bulk CSV/XLSX import — distinct from a single manual shipment
+        // (MANUAL) or an external API call (API), so operators can filter/
+        // spot these on the Shipment & Label list.
+        req.setSource("BULK");
 
         // Customs items: any row (leader OR item rows) that carries
         // item-level data becomes one Item on the invoice. Skip rows

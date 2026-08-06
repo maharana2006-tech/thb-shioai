@@ -49,6 +49,8 @@ public class OrderResponseDTO {
         private String source;
         /** The WMS's own order number, as sent on the external shipment request. */
         private String refOrderNumber;
+        /** Id shared by every order generated from the same CSV/XLSX import upload. Null for non-import orders. */
+        private Integer batchId;
     }
 
     @Data

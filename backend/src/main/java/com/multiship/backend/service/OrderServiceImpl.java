@@ -398,6 +398,7 @@ public class OrderServiceImpl implements OrderService {
                         .goodsDescription((String) row[9])
                         .createdDate(row[10] != null ? (LocalDate) row[10] : null)
                         .source((String) row[19])
+                        .batchId((Integer) row[20])
                         .build())
                 .shippingDetails(OrderResponseDTO.ShippingDetails.builder()
                         .city((String) row[4])

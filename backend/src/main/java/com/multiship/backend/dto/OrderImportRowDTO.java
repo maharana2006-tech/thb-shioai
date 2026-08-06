@@ -131,4 +131,6 @@ public class OrderImportRowDTO {
     private String generatedStatus;
     /** Carrier's failure message when {@code generatedStatus=FAILED}. */
     private String generatedMessage;
+    /** Shared id stamped on every order generated from this same file upload. Null until commit. */
+    private Integer batchId;
 }

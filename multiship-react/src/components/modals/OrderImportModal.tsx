@@ -481,6 +481,11 @@ function CommittedStep({ summary }: { summary: OrderImportPreview }) {
             All rows accepted.
           </p>
         )}
+        {summary.batchId != null ? (
+          <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-1 text-[10.5px] font-bold uppercase tracking-[0.1em] text-emerald-800">
+            Batch #{summary.batchId}
+          </p>
+        ) : null}
       </div>
 
       {generated.length > 0 ? (
@@ -495,6 +500,7 @@ function CommittedStep({ summary }: { summary: OrderImportPreview }) {
                 <th className="p-2">Order</th>
                 <th className="p-2">Recipient</th>
                 <th className="p-2">Tracking</th>
+                <th className="p-2">Batch</th>
               </tr>
             </thead>
             <tbody>
@@ -504,6 +510,7 @@ function CommittedStep({ summary }: { summary: OrderImportPreview }) {
                   <td className="p-2 font-semibold">{r.generatedOrderNo ?? '—'}</td>
                   <td className="p-2">{r.recipientName ?? '—'}</td>
                   <td className="p-2 font-mono text-[10.5px]">{r.generatedTrackingNumber ?? '—'}</td>
+                  <td className="p-2 font-mono text-[10.5px]">{r.batchId ?? '—'}</td>
                 </tr>
               ))}
             </tbody>

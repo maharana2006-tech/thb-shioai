@@ -21,5 +21,7 @@ public class OrderImportPreviewDTO {
     private int totalRows;
     private int validRows;
     private int invalidRows;
+    /** Id shared by every order generated from this commit's file upload. Null on preview. */
+    private Integer batchId;
     private List<OrderImportRowDTO> rows;
 }

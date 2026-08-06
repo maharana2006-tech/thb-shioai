@@ -45,12 +45,16 @@ export interface OrderImportRow {
   generatedTrackingNumber?: string | null
   generatedStatus?: 'GENERATED' | 'FAILED' | null
   generatedMessage?: string | null
+  /** Id shared by every order generated from this same file upload. Null until commit. */
+  batchId?: number | null
 }
 
 export interface OrderImportPreview {
   totalRows: number
   validRows: number
   invalidRows: number
+  /** Id shared by every order this commit generated a label for. Null on preview. */
+  batchId?: number | null
   rows: OrderImportRow[]
 }
 

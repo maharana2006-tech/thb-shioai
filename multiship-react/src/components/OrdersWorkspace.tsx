@@ -778,6 +778,7 @@ export default function OrdersWorkspace() {
         API: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
         WMS: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
         ERP: 'bg-slate-100 text-slate-600 ring-slate-200',
+        BULK: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
       }
       return (
         <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone[s] || tone.ERP}`}>
@@ -794,6 +795,17 @@ export default function OrdersWorkspace() {
     cell: (order) => (
       <span className="block truncate font-mono text-[12px] text-[#5a4526]" title={order.orderDetails.refOrderNumber || undefined}>
         {order.orderDetails.refOrderNumber || <span className="text-[#b3a583]">—</span>}
+      </span>
+    ),
+  })
+
+  columns.push({
+    id: 'batchId',
+    header: 'Batch',
+    width: 90,
+    cell: (order) => (
+      <span className="block truncate font-mono text-[12px] text-[#5a4526]">
+        {order.orderDetails.batchId ?? <span className="text-[#b3a583]">—</span>}
       </span>
     ),
   })

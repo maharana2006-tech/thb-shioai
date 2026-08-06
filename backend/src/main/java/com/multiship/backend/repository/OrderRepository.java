@@ -19,6 +19,10 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
     @Query("SELECT COALESCE(MAX(o.orderNo), 0) FROM Order o")
     Integer findMaxOrderNo();
 
+    /** Highest import batch id in the table (0 when empty) — a bulk CSV/XLSX import takes max+1. */
+    @Query("SELECT COALESCE(MAX(o.batchId), 0) FROM Order o")
+    Integer findMaxBatchId();
+
     /**
      * Locks the order row (SELECT ... FOR UPDATE) so concurrent label
      * generations for the same order serialize: the second request waits for
@@ -58,7 +62,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             t.error_message,
             t.label_generated_at,
             s.shipvia_desc,
-            COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'ERP' END) as order_source
+            COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'ERP' END) as order_source,
+            b.batch_id
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
@@ -227,7 +232,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             t.error_message,
             t.label_generated_at,
             s.shipvia_desc,
-            COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'ERP' END) as order_source
+            COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'ERP' END) as order_source,
+            b.batch_id
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd

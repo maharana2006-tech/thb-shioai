@@ -15,6 +15,8 @@ export interface OrderDetails {
   source?: string | null
   /** The WMS's own order number, as sent on the external shipment request. */
   refOrderNumber?: string | null
+  /** Id shared by every order generated from the same CSV/XLSX import upload. Null for non-import orders. */
+  batchId?: number | null
 }
 
 export interface ShippingDetails {
