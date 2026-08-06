@@ -58,6 +58,21 @@ export interface OrderImportPreview {
   rows: OrderImportRow[]
 }
 
+/** A saved import in the Data History list. */
+export interface ImportBatchSummary {
+  id: number
+  createdBy?: string | null
+  createdAt?: string | null
+  totalRows: number
+  savedRows: number
+  invalidRows: number
+}
+
+/** A saved import with its full rows (detail view). */
+export interface ImportBatchDetail extends ImportBatchSummary {
+  rows: OrderImportRow[]
+}
+
 export const orderImportService = {
   /**
    * Multipart upload — client passes a File; we wrap in FormData.
@@ -85,6 +100,18 @@ export const orderImportService = {
 
   commit: (rows: OrderImportRow[]) =>
     apiClient.post<ApiResponse<OrderImportPreview>>('/orders/import/commit', rows),
+
+  /** Save the previewed rows to Data History (persists the data, no labels). */
+  save: (rows: OrderImportRow[]) =>
+    apiClient.post<ApiResponse<OrderImportPreview>>('/orders/import/save', rows),
+
+  /** List saved imports for the Data History page. */
+  listHistory: () =>
+    apiClient.get<ApiResponse<ImportBatchSummary[]>>('/orders/import/history'),
+
+  /** One saved import with its full rows. */
+  getHistory: (id: number) =>
+    apiClient.get<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}`),
 
   /**
    * Sprint 48 — re-validate rows the operator edited in the preview

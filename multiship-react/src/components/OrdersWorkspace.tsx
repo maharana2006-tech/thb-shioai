@@ -20,6 +20,7 @@ import {
   FiXCircle,
   FiZap,
   FiPlus,
+  FiDatabase,
 } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import { orderService, type Order, type QueueStats } from '../api/orderService'
@@ -62,7 +63,7 @@ const BULK_FETCH_SIZE = 100
  * outline = "needs your input", amber outline = "recover from error".
  */
 const ACTION_BASE =
-  'inline-flex min-w-[112px] items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-[11px] font-semibold transition disabled:cursor-not-allowed'
+  'inline-flex min-w-[96px] items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-[11px] font-semibold transition disabled:cursor-not-allowed'
 const ACTION_SOLID =
   'bg-[#1f150c] text-[#f4eede] shadow-sm ring-1 ring-inset ring-white/10 hover:bg-[#412d15] disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none disabled:ring-0'
 const ACTION_OUTLINE =
@@ -71,10 +72,14 @@ const ACTION_RETRY =
   'border border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-400 hover:bg-amber-100 disabled:opacity-50'
 
 /** Toolbar button tokens — espresso/cream, consistent across the workspace. */
-const BTN_GHOST =
-  'inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
 const BTN_PRIMARY =
   'inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none'
+
+/** Compact toolbar tokens — smaller so every action fits on one line. */
+const BTN_GHOST_SM =
+  'inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40'
+const BTN_PRIMARY_SM =
+  'inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none'
 
 const relativeTime = (value?: string | null) => {
   if (!value) return null
@@ -791,7 +796,7 @@ export default function OrdersWorkspace() {
   columns.push({
     id: 'refOrderNumber',
     header: 'Ref Order #',
-    width: 120,
+    width: 104,
     cell: (order) => (
       <span className="block truncate font-mono text-[12px] text-[#5a4526]" title={order.orderDetails.refOrderNumber || undefined}>
         {order.orderDetails.refOrderNumber || <span className="text-[#b3a583]">—</span>}
@@ -814,7 +819,7 @@ export default function OrdersWorkspace() {
     id: 'destination',
     header: 'Destination',
     sortKey: 'city',
-    width: 190,
+    width: 150,
     flex: showTracking, // in the Archive/generated view (no carrier column) destination absorbs slack
     cell: (order) => {
       const dest = `${order.shippingDetails.city}, ${order.shippingDetails.state}`
@@ -840,7 +845,7 @@ export default function OrdersWorkspace() {
       id: 'created',
       header: 'Created',
       sortKey: 'createdDate',
-      width: 108,
+      width: 96,
       cell: (order) => (
         <span className="whitespace-nowrap text-[12px] text-[#8a7959]">
           {formatCreated(order.orderDetails.createdDate)}
@@ -880,8 +885,10 @@ export default function OrdersWorkspace() {
     columns.push({
       id: 'carrierAccount',
       header: 'Carrier account',
-      width: 200,
-      flex: true, // absorbs slack so the table fills wide screens
+      width: 190,
+      // Fixed (not flex): on wide screens `table-fixed` + `w-full` spreads the
+      // leftover space evenly across every column, instead of piling it all into
+      // this one column and leaving a big empty gap before Actions.
       cell: (order) => <AccountScenarioBadge resolution={order.accountResolution ?? undefined} />,
     })
   }
@@ -899,27 +906,15 @@ export default function OrdersWorkspace() {
     })
   }
 
-  // Every data column shares one width so the grid reads as an even, tidy
-  // manifest. `table-fixed` + `w-full` scales equal widths proportionally to
-  // fill the container, so all columns line up at the same length. The narrow
-  // select-checkbox column is the only exception (it stays compact).
-  const UNIFORM_COL_WIDTH = 150
-  columns.forEach((col) => {
-    if (col.id === 'select') return
-    col.width = UNIFORM_COL_WIDTH
-    col.flex = false
-  })
-
-  const actionsWidth = showTracking ? 248 : 200
+  const actionsWidth = showTracking ? 248 : 216
   const alignClass = (align?: 'left' | 'right' | 'center') =>
     align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
 
   return (
     <div className="pb-24">
-      <div className="flex flex-wrap items-center justify-end gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick={refreshQueues} className={BTN_GHOST}>
-              <FiRefreshCw className="h-3.5 w-3.5" />
+      <div className="mb-4 flex flex-nowrap items-center justify-end gap-1.5 overflow-x-auto">
+            <button type="button" onClick={refreshQueues} className={BTN_GHOST_SM}>
+              <FiRefreshCw className="h-3 w-3" />
               Refresh
             </button>
             <button
@@ -928,48 +923,54 @@ export default function OrdersWorkspace() {
                 void generateAllReady()
               }}
               disabled={busy || !readyCount}
-              className={BTN_GHOST}
+              className={BTN_GHOST_SM}
             >
-              <FiZap className="h-3.5 w-3.5" />
+              <FiZap className="h-3 w-3" />
               Generate all ready ({readyCount})
             </button>
-            <button type="button" onClick={() => setPickupOpen(true)} className={BTN_GHOST}
+            <button type="button" onClick={() => setPickupOpen(true)} className={BTN_GHOST_SM}
                     title="Book a driver to collect labelled parcels">
-              <FiCalendar className="h-3.5 w-3.5" />
+              <FiCalendar className="h-3 w-3" />
               Schedule pickup
             </button>
-            <button type="button" onClick={() => setCloseOutOpen(true)} className={BTN_GHOST}
+            <button type="button" onClick={() => setCloseOutOpen(true)} className={BTN_GHOST_SM}
                     title="Close out today's shipments so the driver can scan the manifest">
-              <FiFileText className="h-3.5 w-3.5" />
+              <FiFileText className="h-3 w-3" />
               Close out day
             </button>
             <button type="button"
                     onClick={() => setBulkLabelOpen(true)}
                     disabled={rows.length === 0}
-                    className={BTN_GHOST}
+                    className={BTN_GHOST_SM}
                     title="Generate labels for every visible row and download a ZIP">
-              <FiPackage className="h-3.5 w-3.5" />
+              <FiPackage className="h-3 w-3" />
               Bulk labels ({rows.length})
             </button>
             <button type="button"
                     onClick={() => setSplitOpen(true)}
-                    className={BTN_GHOST}
+                    className={BTN_GHOST_SM}
                     title="Split one shipment across multiple warehouses (Sprint 47)">
-              <FiTruck className="h-3.5 w-3.5" />
+              <FiTruck className="h-3 w-3" />
               Split across warehouses
             </button>
             <button type="button"
                     onClick={() => setImportOpen(true)}
-                    className={BTN_GHOST}
+                    className={BTN_GHOST_SM}
                     title="Upload a CSV or Excel with one order per row">
-              <FiUpload className="h-3.5 w-3.5" />
+              <FiUpload className="h-3 w-3" />
               Import CSV/Excel
             </button>
-            <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY}>
-              <FiPlus className="h-3.5 w-3.5" />
+            <button type="button"
+                    onClick={() => navigate('/orders/history')}
+                    className={BTN_GHOST_SM}
+                    title="Saved imports — data saved from CSV/Excel imports">
+              <FiDatabase className="h-3 w-3" />
+              Data history
+            </button>
+            <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY_SM}>
+              <FiPlus className="h-3 w-3" />
               New shipment
             </button>
-          </div>
       </div>
 
       {/* ===== workspace card ===== */}
@@ -1178,10 +1179,9 @@ export default function OrdersWorkspace() {
                             onClick={() => setTrackingOrderNo(orderNo)}
                             title={`Live tracking for ${order.labelDetails.trackingNumber}`}
                             aria-label={`Track order ${orderNo}`}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-[#e6dcc7] bg-[#faf7f0] px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#dccfb4] hover:bg-[#f2ebda]"
+                            className="rounded-lg border border-[#e6dcc7] bg-[#faf7f0] p-1.5 text-[#5a4526] transition hover:border-[#dccfb4] hover:bg-[#f2ebda]"
                           >
-                            <FiTruck className="h-3 w-3" />
-                            Track
+                            <FiTruck className="h-3.5 w-3.5" />
                           </button>
                         ) : null}
                         {order.labelDetails.trackingNumber
@@ -1192,10 +1192,13 @@ export default function OrdersWorkspace() {
                             onClick={() => void handleVoid(orderNo, order.labelDetails.trackingNumber)}
                             title={`Void ${order.labelDetails.trackingNumber} at the carrier`}
                             aria-label={`Void order ${orderNo}`}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px] font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:opacity-40"
+                            className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:opacity-40"
                           >
-                            <FiXCircle className="h-3 w-3" />
-                            {voidingOrderNo === orderNo ? 'Voiding…' : 'Void'}
+                            {voidingOrderNo === orderNo ? (
+                              <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300 border-t-rose-700" />
+                            ) : (
+                              <FiXCircle className="h-3.5 w-3.5" />
+                            )}
                           </button>
                         ) : null}
                         <button

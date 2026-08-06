@@ -86,6 +86,12 @@ public class OrderImportServiceImpl implements OrderImportService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private AddressValidationService addressValidationService;
 
+    /** Saved-import store for "Save to Data History" (commit-without-labels). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.fasterxml.jackson.databind.ObjectMapper importObjectMapper;
+
     @org.springframework.beans.factory.annotation.Autowired
     public OrderImportServiceImpl(CarrierService carrierService,
                                   CarrierAccountRefRepository accountRefRepository,
@@ -504,6 +510,94 @@ public class OrderImportServiceImpl implements OrderImportService {
                         : (invalid > 0
                                 ? invalid + " row(s) skipped — none committed"
                                 : "0 label(s) generated"));
+    }
+
+    // ── Save to Data History (persist the imported data, no labels) ──────────
+    @Override
+    public ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy) {
+        List<OrderImportRowDTO> safe = rows == null ? java.util.List.of() : rows;
+        int total = safe.size();
+        int invalid = (int) safe.stream()
+                .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
+                .count();
+        int saved = total - invalid;
+        // Mark the valid rows SAVED so the summary UI can badge them.
+        for (OrderImportRowDTO r : safe) {
+            if (r.getErrors() == null || r.getErrors().isEmpty()) {
+                r.setGeneratedStatus("SAVED");
+            }
+        }
+
+        Long batchId = null;
+        if (importBatchRepository != null) {
+            com.multiship.backend.model.ImportBatch batch = new com.multiship.backend.model.ImportBatch();
+            batch.setCreatedBy(requestedBy);
+            batch.setCreatedAt(java.time.LocalDateTime.now());
+            batch.setTotalRows(total);
+            batch.setSavedRows(saved);
+            batch.setInvalidRows(invalid);
+            try {
+                batch.setRowsJson(importObjectMapper != null
+                        ? importObjectMapper.writeValueAsString(safe) : "[]");
+            } catch (Exception e) {
+                batch.setRowsJson("[]");
+            }
+            batch = importBatchRepository.save(batch);
+            batchId = batch.getId();
+        }
+
+        log.info("Order import save ({}): {} saved, {} invalid → batch {}",
+                requestedBy, saved, invalid, batchId);
+        return success(OrderImportPreviewDTO.builder()
+                        .totalRows(total)
+                        .validRows(saved)
+                        .invalidRows(invalid)
+                        .batchId(batchId == null ? null : batchId.intValue())
+                        .rows(safe)
+                        .build(),
+                saved + " order(s) saved to history"
+                        + (invalid > 0 ? " · " + invalid + " row(s) skipped" : ""));
+    }
+
+    @Override
+    public java.util.List<com.multiship.backend.dto.ImportBatchDTO> history() {
+        if (importBatchRepository == null) return java.util.List.of();
+        return importBatchRepository.findAllByOrderByIdDesc().stream()
+                .map(b -> com.multiship.backend.dto.ImportBatchDTO.builder()
+                        .id(b.getId())
+                        .createdBy(b.getCreatedBy())
+                        .createdAt(b.getCreatedAt() == null ? null : b.getCreatedAt().toString())
+                        .totalRows(b.getTotalRows())
+                        .savedRows(b.getSavedRows())
+                        .invalidRows(b.getInvalidRows())
+                        .build())
+                .toList();
+    }
+
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO historyDetail(Long id) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
+        if (b == null) return null;
+        List<OrderImportRowDTO> parsedRows = java.util.List.of();
+        if (importObjectMapper != null && b.getRowsJson() != null) {
+            try {
+                parsedRows = importObjectMapper.readValue(
+                        b.getRowsJson(),
+                        new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
+            } catch (Exception e) {
+                parsedRows = java.util.List.of();
+            }
+        }
+        return com.multiship.backend.dto.ImportBatchDTO.builder()
+                .id(b.getId())
+                .createdBy(b.getCreatedBy())
+                .createdAt(b.getCreatedAt() == null ? null : b.getCreatedAt().toString())
+                .totalRows(b.getTotalRows())
+                .savedRows(b.getSavedRows())
+                .invalidRows(b.getInvalidRows())
+                .rows(parsedRows)
+                .build();
     }
 
     /**

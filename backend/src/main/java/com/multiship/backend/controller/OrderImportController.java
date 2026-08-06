@@ -75,6 +75,49 @@ public class OrderImportController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
+    @Operation(summary = "Save previewed rows to Data History (no labels)",
+            description = "Persists the imported rows as a data record for the Data History page. " +
+                    "Unlike /commit this does NOT generate carrier labels.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/save")
+    public ResponseEntity<ApiResponse<OrderImportPreviewDTO>> save(
+            @RequestBody List<OrderImportRowDTO> rows,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        String username = userDetails == null ? "unknown" : userDetails.getUsername();
+        ApiResponse<OrderImportPreviewDTO> response = orderImportService.save(rows, username);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "List saved imports (Data History)")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/history")
+    public ResponseEntity<ApiResponse<java.util.List<com.multiship.backend.dto.ImportBatchDTO>>> history() {
+        return ResponseEntity.ok(ApiResponse.<java.util.List<com.multiship.backend.dto.ImportBatchDTO>>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message("Import history loaded.")
+                .data(orderImportService.history())
+                .build());
+    }
+
+    @Operation(summary = "One saved import with its rows")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/history/{id}")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> historyDetail(
+            @org.springframework.web.bind.annotation.PathVariable Long id) {
+        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.historyDetail(id);
+        if (dto == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import not found.")
+                    .build());
+        }
+        return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message("Import loaded.")
+                .data(dto)
+                .build());
+    }
+
     @Operation(summary = "Re-validate rows (dry-run, JSON in / JSON out)",
             description = "Sprint 48 — same pipeline as /preview (required fields, name→code " +
                     "resolution, international-item rule) but takes JSON rows directly so the " +

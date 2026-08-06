@@ -33,6 +33,7 @@ import AuditLogPage from '../components/AuditLogPage'
 import DashboardPage from '../pages/DashboardPage'
 import OrdersPage from '../pages/OrdersPage'
 import NewShipmentPage from '../components/NewShipmentPage'
+import DataHistoryPage from '../components/DataHistoryPage'
 import ProtectedRoute from './ProtectedRoute'
 import AnonymousRoute from './AnonymousRoute'
 import RequireRole from './RequireRole'
@@ -97,6 +98,7 @@ export default function AppRoutes() {
 
           <Route path={workspacePaths.orders} element={<OrdersPage />} />
           <Route path="/orders/new" element={<NewShipmentPage />} />
+          <Route path="/orders/history" element={<DataHistoryPage />} />
 
           <Route path="/label/:orderNo" element={<LabelDocumentPage />} />
 

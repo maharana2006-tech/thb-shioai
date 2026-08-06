@@ -38,6 +38,19 @@ public interface OrderImportService {
     ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy);
 
     /**
+     * Save the previewed rows as a data record in the Data History (does NOT
+     * generate labels). Persists an {@link com.multiship.backend.model.ImportBatch}
+     * with the full row payload; returns the summary + batch id.
+     */
+    ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy);
+
+    /** All saved imports, newest first (row payload omitted from the list). */
+    java.util.List<com.multiship.backend.dto.ImportBatchDTO> history();
+
+    /** One saved import with its full row payload, or null if not found. */
+    com.multiship.backend.dto.ImportBatchDTO historyDetail(Long id);
+
+    /**
      * Sprint 48 — dry-run validation on rows the operator may have edited
      * post-preview. Runs the same pipeline as {@link #preview(String, InputStream)}
      * (sanitize → resolveNamesToCodes → validateRow → validateInternationalItems)
