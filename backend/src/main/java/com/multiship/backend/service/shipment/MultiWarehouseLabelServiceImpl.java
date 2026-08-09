@@ -35,6 +35,14 @@ public class MultiWarehouseLabelServiceImpl implements MultiWarehouseLabelServic
     private final ShipmentGroupRepository groupRepository;
     private final ShipmentRepository shipmentRepository;
 
+    // TODO(sprint49-tier2-fix6-followup): the loop below calls
+    // generateManualLabel (itself @Transactional) N times inside this
+    // outer @Transactional, so one DB connection is held for the entire
+    // sequence of N × (5-15s) carrier RTTs. Splitting requires a saga
+    // (compensating cancels for successful children when a later one
+    // fails) to preserve the current all-or-nothing invariant. Interim:
+    // 60s global tx timeout in application.properties bounds a single
+    // stuck call; multi-child batches beyond that still risk pool pressure.
     @Override
     @Transactional
     public ApiResponse<MultiWarehouseLabelResponse> generate(

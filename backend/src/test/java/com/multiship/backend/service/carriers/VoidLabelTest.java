@@ -30,10 +30,13 @@ class VoidLabelTest {
 
     /* -------------------------- Auth guardrails -------------------------- */
 
+    // Sprint 49 Tier 2 — voidShipment gained accountNumber + senderCountryCode
+    // params (FedEx cancel needs them; other carriers accept nulls).
+
     @Test
     void upsLocalFallbackTokenReturnsNotSupported() {
         UpsConnector c = new UpsConnector(new CarrierProperties(), new ObjectMapper());
-        VoidResult r = c.voidShipment("1Z999", "ups-local-abc", null);
+        VoidResult r = c.voidShipment("1Z999", "ups-local-abc", null, null, null);
         assertEquals("NOT_SUPPORTED", r.status());
         assertFalse(r.voided());
     }
@@ -41,7 +44,7 @@ class VoidLabelTest {
     @Test
     void fedexLocalFallbackTokenReturnsNotSupported() {
         FedExConnector c = new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx());
-        VoidResult r = c.voidShipment("794699999999", "fedex-local-abc", null);
+        VoidResult r = c.voidShipment("794699999999", "fedex-local-abc", null, "12345", "US");
         assertEquals("NOT_SUPPORTED", r.status());
         assertFalse(r.voided());
     }
@@ -49,14 +52,14 @@ class VoidLabelTest {
     @Test
     void dhlLocalFallbackTokenReturnsNotSupported() {
         DhlConnector c = new DhlConnector(new CarrierProperties(), new ObjectMapper());
-        VoidResult r = c.voidShipment("JD99999", "dhl-local-abc", null);
+        VoidResult r = c.voidShipment("JD99999", "dhl-local-abc", null, null, null);
         assertEquals("NOT_SUPPORTED", r.status());
     }
 
     @Test
     void stampsLocalFallbackTokenReturnsNotSupported() {
         StampsConnector c = new StampsConnector(new CarrierProperties(), new ObjectMapper());
-        VoidResult r = c.voidShipment("9400111899223811234567", "stamps-local-abc", null);
+        VoidResult r = c.voidShipment("9400111899223811234567", "stamps-local-abc", null, null, null);
         assertEquals("NOT_SUPPORTED", r.status());
     }
 
@@ -64,16 +67,27 @@ class VoidLabelTest {
     void nullTokenTreatedAsFallback() {
         assertEquals("NOT_SUPPORTED",
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                        .voidShipment("1Z999", null, null).status());
+                        .voidShipment("1Z999", null, null, null, null).status());
         assertEquals("NOT_SUPPORTED",
                 new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                        .voidShipment("794699999999", null, null).status());
+                        .voidShipment("794699999999", null, null, "12345", "US").status());
         assertEquals("NOT_SUPPORTED",
                 new DhlConnector(new CarrierProperties(), new ObjectMapper())
-                        .voidShipment("JD99999", null, null).status());
+                        .voidShipment("JD99999", null, null, null, null).status());
         assertEquals("NOT_SUPPORTED",
                 new StampsConnector(new CarrierProperties(), new ObjectMapper())
-                        .voidShipment("9400111899223811234567", null, null).status());
+                        .voidShipment("9400111899223811234567", null, null, null, null).status());
+    }
+
+    /* Sprint 49 Tier 2 — new guard: FedEx cancel MUST reject when the account
+     * number isn't supplied. Previously it silently submitted "ACCOUNT" and
+     * every FedEx void failed at the carrier. */
+    @Test
+    void fedexVoidWithoutAccountNumberErrors() {
+        FedExConnector c = new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx());
+        VoidResult r = c.voidShipment("794699999999", "real-oauth-token", "PRODUCTION", null, "US");
+        assertEquals("ERROR", r.status(), "missing account must not be silently proxied to FedEx");
+        assertFalse(r.voided());
     }
 
     /* -------------------------- UPS response parsing -------------------------- */
@@ -210,15 +224,15 @@ class VoidLabelTest {
         String tracking = "1Z999TEST";
         assertEquals(tracking,
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                        .voidShipment(tracking, "ups-local-", null).trackingNumber());
+                        .voidShipment(tracking, "ups-local-", null, null, null).trackingNumber());
         assertEquals(tracking,
                 new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                        .voidShipment(tracking, "fedex-local-", null).trackingNumber());
+                        .voidShipment(tracking, "fedex-local-", null, "12345", "US").trackingNumber());
         assertEquals(tracking,
                 new DhlConnector(new CarrierProperties(), new ObjectMapper())
-                        .voidShipment(tracking, "dhl-local-", null).trackingNumber());
+                        .voidShipment(tracking, "dhl-local-", null, null, null).trackingNumber());
         assertEquals(tracking,
                 new StampsConnector(new CarrierProperties(), new ObjectMapper())
-                        .voidShipment(tracking, "stamps-local-", null).trackingNumber());
+                        .voidShipment(tracking, "stamps-local-", null, null, null).trackingNumber());
     }
 }

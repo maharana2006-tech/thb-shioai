@@ -73,7 +73,7 @@ public class FedExConnector implements CarrierConnector {
      */
     private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken, String environment) throws Exception {
         String url = getBaseUrl(environment) + "/availability/v1/service/availability";
-        String response = RestClient.builder().baseUrl(url).build()
+        String response = HttpClients.newBuilder().baseUrl(url).build()
                 .post()
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
@@ -178,7 +178,7 @@ public class FedExConnector implements CarrierConnector {
             form.add("client_secret", clientSecret);
 
             String tokenUrl = getTokenUrl();
-            RestClient restClient = RestClient.builder().baseUrl(tokenUrl).build();
+            RestClient restClient = HttpClients.newBuilder().baseUrl(tokenUrl).build();
             String response = restClient.post()
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .accept(MediaType.APPLICATION_JSON)
@@ -203,7 +203,7 @@ public class FedExConnector implements CarrierConnector {
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
         try {
             String shipmentUrl = getShipmentUrl(environment);
-            RestClient restClient = RestClient.builder().baseUrl(shipmentUrl).build();
+            RestClient restClient = HttpClients.newBuilder().baseUrl(shipmentUrl).build();
             Map<String, Object> payload = buildShipmentPayload(request);
 
             String response = restClient.post()
@@ -215,11 +215,14 @@ public class FedExConnector implements CarrierConnector {
                     .body(String.class);
 
             return parseShipmentResult(response);
+        } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
+            throw cex;
         } catch (Exception ex) {
-            // Mirror the UPS/Stamps connectors: degrade to a local fallback result
-            // instead of failing the whole label-generation flow.
-            log.warn("FedEx shipment request failed; using local fallback shipment result. Reason: {}", ex.getMessage());
-            return buildFallbackShipmentResult(request);
+            // Sprint 49 Tier 2: no silent fake-label fallback. Throw typed
+            // exception so downstream sees the real failure.
+            log.warn("FedEx createShipment failed: {}", ex.getMessage());
+            throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                    .map("FEDEX", ex, "createShipment");
         }
     }
 
@@ -298,7 +301,7 @@ public class FedExConnector implements CarrierConnector {
         }
         try {
             java.util.Map<String, Object> body = buildRateRequestBody(request);
-            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build().post()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build().post()
                     .uri("/rate/v1/rates/quotes")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -524,7 +527,7 @@ public class FedExConnector implements CarrierConnector {
         }
         String trackingLink = "https://www.fedex.com/fedextrack/?trknbr=" + trackingNumber;
         try {
-            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build().post()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build().post()
                     .uri("/track/v1/trackingnumbers")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -619,30 +622,37 @@ public class FedExConnector implements CarrierConnector {
      * refund is issued.
      *
      * <p>{@code -local-*} fallback tokens short-circuit to
-     * {@code NOT_SUPPORTED}. The account number defaults to
-     * {@code "ACCOUNT"} (the platform account placeholder) when not
-     * derivable from the request context; FedEx will reject that but
-     * we surface the ERROR clearly instead of silently attempting.
+     * {@code NOT_SUPPORTED}.
+     *
+     * <p>Sprint 49 Tier 2 — account number and sender country now come
+     * from the caller ({@code VoidServiceImpl} passes the account +
+     * platform shipper defaults) instead of the hardcoded {@code "ACCOUNT"}
+     * / {@code "US"} placeholders. FedEx cancel will reject anything that
+     * doesn't match the label, which the old placeholders always did.
      */
     @Override
-    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
+    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment,
+                                    String accountNumber, String senderCountryCode) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "FedEx void needs live credentials; the account is on a fallback token.",
                     null);
         }
+        if (!StringUtils.hasText(accountNumber)) {
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "FedEx cancel needs the shipper account number that created the label; none was passed.",
+                    null);
+        }
+        String senderCountry = StringUtils.hasText(senderCountryCode) ? senderCountryCode : "US";
         try {
             java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
-            // Account number placeholder — FedEx cancel needs the shipper
-            // account number to match the label. Improve by threading the
-            // stored account from OrderTracking through the void call.
-            body.put("accountNumber", java.util.Map.of("value", "ACCOUNT"));
+            body.put("accountNumber", java.util.Map.of("value", accountNumber));
             body.put("emailShipment", false);
-            body.put("senderCountryCode", "US");
+            body.put("senderCountryCode", senderCountry);
             body.put("deletionControl", "DELETE_ALL_PACKAGES");
             body.put("trackingNumber", trackingNumber);
 
-            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
                     .put()
                     .uri("/ship/v1/shipments/cancel")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -725,7 +735,7 @@ public class FedExConnector implements CarrierConnector {
                     "addressesToValidate", java.util.List.of(
                             Map.of("address", addr)));
 
-            String response = RestClient.builder().baseUrl(getBaseUrl()).build().post()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl()).build().post()
                     .uri("/address/v1/addresses/resolve")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -944,7 +954,7 @@ public class FedExConnector implements CarrierConnector {
 
             body.put("requestedShipment", requestedShipment);
 
-            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build().post()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build().post()
                     .uri("/rate/v1/rates/quotes")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -1081,7 +1091,7 @@ public class FedExConnector implements CarrierConnector {
         }
         try {
             Map<String, Object> body = buildFedExPickupRequest(request);
-            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
                     .post()
                     .uri("/pickup/v1/pickups")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -1217,7 +1227,7 @@ public class FedExConnector implements CarrierConnector {
             body.put("accountNumber", java.util.Map.of("value", "ACCOUNT"));
             body.put("carrierCode", "FDXG");
 
-            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
                     .post()
                     .uri("/ship/v1/shipments/endofday")
                     .contentType(MediaType.APPLICATION_JSON)

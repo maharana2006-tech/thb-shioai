@@ -85,7 +85,7 @@ public class UpsConnector implements CarrierConnector {
                 : carrierProperties.getUps().getApiBaseUrl();
         String url = baseUrl + "/api/rating/"
                 + carrierProperties.getUps().getApiVersion() + "/Shop";
-        String response = RestClient.builder().baseUrl(url).build()
+        String response = HttpClients.newBuilder().baseUrl(url).build()
                 .post()
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
@@ -224,7 +224,7 @@ public class UpsConnector implements CarrierConnector {
             String basic = Base64.getEncoder().encodeToString(
                     (clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8));
 
-            RestClient restClient = RestClient.builder().baseUrl(tokenUrl).build();
+            RestClient restClient = HttpClients.newBuilder().baseUrl(tokenUrl).build();
             RestClient.RequestBodySpec request = restClient.post()
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .accept(MediaType.APPLICATION_JSON)
@@ -261,7 +261,7 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl)
                     .build()
                     .post()
@@ -272,9 +272,18 @@ public class UpsConnector implements CarrierConnector {
                     .retrieve()
                     .body(String.class);
             return parseShipmentResult(response);
+        } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
+            // Already typed — surface without wrapping so the caller can
+            // distinguish auth / validation / rate-limit / server.
+            throw cex;
         } catch (Exception ex) {
-            log.warn("UPS shipment request failed; using local fallback shipment result. Reason: {}", ex.getMessage());
-            return buildFallbackShipmentResult(request);
+            // Sprint 49 Tier 2: no more silent fake-label fallback. Throw a
+            // typed carrier exception so the caller (CarrierServiceImpl)
+            // persists FAILED_CARRIER + returns 502/429/etc. instead of a
+            // synthetic tracking number for a shipment that never happened.
+            log.warn("UPS createShipment failed: {}", ex.getMessage());
+            throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                    .map("UPS", ex, "createShipment");
         }
     }
 
@@ -329,7 +338,7 @@ public class UpsConnector implements CarrierConnector {
                 ? carrierProperties.getUps().getSandboxUrl()
                 : carrierProperties.getUps().getApiBaseUrl();
         try {
-            String response = RestClient.builder().baseUrl(baseUrl).build().get()
+            String response = HttpClients.newBuilder().baseUrl(baseUrl).build().get()
                     .uri("/api/track/v1/details/" + trackingNumber)
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
@@ -447,7 +456,10 @@ public class UpsConnector implements CarrierConnector {
      * {@code NOT_SUPPORTED} — the account never actually authenticated.
      */
     @Override
-    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
+    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment,
+                                    String accountNumber, String senderCountryCode) {
+        // UPS cancel doesn't need accountNumber/senderCountry — the tracking
+        // number alone identifies the shipment. Kept in signature for parity.
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "UPS void needs live credentials; the account is on a fallback token.",
@@ -459,7 +471,7 @@ public class UpsConnector implements CarrierConnector {
                 ? carrierProperties.getUps().getSandboxUrl()
                 : carrierProperties.getUps().getApiBaseUrl();
         try {
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .method(org.springframework.http.HttpMethod.DELETE)
                     .uri(url)
@@ -543,7 +555,7 @@ public class UpsConnector implements CarrierConnector {
         String url = "/api/addressvalidation/" + carrierProperties.getUps().getApiVersion() + "/1";
         try {
             Map<String, Object> body = buildUpsAvsRequest(address);
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
                     .uri(url + "?regionalrequestindicator=false&maximumcandidatelistsize=5")
@@ -755,7 +767,7 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
                     .uri(url)
@@ -924,7 +936,7 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
                     .uri("/api/shipments/v1/pickup")
@@ -1080,7 +1092,7 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
                     .uri("/api/shipments/v1/endofday")
@@ -1885,7 +1897,7 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
                     .uri(url)

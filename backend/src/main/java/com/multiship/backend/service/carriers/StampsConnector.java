@@ -84,7 +84,7 @@ public class StampsConnector implements CarrierConnector {
                 ? carrierProperties.getStamps().getSandboxUrl()
                 : carrierProperties.getStamps().getApiBaseUrl();
         String url = baseUrl + "/shipments/v3/options/search";
-        String response = RestClient.builder().baseUrl(url).build()
+        String response = HttpClients.newBuilder().baseUrl(url).build()
                 .post()
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
@@ -202,7 +202,7 @@ public class StampsConnector implements CarrierConnector {
         String soap = buildAuthenticateUserEnvelope(clientId, accountNumber.trim(), clientSecret);
 
         try {
-            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+            String response = HttpClients.newBuilder().baseUrl(swsimUrl).build().post()
                     .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
                     .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/AuthenticateUser\"")
                     .body(soap)
@@ -317,7 +317,7 @@ public class StampsConnector implements CarrierConnector {
             String soap = buildCreateIndiciumEnvelope(request, packages.get(i),
                     i + 1, packages.size(), accessToken);
             try {
-                String response = RestClient.builder().baseUrl(swsimUrl).build()
+                String response = HttpClients.newBuilder().baseUrl(swsimUrl).build()
                         .post()
                         .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
                         .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/CreateIndicium\"")
@@ -325,19 +325,55 @@ public class StampsConnector implements CarrierConnector {
                         .retrieve()
                         .body(String.class);
                 perPackage.add(parseCreateIndiciumResponse(response, request));
-            } catch (org.springframework.web.client.RestClientResponseException ex) {
-                String fault = extractSoapFault(ex.getResponseBodyAsString());
-                log.warn("Stamps CreateIndicium rejected by {} for package {}/{} (HTTP {}): {}",
-                        swsimUrl, i + 1, packages.size(), ex.getStatusCode().value(), fault);
-                perPackage.add(buildFallbackShipmentResult(request));
+            } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
+                // Sprint 49 Tier 2 Fix 4 — rollback any successful pieces
+                // BEFORE propagating so the customer isn't charged for real
+                // labels that will never ship.
+                rollbackSuccessfulPieces(perPackage, accessToken, environment);
+                throw cex;
             } catch (Exception ex) {
-                log.warn("Stamps CreateIndicium call to {} failed for package {}/{}; using local fallback shipment result. Reason: {}",
-                        swsimUrl, i + 1, packages.size(), ex.getMessage());
-                perPackage.add(buildFallbackShipmentResult(request));
+                // Sprint 49 Tier 2 — no silent fake-label fallback. Throw typed
+                // exception after compensating cancel on all pieces we
+                // successfully created so far.
+                String fault = ex instanceof org.springframework.web.client.RestClientResponseException resp
+                        ? extractSoapFault(resp.getResponseBodyAsString())
+                        : ex.getMessage();
+                log.warn("Stamps CreateIndicium failed for package {}/{}: {}",
+                        i + 1, packages.size(), fault);
+                rollbackSuccessfulPieces(perPackage, accessToken, environment);
+                throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                        .map("STAMPS", ex, "createShipment[pkg " + (i + 1) + "/" + packages.size() + "]");
             }
         }
 
         return aggregateStampsShipmentResults(perPackage);
+    }
+
+    /**
+     * Sprint 49 Tier 2 Fix 4 — compensating CancelIndicium for pieces the
+     * MPS loop created before a later piece failed. Best-effort: each
+     * cancel call is independently wrapped so one failure doesn't block
+     * the others, and none of them mask the original createShipment error
+     * (which is what the caller sees).
+     */
+    void rollbackSuccessfulPieces(java.util.List<ShipmentResult> succeeded,
+                                   String accessToken, String environment) {
+        if (succeeded == null || succeeded.isEmpty()) return;
+        log.warn("Stamps MPS partial failure: rolling back {} successful piece(s) via CancelIndicium.",
+                succeeded.size());
+        for (ShipmentResult piece : succeeded) {
+            String tracking = piece != null ? piece.trackingNumber() : null;
+            if (tracking == null || tracking.isBlank()) continue;
+            try {
+                voidShipment(tracking, accessToken, environment, null, null);
+            } catch (Exception cancelEx) {
+                // Log and continue — we do NOT want the rollback failure to
+                // mask the original createShipment exception the caller
+                // wants to see. Ops needs to reconcile these manually.
+                log.warn("Stamps rollback CancelIndicium failed for {}: {}",
+                        tracking, cancelEx.getMessage());
+            }
+        }
     }
 
     /**
@@ -436,7 +472,7 @@ public class StampsConnector implements CarrierConnector {
         String soap = buildTrackShipmentEnvelope(trackingNumber, accessToken);
         String trackingUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + trackingNumber;
         try {
-            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+            String response = HttpClients.newBuilder().baseUrl(swsimUrl).build().post()
                     .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
                     .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/TrackShipment\"")
                     .body(soap)
@@ -590,7 +626,7 @@ public class StampsConnector implements CarrierConnector {
         for (int i = 0; i < pkgList.size(); i++) {
             String soap = buildGetRatesEnvelope(request, pkgList.get(i), accessToken);
             try {
-                String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+                String response = HttpClients.newBuilder().baseUrl(swsimUrl).build().post()
                         .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
                         .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/GetRates\"")
                         .body(soap)
@@ -684,7 +720,9 @@ public class StampsConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to {@code NOT_SUPPORTED}.
      */
     @Override
-    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
+    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment,
+                                    String accountNumber, String senderCountryCode) {
+        // Stamps cancel doesn't need accountNumber/senderCountry — kept for signature parity.
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "USPS void needs live credentials; the account is on a fallback token.",
@@ -695,7 +733,7 @@ public class StampsConnector implements CarrierConnector {
                 : carrierProperties.getStamps().getApiBaseUrl();
         String soap = buildCancelIndiciumEnvelope(trackingNumber, accessToken);
         try {
-            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+            String response = HttpClients.newBuilder().baseUrl(swsimUrl).build().post()
                     .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
                     .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/CancelIndicium\"")
                     .body(soap)
@@ -779,7 +817,7 @@ public class StampsConnector implements CarrierConnector {
         String operation = domestic ? "CleanseAddress" : "ValidateForeignAddress";
         String soap = buildCleanseAddressEnvelope(address, accessToken, domestic);
         try {
-            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+            String response = HttpClients.newBuilder().baseUrl(swsimUrl).build().post()
                     .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
                     .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/" + operation + "\"")
                     .body(soap)
@@ -925,7 +963,7 @@ public class StampsConnector implements CarrierConnector {
                 : carrierProperties.getStamps().getApiBaseUrl();
         String soap = buildSchedulePickupEnvelope(request, accessToken);
         try {
-            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+            String response = HttpClients.newBuilder().baseUrl(swsimUrl).build().post()
                     .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
                     .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/SchedulePickup\"")
                     .body(soap)
@@ -1066,7 +1104,7 @@ public class StampsConnector implements CarrierConnector {
                 : carrierProperties.getStamps().getApiBaseUrl();
         String soap = buildCreateScanFormEnvelope(request, accessToken);
         try {
-            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+            String response = HttpClients.newBuilder().baseUrl(swsimUrl).build().post()
                     .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
                     .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/CreateScanForm\"")
                     .body(soap)

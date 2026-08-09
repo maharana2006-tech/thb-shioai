@@ -179,7 +179,7 @@ public class DhlConnector implements CarrierConnector {
                 (clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8));
 
         try {
-            RestClient.builder().baseUrl(host).build().get()
+            HttpClients.newBuilder().baseUrl(host).build().get()
                     .uri("/products")
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Basic " + basic)
@@ -207,7 +207,7 @@ public class DhlConnector implements CarrierConnector {
                 : carrierProperties.getDhl().getApiBaseUrl();
         try {
             Map<String, Object> payload = buildShipmentPayload(request);
-            String response = RestClient.builder().baseUrl(host).build().post()
+            String response = HttpClients.newBuilder().baseUrl(host).build().post()
                     .uri(carrierProperties.getDhl().getShipmentPath())
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -216,13 +216,14 @@ public class DhlConnector implements CarrierConnector {
                     .retrieve()
                     .body(String.class);
             return parseShipmentResult(response);
-        } catch (org.springframework.web.client.RestClientResponseException ex) {
-            log.warn("DHL shipment rejected (HTTP {}): {}", ex.getStatusCode().value(),
-                    ex.getResponseBodyAsString());
-            return buildFallbackShipmentResult(request);
+        } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
+            throw cex;
         } catch (Exception ex) {
-            log.warn("DHL shipment call failed; using local fallback. Reason: {}", ex.getMessage());
-            return buildFallbackShipmentResult(request);
+            // Sprint 49 Tier 2: no silent fake-label fallback. Throw typed
+            // exception so downstream sees the real failure.
+            log.warn("DHL createShipment failed: {}", ex.getMessage());
+            throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                    .map("DHL", ex, "createShipment");
         }
     }
 
@@ -280,7 +281,7 @@ public class DhlConnector implements CarrierConnector {
                 ? carrierProperties.getDhl().getSandboxUrl()
                 : carrierProperties.getDhl().getApiBaseUrl();
         try {
-            String response = RestClient.builder().baseUrl(host).build().get()
+            String response = HttpClients.newBuilder().baseUrl(host).build().get()
                     .uri(u -> u.path("/tracking")
                             .queryParam("shipmentTrackingNumber", trackingNumber)
                             .build())
@@ -391,7 +392,9 @@ public class DhlConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to {@code NOT_SUPPORTED}.
      */
     @Override
-    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
+    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment,
+                                    String accountNumber, String senderCountryCode) {
+        // DHL cancel doesn't need accountNumber/senderCountry — kept for signature parity.
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "DHL void needs live credentials; the account is on a fallback token.",
@@ -401,7 +404,7 @@ public class DhlConnector implements CarrierConnector {
                 ? carrierProperties.getDhl().getSandboxUrl()
                 : carrierProperties.getDhl().getApiBaseUrl();
         try {
-            org.springframework.http.ResponseEntity<String> response = RestClient.builder()
+            org.springframework.http.ResponseEntity<String> response = HttpClients.newBuilder()
                     .baseUrl(host).build()
                     .delete()
                     .uri("/shipments/" + trackingNumber)
@@ -469,7 +472,7 @@ public class DhlConnector implements CarrierConnector {
             if (StringUtils.hasText(address.postalCode())) uri.queryParam("postalCode", address.postalCode());
             if (StringUtils.hasText(address.city())) uri.queryParam("cityName", address.city());
 
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build()
                     .get()
                     .uri(uri.build().toUriString())
@@ -595,7 +598,7 @@ public class DhlConnector implements CarrierConnector {
             String host = isSandbox(environment)
                     ? carrierProperties.getDhl().getSandboxUrl()
                     : carrierProperties.getDhl().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(host).build()
                     .post()
                     .uri("/rates")
@@ -743,7 +746,7 @@ public class DhlConnector implements CarrierConnector {
             String host = isSandbox(environment)
                     ? carrierProperties.getDhl().getSandboxUrl()
                     : carrierProperties.getDhl().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(host).build()
                     .post()
                     .uri("/pickups")
@@ -1362,7 +1365,7 @@ public class DhlConnector implements CarrierConnector {
             String host = isSandbox(environment)
                     ? carrierProperties.getDhl().getSandboxUrl()
                     : carrierProperties.getDhl().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(host).build()
                     .post()
                     .uri("/rates")
