@@ -31,8 +31,13 @@ export interface DashboardData {
 }
 
 export const dashboardService = {
-  load: async (): Promise<DashboardData | null> => {
-    const r = await apiClient.get<ApiResponse<DashboardData>>('/dashboard')
+  /**
+   * @param signal Sprint 49 Tier 4 Fix 3/4 — pass an AbortSignal to
+   *               cancel an in-flight poll (fires on unmount / when
+   *               the next tick starts before the previous returned).
+   */
+  load: async (signal?: AbortSignal): Promise<DashboardData | null> => {
+    const r = await apiClient.get<ApiResponse<DashboardData>>('/dashboard', { signal })
     return r.data ?? null
   },
 }

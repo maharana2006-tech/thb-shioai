@@ -17,6 +17,7 @@ import {
   FiZap,
 } from 'react-icons/fi'
 import { dashboardService, type DashboardData } from '../api/dashboardService'
+import { isAbortError } from '../api/apiClient'
 import { useAppSession } from '../hooks/useAppSession'
 import { countryName } from '../utils/countries'
 
@@ -97,26 +98,52 @@ export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [updatedAt, setUpdatedAt] = useState<number | null>(null)
   const timer = useRef<number | null>(null)
-
-  const load = () => {
-    dashboardService
-      .load()
-      .then((d) => {
-        if (d) {
-          setData(d)
-          setUpdatedAt(Date.now())
-        }
-      })
-      .catch(() => {})
-  }
+  // Sprint 49 Tier 4 Fix 3 — in-flight guard + AbortController.
+  //   inFlightRef skips a new tick when the previous one is still pending
+  //   (prevents a slow-carrier request from queueing behind another).
+  //   currentAbortRef holds the AbortController for the pending request so
+  //   we can cancel it on unmount or when a fresh tick supersedes it.
+  const inFlightRef = useRef(false)
+  const currentAbortRef = useRef<AbortController | null>(null)
+  const mountedRef = useRef(true)
 
   useEffect(() => {
+    mountedRef.current = true
+
+    const load = () => {
+      if (inFlightRef.current) return  // skip — previous tick still pending
+      const controller = new AbortController()
+      currentAbortRef.current?.abort()  // cancel any stragglers
+      currentAbortRef.current = controller
+      inFlightRef.current = true
+
+      dashboardService
+        .load(controller.signal)
+        .then((d) => {
+          if (!mountedRef.current) return
+          if (d) {
+            setData(d)
+            setUpdatedAt(Date.now())
+          }
+        })
+        .catch((err) => {
+          // Aborted requests are expected on cancellation — silence them.
+          if (isAbortError(err)) return
+          // Any other error: swallow (mirrors prior behaviour); the stats
+          // stay stale until the next tick succeeds.
+        })
+        .finally(() => {
+          inFlightRef.current = false
+        })
+    }
+
     load()
     timer.current = window.setInterval(load, POLL_MS)
     return () => {
+      mountedRef.current = false
       if (timer.current) window.clearInterval(timer.current)
+      currentAbortRef.current?.abort()  // don't leak a pending fetch on unmount
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const hour = new Date().getHours()
