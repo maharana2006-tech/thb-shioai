@@ -92,4 +92,39 @@ class ReportServiceImplTest {
                 () -> ReportServiceImpl.typedRow(42L, 4));
         assertTrue(ex.getMessage().contains("scalar"));
     }
+
+    /* -------- Sprint 49 Tier 1 — formula injection guard -------- */
+
+    @Test
+    void csv_equalsPrefixEscaped() {
+        // The Excel-cmd-injection classic. Must not open executable in Excel.
+        assertEquals("'=cmd|'/c calc'!A1", ReportServiceImpl.escapeFormulaInjection("=cmd|'/c calc'!A1"));
+    }
+
+    @Test
+    void csv_plusMinusAtPrefixesEscaped() {
+        assertEquals("'+SUM(A1:A10)", ReportServiceImpl.escapeFormulaInjection("+SUM(A1:A10)"));
+        assertEquals("'-1+1", ReportServiceImpl.escapeFormulaInjection("-1+1"));
+        assertEquals("'@import", ReportServiceImpl.escapeFormulaInjection("@import"));
+    }
+
+    @Test
+    void csv_tabAndCrPrefixesEscaped() {
+        assertEquals("'\t=cmd", ReportServiceImpl.escapeFormulaInjection("\t=cmd"));
+        assertEquals("'\r=cmd", ReportServiceImpl.escapeFormulaInjection("\r=cmd"));
+    }
+
+    @Test
+    void csv_benignStringsUntouched() {
+        assertEquals("hello", ReportServiceImpl.escapeFormulaInjection("hello"));
+        assertEquals("123", ReportServiceImpl.escapeFormulaInjection("123"));
+        assertEquals("", ReportServiceImpl.escapeFormulaInjection(""));
+        assertNull(ReportServiceImpl.escapeFormulaInjection(null));
+    }
+
+    @Test
+    void csv_escapedThenQuotedForCommas() {
+        // End-to-end: name field like `=SUM,evil` gets both formula-escape + CSV-quote.
+        assertEquals("\"'=SUM,evil\"", ReportServiceImpl.csv("=SUM,evil"));
+    }
 }
