@@ -501,20 +501,30 @@ const CommodityRow = memo(function CommodityRow({
           value={item.countryOfOrigin ?? ''}
           onChange={(e) => patch({ countryOfOrigin: e.target.value.toUpperCase() })}
         />
+        {/* Sprint 49 Tier 4 Fix 7 — parse-with-fallback + clamp to non-negative
+            so empty / "abc" / "-5" never propagate NaN into invoiceTotal (which
+            then posted to the backend as NaN). */}
         <input
           type="number"
           className="col-span-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-right text-[12px] tabular-nums"
           min={1}
           value={item.quantity}
-          onChange={(e) => patch({ quantity: Number(e.target.value) })}
+          onChange={(e) => {
+            const parsed = parseInt(e.target.value, 10)
+            patch({ quantity: Number.isFinite(parsed) && parsed > 0 ? parsed : 1 })
+          }}
         />
         <input
           type="number"
           step="0.01"
+          min={0}
           className="col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-right text-[12px] tabular-nums"
           placeholder="Unit value"
           value={item.unitValue ?? 0}
-          onChange={(e) => patch({ unitValue: Number(e.target.value) })}
+          onChange={(e) => {
+            const parsed = parseFloat(e.target.value)
+            patch({ unitValue: Number.isFinite(parsed) && parsed >= 0 ? parsed : 0 })
+          }}
         />
         <button
           type="button"
