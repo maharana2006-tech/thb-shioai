@@ -971,6 +971,11 @@ public class CarrierServiceImpl implements CarrierService {
                     .build();
             shipmentBatchRepository.save(batch);
 
+            // Sprint 49 Tier 3 Fix 7 — collect per-piece rows and saveAll
+            // so Hibernate can batch (spring.jpa.properties.hibernate.jdbc.batch_size=50)
+            // instead of per-piece single INSERTs.
+            java.util.List<com.multiship.backend.model.LabelPackage> pieceRows =
+                    new java.util.ArrayList<>(pkgList.size());
             for (int i = 0; i < pkgList.size(); i++) {
                 com.multiship.backend.dto.PackageDetailDTO p = pkgList.get(i);
                 int seq = p.getSequenceNumber() != null ? p.getSequenceNumber() : (batchIdx * 1000 + i + 1);
@@ -1011,8 +1016,9 @@ public class CarrierServiceImpl implements CarrierService {
                         .createdAt(now)
                         .updatedAt(now)
                         .build();
-                labelPackageRepository.save(row);
+                pieceRows.add(row);
             }
+            labelPackageRepository.saveAll(pieceRows);
         }
 
         // International: persist the operator's commercial-invoice line items so the
