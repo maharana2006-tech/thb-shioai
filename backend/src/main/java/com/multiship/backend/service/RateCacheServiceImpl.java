@@ -1,5 +1,7 @@
 package com.multiship.backend.service;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.multiship.backend.dto.ShipmentRequestDTO;
 import com.multiship.backend.service.carriers.CarrierConnector.RateOption;
 import lombok.extern.slf4j.Slf4j;
@@ -13,18 +15,18 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Sprint 39 impl. In-memory only (single-instance deploys). If we ever
- * scale horizontally, swap this out for a distributed cache (Redis,
- * Caffeine, ...); the interface stays stable.
+ * scale horizontally, swap this out for a distributed cache (Redis, ...);
+ * the interface stays stable.
  *
- * <p>Cache size is unbounded but bounded in practice: unique lane
- * fingerprints per tenant per carrier per business day is small (few
- * hundred at most). Entries expire on read, so stale entries clean up
- * lazily.
+ * <p>Sprint 49 Tier 3 Fix 6 — swapped from plain {@code ConcurrentHashMap}
+ * (unbounded, lazy expiry on read only — pathological accessor could
+ * grow the cache indefinitely then never evict) to Caffeine with a
+ * {@code maximumSize} + {@code expireAfterWrite}. Get/put semantics
+ * are unchanged for callers.
  */
 @Slf4j
 @Service
@@ -35,7 +37,13 @@ public class RateCacheServiceImpl implements RateCacheService {
      *  eliminating ≥90% of duplicate carrier calls within a picker session. */
     private static final Duration TTL = Duration.ofMinutes(5);
 
-    private final ConcurrentHashMap<String, Entry> cache = new ConcurrentHashMap<>();
+    /** Hard cap on distinct lane fingerprints; well above healthy usage. */
+    private static final long MAX_ENTRIES = 5_000;
+
+    private final Cache<String, Entry> cache = Caffeine.newBuilder()
+            .maximumSize(MAX_ENTRIES)
+            .expireAfterWrite(TTL)
+            .build();
 
     private final AtomicLong hits = new AtomicLong();
     private final AtomicLong misses = new AtomicLong();
@@ -49,14 +57,16 @@ public class RateCacheServiceImpl implements RateCacheService {
             misses.incrementAndGet();
             return Optional.empty();
         }
-        Entry entry = cache.get(key);
+        Entry entry = cache.getIfPresent(key);
         if (entry == null) {
             misses.incrementAndGet();
             return Optional.empty();
         }
+        // Caffeine expireAfterWrite makes stale entries invisible via
+        // getIfPresent, but keep the explicit check for the test hook
+        // (putRaw with a past expiresAt below).
         if (Instant.now().isAfter(entry.expiresAt)) {
-            // Lazy eviction on read.
-            cache.remove(key, entry);
+            cache.invalidate(key);
             misses.incrementAndGet();
             return Optional.empty();
         }
@@ -77,27 +87,27 @@ public class RateCacheServiceImpl implements RateCacheService {
     @Override
     public int invalidate(String carrierCode) {
         if (!StringUtils.hasText(carrierCode)) {
-            int removed = cache.size();
-            cache.clear();
+            long removed = cache.estimatedSize();
+            cache.invalidateAll();
             invalidations.incrementAndGet();
             log.info("Rate cache: cleared all {} entries", removed);
-            return removed;
+            return (int) removed;
         }
         String prefix = carrierCode.trim().toUpperCase(Locale.ROOT) + "|";
-        int[] removed = {0};
-        cache.keySet().removeIf(k -> {
+        long[] removed = {0};
+        cache.asMap().keySet().removeIf(k -> {
             boolean match = k.startsWith(prefix);
             if (match) removed[0]++;
             return match;
         });
         invalidations.incrementAndGet();
         log.info("Rate cache: cleared {} entries for {}", removed[0], carrierCode);
-        return removed[0];
+        return (int) removed[0];
     }
 
     @Override
     public CacheStats stats() {
-        return new CacheStats(cache.size(),
+        return new CacheStats((int) cache.estimatedSize(),
                 hits.get(), misses.get(), stores.get(), invalidations.get());
     }
 
