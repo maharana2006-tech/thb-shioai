@@ -26,6 +26,12 @@ public class ApiKeyResponse {
     private LocalDateTime createdAt;
     private LocalDateTime lastUsedAt;
     private LocalDateTime revokedAt;
+    /** Sprint 50 Tier 0.5 PR C — drives the UI expiry badge (green >30d, amber ≤30d, red expired). */
+    private LocalDateTime expiresAt;
+    /** Sprint 50 Tier 0.5 PR C — non-null when the key was rotated; grace ends 24h after this. */
+    private LocalDateTime lastRotatedAt;
+    /** Sprint 50 Tier 0.5 PR C — id of the pre-rotation key, when this one was minted by rotation. */
+    private Long rotatedFromId;
 
     public static ApiKeyResponse of(ApiKey k, String masked, String token) {
         return ApiKeyResponse.builder()
@@ -40,6 +46,9 @@ public class ApiKeyResponse {
                 .createdAt(k.getCreatedAt())
                 .lastUsedAt(k.getLastUsedAt())
                 .revokedAt(k.getRevokedAt())
+                .expiresAt(k.getExpiresAt())
+                .lastRotatedAt(k.getLastRotatedAt())
+                .rotatedFromId(k.getRotatedFromId())
                 .build();
     }
 }

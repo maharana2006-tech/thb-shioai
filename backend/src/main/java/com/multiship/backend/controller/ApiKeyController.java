@@ -80,6 +80,33 @@ public class ApiKeyController {
                 .build());
     }
 
+    @Operation(summary = "Rotate an API key",
+            description = "Mints a fresh key inheriting the old key's client, environment, and scopes. "
+                    + "The old key stays valid for a 24h grace window; requests using it during that window "
+                    + "get Deprecation + Sunset headers (RFC 8594). The new plaintext token is shown once.")
+    @PostMapping("/{id}/rotate")
+    public ResponseEntity<ApiResponse<ApiKeyResponse>> rotate(@PathVariable Long id,
+                                                               @AuthenticationPrincipal UserDetails admin) {
+        var issued = apiKeyService.rotate(id, admin != null ? admin.getUsername() : null);
+        if (issued.isEmpty()) {
+            ApiKey existing = apiKeyRepository.findById(id).orElse(null);
+            int code = existing == null ? 404 : 409;
+            return ResponseEntity.status(code).body(ApiResponse.<ApiKeyResponse>builder()
+                    .status("ERROR").code(code).timestamp(LocalDateTime.now())
+                    .message(existing == null ? "API key not found." : "Cannot rotate a revoked key — issue a new one.")
+                    .errorCode(existing == null ? ErrorCode.ORDER_NOT_FOUND.name() : ErrorCode.VALIDATION_ERROR.name())
+                    .build());
+        }
+        ApiKeyResponse body = ApiKeyResponse.of(issued.get().record(),
+                apiKeyService.maskedToken(issued.get().record()), issued.get().plaintextToken());
+        return ResponseEntity.status(201).body(ApiResponse.<ApiKeyResponse>builder()
+                .status("SUCCESS").code(201).timestamp(LocalDateTime.now())
+                .message("API key rotated. The old key stays valid for 24h with Deprecation/Sunset headers. "
+                        + "Copy the new token now — it will not be shown again.")
+                .data(body)
+                .build());
+    }
+
     @Operation(summary = "Revoke an API key")
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Void>> revoke(@PathVariable Long id) {

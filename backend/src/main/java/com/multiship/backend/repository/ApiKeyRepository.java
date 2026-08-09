@@ -4,6 +4,7 @@ import com.multiship.backend.model.ApiKey;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -18,4 +19,10 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Long> {
     List<ApiKey> findAllByOrderByCreatedAtDesc();
 
     List<ApiKey> findByClientCodeIgnoreCaseOrderByCreatedAtDesc(String clientCode);
+
+    /**
+     * Sprint 50 Tier 0.5 PR C — nightly expiry-warning cron looks for
+     * active keys expiring in a given (from, to] window.
+     */
+    List<ApiKey> findByActiveTrueAndExpiresAtBetween(LocalDateTime from, LocalDateTime to);
 }
