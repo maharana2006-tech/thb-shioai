@@ -9,6 +9,7 @@ import {
 } from 'react-icons/fi'
 import { bulkLabelService, type BulkLabelJob } from '../../api/bulkLabelService'
 import { notify } from '../../utils/notify'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
 
 /**
  * Sprint 37 — bulk label generation modal. Submits the batch, polls
@@ -27,6 +28,10 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
   const [submitting, setSubmitting] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const pollTimer = useRef<number | null>(null)
+  // Sprint 49 Tier 4 Fix 6 — trap Tab focus inside the modal and
+  // restore to the trigger on close.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(true, dialogRef)
 
   const downloadZip = async (jobId: number) => {
     if (downloading) return
@@ -118,8 +123,10 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
       aria-label="Bulk label generation"
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
       onClick={onClose}
+      onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}
     >
       <div
+        ref={dialogRef}
         className="flex h-[min(600px,90vh)] w-full max-w-[560px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
         onClick={(e) => e.stopPropagation()}
       >
