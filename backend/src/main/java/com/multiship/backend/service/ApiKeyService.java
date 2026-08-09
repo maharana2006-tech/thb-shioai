@@ -27,7 +27,12 @@ import java.util.Optional;
 public class ApiKeyService {
 
     private static final SecureRandom RANDOM = new SecureRandom();
-    private static final String DEFAULT_SCOPES = "shipments rates tracking void addresses";
+    // Sprint 50 Tier 0.5 PR B — vocabulary aligned with ApiKeyScope enum tokens.
+    // pickups + landed-cost were reachable pre-B but their scopes weren't in the
+    // default set; keys minted before PR B without explicit scopes won't have
+    // them. Admin can rotate via PR C to widen.
+    private static final String DEFAULT_SCOPES =
+            "shipments rates tracking void addresses pickups landed-cost";
 
     private final ApiKeyRepository apiKeyRepository;
     private final PasswordEncoder passwordEncoder;

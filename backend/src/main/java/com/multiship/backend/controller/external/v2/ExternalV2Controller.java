@@ -1,6 +1,8 @@
 package com.multiship.backend.controller.external.v2;
 
 import com.multiship.backend.config.ApiKeyPrincipal;
+import com.multiship.backend.config.ApiKeyScope;
+import com.multiship.backend.config.RequiresScope;
 import com.multiship.backend.dto.*;
 import com.multiship.backend.dto.external.*;
 import com.multiship.backend.service.LandedCostService;
@@ -58,6 +60,7 @@ public class ExternalV2Controller {
 
     @Operation(summary = "Rate quote — single carrier")
     @PostMapping("/rates")
+    @RequiresScope(ApiKeyScope.RATES)
     public ResponseEntity<ApiResponse<ExternalRateResponse>> rates(
             @RequestBody ExternalRateRequest req,
             @AuthenticationPrincipal ApiKeyPrincipal caller,
@@ -72,6 +75,7 @@ public class ExternalV2Controller {
 
     @Operation(summary = "Create a shipment (idempotent via Idempotency-Key)")
     @PostMapping("/shipments")
+    @RequiresScope(ApiKeyScope.SHIPMENTS)
     public ResponseEntity<ApiResponse<ExternalShipmentResponse>> create(
             @RequestBody ExternalShipmentRequest req,
             @AuthenticationPrincipal ApiKeyPrincipal caller,
@@ -94,6 +98,7 @@ public class ExternalV2Controller {
 
     @Operation(summary = "Get tracking for a shipment")
     @GetMapping("/shipments/{shipmentId}/tracking")
+    @RequiresScope(ApiKeyScope.TRACKING)
     public ResponseEntity<ApiResponse<ExternalTrackingResponse>> tracking(
             @PathVariable Long shipmentId, @AuthenticationPrincipal ApiKeyPrincipal caller) {
         try {
@@ -105,6 +110,7 @@ public class ExternalV2Controller {
 
     @Operation(summary = "Void a shipment")
     @PostMapping("/shipments/{shipmentId}/void")
+    @RequiresScope(ApiKeyScope.VOID)
     public ResponseEntity<ApiResponse<Map<String, Object>>> voidShipment(
             @PathVariable Long shipmentId, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
@@ -118,6 +124,7 @@ public class ExternalV2Controller {
 
     @Operation(summary = "Validate an address")
     @PostMapping("/addresses/validate")
+    @RequiresScope(ApiKeyScope.ADDRESSES)
     public ResponseEntity<ApiResponse<ExternalAddressValidationResponse>> validate(
             @RequestBody ExternalAddress address, @AuthenticationPrincipal ApiKeyPrincipal caller) {
         try {
@@ -134,6 +141,7 @@ public class ExternalV2Controller {
 
     @Operation(summary = "Multi-carrier rate-shop (fan-out across every allowlisted carrier)")
     @PostMapping("/rate-shop")
+    @RequiresScope(ApiKeyScope.RATES)
     public ResponseEntity<ApiResponse<RateShopResponseDTO>> rateShop(
             @RequestBody RateShopRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
@@ -148,6 +156,7 @@ public class ExternalV2Controller {
 
     @Operation(summary = "Schedule a courier pickup")
     @PostMapping("/pickups")
+    @RequiresScope(ApiKeyScope.PICKUPS)
     public ResponseEntity<ApiResponse<PickupResponseDTO>> schedulePickup(
             @RequestBody PickupRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
@@ -158,6 +167,7 @@ public class ExternalV2Controller {
 
     @Operation(summary = "Close out the day's shipments at a carrier")
     @PostMapping("/close-out")
+    @RequiresScope(ApiKeyScope.PICKUPS)
     public ResponseEntity<ApiResponse<ManifestResponseDTO>> closeOut(
             @RequestBody ManifestRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
@@ -172,6 +182,7 @@ public class ExternalV2Controller {
 
     @Operation(summary = "Estimate landed cost (freight + duties + taxes + fees)")
     @PostMapping("/landed-cost")
+    @RequiresScope(ApiKeyScope.LANDED_COST)
     public ResponseEntity<ApiResponse<LandedCostResponseDTO>> landedCost(
             @RequestBody LandedCostRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller) {
         requireApi(caller);
@@ -185,6 +196,7 @@ public class ExternalV2Controller {
                     "a valid response means the payload would pass through " +
                     "createShipment without a DG-related failure.")
     @PostMapping("/dangerous-goods/validate")
+    @RequiresScope(ApiKeyScope.SHIPMENTS)
     public ResponseEntity<ApiResponse<Map<String, Object>>> validateDg(
             @RequestBody Map<String, Object> req, @AuthenticationPrincipal ApiKeyPrincipal caller) {
         requireApi(caller);
