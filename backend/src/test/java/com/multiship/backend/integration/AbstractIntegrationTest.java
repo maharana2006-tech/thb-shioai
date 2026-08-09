@@ -6,8 +6,6 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
  * Sprint 49 Tier 5 Fix 1 — base class for real-Postgres integration
@@ -37,7 +35,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * port via {@code @LocalServerPort}.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@Testcontainers
 @EnabledIfEnvironmentVariable(named = "INTEGRATION_TESTS", matches = "1")
 @TestPropertySource(properties = {
         "jwt.secret=integration-test-jwt-secret-do-not-use-in-prod-32b",
@@ -46,22 +43,35 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 })
 public abstract class AbstractIntegrationTest {
 
-    @Container
-    protected static final PostgreSQLContainer<?> postgres =
-            new PostgreSQLContainer<>("postgres:16-alpine")
-                    .withDatabaseName("multiship_test")
-                    .withUsername("test")
-                    .withPassword("test")
-                    .withReuse(true);
+    /**
+     * JVM-singleton container. Deliberately NOT {@code @Container} —
+     * that annotation ties lifecycle to a single test class, so Spring's
+     * cached context (URL captured for class 1's port) breaks when class
+     * 2 boots against a new port. Starting the container in a static
+     * initializer + never stopping it (JVM exit handles cleanup) keeps
+     * the port stable for every class in the suite.
+     */
+    protected static final PostgreSQLContainer<?> postgres;
+    static {
+        postgres = new PostgreSQLContainer<>("postgres:16-alpine")
+                .withDatabaseName("multiship_test")
+                .withUsername("test")
+                .withPassword("test");
+        postgres.start();
+    }
 
     @DynamicPropertySource
     static void wireDatasource(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
-        // With a fresh container we can safely let Hibernate own the schema
-        // for tests — no Flyway baseline required.
-        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
+        // `update` (not create-drop): the Testcontainers Postgres is shared
+        // across all @SpringBootTest classes in the suite, and create-drop
+        // wipes the schema between contexts, breaking any test that runs
+        // after the first. update keeps the schema across the shared
+        // container's lifetime; Hibernate re-runs the create for a fresh
+        // container on the next JVM.
+        registry.add("spring.jpa.hibernate.ddl-auto", () -> "update");
         registry.add("spring.flyway.enabled", () -> "false");
     }
 }
