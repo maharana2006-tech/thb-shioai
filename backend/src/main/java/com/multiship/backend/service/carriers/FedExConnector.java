@@ -215,11 +215,14 @@ public class FedExConnector implements CarrierConnector {
                     .body(String.class);
 
             return parseShipmentResult(response);
+        } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
+            throw cex;
         } catch (Exception ex) {
-            // Mirror the UPS/Stamps connectors: degrade to a local fallback result
-            // instead of failing the whole label-generation flow.
-            log.warn("FedEx shipment request failed; using local fallback shipment result. Reason: {}", ex.getMessage());
-            return buildFallbackShipmentResult(request);
+            // Sprint 49 Tier 2: no silent fake-label fallback. Throw typed
+            // exception so downstream sees the real failure.
+            log.warn("FedEx createShipment failed: {}", ex.getMessage());
+            throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                    .map("FEDEX", ex, "createShipment");
         }
     }
 

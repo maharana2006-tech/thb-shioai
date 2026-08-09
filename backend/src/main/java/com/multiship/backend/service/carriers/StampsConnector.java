@@ -325,15 +325,19 @@ public class StampsConnector implements CarrierConnector {
                         .retrieve()
                         .body(String.class);
                 perPackage.add(parseCreateIndiciumResponse(response, request));
-            } catch (org.springframework.web.client.RestClientResponseException ex) {
-                String fault = extractSoapFault(ex.getResponseBodyAsString());
-                log.warn("Stamps CreateIndicium rejected by {} for package {}/{} (HTTP {}): {}",
-                        swsimUrl, i + 1, packages.size(), ex.getStatusCode().value(), fault);
-                perPackage.add(buildFallbackShipmentResult(request));
+            } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
+                throw cex;
             } catch (Exception ex) {
-                log.warn("Stamps CreateIndicium call to {} failed for package {}/{}; using local fallback shipment result. Reason: {}",
-                        swsimUrl, i + 1, packages.size(), ex.getMessage());
-                perPackage.add(buildFallbackShipmentResult(request));
+                // Sprint 49 Tier 2: no silent fake-label fallback. Throw typed
+                // exception; Fix 4 will add the compensating CancelIndicium for
+                // any pieces successfully created before this failure.
+                String fault = ex instanceof org.springframework.web.client.RestClientResponseException resp
+                        ? extractSoapFault(resp.getResponseBodyAsString())
+                        : ex.getMessage();
+                log.warn("Stamps CreateIndicium failed for package {}/{}: {}",
+                        i + 1, packages.size(), fault);
+                throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                        .map("STAMPS", ex, "createShipment[pkg " + (i + 1) + "/" + packages.size() + "]");
             }
         }
 

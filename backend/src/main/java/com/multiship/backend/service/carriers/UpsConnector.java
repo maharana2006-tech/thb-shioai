@@ -272,9 +272,18 @@ public class UpsConnector implements CarrierConnector {
                     .retrieve()
                     .body(String.class);
             return parseShipmentResult(response);
+        } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
+            // Already typed — surface without wrapping so the caller can
+            // distinguish auth / validation / rate-limit / server.
+            throw cex;
         } catch (Exception ex) {
-            log.warn("UPS shipment request failed; using local fallback shipment result. Reason: {}", ex.getMessage());
-            return buildFallbackShipmentResult(request);
+            // Sprint 49 Tier 2: no more silent fake-label fallback. Throw a
+            // typed carrier exception so the caller (CarrierServiceImpl)
+            // persists FAILED_CARRIER + returns 502/429/etc. instead of a
+            // synthetic tracking number for a shipment that never happened.
+            log.warn("UPS createShipment failed: {}", ex.getMessage());
+            throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                    .map("UPS", ex, "createShipment");
         }
     }
 

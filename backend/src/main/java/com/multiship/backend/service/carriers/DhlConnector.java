@@ -216,13 +216,14 @@ public class DhlConnector implements CarrierConnector {
                     .retrieve()
                     .body(String.class);
             return parseShipmentResult(response);
-        } catch (org.springframework.web.client.RestClientResponseException ex) {
-            log.warn("DHL shipment rejected (HTTP {}): {}", ex.getStatusCode().value(),
-                    ex.getResponseBodyAsString());
-            return buildFallbackShipmentResult(request);
+        } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
+            throw cex;
         } catch (Exception ex) {
-            log.warn("DHL shipment call failed; using local fallback. Reason: {}", ex.getMessage());
-            return buildFallbackShipmentResult(request);
+            // Sprint 49 Tier 2: no silent fake-label fallback. Throw typed
+            // exception so downstream sees the real failure.
+            log.warn("DHL createShipment failed: {}", ex.getMessage());
+            throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                    .map("DHL", ex, "createShipment");
         }
     }
 
