@@ -5,6 +5,7 @@ import {
   clientBillingMarkupService,
   type MarkupKind,
 } from '../../api/clientPolicyService'
+import { addMoney, applyMarkupPercent, fromCents, toCents } from '../../utils/money'
 
 const COMMON_CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'INR', 'JPY', 'SGD', 'AED']
 
@@ -77,16 +78,20 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
     }
   }
 
+  // Sprint 49 Tier 4 Fix 5 — cents-integer arithmetic so the preview
+  // matches what the backend computes (no 0.1 + 0.2 drift, no
+  // toFixed(2) inconsistency).
   const preview = () => {
     const parsed = Number(valueStr)
     if (!Number.isFinite(parsed) || parsed < 0) return null
-    // Reference rate for the preview (illustrative — the real bill uses the
-    // carrier's actual rate at label time).
-    const carrierRate = 25
-    const billable = kind === 'PERCENT'
-      ? carrierRate * (1 + parsed / 100)
-      : carrierRate + parsed
-    return { carrierRate, billable }
+    const carrierRateCents = toCents(25)  // illustrative reference rate
+    const billableCents = kind === 'PERCENT'
+      ? applyMarkupPercent(carrierRateCents, parsed)
+      : addMoney(carrierRateCents, toCents(parsed))
+    return {
+      carrierRate: fromCents(carrierRateCents, currency),
+      billable: fromCents(billableCents, currency),
+    }
   }
 
   const p = preview()
@@ -169,12 +174,9 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
               </p>
               <p className="mt-1">
                 On a{' '}
-                <span className="font-semibold text-slate-800">{currency || 'USD'} {p.carrierRate.toFixed(2)}</span>{' '}
+                <span className="font-semibold text-slate-800">{p.carrierRate}</span>{' '}
                 carrier rate, this markup produces a billable amount of{' '}
-                <span className="font-semibold text-slate-950">
-                  {currency || 'USD'} {p.billable.toFixed(2)}
-                </span>
-                .
+                <span className="font-semibold text-slate-950">{p.billable}</span>.
               </p>
             </div>
           ) : null}

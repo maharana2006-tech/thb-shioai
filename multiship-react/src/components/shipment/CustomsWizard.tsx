@@ -13,6 +13,22 @@ import {
 import { useVirtualizer } from '@tanstack/react-virtual'
 import type { CustomsItem, OrderCustomsPayload } from '../../api/customsService'
 import HsCodeCombobox from './HsCodeCombobox'
+import { fromCents, toCents } from '../../utils/money'
+
+/**
+ * Sprint 49 Tier 4 Fix 5 — line-total formatter. Multiplies quantity
+ * by unit-value cents to avoid float drift, then defers to Intl for
+ * locale-aware display.
+ */
+function formatLineTotal(
+  quantity: number | null | undefined,
+  unitValue: number | null | undefined,
+  currency: string | null | undefined,
+): string {
+  const q = Number.isFinite(quantity) ? Math.max(0, quantity as number) : 0
+  const totalCents = q * toCents(unitValue ?? 0)
+  return fromCents(totalCents, currency || 'USD')
+}
 
 /**
  * Four-step customs wizard for the label creation flow. Sprint-1 scaffold —
@@ -679,7 +695,9 @@ function ReviewStep({
               <div className="text-slate-500">HS {item.hsCode || '—'}</div>
               <div className="text-slate-500">×{item.quantity}</div>
               <div className="text-right tabular-nums text-slate-700">
-                {((item.quantity || 0) * (item.unitValue || 0)).toFixed(2)}
+                {/* Sprint 49 Tier 4 Fix 5 — cents-integer math avoids the
+                    classic 0.1*3 = 0.30000000000000004 in the invoice summary. */}
+                {formatLineTotal(item.quantity, item.unitValue, value.currency)}
               </div>
             </div>
           ))}
