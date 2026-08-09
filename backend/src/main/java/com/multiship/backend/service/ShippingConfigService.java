@@ -13,8 +13,10 @@ import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
+import com.multiship.backend.service.events.CarrierConfigChangedEvent;
 import com.multiship.backend.util.CountryRegions;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,6 +55,8 @@ public class ShippingConfigService {
     private final List<CarrierConnector> carrierConnectors;
     /** Platform carrier accounts — their credentials authenticate the live availability call. */
     private final CarrierAccountRefRepository carrierAccountRefRepository;
+    /** Sprint 49 Tier 3 Fix 1 — invalidate the rate cache when the catalog changes. */
+    private final ApplicationEventPublisher eventPublisher;
 
     /** A package chosen for a service. */
     public record PickedPackage(PackagePreset preset) {}
@@ -213,6 +217,12 @@ public class ShippingConfigService {
                 ? canonical + " offers no services from " + origin
                 : "Synced " + canonical + " from " + origin + ": " + added + " new, " + updated + " refreshed";
         String msg = outcome + " (" + availability.via() + ").";
+
+        // Sprint 49 Tier 3 Fix 1 — service-catalog changes affect rate-shop.
+        if (added > 0 || updated > 0) {
+            eventPublisher.publishEvent(
+                    new CarrierConfigChangedEvent(canonical, "services-sync"));
+        }
         return success(msg, data);
     }
 
@@ -289,6 +299,11 @@ public class ShippingConfigService {
         String head = availability.offerings().isEmpty()
                 ? canonical + " offers no packaging from " + origin
                 : "Synced " + canonical + " packaging from " + origin + ": " + added + " new, " + updated + " refreshed";
+        // Sprint 49 Tier 3 Fix 1 — package changes affect rate-shop's picked package.
+        if (added > 0 || updated > 0) {
+            eventPublisher.publishEvent(
+                    new CarrierConfigChangedEvent(canonical, "packages-sync"));
+        }
         return success(head + " (" + availability.via() + ").", data);
     }
 
@@ -328,6 +343,10 @@ public class ShippingConfigService {
         }
         svc.setEnabled(enabled);
         serviceRepository.save(svc);
+        // Sprint 49 Tier 3 Fix 1 — toggling a service in/out of rate-shop scope
+        // must clear cached prices for that carrier.
+        eventPublisher.publishEvent(
+                new CarrierConfigChangedEvent(svc.getCarrier(), enabled ? "service-enabled" : "service-disabled"));
         return success((enabled ? "Enabled " : "Disabled ") + svc.getName() + ".", svc);
     }
 

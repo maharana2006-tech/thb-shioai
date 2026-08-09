@@ -11,8 +11,10 @@ import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
+import com.multiship.backend.service.events.CarrierConfigChangedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,6 +37,8 @@ public class AccountRefServiceImpl implements AccountRefService {
     private final OrderTrackingRepository orderTrackingRepository;
     private final CarrierService carrierService;
     private final AuditService auditService;
+    /** Sprint 49 Tier 3 Fix 1 — publish rate-cache invalidation on account writes. */
+    private final ApplicationEventPublisher eventPublisher;
 
     private record Usage(long labels, LocalDateTime lastUsed) {}
 
@@ -82,6 +86,12 @@ public class AccountRefServiceImpl implements AccountRefService {
         account.setVerified(check.getVerified());
         account.setLastVerifiedAt(check.getCheckedAt());
         carrierAccountRefRepository.save(account);
+
+        // Sprint 49 Tier 3 Fix 1 — clear stale rate cache for this carrier;
+        // a verify may flip an unverified account to verified, changing the
+        // set of accounts rate-shop can call under.
+        eventPublisher.publishEvent(
+                new CarrierConfigChangedEvent(account.getCarrierCode(), "account-verified"));
 
         return success(check.getMessage(), toDTO(account));
     }
@@ -232,6 +242,12 @@ public class AccountRefServiceImpl implements AccountRefService {
                         + carrierCode + "/" + accountNumber
                         + (StringUtils.hasText(account.getCustomerNo())
                                 ? " (client " + account.getCustomerNo() + ")" : " (platform)"));
+
+        // Sprint 49 Tier 3 Fix 1 — a new/changed account changes which
+        // credentials rate-shop authenticates with; drop stale prices.
+        eventPublisher.publishEvent(
+                new CarrierConfigChangedEvent(carrierCode, "account-upsert"));
+
         return success("Carrier account saved to the reference book.", toDTO(account));
     }
 
@@ -295,6 +311,12 @@ public class AccountRefServiceImpl implements AccountRefService {
                 java.util.Map.of("active", nextActive, "customerNo", account.getCustomerNo()),
                 (nextActive ? "Carrier account activated: " : "Carrier account deactivated: ")
                         + account.getCarrierCode() + "/" + account.getAccountNumber());
+
+        // Sprint 49 Tier 3 Fix 1 — activating/deactivating an account can
+        // change which credentials rate-shop picks up.
+        eventPublisher.publishEvent(new CarrierConfigChangedEvent(
+                account.getCarrierCode(), nextActive ? "account-activated" : "account-deactivated"));
+
         return success(nextActive ? "Account activated." : "Account deactivated.", toDTO(account));
     }
 
@@ -419,6 +441,11 @@ public class AccountRefServiceImpl implements AccountRefService {
         auditService.record(AuditService.DELETE, AuditService.CARRIER_ACCOUNT,
                 deletedId, deletedCarrier + " · " + deletedNumber, null,
                 "Carrier account deleted: " + deletedCarrier + "/" + deletedNumber);
+
+        // Sprint 49 Tier 3 Fix 1 — drop this carrier's cached prices.
+        eventPublisher.publishEvent(
+                new CarrierConfigChangedEvent(deletedCarrier, "account-deleted"));
+
         return success("Account " + account.getAccountNumber() + " removed from the account book.", null);
     }
 
