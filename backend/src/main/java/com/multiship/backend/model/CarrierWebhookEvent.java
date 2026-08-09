@@ -63,6 +63,23 @@ public class CarrierWebhookEvent {
     @Column(name = "rejected")
     private Boolean rejected = false;
 
+    /**
+     * Sprint 49 Tier 1 — SHA-256 of (carrier || tracking || eventType ||
+     * statusCode || occurredAt) or of rawPayload when those fields are
+     * missing. Used to dedup replays inside a 24h window so a carrier
+     * re-delivery doesn't advance order state twice.
+     */
+    @Column(name = "event_hash", length = 64)
+    private String eventHash;
+
+    /**
+     * Sprint 49 Tier 1 — true when this row was matched to a prior
+     * verified event by {@link #eventHash} within the dedup window.
+     * Dedup'd rows are audited but never mutate state.
+     */
+    @Column(name = "duplicate")
+    private Boolean duplicate = false;
+
     /** When our webhook receiver got the request. */
     @Column(name = "received_at", nullable = false)
     private LocalDateTime receivedAt;

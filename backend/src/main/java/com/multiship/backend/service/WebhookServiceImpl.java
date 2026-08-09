@@ -12,8 +12,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -33,6 +37,12 @@ import java.util.Optional;
  * that never had an HMAC secret to begin with). Without the opt-in,
  * unsigned webhooks are marked {@code rejected=true} and the controller
  * returns 401 to the caller.
+ *
+ * <p>Sprint 49 Tier 1 — replay dedup. Verified events compute a
+ * {@code eventHash} (SHA-256 of carrier + tracking + type + status +
+ * occurredAt, falling back to hash of rawPayload). If a matching
+ * verified row exists within the last 24h, the new event is persisted
+ * as {@code duplicate=true} and order state is NOT mutated.
  */
 @Slf4j
 @Service
@@ -98,6 +108,23 @@ public class WebhookServiceImpl implements WebhookService {
         audit.setLocation(event.location());
         audit.setDescription(event.description());
         audit.setDelivered(event.delivered());
+        audit.setEventHash(computeEventHash(carrier, event, rawPayload));
+
+        // Sprint 49 Tier 1 — dedup gate. If a prior verified row with the
+        // same event_hash landed in the last 24h, persist this row with
+        // duplicate=true and do NOT mutate order state.
+        if (mutateState && audit.getEventHash() != null) {
+            LocalDateTime windowStart = LocalDateTime.now(ZoneOffset.UTC).minusHours(24);
+            Optional<CarrierWebhookEvent> prior = webhookEventRepository
+                    .findFirstByEventHashAndVerifiedTrueAndReceivedAtAfterOrderByReceivedAtDesc(
+                            audit.getEventHash(), windowStart);
+            if (prior.isPresent()) {
+                audit.setDuplicate(true);
+                log.info("Webhook: {} duplicate event {} (prior id={}) — audit only, no state change.",
+                        carrier, audit.getEventHash(), prior.get().getId());
+                return webhookEventRepository.save(audit);
+            }
+        }
 
         CarrierWebhookEvent saved = webhookEventRepository.save(audit);
 
@@ -138,5 +165,40 @@ public class WebhookServiceImpl implements WebhookService {
         }
 
         return saved;
+    }
+
+    /**
+     * Sprint 49 Tier 1 — SHA-256 event fingerprint for dedup. Combines the
+     * fields that MUST all match for two events to represent "the same
+     * carrier scan"; falls back to hashing the raw payload if any of those
+     * are missing (e.g. malformed parser output that still somehow
+     * verified).
+     */
+    static String computeEventHash(String carrier, TrackingWebhookEvent event, String rawPayload) {
+        if (event == null) return sha256(rawPayload == null ? "" : rawPayload);
+        String tracking = event.trackingNumber();
+        String type = event.eventType();
+        String status = event.statusCode();
+        var occurred = event.occurredAt();
+        if (tracking == null || tracking.isBlank() || occurred == null) {
+            return sha256(rawPayload == null ? "" : rawPayload);
+        }
+        String base = String.join("|",
+                carrier == null ? "" : carrier,
+                tracking,
+                type == null ? "" : type,
+                status == null ? "" : status,
+                occurred.toString());
+        return sha256(base);
+    }
+
+    private static String sha256(String s) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(s.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
     }
 }
