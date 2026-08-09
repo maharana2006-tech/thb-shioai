@@ -151,9 +151,20 @@ export const accountRefService = {
     return apiClient.post<ApiResponse<CredentialCheck>>('/carrier-accounts/verify-credentials', payload)
   },
 
-  /** Platform-account credentials for a carrier, to pre-fill the add-account drawer. */
+  /**
+   * Platform-account metadata for a carrier, to pre-fill Client ID in the
+   * add-account drawer. Sprint 49 Tier 1: the API no longer returns the
+   * plaintext client_secret — only a masked preview. The drawer prompts
+   * the admin to re-enter or paste the secret.
+   */
   getPlatformCredentials: (carrierCode: string) => {
-    return apiClient.get<ApiResponse<{ carrierCode: string; clientId: string | null; clientSecret: string | null; found: boolean }>>(
+    return apiClient.get<ApiResponse<{
+      carrierCode: string;
+      clientId: string | null;
+      clientSecretMasked: string | null;
+      hasClientSecret: boolean;
+      found: boolean
+    }>>(
       `/carrier-accounts/platform-credentials/${encodeURIComponent(carrierCode)}`
     )
   },

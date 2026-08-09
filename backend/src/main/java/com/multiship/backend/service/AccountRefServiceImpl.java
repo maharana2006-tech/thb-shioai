@@ -373,14 +373,28 @@ public class AccountRefServiceImpl implements AccountRefService {
 
         return carrierAccountRefRepository.findPlatformAccountsByCarrier(canonical).stream()
                 .findFirst()
-                .map(account -> success("Platform credentials loaded.", PlatformCredentialsDTO.builder()
-                        .carrierCode(canonical)
-                        .clientId(account.getClientId())
-                        .clientSecret(account.getClientSecret())
-                        .found(true)
-                        .build()))
+                .map(account -> {
+                    // Sprint 49 Tier 1: never return the plaintext client_secret.
+                    // The UI shows the mask and (future) triggers a server-side
+                    // copy flow when the admin picks "use platform credentials".
+                    String secret = account.getClientSecret();
+                    boolean hasSecret = secret != null && !secret.isBlank();
+                    String masked = hasSecret ? maskSecret(secret) : "";
+                    return success("Platform credentials loaded.", PlatformCredentialsDTO.builder()
+                            .carrierCode(canonical)
+                            .clientId(account.getClientId())
+                            .clientSecretMasked(masked)
+                            .hasClientSecret(hasSecret)
+                            .found(true)
+                            .build());
+                })
                 .orElseGet(() -> success("No platform account for this carrier yet.",
                         PlatformCredentialsDTO.builder().carrierCode(canonical).found(false).build()));
+    }
+
+    private static String maskSecret(String s) {
+        if (s == null || s.length() <= 4) return "****";
+        return "****" + s.substring(s.length() - 4);
     }
 
     @Override

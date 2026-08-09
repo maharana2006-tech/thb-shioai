@@ -293,8 +293,11 @@ export default function CarrierConnections({
       .getPlatformCredentials(drawer.carrierCode)
       .then((r) => {
         if (cancelled) return
+        // Sprint 49 Tier 1: API no longer returns plaintext clientSecret —
+        // only a masked preview. Prefill clientId; leave secret empty so
+        // the admin re-enters or pastes it.
         if (r.data?.found) {
-          setDrawer((c) => ({ ...c, clientId: r.data.clientId || '', clientSecret: r.data.clientSecret || '' }))
+          setDrawer((c) => ({ ...c, clientId: r.data.clientId || '', clientSecret: '' }))
         } else {
           setDrawer((c) => ({ ...c, clientId: '', clientSecret: '' }))
         }
