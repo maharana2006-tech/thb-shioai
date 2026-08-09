@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import WorkspaceHeader from './WorkspaceHeader'
 import BrandBackdrop from './BrandBackdrop'
+import RouteErrorBoundary from '../errors/RouteErrorBoundary'
 
 const PIN_KEY = 'multiship_nav_pinned'
 
@@ -32,9 +33,28 @@ export default function WorkspaceLayout() {
       <div className={`relative transition-[margin] duration-200 ease-out print:ml-0 ${pinned ? 'ml-56' : 'ml-16'}`}>
         <WorkspaceHeader />
         <main className="px-4 py-5 sm:px-6 lg:px-8">
-          <Outlet />
+          {/* Sprint 49 Tier 4 Fix 1 — route-scoped boundary so a broken
+              /orders (or any route) doesn't kill the sidebar + topbar
+              around it. Keyed by pathname so retrying navigates to a
+              fresh mount cleanly on the same route. */}
+          <RouteScopedBoundary />
         </main>
       </div>
     </div>
+  )
+}
+
+/**
+ * Sprint 49 Tier 4 Fix 1 — path-keyed boundary so navigating away
+ * from a crashed page resets the boundary state; otherwise the error
+ * fallback would persist even after the operator picks a different
+ * sidebar item.
+ */
+function RouteScopedBoundary() {
+  const location = useLocation()
+  return (
+    <RouteErrorBoundary key={location.pathname} routeLabel={location.pathname}>
+      <Outlet />
+    </RouteErrorBoundary>
   )
 }
