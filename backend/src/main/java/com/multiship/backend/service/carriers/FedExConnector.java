@@ -734,7 +734,10 @@ public class FedExConnector implements CarrierConnector {
                     .body(body)
                     .retrieve()
                     .body(String.class);
-            log.info("FedEx AV response: {}", response);
+            // Sprint 49 Tier 1 — full response contained streetLines / city /
+            // postalCode / email / phone for the validated address. Moved to
+            // DEBUG so prod logs no longer leak PII by default.
+            log.debug("FedEx AV response: {}", response);
             return parseFedExAvResponse(response);
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             log.warn("FedEx AV rejected (HTTP {}): {}",

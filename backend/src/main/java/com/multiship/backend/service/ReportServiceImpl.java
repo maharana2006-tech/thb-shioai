@@ -222,6 +222,13 @@ public class ReportServiceImpl implements ReportService {
 
     /**
      * CSV-safe stringify: nulls → "", commas / quotes / newlines quoted.
+     *
+     * <p>Sprint 49 Tier 1 — formula-injection guard. Excel and other
+     * spreadsheet consumers execute cells beginning with {@code =},
+     * {@code +}, {@code -}, {@code @}, TAB, or CR as formulas. A hostile
+     * customer name like {@code =cmd|'/c calc'!A1} would fire on export
+     * open. Prefix such values with a single quote so the sheet renders
+     * them as literal text.
      */
     static String csv(Object v) {
         if (v == null) return "";
@@ -230,8 +237,19 @@ public class ReportServiceImpl implements ReportService {
         else if (v instanceof LocalDateTime ldt) s = ldt.toString();
         else if (v instanceof java.time.LocalDate ld) s = ld.toString();
         else s = v.toString();
+        s = escapeFormulaInjection(s);
         if (s.contains(",") || s.contains("\"") || s.contains("\n")) {
             return "\"" + s.replace("\"", "\"\"") + "\"";
+        }
+        return s;
+    }
+
+    static String escapeFormulaInjection(String s) {
+        if (s == null || s.isEmpty()) return s;
+        char first = s.charAt(0);
+        if (first == '=' || first == '+' || first == '-' || first == '@'
+                || first == '\t' || first == '\r') {
+            return "'" + s;
         }
         return s;
     }

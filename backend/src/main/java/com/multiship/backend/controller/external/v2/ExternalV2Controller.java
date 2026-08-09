@@ -41,7 +41,7 @@ import java.util.Map;
         description = "Sprint 46 — Idempotent shipment ops + multi-carrier rate-shop + pickup/close-out/landed-cost + DG preview")
 @RestController
 @RequestMapping("/api/v2/external")
-@CrossOrigin(origins = "*")
+// Sprint 49 Tier 1: @CrossOrigin("*") removed — SecurityConfig applies restrictive CORS globally.
 @RequiredArgsConstructor
 @PreAuthorize("hasAnyRole('API', 'ADMIN')")
 public class ExternalV2Controller {

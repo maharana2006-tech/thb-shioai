@@ -16,9 +16,12 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -167,5 +170,81 @@ class WebhookServiceImplTest {
 
         assertFalse(Boolean.TRUE.equals(result.getRejected()));
         assertEquals("FEDEX", result.getCarrierCode());
+    }
+
+    /* -------- Sprint 49 Tier 1 — replay dedup -------- */
+
+    @Test
+    void duplicateVerifiedEventInWindowIsDedupedNoStateChange() {
+        props.getSecrets().setUps("shared-secret");
+        when(connector.verifyWebhookSignature(anyString(), any(), anyString())).thenReturn(true);
+        TrackingWebhookEvent evt = sampleEvent();
+        when(connector.parseWebhookEvent(anyString(), any())).thenReturn(evt);
+
+        // Repo returns a prior verified event → dedup gate fires
+        CarrierWebhookEvent prior = new CarrierWebhookEvent();
+        prior.setId(999L);
+        prior.setVerified(true);
+        prior.setEventHash("dummy");
+        when(eventRepo.findFirstByEventHashAndVerifiedTrueAndReceivedAtAfterOrderByReceivedAtDesc(
+                anyString(), any())).thenReturn(Optional.of(prior));
+
+        CarrierWebhookEvent result = service.receive("UPS", "raw-body", Map.of());
+
+        assertTrue(Boolean.TRUE.equals(result.getDuplicate()),
+                "second delivery must be flagged duplicate");
+        verify(trackingRepo, never()).save(any());
+    }
+
+    @Test
+    void firstVerifiedEventPersistsAndMutatesState() {
+        props.getSecrets().setUps("shared-secret");
+        when(connector.verifyWebhookSignature(anyString(), any(), anyString())).thenReturn(true);
+        when(connector.parseWebhookEvent(anyString(), any())).thenReturn(sampleEvent());
+        when(eventRepo.findFirstByEventHashAndVerifiedTrueAndReceivedAtAfterOrderByReceivedAtDesc(
+                anyString(), any())).thenReturn(Optional.empty());
+        when(trackingRepo.findByTrackingNumberIgnoreCase(anyString()))
+                .thenReturn(Optional.of(new com.multiship.backend.model.OrderTracking()));
+
+        CarrierWebhookEvent result = service.receive("UPS", "raw-body", Map.of());
+
+        assertFalse(Boolean.TRUE.equals(result.getDuplicate()));
+        assertTrue(Boolean.TRUE.equals(result.getVerified()));
+        verify(trackingRepo, times(1)).save(any());
+    }
+
+    @Test
+    void eventHashIsStableAcrossDuplicateDeliveries() {
+        // Two calls with the same parsed event → identical hash → dedup lookup uses same key.
+        LocalDateTime fixed = LocalDateTime.of(2026, 8, 9, 10, 0);
+        TrackingWebhookEvent evt = new TrackingWebhookEvent(
+                "1Z9999", "DL", "DELIVERED", fixed, "Loc", true, "Delivered");
+        String h1 = WebhookServiceImpl.computeEventHash("UPS", evt, "body-a");
+        String h2 = WebhookServiceImpl.computeEventHash("UPS", evt, "body-b");
+        assertEquals(h1, h2, "hash must depend only on parsed fields, not raw body");
+        assertEquals(64, h1.length(), "SHA-256 hex should be 64 chars");
+    }
+
+    @Test
+    void eventHashFallsBackToPayloadHashWhenTrackingMissing() {
+        // Malformed event with null tracking → fall back to raw payload hash.
+        TrackingWebhookEvent evt = new TrackingWebhookEvent(
+                null, "DL", "DELIVERED", LocalDateTime.now(), "Loc", true, "Delivered");
+        String h = WebhookServiceImpl.computeEventHash("UPS", evt, "raw-body-content");
+        assertEquals(64, h.length());
+        // Different payload → different hash even though event fields match
+        String h2 = WebhookServiceImpl.computeEventHash("UPS", evt, "different-body");
+        assertNotEquals(h, h2);
+    }
+
+    @Test
+    void eventHashDiffersByCarrier() {
+        // Same event fields but delivered by two different carriers must not collide.
+        LocalDateTime fixed = LocalDateTime.of(2026, 8, 9, 10, 0);
+        TrackingWebhookEvent evt = new TrackingWebhookEvent(
+                "1Z9999", "DL", "DELIVERED", fixed, "Loc", true, "Delivered");
+        assertNotEquals(
+                WebhookServiceImpl.computeEventHash("UPS", evt, ""),
+                WebhookServiceImpl.computeEventHash("FEDEX", evt, ""));
     }
 }

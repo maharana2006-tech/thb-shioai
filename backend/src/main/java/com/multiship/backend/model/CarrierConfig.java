@@ -57,7 +57,11 @@ public class CarrierConfig {
     @Column(name = "client_id", length = 255)
     private String clientId;
 
-    @Column(name = "client_secret", length = 255)
+    // Sprint 49 Tier 1: encrypted at rest via EncryptedStringConverter.
+    // Column widened to 512 to fit the base64 nonce||GCM ciphertext||tag
+    // wire format (~380 chars for a 255-char plaintext).
+    @Column(name = "client_secret", length = 512)
+    @jakarta.persistence.Convert(converter = com.multiship.backend.config.EncryptedStringConverter.class)
     private String clientSecret;
 
     @Column(name = "account_number", length = 100)

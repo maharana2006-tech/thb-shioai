@@ -26,7 +26,7 @@ import java.util.List;
 @Tag(name = "Orders", description = "The unified order list, single-order reads, and label documents")
 @RestController
 @RequestMapping("/api/v1/orders")
-@CrossOrigin(origins = "*")
+// Sprint 49 Tier 1: @CrossOrigin("*") removed — SecurityConfig applies restrictive CORS globally.
 public class OrderController {
 
     @Autowired

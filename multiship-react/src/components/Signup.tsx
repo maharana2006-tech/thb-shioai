@@ -31,12 +31,13 @@ export default function Signup() {
 
       // Button already shows a loading state; no interim modal needed.
       try {
+        // Sprint 49 Tier 1: role no longer sent from browser — the backend
+        // always creates a USER account for anonymous signups.
         const response = await authService.signup({
           username: values.username,
           email: values.email,
           password: values.password,
           fullName: values.fullName,
-          role: 'USER',
         })
 
         notify.success(response.message || 'Operator account registered successfully!')

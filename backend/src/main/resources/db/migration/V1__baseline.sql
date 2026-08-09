@@ -1,0 +1,15 @@
+-- Sprint 49 Tier 1 — Flyway baseline marker.
+--
+-- Intentionally empty. On first startup:
+--   * Fresh Postgres (empty DB) — Hibernate's ddl-auto=update creates all
+--     tables from entity metadata; Flyway then stamps V1 (skips this file
+--     because the DB is at "baseline") and proceeds to V2+.
+--   * Existing prod Postgres (rich schema built up over sprints via
+--     ddl-auto=update) — `spring.flyway.baseline-on-migrate=true` +
+--     `spring.flyway.baseline-version=1` stamps V1 without executing
+--     the file, then runs V2+.
+--
+-- A future sprint will do a proper `pg_dump --schema-only` from a
+-- verified prod database into V1 (or a replacement V1_1) so we can
+-- move ddl-auto from `update` to `validate`. Until then Hibernate
+-- retains authority over the schema and Flyway tracks the version.
