@@ -267,6 +267,15 @@ public class CarrierServiceImpl implements CarrierService {
         return success("Carrier status loaded successfully.", response);
     }
 
+    // TODO(sprint49-tier2-fix6-followup): method holds a Postgres row lock
+    // (via findByOrderNoForUpdate below) for the entire duration of the
+    // carrier HTTP call. Splitting this into A) reserve IN_FLIGHT +
+    // release lock, B) carrier call, C) persist result — requires an
+    // IN_FLIGHT status column + saga for stuck rows. Deliverable in a
+    // dedicated PR. Interim mitigations shipped in Tier 2:
+    // application.properties sets 30s Hikari leak-detection + 60s tx
+    // timeout, so a wedged carrier call surfaces with a stack trace and
+    // is auto-rolled-back rather than exhausting the pool.
     @Override
     @Transactional
     public ApiResponse<LabelGenerationResponse> generateLabel(Long orderNo, UserDetails userDetails, String idempotencyKey, Long accountId) {
@@ -500,6 +509,11 @@ public class CarrierServiceImpl implements CarrierService {
      * as a manual order (label_batch.is_manual = 'Y') + tracking so it appears in
      * the queue/archive and its label document renders.
      */
+    // TODO(sprint49-tier2-fix6-followup): method-level @Transactional
+    // holds the DB connection during the carrier HTTP call (5-15s RTT).
+    // Follow-up will split into validate → carrier-call (no tx) →
+    // persist-result (@Transactional). Interim: 60s tx timeout in
+    // application.properties bounds the worst case.
     @Override
     @org.springframework.transaction.annotation.Transactional
     public ApiResponse<LabelGenerationResponse> generateManualLabel(
