@@ -77,4 +77,24 @@ public class ApiKey {
     /** Username of the admin who issued the key. */
     @Column(name = "created_by", length = 100)
     private String createdBy;
+
+    /**
+     * Sprint 50 Tier 0.5 PR A — key lifecycle. NULL = never expires (platform
+     * keys only per policy). Filter enforcement lands in PR C; column exists
+     * now so PRs B+C can wire against a stable schema.
+     */
+    @Column(name = "expires_at")
+    private LocalDateTime expiresAt;
+
+    /**
+     * Sprint 50 Tier 0.5 PR A — rotation trail. When a key is rotated
+     * (POST /api-keys/{id}/rotate in PR C), the new key row points at the
+     * previous key's id via rotated_from_id; the old key stays active for
+     * a 24h grace with revoked_at set at the end of grace.
+     */
+    @Column(name = "rotated_from_id")
+    private Long rotatedFromId;
+
+    @Column(name = "last_rotated_at")
+    private LocalDateTime lastRotatedAt;
 }

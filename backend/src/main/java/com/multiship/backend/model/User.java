@@ -38,6 +38,21 @@ public class User {
     @Column(nullable = false, length = 100)
     private String role;
 
+    /**
+     * Sprint 50 Tier 0.5 PR A — formalises the User↔Client tenant linkage
+     * that was previously derived from the username via convention
+     * ({@code OrderAccessEvaluator.tenantIdOf}).
+     *
+     * <p>Nullable during rollout: legacy ADMIN + USER rows (org-wide operator
+     * scope) keep {@code client_code = null}; TENANT rows are backfilled from
+     * uppercase(username) by the V3 Flyway migration. PR E adds the semantic
+     * gate — USER-with-clientCode becomes tenant-scoped; USER-without-clientCode
+     * stays org-wide for backward-compat; ADMIN stays org-wide unconditionally.
+     * PR F will NOT-NULL the column for USER + TENANT roles.
+     */
+    @Column(name = "client_code", length = 50)
+    private String clientCode;
+
     // ===== Carrier Integration Fields =====
     @Column(name = "preferred_carrier", length = 50)
     private String preferredCarrier;

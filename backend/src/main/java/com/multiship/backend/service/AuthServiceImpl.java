@@ -87,7 +87,10 @@ public class AuthServiceImpl implements AuthService {
 
         if (userOptional.isPresent() && passwordEncoder.matches(loginRequest.getPassword(), userOptional.get().getPassword())) {
             User user = userOptional.get();
-            String token = jwtService.generateToken(user.getUsername(), user.getRole());
+            // Sprint 50 Tier 0.5 PR A — carry the user's clientCode in the JWT.
+            // Null for legacy internal ADMIN + USER (org-wide); populated for
+            // TENANT + any USER assigned to a client via PR E's admin UI.
+            String token = jwtService.generateToken(user.getUsername(), user.getRole(), user.getClientCode());
             return ResponseEntity.ok(new AuthResponse(token, user.getUsername(), user.getRole()));
         }
 

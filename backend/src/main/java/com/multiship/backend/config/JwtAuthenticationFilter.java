@@ -1,5 +1,7 @@
 package com.multiship.backend.config;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
@@ -15,9 +17,12 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import com.multiship.backend.model.ApiKey;
 import com.multiship.backend.repository.ApiKeyRepository;
+import com.multiship.backend.repository.UserRepository;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -32,14 +37,61 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
      *  but the principal is a plain UserDetails and downstream controllers
      *  that expect ApiKeyPrincipal see null. */
     private final ApiKeyRepository apiKeyService;
+    /** Sprint 50 Tier 0.5 PR A — optional; when non-null and a token carries
+     *  no clientCode claim, the filter falls back to a DB lookup here so
+     *  pre-migration tokens keep working through the 24h JWT window. */
+    private final UserRepository userRepository;
+
+    /**
+     * Sprint 50 Tier 0.5 PR A — 5-min cache on the username → clientCode
+     * fallback lookup so a burst of pre-migration-token requests doesn't
+     * pound the users table. Bounded at 10k entries; TTL keeps flipped-in
+     * assignments visible within a window.
+     */
+    private final Cache<String, String> clientCodeFallbackCache =
+            Caffeine.newBuilder()
+                    .maximumSize(10_000)
+                    .expireAfterWrite(Duration.ofMinutes(5))
+                    .build();
 
     public JwtAuthenticationFilter(JwtService jwtService) {
-        this(jwtService, null);
+        this(jwtService, null, null);
     }
 
     public JwtAuthenticationFilter(JwtService jwtService, ApiKeyRepository apiKeyRepository) {
+        this(jwtService, apiKeyRepository, null);
+    }
+
+    public JwtAuthenticationFilter(JwtService jwtService, ApiKeyRepository apiKeyRepository,
+                                    UserRepository userRepository) {
         this.jwtService = jwtService;
         this.apiKeyService = apiKeyRepository;
+        this.userRepository = userRepository;
+    }
+
+    /**
+     * Sprint 50 Tier 0.5 PR A — carrier for the clientCode resolved for the
+     * current request. Attached to {@code Authentication.details}. Empty
+     * during rollout means "legacy internal operator" (see PR E logic).
+     */
+    public record AuthDetails(String clientCode) {}
+
+    /**
+     * Sprint 50 Tier 0.5 PR A — DB fallback for pre-migration tokens whose
+     * JWT payload predates the {@code clientCode} claim. Cached 5 min so a
+     * burst of legacy-token requests doesn't hammer the users table.
+     * Returns {@code null} for unknown username (legacy internal operator).
+     */
+    private String resolveClientCodeFromDb(String username) {
+        String cached = clientCodeFallbackCache.getIfPresent(username);
+        if (cached != null) {
+            // "" sentinel = we looked and found no clientCode; skip re-hitting DB.
+            return cached.isEmpty() ? null : cached;
+        }
+        Optional<com.multiship.backend.model.User> row = userRepository.findByUsername(username);
+        String code = row.map(com.multiship.backend.model.User::getClientCode).orElse(null);
+        clientCodeFallbackCache.put(username, code == null ? "" : code);
+        return code;
     }
 
     /** Reads "apikey:<id>" subject and rehydrates an ApiKeyPrincipal. */
@@ -84,6 +136,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 Claims claims = jwtService.parseClaims(token);
                 String username = claims.getSubject();
                 String role = claims.get("role", String.class);
+                // Sprint 50 Tier 0.5 PR A — new claim; MAY be null for
+                // pre-migration tokens. Filter attaches it to
+                // Authentication.details so downstream OrderAccessEvaluator
+                // (PR E) reads it without a DB hit.
+                String clientCode = claims.get("clientCode", String.class);
+                if ((clientCode == null || clientCode.isBlank())
+                        && username != null
+                        && !username.startsWith("apikey:")
+                        && userRepository != null) {
+                    clientCode = resolveClientCodeFromDb(username);
+                }
 
                 if (username != null && role != null) {
                     var authorities = List.of(new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()));
@@ -118,6 +181,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     if (principal != null) {
                         UsernamePasswordAuthenticationToken authentication =
                                 new UsernamePasswordAuthenticationToken(principal, null, authorities);
+                        // Sprint 50 Tier 0.5 PR A — expose the resolved
+                        // clientCode via Authentication.details so PR E's
+                        // OrderAccessEvaluator + service-layer guards can
+                        // read it without repeating the DB lookup.
+                        if (clientCode != null && !clientCode.isBlank()) {
+                            authentication.setDetails(new AuthDetails(clientCode));
+                        }
                         SecurityContextHolder.getContext().setAuthentication(authentication);
                     }
                 }
