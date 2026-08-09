@@ -20,7 +20,7 @@ import java.time.LocalDateTime;
 @Tag(name = "Addresses", description = "Validate a recipient address")
 @RestController
 @RequestMapping("/api/v1/addresses")
-@CrossOrigin(origins = "*")
+// Sprint 49 Tier 1: @CrossOrigin("*") removed — SecurityConfig applies restrictive CORS globally.
 @RequiredArgsConstructor
 public class AddressController {
 

@@ -26,7 +26,7 @@ import java.util.List;
         description = "Sprint 46 — subscribe to LABEL_GENERATED / TRACKING_UPDATED / EXCEPTION / RULE_BLOCKED events")
 @RestController
 @RequestMapping("/api/v2/external/webhooks")
-@CrossOrigin(origins = "*")
+// Sprint 49 Tier 1: @CrossOrigin("*") removed — SecurityConfig applies restrictive CORS globally.
 @RequiredArgsConstructor
 @PreAuthorize("hasAnyRole('API', 'ADMIN')")
 public class ExternalWebhookController {

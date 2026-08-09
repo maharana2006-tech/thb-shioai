@@ -28,7 +28,7 @@ import java.util.List;
 @Tag(name = "API Keys", description = "Issue and revoke API keys for external applications")
 @RestController
 @RequestMapping("/api/v1/api-keys")
-@CrossOrigin(origins = "*")
+// Sprint 49 Tier 1: @CrossOrigin("*") removed — SecurityConfig applies restrictive CORS globally.
 @RequiredArgsConstructor
 @PreAuthorize("hasRole('ADMIN')")
 public class ApiKeyController {

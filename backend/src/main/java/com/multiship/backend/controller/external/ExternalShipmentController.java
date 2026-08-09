@@ -24,7 +24,7 @@ import java.util.Map;
 @Tag(name = "External Shipping API", description = "Rate, create, track, and void shipments with an API key")
 @RestController
 @RequestMapping("/api/v1/external")
-@CrossOrigin(origins = "*")
+// Sprint 49 Tier 1: @CrossOrigin("*") removed — SecurityConfig applies restrictive CORS globally.
 @RequiredArgsConstructor
 @PreAuthorize("hasAnyRole('API', 'ADMIN')")
 public class ExternalShipmentController {
