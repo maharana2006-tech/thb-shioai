@@ -26,10 +26,13 @@ import java.util.Optional;
  * TrackingService poll. Malformed payloads and bad-signature events are
  * still persisted (for audit) but leave OrderTracking untouched.
  *
- * <p>When {@code webhook.secrets.{carrier}} is blank, the connector's
- * signature verification returns false; we log the payload as
- * unverified but still update tracking. Some carriers use IP allowlist
- * (not HMAC) for verification, so blank secret = "trust the payload".
+ * <p>Sprint 49 Tier 0 — signature bypass fixed. A blank
+ * {@code webhook.secrets.{carrier}} no longer implies "trust". The
+ * per-carrier {@code webhook.unsigned.{carrier}=true} opt-in is now
+ * required to accept unsigned webhooks (for the IP-allowlist deployments
+ * that never had an HMAC secret to begin with). Without the opt-in,
+ * unsigned webhooks are marked {@code rejected=true} and the controller
+ * returns 401 to the caller.
  */
 @Slf4j
 @Service
@@ -63,13 +66,22 @@ public class WebhookServiceImpl implements WebhookService {
 
         String secret = webhookProperties.secretFor(carrier);
         boolean sigOk;
+        boolean mutateState;  // only true on verified events; unsigned-opt-in accepts + audits without touching order state
         if (StringUtils.hasText(secret)) {
             sigOk = connector.verifyWebhookSignature(rawPayload, headers, secret);
+            mutateState = sigOk;
+        } else if (webhookProperties.allowsUnsigned(carrier)) {
+            // Blank secret + explicit opt-in → accept but never mutate; auditor still gets the row.
+            sigOk = false;
+            mutateState = false;
+            log.warn("Webhook: {} accepted unsigned (opt-in); audit only, no state change.", carrier);
         } else {
-            // Blank secret → trust the payload (carrier uses IP allowlist).
-            // Persist as unverified but still process.
-            sigOk = true;
-            log.warn("Webhook: no secret configured for {} — trusting payload.", carrier);
+            // Blank secret + no opt-in → REJECT. Persist audit row with rejected=true;
+            // the controller returns 401 to the caller.
+            audit.setVerified(false);
+            audit.setRejected(true);
+            log.warn("Webhook: {} rejected — no secret configured and unsigned opt-in disabled.", carrier);
+            return webhookEventRepository.save(audit);
         }
         audit.setVerified(sigOk);
 
@@ -93,7 +105,10 @@ public class WebhookServiceImpl implements WebhookService {
         // Carrier webhooks are keyed by per-piece tracking on multi-package
         // shipments — look up the per-piece row first, then bubble up to the
         // master (OrderTracking) so the order-level status still advances.
-        if (sigOk && StringUtils.hasText(event.trackingNumber())) {
+        //
+        // Sprint 49 Tier 0: `mutateState` (not raw `sigOk`) drives this — the
+        // unsigned-opt-in path is intentionally audit-only.
+        if (mutateState && StringUtils.hasText(event.trackingNumber())) {
             String eventTracking = event.trackingNumber();
             // Per-piece resolution — the LabelPackage row for this exact box.
             labelPackageRepository.findByTrackingNumber(eventTracking).ifPresent(pkg -> {

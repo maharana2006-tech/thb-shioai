@@ -19,9 +19,11 @@ import java.util.Locale;
  * webhook.secrets.stamps=jkl012
  * </pre>
  *
- * <p>Blank secrets are treated as "no verifiable webhook configured" —
- * the receiver logs the payload as unverified but doesn't reject the
- * carrier (some carriers use IP allowlist rather than HMAC).
+ * <p>Sprint 49 Tier 0: a blank secret alone no longer implies "trust the
+ * payload". Per-carrier opt-in is required for unsigned mode via
+ * {@code webhook.unsigned.{carrier}=true}, matching the older
+ * IP-allowlist deployments. Without the opt-in, unsigned webhooks are
+ * rejected (401) so an attacker cannot POST arbitrary shipment updates.
  */
 @Component
 @ConfigurationProperties(prefix = "webhook")
@@ -30,6 +32,12 @@ import java.util.Locale;
 public class WebhookProperties {
 
     private final Secrets secrets = new Secrets();
+
+    /**
+     * Per-carrier opt-in for unsigned webhooks. Applies only when the
+     * matching secret is blank; ignored when a secret is configured.
+     */
+    private final Unsigned unsigned = new Unsigned();
 
     public String secretFor(String carrierCode) {
         if (carrierCode == null) return null;
@@ -42,6 +50,17 @@ public class WebhookProperties {
         };
     }
 
+    public boolean allowsUnsigned(String carrierCode) {
+        if (carrierCode == null) return false;
+        return switch (carrierCode.trim().toUpperCase(Locale.ROOT)) {
+            case "UPS" -> unsigned.ups;
+            case "FEDEX" -> unsigned.fedex;
+            case "DHL" -> unsigned.dhl;
+            case "USPS", "STAMPS" -> unsigned.stamps;
+            default -> false;
+        };
+    }
+
     @Getter
     @Setter
     public static class Secrets {
@@ -49,5 +68,14 @@ public class WebhookProperties {
         private String fedex = "";
         private String dhl = "";
         private String stamps = "";
+    }
+
+    @Getter
+    @Setter
+    public static class Unsigned {
+        private boolean ups;
+        private boolean fedex;
+        private boolean dhl;
+        private boolean stamps;
     }
 }
