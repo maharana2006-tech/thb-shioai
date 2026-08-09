@@ -56,16 +56,16 @@ class PickupTest {
         PickupRequest r = baseRequest();
         assertEquals("NOT_SUPPORTED",
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                        .schedulePickup(r, "ups-local-abc").status());
+                        .schedulePickup(r, "ups-local-abc", null).status());
         assertEquals("NOT_SUPPORTED",
                 new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                        .schedulePickup(r, "fedex-local-abc").status());
+                        .schedulePickup(r, "fedex-local-abc", null).status());
         assertEquals("NOT_SUPPORTED",
                 new DhlConnector(new CarrierProperties(), new ObjectMapper())
-                        .schedulePickup(r, "dhl-local-abc").status());
+                        .schedulePickup(r, "dhl-local-abc", null).status());
         assertEquals("NOT_SUPPORTED",
                 new StampsConnector(new CarrierProperties(), new ObjectMapper())
-                        .schedulePickup(r, "stamps-local-abc").status());
+                        .schedulePickup(r, "stamps-local-abc", null).status());
     }
 
     @Test
@@ -73,16 +73,16 @@ class PickupTest {
         PickupRequest r = baseRequest();
         assertEquals("NOT_SUPPORTED",
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                        .schedulePickup(r, null).status());
+                        .schedulePickup(r, null, null).status());
         assertEquals("NOT_SUPPORTED",
                 new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                        .schedulePickup(r, null).status());
+                        .schedulePickup(r, null, null).status());
         assertEquals("NOT_SUPPORTED",
                 new DhlConnector(new CarrierProperties(), new ObjectMapper())
-                        .schedulePickup(r, null).status());
+                        .schedulePickup(r, null, null).status());
         assertEquals("NOT_SUPPORTED",
                 new StampsConnector(new CarrierProperties(), new ObjectMapper())
-                        .schedulePickup(r, null).status());
+                        .schedulePickup(r, null, null).status());
     }
 
     /* -------------------------- UPS -------------------------- */

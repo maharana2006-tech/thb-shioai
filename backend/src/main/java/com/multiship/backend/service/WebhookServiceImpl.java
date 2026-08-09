@@ -40,6 +40,7 @@ public class WebhookServiceImpl implements WebhookService {
     private final CarrierWebhookEventRepository webhookEventRepository;
     private final OrderTrackingRepository orderTrackingRepository;
     private final WebhookProperties webhookProperties;
+    private final com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
 
     @Override
     public CarrierWebhookEvent receive(String carrierCode, String rawPayload,
@@ -88,11 +89,29 @@ public class WebhookServiceImpl implements WebhookService {
 
         CarrierWebhookEvent saved = webhookEventRepository.save(audit);
 
-        // Only mutate OrderTracking on verified events with a tracking
-        // number we already know about.
+        // Only mutate on verified events with a tracking number we know about.
+        // Carrier webhooks are keyed by per-piece tracking on multi-package
+        // shipments — look up the per-piece row first, then bubble up to the
+        // master (OrderTracking) so the order-level status still advances.
         if (sigOk && StringUtils.hasText(event.trackingNumber())) {
+            String eventTracking = event.trackingNumber();
+            // Per-piece resolution — the LabelPackage row for this exact box.
+            labelPackageRepository.findByTrackingNumber(eventTracking).ifPresent(pkg -> {
+                // Bump the per-piece updated_at; status column TBD in a
+                // follow-up. Currently we surface per-piece movement via
+                // the description on the CarrierWebhookEvent audit row.
+                pkg.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
+                labelPackageRepository.save(pkg);
+            });
+            // Master (shipment-level) — either the tracking IS the master, or
+            // it's a piece; in both cases we advance the order's status.
             Optional<OrderTracking> tracking = orderTrackingRepository
-                    .findByTrackingNumberIgnoreCase(event.trackingNumber());
+                    .findByTrackingNumberIgnoreCase(eventTracking);
+            if (tracking.isEmpty()) {
+                // Piece-tracking event — resolve the master via the LabelPackage row.
+                tracking = labelPackageRepository.findByTrackingNumber(eventTracking)
+                        .flatMap(pkg -> orderTrackingRepository.findByOrderNo(pkg.getOrderNo()).stream().findFirst());
+            }
             if (tracking.isPresent()) {
                 OrderTracking t = tracking.get();
                 if (StringUtils.hasText(event.description())) {

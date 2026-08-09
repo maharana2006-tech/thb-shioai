@@ -43,19 +43,19 @@ class StampsTrackingTest {
 
     @Test
     void localFallbackTokenShortCircuitsToStub() {
-        var result = connector.trackShipment("9400", "stamps-local-abc");
+        var result = connector.trackShipment("9400", "stamps-local-abc", null);
         assertEquals("UNKNOWN", result.status());
         assertTrue(result.events().isEmpty());
     }
 
     @Test
     void blankTokenShortCircuitsToStub() {
-        assertEquals("UNKNOWN", connector.trackShipment("9400", "").status());
+        assertEquals("UNKNOWN", connector.trackShipment("9400", "", null).status());
     }
 
     @Test
     void nullTokenShortCircuitsToStub() {
-        assertEquals("UNKNOWN", connector.trackShipment("9400", null).status());
+        assertEquals("UNKNOWN", connector.trackShipment("9400", null, null).status());
     }
 
     @Test

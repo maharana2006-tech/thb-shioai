@@ -15,9 +15,26 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
 
     Optional<Order> findByOrderNo(Integer orderNo);
 
-    /** Highest order number in the table (0 when empty) — manual orders take max+1. */
-    @Query("SELECT COALESCE(MAX(o.orderNo), 0) FROM Order o")
-    Integer findMaxOrderNo();
+    /**
+     * Sprint 48 B10 — allocates the next order_no for a manual shipment
+     * from a Postgres sequence. Replaces the racy {@code MAX(order_no) + 1}
+     * pattern that let two concurrent createManualShipment calls compute
+     * the same id and collide on the PK.
+     *
+     * <p>The sequence is created + seeded on startup by
+     * {@code OrderNoSequenceInitializer}. Under contention, Postgres
+     * serialises {@code nextval()} without any lock the application can
+     * see, so there is no thread coordination needed here.
+     */
+    @Query(value = "SELECT nextval('label_batch_order_no_seq')", nativeQuery = true)
+    Long nextManualOrderNoRaw();
+
+    /** Convenience wrapper — sequences are bigint on the wire but our
+     *  order_no column is INTEGER, so the value always fits. */
+    default int nextManualOrderNo() {
+        Long v = nextManualOrderNoRaw();
+        return v == null ? 0 : v.intValue();
+    }
 
     /** Highest import batch id in the table (0 when empty) — a bulk CSV/XLSX import takes max+1. */
     @Query("SELECT COALESCE(MAX(o.batchId), 0) FROM Order o")

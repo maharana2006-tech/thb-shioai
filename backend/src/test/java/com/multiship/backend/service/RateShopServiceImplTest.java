@@ -147,14 +147,14 @@ class RateShopServiceImplTest {
         when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok-fedex");
         when(uspsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok-usps");
         when(dhlConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok-dhl");
-        when(upsConn.getRates(any(), eq("tok-ups"))).thenReturn(List.of(
+        when(upsConn.getRates(any(), eq("tok-ups"), any())).thenReturn(List.of(
                 option("UPS", "03", "12.50"),
                 option("UPS", "01", "42.75")));
-        when(fedexConn.getRates(any(), eq("tok-fedex"))).thenReturn(List.of(
+        when(fedexConn.getRates(any(), eq("tok-fedex"), any())).thenReturn(List.of(
                 option("FEDEX", "FEDEX_GROUND", "11.20")));
-        when(uspsConn.getRates(any(), eq("tok-usps"))).thenReturn(List.of(
+        when(uspsConn.getRates(any(), eq("tok-usps"), any())).thenReturn(List.of(
                 option("USPS", "USPS GA", "7.85")));
-        when(dhlConn.getRates(any(), eq("tok-dhl"))).thenReturn(List.of(
+        when(dhlConn.getRates(any(), eq("tok-dhl"), any())).thenReturn(List.of(
                 option("DHL", "P", "35.00")));
 
         var response = service.rateShop(req());
@@ -179,7 +179,7 @@ class RateShopServiceImplTest {
         when(accountRepo.findPlatformAccountsByCarrier("USPS")).thenReturn(List.of());
         when(accountRepo.findPlatformAccountsByCarrier("DHL")).thenReturn(List.of());
         when(upsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
-        when(upsConn.getRates(any(), eq("tok"))).thenReturn(List.of(option("UPS", "03", "12.50")));
+        when(upsConn.getRates(any(), eq("tok"), any())).thenReturn(List.of(option("UPS", "03", "12.50")));
 
         var response = service.rateShop(req());
         RateShopResponseDTO body = response.getData();
@@ -201,11 +201,11 @@ class RateShopServiceImplTest {
         when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(uspsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(dhlConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
-        when(upsConn.getRates(any(), anyString())).thenReturn(List.of(option("UPS", "03", "12.50")));
-        when(fedexConn.getRates(any(), anyString()))
+        when(upsConn.getRates(any(), anyString(), any())).thenReturn(List.of(option("UPS", "03", "12.50")));
+        when(fedexConn.getRates(any(), anyString(), any()))
                 .thenThrow(new RuntimeException("FedEx API down"));
-        when(uspsConn.getRates(any(), anyString())).thenReturn(List.of());
-        when(dhlConn.getRates(any(), anyString())).thenReturn(List.of(option("DHL", "P", "35.00")));
+        when(uspsConn.getRates(any(), anyString(), any())).thenReturn(List.of());
+        when(dhlConn.getRates(any(), anyString(), any())).thenReturn(List.of(option("DHL", "P", "35.00")));
 
         var response = service.rateShop(req());
         RateShopResponseDTO body = response.getData();
@@ -230,9 +230,9 @@ class RateShopServiceImplTest {
         when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(uspsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(dhlConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
-        when(fedexConn.getRates(any(), anyString())).thenReturn(List.of());
-        when(uspsConn.getRates(any(), anyString())).thenReturn(List.of());
-        when(dhlConn.getRates(any(), anyString())).thenReturn(List.of());
+        when(fedexConn.getRates(any(), anyString(), any())).thenReturn(List.of());
+        when(uspsConn.getRates(any(), anyString(), any())).thenReturn(List.of());
+        when(dhlConn.getRates(any(), anyString(), any())).thenReturn(List.of());
 
         var response = service.rateShop(req());
         RateShopResponseDTO body = response.getData();
@@ -250,10 +250,10 @@ class RateShopServiceImplTest {
         when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(uspsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(dhlConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
-        when(upsConn.getRates(any(), anyString())).thenReturn(List.of());
-        when(fedexConn.getRates(any(), anyString())).thenReturn(List.of());
-        when(uspsConn.getRates(any(), anyString())).thenReturn(List.of());
-        when(dhlConn.getRates(any(), anyString())).thenReturn(List.of());
+        when(upsConn.getRates(any(), anyString(), any())).thenReturn(List.of());
+        when(fedexConn.getRates(any(), anyString(), any())).thenReturn(List.of());
+        when(uspsConn.getRates(any(), anyString(), any())).thenReturn(List.of());
+        when(dhlConn.getRates(any(), anyString(), any())).thenReturn(List.of());
 
         var response = service.rateShop(req());
         assertEquals("success", response.getStatus());
@@ -312,8 +312,8 @@ class RateShopServiceImplTest {
                 .thenReturn(List.of(acct("_")));
         when(upsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
-        when(upsConn.getRates(any(), anyString())).thenReturn(List.of(option("UPS", "03", "12.50")));
-        when(fedexConn.getRates(any(), anyString())).thenReturn(List.of(option("FEDEX", "FEDEX_GROUND", "11.20")));
+        when(upsConn.getRates(any(), anyString(), any())).thenReturn(List.of(option("UPS", "03", "12.50")));
+        when(fedexConn.getRates(any(), anyString(), any())).thenReturn(List.of(option("FEDEX", "FEDEX_GROUND", "11.20")));
 
         var response = service.rateShop(request);
         // Only two carriers, no USPS or DHL status entries.
@@ -360,16 +360,16 @@ class RateShopServiceImplTest {
         when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(uspsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(dhlConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
-        when(upsConn.getRates(any(), anyString())).thenReturn(List.of(
+        when(upsConn.getRates(any(), anyString(), any())).thenReturn(List.of(
                 new CarrierConnector.RateOption("UPS", "07", "UPS Express",
                         new BigDecimal("25"), "USD", null, 3)));
-        when(fedexConn.getRates(any(), anyString())).thenReturn(List.of(
+        when(fedexConn.getRates(any(), anyString(), any())).thenReturn(List.of(
                 new CarrierConnector.RateOption("FEDEX", "INTL_ECON", "FedEx Intl Econ",
                         new BigDecimal("20"), "EUR", null, 5)));
-        when(uspsConn.getRates(any(), anyString())).thenReturn(List.of(
+        when(uspsConn.getRates(any(), anyString(), any())).thenReturn(List.of(
                 new CarrierConnector.RateOption("USPS", "USPS PMI", "USPS PMI",
                         new BigDecimal("20"), "USD", null, 4)));
-        when(dhlConn.getRates(any(), anyString())).thenReturn(List.of());
+        when(dhlConn.getRates(any(), anyString(), any())).thenReturn(List.of());
 
         var response = service.rateShop(req());
         var options = response.getData().getOptions();
@@ -395,14 +395,14 @@ class RateShopServiceImplTest {
         when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(uspsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(dhlConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
-        when(upsConn.getRates(any(), anyString())).thenReturn(List.of(
+        when(upsConn.getRates(any(), anyString(), any())).thenReturn(List.of(
                 new CarrierConnector.RateOption("UPS", "03", "UPS Ground",
                         new BigDecimal("15"), "USD", null, 3)));
-        when(fedexConn.getRates(any(), anyString())).thenReturn(List.of(
+        when(fedexConn.getRates(any(), anyString(), any())).thenReturn(List.of(
                 new CarrierConnector.RateOption("FEDEX", "INTL", "FedEx Intl",
                         new BigDecimal("20"), "EUR", null, 5)));
-        when(uspsConn.getRates(any(), anyString())).thenReturn(List.of());
-        when(dhlConn.getRates(any(), anyString())).thenReturn(List.of());
+        when(uspsConn.getRates(any(), anyString(), any())).thenReturn(List.of());
+        when(dhlConn.getRates(any(), anyString(), any())).thenReturn(List.of());
 
         var response = service.rateShop(req());
         var options = response.getData().getOptions();
@@ -420,10 +420,10 @@ class RateShopServiceImplTest {
         when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(uspsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(dhlConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
-        when(upsConn.getRates(any(), anyString())).thenReturn(List.of(option("UPS", "03", "12.50")));
-        when(fedexConn.getRates(any(), anyString())).thenReturn(List.of());
-        when(uspsConn.getRates(any(), anyString())).thenReturn(List.of());
-        when(dhlConn.getRates(any(), anyString())).thenReturn(List.of());
+        when(upsConn.getRates(any(), anyString(), any())).thenReturn(List.of(option("UPS", "03", "12.50")));
+        when(fedexConn.getRates(any(), anyString(), any())).thenReturn(List.of());
+        when(uspsConn.getRates(any(), anyString(), any())).thenReturn(List.of());
+        when(dhlConn.getRates(any(), anyString(), any())).thenReturn(List.of());
 
         service.rateShop(req());
         org.mockito.Mockito.verify(fxRateService, org.mockito.Mockito.never())
@@ -557,10 +557,10 @@ class RateShopServiceImplTest {
         when(fedexConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(uspsConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
         when(dhlConn.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
-        when(upsConn.getRates(any(), anyString())).thenReturn(List.of(option(carrier, serviceCode, amount)));
-        when(fedexConn.getRates(any(), anyString())).thenReturn(List.of());
-        when(uspsConn.getRates(any(), anyString())).thenReturn(List.of());
-        when(dhlConn.getRates(any(), anyString())).thenReturn(List.of());
+        when(upsConn.getRates(any(), anyString(), any())).thenReturn(List.of(option(carrier, serviceCode, amount)));
+        when(fedexConn.getRates(any(), anyString(), any())).thenReturn(List.of());
+        when(uspsConn.getRates(any(), anyString(), any())).thenReturn(List.of());
+        when(dhlConn.getRates(any(), anyString(), any())).thenReturn(List.of());
     }
 
     private com.multiship.backend.model.ShippingService svc(Long id, String carrier, String serviceCode) {

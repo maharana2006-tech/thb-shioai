@@ -130,22 +130,34 @@ class StampsMultiPackageTest {
     }
 
     @Test
-    void aggregateSinglePackagePassesThrough() {
+    void aggregateSinglePackageMasterMatchesTheSoleResult() {
+        // Sprint 48 B1: aggregation always wraps into the packages[] shape;
+        // master tracking equals the sole piece's tracking. Raw response
+        // gets the "pkg 1" marker prefix for debug consistency.
         ShipmentResult sole = result("9400111899223811234567", "https://track/1",
                 "https://labels/1", "10.20", "<xml1/>");
         ShipmentResult agg = connector.aggregateStampsShipmentResults(List.of(sole));
-        assertEquals(sole, agg,
-                "Single-package aggregation should return the same result unchanged");
+        assertEquals(sole.trackingNumber(), agg.trackingNumber(),
+                "single-pkg master tracking mirrors the sole piece");
+        assertEquals(1, agg.packages().size(), "packages[] carries the sole piece");
+        assertEquals(sole.trackingNumber(), agg.packages().get(0).trackingNumber());
     }
 
     @Test
-    void aggregateJoinsTrackingNumbersWithCommas() {
+    void aggregateMultiPackageMasterIsPiece1_pieceListHoldsAll() {
+        // Sprint 48 B1: the old CSV-joined trackingNumber string is gone.
+        // Master = piece 1's tracking (matches how customer-facing systems
+        // reference "the shipment"); every piece lives in packages[].
         ShipmentResult r1 = result("PKG-1", "https://track/1", "https://labels/1", "10.20", "<xml1/>");
         ShipmentResult r2 = result("PKG-2", "https://track/2", "https://labels/2", "8.50", "<xml2/>");
         ShipmentResult r3 = result("PKG-3", "https://track/3", "https://labels/3", "3.10", "<xml3/>");
 
         ShipmentResult agg = connector.aggregateStampsShipmentResults(List.of(r1, r2, r3));
-        assertEquals("PKG-1,PKG-2,PKG-3", agg.trackingNumber());
+        assertEquals("PKG-1", agg.trackingNumber(), "master = piece 1's tracking");
+        assertEquals(3, agg.packages().size(), "packages[] holds all 3 pieces");
+        assertEquals("PKG-1", agg.packages().get(0).trackingNumber());
+        assertEquals("PKG-2", agg.packages().get(1).trackingNumber());
+        assertEquals("PKG-3", agg.packages().get(2).trackingNumber());
     }
 
     @Test
@@ -197,12 +209,16 @@ class StampsMultiPackageTest {
 
     @Test
     void aggregateTolerantOfBlankTrackingNumbers() {
-        // If a package's CreateIndicium falls back (SWSIM outage), its
-        // trackingNumber may be null. We just skip it in the join.
+        // Sprint 48 B1: master = piece 1's tracking (even if some pieces
+        // fell back with null tracking); the packages[] list still carries
+        // one entry per piece so downstream persistence can see the gap.
         ShipmentResult r1 = result("PKG-1", null, null, "10.20", null);
         ShipmentResult r2 = result(null, null, null, null, null);  // fallback path
         ShipmentResult r3 = result("PKG-3", null, null, "3.10", null);
         ShipmentResult agg = connector.aggregateStampsShipmentResults(List.of(r1, r2, r3));
-        assertEquals("PKG-1,PKG-3", agg.trackingNumber());
+        assertEquals("PKG-1", agg.trackingNumber(), "master = piece 1's tracking (non-null)");
+        assertEquals(3, agg.packages().size(), "one PackageTracking per piece regardless of null tracking");
+        assertNull(agg.packages().get(1).trackingNumber(), "piece 2 (fallback) has null tracking preserved");
+        assertEquals("PKG-3", agg.packages().get(2).trackingNumber());
     }
 }

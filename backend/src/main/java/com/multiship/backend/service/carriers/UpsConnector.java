@@ -49,7 +49,7 @@ public class UpsConnector implements CarrierConnector {
     }
 
     @Override
-    public ServiceAvailability listServices(String originCountry, String accessToken) {
+    public ServiceAvailability listServices(String originCountry, String accessToken, String environment) {
         List<ServiceOffering> matrix = serviceMatrix(originCountry);
         // A live availability lookup needs a REAL OAuth token. In dev the
         // connectors run on local fallback tokens (no live UPS credentials) —
@@ -62,7 +62,7 @@ public class UpsConnector implements CarrierConnector {
         // response; if UPS returns nothing, publish the carrier's standard service
         // catalog for this verified account (still live — backed by a verified credential).
         try {
-            List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken);
+            List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken, environment);
             if (!live.isEmpty()) {
                 return new ServiceAvailability(live, true, "UPS Rating API (Shop)");
             }
@@ -79,8 +79,11 @@ public class UpsConnector implements CarrierConnector {
      * (see backend/docs/CUSTOMS_CARRIER_MAPPING.md). Throws/returns empty when
      * unreachable so the caller falls back to the built-in model.
      */
-    private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken) throws Exception {
-        String url = carrierProperties.getUps().getApiBaseUrl() + "/api/rating/"
+    private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken, String environment) throws Exception {
+        String baseUrl = isSandbox(environment)
+                ? carrierProperties.getUps().getSandboxUrl()
+                : carrierProperties.getUps().getApiBaseUrl();
+        String url = baseUrl + "/api/rating/"
                 + carrierProperties.getUps().getApiVersion() + "/Shop";
         String response = RestClient.builder().baseUrl(url).build()
                 .post()
@@ -133,7 +136,7 @@ public class UpsConnector implements CarrierConnector {
     }
 
     @Override
-    public PackageAvailability listPackages(String originCountry, String accessToken) {
+    public PackageAvailability listPackages(String originCountry, String accessToken, String environment) {
         // UPS packaging is a published, static catalogue (same set every origin);
         // the 10/25KG boxes are international-only. Token unused — packaging isn't
         // a live availability call.
@@ -252,11 +255,14 @@ public class UpsConnector implements CarrierConnector {
     }
 
     @Override
-    public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken) {
+    public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
         try {
             Map<String, Object> payload = buildShipmentPayload(request);
+            String baseUrl = isSandbox(environment)
+                    ? carrierProperties.getUps().getSandboxUrl()
+                    : carrierProperties.getUps().getApiBaseUrl();
             String response = RestClient.builder()
-                    .baseUrl(carrierProperties.getUps().getApiBaseUrl())
+                    .baseUrl(baseUrl)
                     .build()
                     .post()
                     .contentType(MediaType.APPLICATION_JSON)
@@ -314,13 +320,16 @@ public class UpsConnector implements CarrierConnector {
      * convention Sprint 12 established for FedEx.
      */
     @Override
-    public TrackingResult trackShipment(String trackingNumber, String accessToken) {
+    public TrackingResult trackShipment(String trackingNumber, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return trackShipment(trackingNumber);
         }
         String trackingUrl = "https://www.ups.com/track?tracknum=" + trackingNumber;
+        String baseUrl = isSandbox(environment)
+                ? carrierProperties.getUps().getSandboxUrl()
+                : carrierProperties.getUps().getApiBaseUrl();
         try {
-            String response = RestClient.builder().baseUrl(carrierProperties.getUps().getApiBaseUrl()).build().get()
+            String response = RestClient.builder().baseUrl(baseUrl).build().get()
                     .uri("/api/track/v1/details/" + trackingNumber)
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
@@ -438,7 +447,7 @@ public class UpsConnector implements CarrierConnector {
      * {@code NOT_SUPPORTED} — the account never actually authenticated.
      */
     @Override
-    public VoidResult voidShipment(String trackingNumber, String accessToken) {
+    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "UPS void needs live credentials; the account is on a fallback token.",
@@ -446,9 +455,12 @@ public class UpsConnector implements CarrierConnector {
         }
         String url = "/api/shipments/" + carrierProperties.getUps().getApiVersion()
                 + "/void/cancel/" + trackingNumber;
+        String baseUrl = isSandbox(environment)
+                ? carrierProperties.getUps().getSandboxUrl()
+                : carrierProperties.getUps().getApiBaseUrl();
         try {
             String response = RestClient.builder()
-                    .baseUrl(carrierProperties.getUps().getApiBaseUrl()).build()
+                    .baseUrl(baseUrl).build()
                     .method(org.springframework.http.HttpMethod.DELETE)
                     .uri(url)
                     .accept(MediaType.APPLICATION_JSON)
@@ -515,18 +527,24 @@ public class UpsConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken) {
+    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new AddressValidationResult(false, "NOT_SUPPORTED", "UNKNOWN", null,
                     java.util.List.of(),
                     "UPS AVS needs live credentials; the account is on a fallback token.",
                     null);
         }
+        // UPS AVS host must match the env the token was minted in — a sandbox
+        // (CIE) token 401s against onlinetools.ups.com and a prod token 401s
+        // against wwwcie.ups.com. See getAccessToken() for the same routing.
+        String baseUrl = isSandbox(environment)
+                ? carrierProperties.getUps().getSandboxUrl()
+                : carrierProperties.getUps().getApiBaseUrl();
         String url = "/api/addressvalidation/" + carrierProperties.getUps().getApiVersion() + "/1";
         try {
             Map<String, Object> body = buildUpsAvsRequest(address);
             String response = RestClient.builder()
-                    .baseUrl(carrierProperties.getUps().getApiBaseUrl()).build()
+                    .baseUrl(baseUrl).build()
                     .post()
                     .uri(url + "?regionalrequestindicator=false&maximumcandidatelistsize=5")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -539,18 +557,51 @@ public class UpsConnector implements CarrierConnector {
                     .body(String.class);
             return parseUpsAvsResponse(address, response);
         } catch (org.springframework.web.client.RestClientResponseException ex) {
-            log.warn("UPS AVS rejected (HTTP {}): {}",
-                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            String body = ex.getResponseBodyAsString();
+            log.warn("UPS AVS rejected (HTTP {}): {}", ex.getStatusCode().value(), body);
             return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
                     java.util.List.of(),
-                    "UPS AVS rejected: HTTP " + ex.getStatusCode().value(),
-                    ex.getResponseBodyAsString());
+                    formatUpsError("UPS AVS", ex.getStatusCode().value(), body),
+                    body);
         } catch (Exception ex) {
             log.warn("UPS AVS call failed: {}", ex.getMessage());
             return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
                     java.util.List.of(),
                     "UPS AVS call failed: " + ex.getMessage(), null);
         }
+    }
+
+    /**
+     * Turn a UPS error response body into a human-readable message.
+     * UPS wraps errors as {@code {"response":{"errors":[{"code":"...","message":"..."}]}}}.
+     * Adds a hint for known "gotcha" codes (e.g. 250002 = product not subscribed on the app).
+     */
+    private String formatUpsError(String opName, int httpStatus, String body) {
+        try {
+            JsonNode root = objectMapper.readTree(Optional.ofNullable(body).orElse("{}"));
+            JsonNode errors = root.path("response").path("errors");
+            if (errors.isArray() && errors.size() > 0) {
+                JsonNode first = errors.get(0);
+                String code = first.path("code").asText("");
+                String message = first.path("message").asText("");
+                StringBuilder sb = new StringBuilder(opName).append(" · HTTP ").append(httpStatus);
+                if (!code.isEmpty()) sb.append(" · ").append(code);
+                if (!message.isEmpty()) sb.append(": ").append(message);
+                if ("250002".equals(code)) {
+                    sb.append(" — the OAuth token was issued but UPS did not accept it for this endpoint. "
+                            + "Most common cause: the developer app that owns these credentials is not "
+                            + "subscribed to the required product (Address Validation Street Level for AVS). "
+                            + "Enable it on the UPS Developer Portal, or use credentials from an app that already has it.");
+                } else if ("10401".equals(code)) {
+                    sb.append(" — sandbox credentials called against production host (or vice versa). "
+                            + "Check the carrier account's environment setting.");
+                }
+                return sb.toString();
+            }
+        } catch (Exception ignored) {
+            // Fall through to generic message
+        }
+        return opName + " rejected: HTTP " + httpStatus;
     }
 
     /** Build the UPS XAV request body. Only ShipTo.Address is sent. */
@@ -671,7 +722,7 @@ public class UpsConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken) {
+    public LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new LandedCostResult("UPS", "NOT_SUPPORTED",
                     null, null, null, null, null, null,
@@ -701,8 +752,11 @@ public class UpsConnector implements CarrierConnector {
             body.put("RateRequest", rateRequest);
 
             String url = "/api/rating/" + carrierProperties.getUps().getApiVersion() + "/Rate";
+            String baseUrl = isSandbox(environment)
+                    ? carrierProperties.getUps().getSandboxUrl()
+                    : carrierProperties.getUps().getApiBaseUrl();
             String response = RestClient.builder()
-                    .baseUrl(carrierProperties.getUps().getApiBaseUrl()).build()
+                    .baseUrl(baseUrl).build()
                     .post()
                     .uri(url)
                     .contentType(MediaType.APPLICATION_JSON)
@@ -859,7 +913,7 @@ public class UpsConnector implements CarrierConnector {
      * <p>{@code -local-*} fallback tokens short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public PickupResult schedulePickup(PickupRequest request, String accessToken) {
+    public PickupResult schedulePickup(PickupRequest request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new PickupResult("UPS", null, null, null, null, "NOT_SUPPORTED",
                     "UPS pickup needs live credentials; the account is on a fallback token.",
@@ -867,8 +921,11 @@ public class UpsConnector implements CarrierConnector {
         }
         try {
             Map<String, Object> body = buildUpsPickupRequest(request);
+            String baseUrl = isSandbox(environment)
+                    ? carrierProperties.getUps().getSandboxUrl()
+                    : carrierProperties.getUps().getApiBaseUrl();
             String response = RestClient.builder()
-                    .baseUrl(carrierProperties.getUps().getApiBaseUrl()).build()
+                    .baseUrl(baseUrl).build()
                     .post()
                     .uri("/api/shipments/v1/pickup")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -999,7 +1056,7 @@ public class UpsConnector implements CarrierConnector {
      * <p>{@code -local-*} fallback tokens short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken) {
+    public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new CloseOutResult("UPS", null, null, null, 0, "NOT_SUPPORTED",
                     "UPS close-out needs live credentials; the account is on a fallback token.",
@@ -1020,8 +1077,11 @@ public class UpsConnector implements CarrierConnector {
             eodRequest.put("Shipments", shipments);
 
             Map<String, Object> body = Map.of("EndOfDayRequest", eodRequest);
+            String baseUrl = isSandbox(environment)
+                    ? carrierProperties.getUps().getSandboxUrl()
+                    : carrierProperties.getUps().getApiBaseUrl();
             String response = RestClient.builder()
-                    .baseUrl(carrierProperties.getUps().getApiBaseUrl()).build()
+                    .baseUrl(baseUrl).build()
                     .post()
                     .uri("/api/shipments/v1/endofday")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -1221,9 +1281,24 @@ public class UpsConnector implements CarrierConnector {
         // Sprint 28 — multi-package. effectivePackages() returns
         // ShipmentRequestDTO.packages when populated, else a single-
         // package synthetic list from the top-level fields.
+        // Sprint 48 B11 — derive per-package declared value from CI
+        // commodities' boxSeq. UPS's Package[i].PackageServiceOptions.
+        // DeclaredValue is the ONLY declared-value field on the wire
+        // (no shipment-level equivalent for carriage liability), so we
+        // MUST populate each Package with its own value.
+        java.util.List<com.multiship.backend.dto.PackageDetailDTO> pkgList = request.effectivePackages();
+        com.multiship.backend.util.DeclaredValueContextBuilder.DeclaredValueContext dvCtx =
+                com.multiship.backend.util.DeclaredValueContextBuilder.build(
+                        request.getIntl() != null ? request.getIntl().getCommodities() : null,
+                        pkgList.size(),
+                        pkgList,
+                        firstNonBlank(request.getDeclaredValueCurrency(), "USD"),
+                        request.getDeclaredValue());
         java.util.List<Map<String, Object>> packageBlocks = new java.util.ArrayList<>();
-        for (com.multiship.backend.dto.PackageDetailDTO p : request.effectivePackages()) {
-            packageBlocks.add(buildPackage(request, p));
+        for (int i = 0; i < pkgList.size(); i++) {
+            packageBlocks.add(buildPackage(request, pkgList.get(i),
+                    i < dvCtx.perPackage().size() ? dvCtx.perPackage().get(i) : null,
+                    dvCtx.currency()));
         }
         shipment.put("Package", packageBlocks);
 
@@ -1399,8 +1474,16 @@ public class UpsConnector implements CarrierConnector {
      * block still lives at the shipment level; the same hazmat wire is
      * duplicated onto every package (UPS wants it per-package).
      */
+    /** Backwards-compat overload — no per-pkg declared value. Used by tests. */
     private Map<String, Object> buildPackage(ShipmentRequestDTO request,
                                               com.multiship.backend.dto.PackageDetailDTO p) {
+        return buildPackage(request, p, null, null);
+    }
+
+    private Map<String, Object> buildPackage(ShipmentRequestDTO request,
+                                              com.multiship.backend.dto.PackageDetailDTO p,
+                                              java.math.BigDecimal pieceDeclaredValue,
+                                              String currency) {
         Map<String, Object> pkg = new LinkedHashMap<>();
         pkg.put("Description", firstNonBlank(p.getDescription(),
                 firstNonBlank(request.getSpecialInstructions(), "Package")));
@@ -1439,7 +1522,13 @@ public class UpsConnector implements CarrierConnector {
 
         // Sprint 35 — signature + insurance are per-package on UPS
         // (PackageServiceOptions block).
-        Map<String, Object> serviceOptions = buildUpsPackageServiceOptions(request);
+        // Sprint 48 B11 — per-package DeclaredValue drives both carriage
+        // liability AND (when not overridden by explicit InsuredValue)
+        // the loss-claim ceiling. Passed in from the outer per-package
+        // loop; falls back to the shipment-level insuredValue when the
+        // per-pkg value is null / zero (preserves legacy insurance behavior).
+        Map<String, Object> serviceOptions = buildUpsPackageServiceOptions(request,
+                pieceDeclaredValue, currency);
         if (!serviceOptions.isEmpty()) {
             pkg.put("PackageServiceOptions", serviceOptions);
         }
@@ -1460,7 +1549,14 @@ public class UpsConnector implements CarrierConnector {
      * refunds the declared amount on loss/damage claims. Free tier is
      * $100; anything above that is billed.
      */
+    /** Backwards-compat overload — no per-pkg declared value. */
     private Map<String, Object> buildUpsPackageServiceOptions(ShipmentRequestDTO request) {
+        return buildUpsPackageServiceOptions(request, null, null);
+    }
+
+    private Map<String, Object> buildUpsPackageServiceOptions(ShipmentRequestDTO request,
+                                                              java.math.BigDecimal pieceDeclaredValue,
+                                                              String currency) {
         Map<String, Object> options = new LinkedHashMap<>();
         String sig = normaliseSignatureOption(request.getSignatureOption());
         if (sig != null) {
@@ -1474,13 +1570,28 @@ public class UpsConnector implements CarrierConnector {
                 options.put("DeliveryConfirmation", Map.of("DCISType", dcisType));
             }
         }
-        if (request.getInsuredValue() != null && request.getInsuredValue().signum() > 0) {
-            String currency = firstNonBlank(
+        // Sprint 48 B11 — resolution chain for DeclaredValue:
+        //   1. per-pkg value from CI-derived context (wins when present)
+        //   2. shipment-level insuredValue (legacy insurance-only orders)
+        // Note: UPS's DeclaredValue drives BOTH carriage liability and
+        // customs — same wire field. The customs invoice total lives
+        // separately under InternationalForms.InvoiceLineTotal.
+        java.math.BigDecimal effectiveDeclared = null;
+        String effectiveCurrency = null;
+        if (pieceDeclaredValue != null && pieceDeclaredValue.signum() > 0) {
+            effectiveDeclared = pieceDeclaredValue;
+            effectiveCurrency = firstNonBlank(currency,
+                    firstNonBlank(request.getDeclaredValueCurrency(), "USD")).toUpperCase();
+        } else if (request.getInsuredValue() != null && request.getInsuredValue().signum() > 0) {
+            effectiveDeclared = request.getInsuredValue();
+            effectiveCurrency = firstNonBlank(
                     firstNonBlank(request.getInsuredValueCurrency(), request.getDeclaredValueCurrency()),
                     "USD").toUpperCase();
+        }
+        if (effectiveDeclared != null) {
             options.put("DeclaredValue", Map.of(
-                    "CurrencyCode", currency,
-                    "MonetaryValue", request.getInsuredValue().toPlainString()));
+                    "CurrencyCode", effectiveCurrency,
+                    "MonetaryValue", effectiveDeclared.toPlainString()));
         }
         return options;
     }
@@ -1647,13 +1758,72 @@ public class UpsConnector implements CarrierConnector {
 
     private ShipmentResult parseShipmentResult(String response) throws Exception {
         JsonNode root = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
-        String trackingNumber = root.path("trackingNumber").asText(null);
-        String labelUrl = root.path("labelUrl").asText(null);
-        String labelPdf = root.path("labelPdf").asText(null);
-        BigDecimal shippingCost = root.path("shippingCost").isNumber() ? root.path("shippingCost").decimalValue() : null;
+
+        // Real UPS Ship API response nests under ShipmentResponse.ShipmentResults.
+        // Legacy / stub shape had flat top-level fields — fall back to that when
+        // the nested tree isn't there so existing tests keep working.
+        JsonNode results = root.at("/ShipmentResponse/ShipmentResults");
+        boolean realShape = !results.isMissingNode() && results.isObject();
+
+        String trackingNumber;
+        BigDecimal shippingCost;
+        String labelUrl;
+        String labelPdf;
+        JsonNode packageResults;
+
+        if (realShape) {
+            // Master shipment ID — the customer-facing identity that ties
+            // all pieces together.
+            trackingNumber = results.path("ShipmentIdentificationNumber").asText(null);
+            packageResults = results.path("PackageResults");
+            // Prefer the shipment-level total; else piece 1's base charge.
+            JsonNode totalCharge = results.path("ShipmentCharges").path("TotalCharges").path("MonetaryValue");
+            shippingCost = parseUpsMonetary(totalCharge);
+            // Top-level label pointers mirror piece 1 (matches how the master
+            // relates to piece 1 in the FedEx parser).
+            JsonNode piece0 = packageResults.isArray() && packageResults.size() > 0
+                    ? packageResults.get(0) : null;
+            labelUrl = piece0 == null ? null : piece0.path("ShippingLabel").path("GraphicImage").asText(null);
+            labelPdf = labelUrl;
+        } else {
+            // Legacy flat shape (tests + fallback):
+            trackingNumber = root.path("trackingNumber").asText(null);
+            labelUrl = root.path("labelUrl").asText(null);
+            labelPdf = root.path("labelPdf").asText(null);
+            shippingCost = root.path("shippingCost").isNumber() ? root.path("shippingCost").decimalValue() : null;
+            packageResults = com.fasterxml.jackson.databind.node.MissingNode.getInstance();
+        }
+
         LocalDateTime estimatedDelivery = parseDateTime(root.path("estimatedDelivery").asText(null));
-        String trackingUrl = StringUtils.hasText(trackingNumber) ? "https://www.ups.com/track?tracknum=" + trackingNumber : null;
-        return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelPdf, shippingCost, estimatedDelivery, response);
+        String trackingUrl = StringUtils.hasText(trackingNumber)
+                ? "https://www.ups.com/track?tracknum=" + trackingNumber : null;
+
+        // Per-piece rows — one PackageTracking per PackageResults[] entry.
+        java.util.List<PackageTracking> packages = new java.util.ArrayList<>();
+        if (packageResults.isArray()) {
+            for (int i = 0; i < packageResults.size(); i++) {
+                JsonNode pkg = packageResults.get(i);
+                String pcTrack = pkg.path("TrackingNumber").asText(null);
+                if (!StringUtils.hasText(pcTrack)) continue;
+                String pcLabel = pkg.path("ShippingLabel").path("GraphicImage").asText(null);
+                BigDecimal pcCharge = parseUpsMonetary(pkg.path("BaseServiceCharge").path("MonetaryValue"));
+                packages.add(new PackageTracking(i + 1, pcTrack,
+                        "https://www.ups.com/track?tracknum=" + pcTrack,
+                        pcLabel, pcLabel, pcCharge));
+            }
+        }
+
+        return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelPdf,
+                shippingCost, estimatedDelivery, response, packages);
+    }
+
+    /** UPS monetary values arrive as JSON strings ("12.34"), not numbers. */
+    private static BigDecimal parseUpsMonetary(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) return null;
+        if (node.isNumber()) return node.decimalValue();
+        String text = node.asText(null);
+        if (text == null || text.isBlank()) return null;
+        try { return new BigDecimal(text); } catch (NumberFormatException ignored) { return null; }
     }
 
     private ShipmentResult buildFallbackShipmentResult(ShipmentRequestDTO request) {
@@ -1695,7 +1865,7 @@ public class UpsConnector implements CarrierConnector {
      * Sprint 18 for FedEx rating.
      */
     @Override
-    public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken) {
+    public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return java.util.List.of();
         }
@@ -1712,8 +1882,11 @@ public class UpsConnector implements CarrierConnector {
             body.put("RateRequest", rateRequest);
 
             String url = "/api/rating/" + carrierProperties.getUps().getApiVersion() + "/Shop";
+            String baseUrl = isSandbox(environment)
+                    ? carrierProperties.getUps().getSandboxUrl()
+                    : carrierProperties.getUps().getApiBaseUrl();
             String response = RestClient.builder()
-                    .baseUrl(carrierProperties.getUps().getApiBaseUrl()).build()
+                    .baseUrl(baseUrl).build()
                     .post()
                     .uri(url)
                     .contentType(MediaType.APPLICATION_JSON)

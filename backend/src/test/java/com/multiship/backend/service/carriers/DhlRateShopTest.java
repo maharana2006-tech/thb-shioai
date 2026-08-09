@@ -46,17 +46,17 @@ class DhlRateShopTest {
 
     @Test
     void localFallbackTokenReturnsEmptyList() {
-        assertTrue(connector.getRates(minimalRequest(), "dhl-local-abc").isEmpty());
+        assertTrue(connector.getRates(minimalRequest(), "dhl-local-abc", null).isEmpty());
     }
 
     @Test
     void blankTokenReturnsEmptyList() {
-        assertTrue(connector.getRates(minimalRequest(), "").isEmpty());
+        assertTrue(connector.getRates(minimalRequest(), "", null).isEmpty());
     }
 
     @Test
     void nullTokenReturnsEmptyList() {
-        assertTrue(connector.getRates(minimalRequest(), null).isEmpty());
+        assertTrue(connector.getRates(minimalRequest(), null, null).isEmpty());
     }
 
     /* -------------------------- Response parsing -------------------------- */

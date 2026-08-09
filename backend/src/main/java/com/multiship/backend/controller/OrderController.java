@@ -500,7 +500,8 @@ public class OrderController {
     @Operation(summary = "Raw ZPL for the 4x6 thermal label (text/plain)")
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
     @GetMapping(value = "/{orderNo}/label/zpl", produces = org.springframework.http.MediaType.TEXT_PLAIN_VALUE)
-    public ResponseEntity<String> getLabelZpl(@PathVariable Integer orderNo) {
+    public ResponseEntity<String> getLabelZpl(@PathVariable Integer orderNo,
+            @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex) {
         ApiResponse<OrderWithLinesDTO> orderResponse = orderService.getOrderWithLines(orderNo);
         if (!"SUCCESS".equalsIgnoreCase(orderResponse.getStatus()) || orderResponse.getData() == null) {
             return ResponseEntity.status(orderResponse.getCode()).body("Order " + orderNo + " was not found.");
@@ -520,11 +521,42 @@ public class OrderController {
                 ? trackingResponse.getData().getLabelDetails()
                 : null;
 
-        String zpl = zplLabelService.buildLabel(orderResponse.getData(), resolution, labelDetails);
+        Integer pkgCount = orderResponse.getData().getPackageCount();
+        int totalPkgs = pkgCount == null || pkgCount < 1 ? 1 : pkgCount;
+        java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =
+                orderResponse.getData().getPackages() == null
+                        ? java.util.List.of()
+                        : orderResponse.getData().getPackages();
 
+        // When ?pkg is omitted on a multi-box shipment, stream ALL labels in
+        // one file (thermal printers spool multi-label ZPL sequentially via
+        // consecutive ^XA…^XZ blocks). When ?pkg=N is given, return only that
+        // box's label — same as before.
+        boolean allPkgs = (pkgIndex == null) && totalPkgs > 1;
+        StringBuilder zplOut = new StringBuilder();
+        int firstPkg = allPkgs ? 1 : (pkgIndex == null || pkgIndex < 1 ? 1 : Math.min(pkgIndex, totalPkgs));
+        int lastPkg = allPkgs ? totalPkgs : firstPkg;
+        for (int p = firstPkg; p <= lastPkg; p++) {
+            final int currentPkg = p;
+            com.multiship.backend.dto.LabelPackageDTO perPkg = allPackages.stream()
+                    .filter(x -> x.getSequenceNumber() != null && x.getSequenceNumber() == currentPkg)
+                    .findFirst().orElse(null);
+            zplOut.append(zplLabelService.buildLabel(orderResponse.getData(), resolution, labelDetails,
+                    currentPkg, totalPkgs, perPkg));
+        }
+
+        String filenameSuffix;
+        if (totalPkgs <= 1) {
+            filenameSuffix = "";
+        } else if (allPkgs) {
+            filenameSuffix = "-all" + totalPkgs;
+        } else {
+            filenameSuffix = "-pkg" + firstPkg;
+        }
         return ResponseEntity.ok()
-                .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".zpl")
-                .body(zpl);
+                .header("Content-Disposition", "attachment; filename=label-" + orderNo
+                        + filenameSuffix + ".zpl")
+                .body(zplOut.toString());
     }
 
     @Operation(

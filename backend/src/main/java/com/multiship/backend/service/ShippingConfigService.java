@@ -64,12 +64,40 @@ public class ShippingConfigService {
      */
     public static String canonicalCarrierFor(String shipviaCd) {
         if (shipviaCd == null || shipviaCd.isBlank()) return "";
-        return switch (shipviaCd.trim().toUpperCase(Locale.ROOT)) {
-            case "P80" -> "UPS";
-            case "F77" -> "FEDEX";
-            case "L01" -> "USPS";
-            default -> shipviaCd.trim().toUpperCase(Locale.ROOT);
-        };
+        String s = shipviaCd.trim().toUpperCase(Locale.ROOT);
+        // Legacy ERP carrier codes.
+        switch (s) {
+            case "P80": return "UPS";
+            case "F77": return "FEDEX";
+            case "L01": return "USPS";
+            case "UPS":
+            case "FEDEX":
+            case "USPS":
+            case "DHL":
+            case "STAMPS":
+                return s;
+            default: break;
+        }
+        // Carrier-prefixed service codes (order matters — most specific first).
+        if (s.startsWith("FEDEX_") || s.startsWith("FEDEX ")) return "FEDEX";
+        if (s.startsWith("UPS_") || s.startsWith("UPS ")) return "UPS";
+        if (s.startsWith("USPS_") || s.startsWith("USPS ")) return "USPS";
+        if (s.startsWith("DHL_") || s.startsWith("DHL ")) return "DHL";
+        // Carrier-specific service names without a prefix.
+        if (s.equals("GROUND_HOME_DELIVERY") || s.equals("SMART_POST")
+                || s.contains("INTERNATIONAL_ECONOMY") || s.contains("INTERNATIONAL_FIRST")
+                || s.contains("INTERNATIONAL_PRIORITY")
+                || s.contains("FIRST_OVERNIGHT") || s.contains("PRIORITY_OVERNIGHT")
+                || s.contains("STANDARD_OVERNIGHT") || s.equals("FEDEX_ENVELOPE")
+                || s.contains("EUROPE_FIRST")) return "FEDEX";
+        if (s.contains("NEXT_DAY_AIR") || s.contains("2ND_DAY_AIR") || s.contains("SECOND_DAY_AIR")
+                || s.contains("3_DAY_SELECT") || s.contains("THREE_DAY_SELECT")
+                || s.contains("WORLDWIDE_EXPRESS") || s.contains("WORLDWIDE_SAVER")
+                || s.contains("WORLDWIDE_EXPEDITED")) return "UPS";
+        if (s.contains("PRIORITY_MAIL") || s.equals("FIRST_CLASS")
+                || s.contains("PARCEL_SELECT") || s.equals("MEDIA_MAIL")) return "USPS";
+        // Fallback: return input verbatim so downstream lookups can still try.
+        return s;
     }
 
     // ===== Catalog =====
@@ -119,8 +147,10 @@ public class ShippingConfigService {
         }
 
         // Authenticate with the platform account's real credentials (if any).
-        String accessToken = platformAccessToken(connector, canonical);
-        CarrierConnector.ServiceAvailability availability = connector.listServices(origin, accessToken);
+        TokenAndEnv tokenAndEnv = platformAccessToken(connector, canonical);
+        String accessToken = tokenAndEnv == null ? null : tokenAndEnv.token();
+        String environment = tokenAndEnv == null ? null : tokenAndEnv.environment();
+        CarrierConnector.ServiceAvailability availability = connector.listServices(origin, accessToken, environment);
 
         // Live-only policy: services are persisted ONLY from a genuinely verified,
         // live carrier call. If the connection didn't authenticate live (no/invalid
@@ -206,8 +236,10 @@ public class ShippingConfigService {
             return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "Unknown carrier: " + carrier + ".");
         }
 
-        String token = platformAccessToken(connector, canonical);
-        CarrierConnector.PackageAvailability availability = connector.listPackages(origin, token);
+        TokenAndEnv tokenAndEnv = platformAccessToken(connector, canonical);
+        String token = tokenAndEnv == null ? null : tokenAndEnv.token();
+        String environment = tokenAndEnv == null ? null : tokenAndEnv.environment();
+        CarrierConnector.PackageAvailability availability = connector.listPackages(origin, token, environment);
 
         // Live-only policy (same as services): packaging is persisted ONLY from a
         // genuinely verified, live carrier account. If the connection didn't
@@ -261,11 +293,13 @@ public class ShippingConfigService {
     }
 
     /**
-     * A real OAuth token for the carrier's platform account, or null when no
-     * platform credentials are configured. The connector still returns a local
-     * fallback token in dev — the availability lookup treats that as "not live".
+     * A real OAuth token for the carrier's platform account paired with the
+     * account's environment (SANDBOX / PRODUCTION), or null when no platform
+     * credentials are configured. Sprint 47 — connectors now need the caller's
+     * environment to route to sandbox vs production hosts, so this helper
+     * carries both so callers don't have to look the account up twice.
      */
-    private String platformAccessToken(CarrierConnector connector, String canonicalCarrier) {
+    private TokenAndEnv platformAccessToken(CarrierConnector connector, String canonicalCarrier) {
         CarrierAccountRef account = carrierAccountRefRepository.findPlatformAccountsByCarrier(canonicalCarrier)
                 .stream()
                 .filter(a -> StringUtils.hasText(a.getClientId()) && StringUtils.hasText(a.getClientSecret()))
@@ -274,11 +308,16 @@ public class ShippingConfigService {
             return null;
         }
         try {
-            return connector.getAccessToken(account.getClientId(), account.getClientSecret(),
+            String token = connector.getAccessToken(account.getClientId(), account.getClientSecret(),
                     account.getAccountNumber());
+            return new TokenAndEnv(token, account.getEnvironment());
         } catch (Exception ex) {
             return null;
         }
+    }
+
+    /** Bundle a platform OAuth token with the account's environment label. */
+    private record TokenAndEnv(String token, String environment) {
     }
 
     @Transactional

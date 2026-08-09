@@ -38,6 +38,7 @@ public class VoidServiceImpl implements VoidService {
     private final OrderTrackingRepository orderTrackingRepository;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     private final CarrierService carrierService;
+    private final com.multiship.backend.repository.ShipmentBatchRepository shipmentBatchRepository;
 
     @Override
     public ApiResponse<VoidLabelResponseDTO> voidLabel(Integer orderNo) {
@@ -89,14 +90,53 @@ public class VoidServiceImpl implements VoidService {
                     canonicalCarrier + " token acquisition failed: " + ex.getMessage());
         }
 
-        CarrierConnector.VoidResult result;
-        try {
-            result = connector.voidShipment(tracking.getTrackingNumber(), accessToken);
-        } catch (Exception ex) {
-            log.warn("Void {} — carrier call failed at {}: {}",
-                    tracking.getTrackingNumber(), canonicalCarrier, ex.getMessage());
-            return failure(HttpStatus.BAD_GATEWAY,
-                    canonicalCarrier + " void call failed: " + ex.getMessage());
+        // Multi-batch void — an order that was auto-split into N carrier
+        // shipments has N master tracking numbers in shipment_batch. Void
+        // every batch and treat the overall void as successful only when
+        // every batch voided. Any failure surfaces the first failing batch's
+        // message; partial voids are persisted (order status flips only when
+        // ALL batches voided).
+        java.util.List<com.multiship.backend.model.ShipmentBatch> batches =
+                shipmentBatchRepository.findByOrderNoOrderByBatchSeqAsc(orderNo);
+        java.util.List<String> trackingNumbersToVoid = new java.util.ArrayList<>();
+        if (batches.isEmpty()) {
+            // Legacy path — no batches persisted; void the order-level master.
+            trackingNumbersToVoid.add(tracking.getTrackingNumber());
+        } else {
+            for (com.multiship.backend.model.ShipmentBatch b : batches) {
+                if (StringUtils.hasText(b.getMasterTrackingNumber())) {
+                    trackingNumbersToVoid.add(b.getMasterTrackingNumber());
+                }
+            }
+        }
+
+        CarrierConnector.VoidResult result = null;
+        java.util.List<CarrierConnector.VoidResult> perBatchResults = new java.util.ArrayList<>();
+        for (String trackNo : trackingNumbersToVoid) {
+            try {
+                CarrierConnector.VoidResult r = connector.voidShipment(trackNo, accessToken,
+                        account.getEnvironment());
+                perBatchResults.add(r);
+                if (result == null) result = r;
+            } catch (Exception ex) {
+                log.warn("Void {} — carrier call failed at {}: {}", trackNo, canonicalCarrier, ex.getMessage());
+                return failure(HttpStatus.BAD_GATEWAY,
+                        canonicalCarrier + " void call failed for " + trackNo + ": " + ex.getMessage());
+            }
+        }
+        // If any batch failed to void, surface that. Order status only flips
+        // when every batch reports voided=true.
+        boolean allVoided = !perBatchResults.isEmpty()
+                && perBatchResults.stream().allMatch(CarrierConnector.VoidResult::voided);
+        if (!allVoided) {
+            CarrierConnector.VoidResult firstFail = perBatchResults.stream()
+                    .filter(r -> !r.voided()).findFirst().orElse(result);
+            result = firstFail != null ? firstFail : result;
+        } else {
+            // Reuse a synthetic aggregate so downstream persistence sees success.
+            result = new CarrierConnector.VoidResult(
+                    tracking.getTrackingNumber(), true, "VOIDED",
+                    perBatchResults.size() + " batch(es) voided.", null);
         }
 
         // Persist the successful void so the order is no longer treated

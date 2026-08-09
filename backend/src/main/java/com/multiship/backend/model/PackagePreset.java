@@ -130,6 +130,37 @@ public class PackagePreset {
     private BigDecimal tareWeight;
 
     /**
+     * Dimensional-weight divisor for this preset. When set, DIM weight =
+     * (L × W × H) / dimDivisor (in inches / lb); the validator rejects the
+     * shipment if DIM weight exceeds {@link #maxWeight}. Typical values:
+     * FedEx Ground/Express = 139, UPS Air = 166, DHL metric = 5000. Null =
+     * DIM check is skipped for this preset (flat-rate boxes typically skip
+     * DIM per carrier rules).
+     */
+    @Column(name = "dim_divisor")
+    private Integer dimDivisor;
+
+    /**
+     * Max girth (L + 2×(W+H)) in {@link #dimUnit}. When set, the validator
+     * rejects the shipment if the requested dimensions push girth above
+     * this cap. Typical: FedEx Ground/Home = 165 in, UPS Ground = 165 in,
+     * USPS Priority = 108 in. Null = girth check is skipped.
+     */
+    @Column(name = "max_girth", precision = 8, scale = 2)
+    private BigDecimal maxGirth;
+
+    /**
+     * How the validator treats rule violations for this preset:
+     * {@code HARD} (default) — reject the shipment with 422;
+     * {@code SOFT} — allow the shipment through with a warning
+     * surfaced to the operator. Ops can flip a preset from HARD to
+     * SOFT to override a rule in the field without a code deploy.
+     */
+    @Column(name = "enforcement", length = 10)
+    @Builder.Default
+    private String enforcement = "HARD";
+
+    /**
      * Wrapper Booleans (not primitives): Jackson binds this entity through the
      * all-args creator, and a missing JSON property arrives as null — a
      * primitive here turns "field not sent" into a 400/401. @JsonProperty

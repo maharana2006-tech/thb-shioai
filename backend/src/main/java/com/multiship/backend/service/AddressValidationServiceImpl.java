@@ -79,20 +79,21 @@ public class AddressValidationServiceImpl implements AddressValidationService {
                     carrier + " token acquisition failed: " + ex.getMessage(), null)));
         }
 
-        AddressToValidate address = new AddressToValidate(
-                request.getName(),
-                request.getCompany(),
-                request.getAddressLine1(),
-                request.getAddressLine2(),
-                request.getAddressLine3(),
-                request.getCity(),
-                request.getState(),
-                request.getPostalCode(),
-                request.getCountryCode());
+        AddressToValidate address = com.multiship.backend.service.carriers.AddressSanitizer.sanitize(
+                new AddressToValidate(
+                        request.getName(),
+                        request.getCompany(),
+                        request.getAddressLine1(),
+                        request.getAddressLine2(),
+                        request.getAddressLine3(),
+                        request.getCity(),
+                        request.getState(),
+                        request.getPostalCode(),
+                        request.getCountryCode()));
 
         AddressValidationResult result;
         try {
-            result = connector.validateAddress(address, accessToken);
+            result = connector.validateAddress(address, accessToken, account.getEnvironment());
         } catch (Exception ex) {
             log.warn("Address validation call to {} failed: {}", carrier, ex.getMessage());
             result = new AddressValidationResult(false, "ERROR", "UNKNOWN", null, List.of(),
@@ -104,19 +105,37 @@ public class AddressValidationServiceImpl implements AddressValidationService {
 
     CarrierAccountRef resolveAccount(String carrierCode, String customerNo) {
         if (StringUtils.hasText(customerNo)) {
+            // Tier 1: client-owned default for this carrier.
             List<CarrierAccountRef> ownedDefaults = carrierAccountRefRepository
                     .findByCustomerNoIgnoreCaseAndClientDefaultTrue(customerNo);
             for (CarrierAccountRef ref : ownedDefaults) {
-                if (carrierCode.equalsIgnoreCase(ref.getCarrierCode())
-                        && StringUtils.hasText(ref.getClientId())
-                        && StringUtils.hasText(ref.getClientSecret())) {
+                if (matchesCarrierWithCreds(ref, carrierCode)) {
+                    return ref;
+                }
+            }
+            // Tier 2: any active client-owned row for this carrier, even if
+            // it's not the client default. Ordered by client_default DESC
+            // then updated_at DESC, so an unmarked-but-usable account still
+            // resolves instead of surfacing 'No live credentials'.
+            List<CarrierAccountRef> allOwned = carrierAccountRefRepository
+                    .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(customerNo);
+            for (CarrierAccountRef ref : allOwned) {
+                if (Boolean.FALSE.equals(ref.getActive())) continue;
+                if (matchesCarrierWithCreds(ref, carrierCode)) {
                     return ref;
                 }
             }
         }
+        // Tier 3: platform (customer_no IS NULL) fallback.
         List<CarrierAccountRef> platform = carrierAccountRefRepository
                 .findPlatformAccountsByCarrier(carrierCode);
         return platform.isEmpty() ? null : platform.get(0);
+    }
+
+    private static boolean matchesCarrierWithCreds(CarrierAccountRef ref, String carrierCode) {
+        return carrierCode.equalsIgnoreCase(ref.getCarrierCode())
+                && StringUtils.hasText(ref.getClientId())
+                && StringUtils.hasText(ref.getClientSecret());
     }
 
     static AddressValidationResponseDTO dtoFrom(String carrier, AddressValidationResult r) {

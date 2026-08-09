@@ -63,4 +63,15 @@ public class OrderCustomsItem {
 
     @Column(length = 60)
     private String sku;
+
+    /**
+     * Sprint 48 B11 — 1-based package index within the shipment this
+     * item belongs to. NULL = unassigned; when every item on the
+     * shipment is null the connector treats all items as belonging to
+     * one logical package (backward-compat with legacy single-box CI).
+     * When any item has a value, the {@code DeclaredValueContextBuilder}
+     * groups items by this column to derive per-box declared value.
+     */
+    @Column(name = "box_seq")
+    private Integer boxSeq;
 }

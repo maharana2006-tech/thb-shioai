@@ -16,6 +16,8 @@ import java.util.List;
 public class OrderWithLinesDTO {
     private Integer orderNo;
     private Integer orderSuffix;
+    /** Sprint 48 B10 — customer-facing prefix for manual orders (e.g. "MAN900001"). */
+    private String displayOrderNo;
     private String orderStatus;
     private String custNo;
     private String shipName;
@@ -35,5 +37,9 @@ public class OrderWithLinesDTO {
     private String isReturn;
     /** Per-shipment importer/broker override (JSON), or null to use the client profile. */
     private String importerBrokerOverride;
+    /** Total number of packages in this shipment; null / 1 for single-box orders. */
+    private Integer packageCount;
+    /** Per-box rows (tracking, weight, dims). Ordered by sequenceNumber. Empty on legacy orders. */
+    private List<LabelPackageDTO> packages;
     private List<OrderLineDTO> orderLines;
 }

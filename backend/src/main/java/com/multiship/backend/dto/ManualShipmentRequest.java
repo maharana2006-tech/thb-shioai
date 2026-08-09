@@ -52,6 +52,14 @@ public class ManualShipmentRequest {
     private BigDecimal weight;
     private String weightUnit;
 
+    /**
+     * Multi-package: box 1..N with individual weight + dims. Frontend
+     * sends this when the operator adds extra boxes via the "Add another
+     * box" button (NewShipmentPage.extraPackages). When null / empty the
+     * connector falls back to the top-level weight + dims (single box).
+     */
+    private java.util.List<PackageDetailDTO> packages;
+
     /** Optional client/customer code to tag the shipment with. */
     private String clientCode;
 
@@ -147,5 +155,7 @@ public class ManualShipmentRequest {
         private BigDecimal unitValue;
         private BigDecimal weight;
         private String sku;
+        /** Sprint 48 B11 — 1-based package this item belongs to; null = unassigned. */
+        private Integer boxSeq;
     }
 }

@@ -163,16 +163,20 @@ class MultiPackageTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void fedexDeclaredValueEmittedOnlyOnFirstPackageByDefault() throws Exception {
+    void fedexShipmentLevelDeclaredValueSplitsAcrossPackages() throws Exception {
+        // Sprint 48 B11 — shipment-level declaredValue no longer lands on
+        // just seq==1; DeclaredValueContextBuilder splits it evenly across
+        // all packages when no CI items are present. $500 / 2 packages =
+        // $250 each (last box absorbs rounding remainder if any).
         ShipmentRequestDTO r = baseRequest();
         r.setDeclaredValue(new BigDecimal("500.00"));
         r.setPackages(List.of(pkg(1, "2.5", null), pkg(2, "3.0", null)));
         Map<String, Object> rs = fedexRequestedShipment(r);
         List<Map<String, Object>> items = (List<Map<String, Object>>) rs.get("requestedPackageLineItems");
         assertNotNull(items.get(0).get("declaredValue"),
-                "Shipment-level declared value lands on package 1 when the per-package fields are null");
-        assertNull(items.get(1).get("declaredValue"),
-                "Subsequent packages get no declared value unless explicitly set on the package");
+                "Every package gets a share of the shipment-level declared value.");
+        assertNotNull(items.get(1).get("declaredValue"),
+                "Sprint 48 B11: subsequent packages also get their proportional share (was null before).");
     }
 
     /* -------------------------- DHL -------------------------- */

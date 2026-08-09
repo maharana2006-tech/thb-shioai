@@ -40,19 +40,19 @@ class UpsTrackingTest {
 
     @Test
     void localFallbackTokenShortCircuitsToStub() {
-        var result = connector.trackShipment("1Z999", "ups-local-abcd1234");
+        var result = connector.trackShipment("1Z999", "ups-local-abcd1234", null);
         assertEquals("UNKNOWN", result.status());
         assertTrue(result.events().isEmpty());
     }
 
     @Test
     void blankTokenShortCircuitsToStub() {
-        assertEquals("UNKNOWN", connector.trackShipment("1Z", "").status());
+        assertEquals("UNKNOWN", connector.trackShipment("1Z", "", null).status());
     }
 
     @Test
     void nullTokenShortCircuitsToStub() {
-        assertEquals("UNKNOWN", connector.trackShipment("1Z", null).status());
+        assertEquals("UNKNOWN", connector.trackShipment("1Z", null, null).status());
     }
 
     @Test

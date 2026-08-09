@@ -111,7 +111,7 @@ public class TrackingServiceImpl implements TrackingService {
 
         CarrierConnector.TrackingResult result;
         try {
-            result = connector.trackShipment(trackingNumber, accessToken);
+            result = connector.trackShipment(trackingNumber, accessToken, account.getEnvironment());
         } catch (Exception ex) {
             log.warn("Live tracking for {} failed at {}: {}",
                     trackingNumber, canonicalCarrier, ex.getMessage());

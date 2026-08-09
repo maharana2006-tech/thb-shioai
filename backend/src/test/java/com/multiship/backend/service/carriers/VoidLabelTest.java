@@ -33,7 +33,7 @@ class VoidLabelTest {
     @Test
     void upsLocalFallbackTokenReturnsNotSupported() {
         UpsConnector c = new UpsConnector(new CarrierProperties(), new ObjectMapper());
-        VoidResult r = c.voidShipment("1Z999", "ups-local-abc");
+        VoidResult r = c.voidShipment("1Z999", "ups-local-abc", null);
         assertEquals("NOT_SUPPORTED", r.status());
         assertFalse(r.voided());
     }
@@ -41,7 +41,7 @@ class VoidLabelTest {
     @Test
     void fedexLocalFallbackTokenReturnsNotSupported() {
         FedExConnector c = new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx());
-        VoidResult r = c.voidShipment("794699999999", "fedex-local-abc");
+        VoidResult r = c.voidShipment("794699999999", "fedex-local-abc", null);
         assertEquals("NOT_SUPPORTED", r.status());
         assertFalse(r.voided());
     }
@@ -49,14 +49,14 @@ class VoidLabelTest {
     @Test
     void dhlLocalFallbackTokenReturnsNotSupported() {
         DhlConnector c = new DhlConnector(new CarrierProperties(), new ObjectMapper());
-        VoidResult r = c.voidShipment("JD99999", "dhl-local-abc");
+        VoidResult r = c.voidShipment("JD99999", "dhl-local-abc", null);
         assertEquals("NOT_SUPPORTED", r.status());
     }
 
     @Test
     void stampsLocalFallbackTokenReturnsNotSupported() {
         StampsConnector c = new StampsConnector(new CarrierProperties(), new ObjectMapper());
-        VoidResult r = c.voidShipment("9400111899223811234567", "stamps-local-abc");
+        VoidResult r = c.voidShipment("9400111899223811234567", "stamps-local-abc", null);
         assertEquals("NOT_SUPPORTED", r.status());
     }
 
@@ -64,16 +64,16 @@ class VoidLabelTest {
     void nullTokenTreatedAsFallback() {
         assertEquals("NOT_SUPPORTED",
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                        .voidShipment("1Z999", null).status());
+                        .voidShipment("1Z999", null, null).status());
         assertEquals("NOT_SUPPORTED",
                 new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                        .voidShipment("794699999999", null).status());
+                        .voidShipment("794699999999", null, null).status());
         assertEquals("NOT_SUPPORTED",
                 new DhlConnector(new CarrierProperties(), new ObjectMapper())
-                        .voidShipment("JD99999", null).status());
+                        .voidShipment("JD99999", null, null).status());
         assertEquals("NOT_SUPPORTED",
                 new StampsConnector(new CarrierProperties(), new ObjectMapper())
-                        .voidShipment("9400111899223811234567", null).status());
+                        .voidShipment("9400111899223811234567", null, null).status());
     }
 
     /* -------------------------- UPS response parsing -------------------------- */
@@ -210,15 +210,15 @@ class VoidLabelTest {
         String tracking = "1Z999TEST";
         assertEquals(tracking,
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                        .voidShipment(tracking, "ups-local-").trackingNumber());
+                        .voidShipment(tracking, "ups-local-", null).trackingNumber());
         assertEquals(tracking,
                 new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                        .voidShipment(tracking, "fedex-local-").trackingNumber());
+                        .voidShipment(tracking, "fedex-local-", null).trackingNumber());
         assertEquals(tracking,
                 new DhlConnector(new CarrierProperties(), new ObjectMapper())
-                        .voidShipment(tracking, "dhl-local-").trackingNumber());
+                        .voidShipment(tracking, "dhl-local-", null).trackingNumber());
         assertEquals(tracking,
                 new StampsConnector(new CarrierProperties(), new ObjectMapper())
-                        .voidShipment(tracking, "stamps-local-").trackingNumber());
+                        .voidShipment(tracking, "stamps-local-", null).trackingNumber());
     }
 }

@@ -80,6 +80,21 @@ public class RateShopServiceImpl implements RateShopService {
     private final RateCacheService rateCacheService;
     private final ExecutorService executor;
 
+    /** Sprint 48 B5 — optional so existing tests don't need to plumb it.
+     *  When absent (unit tests), the packaging pre-flight is a no-op. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ShippingConfigService shippingConfigService;
+
+    /** Sprint 48 freight/LTL — optional; supplies the per-shipment weight
+     *  cap the parcel-eligibility check needs. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CarrierLimitService carrierLimitService;
+
+    /** Sprint 48 B5 — same kill-switch as CarrierServiceImpl; when false
+     *  the rate-shop skips packaging pre-flight and just fires every carrier. */
+    @org.springframework.beans.factory.annotation.Value("${packaging.validation-enabled:true}")
+    private boolean packagingValidationEnabled;
+
     /** Sprint 45 — optional so existing tests don't need to plumb it. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.RateShopHistoryRepository rateShopHistoryRepository;
@@ -266,8 +281,49 @@ public class RateShopServiceImpl implements RateShopService {
         // not carry the credentials owner's account number.
         ShipmentRequestDTO scoped = withAccountNumber(shipment, account.getAccountNumber());
 
+        // Sprint 48 B5 — packaging pre-flight before the carrier call.
+        // Resolves the same preset a real label-generation would pick for
+        // this shipment. Any HARD violation → skip this carrier and record
+        // the reason so the response tells ops WHY that carrier is missing
+        // ("FEDEX skipped: Box 3: Weight 20 lb exceeds FedEx Envelope
+        // limit of 1 lb"). Other carriers still get rate-shopped.
+        if (packagingValidationEnabled && shippingConfigService != null) {
+            com.multiship.backend.model.PackagePreset preset = shippingConfigService
+                    .pickPackage(null, scoped.getWeight())
+                    .map(ShippingConfigService.PickedPackage::preset)
+                    .orElse(null);
+            com.multiship.backend.util.PackagingValidator.Outcome outcome =
+                    preset == null
+                            ? new com.multiship.backend.util.PackagingValidator.Outcome(List.of())
+                            : com.multiship.backend.util.PackagingValidator.validateAll(
+                                    preset,
+                                    scoped.getWeight(), scoped.getWeightUnit(),
+                                    scoped.getLength(), scoped.getWidth(),
+                                    scoped.getHeight(), scoped.getDimUnit(),
+                                    scoped.getPackages());
+            // Sprint 48 freight/LTL: parcel-eligibility for THIS carrier.
+            // Skips the carrier if a piece exceeds the parcel service caps
+            // or the shipment total exceeds the carrier per-shipment cap.
+            String svcCode = scoped.getServiceType();
+            boolean intl = scoped.getRecipientCountryCode() != null
+                    && scoped.getShipperCountryCode() != null
+                    && !scoped.getRecipientCountryCode().trim().equalsIgnoreCase(
+                            scoped.getShipperCountryCode().trim());
+            com.multiship.backend.model.CarrierShippingLimit svcLimit = carrierLimitService == null
+                    ? null : carrierLimitService.resolveLimit(carrierCode, svcCode, intl);
+            outcome = outcome.merge(com.multiship.backend.util.PackagingValidator.validateParcelLimits(
+                    carrierCode, svcCode, scoped.getPackages(),
+                    scoped.getWeight(), scoped.getWeightUnit(),
+                    scoped.getLength(), scoped.getWidth(), scoped.getHeight(), scoped.getDimUnit(),
+                    svcLimit == null ? null : svcLimit.getMaxTotalWeightLb()));
+            if (outcome.hardBlock()) {
+                return new CarrierFanoutResult(carrierCode, List.of(), "SKIPPED_PACKAGING",
+                        carrierCode + " skipped: " + outcome.combinedMessage());
+            }
+        }
+
         try {
-            List<CarrierConnector.RateOption> raw = connector.getRates(scoped, accessToken);
+            List<CarrierConnector.RateOption> raw = connector.getRates(scoped, accessToken, account.getEnvironment());
             if (raw == null) raw = List.of();
             // Sprint 39 — cache non-empty results. Empty lists skip the
             // cache so a transient miss retries the carrier next time.

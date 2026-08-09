@@ -70,7 +70,7 @@ public class DhlConnector implements CarrierConnector {
     }
 
     @Override
-    public ServiceAvailability listServices(String originCountry, String accessToken) {
+    public ServiceAvailability listServices(String originCountry, String accessToken, String environment) {
         List<ServiceOffering> matrix = serviceMatrix(originCountry);
         boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
         // DHL doesn't expose a "list services" endpoint — the ProductCode
@@ -116,7 +116,7 @@ public class DhlConnector implements CarrierConnector {
     }
 
     @Override
-    public PackageAvailability listPackages(String originCountry, String accessToken) {
+    public PackageAvailability listPackages(String originCountry, String accessToken, String environment) {
         // DHL Express Envelope + Box lineup. Weight caps enforced by DHL —
         // exceeding = fall back to YOUR_PACKAGING (custom dimensions).
         List<PackageOffering> pkgs = List.of(
@@ -201,8 +201,10 @@ public class DhlConnector implements CarrierConnector {
     }
 
     @Override
-    public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken) {
-        String host = carrierProperties.getDhl().getApiBaseUrl();
+    public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        String host = isSandbox(environment)
+                ? carrierProperties.getDhl().getSandboxUrl()
+                : carrierProperties.getDhl().getApiBaseUrl();
         try {
             Map<String, Object> payload = buildShipmentPayload(request);
             String response = RestClient.builder().baseUrl(host).build().post()
@@ -269,13 +271,16 @@ public class DhlConnector implements CarrierConnector {
      * convention Sprints 12 and 13 established.
      */
     @Override
-    public TrackingResult trackShipment(String trackingNumber, String accessToken) {
+    public TrackingResult trackShipment(String trackingNumber, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return trackShipment(trackingNumber);
         }
         String trackingUrl = "https://www.dhl.com/en/express/tracking.html?AWB=" + trackingNumber;
+        String host = isSandbox(environment)
+                ? carrierProperties.getDhl().getSandboxUrl()
+                : carrierProperties.getDhl().getApiBaseUrl();
         try {
-            String response = RestClient.builder().baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build().get()
+            String response = RestClient.builder().baseUrl(host).build().get()
                     .uri(u -> u.path("/tracking")
                             .queryParam("shipmentTrackingNumber", trackingNumber)
                             .build())
@@ -386,15 +391,18 @@ public class DhlConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to {@code NOT_SUPPORTED}.
      */
     @Override
-    public VoidResult voidShipment(String trackingNumber, String accessToken) {
+    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "DHL void needs live credentials; the account is on a fallback token.",
                     null);
         }
+        String host = isSandbox(environment)
+                ? carrierProperties.getDhl().getSandboxUrl()
+                : carrierProperties.getDhl().getApiBaseUrl();
         try {
             org.springframework.http.ResponseEntity<String> response = RestClient.builder()
-                    .baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build()
+                    .baseUrl(host).build()
                     .delete()
                     .uri("/shipments/" + trackingNumber)
                     .header("Authorization", "Basic " + accessToken)
@@ -446,7 +454,7 @@ public class DhlConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken) {
+    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new AddressValidationResult(false, "NOT_SUPPORTED", "UNKNOWN", null,
                     List.of(),
@@ -549,7 +557,7 @@ public class DhlConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken) {
+    public LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new LandedCostResult("DHL", "NOT_SUPPORTED",
                     null, null, null, null, null, null,
@@ -584,8 +592,11 @@ public class DhlConnector implements CarrierConnector {
                 payload.put("content", content);
             }
 
+            String host = isSandbox(environment)
+                    ? carrierProperties.getDhl().getSandboxUrl()
+                    : carrierProperties.getDhl().getApiBaseUrl();
             String response = RestClient.builder()
-                    .baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build()
+                    .baseUrl(host).build()
                     .post()
                     .uri("/rates")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -721,7 +732,7 @@ public class DhlConnector implements CarrierConnector {
      * <p>{@code -local-*} fallback tokens short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public PickupResult schedulePickup(PickupRequest request, String accessToken) {
+    public PickupResult schedulePickup(PickupRequest request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new PickupResult("DHL", null, null, null, null, "NOT_SUPPORTED",
                     "DHL pickup needs live credentials; the account is on a fallback token.",
@@ -729,8 +740,11 @@ public class DhlConnector implements CarrierConnector {
         }
         try {
             Map<String, Object> body = buildDhlPickupRequest(request);
+            String host = isSandbox(environment)
+                    ? carrierProperties.getDhl().getSandboxUrl()
+                    : carrierProperties.getDhl().getApiBaseUrl();
             String response = RestClient.builder()
-                    .baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build()
+                    .baseUrl(host).build()
                     .post()
                     .uri("/pickups")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -1016,11 +1030,24 @@ public class DhlConnector implements CarrierConnector {
         Map<String, Object> content = new LinkedHashMap<>();
         boolean isIntl = request.getIntl() != null && request.getIntl().isReadyForCarrier();
         content.put("isCustomsDeclarable", isIntl);
-        if (request.getDeclaredValue() != null) {
-            content.put("declaredValue", request.getDeclaredValue());
-            content.put("declaredValueCurrency", firstNonBlank(
-                    request.getDeclaredValueCurrency(),
-                    isIntl ? request.getIntl().getCustomsCurrency() : "USD").toUpperCase());
+        // Sprint 48 B11 — DHL has a SINGLE shipment-level declaredValue
+        // field (no per-package option); derive it as sum of CI items
+        // (grouped totals still sum to the same shipment amount). Legacy
+        // shipment-level request.declaredValue is the fallback when there
+        // are no items.
+        String dvCurrency = firstNonBlank(
+                request.getDeclaredValueCurrency(),
+                isIntl ? request.getIntl().getCustomsCurrency() : "USD").toUpperCase();
+        com.multiship.backend.util.DeclaredValueContextBuilder.DeclaredValueContext dvCtx =
+                com.multiship.backend.util.DeclaredValueContextBuilder.build(
+                        isIntl ? request.getIntl().getCommodities() : null,
+                        request.effectivePackages().size(),
+                        request.effectivePackages(),
+                        dvCurrency,
+                        request.getDeclaredValue());
+        if (dvCtx.shipmentTotal() != null && dvCtx.shipmentTotal().signum() > 0) {
+            content.put("declaredValue", dvCtx.shipmentTotal());
+            content.put("declaredValueCurrency", dvCurrency);
         }
         content.put("packages", buildPackages(request));
         content.put("unitOfMeasurement", "KG".equalsIgnoreCase(request.getWeightUnit()) ? "metric" : "imperial");
@@ -1233,22 +1260,61 @@ public class DhlConnector implements CarrierConnector {
     private ShipmentResult parseShipmentResult(String response) {
         try {
             JsonNode root = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
+            // Master AWB (shipment identity).
             String trackingNumber = root.path("shipmentTrackingNumber").asText(null);
+
+            // Top-level label — first document of typeCode=label.
             String labelUrl = null;
             for (JsonNode doc : root.path("documents")) {
                 if ("label".equalsIgnoreCase(doc.path("typeCode").asText())) {
                     labelUrl = doc.path("url").asText(null);
                     if (labelUrl == null) labelUrl = doc.path("content").asText(null);
+                    break;
                 }
             }
             String trackingUrl = StringUtils.hasText(trackingNumber)
                     ? "https://www.dhl.com/en/express/tracking.html?AWB=" + trackingNumber : null;
+
+            // Per-piece rows — DHL Express returns packages[] with each
+            // package's own trackingNumber. Some responses also include a
+            // per-package label document array; we mirror the shipment
+            // label onto every piece when the response doesn't split them.
+            java.util.List<PackageTracking> packages = new java.util.ArrayList<>();
+            JsonNode pkgsNode = root.path("packages");
+            if (pkgsNode.isArray()) {
+                for (int i = 0; i < pkgsNode.size(); i++) {
+                    JsonNode pkg = pkgsNode.get(i);
+                    String pcTrack = pkg.path("trackingNumber").asText(null);
+                    if (!StringUtils.hasText(pcTrack)) continue;
+                    // Per-package label (if the response splits documents by piece).
+                    String pcLabel = null;
+                    JsonNode pcDocs = pkg.path("documents");
+                    if (pcDocs.isArray()) {
+                        for (JsonNode doc : pcDocs) {
+                            if ("label".equalsIgnoreCase(doc.path("typeCode").asText())) {
+                                pcLabel = firstNonBlank(doc.path("url").asText(null), doc.path("content").asText(null));
+                                break;
+                            }
+                        }
+                    }
+                    if (pcLabel == null) pcLabel = labelUrl;
+                    packages.add(new PackageTracking(i + 1, pcTrack,
+                            "https://www.dhl.com/en/express/tracking.html?AWB=" + pcTrack,
+                            pcLabel, pcLabel, null));
+                }
+            }
+
             return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelUrl,
-                    null, LocalDateTime.now(ZoneOffset.UTC).plusDays(2), response);
+                    null, LocalDateTime.now(ZoneOffset.UTC).plusDays(2), response, packages);
         } catch (Exception ex) {
             log.warn("Failed to parse DHL response; treating as fallback. Reason: {}", ex.getMessage());
-            return new ShipmentResult(null, null, null, null, null, null, response);
+            return new ShipmentResult(null, null, null, null, null, null, response,
+                    java.util.List.of());
         }
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        return StringUtils.hasText(a) ? a : (StringUtils.hasText(b) ? b : null);
     }
 
     private ShipmentResult buildFallbackShipmentResult(ShipmentRequestDTO request) {
@@ -1287,14 +1353,17 @@ public class DhlConnector implements CarrierConnector {
      * <p>{@code -local-*} fallback tokens short-circuit to an empty list.
      */
     @Override
-    public List<RateOption> getRates(ShipmentRequestDTO request, String accessToken) {
+    public List<RateOption> getRates(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return List.of();
         }
         try {
             Map<String, Object> body = buildRatePayload(request);
+            String host = isSandbox(environment)
+                    ? carrierProperties.getDhl().getSandboxUrl()
+                    : carrierProperties.getDhl().getApiBaseUrl();
             String response = RestClient.builder()
-                    .baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build()
+                    .baseUrl(host).build()
                     .post()
                     .uri("/rates")
                     .contentType(MediaType.APPLICATION_JSON)

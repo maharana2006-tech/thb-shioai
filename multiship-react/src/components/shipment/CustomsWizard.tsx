@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   FiCheckCircle,
   FiChevronLeft,
@@ -10,6 +10,7 @@ import {
   FiPlus,
   FiTrash2,
 } from 'react-icons/fi'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type { CustomsItem, OrderCustomsPayload } from '../../api/customsService'
 import HsCodeCombobox from './HsCodeCombobox'
 
@@ -362,67 +363,11 @@ function CommoditiesStep({
           </button>
         </div>
       ) : (
-        <div className="space-y-2">
-          {items.map((item, idx) => {
-            return (
-            <div
-              key={idx}
-              className="rounded-xl border border-slate-200 bg-white p-2.5 space-y-1.5"
-            >
-              <div className="grid grid-cols-12 gap-2 items-start">
-              <input
-                className="col-span-4 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px]"
-                placeholder="Description"
-                value={item.description}
-                onChange={(e) => onUpdate(idx, { description: e.target.value })}
-              />
-              <div className="col-span-2">
-                <HsCodeCombobox
-                  value={item.hsCode ?? ''}
-                  onChange={(v) => onUpdate(idx, { hsCode: v })}
-                  onDescriptionSuggest={(desc) => {
-                    if (!item.description || !item.description.trim()) {
-                      onUpdate(idx, { description: desc })
-                    }
-                  }}
-                />
-              </div>
-              <input
-                className="col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px]"
-                placeholder="Origin (US)"
-                maxLength={2}
-                value={item.countryOfOrigin ?? ''}
-                onChange={(e) => onUpdate(idx, { countryOfOrigin: e.target.value.toUpperCase() })}
-              />
-              <input
-                type="number"
-                className="col-span-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-right text-[12px] tabular-nums"
-                min={1}
-                value={item.quantity}
-                onChange={(e) => onUpdate(idx, { quantity: Number(e.target.value) })}
-              />
-              <input
-                type="number"
-                step="0.01"
-                className="col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-right text-[12px] tabular-nums"
-                placeholder="Unit value"
-                value={item.unitValue ?? 0}
-                onChange={(e) => onUpdate(idx, { unitValue: Number(e.target.value) })}
-              />
-              <button
-                type="button"
-                onClick={() => onRemove(idx)}
-                aria-label="Remove line"
-                className="col-span-1 flex items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
-              >
-                <FiTrash2 className="h-3.5 w-3.5" />
-              </button>
-              </div>
-              {/* HS code hint is now rendered by HsCodeCombobox itself. */}
-            </div>
-            )
-          })}
-        </div>
+        <VirtualizedCommodityList
+          items={items}
+          onUpdate={onUpdate}
+          onRemove={onRemove}
+        />
       )}
 
       {items.length > 0 ? (
@@ -436,6 +381,153 @@ function CommoditiesStep({
     </div>
   )
 }
+
+/* ---------------- virtualized commodity list ---------------- */
+/**
+ * Sprint 48 audit fix — CI item lists can grow into the 100s of rows for
+ * consolidator warehouses. Naive .map() rendering (was 10+ DOM nodes and
+ * an HsCodeCombobox instance per row) hit visible input lag around 30
+ * items and became unusable past 100.
+ *
+ * <p>{@code @tanstack/react-virtual} renders only the rows in / near the
+ * viewport (~7 visible + 5 overscan above/below); the memoized row
+ * component prevents parent-render cascades from reconciling every row
+ * on each keystroke.
+ *
+ * <p>Height is measured (not fixed) because the HsCodeCombobox dropdown
+ * pushes the row taller when open, and long descriptions wrap.
+ */
+export function VirtualizedCommodityList({
+  items,
+  onUpdate,
+  onRemove,
+}: {
+  items: CustomsItem[]
+  onUpdate: (index: number, delta: Partial<CustomsItem>) => void
+  onRemove: (index: number) => void
+}) {
+  const parentRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => parentRef.current,
+    // Rough starting size — the observer takes over as rows render.
+    estimateSize: () => 72,
+    overscan: 5,
+  })
+
+  return (
+    <div
+      ref={parentRef}
+      className="rounded-xl border border-slate-200 bg-white"
+      style={{ height: '60vh', overflowY: 'auto', contain: 'strict' }}
+    >
+      <div
+        style={{
+          height: `${virtualizer.getTotalSize()}px`,
+          width: '100%',
+          position: 'relative',
+        }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => (
+          <div
+            key={virtualRow.key}
+            data-index={virtualRow.index}
+            ref={virtualizer.measureElement}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualRow.start}px)`,
+            }}
+            className="p-2"
+          >
+            <CommodityRow
+              index={virtualRow.index}
+              item={items[virtualRow.index]}
+              onUpdate={onUpdate}
+              onRemove={onRemove}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Memoized row so typing in one row doesn't re-render every other row.
+ * Custom equality: re-render only when THIS row's item object identity
+ * changes; parent's fresh callback references are ok (same reference
+ * across renders when the parent uses stable useCallbacks).
+ */
+const CommodityRow = memo(function CommodityRow({
+  index,
+  item,
+  onUpdate,
+  onRemove,
+}: {
+  index: number
+  item: CustomsItem
+  onUpdate: (index: number, delta: Partial<CustomsItem>) => void
+  onRemove: (index: number) => void
+}) {
+  const patch = useCallback((delta: Partial<CustomsItem>) => onUpdate(index, delta), [onUpdate, index])
+  const remove = useCallback(() => onRemove(index), [onRemove, index])
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-2.5 space-y-1.5">
+      <div className="grid grid-cols-12 gap-2 items-start">
+        <input
+          className="col-span-4 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px]"
+          placeholder="Description"
+          value={item.description}
+          onChange={(e) => patch({ description: e.target.value })}
+        />
+        <div className="col-span-2">
+          <HsCodeCombobox
+            value={item.hsCode ?? ''}
+            onChange={(v) => patch({ hsCode: v })}
+            onDescriptionSuggest={(desc) => {
+              if (!item.description || !item.description.trim()) {
+                patch({ description: desc })
+              }
+            }}
+          />
+        </div>
+        <input
+          className="col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px]"
+          placeholder="Origin (US)"
+          maxLength={2}
+          value={item.countryOfOrigin ?? ''}
+          onChange={(e) => patch({ countryOfOrigin: e.target.value.toUpperCase() })}
+        />
+        <input
+          type="number"
+          className="col-span-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-right text-[12px] tabular-nums"
+          min={1}
+          value={item.quantity}
+          onChange={(e) => patch({ quantity: Number(e.target.value) })}
+        />
+        <input
+          type="number"
+          step="0.01"
+          className="col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-right text-[12px] tabular-nums"
+          placeholder="Unit value"
+          value={item.unitValue ?? 0}
+          onChange={(e) => patch({ unitValue: Number(e.target.value) })}
+        />
+        <button
+          type="button"
+          onClick={remove}
+          aria-label="Remove line"
+          className="col-span-1 flex items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+        >
+          <FiTrash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  )
+})
 
 /* ---------------- Step 3: duties + incoterms ---------------- */
 function DutiesStep({

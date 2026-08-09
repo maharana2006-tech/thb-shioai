@@ -51,13 +51,13 @@ class CloseOutTest {
         CloseOutRequest r = baseRequest();
         assertEquals("NOT_SUPPORTED",
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                        .closeOutDay(r, "ups-local-abc").status());
+                        .closeOutDay(r, "ups-local-abc", null).status());
         assertEquals("NOT_SUPPORTED",
                 new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                        .closeOutDay(r, "fedex-local-abc").status());
+                        .closeOutDay(r, "fedex-local-abc", null).status());
         assertEquals("NOT_SUPPORTED",
                 new StampsConnector(new CarrierProperties(), new ObjectMapper())
-                        .closeOutDay(r, "stamps-local-abc").status());
+                        .closeOutDay(r, "stamps-local-abc", null).status());
     }
 
     @Test
@@ -66,7 +66,7 @@ class CloseOutTest {
         // via the pickup call from Sprint 33. Inherits the interface
         // default even with real tokens.
         CloseOutResult r = new DhlConnector(new CarrierProperties(), new ObjectMapper())
-                .closeOutDay(baseRequest(), "REAL-TOKEN");
+                .closeOutDay(baseRequest(), "REAL-TOKEN", null);
         assertEquals("NOT_SUPPORTED", r.status());
         assertEquals("DHL", r.carrierCode());
     }
@@ -78,13 +78,13 @@ class CloseOutTest {
         String tok = "REAL-TOKEN";
         assertEquals("ERROR",
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                        .closeOutDay(emptyTrackingRequest(), tok).status());
+                        .closeOutDay(emptyTrackingRequest(), tok, null).status());
         assertEquals("ERROR",
                 new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                        .closeOutDay(emptyTrackingRequest(), tok).status());
+                        .closeOutDay(emptyTrackingRequest(), tok, null).status());
         assertEquals("ERROR",
                 new StampsConnector(new CarrierProperties(), new ObjectMapper())
-                        .closeOutDay(emptyTrackingRequest(), tok).status());
+                        .closeOutDay(emptyTrackingRequest(), tok, null).status());
     }
 
     /* -------------------------- UPS parsing -------------------------- */

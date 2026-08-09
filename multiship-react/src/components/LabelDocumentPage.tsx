@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import { FiActivity, FiArrowLeft, FiCopy, FiDownload, FiExternalLink, FiFileText, FiPrinter, FiTag } from 'react-icons/fi'
 import { orderService, type LabelDocumentPayload } from '../api/orderService'
@@ -118,6 +118,7 @@ const hash36 = (value: string, length: number) => {
 export default function LabelDocumentPage() {
   const { orderNo: orderNoParam } = useParams()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { role, username } = useAppSession()
   const orderNo = Number(orderNoParam)
 
@@ -226,8 +227,6 @@ export default function LabelDocumentPage() {
   const carrierId = normalizeCarrierCode(accountCarrierCode)
   const theme = (carrierId && CARRIER_THEMES[carrierId]) || fallbackTheme
   const carrierDisplay = formatCarrierName(accountCarrierCode)
-  const trackingNumber = label?.trackingNumber || null
-  const generated = Boolean(label?.isGenerated && trackingNumber)
   const shipDate = label?.generatedAt || order?.createdDate
 
   // Commercial-invoice lines: prefer the per-order customs items entered against
@@ -258,13 +257,44 @@ export default function LabelDocumentPage() {
   const totalQty = lines.reduce((sum, line) => sum + (line.qtyShipped ?? 0), 0)
 
   // Some order feeds put a bare sequence digit in ship_name; prefer a plausible name.
+  // Never falls back to custNo (client code) — that would render the tenant
+  // identifier as the parcel's addressee. Placeholder is a literal '-' so
+  // mis-populated shipments are visibly broken.
   const rawShipName = order?.shipName?.trim()
   const recipientName =
-    (rawShipName && rawShipName.length > 2 ? rawShipName : order?.shipAttn) || order?.custNo || 'CONSIGNEE'
+    (rawShipName && rawShipName.length > 2 ? rawShipName : order?.shipAttn) || '-'
   const recipientCityLine = order
     ? `${order.shiptoCity || ''}, ${order.shiptoState || ''} ${order.shiptoZip || ''}`.trim()
     : ''
   const destCountry = (order?.shiptoCountryCd || 'US').toUpperCase()
+  // Sprint 48 B10 - customer-facing order number. Backend now sends
+  // displayOrderNo pre-formatted (e.g. "MAN900001" for manual shipments,
+  // just the number for ERP-imported orders). Fall back to the raw integer
+  // when the payload predates this field.
+  const orderDisplay = (order as { displayOrderNo?: string })?.displayOrderNo
+    || (order?.orderNo != null ? String(order.orderNo) : '')
+  // Cross-border flag from the backend (same-customs-territory pairs like
+  // intra-EU are treated as domestic). Domestic shipments suppress
+  // incoterms, EEI text, and the destination-country tag on the label.
+  const isInternational = Boolean(payload?.international)
+  const originCountry = (shipper?.countryCode || '').toUpperCase()
+  const isUsExport = isInternational && originCountry === 'US'
+  // Multi-package: total M comes from the order's package_count column;
+  // current N comes from the ?pkg= query param (default 1). Clamped.
+  const pkgCount = Math.max(1, Number(order?.packageCount) || 1)
+  const rawPkg = Number(searchParams.get('pkg')) || 1
+  const pkgIndex = Math.min(Math.max(1, rawPkg), pkgCount)
+  // Per-package row for the currently-selected box (drives per-pkg tracking,
+  // weight, dims). Null / undefined when the order predates label_package
+  // persistence — every downstream read falls back to the shipment-level
+  // label + order fields.
+  const perPkg = Array.isArray(order?.packages)
+    ? order.packages.find((p: { sequenceNumber?: number }) => p?.sequenceNumber === pkgIndex) ?? null
+    : null
+  const trackingNumber = perPkg?.trackingNumber || label?.trackingNumber || null
+  const generated = Boolean(label?.isGenerated && trackingNumber)
+  const perPkgWeight = perPkg?.weight ?? null
+  const perPkgWeightUnit = perPkg?.weightUnit || null
 
   // ---- carrier-form codes, derived deterministically like the real label carries ----
   const formCode = `${hash36(`${orderNo}${order?.shiptoZip || ''}`, 5)}/${hash36(`${order?.shiptoZip || ''}${orderNo}`, 4)}/${hash36(`${order?.custNo || ''}${orderNo}`, 4)}`
@@ -343,6 +373,26 @@ export default function LabelDocumentPage() {
               Commercial Invoice
             </button>
           </div>
+
+          {/* Multi-package picker — only shown when the shipment has >1 box. */}
+          {pkgCount > 1 ? (
+            <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-700 print:hidden">
+              <span className="font-semibold uppercase tracking-wide">Package</span>
+              <select
+                value={pkgIndex}
+                onChange={(e) => {
+                  const next = new URLSearchParams(searchParams)
+                  next.set('pkg', e.target.value)
+                  setSearchParams(next, { replace: true })
+                }}
+                className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[12px] font-semibold focus:outline-none focus:ring-1 focus:ring-slate-400"
+              >
+                {Array.from({ length: pkgCount }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>{n} of {pkgCount}</option>
+                ))}
+              </select>
+            </div>
+          ) : null}
 
           {trackingNumber ? (
             <button
@@ -435,11 +485,15 @@ export default function LabelDocumentPage() {
                 </div>
               ) : null}
 
-              {/* ---- header: incoterms + two-column origin / ship data ---- */}
+              {/* ---- header: (incoterms) + two-column origin / ship data ---- */}
               <div className="px-2 pb-1 pt-1.5">
-                <p className="text-[11px] font-black leading-none">
-                  INCOTERMS: {customsDefaults?.incoterms || (receiverIsImporter ? 'DAP' : 'DDP')}
-                </p>
+                {/* Incoterms are a cross-border commercial term — hidden
+                    for domestic parcels. */}
+                {isInternational ? (
+                  <p className="text-[11px] font-black leading-none">
+                    INCOTERMS: {customsDefaults?.incoterms || (receiverIsImporter ? 'DAP' : 'DDP')}
+                  </p>
+                ) : null}
                 <div className="mt-1 grid grid-cols-[1.08fr_1fr] font-mono text-[10px] leading-[13px]">
                   <div className="pr-2 uppercase">
                     <p>ORIGIN ID:{(shipper?.state || 'XX').toUpperCase()}{(shipper?.postalCode || '').slice(0, 2)}A&nbsp;&nbsp;{(shipper?.phone || '').replace(/\s+/g, '')}</p>
@@ -455,14 +509,22 @@ export default function LabelDocumentPage() {
                         (max of actual+tare and DIM weight), not the raw scale weight. */}
                     <p>
                       ACTWGT: {(() => {
-                        const w = (payload?.packagePreset as { billableWeight?: number | null } | null | undefined)?.billableWeight ?? order.weight
+                        // Per-package weight when a label_package row exists;
+                        // else fall back to the billable weight from the preset,
+                        // else the raw order weight.
+                        const w = perPkgWeight
+                          ?? (payload?.packagePreset as { billableWeight?: number | null } | null | undefined)?.billableWeight
+                          ?? order.weight
                         return typeof w === 'number' ? w.toFixed(2) : '—'
-                      })()} KG
+                      })()} {(perPkgWeightUnit || 'KG').toUpperCase()}
                     </p>
-                    <p>CAD: {order.orderNo}/MSHIP1</p>
+                    <p>CAD: {orderDisplay}{pkgCount > 1 ? `-${pkgIndex}` : ''}/MSHIP1</p>
                     <p>&nbsp;</p>
                     <p>BILL SENDER</p>
-                    <p className="text-[9px] font-black" style={{ fontFamily: 'inherit' }}>NO EEI 30.37(a)</p>
+                    {/* EEI exemption text is US-export-specific. */}
+                    {isUsExport ? (
+                      <p className="text-[9px] font-black" style={{ fontFamily: 'inherit' }}>NO EEI 30.37(a)</p>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -480,7 +542,8 @@ export default function LabelDocumentPage() {
                   <span className="pt-1 text-[10px] font-black">TO</span>
                   <div className="min-w-0">
                     <p className="truncate text-[21px] font-black uppercase leading-[24px] tracking-tight">{recipientName}</p>
-                    <p className="text-[18px] font-black uppercase leading-[22px]">{order.custNo}</p>
+                    {/* custNo used to render here as a big uppercase line — read as part
+                        of the address. Moved to the warehouse footer below the label. */}
                     {order.shipAddr1 ? (
                       <p className="text-[18px] font-black uppercase leading-[22px]">{order.shipAddr1}</p>
                     ) : null}
@@ -491,16 +554,23 @@ export default function LabelDocumentPage() {
                       <p className="text-[20px] font-black uppercase leading-[24px]">
                         {order.shiptoCity} {order.shiptoState} {order.shiptoZip}
                       </p>
-                      <p className="text-[20px] font-black leading-[24px]">({destCountry})</p>
+                      {/* Destination country tag: only show when the parcel
+                          actually crosses a customs boundary. Domestic
+                          parcels don't need it (country is implicit from the
+                          rest of the label). */}
+                      {isInternational ? (
+                        <p className="text-[20px] font-black leading-[24px]">({destCountry})</p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
                 <p className="mt-0.5 text-[11px] font-bold leading-[13px]">{order.phone || ''}</p>
                 <div className="grid grid-cols-2 pr-8 text-[9px] font-bold leading-[12px]">
                   <span>INV:</span>
-                  <span>REF: {order.orderNo}</span>
-                  <span>PO:</span>
-                  <span>DEPT: {order.custNo}</span>
+                  <span>REF: {orderDisplay}</span>
+                  {/* PO/DEPT row removed — PO isn't captured on the order yet, and
+                      DEPT was re-rendering the client code inside the TO block.
+                      Client code now lives in the warehouse footer below. */}
                 </div>
               </div>
               <div className="mx-1 h-px bg-black" />
@@ -558,6 +628,22 @@ export default function LabelDocumentPage() {
                 ) : null}
               </div>
 
+              {/* ---- warehouse footer (mirrors ZPL renderer) ---- */}
+              <div className="mx-1 h-px bg-black" />
+              <div className="px-2 py-1 text-[9px] font-bold uppercase leading-[12px] tracking-wide">
+                <p>
+                  CLIENT: {order.custNo || '-'} · ORDER: {orderDisplay}
+                  {order.orderSuffix ? `-${order.orderSuffix}` : ''}
+                  {` · PKG ${pkgIndex} OF ${pkgCount} · `}
+                  {formatDate(shipDate)}
+                </p>
+                <p>
+                  SVC: {serviceTier} ({order.shipviaCd || '-'}) · WT:{' '}
+                  {(perPkgWeight ?? order.weight) ?? '-'} {(perPkgWeightUnit || order.weightUnit || 'KG').toUpperCase()}
+                  {order.tenantId ? ` · TENANT: ${order.tenantId}` : ''}
+                </p>
+              </div>
+
               {/* ---- bottom Code 128 ---- */}
               <div className="relative px-3 pb-2.5 pt-1">
                 {generated && trackingNumber ? (
@@ -592,7 +678,7 @@ export default function LabelDocumentPage() {
                   <p className="mt-1 text-xs text-slate-500">International shipping document — customs declaration</p>
                   {accountNumber ? (
                     <p className="mt-1 font-mono text-[11px] text-slate-600">
-                      {accountName || carrierDisplay} — {trackingNumber || `ORDER ${order.orderNo}`}
+                      {accountName || carrierDisplay} — {trackingNumber || `ORDER ${orderDisplay}`}
                     </p>
                   ) : null}
                 </div>
@@ -601,7 +687,7 @@ export default function LabelDocumentPage() {
                   <p><span className="font-semibold">International Tracking#:</span> {trackingNumber || 'Pending'}</p>
                   <p><span className="font-semibold">Purpose:</span> {(customsDefaults?.reasonForExport || 'COMMERCIAL / SOLD').toUpperCase()}</p>
                   <p><span className="font-semibold">Nbr pkgs:</span> 1</p>
-                  <p><span className="font-semibold">Invoice #:</span> INV-{order.orderNo}</p>
+                  <p><span className="font-semibold">Invoice #:</span> INV-{orderDisplay}</p>
                 </div>
               </div>
 

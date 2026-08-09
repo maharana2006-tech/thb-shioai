@@ -81,6 +81,7 @@ public class CustomsServiceImpl implements CustomsService {
                         .unitValue(dto.getUnitValue())
                         .weight(dto.getWeight())
                         .sku(trimOrNull(dto.getSku()))
+                        .boxSeq(dto.getBoxSeq())  // Sprint 48 B11
                         .build();
                 customs.getItems().add(item);
             }
@@ -148,6 +149,7 @@ public class CustomsServiceImpl implements CustomsService {
                         .unitValue(i.getUnitValue())
                         .weight(i.getWeight())
                         .sku(i.getSku())
+                        .boxSeq(i.getBoxSeq())  // Sprint 48 B11
                         .build())
                 .toList();
 

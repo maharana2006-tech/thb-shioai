@@ -55,17 +55,17 @@ class FedExRateShopTest {
 
     @Test
     void localFallbackTokenReturnsEmptyList() {
-        assertTrue(connector.getRates(minimalRequest(), "fedex-local-abc").isEmpty());
+        assertTrue(connector.getRates(minimalRequest(), "fedex-local-abc", null).isEmpty());
     }
 
     @Test
     void blankTokenReturnsEmptyList() {
-        assertTrue(connector.getRates(minimalRequest(), "").isEmpty());
+        assertTrue(connector.getRates(minimalRequest(), "", null).isEmpty());
     }
 
     @Test
     void nullTokenReturnsEmptyList() {
-        assertTrue(connector.getRates(minimalRequest(), null).isEmpty());
+        assertTrue(connector.getRates(minimalRequest(), null, null).isEmpty());
     }
 
     /* -------------------------- Response parsing -------------------------- */

@@ -44,7 +44,7 @@ public class FedExConnector implements CarrierConnector {
     }
 
     @Override
-    public ServiceAvailability listServices(String originCountry, String accessToken) {
+    public ServiceAvailability listServices(String originCountry, String accessToken, String environment) {
         List<ServiceOffering> matrix = serviceMatrix(originCountry);
         boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
         if (!realToken) {
@@ -55,7 +55,7 @@ public class FedExConnector implements CarrierConnector {
         // this verified account (still live — backed by a verified credential). If a
         // genuine availability response is ever returned, prefer it.
         try {
-            List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken);
+            List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken, environment);
             if (!live.isEmpty()) {
                 return new ServiceAvailability(live, true, "FedEx Service Availability API");
             }
@@ -71,8 +71,8 @@ public class FedExConnector implements CarrierConnector {
      * must be finalised against a FedEx sandbox (see CUSTOMS_CARRIER_MAPPING.md).
      * Throws/returns empty when unreachable so the caller uses the built-in model.
      */
-    private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken) throws Exception {
-        String url = getBaseUrl() + "/availability/v1/service/availability";
+    private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken, String environment) throws Exception {
+        String url = getBaseUrl(environment) + "/availability/v1/service/availability";
         String response = RestClient.builder().baseUrl(url).build()
                 .post()
                 .contentType(MediaType.APPLICATION_JSON)
@@ -95,7 +95,7 @@ public class FedExConnector implements CarrierConnector {
     }
 
     @Override
-    public PackageAvailability listPackages(String originCountry, String accessToken) {
+    public PackageAvailability listPackages(String originCountry, String accessToken, String environment) {
         String o = originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT);
         boolean us = "US".equals(o) || "PR".equals(o);
         java.util.List<PackageOffering> pkgs = new java.util.ArrayList<>(List.of(
@@ -200,9 +200,9 @@ public class FedExConnector implements CarrierConnector {
     }
 
     @Override
-    public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken) {
+    public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
         try {
-            String shipmentUrl = getShipmentUrl();
+            String shipmentUrl = getShipmentUrl(environment);
             RestClient restClient = RestClient.builder().baseUrl(shipmentUrl).build();
             Map<String, Object> payload = buildShipmentPayload(request);
 
@@ -281,31 +281,24 @@ public class FedExConnector implements CarrierConnector {
      * </ul>
      */
     @Override
-    public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken) {
+    public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return java.util.List.of();
         }
+        // Guard: caller must supply either a shipment-level weight or a
+        // packages[] with at least one entry. Rate-shopping with zero weight
+        // is meaningless — return empty so the operator sees "no FedEx rates
+        // returned" rather than a spurious BigDecimal.ONE quote.
+        boolean noWeight = request.getWeight() == null
+                && (request.getPackages() == null || request.getPackages().isEmpty()
+                    || request.effectivePackages().stream().allMatch(p -> p.getWeight() == null));
+        if (noWeight) {
+            log.warn("FedEx rate-shop skipped: request has no weight and no packages[] with weight.");
+            return java.util.List.of();
+        }
         try {
-            String fedexWeightUnit = "KG".equalsIgnoreCase(request.getWeightUnit()) ? "KG" : "LB";
-            java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
-            body.put("accountNumber", java.util.Map.of("value",
-                    firstNonBlank(request.getAccountNumber(), "")));
-            java.util.Map<String, Object> requestedShipment = new java.util.LinkedHashMap<>();
-            requestedShipment.put("shipper", java.util.Map.of("address", java.util.Map.of(
-                    "postalCode", firstNonBlank(request.getShipperPostalCode(), ""),
-                    "countryCode", firstNonBlank(request.getShipperCountryCode(), "US"))));
-            requestedShipment.put("recipient", java.util.Map.of("address", java.util.Map.of(
-                    "postalCode", firstNonBlank(request.getRecipientPostalCode(), ""),
-                    "countryCode", firstNonBlank(request.getRecipientCountryCode(), "US"))));
-            requestedShipment.put("pickupType", "USE_SCHEDULED_PICKUP");
-            requestedShipment.put("rateRequestType", java.util.List.of("ACCOUNT", "LIST"));
-            requestedShipment.put("requestedPackageLineItems", java.util.List.of(java.util.Map.of(
-                    "weight", java.util.Map.of(
-                            "units", fedexWeightUnit,
-                            "value", request.getWeight() != null ? request.getWeight() : BigDecimal.ONE))));
-            body.put("requestedShipment", requestedShipment);
-
-            String response = RestClient.builder().baseUrl(getBaseUrl()).build().post()
+            java.util.Map<String, Object> body = buildRateRequestBody(request);
+            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build().post()
                     .uri("/rate/v1/rates/quotes")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -325,6 +318,66 @@ public class FedExConnector implements CarrierConnector {
                     ex.getMessage());
             return java.util.List.of();
         }
+    }
+
+    /**
+     * Build the /rate/v1/rates/quotes request body. Package-visible so tests
+     * can assert against the JSON shape without needing a live carrier.
+     *
+     * <p>Multi-package: one {@code requestedPackageLineItems} entry per box
+     * from {@code request.effectivePackages()}. Each entry carries its own
+     * weight; dimensions ride along when the box has them (FedEx needs dims
+     * to compute DIM-weight surcharges — omitting them under-quotes any
+     * oversize-but-light shipment).
+     *
+     * <p>Legacy single-package path (no packages[]) falls back to a single
+     * entry with {@code request.getWeight()} to preserve pre-Sprint-28
+     * behaviour.
+     */
+    java.util.Map<String, Object> buildRateRequestBody(ShipmentRequestDTO request) {
+        String fedexWeightUnit = "KG".equalsIgnoreCase(request.getWeightUnit()) ? "KG" : "LB";
+        String fedexDimUnit = "CM".equalsIgnoreCase(request.getDimUnit()) ? "CM" : "IN";
+        java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("accountNumber", java.util.Map.of("value",
+                firstNonBlank(request.getAccountNumber(), "")));
+        java.util.Map<String, Object> requestedShipment = new java.util.LinkedHashMap<>();
+        requestedShipment.put("shipper", java.util.Map.of("address", java.util.Map.of(
+                "postalCode", firstNonBlank(request.getShipperPostalCode(), ""),
+                "countryCode", firstNonBlank(request.getShipperCountryCode(), "US"))));
+        requestedShipment.put("recipient", java.util.Map.of("address", java.util.Map.of(
+                "postalCode", firstNonBlank(request.getRecipientPostalCode(), ""),
+                "countryCode", firstNonBlank(request.getRecipientCountryCode(), "US"))));
+        requestedShipment.put("pickupType", "USE_SCHEDULED_PICKUP");
+        requestedShipment.put("rateRequestType", java.util.List.of("ACCOUNT", "LIST"));
+
+        // One entry per box; effectivePackages() returns a synthetic
+        // 1-element list when packages[] wasn't supplied.
+        java.util.List<java.util.Map<String, Object>> lineItems = new java.util.ArrayList<>();
+        for (com.multiship.backend.dto.PackageDetailDTO pkg : request.effectivePackages()) {
+            java.util.Map<String, Object> item = new java.util.LinkedHashMap<>();
+            item.put("groupPackageCount", 1);
+            BigDecimal pieceWeight = pkg.getWeight() != null ? pkg.getWeight()
+                    : (request.getWeight() != null ? request.getWeight() : BigDecimal.ONE);
+            String pieceWeightUnit = "KG".equalsIgnoreCase(pkg.getWeightUnit()) ? "KG"
+                    : (pkg.getWeightUnit() != null ? pkg.getWeightUnit().toUpperCase() : fedexWeightUnit);
+            item.put("weight", java.util.Map.of("units", pieceWeightUnit, "value", pieceWeight));
+            // Include dims when the box carries them — matters for DIM-weight
+            // surcharges (oversize-but-light boxes are underpriced without dims).
+            if (pkg.getLength() != null && pkg.getWidth() != null && pkg.getHeight() != null) {
+                String pieceDimUnit = pkg.getDimUnit() != null
+                        ? ("CM".equalsIgnoreCase(pkg.getDimUnit()) ? "CM" : "IN")
+                        : fedexDimUnit;
+                item.put("dimensions", java.util.Map.of(
+                        "length", pkg.getLength(),
+                        "width", pkg.getWidth(),
+                        "height", pkg.getHeight(),
+                        "units", pieceDimUnit));
+            }
+            lineItems.add(item);
+        }
+        requestedShipment.put("requestedPackageLineItems", lineItems);
+        body.put("requestedShipment", requestedShipment);
+        return body;
     }
 
     /**
@@ -465,13 +518,13 @@ public class FedExConnector implements CarrierConnector {
      * connector uses.
      */
     @Override
-    public TrackingResult trackShipment(String trackingNumber, String accessToken) {
+    public TrackingResult trackShipment(String trackingNumber, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return trackShipment(trackingNumber);
         }
         String trackingLink = "https://www.fedex.com/fedextrack/?trknbr=" + trackingNumber;
         try {
-            String response = RestClient.builder().baseUrl(getBaseUrl()).build().post()
+            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build().post()
                     .uri("/track/v1/trackingnumbers")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -572,7 +625,7 @@ public class FedExConnector implements CarrierConnector {
      * we surface the ERROR clearly instead of silently attempting.
      */
     @Override
-    public VoidResult voidShipment(String trackingNumber, String accessToken) {
+    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "FedEx void needs live credentials; the account is on a fallback token.",
@@ -589,7 +642,7 @@ public class FedExConnector implements CarrierConnector {
             body.put("deletionControl", "DELETE_ALL_PACKAGES");
             body.put("trackingNumber", trackingNumber);
 
-            String response = RestClient.builder().baseUrl(getBaseUrl()).build()
+            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build()
                     .put()
                     .uri("/ship/v1/shipments/cancel")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -648,7 +701,7 @@ public class FedExConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken) {
+    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new AddressValidationResult(false, "NOT_SUPPORTED", "UNKNOWN", null,
                     java.util.List.of(),
@@ -681,6 +734,7 @@ public class FedExConnector implements CarrierConnector {
                     .body(body)
                     .retrieve()
                     .body(String.class);
+            log.info("FedEx AV response: {}", response);
             return parseFedExAvResponse(response);
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             log.warn("FedEx AV rejected (HTTP {}): {}",
@@ -740,9 +794,35 @@ public class FedExConnector implements CarrierConnector {
                             java.util.List.of("FedEx couldn't find this address."),
                             "FedEx address not found.", response);
                 default:
-                    return new AddressValidationResult(false, "ERROR", classification, suggested,
+                    // Some FedEx API versions omit the top-level `state` field.
+                    // Fall back to attributes.Matched + attributes.DPV, which
+                    // together indicate "delivery-point verified". When those
+                    // are also missing, treat a resolved suggestion that
+                    // differs from input as CORRECTED, or same-as-input as
+                    // EXACT — anything else is genuinely unknown.
+                    String matched = resolved.path("attributes").path("Matched").asText("");
+                    String dpv = resolved.path("attributes").path("DPV").asText("");
+                    if ("true".equalsIgnoreCase(matched) || "true".equalsIgnoreCase(dpv)) {
+                        return new AddressValidationResult(true, "EXACT", classification, null,
+                                java.util.List.of(),
+                                "FedEx confirmed this address (attributes.Matched=true).", response);
+                    }
+                    if ("false".equalsIgnoreCase(matched)) {
+                        return new AddressValidationResult(false, "NOT_FOUND", classification, null,
+                                java.util.List.of("FedEx couldn't find this address (attributes.Matched=false)."),
+                                "FedEx address not found.", response);
+                    }
+                    if (suggested != null) {
+                        return new AddressValidationResult(true, "CORRECTED", classification, suggested,
+                                java.util.List.of("FedEx returned a resolved address; state field was absent."),
+                                "FedEx suggested a corrected address.", response);
+                    }
+                    log.warn("FedEx AV returned no interpretable state / attributes.Matched. Response: {}", response);
+                    return new AddressValidationResult(false, "ERROR", classification, null,
                             java.util.List.of(),
-                            "FedEx AV returned unrecognized state: " + state, response);
+                            "FedEx AV response did not contain a recognisable state or attributes.Matched field. "
+                                    + "See backend logs for the raw payload.",
+                            response);
             }
         } catch (Exception ex) {
             return new AddressValidationResult(false, "ERROR", "UNKNOWN", null,
@@ -818,7 +898,7 @@ public class FedExConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken) {
+    public LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new LandedCostResult("FEDEX", "NOT_SUPPORTED",
                     null, null, null, null, null, null,
@@ -861,7 +941,7 @@ public class FedExConnector implements CarrierConnector {
 
             body.put("requestedShipment", requestedShipment);
 
-            String response = RestClient.builder().baseUrl(getBaseUrl()).build().post()
+            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build().post()
                     .uri("/rate/v1/rates/quotes")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -990,7 +1070,7 @@ public class FedExConnector implements CarrierConnector {
      * <p>{@code -local-*} fallback tokens short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public PickupResult schedulePickup(PickupRequest request, String accessToken) {
+    public PickupResult schedulePickup(PickupRequest request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new PickupResult("FEDEX", null, null, null, null, "NOT_SUPPORTED",
                     "FedEx pickup needs live credentials; the account is on a fallback token.",
@@ -998,7 +1078,7 @@ public class FedExConnector implements CarrierConnector {
         }
         try {
             Map<String, Object> body = buildFedExPickupRequest(request);
-            String response = RestClient.builder().baseUrl(getBaseUrl()).build()
+            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build()
                     .post()
                     .uri("/pickup/v1/pickups")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -1118,7 +1198,7 @@ public class FedExConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken) {
+    public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new CloseOutResult("FEDEX", null, null, null, 0, "NOT_SUPPORTED",
                     "FedEx close-out needs live credentials; the account is on a fallback token.",
@@ -1134,7 +1214,7 @@ public class FedExConnector implements CarrierConnector {
             body.put("accountNumber", java.util.Map.of("value", "ACCOUNT"));
             body.put("carrierCode", "FDXG");
 
-            String response = RestClient.builder().baseUrl(getBaseUrl()).build()
+            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build()
                     .post()
                     .uri("/ship/v1/shipments/endofday")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -1402,6 +1482,19 @@ public class FedExConnector implements CarrierConnector {
         java.util.List<Map<String, Object>> lineItems = new java.util.ArrayList<>();
         String declaredCurrency = StringUtils.hasText(request.getDeclaredValueCurrency())
                 ? request.getDeclaredValueCurrency().trim().toUpperCase() : "USD";
+        // Sprint 48 B11 — derive per-package declared value from CI
+        // commodities (grouped by boxSeq). Domestic FedEx uses per-pkg
+        // declaredValue on each line item; international FedEx MPS
+        // switches to shipment-level totalDeclaredValue on the master
+        // (added below after the loop).
+        boolean fedexIntl = request.getIntl() != null && request.getIntl().isReadyForCarrier();
+        com.multiship.backend.util.DeclaredValueContextBuilder.DeclaredValueContext dvCtx =
+                com.multiship.backend.util.DeclaredValueContextBuilder.build(
+                        request.getIntl() != null ? request.getIntl().getCommodities() : null,
+                        packages.size(),
+                        packages,
+                        declaredCurrency,
+                        request.getDeclaredValue());
         int seq = 1;
         for (com.multiship.backend.dto.PackageDetailDTO p : packages) {
             Map<String, Object> item = new LinkedHashMap<>();
@@ -1412,14 +1505,21 @@ public class FedExConnector implements CarrierConnector {
             item.put("weight", Map.of(
                     "units", fedexWeightUnit,
                     "value", p.getWeight() != null ? p.getWeight() : java.math.BigDecimal.ZERO));
-            // FedEx uses declaredValue on the line item BOTH for customs
-            // and for insurance beyond the free $100 tier. Sprint 35 —
-            // insuredValue wins when set, else fall back to the customs
-            // declared value on package 1 (Sprint 28 semantics).
-            java.math.BigDecimal declared = p.getDeclaredValue() != null
-                    ? p.getDeclaredValue()
-                    : (seq == 1 ? request.getDeclaredValue() : null);
-            if (request.getInsuredValue() != null
+            // Resolution chain per package:
+            //   1. per-box CI-derived declared value (from dvCtx)
+            //   2. explicit p.declaredValue (legacy override)
+            //   3. insuredValue (shipment-level insurance, wins for legacy
+            //      insurance-only orders)
+            // Skipped for intl MPS — value is set at shipment level via
+            // totalDeclaredValue below.
+            java.math.BigDecimal declared = null;
+            int pkgIdx = (p.getSequenceNumber() != null ? p.getSequenceNumber() : seq) - 1;
+            if (!fedexIntl && pkgIdx >= 0 && pkgIdx < dvCtx.perPackage().size()) {
+                java.math.BigDecimal fromItems = dvCtx.perPackage().get(pkgIdx);
+                if (fromItems != null && fromItems.signum() > 0) declared = fromItems;
+            }
+            if (declared == null && p.getDeclaredValue() != null) declared = p.getDeclaredValue();
+            if (declared == null && !fedexIntl && request.getInsuredValue() != null
                     && request.getInsuredValue().signum() > 0) {
                 declared = request.getInsuredValue();
             }
@@ -1446,6 +1546,17 @@ public class FedExConnector implements CarrierConnector {
         }
         requestedShipment.put("totalPackageCount", String.valueOf(packages.size()));
         requestedShipment.put("requestedPackageLineItems", lineItems);
+
+        // Sprint 48 B11 — for intl MPS FedEx expects one shipment-level
+        // declared value on totalDeclaredValue (per FedEx MPS docs); the
+        // per-package declaredValue field is skipped for intl in the loop
+        // above. Carriage-liability total = sum of per-box CI-derived
+        // amounts (customs total is set on commodities separately below).
+        if (fedexIntl && dvCtx.shipmentTotal() != null && dvCtx.shipmentTotal().signum() > 0) {
+            requestedShipment.put("totalDeclaredValue", Map.of(
+                    "amount", dvCtx.shipmentTotal(),
+                    "currency", declaredCurrency));
+        }
 
         // International customs only when the request carries a
         // ready-to-carrier intl block. Domestic shipments never see this.
@@ -1880,38 +1991,68 @@ public class FedExConnector implements CarrierConnector {
 
     private ShipmentResult parseShipmentResult(String response) throws Exception {
         JsonNode root = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
+        JsonNode shipment = root.at("/output/transactionShipments/0");
+        JsonNode pieceResponses = shipment.path("pieceResponses");
+
+        // Master tracking: FedEx's masterTrackingNumber is the shipment ID
+        // that ties multi-piece pieces together. When absent (single-pkg)
+        // it equals pieces[0].trackingNumber — same fallback chain the old
+        // parser used.
         String trackingNumber = firstText(
-                root.at("/output/transactionShipments/0/masterTrackingNumber"),
-                root.at("/output/transactionShipments/0/pieceResponses/0/trackingNumber"),
-                root.at("/output/transactionShipments/0/pieceResponses/0/packageDocuments/0/trackingNumber")
+                shipment.path("masterTrackingNumber"),
+                pieceResponses.path(0).path("trackingNumber"),
+                pieceResponses.path(0).path("packageDocuments").path(0).path("trackingNumber")
         );
 
         String labelUrl = firstText(
-                root.at("/output/transactionShipments/0/pieceResponses/0/packageDocuments/0/url"),
-                root.at("/output/transactionShipments/0/pieceResponses/0/packageDocuments/0/encodedLabel")
+                pieceResponses.path(0).path("packageDocuments").path(0).path("url"),
+                pieceResponses.path(0).path("packageDocuments").path(0).path("encodedLabel")
         );
 
         String labelPdf = firstText(
-                root.at("/output/transactionShipments/0/pieceResponses/0/packageDocuments/0/encodedLabel"),
-                root.at("/output/transactionShipments/0/pieceResponses/0/packageDocuments/0/url")
+                pieceResponses.path(0).path("packageDocuments").path(0).path("encodedLabel"),
+                pieceResponses.path(0).path("packageDocuments").path(0).path("url")
         );
 
-        BigDecimal shippingCost = root.at("/output/transactionShipments/0/shipmentRatingDetails/0/totalNetCharge")
-                .decimalValue();
-        if (shippingCost != null && shippingCost.compareTo(BigDecimal.ZERO) == 0 && !root.at("/output/transactionShipments/0/shipmentRatingDetails/0/totalNetCharge").isNumber()) {
-            shippingCost = null;
-        }
+        JsonNode totalNetChargeNode = shipment.path("shipmentRatingDetails").path(0).path("totalNetCharge");
+        BigDecimal shippingCost = totalNetChargeNode.isNumber() ? totalNetChargeNode.decimalValue() : null;
 
         LocalDateTime estimatedDelivery = parseDateTime(
                 firstText(
-                        root.at("/output/transactionShipments/0/actualDeliveryDate"),
-                        root.at("/output/transactionShipments/0/shipDatestamp")
+                        shipment.path("actualDeliveryDate"),
+                        shipment.path("shipDatestamp")
                 )
         );
 
         String trackingUrl = StringUtils.hasText(trackingNumber)
                 ? "https://www.fedex.com/fedextrack/?trknbr=" + trackingNumber
                 : null;
+
+        // Per-piece rows — one PackageTracking per element in pieceResponses[].
+        // FedEx returns N pieces for an N-piece shipment when the createShipment
+        // MPS payload was accepted. When the request was single-package this
+        // list has exactly one element that mirrors the master.
+        java.util.List<PackageTracking> packages = new java.util.ArrayList<>();
+        if (pieceResponses.isArray()) {
+            for (int i = 0; i < pieceResponses.size(); i++) {
+                JsonNode piece = pieceResponses.get(i);
+                String pcTrack = firstText(
+                        piece.path("trackingNumber"),
+                        piece.path("packageDocuments").path(0).path("trackingNumber"));
+                if (!StringUtils.hasText(pcTrack)) continue;
+                String pcLabelUrl = firstText(
+                        piece.path("packageDocuments").path(0).path("url"),
+                        piece.path("packageDocuments").path(0).path("encodedLabel"));
+                String pcLabelPdf = firstText(
+                        piece.path("packageDocuments").path(0).path("encodedLabel"),
+                        piece.path("packageDocuments").path(0).path("url"));
+                JsonNode pcCharge = piece.path("netChargeAmount");
+                BigDecimal pcNet = pcCharge.isNumber() ? pcCharge.decimalValue() : null;
+                packages.add(new PackageTracking(i + 1, pcTrack,
+                        StringUtils.hasText(pcTrack) ? "https://www.fedex.com/fedextrack/?trknbr=" + pcTrack : null,
+                        pcLabelUrl, pcLabelPdf, pcNet));
+            }
+        }
 
         return new ShipmentResult(
                 trackingNumber,
@@ -1920,7 +2061,8 @@ public class FedExConnector implements CarrierConnector {
                 labelPdf,
                 shippingCost,
                 estimatedDelivery,
-                response
+                response,
+                packages
         );
     }
 
@@ -1962,7 +2104,15 @@ public class FedExConnector implements CarrierConnector {
     }
 
     private String getBaseUrl() {
-        String environment = carrierProperties.getDefaultEnvironment();
+        return getBaseUrl(carrierProperties.getDefaultEnvironment());
+    }
+
+    /**
+     * Base URL for the given caller environment. SANDBOX routes to the
+     * per-carrier sandbox host so sandbox credentials don't hit production;
+     * anything else routes to the production host.
+     */
+    private String getBaseUrl(String environment) {
         CarrierProperties.FedEx fedEx = carrierProperties.getFedEx();
         if ("SANDBOX".equalsIgnoreCase(environment) && StringUtils.hasText(fedEx.getSandboxUrl())) {
             return fedEx.getSandboxUrl();
@@ -1982,9 +2132,9 @@ public class FedExConnector implements CarrierConnector {
         return getBaseUrl() + fedEx.getTokenPath();
     }
 
-    private String getShipmentUrl() {
+    private String getShipmentUrl(String environment) {
         CarrierProperties.FedEx fedEx = carrierProperties.getFedEx();
-        return getBaseUrl() + fedEx.getShipmentPath();
+        return getBaseUrl(environment) + fedEx.getShipmentPath();
     }
 
     private String getTrackingUrl() {

@@ -44,6 +44,15 @@ public class CustomsCommodityDTO {
     private String sku;
 
     /**
+     * Sprint 48 B11 — 1-based package index this item belongs to. NULL =
+     * unassigned; when every item on a shipment is null the connector
+     * treats all items as belonging to one logical package. When set,
+     * the {@code DeclaredValueContextBuilder} groups items by this to
+     * derive per-package declared value.
+     */
+    private Integer boxSeq;
+
+    /**
      * Line total = quantity × unitValue. Convenience for connectors that need
      * a pre-computed line-value column on the invoice; safe against null
      * inputs so partial rows don't NPE at translation time.

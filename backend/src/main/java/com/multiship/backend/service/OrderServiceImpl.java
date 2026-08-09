@@ -49,6 +49,9 @@ public class OrderServiceImpl implements OrderService {
     @Autowired
     private OrderRawCodesRepository orderRawCodesRepository;
 
+    @Autowired
+    private com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
+
     private static final Set<String> VALID_STATUSES = Set.of("PENDING", "GENERATED", "ERROR");
     private static final Set<String> VALID_RESOLUTIONS = Set.of("READY", "NEEDS_DETAILS", "CHOOSE_ACCOUNT", "CLIENT_MISSING");
 
@@ -294,6 +297,8 @@ public class OrderServiceImpl implements OrderService {
         OrderWithLinesDTO data = OrderWithLinesDTO.builder()
                 .orderNo(entity.getOrderNo())
                 .orderSuffix(entity.getOrderSuffix())
+                .displayOrderNo(com.multiship.backend.util.OrderNumberFormatter.format(
+                        entity.getOrderNo(), entity.getIsManual()))
                 .orderStatus(entity.getOrderStatus())
                 .custNo(entity.getCustNo())
                 .shipName(entity.getShipName())
@@ -311,6 +316,26 @@ public class OrderServiceImpl implements OrderService {
                 .createdDate(entity.getCreatedDate())
                 .isReturn(entity.getIsReturn())
                 .importerBrokerOverride(entity.getImporterBrokerOverride())
+                .packageCount(entity.getPackageCount())
+                .packages(labelPackageRepository
+                        .findByOrderNoOrderBySequenceNumberAsc(entity.getOrderNo()).stream()
+                        .map(p -> com.multiship.backend.dto.LabelPackageDTO.builder()
+                                .sequenceNumber(p.getSequenceNumber())
+                                .trackingNumber(p.getTrackingNumber())
+                                .trackingUrl(p.getTrackingUrl())
+                                .labelFilePath(p.getLabelFilePath())
+                                .weight(p.getWeight())
+                                .weightUnit(p.getWeightUnit())
+                                .length(p.getLength())
+                                .width(p.getWidth())
+                                .height(p.getHeight())
+                                .dimUnit(p.getDimUnit())
+                                .packageType(p.getPackageType())
+                                .declaredValue(p.getDeclaredValue())
+                                .reference(p.getReference())
+                                .description(p.getDescription())
+                                .build())
+                        .toList())
                 .orderLines(lines)
                 .build();
 

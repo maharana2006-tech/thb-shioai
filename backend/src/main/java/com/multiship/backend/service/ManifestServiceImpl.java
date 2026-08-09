@@ -95,7 +95,7 @@ public class ManifestServiceImpl implements ManifestService {
 
         CloseOutResult result;
         try {
-            result = connector.closeOutDay(connectorRequest, accessToken);
+            result = connector.closeOutDay(connectorRequest, accessToken, account.getEnvironment());
         } catch (Exception ex) {
             log.warn("Close-out call to {} failed: {}", carrier, ex.getMessage());
             result = new CloseOutResult(carrier, null, null, null,

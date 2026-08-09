@@ -73,7 +73,7 @@ public class LandedCostServiceImpl implements LandedCostService {
 
         LandedCostResult result;
         try {
-            result = connector.estimateLandedCost(request.getShipment(), accessToken);
+            result = connector.estimateLandedCost(request.getShipment(), accessToken, account.getEnvironment());
         } catch (Exception ex) {
             log.warn("Landed cost call to {} failed: {}", carrier, ex.getMessage());
             result = new LandedCostResult(carrier, "ERROR",

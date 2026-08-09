@@ -42,32 +42,32 @@ class AddressValidationTest {
     void everyCarrierReturnsNotSupportedForLocalFallbackToken() {
         assertEquals("NOT_SUPPORTED",
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                        .validateAddress(address(), "ups-local-abc").matchLevel());
+                        .validateAddress(address(), "ups-local-abc", null).matchLevel());
         assertEquals("NOT_SUPPORTED",
                 new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                        .validateAddress(address(), "fedex-local-abc").matchLevel());
+                        .validateAddress(address(), "fedex-local-abc", null).matchLevel());
         assertEquals("NOT_SUPPORTED",
                 new DhlConnector(new CarrierProperties(), new ObjectMapper())
-                        .validateAddress(address(), "dhl-local-abc").matchLevel());
+                        .validateAddress(address(), "dhl-local-abc", null).matchLevel());
         assertEquals("NOT_SUPPORTED",
                 new StampsConnector(new CarrierProperties(), new ObjectMapper())
-                        .validateAddress(address(), "stamps-local-abc").matchLevel());
+                        .validateAddress(address(), "stamps-local-abc", null).matchLevel());
     }
 
     @Test
     void nullTokenTreatedAsFallbackEverywhere() {
         assertEquals("NOT_SUPPORTED",
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                        .validateAddress(address(), null).matchLevel());
+                        .validateAddress(address(), null, null).matchLevel());
         assertEquals("NOT_SUPPORTED",
                 new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                        .validateAddress(address(), null).matchLevel());
+                        .validateAddress(address(), null, null).matchLevel());
         assertEquals("NOT_SUPPORTED",
                 new DhlConnector(new CarrierProperties(), new ObjectMapper())
-                        .validateAddress(address(), null).matchLevel());
+                        .validateAddress(address(), null, null).matchLevel());
         assertEquals("NOT_SUPPORTED",
                 new StampsConnector(new CarrierProperties(), new ObjectMapper())
-                        .validateAddress(address(), null).matchLevel());
+                        .validateAddress(address(), null, null).matchLevel());
     }
 
     /* -------------------------- UPS AVS response parsing -------------------------- */

@@ -59,7 +59,16 @@ public class ClientCustomsProfile {
      * and the DB enforces unique(client_code, country) — no country can ever
      * be double-booked across a client's profiles, even under concurrency.
      */
-    @OneToMany(mappedBy = "profile", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
+    /**
+     * Sprint 48 N+1 fix — LAZY (was EAGER). Bulk admin listing of profiles
+     * previously fired a JOIN with cartesian expansion on every read. Hot
+     * paths that need country links (findByClientAndCountry — 1 profile;
+     * bulk listing — many profiles) use JOIN FETCH variants on the
+     * repository. Any code path that accesses {@code countryLinks} outside
+     * an open Hibernate session must use one of those variants or wrap the
+     * read in a transactional service method.
+     */
+    @OneToMany(mappedBy = "profile", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @Builder.Default
     @EqualsAndHashCode.Exclude
     @ToString.Exclude

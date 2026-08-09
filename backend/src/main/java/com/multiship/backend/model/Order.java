@@ -130,8 +130,30 @@ public class Order {
     @Column(name = "importer_broker_override", columnDefinition = "text")
     private String importerBrokerOverride;
 
+    /**
+     * Total number of packages (boxes) in this shipment. 1 for a single-
+     * package order; N for multi-package. Persisted from
+     * {@code ShipmentRequestDTO.packages.size()} at label-generation time
+     * so downstream reads (label endpoint, exports, dashboards) can render
+     * "PKG N OF M" without recomputing.
+     */
+    @Column(name = "package_count")
+    private Integer packageCount;
+
     @OneToMany(mappedBy = "order", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
     @ToString.Exclude
     @EqualsAndHashCode.Exclude
     private List<OrderLine> orderLines;
+
+    /**
+     * Sprint 48 B10 — optimistic locking. Concurrent updates to the same
+     * order row fail-fast with {@code OptimisticLockException} instead of
+     * silently overwriting each other. Hibernate auto-increments this on
+     * every save and adds it to the UPDATE's WHERE clause. Nullable so
+     * existing rows on first upgrade start at NULL (Hibernate treats null
+     * as "no prior version" and inserts version=0 on first save).
+     */
+    @jakarta.persistence.Version
+    @jakarta.persistence.Column(name = "version")
+    private Long version;
 }

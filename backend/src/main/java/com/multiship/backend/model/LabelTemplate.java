@@ -32,7 +32,19 @@ public class LabelTemplate {
     @Column(name = "tenant_id", length = 50)
     private String tenantId;
 
-    /** PACKING_SLIP for now; RETURN_COVER + COMMERCIAL_INVOICE future. */
+    /**
+     * Discriminator for the document this template renders:
+     * <ul>
+     *   <li>{@code PACKING_SLIP} — the branded packing slip inserted inside
+     *       the parcel. Rendered locally via {@code PackingSlipServiceImpl}.</li>
+     *   <li>{@code COMMERCIAL_INVOICE} — customs CI for international
+     *       shipments. Stored per-tenant so the client can override the
+     *       platform default (fallback logic in
+     *       {@code LabelTemplateService.resolve}). Rendering pipeline is
+     *       carrier-side today; a local renderer is a future addition.</li>
+     *   <li>{@code RETURN_COVER} — planned; return-label cover page.</li>
+     * </ul>
+     */
     @Column(name = "template_type", nullable = false, length = 40)
     private String templateType = "PACKING_SLIP";
 

@@ -49,7 +49,7 @@ public class StampsConnector implements CarrierConnector {
     }
 
     @Override
-    public ServiceAvailability listServices(String originCountry, String accessToken) {
+    public ServiceAvailability listServices(String originCountry, String accessToken, String environment) {
         List<ServiceOffering> matrix = serviceMatrix(originCountry);
         boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
         if (!realToken) {
@@ -61,7 +61,7 @@ public class StampsConnector implements CarrierConnector {
         String o = originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT);
         boolean usOrigin = "US".equals(o) || "PR".equals(o);
         try {
-            List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken);
+            List<ServiceOffering> live = fetchLiveServices(originCountry, accessToken, environment);
             if (!live.isEmpty()) {
                 return new ServiceAvailability(live, true, "USPS Shipping Options API");
             }
@@ -79,8 +79,11 @@ public class StampsConnector implements CarrierConnector {
      * the USPS sandbox (see CUSTOMS_CARRIER_MAPPING.md). Throws/returns empty
      * when unreachable so the caller uses the built-in model.
      */
-    private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken) throws Exception {
-        String url = carrierProperties.getStamps().getApiBaseUrl() + "/shipments/v3/options/search";
+    private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken, String environment) throws Exception {
+        String baseUrl = isSandbox(environment)
+                ? carrierProperties.getStamps().getSandboxUrl()
+                : carrierProperties.getStamps().getApiBaseUrl();
+        String url = baseUrl + "/shipments/v3/options/search";
         String response = RestClient.builder().baseUrl(url).build()
                 .post()
                 .contentType(MediaType.APPLICATION_JSON)
@@ -101,7 +104,7 @@ public class StampsConnector implements CarrierConnector {
     }
 
     @Override
-    public PackageAvailability listPackages(String originCountry, String accessToken) {
+    public PackageAvailability listPackages(String originCountry, String accessToken, String environment) {
         String o = originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT);
         // USPS Flat Rate packaging is US-domestic only; from any other origin
         // USPS offers nothing (US-only carrier).
@@ -292,8 +295,10 @@ public class StampsConnector implements CarrierConnector {
      * received from {@code getAccessToken} was seeded by AuthenticateUser.
      */
     @Override
-    public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken) {
-        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+    public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        String swsimUrl = isSandbox(environment)
+                ? carrierProperties.getStamps().getSandboxUrl()
+                : carrierProperties.getStamps().getApiBaseUrl();
         java.util.List<com.multiship.backend.dto.PackageDetailDTO> packages = request.effectivePackages();
 
         // Sprint 29 — multi-package USPS. SWSIM CreateIndicium is single-
@@ -337,19 +342,15 @@ public class StampsConnector implements CarrierConnector {
 
     /**
      * Aggregate per-package CreateIndicium results into a single
-     * {@link ShipmentResult}. See {@link #createShipment} for the fields'
-     * combination strategy.
+     * {@link ShipmentResult}. Master fields come from piece 1 (Stamps has
+     * no explicit shipment identity — piece 1's tracking doubles as the
+     * master, matching what customer-facing systems expect). The full
+     * per-piece breakdown lives in {@link ShipmentResult#packages()}.
      */
     ShipmentResult aggregateStampsShipmentResults(java.util.List<ShipmentResult> perPackage) {
         if (perPackage.isEmpty()) {
-            return new ShipmentResult(null, null, null, null, null, null, null);
+            return new ShipmentResult(null, null, null, null, null, null, null, java.util.List.of());
         }
-        if (perPackage.size() == 1) return perPackage.get(0);
-
-        String trackingJoined = perPackage.stream()
-                .map(ShipmentResult::trackingNumber)
-                .filter(StringUtils::hasText)
-                .collect(java.util.stream.Collectors.joining(","));
 
         java.math.BigDecimal totalCost = perPackage.stream()
                 .map(ShipmentResult::shippingCost)
@@ -364,15 +365,26 @@ public class StampsConnector implements CarrierConnector {
                     .append('\n');
         }
 
+        // Per-piece list — one PackageTracking per SWSIM CreateIndicium
+        // response. Sequence number matches the request's package order.
+        java.util.List<PackageTracking> pieces = new java.util.ArrayList<>();
+        for (int i = 0; i < perPackage.size(); i++) {
+            ShipmentResult r = perPackage.get(i);
+            pieces.add(new PackageTracking(i + 1,
+                    r.trackingNumber(), r.trackingUrl(),
+                    r.labelUrl(), r.labelPdf(), r.shippingCost()));
+        }
+
         ShipmentResult first = perPackage.get(0);
         return new ShipmentResult(
-                StringUtils.hasText(trackingJoined) ? trackingJoined : first.trackingNumber(),
+                first.trackingNumber(),   // master = piece 1's tracking (no separate master concept in USPS)
                 first.trackingUrl(),
                 first.labelUrl(),
                 first.labelPdf(),
                 totalCost,
                 first.estimatedDelivery(),
-                raw.toString());
+                raw.toString(),
+                pieces);
     }
 
     @Override
@@ -414,11 +426,13 @@ public class StampsConnector implements CarrierConnector {
      * to the URL-only stub — same convention Sprints 12/13/14 established.
      */
     @Override
-    public TrackingResult trackShipment(String trackingNumber, String accessToken) {
+    public TrackingResult trackShipment(String trackingNumber, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return trackShipment(trackingNumber);
         }
-        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        String swsimUrl = isSandbox(environment)
+                ? carrierProperties.getStamps().getSandboxUrl()
+                : carrierProperties.getStamps().getApiBaseUrl();
         String soap = buildTrackShipmentEnvelope(trackingNumber, accessToken);
         String trackingUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + trackingNumber;
         try {
@@ -555,30 +569,111 @@ public class StampsConnector implements CarrierConnector {
      * same auth-degraded convention Sprints 12/13/14/18 established.
      */
     @Override
-    public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken) {
+    public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return java.util.List.of();
         }
-        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
-        String soap = buildGetRatesEnvelope(request, accessToken);
-        try {
-            String response = RestClient.builder().baseUrl(swsimUrl).build().post()
-                    .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
-                    .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/GetRates\"")
-                    .body(soap)
-                    .retrieve()
-                    .body(String.class);
-            return parseGetRatesResponse(response);
-        } catch (org.springframework.web.client.RestClientResponseException ex) {
-            String fault = extractSoapFault(ex.getResponseBodyAsString());
-            log.warn("Stamps SWSIM GetRates rejected (HTTP {}): {}",
-                    ex.getStatusCode().value(), fault);
-            return java.util.List.of();
-        } catch (Exception ex) {
-            log.warn("Stamps SWSIM GetRates failed; returning empty rate list. Reason: {}",
-                    ex.getMessage());
+        java.util.List<com.multiship.backend.dto.PackageDetailDTO> pkgList = request.effectivePackages();
+        if (pkgList.isEmpty()) {
+            log.warn("Stamps rate-shop skipped: request has no packages.");
             return java.util.List.of();
         }
+        String swsimUrl = isSandbox(environment)
+                ? carrierProperties.getStamps().getSandboxUrl()
+                : carrierProperties.getStamps().getApiBaseUrl();
+
+        // SWSIM GetRates is single-piece — loop N calls, then aggregate
+        // per-service totals. Cost scales linearly with package count; a
+        // 100-piece rate-shop is 100 SWSIM roundtrips.
+        long startedAt = System.currentTimeMillis();
+        java.util.List<java.util.List<RateOption>> perPackage = new java.util.ArrayList<>();
+        for (int i = 0; i < pkgList.size(); i++) {
+            String soap = buildGetRatesEnvelope(request, pkgList.get(i), accessToken);
+            try {
+                String response = RestClient.builder().baseUrl(swsimUrl).build().post()
+                        .contentType(MediaType.parseMediaType("text/xml; charset=utf-8"))
+                        .header("SOAPAction", "\"" + SWSIM_NAMESPACE + "/GetRates\"")
+                        .body(soap)
+                        .retrieve()
+                        .body(String.class);
+                perPackage.add(parseGetRatesResponse(response));
+            } catch (org.springframework.web.client.RestClientResponseException ex) {
+                String fault = extractSoapFault(ex.getResponseBodyAsString());
+                log.warn("Stamps SWSIM GetRates rejected for pkg {}/{} (HTTP {}): {}",
+                        i + 1, pkgList.size(), ex.getStatusCode().value(), fault);
+                // One bad piece shouldn't kill the whole rate-shop — treat as
+                // empty for that piece; aggregator drops services not on every piece.
+                perPackage.add(java.util.List.of());
+            } catch (Exception ex) {
+                log.warn("Stamps SWSIM GetRates failed for pkg {}/{}: {}",
+                        i + 1, pkgList.size(), ex.getMessage());
+                perPackage.add(java.util.List.of());
+            }
+        }
+        java.util.List<RateOption> aggregated = aggregateStampsRates(perPackage);
+        if (pkgList.size() > 1) {
+            log.info("Stamps rate-shop for {}-pkg request: {} SWSIM calls, {} ms, {} aggregate services",
+                    pkgList.size(), pkgList.size(), System.currentTimeMillis() - startedAt, aggregated.size());
+        }
+        return aggregated;
+    }
+
+    /**
+     * Sum per-service rates across every package's response. A service is
+     * only included in the output when EVERY package quoted it — otherwise
+     * the aggregate misrepresents cost (some pieces would need a fallback
+     * service, changing the price).
+     *
+     * <p>Package-visible so tests can drive the aggregator with canned
+     * per-package rate lists.
+     */
+    java.util.List<RateOption> aggregateStampsRates(java.util.List<java.util.List<RateOption>> perPackage) {
+        if (perPackage.isEmpty()) return java.util.List.of();
+        if (perPackage.size() == 1) return perPackage.get(0);
+
+        // Determine services present on EVERY package.
+        java.util.Map<String, RateOption> firstByService = new java.util.LinkedHashMap<>();
+        for (RateOption r : perPackage.get(0)) {
+            if (r != null && StringUtils.hasText(r.serviceCode())) {
+                firstByService.putIfAbsent(r.serviceCode(), r);
+            }
+        }
+        java.util.Set<String> commonServices = new java.util.LinkedHashSet<>(firstByService.keySet());
+        for (int i = 1; i < perPackage.size(); i++) {
+            java.util.Set<String> here = new java.util.HashSet<>();
+            for (RateOption r : perPackage.get(i)) {
+                if (r != null && StringUtils.hasText(r.serviceCode())) here.add(r.serviceCode());
+            }
+            commonServices.retainAll(here);
+        }
+
+        // Sum totalAmount + max estimatedDelivery / transitDays per common service.
+        java.util.List<RateOption> out = new java.util.ArrayList<>();
+        for (String svc : commonServices) {
+            RateOption template = firstByService.get(svc);
+            java.math.BigDecimal total = java.math.BigDecimal.ZERO;
+            String currency = template.currency();
+            java.time.LocalDateTime latestDelivery = template.estimatedDelivery();
+            Integer maxTransit = template.transitDays();
+            for (java.util.List<RateOption> pkg : perPackage) {
+                for (RateOption r : pkg) {
+                    if (r == null || !svc.equals(r.serviceCode())) continue;
+                    if (r.totalAmount() != null) total = total.add(r.totalAmount());
+                    if (r.currency() != null) currency = r.currency();
+                    if (r.estimatedDelivery() != null
+                            && (latestDelivery == null || r.estimatedDelivery().isAfter(latestDelivery))) {
+                        latestDelivery = r.estimatedDelivery();
+                    }
+                    if (r.transitDays() != null && (maxTransit == null || r.transitDays() > maxTransit)) {
+                        maxTransit = r.transitDays();
+                    }
+                    break;
+                }
+            }
+            out.add(new RateOption(template.carrierCode(), svc, template.serviceName(),
+                    total, currency, latestDelivery, maxTransit));
+        }
+        return out;
     }
 
     /**
@@ -589,13 +684,15 @@ public class StampsConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to {@code NOT_SUPPORTED}.
      */
     @Override
-    public VoidResult voidShipment(String trackingNumber, String accessToken) {
+    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "USPS void needs live credentials; the account is on a fallback token.",
                     null);
         }
-        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        String swsimUrl = isSandbox(environment)
+                ? carrierProperties.getStamps().getSandboxUrl()
+                : carrierProperties.getStamps().getApiBaseUrl();
         String soap = buildCancelIndiciumEnvelope(trackingNumber, accessToken);
         try {
             String response = RestClient.builder().baseUrl(swsimUrl).build().post()
@@ -669,7 +766,7 @@ public class StampsConnector implements CarrierConnector {
      * add-on we don't wire here.
      */
     @Override
-    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken) {
+    public AddressValidationResult validateAddress(AddressToValidate address, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new AddressValidationResult(false, "NOT_SUPPORTED", "UNKNOWN", null,
                     java.util.List.of(),
@@ -817,13 +914,15 @@ public class StampsConnector implements CarrierConnector {
      * <p>{@code -local-*} authenticators short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public PickupResult schedulePickup(PickupRequest request, String accessToken) {
+    public PickupResult schedulePickup(PickupRequest request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new PickupResult("USPS", null, null, null, null, "NOT_SUPPORTED",
                     "USPS pickup needs live credentials; the account is on a fallback token.",
                     null);
         }
-        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        String swsimUrl = isSandbox(environment)
+                ? carrierProperties.getStamps().getSandboxUrl()
+                : carrierProperties.getStamps().getApiBaseUrl();
         String soap = buildSchedulePickupEnvelope(request, accessToken);
         try {
             String response = RestClient.builder().baseUrl(swsimUrl).build().post()
@@ -951,7 +1050,7 @@ public class StampsConnector implements CarrierConnector {
      * <p>{@code -local-*} authenticators short-circuit to NOT_SUPPORTED.
      */
     @Override
-    public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken) {
+    public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new CloseOutResult("USPS", null, null, null, 0, "NOT_SUPPORTED",
                     "USPS SCAN Form needs live credentials; the account is on a fallback token.",
@@ -962,7 +1061,9 @@ public class StampsConnector implements CarrierConnector {
             return new CloseOutResult("USPS", null, null, null, 0, "ERROR",
                     "USPS SCAN Form requires at least one tracking number.", null);
         }
-        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        String swsimUrl = isSandbox(environment)
+                ? carrierProperties.getStamps().getSandboxUrl()
+                : carrierProperties.getStamps().getApiBaseUrl();
         String soap = buildCreateScanFormEnvelope(request, accessToken);
         try {
             String response = RestClient.builder().baseUrl(swsimUrl).build().post()
@@ -1126,6 +1227,18 @@ public class StampsConnector implements CarrierConnector {
      * treats absent Country as US and errors when both are set).
      */
     String buildGetRatesEnvelope(ShipmentRequestDTO request, String authenticator) {
+        // BC overload — takes piece 1 (matches pre-Sprint-48 behaviour).
+        return buildGetRatesEnvelope(request, request.effectivePackages().get(0), authenticator);
+    }
+
+    /**
+     * Build the SWSIM GetRates SOAP envelope for a specific package. Sprint 48
+     * B3 — multi-package rate-shopping loops N calls, one per package, so this
+     * method now takes an explicit package rather than pulling piece 1.
+     */
+    String buildGetRatesEnvelope(ShipmentRequestDTO request,
+                                 com.multiship.backend.dto.PackageDetailDTO pkg,
+                                 String authenticator) {
         StringBuilder xml = new StringBuilder(768);
         xml.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
         xml.append("<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">");
@@ -1145,19 +1258,20 @@ public class StampsConnector implements CarrierConnector {
             xml.append("<Country>").append(xmlEscape(country)).append("</Country>");
         }
         xml.append("</To>");
-        // SWSIM GetRates is single-package; use the first for the quote.
-        com.multiship.backend.dto.PackageDetailDTO firstPkg = request.effectivePackages().get(0);
-        xml.append("<WeightOz>").append(xmlEscape(weightInOz(firstPkg))).append("</WeightOz>");
+        xml.append("<WeightOz>").append(xmlEscape(weightInOz(pkg))).append("</WeightOz>");
         xml.append("<PackageType>")
                 .append(xmlEscape(nonBlank(
-                        nonBlank(firstPkg.getPackageType(), request.getPackageType()), "Package")))
+                        nonBlank(pkg.getPackageType(), request.getPackageType()), "Package")))
                 .append("</PackageType>");
         xml.append("<ShipDate>")
                 .append(java.time.LocalDate.now(java.time.ZoneOffset.UTC))
                 .append("</ShipDate>");
-        if (request.getDeclaredValue() != null) {
+        // Declared value: prefer per-package, else shipment-level.
+        java.math.BigDecimal declared = pkg.getDeclaredValue() != null
+                ? pkg.getDeclaredValue() : request.getDeclaredValue();
+        if (declared != null) {
             xml.append("<DeclaredValue>")
-                    .append(xmlEscape(request.getDeclaredValue().toPlainString()))
+                    .append(xmlEscape(declared.toPlainString()))
                     .append("</DeclaredValue>");
         }
         xml.append("</Rate>");
@@ -1328,7 +1442,7 @@ public class StampsConnector implements CarrierConnector {
         com.multiship.backend.dto.PackageDetailDTO firstPkg = packageDetail;
         String weightOz = weightInOz(firstPkg);
         xml.append("<Rate>");
-        appendServiceRate(xml, request, firstPkg, weightOz);
+        appendServiceRate(xml, request, firstPkg, weightOz, packageIndex, packageTotal);
         xml.append("</Rate>");
 
         // From/To are separate blocks; addresses appear twice (once inside
@@ -1374,7 +1488,8 @@ public class StampsConnector implements CarrierConnector {
     }
 
     private void appendServiceRate(StringBuilder xml, ShipmentRequestDTO request,
-                                    com.multiship.backend.dto.PackageDetailDTO p, String weightOz) {
+                                    com.multiship.backend.dto.PackageDetailDTO p, String weightOz,
+                                    int packageIndex, int packageTotal) {
         xml.append("<From><ZIPCode>").append(xmlEscape(nonBlank(request.getShipperPostalCode(), "")))
                 .append("</ZIPCode></From>");
         xml.append("<To>");
@@ -1389,8 +1504,28 @@ public class StampsConnector implements CarrierConnector {
                 nonBlank(nonBlank(p.getPackageType(), request.getPackageType()), "Package"))).append("</PackageType>");
         xml.append("<WeightOz>").append(xmlEscape(weightOz)).append("</WeightOz>");
         xml.append("<ShipDate>").append(java.time.LocalDate.now(java.time.ZoneOffset.UTC)).append("</ShipDate>");
-        java.math.BigDecimal declared = p.getDeclaredValue() != null
-                ? p.getDeclaredValue() : request.getDeclaredValue();
+        // Sprint 48 B11 — DeclaredValue resolution:
+        //   1. per-box CI-derived value (grouped from OrderCustomsItem.boxSeq)
+        //   2. explicit packageDetail.declaredValue (legacy override)
+        //   3. shipment-level request.declaredValue
+        // SWSIM is single-piece per call; each call gets THIS box's total.
+        // Invariant: declared >= sum(customs items for this box) holds by
+        // construction when items are the source (they'd be equal).
+        com.multiship.backend.util.DeclaredValueContextBuilder.DeclaredValueContext dvCtx =
+                com.multiship.backend.util.DeclaredValueContextBuilder.build(
+                        request.getIntl() != null ? request.getIntl().getCommodities() : null,
+                        Math.max(packageTotal, 1),
+                        request.effectivePackages(),
+                        nonBlank(request.getDeclaredValueCurrency(), "USD"),
+                        request.getDeclaredValue());
+        int boxIdx = Math.max(0, Math.min(packageIndex - 1, dvCtx.perPackage().size() - 1));
+        java.math.BigDecimal declared = null;
+        if (boxIdx >= 0 && boxIdx < dvCtx.perPackage().size()) {
+            java.math.BigDecimal fromItems = dvCtx.perPackage().get(boxIdx);
+            if (fromItems != null && fromItems.signum() > 0) declared = fromItems;
+        }
+        if (declared == null && p.getDeclaredValue() != null) declared = p.getDeclaredValue();
+        if (declared == null) declared = request.getDeclaredValue();
         if (declared != null) {
             xml.append("<DeclaredValue>").append(xmlEscape(declared.toPlainString()))
                     .append("</DeclaredValue>");

@@ -142,7 +142,7 @@ class TrackingServiceImplTest {
                 .thenReturn(Optional.of(account("UPS", "740561111", "cid", "sec")));
         when(connector.getAccessToken(eq("cid"), eq("sec"), eq("740561111"), eq("PRODUCTION")))
                 .thenReturn("real-token");
-        when(connector.trackShipment("1Z999", "real-token"))
+        when(connector.trackShipment(eq("1Z999"), eq("real-token"), eq("PRODUCTION")))
                 .thenReturn(liveResult(false));
 
         ApiResponse<TrackingResponseDTO> res = service.getLiveTracking(1);
@@ -163,14 +163,14 @@ class TrackingServiceImplTest {
         when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(anyString(), anyString()))
                 .thenReturn(Optional.of(account("UPS", "740561111", "cid", "sec")));
         when(connector.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("real-token");
-        when(connector.trackShipment(eq("1Z999"), eq("real-token")))
+        when(connector.trackShipment(eq("1Z999"), eq("real-token"), anyString()))
                 .thenReturn(liveResult(false));
 
         service.getLiveTracking(1);
         ApiResponse<TrackingResponseDTO> second = service.getLiveTracking(1);
         assertEquals("CACHE", second.getData().getSource());
-        // 2-arg trackShipment invoked exactly once — cache short-circuits second call.
-        verify(connector, times(1)).trackShipment(eq("1Z999"), anyString());
+        // 3-arg trackShipment invoked exactly once — cache short-circuits second call.
+        verify(connector, times(1)).trackShipment(eq("1Z999"), anyString(), anyString());
     }
 
     /* -------------------------- Fallback paths -------------------------- */
@@ -187,8 +187,8 @@ class TrackingServiceImplTest {
         ApiResponse<TrackingResponseDTO> res = service.getLiveTracking(1);
         assertEquals("STUB", res.getData().getSource());
         assertEquals("UNKNOWN", res.getData().getStatus());
-        // Confirm we did NOT call the 2-arg version.
-        verify(connector, times(0)).trackShipment(anyString(), anyString());
+        // Confirm we did NOT call the 3-arg version.
+        verify(connector, times(0)).trackShipment(anyString(), anyString(), anyString());
     }
 
     @Test
@@ -215,7 +215,7 @@ class TrackingServiceImplTest {
         when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("740561111", "UPS"))
                 .thenReturn(Optional.of(account("UPS", "740561111", "cid", "sec")));
         when(connector.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
-        when(connector.trackShipment(eq("1Z999"), eq("tok")))
+        when(connector.trackShipment(eq("1Z999"), eq("tok"), anyString()))
                 .thenThrow(new RuntimeException("timeout"));
         when(connector.trackShipment("1Z999")).thenReturn(new CarrierConnector.TrackingResult(
                 "1Z999", "UNKNOWN", "https://track/1Z999", null, null, false, null));
@@ -250,7 +250,7 @@ class TrackingServiceImplTest {
                 .thenReturn(List.of(account("UPS", "PLATFORM", "pcid", "psec")));
         when(connector.getAccessToken(eq("pcid"), eq("psec"), eq("PLATFORM"), eq("PRODUCTION")))
                 .thenReturn("platform-token");
-        when(connector.trackShipment(eq("1Z999"), eq("platform-token")))
+        when(connector.trackShipment(eq("1Z999"), eq("platform-token"), anyString()))
                 .thenReturn(liveResult(false));
 
         ApiResponse<TrackingResponseDTO> res = service.getLiveTracking(1);
@@ -267,7 +267,7 @@ class TrackingServiceImplTest {
         when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("740561111", "UPS"))
                 .thenReturn(Optional.of(account("UPS", "740561111", "cid", "sec")));
         when(connector.getAccessToken(anyString(), anyString(), any(), any())).thenReturn("tok");
-        when(connector.trackShipment(eq("1Z999"), eq("tok")))
+        when(connector.trackShipment(eq("1Z999"), eq("tok"), anyString()))
                 .thenReturn(liveResult(true));
 
         ApiResponse<TrackingResponseDTO> res = service.getLiveTracking(1);

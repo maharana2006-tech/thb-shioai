@@ -90,7 +90,16 @@ public class OrderCustoms {
     @Column(length = 500)
     private String notes;
 
-    @OneToMany(mappedBy = "orderCustoms", cascade = CascadeType.ALL, orphanRemoval = true)
+    /**
+     * Sprint 48 N+1 fix — EAGER because every code path that loads an
+     * OrderCustoms row also reads its items (label generation, commercial
+     * invoice render, per-package declared-value derivation). Default LAZY
+     * caused ~15K wasted "on-demand items" SELECTs per day at 50K orders.
+     * Safe as EAGER: single collection on this entity (no MultipleBagFetch
+     * risk); items are always needed together.
+     */
+    @OneToMany(mappedBy = "orderCustoms", cascade = CascadeType.ALL, orphanRemoval = true,
+            fetch = jakarta.persistence.FetchType.EAGER)
     @Default
     private List<OrderCustomsItem> items = new ArrayList<>();
 

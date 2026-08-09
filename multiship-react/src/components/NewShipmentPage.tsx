@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { useNavigate } from 'react-router-dom'
 import { notify } from '../utils/notify'
-import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch } from 'react-icons/fi'
+import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch, FiX } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import {
   orderService,
@@ -114,10 +115,10 @@ function Field({ label, required, hint, children, className = '' }: { label: str
 }
 
 /** Espresso section shell used across the page. */
-function SectionCard({ icon, title, badge, note, children }: { icon: ReactNode; title: string; badge?: ReactNode; note?: ReactNode; children: ReactNode }) {
+function SectionCard({ icon, title, badge, note, className = '', wrapHeader = false, children }: { icon: ReactNode; title: string; badge?: ReactNode; note?: ReactNode; className?: string; wrapHeader?: boolean; children: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex min-h-[38px] items-center justify-between gap-2 border-b border-dashed border-[#e3d9c4] pb-2">
+    <section className={`rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ${className}`}>
+      <div className={`flex min-h-[38px] items-center justify-between gap-2 border-b border-dashed border-[#e3d9c4] pb-2 ${wrapHeader ? 'flex-wrap' : ''}`}>
         <div className="flex items-center gap-2">
           <span className="text-[#8a7959]">{icon}</span>
           <h3 className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#8a7959]">{title}</h3>
@@ -479,8 +480,12 @@ export default function NewShipmentPage() {
   const [reviewWarnings, setReviewWarnings] = useState<ShipmentWarning[] | null>(null)
 
   // International commercial-invoice line items (shown only for cross-border lanes).
-  type ItemRow = { description: string; sku: string; hsCode: string; countryOfOrigin: string; quantity: string; unitValue: string }
-  const blankItem = (): ItemRow => ({ description: '', sku: '', hsCode: '', countryOfOrigin: '', quantity: '1', unitValue: '' })
+  // Sprint 48 B11 — each item can be assigned to a physical package (boxSeq).
+  // When every item is assigned, backend derives per-package declared value
+  // from sum(unitValue × quantity in that box). null boxSeq = unassigned
+  // (falls into box 1 by default; treated as legacy single-box CI).
+  type ItemRow = NewShipmentItemRow
+  const blankItem = (): ItemRow => ({ description: '', sku: '', hsCode: '', countryOfOrigin: '', quantity: '1', unitValue: '', boxSeq: '' })
   const [items, setItems] = useState<ItemRow[]>([blankItem()])
   // Reason of export + currency are sticky — they prefill from the last shipment.
   const [reasonForExport, setReasonForExport] = useState(() => readSticky('ms:lastReason', 'SALE'))
@@ -1081,6 +1086,7 @@ export default function NewShipmentPage() {
       countryOfOrigin: it.countryOfOrigin ?? '',
       quantity: String(it.quantity ?? 1),
       unitValue: it.unitValue != null ? String(it.unitValue) : '',
+      boxSeq: '', // Sprint 48 B11 — wizard doesn't collect boxSeq yet; preserved as blank
     }))
     // Keep at least one row so the inline form isn't blank after a Save
     // with zero items entered in the wizard.
@@ -1229,6 +1235,10 @@ export default function NewShipmentPage() {
         countryOfOrigin: it.countryOfOrigin.trim().toUpperCase() || undefined,
         quantity: it.quantity ? Number(it.quantity) : null,
         unitValue: it.unitValue ? Number(it.unitValue) : null,
+        // Sprint 48 B11 — assign item to a specific physical package;
+        // backend derives per-box declared value from sum of items
+        // when at least one item is assigned.
+        boxSeq: it.boxSeq ? Number(it.boxSeq) : undefined,
       }))
     if (isInternational) {
       if (!cleanItems.length) {
@@ -1470,61 +1480,19 @@ export default function NewShipmentPage() {
               </div>
             </SectionCard>
 
-            {/* ── Addresses ── */}
-            <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+            {/* ── Addresses + Carrier + Package (compact 3-col band) ── */}
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
               <SectionCard
                 icon={<FiHome className="h-3.5 w-3.5" />}
                 title={isReturn ? 'Return from · customer' : 'Ship from · sender'}
+                className="xl:row-span-2"
               >
                 <AddressBlock value={sender} onChange={(patch) => setSender((s) => ({ ...s, ...patch }))} withEmail={isReturn} />
               </SectionCard>
               <SectionCard
                 icon={<FiMapPin className="h-3.5 w-3.5" />}
                 title={isReturn ? 'Return to · your address' : 'Ship to · recipient'}
-                badge={
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => void validateRecipient()}
-                      disabled={validating}
-                      title="Platform-side check — postal format, address components"
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
-                    >
-                      {validating ? (
-                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
-                      ) : (
-                        <FiCheckCircle className="h-3.5 w-3.5" />
-                      )}
-                      Validate address
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void validateRecipientWithCarrier()}
-                      disabled={carrierValidating || !carrier}
-                      title={carrier
-                        ? `Carrier-side check — ask ${carrier} whether they can deliver here + residential/commercial classification`
-                        : 'Pick a carrier first'}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#1f150c] bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {carrierValidating ? (
-                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#8a7959] border-t-[#f4eede]" />
-                      ) : (
-                        <FiSearch className="h-3 w-3" />
-                      )}
-                      Check with {carrier || 'carrier'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void saveCurrentRecipient()}
-                      disabled={savingRecipient}
-                      title="Save this recipient to the address book"
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:opacity-50"
-                    >
-                      <FiPlus className="h-3 w-3" />
-                      {savingRecipient ? 'Saving…' : 'Save recipient'}
-                    </button>
-                  </div>
-                }
+                className="xl:row-span-2"
               >
                 <AddressBlock
                   value={recipient}
@@ -1580,6 +1548,24 @@ export default function NewShipmentPage() {
                     </div>
                   }
                 />
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => void validateRecipientWithCarrier()}
+                    disabled={carrierValidating || !carrier}
+                    title={carrier
+                      ? `Carrier-side check — ask ${carrier} whether they can deliver here + residential/commercial classification`
+                      : 'Pick a carrier first'}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#1f150c] bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {carrierValidating ? (
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#8a7959] border-t-[#f4eede]" />
+                    ) : (
+                      <FiCheckCircle className="h-3.5 w-3.5" />
+                    )}
+                    Validate with Carrier
+                  </button>
+                </div>
                 {!destAllowed && destRules?.mode && recipient.countryCode ? (
                   <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
                     <p className="flex items-center gap-2 font-semibold">
@@ -1619,10 +1605,6 @@ export default function NewShipmentPage() {
                   />
                 ) : null}
               </SectionCard>
-            </div>
-
-            {/* ── Carrier & package ── */}
-            <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-2">
               <SectionCard
                 icon={<FiTruck className="h-3.5 w-3.5" />}
                 title="Account & service"
@@ -2080,53 +2062,23 @@ export default function NewShipmentPage() {
               >
                 <div className="space-y-1.5 overflow-x-auto">
                   {/* header labels (once) */}
-                  <div className="hidden min-w-[760px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_44px] gap-2 sm:grid">
-                    {['Description *', 'SKU', 'HS code', 'Origin', 'Qty', `Unit value (${currency}) *`, `Amount (${currency})`].map((h) => (
+                  {/* Sprint 48 B11 — added "Pkg #" column between Amount and trash.
+                      Total packages available = primary box + extraPackages. */}
+                  <div className="hidden min-w-[820px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_0.6fr_44px] gap-2 sm:grid">
+                    {['Description *', 'SKU', 'HS code', 'Origin', 'Qty', `Unit value (${currency}) *`, `Amount (${currency})`, 'Pkg #'].map((h) => (
                       <span key={h} className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">{h}</span>
                     ))}
                     <span />
                   </div>
 
-                  {items.map((it, i) => {
-                    const amount = (Number(it.quantity) || 0) * (Number(it.unitValue) || 0)
-                    return (
-                      <div key={i} className="space-y-1">
-                      <div
-                        className="grid min-w-[760px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_44px] items-start gap-2"
-                      >
-                        <input className={inputCls} value={it.description} onChange={(e) => patchItem(i, { description: e.target.value })} placeholder="Cotton t-shirt" />
-                        <input className={inputCls} value={it.sku} onChange={(e) => patchItem(i, { sku: e.target.value })} placeholder="SKU-001" />
-                        <HsCodeCombobox
-                          value={it.hsCode}
-                          onChange={(v) => patchItem(i, { hsCode: v })}
-                          onDescriptionSuggest={(desc) => {
-                            if (!it.description || !it.description.trim()) {
-                              patchItem(i, { description: desc })
-                            }
-                          }}
-                        />
-                        <input className={`${inputCls} uppercase`} value={it.countryOfOrigin} onChange={(e) => patchItem(i, { countryOfOrigin: e.target.value })} placeholder="US" maxLength={2} />
-                        <input className={inputCls} type="number" min="1" step="1" value={it.quantity} onChange={(e) => patchItem(i, { quantity: e.target.value })} placeholder="1" />
-                        <input className={inputCls} type="number" min="0" step="0.01" value={it.unitValue} onChange={(e) => patchItem(i, { unitValue: e.target.value })} placeholder="20.00" />
-                        <div className={`${inputCls} flex items-center justify-end bg-[#faf7f0] font-mono tabular-nums`}>
-                          {amount > 0 ? amount.toFixed(2) : '—'}
-                        </div>
-                        <div className="flex items-center justify-center">
-                          <button
-                            type="button"
-                            onClick={() => removeItem(i)}
-                            disabled={items.length === 1}
-                            className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#b6a684] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
-                            aria-label={`Remove item ${i + 1}`}
-                          >
-                            <FiTrash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                      {/* HS code shape hint is rendered inline by HsCodeCombobox. */}
-                      </div>
-                    )
-                  })}
+                  <VirtualizedNewShipmentItems
+                    items={items}
+                    patchItem={patchItem}
+                    removeItem={removeItem}
+                    totalPkgs={1 + extraPackages.length}
+                    canRemove={items.length > 1}
+                    inputCls={inputCls}
+                  />
 
                   {/* invoice total */}
                   <div className="flex min-w-[760px] items-center justify-end gap-3 border-t border-dashed border-[#e3d9c4] px-0.5 pt-2">
@@ -2397,3 +2349,158 @@ function CarrierAddressBanner({
     </div>
   )
 }
+
+/* ---------------- Sprint 48 audit fix — virtualized CI items list ---------------- */
+
+/** Module-scoped mirror of the local ItemRow type so the virtualizer's
+ *  memoized row component can be declared outside the main function
+ *  (memo needs a stable reference across parent re-renders). */
+export type NewShipmentItemRow = {
+  description: string
+  sku: string
+  hsCode: string
+  countryOfOrigin: string
+  quantity: string
+  unitValue: string
+  boxSeq: string
+}
+
+/**
+ * Virtualized wrapper for the CI items table. Renders only the rows in /
+ * near the viewport plus a small overscan; DOM stays at ~10 rows regardless
+ * of items.length. Fixes the jank-past-30-items audit finding.
+ *
+ * <p>Uses measured height (ResizeObserver) so rows with wrapping
+ * descriptions or an open HsCodeCombobox dropdown expand naturally.
+ * 60vh scroll container is responsive to viewport height.
+ */
+export function VirtualizedNewShipmentItems({
+  items,
+  patchItem,
+  removeItem,
+  totalPkgs,
+  canRemove,
+  inputCls,
+}: {
+  items: NewShipmentItemRow[]
+  patchItem: (i: number, patch: Partial<NewShipmentItemRow>) => void
+  removeItem: (i: number) => void
+  totalPkgs: number
+  canRemove: boolean
+  inputCls: string
+}) {
+  const parentRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 72,
+    overscan: 5,
+  })
+  return (
+    <div
+      ref={parentRef}
+      style={{ height: '60vh', overflowY: 'auto', contain: 'strict' }}
+      className="rounded-xl border border-slate-200 bg-white"
+    >
+      <div
+        style={{
+          height: `${virtualizer.getTotalSize()}px`,
+          width: '100%',
+          position: 'relative',
+        }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => (
+          <div
+            key={virtualRow.key}
+            data-index={virtualRow.index}
+            ref={virtualizer.measureElement}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualRow.start}px)`,
+            }}
+            className="px-2 py-1"
+          >
+            <NewShipmentItemsRow
+              index={virtualRow.index}
+              it={items[virtualRow.index]}
+              patchItem={patchItem}
+              removeItem={removeItem}
+              totalPkgs={totalPkgs}
+              canRemove={canRemove}
+              inputCls={inputCls}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** Memoized row — typing in one row doesn't reconcile the other 99. */
+const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
+  index,
+  it,
+  patchItem,
+  removeItem,
+  totalPkgs,
+  canRemove,
+  inputCls,
+}: {
+  index: number
+  it: NewShipmentItemRow
+  patchItem: (i: number, patch: Partial<NewShipmentItemRow>) => void
+  removeItem: (i: number) => void
+  totalPkgs: number
+  canRemove: boolean
+  inputCls: string
+}) {
+  const patch = useCallback((delta: Partial<NewShipmentItemRow>) => patchItem(index, delta), [patchItem, index])
+  const remove = useCallback(() => removeItem(index), [removeItem, index])
+  const amount = (Number(it.quantity) || 0) * (Number(it.unitValue) || 0)
+  return (
+    <div className="space-y-1">
+      <div className="grid min-w-[820px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_0.6fr_44px] items-start gap-2">
+        <input className={inputCls} value={it.description} onChange={(e) => patch({ description: e.target.value })} placeholder="Cotton t-shirt" />
+        <input className={inputCls} value={it.sku} onChange={(e) => patch({ sku: e.target.value })} placeholder="SKU-001" />
+        <HsCodeCombobox
+          value={it.hsCode}
+          onChange={(v) => patch({ hsCode: v })}
+          onDescriptionSuggest={(desc) => {
+            if (!it.description || !it.description.trim()) patch({ description: desc })
+          }}
+        />
+        <input className={`${inputCls} uppercase`} value={it.countryOfOrigin} onChange={(e) => patch({ countryOfOrigin: e.target.value })} placeholder="US" maxLength={2} />
+        <input className={inputCls} type="number" min="1" step="1" value={it.quantity} onChange={(e) => patch({ quantity: e.target.value })} placeholder="1" />
+        <input className={inputCls} type="number" min="0" step="0.01" value={it.unitValue} onChange={(e) => patch({ unitValue: e.target.value })} placeholder="20.00" />
+        <div className={`${inputCls} flex items-center justify-end bg-[#faf7f0] font-mono tabular-nums`}>
+          {amount > 0 ? amount.toFixed(2) : '—'}
+        </div>
+        <select
+          className={inputCls}
+          value={it.boxSeq}
+          onChange={(e) => patch({ boxSeq: e.target.value })}
+          title="Assign this item to a specific package. Backend sums assigned items per box for declared value."
+        >
+          <option value="">—</option>
+          {Array.from({ length: totalPkgs }, (_, n) => n + 1).map((n) => (
+            <option key={n} value={String(n)}>{n}</option>
+          ))}
+        </select>
+        <div className="flex items-center justify-center">
+          <button
+            type="button"
+            onClick={remove}
+            disabled={!canRemove}
+            className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#b6a684] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={`Remove item ${index + 1}`}
+          >
+            <FiTrash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+})

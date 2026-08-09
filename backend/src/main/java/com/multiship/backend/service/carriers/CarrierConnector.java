@@ -23,7 +23,7 @@ public interface CarrierConnector {
      * is unreachable — it returns the built-in availability model and reports
      * live=false, so callers never mistake simulated data for a live response.
      */
-    ServiceAvailability listServices(String originCountry, String accessToken);
+    ServiceAvailability listServices(String originCountry, String accessToken, String environment);
 
     /**
      * The carrier's predefined PACKAGING for the origin country — the carrier
@@ -31,7 +31,7 @@ public interface CarrierConnector {
      * US-only, FedEx One Rate is US-domestic, 10/25KG boxes are international).
      * Real API when a live token is given, else the built-in catalogue.
      */
-    PackageAvailability listPackages(String originCountry, String accessToken);
+    PackageAvailability listPackages(String originCountry, String accessToken, String environment);
 
     CarrierConnectionResult connect(String clientId, String clientSecret, String accountNumber);
 
@@ -60,7 +60,7 @@ public interface CarrierConnector {
         return getAccessToken(clientId, clientSecret, accountNumber);
     }
 
-    ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken);
+    ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment);
 
     /**
      * Rate shopping — ask the carrier what its services would cost for the
@@ -73,7 +73,7 @@ public interface CarrierConnector {
      * fan-out service treats empty as "no options from this carrier" — it
      * merges results across every configured carrier before returning.
      */
-    default List<RateOption> getRates(ShipmentRequestDTO request, String accessToken) {
+    default List<RateOption> getRates(ShipmentRequestDTO request, String accessToken, String environment) {
         return List.of();
     }
 
@@ -90,7 +90,7 @@ public interface CarrierConnector {
      * carrier's own token flow for that convention — the caller should
      * expect the same URL-only result the default returns.
      */
-    default TrackingResult trackShipment(String trackingNumber, String accessToken) {
+    default TrackingResult trackShipment(String trackingNumber, String accessToken, String environment) {
         return trackShipment(trackingNumber);
     }
 
@@ -113,7 +113,7 @@ public interface CarrierConnector {
      * account can't authenticate a void call, so the connector returns
      * NOT_SUPPORTED with a message.
      */
-    default VoidResult voidShipment(String trackingNumber, String accessToken) {
+    default VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
         return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                 "Void isn't implemented for " + getCarrierCode() + " on this instance.", null);
     }
@@ -194,8 +194,13 @@ public interface CarrierConnector {
      * Validate an address against the carrier's own address database.
      * Sprint 31 wires each connector to its real endpoint; the default
      * returns NOT_SUPPORTED so this stays additive over past sprints.
+     *
+     * <p>{@code environment} is the account's UPS-style env label
+     * ("SANDBOX" or anything else = PRODUCTION) — required because
+     * UPS issues per-env credentials AND per-env API hosts. Sandbox
+     * tokens 401 against production hosts and vice versa.
      */
-    default AddressValidationResult validateAddress(AddressToValidate address, String accessToken) {
+    default AddressValidationResult validateAddress(AddressToValidate address, String accessToken, String environment) {
         return new AddressValidationResult(
                 false, "NOT_SUPPORTED", "UNKNOWN", null, List.of(),
                 "Address validation isn't implemented for " + getCarrierCode() + " on this instance.",
@@ -311,7 +316,7 @@ public interface CarrierConnector {
     ) {
     }
 
-    default CloseOutResult closeOutDay(CloseOutRequest request, String accessToken) {
+    default CloseOutResult closeOutDay(CloseOutRequest request, String accessToken, String environment) {
         return new CloseOutResult(
                 getCarrierCode(),
                 null,
@@ -373,7 +378,7 @@ public interface CarrierConnector {
     ) {
     }
 
-    default PickupResult schedulePickup(PickupRequest request, String accessToken) {
+    default PickupResult schedulePickup(PickupRequest request, String accessToken, String environment) {
         return new PickupResult(
                 getCarrierCode(),
                 null,
@@ -437,7 +442,7 @@ public interface CarrierConnector {
     ) {
     }
 
-    default LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken) {
+    default LandedCostResult estimateLandedCost(ShipmentRequestDTO request, String accessToken, String environment) {
         return new LandedCostResult(
                 getCarrierCode(),
                 "NOT_SUPPORTED",
@@ -544,6 +549,35 @@ public interface CarrierConnector {
     ) {
     }
 
+    /**
+     * One piece inside a multi-package shipment result. Sprint 48 —
+     * carriers return per-piece tracking + label artifacts (FedEx
+     * {@code pieceResponses[]}, UPS {@code PackageResults[]}, DHL
+     * {@code packages[]}), and Stamps splits per-package by design.
+     * Persisted into {@code label_package} so downstream reads (label
+     * printing, webhooks, customer support) can address individual boxes.
+     */
+    record PackageTracking(
+            int sequenceNumber,
+            String trackingNumber,
+            String trackingUrl,
+            String labelUrl,
+            String labelPdf,
+            BigDecimal netCharge
+    ) {
+    }
+
+    /**
+     * Top-level fields carry the "master" identity of the shipment:
+     * {@code trackingNumber} is what carriers surface on the shipment
+     * document (FedEx piece 1's tracking, UPS ShipmentIdentificationNumber,
+     * DHL shipmentTrackingNumber, Stamps piece 1's tracking). For
+     * single-package shipments {@code trackingNumber} == {@code packages[0].trackingNumber}.
+     *
+     * <p>{@code packages} is one entry per physical box. Empty list is
+     * legal for connectors that haven't been upgraded to parse per-piece
+     * — downstream code falls back to the master when packages is empty.
+     */
     record ShipmentResult(
             String trackingNumber,
             String trackingUrl,
@@ -551,8 +585,22 @@ public interface CarrierConnector {
             String labelPdf,
             BigDecimal shippingCost,
             LocalDateTime estimatedDelivery,
-            String rawResponse
+            String rawResponse,
+            List<PackageTracking> packages
     ) {
+        /** Backwards-compatible constructor for callers/tests that
+         *  don't provide a per-piece list — synthesizes a 1-element
+         *  list from the master when trackingNumber is present, else
+         *  an empty list. */
+        public ShipmentResult(String trackingNumber, String trackingUrl, String labelUrl,
+                              String labelPdf, BigDecimal shippingCost,
+                              LocalDateTime estimatedDelivery, String rawResponse) {
+            this(trackingNumber, trackingUrl, labelUrl, labelPdf, shippingCost,
+                    estimatedDelivery, rawResponse,
+                    trackingNumber == null ? List.of()
+                            : List.of(new PackageTracking(1, trackingNumber, trackingUrl,
+                                    labelUrl, labelPdf, shippingCost)));
+        }
     }
 
     /**

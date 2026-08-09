@@ -22,4 +22,6 @@ public class OrderCustomsItemDTO {
     private BigDecimal unitValue;
     private BigDecimal weight;
     @Size(max = 60) private String sku;
+    /** Sprint 48 B11 — 1-based package this item belongs to; null = unassigned. */
+    private Integer boxSeq;
 }

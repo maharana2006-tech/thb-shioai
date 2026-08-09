@@ -15,7 +15,14 @@ public interface LabelTemplateService {
     /** Fetch a template by primary key. */
     Optional<LabelTemplate> findById(Long id);
 
-    /** Resolve the effective template: tenant-scoped, then platform default. */
+    /**
+     * Resolve the effective template: tenant-scoped, then platform default.
+     * {@code templateType} accepts any of the {@link LabelTemplate} type
+     * discriminators — {@code PACKING_SLIP}, {@code COMMERCIAL_INVOICE},
+     * {@code RETURN_COVER}. Returns empty when neither the tenant nor
+     * the platform has one configured; callers fall back to hardcoded
+     * defaults.
+     */
     Optional<LabelTemplate> resolve(String tenantId, String templateType);
 
     /** Fetch the tenant-scoped template (does NOT fall back). */

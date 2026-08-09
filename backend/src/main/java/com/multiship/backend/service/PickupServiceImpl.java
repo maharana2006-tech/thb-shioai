@@ -101,7 +101,7 @@ public class PickupServiceImpl implements PickupService {
 
         PickupResult result;
         try {
-            result = connector.schedulePickup(connectorRequest, accessToken);
+            result = connector.schedulePickup(connectorRequest, accessToken, account.getEnvironment());
         } catch (Exception ex) {
             log.warn("Pickup call to {} failed: {}", carrier, ex.getMessage());
             result = new PickupResult(carrier, null,

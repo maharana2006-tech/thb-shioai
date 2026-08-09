@@ -137,9 +137,12 @@ public class AccountRefServiceImpl implements AccountRefService {
         // normalizes legacy codes (P80/F77/L01) and rejects unknown carriers.
         String carrierCode = carrierService.getCarrierConnector(request.getCarrierCode()).getCarrierCode();
 
+        // Match strictly on (accountNumber, carrierCode) — the table's unique
+        // constraint. An account_number-only fallback would let, e.g., adding
+        // a FedEx account overwrite an existing UPS row that happens to share
+        // the number, silently reassigning the row across carriers.
         CarrierAccountRef account = carrierAccountRefRepository
                 .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(accountNumber, carrierCode)
-                .or(() -> carrierAccountRefRepository.findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(accountNumber))
                 .orElseGet(CarrierAccountRef::new);
 
         boolean isNewAccount = account.getId() == null;

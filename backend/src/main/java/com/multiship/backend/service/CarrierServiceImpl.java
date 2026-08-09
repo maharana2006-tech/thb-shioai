@@ -69,6 +69,20 @@ public class CarrierServiceImpl implements CarrierService {
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     private final ClientRepository clientRepository;
     private final com.multiship.backend.repository.OrderCustomsRepository orderCustomsRepository;
+    private final com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
+    private final com.multiship.backend.repository.ShipmentBatchRepository shipmentBatchRepository;
+    private final CarrierLimitService carrierLimitService;
+    private final ShipmentSplitter shipmentSplitter;
+
+    @org.springframework.beans.factory.annotation.Value("${carrier.auto-split-enabled:true}")
+    private boolean autoSplitEnabled;
+
+    /** Sprint 48 B5 — global kill-switch for the packaging validator.
+     *  Off = validator is skipped everywhere; over-packaged shipments then
+     *  go straight to the carrier (which will reject them with a generic
+     *  error). Default true. */
+    @org.springframework.beans.factory.annotation.Value("${packaging.validation-enabled:true}")
+    private boolean packagingValidationEnabled;
     private final com.multiship.backend.repository.ClientCustomsProfileRepository clientCustomsProfileRepository;
     private final ShippingConfigService shippingConfigService;
     private final CustomsService customsService;
@@ -583,6 +597,52 @@ public class CarrierServiceImpl implements CarrierService {
         com.multiship.backend.model.PackagePreset preset =
                 shippingConfigService.presetById(req.getPackagePresetId()).orElse(null);
 
+        // Packaging pre-flight — data-driven rules from the preset row:
+        // max weight, max L/W/H, dim weight, girth. Sprint 48 B8: also
+        // validates each req.packages[i] with box-index-tagged violations
+        // ("Box 3: Weight 20 lb exceeds FedEx Envelope limit of 1 lb").
+        // Sprint 48 freight/LTL: parcel-service eligibility (piece >150 lb,
+        // length >108 in, L+G >165 in, or shipment total > carrier max)
+        // adds PARCEL_LIMIT violations pointing operators to freight service.
+        // Kill-switch: packaging.validation-enabled=false disables both.
+        if (packagingValidationEnabled) {
+            com.multiship.backend.util.PackagingValidator.Outcome outcome =
+                    preset == null
+                            ? new com.multiship.backend.util.PackagingValidator.Outcome(java.util.List.of())
+                            : com.multiship.backend.util.PackagingValidator.validateAll(
+                                    preset,
+                                    req.getWeight(), req.getWeightUnit(),
+                                    req.getLength(), req.getWidth(), req.getHeight(), req.getDimUnit(),
+                                    req.getPackages());
+            // Parcel-eligibility uses per-carrier/service defaults from
+            // PackageMath.defaultLimits + the carrier's per-shipment cap
+            // (already seeded in carrier_shipping_limit). intl-vs-domestic
+            // scope resolved from the recipient country vs the platform
+            // shipper default (from-address override is applied further
+            // down; this pre-flight uses the platform default).
+            String originForScope = carrierProperties.getShipper().getCountryCode();
+            boolean intlForScope = to.getCountryCode() != null && originForScope != null
+                    && !to.getCountryCode().trim().equalsIgnoreCase(originForScope.trim());
+            String serviceCodeForScope = service != null ? service.getServiceCode() : null;
+            com.multiship.backend.model.CarrierShippingLimit svcLimit = carrierLimitService.resolveLimit(
+                    carrier, serviceCodeForScope, intlForScope);
+            outcome = outcome.merge(com.multiship.backend.util.PackagingValidator.validateParcelLimits(
+                    carrier, serviceCodeForScope, req.getPackages(),
+                    req.getWeight(), req.getWeightUnit(),
+                    req.getLength(), req.getWidth(), req.getHeight(), req.getDimUnit(),
+                    svcLimit == null ? null : svcLimit.getMaxTotalWeightLb()));
+            if (outcome.hardBlock()) {
+                return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                        outcome.combinedMessage()
+                                + " Pick a larger packaging, reduce the weight/dimensions, "
+                                + "or set the preset's enforcement to SOFT to override.");
+            }
+            if (!outcome.violations().isEmpty()) {
+                log.warn("Packaging soft-warning on manual shipment (preset={}): {}",
+                        preset != null ? preset.getName() : "(none)", outcome.combinedMessage());
+            }
+        }
+
         // Sprint 44 — routing rules. Runs after the initial carrier/service
         // pick is known so rules can key off the current selection, but
         // BEFORE allowlist gates so a valid reroute isn't rejected by the
@@ -755,22 +815,61 @@ public class CarrierServiceImpl implements CarrierService {
                 .signatureOption(req.getSignatureOption())
                 .insuredValue(req.getInsuredValue())
                 .insuredValueCurrency(req.getInsuredValueCurrency())
+                // Multi-package boxes 2..N (box 1 is the top-level fields).
+                // Connectors' effectivePackages() prefers packages[] when set.
+                .packages(req.getPackages())
                 .build();
 
-        CarrierConnector.ShipmentResult result;
+        // Resolve the carrier's MPS cap for this service/scope and split
+        // the shipment into sub-requests when we're over the cap. Every
+        // sub-request goes to the carrier as its own call; each returns
+        // its own master tracking + label. Splitting is skipped when the
+        // feature flag is off (safety kill-switch: over-cap requests then
+        // fail at the carrier with a 4xx, which the try/catch below surfaces).
+        boolean intlForLimit = to.getCountryCode() != null && fromCountry != null
+                && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
+        com.multiship.backend.model.CarrierShippingLimit limit = carrierLimitService.resolveLimit(
+                carrier, serviceType, intlForLimit);
+        java.math.BigDecimal totalWeightLb = shipmentSplitter.totalWeightLb(shipmentRequest);
+        boolean overCap = autoSplitEnabled && carrierLimitService.requiresSplit(
+                limit, shipmentRequest.effectivePackages().size(), totalWeightLb);
+        java.util.List<ShipmentRequestDTO> subRequests = overCap
+                ? shipmentSplitter.split(shipmentRequest, limit)
+                : java.util.List.of(shipmentRequest);
+        if (subRequests.size() > 1) {
+            log.info("Splitting {}-pkg shipment into {} carrier calls (cap={} for {}/{})",
+                    shipmentRequest.effectivePackages().size(), subRequests.size(),
+                    limit.getMaxPackages(), carrier, serviceType);
+        }
+
+        // Loop the sub-requests, collect each carrier's ShipmentResult, then
+        // fold them into a single master result for downstream persistence.
+        // We save shipment_batch rows below (after the order row exists) so
+        // that batch_id can FK back to the order.
+        java.util.List<CarrierConnector.ShipmentResult> batchResults = new java.util.ArrayList<>();
         try {
             connector.validateCredentials(account.getClientId(), account.getClientSecret());
             String token = connector.getAccessToken(account.getClientId(), account.getClientSecret(),
                     account.getAccountNumber());
-            result = connector.createShipment(shipmentRequest, token);
+            String envForCall = firstNonBlank(account.getEnvironment(), carrierProperties.getDefaultEnvironment());
+            for (ShipmentRequestDTO sub : subRequests) {
+                batchResults.add(connector.createShipment(sub, token, envForCall));
+            }
         } catch (Exception ex) {
             log.warn("Manual shipment failed at carrier {}: {}", carrier, ex.getMessage());
             return failure(HttpStatus.BAD_GATEWAY, ErrorCode.CARRIER_FAILURE,
                     "The carrier rejected the manual shipment: " + ex.getMessage());
         }
+        // Master result = batch 1 (order_label_tracking downstream uses its
+        // trackingNumber). label_package rows come from each batch's
+        // packages() with matching batch_id.
+        CarrierConnector.ShipmentResult result = batchResults.get(0);
 
-        Integer maxNo = orderRepository.findMaxOrderNo();
-        int orderNo = Math.max(maxNo == null ? 0 : maxNo, 900000) + 1;
+        // Sprint 48 B10 — allocate from a Postgres sequence instead of
+        // MAX(order_no) + 1. Bulletproof under concurrency; the sequence
+        // is created + seeded above the current MAX on startup by
+        // OrderNoSequenceInitializer.
+        int orderNo = orderRepository.nextManualOrderNo();
         boolean intl = to.getCountryCode() != null && fromCountry != null
                 && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
 
@@ -801,6 +900,12 @@ public class CarrierServiceImpl implements CarrierService {
         order.setPrice(req.getDeclaredValue());
         order.setIntlYn(intl ? "Y" : "N");
         order.setCreatedDate(java.time.LocalDate.now());
+        // Total package count for multi-box shipments. Frontend sends the
+        // primary box plus extraPackages via req.packages; when packages[]
+        // is null (single-box legacy path) we count 1.
+        order.setPackageCount(shipmentRequest.getPackages() != null
+                ? Math.max(1, shipmentRequest.getPackages().size())
+                : 1);
         // Per-shipment importer/broker override (does NOT touch the client's saved profile).
         if (req.getImporter() != null || req.getBroker() != null) {
             try {
@@ -813,6 +918,76 @@ public class CarrierServiceImpl implements CarrierService {
             }
         }
         orderRepository.save(order);
+
+        // Per-batch + per-package persistence. Each sub-request produced its
+        // own carrier ShipmentResult; save one shipment_batch row per result
+        // and one label_package row per piece with batch_id linked.
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        for (int batchIdx = 0; batchIdx < subRequests.size(); batchIdx++) {
+            ShipmentRequestDTO subReq = subRequests.get(batchIdx);
+            CarrierConnector.ShipmentResult batchResult = batchResults.get(batchIdx);
+            java.util.List<com.multiship.backend.dto.PackageDetailDTO> pkgList = subReq.effectivePackages();
+            java.util.List<CarrierConnector.PackageTracking> resultPackages =
+                    batchResult.packages() == null ? java.util.List.of() : batchResult.packages();
+
+            com.multiship.backend.model.ShipmentBatch batch = com.multiship.backend.model.ShipmentBatch.builder()
+                    .orderNo(orderNo)
+                    .batchSeq(batchIdx + 1)
+                    .carrierCode(carrier)
+                    .masterTrackingNumber(batchResult.trackingNumber())
+                    .masterTrackingUrl(batchResult.trackingUrl())
+                    .masterLabelUrl(batchResult.labelUrl())
+                    .masterLabelPdf(batchResult.labelPdf())
+                    .packageCountInBatch(pkgList.size())
+                    .shippingCost(batchResult.shippingCost())
+                    .rawResponse(batchResult.rawResponse())
+                    .createdAt(now)
+                    .build();
+            shipmentBatchRepository.save(batch);
+
+            for (int i = 0; i < pkgList.size(); i++) {
+                com.multiship.backend.dto.PackageDetailDTO p = pkgList.get(i);
+                int seq = p.getSequenceNumber() != null ? p.getSequenceNumber() : (batchIdx * 1000 + i + 1);
+                final int seqFinal = seq;
+                // Match strategy: sequenceNumber-in-piece list, else positional,
+                // else master fallback. Guarantees every row has some tracking id.
+                CarrierConnector.PackageTracking pieceMatch = resultPackages.stream()
+                        .filter(pt -> pt.sequenceNumber() == seqFinal)
+                        .findFirst()
+                        .orElse(null);
+                if (pieceMatch == null && i < resultPackages.size()) {
+                    pieceMatch = resultPackages.get(i);
+                }
+                String piecelabel = pieceMatch != null ? pieceMatch.labelUrl() : null;
+                if (!StringUtils.hasText(piecelabel) && pieceMatch != null) piecelabel = pieceMatch.labelPdf();
+                if (!StringUtils.hasText(piecelabel)) piecelabel = batchResult.labelUrl();
+                String pieceTracking = pieceMatch != null ? pieceMatch.trackingNumber() : null;
+                if (!StringUtils.hasText(pieceTracking)) pieceTracking = batchResult.trackingNumber();
+                String pieceTrackingUrl = pieceMatch != null ? pieceMatch.trackingUrl() : null;
+                if (!StringUtils.hasText(pieceTrackingUrl)) pieceTrackingUrl = batchResult.trackingUrl();
+                com.multiship.backend.model.LabelPackage row = com.multiship.backend.model.LabelPackage.builder()
+                        .orderNo(orderNo)
+                        .batchId(batch.getId())
+                        .sequenceNumber(seq)
+                        .trackingNumber(pieceTracking)
+                        .trackingUrl(pieceTrackingUrl)
+                        .labelFilePath(piecelabel)
+                        .weight(p.getWeight() != null ? p.getWeight() : req.getWeight())
+                        .weightUnit(firstNonBlank(p.getWeightUnit(), req.getWeightUnit()))
+                        .length(p.getLength() != null ? p.getLength() : length)
+                        .width(p.getWidth() != null ? p.getWidth() : width)
+                        .height(p.getHeight() != null ? p.getHeight() : height)
+                        .dimUnit(firstNonBlank(p.getDimUnit(), req.getDimUnit()))
+                        .packageType(firstNonBlank(p.getPackageType(), packageType))
+                        .declaredValue(p.getDeclaredValue() != null ? p.getDeclaredValue() : req.getDeclaredValue())
+                        .reference(p.getReference())
+                        .description(p.getDescription())
+                        .createdAt(now)
+                        .updatedAt(now)
+                        .build();
+                labelPackageRepository.save(row);
+            }
+        }
 
         // International: persist the operator's commercial-invoice line items so the
         // commercial invoice renders. Importer/broker resolve from the client's
@@ -828,6 +1003,7 @@ public class CarrierServiceImpl implements CarrierService {
                             .unitValue(it.getUnitValue())
                             .weight(it.getWeight())
                             .sku(it.getSku())
+                            .boxSeq(it.getBoxSeq())  // Sprint 48 B11 — per-item package assignment
                             .build())
                     .toList();
             if (!lines.isEmpty()) {
@@ -927,7 +1103,65 @@ public class CarrierServiceImpl implements CarrierService {
                     IntlShipmentValidator.toMessage(intlErrors));
         }
 
-        return connector.createShipment(shipmentRequest, accessToken);
+        // Sprint 48 B5 — packaging pre-flight on the order-cascade hot path.
+        // Resolves the same preset buildShipmentRequest picked (extra 1ms
+        // repo call in return for a clean separation from the request DTO).
+        // Any HARD violation surfaces as a CarrierConnectionException with an
+        // actionable message before we spend the carrier round-trip.
+        if (packagingValidationEnabled) {
+            com.multiship.backend.model.ShippingService resolvedService = shippingConfigService
+                    .resolveService(connector.getCarrierCode(),
+                            firstNonBlank(order.getTenantId(), order.getCustNo()),
+                            order.getShipviaCd(), order.getShiptoCountryCd(),
+                            isInternational(order), carrierProperties.getShipper().getCountryCode())
+                    .orElse(null);
+            com.multiship.backend.model.PackagePreset preset = shippingConfigService
+                    .pickPackage(resolvedService != null ? resolvedService.getId() : null, order.getWeight())
+                    .map(ShippingConfigService.PickedPackage::preset)
+                    .orElse(null);
+            com.multiship.backend.util.PackagingValidator.Outcome outcome =
+                    preset == null
+                            ? new com.multiship.backend.util.PackagingValidator.Outcome(java.util.List.of())
+                            : com.multiship.backend.util.PackagingValidator.validateAll(
+                                    preset,
+                                    shipmentRequest.getWeight(), shipmentRequest.getWeightUnit(),
+                                    shipmentRequest.getLength(), shipmentRequest.getWidth(),
+                                    shipmentRequest.getHeight(), shipmentRequest.getDimUnit(),
+                                    shipmentRequest.getPackages());
+            // Sprint 48 freight/LTL: parcel-eligibility check.
+            String svcCode = resolvedService != null ? resolvedService.getServiceCode()
+                    : shipmentRequest.getServiceType();
+            com.multiship.backend.model.CarrierShippingLimit svcLimit = carrierLimitService.resolveLimit(
+                    connector.getCarrierCode(), svcCode, isInternational(order));
+            outcome = outcome.merge(com.multiship.backend.util.PackagingValidator.validateParcelLimits(
+                    connector.getCarrierCode(), svcCode, shipmentRequest.getPackages(),
+                    shipmentRequest.getWeight(), shipmentRequest.getWeightUnit(),
+                    shipmentRequest.getLength(), shipmentRequest.getWidth(),
+                    shipmentRequest.getHeight(), shipmentRequest.getDimUnit(),
+                    svcLimit == null ? null : svcLimit.getMaxTotalWeightLb()));
+            if (outcome.hardBlock()) {
+                throw new com.multiship.backend.exception.CarrierConnectionException(
+                        outcome.combinedMessage()
+                                + " Adjust packaging or set the preset enforcement to SOFT.");
+            }
+            if (!outcome.violations().isEmpty()) {
+                log.warn("Packaging soft-warning on order {} (preset={}): {}",
+                        order.getOrderNo(),
+                        preset != null ? preset.getName() : "(none)",
+                        outcome.combinedMessage());
+            }
+        }
+
+        return connector.createShipment(shipmentRequest, accessToken,
+                firstNonBlank(res.environment(), carrierProperties.getDefaultEnvironment()));
+    }
+
+    /** True when the order's ship-to country differs from the platform shipper's origin. */
+    private boolean isInternational(Order order) {
+        String origin = carrierProperties.getShipper().getCountryCode();
+        String dest = order.getShiptoCountryCd();
+        return StringUtils.hasText(origin) && StringUtils.hasText(dest)
+                && !origin.trim().equalsIgnoreCase(dest.trim());
     }
 
     /**
@@ -1436,6 +1670,7 @@ public class CarrierServiceImpl implements CarrierService {
                                         .unitValue(i.getUnitValue())
                                         .unitWeight(i.getWeight())
                                         .sku(i.getSku())
+                                        .boxSeq(i.getBoxSeq())  // Sprint 48 B11
                                         .build())
                                 .toList();
 

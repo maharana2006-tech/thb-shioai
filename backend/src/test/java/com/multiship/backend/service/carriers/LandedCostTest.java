@@ -61,20 +61,20 @@ class LandedCostTest {
     void everyCarrierReturnsNotSupportedForLocalFallbackToken() {
         assertEquals("NOT_SUPPORTED",
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                        .estimateLandedCost(intlRequest(), "ups-local-abc").source());
+                        .estimateLandedCost(intlRequest(), "ups-local-abc", null).source());
         assertEquals("NOT_SUPPORTED",
                 new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                        .estimateLandedCost(intlRequest(), "fedex-local-abc").source());
+                        .estimateLandedCost(intlRequest(), "fedex-local-abc", null).source());
         assertEquals("NOT_SUPPORTED",
                 new DhlConnector(new CarrierProperties(), new ObjectMapper())
-                        .estimateLandedCost(intlRequest(), "dhl-local-abc").source());
+                        .estimateLandedCost(intlRequest(), "dhl-local-abc", null).source());
     }
 
     @Test
     void uspsInheritsDefaultNotSupportedFromInterface() {
         // Sprint 32 leaves USPS on the default — it's domestic-only.
         LandedCostResult r = new StampsConnector(new CarrierProperties(), new ObjectMapper())
-                .estimateLandedCost(intlRequest(), "AUTH-XYZ");
+                .estimateLandedCost(intlRequest(), "AUTH-XYZ", null);
         assertEquals("NOT_SUPPORTED", r.source());
         assertEquals("USPS", r.carrierCode());
     }
@@ -87,13 +87,13 @@ class LandedCostTest {
         String token = "REAL-TOKEN-abc";
         assertEquals("NOT_SUPPORTED",
                 new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                        .estimateLandedCost(domesticRequest(), token).source());
+                        .estimateLandedCost(domesticRequest(), token, null).source());
         assertEquals("NOT_SUPPORTED",
                 new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                        .estimateLandedCost(domesticRequest(), token).source());
+                        .estimateLandedCost(domesticRequest(), token, null).source());
         assertEquals("NOT_SUPPORTED",
                 new DhlConnector(new CarrierProperties(), new ObjectMapper())
-                        .estimateLandedCost(domesticRequest(), token).source());
+                        .estimateLandedCost(domesticRequest(), token, null).source());
     }
 
     /* -------------------------- UPS response parsing -------------------------- */
@@ -299,16 +299,16 @@ class LandedCostTest {
     @Test
     void everyResultCarriesCarrierCodeAndSource() {
         LandedCostResult ups = new UpsConnector(new CarrierProperties(), new ObjectMapper())
-                .estimateLandedCost(intlRequest(), "ups-local-");
+                .estimateLandedCost(intlRequest(), "ups-local-", null);
         assertEquals("UPS", ups.carrierCode());
         assertTrue(ups.source() == null || !ups.source().isEmpty());
 
         LandedCostResult fedex = new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx())
-                .estimateLandedCost(intlRequest(), "fedex-local-");
+                .estimateLandedCost(intlRequest(), "fedex-local-", null);
         assertEquals("FEDEX", fedex.carrierCode());
 
         LandedCostResult dhl = new DhlConnector(new CarrierProperties(), new ObjectMapper())
-                .estimateLandedCost(intlRequest(), "dhl-local-");
+                .estimateLandedCost(intlRequest(), "dhl-local-", null);
         assertEquals("DHL", dhl.carrierCode());
     }
 }

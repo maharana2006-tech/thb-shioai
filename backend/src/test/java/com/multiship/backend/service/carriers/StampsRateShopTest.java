@@ -46,17 +46,17 @@ class StampsRateShopTest {
 
     @Test
     void localFallbackTokenReturnsEmptyList() {
-        assertTrue(connector.getRates(domesticRequest(), "stamps-local-abc").isEmpty());
+        assertTrue(connector.getRates(domesticRequest(), "stamps-local-abc", null).isEmpty());
     }
 
     @Test
     void blankTokenReturnsEmptyList() {
-        assertTrue(connector.getRates(domesticRequest(), "").isEmpty());
+        assertTrue(connector.getRates(domesticRequest(), "", null).isEmpty());
     }
 
     @Test
     void nullTokenReturnsEmptyList() {
-        assertTrue(connector.getRates(domesticRequest(), null).isEmpty());
+        assertTrue(connector.getRates(domesticRequest(), null, null).isEmpty());
     }
 
     /* -------------------------- Envelope -------------------------- */

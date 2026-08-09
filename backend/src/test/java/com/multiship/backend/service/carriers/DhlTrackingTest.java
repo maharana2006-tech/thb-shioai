@@ -40,19 +40,19 @@ class DhlTrackingTest {
 
     @Test
     void localFallbackTokenShortCircuitsToStub() {
-        var result = connector.trackShipment("1234", "dhl-local-abc123");
+        var result = connector.trackShipment("1234", "dhl-local-abc123", null);
         assertEquals("UNKNOWN", result.status());
         assertTrue(result.events().isEmpty());
     }
 
     @Test
     void blankTokenShortCircuitsToStub() {
-        assertEquals("UNKNOWN", connector.trackShipment("1234", "").status());
+        assertEquals("UNKNOWN", connector.trackShipment("1234", "", null).status());
     }
 
     @Test
     void nullTokenShortCircuitsToStub() {
-        assertEquals("UNKNOWN", connector.trackShipment("1234", null).status());
+        assertEquals("UNKNOWN", connector.trackShipment("1234", null, null).status());
     }
 
     @Test

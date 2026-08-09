@@ -157,15 +157,21 @@ class SignatureInsuranceTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void fedexInsuredValueOverridesDeclaredValueOnLineItem() throws Exception {
+    void fedexDeclaredValueWinsOverInsuredValueOnLineItem() throws Exception {
+        // Sprint 48 B11 — new priority chain: items > p.declaredValue >
+        // shipment-level declaredValue > insuredValue. Customs declared
+        // value ($50 split across 1 pkg = $50) now wins on the line item
+        // over the shipment-level insurance value. Ops who need to insure
+        // for a higher amount than the customs value can set p.declaredValue
+        // or use InternationalForms.
         ShipmentRequestDTO r = baseRequest();
-        r.setDeclaredValue(new BigDecimal("50.00"));    // customs
+        r.setDeclaredValue(new BigDecimal("50.00"));    // customs (feeds context)
         r.setInsuredValue(new BigDecimal("500.00"));    // insurance
         r.setInsuredValueCurrency("USD");
         Map<String, Object> item = fedexFirstLineItem(r);
         Map<String, Object> dv = (Map<String, Object>) item.get("declaredValue");
-        assertEquals(0, new BigDecimal("500.00").compareTo((BigDecimal) dv.get("amount")),
-                "Insured value should win over customs declared value on the wire");
+        assertEquals(0, new BigDecimal("50.00").compareTo((BigDecimal) dv.get("amount")),
+                "Sprint 48 B11: declared value (from items/shipment total) wins over insuredValue.");
     }
 
     /* -------------------------- DHL -------------------------- */

@@ -56,20 +56,20 @@ class FedExTrackingTest {
     void localFallbackTokenShortCircuitsToStub() {
         // -local- token = FedEx auth couldn't get a real token, don't hit the
         // API (it would 401), just return the URL-only stub.
-        var result = connector.trackShipment("123", "fedex-local-abcd1234");
+        var result = connector.trackShipment("123", "fedex-local-abcd1234", null);
         assertEquals("UNKNOWN", result.status());
         assertTrue(result.events().isEmpty());
     }
 
     @Test
     void blankTokenShortCircuitsToStub() {
-        var result = connector.trackShipment("123", "");
+        var result = connector.trackShipment("123", "", null);
         assertEquals("UNKNOWN", result.status());
     }
 
     @Test
     void nullTokenShortCircuitsToStub() {
-        var result = connector.trackShipment("123", null);
+        var result = connector.trackShipment("123", null, null);
         assertEquals("UNKNOWN", result.status());
     }
 

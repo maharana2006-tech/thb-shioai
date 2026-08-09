@@ -364,6 +364,13 @@ export interface ManualShipmentItem {
   unitValue?: number | null
   weight?: number | null
   sku?: string
+  /**
+   * Sprint 48 B11 — 1-based package index this item belongs to. Backend
+   * groups items by boxSeq to derive per-package declared value (sum of
+   * unitValue × quantity). Null = unassigned; treated as "all in box 1"
+   * (backward-compat with legacy single-box CI).
+   */
+  boxSeq?: number
 }
 
 /** Payload for the one-shot manual shipment / label endpoint. */
