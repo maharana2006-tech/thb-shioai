@@ -50,21 +50,20 @@ public class AuthServiceImpl implements AuthService {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(new MessageResponse(errorMsg, ErrorCode.EMAIL_TAKEN));
         }
 
-        // 3. Sanitize the requested role: public signup may create USER or
-        // TENANT accounts only. ADMIN accounts can only be created by a
-        // caller who is already authenticated as ADMIN.
-        String requestedRole = signupRequest.getRole() != null
-                ? signupRequest.getRole().trim().toUpperCase()
-                : "USER";
-
-        if (!requestedRole.equals("USER") && !requestedRole.equals("TENANT") && !requestedRole.equals("ADMIN")) {
-            requestedRole = "USER";
+        // 3. Role — Sprint 49 Tier 1: public signup NEVER trusts the browser.
+        //    Anonymous /auth/signup always creates a USER account. TENANT and
+        //    ADMIN accounts are created via admin-only flows. If the request
+        //    tried to smuggle a privileged role, log it (potential probe).
+        String requestedRole = signupRequest.getRole() == null ? null
+                : signupRequest.getRole().trim().toUpperCase();
+        if (requestedRole != null && !requestedRole.isEmpty() && !"USER".equals(requestedRole)) {
+            // Never fatal — just ignore and record. An admin creating an
+            // account via a separate path is out of scope for this endpoint.
+            org.slf4j.LoggerFactory.getLogger(AuthServiceImpl.class)
+                    .warn("Signup with non-USER role '{}' ignored; forcing USER. username={}",
+                            requestedRole, signupRequest.getUsername());
         }
-
-        if (requestedRole.equals("ADMIN") && !isCallerAdmin()) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(new MessageResponse("Error: Only an administrator can create ADMIN accounts.", ErrorCode.ADMIN_SIGNUP_FORBIDDEN));
-        }
+        String resolvedRole = "USER";
 
         // 4. Construct Operator and securely hash password using BCrypt
         User user = User.builder()
@@ -72,7 +71,7 @@ public class AuthServiceImpl implements AuthService {
                 .email(signupRequest.getEmail())
                 .password(passwordEncoder.encode(signupRequest.getPassword()))
                 .fullName(signupRequest.getFullName())
-                .role(requestedRole)
+                .role(resolvedRole)
                 .build();
 
         userRepository.save(user);
@@ -94,15 +93,6 @@ public class AuthServiceImpl implements AuthService {
 
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(new MessageResponse("Error: Invalid username or password!", ErrorCode.INVALID_CREDENTIALS));
-    }
-
-    private boolean isCallerAdmin() {
-        var authentication = SecurityContextHolder.getContext().getAuthentication();
-
-        return authentication != null
-                && authentication.isAuthenticated()
-                && authentication.getAuthorities().stream()
-                        .anyMatch(granted -> granted.getAuthority().equals("ROLE_ADMIN"));
     }
 
     @Override
