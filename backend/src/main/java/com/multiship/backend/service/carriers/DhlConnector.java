@@ -179,7 +179,7 @@ public class DhlConnector implements CarrierConnector {
                 (clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8));
 
         try {
-            RestClient.builder().baseUrl(host).build().get()
+            HttpClients.newBuilder().baseUrl(host).build().get()
                     .uri("/products")
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Basic " + basic)
@@ -207,7 +207,7 @@ public class DhlConnector implements CarrierConnector {
                 : carrierProperties.getDhl().getApiBaseUrl();
         try {
             Map<String, Object> payload = buildShipmentPayload(request);
-            String response = RestClient.builder().baseUrl(host).build().post()
+            String response = HttpClients.newBuilder().baseUrl(host).build().post()
                     .uri(carrierProperties.getDhl().getShipmentPath())
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -280,7 +280,7 @@ public class DhlConnector implements CarrierConnector {
                 ? carrierProperties.getDhl().getSandboxUrl()
                 : carrierProperties.getDhl().getApiBaseUrl();
         try {
-            String response = RestClient.builder().baseUrl(host).build().get()
+            String response = HttpClients.newBuilder().baseUrl(host).build().get()
                     .uri(u -> u.path("/tracking")
                             .queryParam("shipmentTrackingNumber", trackingNumber)
                             .build())
@@ -403,7 +403,7 @@ public class DhlConnector implements CarrierConnector {
                 ? carrierProperties.getDhl().getSandboxUrl()
                 : carrierProperties.getDhl().getApiBaseUrl();
         try {
-            org.springframework.http.ResponseEntity<String> response = RestClient.builder()
+            org.springframework.http.ResponseEntity<String> response = HttpClients.newBuilder()
                     .baseUrl(host).build()
                     .delete()
                     .uri("/shipments/" + trackingNumber)
@@ -471,7 +471,7 @@ public class DhlConnector implements CarrierConnector {
             if (StringUtils.hasText(address.postalCode())) uri.queryParam("postalCode", address.postalCode());
             if (StringUtils.hasText(address.city())) uri.queryParam("cityName", address.city());
 
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(carrierProperties.getDhl().getApiBaseUrl()).build()
                     .get()
                     .uri(uri.build().toUriString())
@@ -597,7 +597,7 @@ public class DhlConnector implements CarrierConnector {
             String host = isSandbox(environment)
                     ? carrierProperties.getDhl().getSandboxUrl()
                     : carrierProperties.getDhl().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(host).build()
                     .post()
                     .uri("/rates")
@@ -745,7 +745,7 @@ public class DhlConnector implements CarrierConnector {
             String host = isSandbox(environment)
                     ? carrierProperties.getDhl().getSandboxUrl()
                     : carrierProperties.getDhl().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(host).build()
                     .post()
                     .uri("/pickups")
@@ -1364,7 +1364,7 @@ public class DhlConnector implements CarrierConnector {
             String host = isSandbox(environment)
                     ? carrierProperties.getDhl().getSandboxUrl()
                     : carrierProperties.getDhl().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(host).build()
                     .post()
                     .uri("/rates")

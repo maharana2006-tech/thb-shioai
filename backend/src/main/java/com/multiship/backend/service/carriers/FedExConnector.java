@@ -73,7 +73,7 @@ public class FedExConnector implements CarrierConnector {
      */
     private List<ServiceOffering> fetchLiveServices(String originCountry, String accessToken, String environment) throws Exception {
         String url = getBaseUrl(environment) + "/availability/v1/service/availability";
-        String response = RestClient.builder().baseUrl(url).build()
+        String response = HttpClients.newBuilder().baseUrl(url).build()
                 .post()
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
@@ -178,7 +178,7 @@ public class FedExConnector implements CarrierConnector {
             form.add("client_secret", clientSecret);
 
             String tokenUrl = getTokenUrl();
-            RestClient restClient = RestClient.builder().baseUrl(tokenUrl).build();
+            RestClient restClient = HttpClients.newBuilder().baseUrl(tokenUrl).build();
             String response = restClient.post()
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .accept(MediaType.APPLICATION_JSON)
@@ -203,7 +203,7 @@ public class FedExConnector implements CarrierConnector {
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
         try {
             String shipmentUrl = getShipmentUrl(environment);
-            RestClient restClient = RestClient.builder().baseUrl(shipmentUrl).build();
+            RestClient restClient = HttpClients.newBuilder().baseUrl(shipmentUrl).build();
             Map<String, Object> payload = buildShipmentPayload(request);
 
             String response = restClient.post()
@@ -298,7 +298,7 @@ public class FedExConnector implements CarrierConnector {
         }
         try {
             java.util.Map<String, Object> body = buildRateRequestBody(request);
-            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build().post()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build().post()
                     .uri("/rate/v1/rates/quotes")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -524,7 +524,7 @@ public class FedExConnector implements CarrierConnector {
         }
         String trackingLink = "https://www.fedex.com/fedextrack/?trknbr=" + trackingNumber;
         try {
-            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build().post()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build().post()
                     .uri("/track/v1/trackingnumbers")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -649,7 +649,7 @@ public class FedExConnector implements CarrierConnector {
             body.put("deletionControl", "DELETE_ALL_PACKAGES");
             body.put("trackingNumber", trackingNumber);
 
-            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
                     .put()
                     .uri("/ship/v1/shipments/cancel")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -732,7 +732,7 @@ public class FedExConnector implements CarrierConnector {
                     "addressesToValidate", java.util.List.of(
                             Map.of("address", addr)));
 
-            String response = RestClient.builder().baseUrl(getBaseUrl()).build().post()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl()).build().post()
                     .uri("/address/v1/addresses/resolve")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -951,7 +951,7 @@ public class FedExConnector implements CarrierConnector {
 
             body.put("requestedShipment", requestedShipment);
 
-            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build().post()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build().post()
                     .uri("/rate/v1/rates/quotes")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -1088,7 +1088,7 @@ public class FedExConnector implements CarrierConnector {
         }
         try {
             Map<String, Object> body = buildFedExPickupRequest(request);
-            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
                     .post()
                     .uri("/pickup/v1/pickups")
                     .contentType(MediaType.APPLICATION_JSON)
@@ -1224,7 +1224,7 @@ public class FedExConnector implements CarrierConnector {
             body.put("accountNumber", java.util.Map.of("value", "ACCOUNT"));
             body.put("carrierCode", "FDXG");
 
-            String response = RestClient.builder().baseUrl(getBaseUrl(environment)).build()
+            String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
                     .post()
                     .uri("/ship/v1/shipments/endofday")
                     .contentType(MediaType.APPLICATION_JSON)

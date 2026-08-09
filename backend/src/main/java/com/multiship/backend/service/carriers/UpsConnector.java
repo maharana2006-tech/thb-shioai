@@ -85,7 +85,7 @@ public class UpsConnector implements CarrierConnector {
                 : carrierProperties.getUps().getApiBaseUrl();
         String url = baseUrl + "/api/rating/"
                 + carrierProperties.getUps().getApiVersion() + "/Shop";
-        String response = RestClient.builder().baseUrl(url).build()
+        String response = HttpClients.newBuilder().baseUrl(url).build()
                 .post()
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
@@ -224,7 +224,7 @@ public class UpsConnector implements CarrierConnector {
             String basic = Base64.getEncoder().encodeToString(
                     (clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8));
 
-            RestClient restClient = RestClient.builder().baseUrl(tokenUrl).build();
+            RestClient restClient = HttpClients.newBuilder().baseUrl(tokenUrl).build();
             RestClient.RequestBodySpec request = restClient.post()
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .accept(MediaType.APPLICATION_JSON)
@@ -261,7 +261,7 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl)
                     .build()
                     .post()
@@ -329,7 +329,7 @@ public class UpsConnector implements CarrierConnector {
                 ? carrierProperties.getUps().getSandboxUrl()
                 : carrierProperties.getUps().getApiBaseUrl();
         try {
-            String response = RestClient.builder().baseUrl(baseUrl).build().get()
+            String response = HttpClients.newBuilder().baseUrl(baseUrl).build().get()
                     .uri("/api/track/v1/details/" + trackingNumber)
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
@@ -462,7 +462,7 @@ public class UpsConnector implements CarrierConnector {
                 ? carrierProperties.getUps().getSandboxUrl()
                 : carrierProperties.getUps().getApiBaseUrl();
         try {
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .method(org.springframework.http.HttpMethod.DELETE)
                     .uri(url)
@@ -546,7 +546,7 @@ public class UpsConnector implements CarrierConnector {
         String url = "/api/addressvalidation/" + carrierProperties.getUps().getApiVersion() + "/1";
         try {
             Map<String, Object> body = buildUpsAvsRequest(address);
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
                     .uri(url + "?regionalrequestindicator=false&maximumcandidatelistsize=5")
@@ -758,7 +758,7 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
                     .uri(url)
@@ -927,7 +927,7 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
                     .uri("/api/shipments/v1/pickup")
@@ -1083,7 +1083,7 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
                     .uri("/api/shipments/v1/endofday")
@@ -1888,7 +1888,7 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
-            String response = RestClient.builder()
+            String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl).build()
                     .post()
                     .uri(url)
