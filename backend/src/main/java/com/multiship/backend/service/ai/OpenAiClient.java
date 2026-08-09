@@ -2,7 +2,7 @@ package com.multiship.backend.service.ai;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
+import com.multiship.backend.service.SystemSettingService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -19,26 +19,50 @@ import java.util.Map;
  * Thin wrapper over OpenAI Chat Completions in JSON mode. Every AI-assist
  * feature (address parse, HS suggest, packaging, service, review) funnels
  * through {@link #completeJson} so the key handling, error mapping and JSON
- * unwrapping live in one place. Key is read from the OPENAI_API_KEY env var.
+ * unwrapping live in one place.
+ *
+ * <p>Sprint 49 Tier 0 — key resolution order:
+ * <ol>
+ *   <li>DB-stored setting {@code openai.api-key} (rotated via admin UI)</li>
+ *   <li>{@code OPENAI_API_KEY} env var</li>
+ *   <li>neither → feature disabled ({@link #isConfigured()} returns false)</li>
+ * </ol>
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class OpenAiClient {
 
     private final ObjectMapper objectMapper;
+    private final SystemSettingService systemSettingService;
 
-    @Value("${openai.api-key:}")
-    private String apiKey;
+    /** Fallback if the DB-stored setting is unset. */
+    private final String envApiKey;
+    private final String model;
+    private final String baseUrl;
 
-    @Value("${openai.model:gpt-4o-mini}")
-    private String model;
+    public static final String SETTING_KEY = "openai.api-key";
 
-    @Value("${openai.base-url:https://api.openai.com/v1}")
-    private String baseUrl;
+    public OpenAiClient(
+            ObjectMapper objectMapper,
+            SystemSettingService systemSettingService,
+            @Value("${openai.api-key:}") String envApiKey,
+            @Value("${openai.model:gpt-4o-mini}") String model,
+            @Value("${openai.base-url:https://api.openai.com/v1}") String baseUrl) {
+        this.objectMapper = objectMapper;
+        this.systemSettingService = systemSettingService;
+        this.envApiKey = envApiKey;
+        this.model = model;
+        this.baseUrl = baseUrl;
+    }
+
+    private String resolveApiKey() {
+        return systemSettingService.getDecrypted(SETTING_KEY)
+                .filter(StringUtils::hasText)
+                .orElse(envApiKey);
+    }
 
     public boolean isConfigured() {
-        return StringUtils.hasText(apiKey);
+        return StringUtils.hasText(resolveApiKey());
     }
 
     /**
@@ -46,9 +70,10 @@ public class OpenAiClient {
      * prompt MUST instruct the model to return a JSON object.
      */
     public JsonNode completeJson(String systemPrompt, String userContent) {
-        if (!isConfigured()) {
+        String apiKey = resolveApiKey();
+        if (!StringUtils.hasText(apiKey)) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "AI assist is not configured. Set the OPENAI_API_KEY environment variable.");
+                    "AI assist is not configured. Set OPENAI_API_KEY or store the key via the admin Settings page.");
         }
         if (!StringUtils.hasText(userContent)) {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Nothing to send to the AI service.");
