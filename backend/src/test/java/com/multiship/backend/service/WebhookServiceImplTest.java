@@ -1,0 +1,171 @@
+package com.multiship.backend.service;
+
+import com.multiship.backend.config.WebhookProperties;
+import com.multiship.backend.model.CarrierWebhookEvent;
+import com.multiship.backend.repository.CarrierWebhookEventRepository;
+import com.multiship.backend.repository.LabelPackageRepository;
+import com.multiship.backend.repository.OrderTrackingRepository;
+import com.multiship.backend.service.carriers.CarrierConnector;
+import com.multiship.backend.service.carriers.CarrierConnector.TrackingWebhookEvent;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * Sprint 49 Tier 0 — signature-bypass fix regression guard.
+ *
+ * <p>Prior behavior: a blank {@code webhook.secrets.{carrier}} caused
+ * the receiver to set {@code sigOk=true} and mutate order state.
+ * Anyone POSTing to {@code /api/v1/webhooks/carrier/{c}} could rewrite
+ * any shipment's status.
+ *
+ * <p>New behavior:
+ * <ul>
+ *   <li>secret present → verify (existing)</li>
+ *   <li>secret blank AND {@code webhook.unsigned.{c}=true} → accept as
+ *       unverified, audit row saved, order state NOT touched</li>
+ *   <li>secret blank AND opt-in absent → REJECT with audit row marked
+ *       {@code rejected=true}; controller returns 401</li>
+ * </ul>
+ */
+class WebhookServiceImplTest {
+
+    private CarrierService carrierService;
+    private CarrierWebhookEventRepository eventRepo;
+    private OrderTrackingRepository trackingRepo;
+    private LabelPackageRepository labelPackageRepo;
+    private WebhookProperties props;
+    private CarrierConnector connector;
+    private WebhookServiceImpl service;
+
+    @BeforeEach
+    void setUp() {
+        carrierService = mock(CarrierService.class);
+        eventRepo = mock(CarrierWebhookEventRepository.class);
+        trackingRepo = mock(OrderTrackingRepository.class);
+        labelPackageRepo = mock(LabelPackageRepository.class);
+        props = new WebhookProperties();
+        connector = mock(CarrierConnector.class);
+
+        service = new WebhookServiceImpl(
+                carrierService, eventRepo, trackingRepo, props, labelPackageRepo);
+
+        when(carrierService.getCarrierConnector(anyString())).thenReturn(connector);
+        when(eventRepo.save(any(CarrierWebhookEvent.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    private TrackingWebhookEvent sampleEvent() {
+        return new TrackingWebhookEvent(
+                "1Z9999999999999999",
+                "DL",
+                "DELIVERED",
+                LocalDateTime.now(),
+                "Bengaluru, KA IN",
+                true,
+                "Delivered to recipient");
+    }
+
+    @Test
+    void blankSecretWithoutOptInRejects() {
+        // Attacker POSTs to /webhooks/carrier/ups with no secret configured
+        // and no unsigned opt-in. Prior bug: this succeeded and rewrote state.
+        // Now: audit row marked rejected, no order state touched.
+        CarrierWebhookEvent result = service.receive("UPS", "raw-body", Map.of());
+
+        assertTrue(Boolean.TRUE.equals(result.getRejected()),
+                "rejected must be true so controller returns 401");
+        assertFalse(Boolean.TRUE.equals(result.getVerified()));
+        // Never even tried to parse the payload
+        verify(connector, never()).parseWebhookEvent(anyString(), any());
+        // Never touched OrderTracking
+        verify(trackingRepo, never()).save(any());
+    }
+
+    @Test
+    void blankSecretWithOptInAcceptsButDoesNotMutateState() {
+        // Deployment that never had an HMAC secret (IP allowlist) opts in.
+        props.getUnsigned().setUps(true);
+        when(connector.parseWebhookEvent(anyString(), any())).thenReturn(sampleEvent());
+        when(trackingRepo.findByTrackingNumberIgnoreCase(anyString())).thenReturn(Optional.empty());
+        when(labelPackageRepo.findByTrackingNumber(anyString())).thenReturn(Optional.empty());
+
+        CarrierWebhookEvent result = service.receive("UPS", "raw-body", Map.of());
+
+        assertFalse(Boolean.TRUE.equals(result.getRejected()));
+        assertFalse(Boolean.TRUE.equals(result.getVerified()),
+                "opt-in unsigned is unverified — auditor sees false");
+        // Parsed for audit
+        verify(connector, times(1)).parseWebhookEvent(anyString(), any());
+        // But order state stays untouched
+        verify(trackingRepo, never()).save(any());
+    }
+
+    @Test
+    void validSignatureMutatesOrderState() {
+        props.getSecrets().setUps("shared-secret");
+        when(connector.verifyWebhookSignature(anyString(), any(), anyString())).thenReturn(true);
+        when(connector.parseWebhookEvent(anyString(), any())).thenReturn(sampleEvent());
+        when(trackingRepo.findByTrackingNumberIgnoreCase(anyString()))
+                .thenReturn(Optional.of(new com.multiship.backend.model.OrderTracking()));
+
+        CarrierWebhookEvent result = service.receive("UPS", "raw-body", Map.of());
+
+        assertFalse(Boolean.TRUE.equals(result.getRejected()));
+        assertTrue(Boolean.TRUE.equals(result.getVerified()));
+        verify(trackingRepo, times(1)).save(any());
+    }
+
+    @Test
+    void secretPresentButSignatureFailsAuditsWithoutMutation() {
+        props.getSecrets().setUps("shared-secret");
+        when(connector.verifyWebhookSignature(anyString(), any(), anyString())).thenReturn(false);
+        when(connector.parseWebhookEvent(anyString(), any())).thenReturn(sampleEvent());
+
+        CarrierWebhookEvent result = service.receive("UPS", "raw-body", Map.of());
+
+        assertFalse(Boolean.TRUE.equals(result.getRejected()),
+                "signature-fail is auditable, not rejected — carrier retry semantics preserved");
+        assertFalse(Boolean.TRUE.equals(result.getVerified()));
+        verify(trackingRepo, never()).save(any());
+    }
+
+    @Test
+    void unknownCarrierPersistsUnverifiedAudit() {
+        when(carrierService.getCarrierConnector(anyString()))
+                .thenThrow(new IllegalArgumentException("unknown carrier"));
+
+        CarrierWebhookEvent result = service.receive("BOGUS", "raw-body", Map.of());
+
+        // Existing behavior — audit-only, not rejected (unknown-carrier is
+        // separate from the signature-bypass concern).
+        assertFalse(Boolean.TRUE.equals(result.getVerified()));
+        verify(trackingRepo, never()).save(any());
+    }
+
+    @Test
+    void carrierCodeIsCaseInsensitiveForUnsignedOptIn() {
+        // The switch normalizes to upper — confirm lower-case carrier still hits the flag.
+        props.getUnsigned().setFedex(true);
+        when(connector.parseWebhookEvent(anyString(), any())).thenReturn(sampleEvent());
+
+        CarrierWebhookEvent result = service.receive("fedex", "raw-body", Map.of());
+
+        assertFalse(Boolean.TRUE.equals(result.getRejected()));
+        assertEquals("FEDEX", result.getCarrierCode());
+    }
+}

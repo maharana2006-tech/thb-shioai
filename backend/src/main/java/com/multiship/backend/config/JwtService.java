@@ -21,13 +21,37 @@ public class JwtService {
     private final SecretKey signingKey;
     private final long expirationMillis;
 
+    /**
+     * Old hardcoded default from application.properties. Fail startup if this
+     * value is still in use — anyone with repo access could forge admin tokens.
+     */
+    static final String COMPROMISED_DEFAULT = "multishipSecretKeyForJWTTokenGeneration2026";
+
     public JwtService(
-            @Value("${jwt.secret}") String secret,
+            @Value("${jwt.secret:}") String secret,
             @Value("${jwt.expiration}") long expirationMillis
     ) {
+        validateSecret(secret);
         // HS256 requires a key of at least 256 bits (32 bytes).
         this.signingKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
         this.expirationMillis = expirationMillis;
+    }
+
+    static void validateSecret(String secret) {
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException(
+                    "JWT_SECRET environment variable is required — no default is provided. "
+                            + "Set to a random string of at least 32 bytes.");
+        }
+        if (secret.equals(COMPROMISED_DEFAULT)) {
+            throw new IllegalStateException(
+                    "JWT_SECRET is set to the compromised legacy default — rotate immediately.");
+        }
+        int byteLength = secret.getBytes(StandardCharsets.UTF_8).length;
+        if (byteLength < 32) {
+            throw new IllegalStateException(
+                    "JWT_SECRET must be at least 32 bytes (256 bits) for HS256; got " + byteLength);
+        }
     }
 
     public String generateToken(String username, String role) {

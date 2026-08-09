@@ -55,6 +55,14 @@ public class CarrierWebhookEvent {
     @Column(name = "verified")
     private Boolean verified = false;
 
+    /**
+     * Sprint 49 Tier 0 — true when the receiver refused the payload
+     * (blank secret + no unsigned opt-in). Rejected rows are audited
+     * but do NOT mutate order state; the receiver returns 401 to the caller.
+     */
+    @Column(name = "rejected")
+    private Boolean rejected = false;
+
     /** When our webhook receiver got the request. */
     @Column(name = "received_at", nullable = false)
     private LocalDateTime receivedAt;

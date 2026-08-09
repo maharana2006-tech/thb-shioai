@@ -32,6 +32,9 @@ export const settingsPaths = {
   apiKeys: '/settings/api-keys',
   apiReference: '/settings/api-reference',
   auditLog: '/settings/audit-log',
+  /** Sprint 49 Tier 0 — admin-managed secrets (OpenAI key, etc.) stored
+   *  encrypted in the DB and rotated at runtime. ADMIN role only. */
+  system: '/settings/system',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -83,6 +86,9 @@ export const settingsNavItems: Array<{
   { key: 'custom-fields', label: 'Custom Fields', to: settingsPaths.customFields, iconKey: 'mapping',
     description: 'Per-tenant metadata on orders (PO number, department, marketplace order id) — flows through the form and order detail.',
     roles: ['ADMIN', 'USER'] },
+  { key: 'system', label: 'System', to: settingsPaths.system, iconKey: 'apiKey',
+    description: 'Admin-managed encrypted secrets — OpenAI key and other overrides for env vars. AES-GCM at rest.',
+    roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep
   // working — only the nav-menu entries are removed. Re-add an object to the

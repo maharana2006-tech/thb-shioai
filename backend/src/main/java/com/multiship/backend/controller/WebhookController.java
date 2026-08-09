@@ -28,12 +28,15 @@ import java.util.Map;
  *
  * <p>Response semantics:
  * <ul>
- *   <li>200 with {@code verified=true} — event accepted.</li>
- *   <li>200 with {@code verified=false} — signature failed OR no secret
- *       configured for this carrier. Still persisted for audit.</li>
+ *   <li>200 with {@code verified=true} — signature verified; order state advanced.</li>
+ *   <li>200 with {@code verified=false} — carrier is opted in to unsigned mode
+ *       (webhook.unsigned.{carrier}=true); payload audited but order state untouched.</li>
+ *   <li>200 with {@code verified=false} — signature was present but did not match;
+ *       audited, no state change.</li>
+ *   <li><b>401</b> with {@code rejected=true} — blank secret AND no unsigned opt-in.
+ *       Sprint 49 Tier 0: closes the pre-existing bypass where unsigned webhooks
+ *       could rewrite any shipment's status.</li>
  * </ul>
- * Never returns 4xx — carriers retry on non-2xx which we don't want for
- * malformed rows (we still audit them).
  */
 @Tag(name = "Carrier webhooks",
         description = "Push-tracking receiver — no JWT, HMAC-SHA256 per carrier")
@@ -74,6 +77,12 @@ public class WebhookController {
         body.put("trackingNumber", saved.getTrackingNumber());
         body.put("verified", saved.getVerified());
         body.put("delivered", saved.getDelivered());
+
+        // Sprint 49 Tier 0: rejected rows return 401 so callers see the refusal.
+        if (Boolean.TRUE.equals(saved.getRejected())) {
+            body.put("rejected", true);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(body);
+        }
         return ResponseEntity.status(HttpStatus.OK).body(body);
     }
 }
