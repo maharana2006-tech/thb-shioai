@@ -98,12 +98,28 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         return success(toDto(saved), "Bulk-label job submitted.");
     }
 
+    /** Sprint 49 Tier 3 Fix 4 — throttle progress persistence. */
+    private static final int PROGRESS_FLUSH_EVERY_N = 25;
+    private static final long PROGRESS_FLUSH_EVERY_MS = 2_000;
+
     /**
-     * Job worker. Loads the freshly-saved job, iterates order numbers,
-     * calls the existing single-label generator for each, and writes
-     * the label PDFs into a ZIP. Failure of one order doesn't kill the
-     * job — {@code failedCount} accumulates and the ZIP contains only
-     * successful labels.
+     * Per-order outcome so parallel workers can build up results without
+     * mutating shared state on every step.
+     */
+    private record OrderOutcome(long orderNo, byte[] pdf, String trackingNumber, String failureReason) {}
+
+    /**
+     * Job worker. Loads the freshly-saved job, submits each order to the
+     * fan-out pool ({@link #WORKER_CONCURRENCY} labels in flight at once),
+     * assembles the results in input order into a ZIP, and persists a
+     * running progress count throttled to every {@value #PROGRESS_FLUSH_EVERY_N}
+     * orders or {@value #PROGRESS_FLUSH_EVERY_MS} ms.
+     *
+     * <p>Sprint 49 Tier 3 Fix 4 — was serial (one label at a time,
+     * ignoring fanOutExecutor) with a save() per order. A 500-order job
+     * used to do 500 UPDATEs on the job row and take 4x longer than
+     * needed; now WORKER_CONCURRENCY parallel workers with ~20 progress
+     * UPDATEs total.
      */
     void runJob(Long jobId) {
         BulkLabelJob job = jobRepository.findById(jobId).orElse(null);
@@ -118,42 +134,60 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         long[] orderNos = parseOrderNumbers(job.getOrderNumbers());
         StringBuilder failures = new StringBuilder();
 
+        // Progress tracking mutated from callback + timer.
+        java.util.concurrent.atomic.AtomicLong lastFlushMs =
+                new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
+        java.util.concurrent.atomic.AtomicInteger doneSinceLastFlush =
+                new java.util.concurrent.atomic.AtomicInteger();
+
         try (ByteArrayOutputStream zipBytes = new ByteArrayOutputStream();
              ZipOutputStream zip = new ZipOutputStream(zipBytes)) {
 
+            // Submit every order to the fan-out pool. The pool size (4)
+            // bounds concurrency naturally; extra tasks queue.
+            java.util.List<java.util.concurrent.Callable<OrderOutcome>> tasks = new java.util.ArrayList<>(orderNos.length);
             for (long orderNo : orderNos) {
+                tasks.add(() -> processOneOrder(orderNo));
+            }
+            java.util.List<java.util.concurrent.Future<OrderOutcome>> futures = fanOutExecutor.invokeAll(tasks);
+
+            // Aggregate in input order so the ZIP is stable + failure messages
+            // read in the order the caller submitted.
+            for (java.util.concurrent.Future<OrderOutcome> f : futures) {
+                OrderOutcome out;
                 try {
-                    LabelGenerationResponse label = generateSingle(orderNo);
-                    if (label == null) {
-                        job.setFailedCount(job.getFailedCount() + 1);
-                        failures.append("order ").append(orderNo)
-                                .append(": label service returned null\n");
-                    } else if (!StringUtils.hasText(label.getTrackingNumber())) {
-                        job.setFailedCount(job.getFailedCount() + 1);
-                        String reason = label.getMessage() == null ? "unknown" : label.getMessage();
-                        failures.append("order ").append(orderNo).append(": ").append(reason).append("\n");
-                    } else {
-                        byte[] pdf = downloadLabelPdf(label);
-                        if (pdf == null) {
-                            job.setFailedCount(job.getFailedCount() + 1);
-                            failures.append("order ").append(orderNo).append(": label URL unreachable\n");
-                        } else {
-                            String entryName = "label-" + orderNo + "-" + label.getTrackingNumber() + ".pdf";
-                            zip.putNextEntry(new ZipEntry(entryName));
-                            zip.write(pdf);
-                            zip.closeEntry();
-                            job.setSuccessfulCount(job.getSuccessfulCount() + 1);
-                        }
-                    }
-                    jobRepository.save(job);
-                } catch (Exception ex) {
-                    log.warn("Bulk-label worker: order {} failed: {}", orderNo, ex.getMessage());
+                    out = f.get();
+                } catch (Exception e) {
+                    // Worker itself threw — shouldn't happen since processOneOrder
+                    // catches internally, but guard for safety.
+                    log.warn("Bulk-label worker future.get() threw: {}", e.getMessage());
                     job.setFailedCount(job.getFailedCount() + 1);
-                    failures.append("order ").append(orderNo).append(": ")
-                            .append(ex.getMessage() == null ? ex.getClass().getSimpleName()
-                                    : ex.getMessage())
-                            .append("\n");
+                    failures.append("worker failure: ").append(e.getMessage()).append('\n');
+                    continue;
+                }
+
+                if (out.pdf != null && out.trackingNumber != null) {
+                    String entryName = "label-" + out.orderNo + "-" + out.trackingNumber + ".pdf";
+                    zip.putNextEntry(new ZipEntry(entryName));
+                    zip.write(out.pdf);
+                    zip.closeEntry();
+                    job.setSuccessfulCount(job.getSuccessfulCount() + 1);
+                } else {
+                    job.setFailedCount(job.getFailedCount() + 1);
+                    if (out.failureReason != null) {
+                        failures.append("order ").append(out.orderNo)
+                                .append(": ").append(out.failureReason).append('\n');
+                    }
+                }
+
+                // Throttled progress flush — every N orders or every M ms.
+                int done = doneSinceLastFlush.incrementAndGet();
+                long now = System.currentTimeMillis();
+                if (done >= PROGRESS_FLUSH_EVERY_N
+                        || (now - lastFlushMs.get()) >= PROGRESS_FLUSH_EVERY_MS) {
                     jobRepository.save(job);
+                    doneSinceLastFlush.set(0);
+                    lastFlushMs.set(now);
                 }
             }
 
@@ -171,6 +205,32 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             if (failures.length() > 0) job.setFailureMessage(failures.toString());
             job.setCompletedAt(LocalDateTime.now(ZoneOffset.UTC));
             jobRepository.save(job);
+        }
+    }
+
+    /**
+     * Worker body — runs on a fan-out pool thread. Never throws;
+     * returns a marker OrderOutcome the caller aggregates.
+     */
+    private OrderOutcome processOneOrder(long orderNo) {
+        try {
+            LabelGenerationResponse label = generateSingle(orderNo);
+            if (label == null) {
+                return new OrderOutcome(orderNo, null, null, "label service returned null");
+            }
+            if (!StringUtils.hasText(label.getTrackingNumber())) {
+                return new OrderOutcome(orderNo, null, null,
+                        label.getMessage() == null ? "unknown" : label.getMessage());
+            }
+            byte[] pdf = downloadLabelPdf(label);
+            if (pdf == null) {
+                return new OrderOutcome(orderNo, null, null, "label URL unreachable");
+            }
+            return new OrderOutcome(orderNo, pdf, label.getTrackingNumber(), null);
+        } catch (Exception ex) {
+            log.warn("Bulk-label worker: order {} failed: {}", orderNo, ex.getMessage());
+            return new OrderOutcome(orderNo, null, null,
+                    ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
         }
     }
 

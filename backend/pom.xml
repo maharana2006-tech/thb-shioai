@@ -56,6 +56,14 @@
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-postgresql</artifactId>
 		</dependency>
+
+		<!-- Sprint 49 Tier 3 Fix 6: Caffeine for bounded in-memory caches
+		     (rate cache, tracking cache). Replaces plain ConcurrentHashMaps
+		     that grew unbounded and evicted only on read. -->
+		<dependency>
+			<groupId>com.github.ben-manes.caffeine</groupId>
+			<artifactId>caffeine</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>

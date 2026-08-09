@@ -971,6 +971,11 @@ public class CarrierServiceImpl implements CarrierService {
                     .build();
             shipmentBatchRepository.save(batch);
 
+            // Sprint 49 Tier 3 Fix 7 — collect per-piece rows and saveAll
+            // so Hibernate can batch (spring.jpa.properties.hibernate.jdbc.batch_size=50)
+            // instead of per-piece single INSERTs.
+            java.util.List<com.multiship.backend.model.LabelPackage> pieceRows =
+                    new java.util.ArrayList<>(pkgList.size());
             for (int i = 0; i < pkgList.size(); i++) {
                 com.multiship.backend.dto.PackageDetailDTO p = pkgList.get(i);
                 int seq = p.getSequenceNumber() != null ? p.getSequenceNumber() : (batchIdx * 1000 + i + 1);
@@ -1011,8 +1016,9 @@ public class CarrierServiceImpl implements CarrierService {
                         .createdAt(now)
                         .updatedAt(now)
                         .build();
-                labelPackageRepository.save(row);
+                pieceRows.add(row);
             }
+            labelPackageRepository.saveAll(pieceRows);
         }
 
         // International: persist the operator's commercial-invoice line items so the
@@ -1232,7 +1238,17 @@ public class CarrierServiceImpl implements CarrierService {
      * 5. NO_DEFAULT — nothing on the order and no global default configured.
      */
     private AccountResolution resolveAccountForOrder(Order order) {
-        OrderCarrierDetails details = orderCarrierDetailsRepository.findByOrderNo(order.getOrderNo()).orElse(null);
+        return resolveAccountForOrderWithDetails(order,
+                orderCarrierDetailsRepository.findByOrderNo(order.getOrderNo()).orElse(null));
+    }
+
+    /**
+     * Sprint 49 Tier 3 Fix 2 — the resolve logic below re-parameterised
+     * to accept a pre-fetched {@link OrderCarrierDetails} so the batch
+     * caller can prefetch all rows in one query and drop N per-order
+     * SELECTs.
+     */
+    private AccountResolution resolveAccountForOrderWithDetails(Order order, OrderCarrierDetails details) {
         // Canonical vocabulary at the edge: the order's raw ship-via code
         // (P80/F77/L01) never leaks into resolutions or responses.
         String carrierCode = resolveCanonicalCarrierCode(firstNonBlank(
@@ -1359,25 +1375,35 @@ public class CarrierServiceImpl implements CarrierService {
             return success("No orders to resolve.", List.of());
         }
 
-        List<OrderAccountResolutionDTO> resolutions = orderNos.stream()
-                .distinct()
-                .map(orderNo -> orderRepository.findByOrderNo(orderNo)
-                        .map(order -> {
-                            AccountResolution resolution = resolveAccountForOrder(order);
-                            return OrderAccountResolutionDTO.builder()
-                                    .orderNo(orderNo)
-                                    .scenario(resolution.scenario())
-                                    .carrierCode(resolution.carrierCode())
-                                    .accountNumber(resolution.accountNumber())
-                                    .accountName(resolution.accountName())
-                                    .environment(resolution.environment())
-                                    .missingFields(resolution.missingFields())
-                                    .prefillClientId(resolution.clientId())
-                                    .build();
-                        })
-                        .orElse(null))
-                .filter(java.util.Objects::nonNull)
-                .toList();
+        // Sprint 49 Tier 3 Fix 2 — batch-preload orders and carrier-detail
+        // rows. Previously called findByOrderNo + findByOrderNo per order,
+        // then resolveAccountForOrder did another N lookups internally.
+        // A 100-row page issued ~400 queries; this drops the outer loop to 2.
+        List<Integer> distinctNos = orderNos.stream().distinct().toList();
+        java.util.Map<Integer, Order> orders = orderRepository.findByOrderNoIn(distinctNos).stream()
+                .collect(java.util.stream.Collectors.toMap(Order::getOrderNo, o -> o, (a, b) -> a));
+        java.util.Map<Integer, OrderCarrierDetails> detailsByOrder =
+                orderCarrierDetailsRepository.findByOrderNoIn(distinctNos).stream()
+                        .collect(java.util.stream.Collectors.toMap(
+                                OrderCarrierDetails::getOrderNo, d -> d, (a, b) -> a));
+
+        List<OrderAccountResolutionDTO> resolutions = new java.util.ArrayList<>(distinctNos.size());
+        for (Integer orderNo : distinctNos) {
+            Order order = orders.get(orderNo);
+            if (order == null) continue;  // skip missing orders — same as prior .filter(nonNull)
+            AccountResolution resolution = resolveAccountForOrderWithDetails(
+                    order, detailsByOrder.get(orderNo));
+            resolutions.add(OrderAccountResolutionDTO.builder()
+                    .orderNo(orderNo)
+                    .scenario(resolution.scenario())
+                    .carrierCode(resolution.carrierCode())
+                    .accountNumber(resolution.accountNumber())
+                    .accountName(resolution.accountName())
+                    .environment(resolution.environment())
+                    .missingFields(resolution.missingFields())
+                    .prefillClientId(resolution.clientId())
+                    .build());
+        }
 
         return success("Order account resolutions computed successfully.", resolutions);
     }

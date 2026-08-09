@@ -16,6 +16,14 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
     Optional<Order> findByOrderNo(Integer orderNo);
 
     /**
+     * Sprint 49 Tier 3 Fix 2 — batch fetch for the order-list resolve
+     * loop. Replaces N individual {@code findByOrderNo} calls per page
+     * render (~100 orders × ~4 lookups each = 400 queries) with a
+     * single {@code IN (:orderNos)}.
+     */
+    List<Order> findByOrderNoIn(java.util.Collection<Integer> orderNos);
+
+    /**
      * Sprint 48 B10 — allocates the next order_no for a manual shipment
      * from a Postgres sequence. Replaces the racy {@code MAX(order_no) + 1}
      * pattern that let two concurrent createManualShipment calls compute

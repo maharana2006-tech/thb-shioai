@@ -14,23 +14,26 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
 import java.time.Instant;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Sprint 16 implementation of {@link TrackingService}. Injects the same
  * {@link CarrierService} the label flow uses so the connector lookup and
  * carrier code canonicalization stay in one place.
  *
- * <p>Cache design: a lock-free ConcurrentHashMap keyed by trackingNumber.
- * Two TTLs: {@link #CACHE_TTL_ACTIVE} for still-moving shipments (short
- * so refresh actually reflects new scans) and {@link #CACHE_TTL_DELIVERED}
- * for terminal states (long because delivered doesn't un-deliver). Entries
- * are lazily replaced on read — no background eviction.
+ * <p>Cache design: Caffeine cache keyed by trackingNumber, capped at
+ * {@link #MAX_ENTRIES} with expireAfterWrite bounded at
+ * {@link #CACHE_TTL_DELIVERED} (24h). Per-entry TTLs are enforced by
+ * the {@link CacheEntry#isExpired()} check the callers already use, so
+ * active-vs-delivered semantics are unchanged. Sprint 49 Tier 3 Fix 6 —
+ * previously an unbounded ConcurrentHashMap that grew forever.
  */
 @Slf4j
 @Service
@@ -41,12 +44,17 @@ public class TrackingServiceImpl implements TrackingService {
     private static final Duration CACHE_TTL_ACTIVE = Duration.ofMinutes(5);
     /** Delivered shipment: 24-hour cache — carriers rarely reopen a delivered scan. */
     private static final Duration CACHE_TTL_DELIVERED = Duration.ofHours(24);
+    /** Sprint 49 Tier 3 Fix 6 — hard cap on tracking cache size. */
+    private static final long MAX_ENTRIES = 10_000;
 
     private final OrderTrackingRepository orderTrackingRepository;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     private final CarrierService carrierService;
 
-    private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
+    private final Cache<String, CacheEntry> cache = Caffeine.newBuilder()
+            .maximumSize(MAX_ENTRIES)
+            .expireAfterWrite(CACHE_TTL_DELIVERED)
+            .build();
 
     @Override
     public ApiResponse<TrackingResponseDTO> getLiveTracking(Integer orderNo) {
@@ -68,7 +76,7 @@ public class TrackingServiceImpl implements TrackingService {
 
         // Cache probe. A LIVE result with delivered=true stays for 24h;
         // anything else re-checks after CACHE_TTL_ACTIVE.
-        CacheEntry cached = cache.get(trackingNumber);
+        CacheEntry cached = cache.getIfPresent(trackingNumber);
         if (cached != null && !cached.isExpired()) {
             return success(cached.dto().toBuilder().source("CACHE").build(),
                     "Cached tracking (checked " + cached.ageSeconds() + "s ago).");

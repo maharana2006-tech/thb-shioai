@@ -37,4 +37,12 @@ public interface ClientCustomsProfileRepository extends JpaRepository<ClientCust
             + "            where c.profile = p and c.country = upper(:country))")
     Optional<ClientCustomsProfile> findByClientAndCountry(@Param("clientCode") String clientCode,
                                                           @Param("country") String country);
+
+    /* -------- Sprint 49 Tier 3 Fix 5 — count queries for getStats -------- */
+
+    @Query("select count(distinct upper(p.clientCode)) from ClientCustomsProfile p")
+    long countDistinctClientCodes();
+
+    @Query("select count(distinct c.country) from CustomsProfileCountry c")
+    long countDistinctCountries();
 }
