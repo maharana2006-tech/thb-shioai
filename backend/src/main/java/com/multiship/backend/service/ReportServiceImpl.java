@@ -6,9 +6,12 @@ import com.multiship.backend.repository.OrderTrackingRepository;
 import com.multiship.backend.repository.RateShopHistoryRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
+import org.hibernate.jpa.HibernateHints;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.stream.Stream;
 
 import java.io.OutputStream;
 import java.io.PrintWriter;
@@ -47,8 +50,15 @@ public class ReportServiceImpl implements ReportService {
 
     // ===== Orders + labels =====
 
+    /**
+     * Sprint 49 Tier 3 Fix 3 — flush every N rows so downloaders start
+     * receiving data immediately AND we periodically clear the
+     * EntityManager's L1 cache so a million-row export doesn't OOM.
+     */
+    private static final int STREAM_FLUSH_INTERVAL = 500;
+
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 300)
     public void streamOrdersCsv(ReportFilters f, OutputStream out) {
         StringBuilder sql = new StringBuilder("""
             SELECT o.order_no, o.cust_no, o.tenant_id, o.created_date,
@@ -71,16 +81,23 @@ public class ReportServiceImpl implements ReportService {
         sql.append(" ORDER BY o.created_date DESC, o.order_no DESC");
 
         Query q = em.createNativeQuery(sql.toString());
+        q.setHint(HibernateHints.HINT_FETCH_SIZE, 200);
         bindFilters(q, f);
 
-        try (PrintWriter w = new PrintWriter(out)) {
+        try (PrintWriter w = new PrintWriter(out);
+             Stream<?> stream = q.getResultStream()) {
             w.println("orderNo,customerNo,tenantId,shipDate,trackingNumber,status,carrierAmount,billableAmount,currency,destCountry,weight,shipVia");
-            for (Object row : q.getResultList()) {
+            int[] rowCount = {0};
+            stream.forEach(row -> {
                 Object[] r = typedRow(row, 12);
                 w.println(csv(r[0]) + "," + csv(r[1]) + "," + csv(r[2]) + "," + csv(r[3]) + ","
                         + csv(r[4]) + "," + csv(r[5]) + "," + csv(r[6]) + "," + csv(r[7]) + ","
                         + csv(r[8]) + "," + csv(r[9]) + "," + csv(r[10]) + "," + csv(r[11]));
-            }
+                if (++rowCount[0] % STREAM_FLUSH_INTERVAL == 0) {
+                    w.flush();
+                    em.clear();  // keep L1 cache bounded across the export
+                }
+            });
             w.flush();
         }
     }
@@ -88,7 +105,7 @@ public class ReportServiceImpl implements ReportService {
     // ===== Tracking events =====
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, timeout = 300)
     public void streamTrackingCsv(ReportFilters f, OutputStream out) {
         // We use OrderTracking snapshots (there isn't a per-event history
         // table on the platform yet) and pair with the order for client
@@ -108,15 +125,22 @@ public class ReportServiceImpl implements ReportService {
         sql.append(" ORDER BY t.updated_at DESC");
 
         Query q = em.createNativeQuery(sql.toString());
+        q.setHint(HibernateHints.HINT_FETCH_SIZE, 200);
         bindFilters(q, f);
 
-        try (PrintWriter w = new PrintWriter(out)) {
+        try (PrintWriter w = new PrintWriter(out);
+             Stream<?> stream = q.getResultStream()) {
             w.println("orderNo,trackingNumber,status,createdAt,updatedAt,customerNo,tenantId,destCountry");
-            for (Object row : q.getResultList()) {
+            int[] rowCount = {0};
+            stream.forEach(row -> {
                 Object[] r = typedRow(row, 8);
                 w.println(csv(r[0]) + "," + csv(r[1]) + "," + csv(r[2]) + "," + csv(r[3]) + ","
                         + csv(r[4]) + "," + csv(r[5]) + "," + csv(r[6]) + "," + csv(r[7]));
-            }
+                if (++rowCount[0] % STREAM_FLUSH_INTERVAL == 0) {
+                    w.flush();
+                    em.clear();
+                }
+            });
             w.flush();
         }
     }
