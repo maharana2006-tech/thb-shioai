@@ -684,7 +684,9 @@ public class StampsConnector implements CarrierConnector {
      * <p>{@code -local-*} tokens short-circuit to {@code NOT_SUPPORTED}.
      */
     @Override
-    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
+    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment,
+                                    String accountNumber, String senderCountryCode) {
+        // Stamps cancel doesn't need accountNumber/senderCountry — kept for signature parity.
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "USPS void needs live credentials; the account is on a fallback token.",

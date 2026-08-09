@@ -113,7 +113,17 @@ public interface CarrierConnector {
      * account can't authenticate a void call, so the connector returns
      * NOT_SUPPORTED with a message.
      */
-    default VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
+    /**
+     * @param accountNumber     Sprint 49 Tier 2 — the carrier account
+     *                          number the label was created under. FedEx
+     *                          cancel requires it to match the label; UPS
+     *                          derives it from the tracking number.
+     * @param senderCountryCode Sprint 49 Tier 2 — ISO country of the
+     *                          shipper on the label. FedEx cancel needs it
+     *                          to route the request; other carriers ignore.
+     */
+    default VoidResult voidShipment(String trackingNumber, String accessToken, String environment,
+                                     String accountNumber, String senderCountryCode) {
         return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                 "Void isn't implemented for " + getCarrierCode() + " on this instance.", null);
     }

@@ -619,26 +619,33 @@ public class FedExConnector implements CarrierConnector {
      * refund is issued.
      *
      * <p>{@code -local-*} fallback tokens short-circuit to
-     * {@code NOT_SUPPORTED}. The account number defaults to
-     * {@code "ACCOUNT"} (the platform account placeholder) when not
-     * derivable from the request context; FedEx will reject that but
-     * we surface the ERROR clearly instead of silently attempting.
+     * {@code NOT_SUPPORTED}.
+     *
+     * <p>Sprint 49 Tier 2 — account number and sender country now come
+     * from the caller ({@code VoidServiceImpl} passes the account +
+     * platform shipper defaults) instead of the hardcoded {@code "ACCOUNT"}
+     * / {@code "US"} placeholders. FedEx cancel will reject anything that
+     * doesn't match the label, which the old placeholders always did.
      */
     @Override
-    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
+    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment,
+                                    String accountNumber, String senderCountryCode) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "FedEx void needs live credentials; the account is on a fallback token.",
                     null);
         }
+        if (!StringUtils.hasText(accountNumber)) {
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "FedEx cancel needs the shipper account number that created the label; none was passed.",
+                    null);
+        }
+        String senderCountry = StringUtils.hasText(senderCountryCode) ? senderCountryCode : "US";
         try {
             java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
-            // Account number placeholder — FedEx cancel needs the shipper
-            // account number to match the label. Improve by threading the
-            // stored account from OrderTracking through the void call.
-            body.put("accountNumber", java.util.Map.of("value", "ACCOUNT"));
+            body.put("accountNumber", java.util.Map.of("value", accountNumber));
             body.put("emailShipment", false);
-            body.put("senderCountryCode", "US");
+            body.put("senderCountryCode", senderCountry);
             body.put("deletionControl", "DELETE_ALL_PACKAGES");
             body.put("trackingNumber", trackingNumber);
 

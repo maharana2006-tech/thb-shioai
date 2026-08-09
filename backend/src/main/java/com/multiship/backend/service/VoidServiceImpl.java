@@ -39,6 +39,7 @@ public class VoidServiceImpl implements VoidService {
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     private final CarrierService carrierService;
     private final com.multiship.backend.repository.ShipmentBatchRepository shipmentBatchRepository;
+    private final com.multiship.backend.config.CarrierProperties carrierProperties;
 
     @Override
     public ApiResponse<VoidLabelResponseDTO> voidLabel(Integer orderNo) {
@@ -110,12 +111,21 @@ public class VoidServiceImpl implements VoidService {
             }
         }
 
+        // Sprint 49 Tier 2: pass the real account number + platform shipper
+        // country to the connector. FedEx cancel rejects any label whose
+        // shipperAccountNumber doesn't match; the placeholder "ACCOUNT" it
+        // used to receive made every FedEx void fail silently.
+        String voidAccountNumber = account.getAccountNumber();
+        String senderCountryCode = carrierProperties.getShipper() != null
+                ? carrierProperties.getShipper().getCountryCode()
+                : null;
+
         CarrierConnector.VoidResult result = null;
         java.util.List<CarrierConnector.VoidResult> perBatchResults = new java.util.ArrayList<>();
         for (String trackNo : trackingNumbersToVoid) {
             try {
                 CarrierConnector.VoidResult r = connector.voidShipment(trackNo, accessToken,
-                        account.getEnvironment());
+                        account.getEnvironment(), voidAccountNumber, senderCountryCode);
                 perBatchResults.add(r);
                 if (result == null) result = r;
             } catch (Exception ex) {

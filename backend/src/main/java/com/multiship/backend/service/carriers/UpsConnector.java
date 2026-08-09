@@ -447,7 +447,10 @@ public class UpsConnector implements CarrierConnector {
      * {@code NOT_SUPPORTED} — the account never actually authenticated.
      */
     @Override
-    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment) {
+    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment,
+                                    String accountNumber, String senderCountryCode) {
+        // UPS cancel doesn't need accountNumber/senderCountry — the tracking
+        // number alone identifies the shipment. Kept in signature for parity.
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "UPS void needs live credentials; the account is on a fallback token.",
