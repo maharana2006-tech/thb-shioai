@@ -427,7 +427,12 @@ function CommodityRow({
                 min="0"
                 step="0.01"
                 value={value.quantity || ''}
-                onChange={(e) => onChange({ quantity: Number(e.target.value) })}
+                onChange={(e) => {
+                  // Sprint 49 Tier 4 Fix 7 — clamp non-numeric / negative to 0
+                  // so DG shipments never post NaN to the carrier's quantity check.
+                  const parsed = parseFloat(e.target.value)
+                  onChange({ quantity: Number.isFinite(parsed) && parsed >= 0 ? parsed : 0 })
+                }}
               />
             </Field>
             <Field label="Unit">

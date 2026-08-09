@@ -7,6 +7,8 @@ import { clearAuthSession, useAppSession } from '../../hooks/useAppSession'
 import { getNavItemsForRole, resolveWorkspaceRouteKey } from '../../routes/workspaceRoutes'
 import { normalizeRole } from '../../utils/roles'
 import { navIcons } from './navIcons'
+import { useAppDispatch } from '../../store/hooks'
+import { logout as logoutAction } from '../../store/store'
 
 interface SidebarProps {
   pinned: boolean
@@ -30,6 +32,7 @@ const BARCODE = [3, 1, 2, 4, 1, 2, 1, 3, 1, 2, 4, 1, 1, 3, 2, 1]
 export default function Sidebar({ pinned, onTogglePin }: SidebarProps) {
   const location = useLocation()
   const navigate = useNavigate()
+  const dispatch = useAppDispatch()
   const { username, role } = useAppSession()
   const [loggingOut, setLoggingOut] = useState(false)
 
@@ -53,6 +56,10 @@ export default function Sidebar({ pinned, onTogglePin }: SidebarProps) {
       console.debug('Logout request failed', error)
     }
 
+    // Sprint 49 Tier 4 Fix 2 — reset ALL Redux user-data slices BEFORE
+    // navigating so the next signed-in user never briefly sees the
+    // previous operator's orders / carrier status / stats.
+    dispatch(logoutAction())
     clearAuthSession()
     notify.success('Logged out')
     navigate('/login')

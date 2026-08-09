@@ -152,18 +152,44 @@ export async function authFetch(endpoint: string, options: RequestInit = {}): Pr
 }
 
 export const apiClient = {
-  get: <T>(endpoint: string, options?: RequestInit) => 
+  /**
+   * Every method accepts an optional {@link RequestInit} that is
+   * forwarded to fetch. Sprint 49 Tier 4 Fix 4 — this makes
+   * cancellation a one-liner:
+   *
+   * <pre>
+   * const controller = new AbortController();
+   * apiClient.get('/orders', { signal: controller.signal });
+   * // ...on unmount: controller.abort();
+   * </pre>
+   *
+   * Aborted requests reject with an error whose name is 'AbortError';
+   * use {@link isAbortError} to silence them in catch blocks.
+   */
+  get: <T>(endpoint: string, options?: RequestInit) =>
     apiRequest<T>(endpoint, { method: 'GET', ...options }),
-    
-  post: <T>(endpoint: string, data?: any, options?: RequestInit) => 
+
+  post: <T>(endpoint: string, data?: any, options?: RequestInit) =>
     apiRequest<T>(endpoint, { method: 'POST', data, ...options }),
-    
+
   put: <T>(endpoint: string, data: any, options?: RequestInit) =>
     apiRequest<T>(endpoint, { method: 'PUT', data, ...options }),
 
   patch: <T>(endpoint: string, data: any, options?: RequestInit) =>
     apiRequest<T>(endpoint, { method: 'PATCH', data, ...options }),
 
-  delete: <T>(endpoint: string, options?: RequestInit) => 
+  delete: <T>(endpoint: string, options?: RequestInit) =>
     apiRequest<T>(endpoint, { method: 'DELETE', ...options }),
 };
+
+/**
+ * Sprint 49 Tier 4 Fix 4 — true when the given error came from an
+ * AbortController.abort() call. Aborts happen on unmount / re-render
+ * and are expected — callers should silence them rather than showing
+ * a toast.
+ */
+export function isAbortError(err: unknown): boolean {
+  if (err == null) return false;
+  if (err instanceof DOMException && err.name === 'AbortError') return true;
+  return typeof err === 'object' && (err as { name?: string }).name === 'AbortError';
+}
