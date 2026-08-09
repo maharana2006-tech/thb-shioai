@@ -67,22 +67,13 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<Map<String, Long>> getStats() {
-        // Aggregate counts across every profile — the page's health strip.
-        // Reuse repository.findAll() once and derive the three totals in-memory.
-        List<ClientCustomsProfile> all = repository.findAll();
-        long profiles = all.size();
-        long destinationsCovered = all.stream()
-                .flatMap(p -> p.getCountries().stream())
-                .distinct()
-                .count();
-        long clientsConfigured = all.stream()
-                .map(p -> p.getClientCode() == null ? "" : p.getClientCode().toUpperCase(Locale.ROOT))
-                .distinct()
-                .count();
+        // Sprint 49 Tier 3 Fix 5 — the page's health strip called findAll()
+        // and derived three totals in Java. Now three lightweight count
+        // queries run at the DB and return scalars. Response identical.
         Map<String, Long> out = new LinkedHashMap<>();
-        out.put("profiles", profiles);
-        out.put("destinationsCovered", destinationsCovered);
-        out.put("clientsConfigured", clientsConfigured);
+        out.put("profiles", repository.count());
+        out.put("destinationsCovered", repository.countDistinctCountries());
+        out.put("clientsConfigured", repository.countDistinctClientCodes());
         return success("Customs profile stats.", out);
     }
 
@@ -114,6 +105,14 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
      * In-memory apply-all-filters over every profile. Small dataset (typically
      * fewer than a few hundred rows across the whole system), so the simplicity
      * of a single fetch beats bespoke SQL. Sort + slice happen after.
+     *
+     * <p>TODO(sprint49-tier3-fix5-followup): once the profile count crosses
+     * a few thousand this becomes a scale wall. Migrate to a
+     * {@code JpaSpecificationExecutor<ClientCustomsProfile>} + Specifications
+     * per filter (clientCode, carrier, broker, countries, search) so
+     * pagination is a real DB LIMIT + OFFSET rather than a Java sublist over
+     * a full result set. Frontend already sends the filters in the shape
+     * needed.
      */
     private List<ClientCustomsProfileDTO> fetchFiltered(CustomsProfileFilters filters) {
         Map<String, String> clientNames = clientRepository.findAll().stream()
