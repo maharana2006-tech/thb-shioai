@@ -852,8 +852,20 @@ public class CarrierServiceImpl implements CarrierService {
             String token = connector.getAccessToken(account.getClientId(), account.getClientSecret(),
                     account.getAccountNumber());
             String envForCall = firstNonBlank(account.getEnvironment(), carrierProperties.getDefaultEnvironment());
+            // Sprint 49 Tier 2 — auth-retry per sub-request. If the token
+            // 401s mid-loop (rotation / revocation), refresh once and retry
+            // that sub only; second failure propagates as CarrierAuthException.
+            // account / connector are non-final upstream (fallback path can
+            // reassign) — capture into effectively-final locals for the lambda.
+            final CarrierAccountRef fAccount = account;
+            final CarrierConnector fConnector = connector;
+            final String fEnv = envForCall;
             for (ShipmentRequestDTO sub : subRequests) {
-                batchResults.add(connector.createShipment(sub, token, envForCall));
+                batchResults.add(com.multiship.backend.service.carriers.AuthRetry.withAuthRetry(
+                        token,
+                        () -> fConnector.getAccessToken(fAccount.getClientId(), fAccount.getClientSecret(),
+                                fAccount.getAccountNumber()),
+                        t -> fConnector.createShipment(sub, t, fEnv)));
             }
         } catch (Exception ex) {
             log.warn("Manual shipment failed at carrier {}: {}", carrier, ex.getMessage());
