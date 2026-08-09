@@ -44,6 +44,18 @@
 			<artifactId>postgresql</artifactId>
 			<scope>runtime</scope>
 		</dependency>
+
+		<!-- Sprint 49 Tier 1: Flyway for schema migrations. Baseline-on-migrate
+		     lets Flyway stamp existing (ddl-auto-created) prod schemas at V1
+		     without running the empty V1 file. V2+ contain real migrations. -->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>
