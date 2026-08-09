@@ -64,6 +64,24 @@
 			<groupId>com.github.ben-manes.caffeine</groupId>
 			<artifactId>caffeine</artifactId>
 		</dependency>
+
+		<!-- Sprint 49 Tier 5 Fix 1: Testcontainers for real-Postgres
+		     integration tests. Every test in the .integration package
+		     is guarded by @EnabledIfEnvironmentVariable(INTEGRATION_TESTS=1)
+		     so CI without Docker still runs the full unit suite green.
+		     Version pinned explicitly — not in Spring Boot's BOM. -->
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<version>1.20.4</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>postgresql</artifactId>
+			<version>1.20.4</version>
+			<scope>test</scope>
+		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>
