@@ -51,6 +51,14 @@ public class ApiKeyService {
 
     private final ApiKeyRepository apiKeyRepository;
     private final PasswordEncoder passwordEncoder;
+    /**
+     * Sprint 50 Tier 0.5 PR E - clamp caller-supplied clientCode on
+     * issue so a scoped USER cannot mint an API key for a foreign tenant.
+     * Platform operators (ADMIN, wildcard API key) pass through unchanged;
+     * a platform-wide key issuance (clientCode == "*" or null) also
+     * passes through since clampClientCode treats operators as pass-through.
+     */
+    private final TenantScopeEnforcer tenantScope;
 
     /** The token to hand back to the caller, paired with the persisted record. */
     public record IssuedKey(ApiKey record, String plaintextToken) {}
@@ -92,13 +100,18 @@ public class ApiKeyService {
     public IssuedKey issue(String name, String clientCode, String environment, String scopes,
                             String createdBy, LocalDateTime expiresAt) {
         String env = StringUtils.hasText(environment) ? environment.trim().toLowerCase() : "live";
+        // Sprint 50 Tier 0.5 PR E - Pattern A clamp: a scoped USER can
+        // only mint a key for their own tenant. ADMIN + wildcard-API
+        // callers pass any value (including null for a platform-wide key
+        // or "*" for the multi-tenant key) through unchanged.
+        String scopedClientCode = tenantScope.clampClientCode(clientCode);
         String prefix = randomHex(8);   // 16 hex chars — public lookup id
         String secret = randomHex(24);  // 48 hex chars — the sensitive secret
         String token = "msk_" + env + "_" + prefix + "_" + secret;
 
         ApiKey key = ApiKey.builder()
                 .name(name)
-                .clientCode(clientCode)
+                .clientCode(scopedClientCode)
                 .environment(env)
                 .keyPrefix(prefix)
                 .keyHash(passwordEncoder.encode(secret))

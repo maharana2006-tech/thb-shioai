@@ -26,6 +26,14 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
 
     private final RoutingRuleRepository ruleRepo;
     private final ShippingServiceRepository serviceRepo;
+    /**
+     * Sprint 50 Tier 0.5 PR E - path-param clientCode uses Pattern B
+     * (requireTenantMatch), rule.clientCode on save uses Pattern A
+     * (clampClientCode). Optional so pre-PR-E tests that build the
+     * service directly still compile.
+     */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
 
     @Autowired
     public RoutingRuleServiceImpl(RoutingRuleRepository ruleRepo,
@@ -38,6 +46,10 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
 
     @Override
     public List<RoutingRule> listForClient(String clientCode) {
+        // Sprint 50 Tier 0.5 PR E - Pattern B: path-param clientCode is
+        // the caller's assertion of the tenant they want. A scoped USER
+        // hitting /clients/OTHER/routing-rules gets a clean 403.
+        if (tenantScope != null) tenantScope.requireTenantMatch(safe(clientCode));
         return ruleRepo.findByClientCodeIgnoreCaseOrderByPriorityAscIdAsc(safe(clientCode));
     }
 
@@ -47,6 +59,9 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
         if (rule.getClientCode() == null || rule.getClientCode().isBlank()) {
             throw new IllegalArgumentException("clientCode is required");
         }
+        // Sprint 50 Tier 0.5 PR E - Pattern A: clamp body clientCode so a
+        // scoped USER cannot save a rule targeting a foreign tenant.
+        if (tenantScope != null) rule.setClientCode(tenantScope.clampClientCode(rule.getClientCode()));
         if (rule.getName() == null || rule.getName().isBlank()) {
             throw new IllegalArgumentException("name is required");
         }
@@ -75,6 +90,10 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
     @Override
     @Transactional
     public void delete(String clientCode, Long ruleId) {
+        // Sprint 50 Tier 0.5 PR E - Pattern B: reject before touching the
+        // repository so a scoped USER hitting /clients/OTHER/routing-rules/N
+        // gets a 403 rather than a silent 200-and-no-op.
+        if (tenantScope != null) tenantScope.requireTenantMatch(safe(clientCode));
         ruleRepo.findById(ruleId)
                 .filter(r -> safe(clientCode).equalsIgnoreCase(r.getClientCode()))
                 .ifPresent(ruleRepo::delete);

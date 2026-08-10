@@ -7,6 +7,7 @@ import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.LabelGenerationResponse;
 import com.multiship.backend.model.BulkLabelJob;
 import com.multiship.backend.repository.BulkLabelJobRepository;
+import com.multiship.backend.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -52,6 +53,14 @@ public class BulkLabelServiceImpl implements BulkLabelService {
 
     private final BulkLabelJobRepository jobRepository;
     private final CarrierService carrierService;
+    /**
+     * Sprint 50 Tier 0.5 PR E - guard so a scoped USER cannot enqueue a
+     * bulk job containing an order from a foreign tenant. We check every
+     * order in the request at submit time; any foreign hit rejects the
+     * whole batch (fail-fast, per the existing invariant).
+     */
+    private final OrderRepository orderRepository;
+    private final TenantScopeEnforcer tenantScope;
 
     /** Fan-out executor for the per-order workers. Shared across every
      *  job because job kick-off already runs on its own thread. */
@@ -79,6 +88,16 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     public ApiResponse<BulkLabelJobDTO> submit(BulkLabelRequestDTO request, String requestedBy) {
         if (request == null || request.getOrderNumbers() == null || request.getOrderNumbers().isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "orderNumbers is required.");
+        }
+        // Sprint 50 Tier 0.5 PR E - tenant guard. Verify EVERY order in
+        // the request belongs to the caller's tenant before enqueuing;
+        // any foreign order aborts the whole submission (fail-fast).
+        // Platform operators pass through unchanged.
+        for (Long orderNo : request.getOrderNumbers()) {
+            if (orderNo == null) continue;
+            orderRepository.findByOrderNo(orderNo.intValue()).ifPresent(o ->
+                    tenantScope.requireTenantMatch(
+                            StringUtils.hasText(o.getTenantId()) ? o.getTenantId() : o.getCustNo()));
         }
         // Persist the job row before we return so the client can poll
         // immediately.

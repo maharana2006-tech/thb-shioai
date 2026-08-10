@@ -1,10 +1,12 @@
 package com.multiship.backend.service;
 
+import com.multiship.backend.config.AccessScopePolicy;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.TrackingResponseDTO;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.OrderTracking;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
+import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,6 +38,7 @@ class TrackingServiceImplTest {
     private OrderTrackingRepository trackingRepo;
     private CarrierAccountRefRepository accountRepo;
     private CarrierService carrierService;
+    private OrderRepository orderRepo;
     private CarrierConnector connector;
     private TrackingServiceImpl service;
 
@@ -44,8 +47,12 @@ class TrackingServiceImplTest {
         trackingRepo = mock(OrderTrackingRepository.class);
         accountRepo = mock(CarrierAccountRefRepository.class);
         carrierService = mock(CarrierService.class);
+        orderRepo = mock(OrderRepository.class);
         connector = mock(CarrierConnector.class);
-        service = new TrackingServiceImpl(trackingRepo, accountRepo, carrierService);
+        // Sprint 50 Tier 0.5 PR E - enforcer with flag OFF is a pure
+        // pass-through, so existing test behavior is unchanged.
+        service = new TrackingServiceImpl(trackingRepo, accountRepo, carrierService,
+                orderRepo, new TenantScopeEnforcer(new AccessScopePolicy(false)));
     }
 
     private OrderTracking tracking(int orderNo, String trackingNumber, String shipVia, String accountNumber) {
@@ -105,6 +112,36 @@ class TrackingServiceImplTest {
         when(trackingRepo.findByOrderNo(1)).thenReturn(Optional.of(
                 tracking(1, "1Z", null, "740561111")));
         assertEquals(422, service.getLiveTracking(1).getCode());
+    }
+
+    /* -------- Sprint 50 Tier 0.5 PR E: tenant-scope -------- */
+
+    @Test
+    void scopedUserCannotTrackForeignTenantOrder() {
+        // Arrange: put a scoped USER (ACME) in the security context.
+        var authorities = List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("acmeuser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails("ACME"));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+        try {
+            TrackingServiceImpl scopedService = new TrackingServiceImpl(
+                    trackingRepo, accountRepo, carrierService, orderRepo,
+                    new TenantScopeEnforcer(new AccessScopePolicy(true)));
+
+            com.multiship.backend.model.Order foreignOrder = new com.multiship.backend.model.Order();
+            foreignOrder.setOrderNo(1);
+            foreignOrder.setTenantId("OTHER");
+            when(orderRepo.findByOrderNo(1)).thenReturn(Optional.of(foreignOrder));
+
+            org.junit.jupiter.api.Assertions.assertThrows(
+                    org.springframework.security.access.AccessDeniedException.class,
+                    () -> scopedService.getLiveTracking(1));
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
     }
 
     /* -------------------------- Carrier code canonicalization -------------------------- */

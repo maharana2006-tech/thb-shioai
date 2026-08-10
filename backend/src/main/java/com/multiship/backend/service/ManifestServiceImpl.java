@@ -31,6 +31,11 @@ public class ManifestServiceImpl implements ManifestService {
 
     private final CarrierService carrierService;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
+    /**
+     * Sprint 50 Tier 0.5 PR E - clamp customerNo to the caller's tenant so
+     * a scoped USER cannot close out a foreign tenant's manifest.
+     */
+    private final TenantScopeEnforcer tenantScope;
 
     @Override
     public ApiResponse<ManifestResponseDTO> closeOut(ManifestRequestDTO request) {
@@ -44,6 +49,9 @@ public class ManifestServiceImpl implements ManifestService {
             return failure(HttpStatus.BAD_REQUEST,
                     "At least one tracking number is required to close out a day.");
         }
+        // Sprint 50 Tier 0.5 PR E - clamp caller-supplied customerNo to
+        // caller's own tenant. Platform operators pass through unchanged.
+        request.setCustomerNo(tenantScope.clampClientCode(request.getCustomerNo()));
         String carrier = request.getCarrierCode().trim().toUpperCase(Locale.ROOT);
 
         CarrierConnector connector;

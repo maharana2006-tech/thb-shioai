@@ -30,6 +30,11 @@ public class PickupServiceImpl implements PickupService {
 
     private final CarrierService carrierService;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
+    /**
+     * Sprint 50 Tier 0.5 PR E - clamp customerNo so a scoped USER cannot
+     * schedule a pickup on a foreign tenant's behalf.
+     */
+    private final TenantScopeEnforcer tenantScope;
 
     @Override
     public ApiResponse<PickupResponseDTO> schedule(PickupRequestDTO request) {
@@ -41,6 +46,9 @@ public class PickupServiceImpl implements PickupService {
         if (!StringUtils.hasText(carrier)) {
             return failure(HttpStatus.BAD_REQUEST, "carrierCode is required.");
         }
+        // Sprint 50 Tier 0.5 PR E - clamp caller-supplied customerNo to
+        // caller's own tenant. Platform operators pass through unchanged.
+        request.setCustomerNo(tenantScope.clampClientCode(request.getCustomerNo()));
 
         CarrierConnector connector;
         try {

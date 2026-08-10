@@ -35,12 +35,20 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
     private static final int SEARCH_MAX = 25;
 
     private final SavedRecipientRepository repository;
+    /**
+     * Sprint 50 Tier 0.5 PR E - clamp customerNo so a scoped USER cannot
+     * search/write for a foreign tenant's saved recipients.
+     */
+    private final TenantScopeEnforcer tenantScope;
 
     @Override
     public ApiResponse<List<SavedRecipientDTO>> search(String q, String customerNo) {
         String norm = q == null ? null : q.trim();
+        // Sprint 50 Tier 0.5 PR E - Pattern A on the caller-supplied
+        // customerNo filter. Scoped USER null → own tenant; foreign → 403.
+        String scoped = tenantScope.clampClientCode(customerNo);
         List<SavedRecipient> hits = repository.search(
-                StringUtils.hasText(customerNo) ? customerNo : null,
+                StringUtils.hasText(scoped) ? scoped : null,
                 StringUtils.hasText(norm) ? norm : null);
         if (hits.size() > SEARCH_MAX) hits = hits.subList(0, SEARCH_MAX);
         return ApiResponse.<List<SavedRecipientDTO>>builder()
@@ -63,6 +71,9 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
         String err = validateRequest(request);
         if (err != null) return failure(HttpStatus.BAD_REQUEST, err);
 
+        // Sprint 50 Tier 0.5 PR E - Pattern A on ownerCustomerNo before
+        // persist. Scoped USER null → own tenant; foreign → 403.
+        request.setOwnerCustomerNo(tenantScope.clampClientCode(request.getOwnerCustomerNo()));
         String hash = dedupHash(request.getName(), request.getAddressLine1(), request.getPostalCode());
         Optional<SavedRecipient> existing = repository.findExisting(hash, request.getOwnerCustomerNo());
         if (existing.isPresent()) {
@@ -84,12 +95,20 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
         String err = validateRequest(request);
         if (err != null) return failure(HttpStatus.BAD_REQUEST, err);
 
+        // Sprint 50 Tier 0.5 PR E - Pattern A on ownerCustomerNo BEFORE the
+        // load so the caller can't tell the diff between "row exists but
+        // foreign tenant" and "row missing" by touching foreign IDs.
+        request.setOwnerCustomerNo(tenantScope.clampClientCode(request.getOwnerCustomerNo()));
         Optional<SavedRecipient> maybe = repository.findById(id);
         if (maybe.isEmpty()) {
             return failure(HttpStatus.NOT_FOUND,
                     "Saved recipient " + id + " not found.");
         }
         SavedRecipient row = maybe.get();
+        // Sprint 50 Tier 0.5 PR E - Pattern B on the loaded row: a scoped
+        // USER hitting an existing row that belongs to another tenant
+        // gets a 403, not a silent overwrite.
+        tenantScope.requireTenantMatch(row.getOwnerCustomerNo());
         applyDto(row, request);
         // Recompute the dedup hash — a name / street / postal edit
         // shifts the dedup identity.

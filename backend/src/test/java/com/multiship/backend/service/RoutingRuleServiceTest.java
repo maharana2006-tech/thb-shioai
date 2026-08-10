@@ -91,6 +91,35 @@ class RoutingRuleServiceTest {
         assertEquals(ActionType.REROUTE, saved.getActionType());
     }
 
+    // ===== Sprint 50 Tier 0.5 PR E: tenant-scope =====
+
+    @Test
+    void scopedUserCannotListForeignTenantRoutingRules() {
+        // Arrange: put a scoped USER (ACME) in the security context.
+        var authorities = List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("acmeuser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails("ACME"));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+        try {
+            RoutingRuleServiceImpl scopedService = new RoutingRuleServiceImpl(ruleRepo, serviceRepo);
+            // Manually wire the (optional) enforcer via reflection to keep
+            // pure Mockito style.
+            java.lang.reflect.Field f = RoutingRuleServiceImpl.class.getDeclaredField("tenantScope");
+            f.setAccessible(true);
+            f.set(scopedService, new TenantScopeEnforcer(new com.multiship.backend.config.AccessScopePolicy(true)));
+
+            assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                    () -> scopedService.listForClient("OTHER"));
+        } catch (ReflectiveOperationException ex) {
+            throw new RuntimeException(ex);
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
     // ===== matches() — per condition =====
 
     @Test

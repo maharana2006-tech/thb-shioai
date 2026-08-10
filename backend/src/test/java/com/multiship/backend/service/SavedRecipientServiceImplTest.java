@@ -1,5 +1,6 @@
 package com.multiship.backend.service;
 
+import com.multiship.backend.config.AccessScopePolicy;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.SavedRecipientDTO;
 import com.multiship.backend.model.SavedRecipient;
@@ -15,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -57,7 +59,9 @@ class SavedRecipientServiceImplTest {
         // findExisting default: no dupe.
         when(repo.findExisting(anyString(), any())).thenReturn(Optional.empty());
 
-        service = new SavedRecipientServiceImpl(repo);
+        // Sprint 50 Tier 0.5 PR E - enforcer with flag OFF is a pass-through.
+        service = new SavedRecipientServiceImpl(repo,
+                new TenantScopeEnforcer(new AccessScopePolicy(false)));
     }
 
     private static SavedRecipientDTO acmeRequest() {
@@ -72,6 +76,28 @@ class SavedRecipientServiceImplTest {
                 .countryCode("US")
                 .residential(false)
                 .build();
+    }
+
+    /* -------- Sprint 50 Tier 0.5 PR E: tenant-scope -------- */
+
+    @Test
+    void scopedUserCannotSearchForForeignTenant() {
+        var authorities = List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("acmeuser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails("ACME"));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+        try {
+            SavedRecipientServiceImpl scopedService = new SavedRecipientServiceImpl(repo,
+                    new TenantScopeEnforcer(new AccessScopePolicy(true)));
+
+            assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                    () -> scopedService.search("acme", "OTHER"));
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
     }
 
     /* -------------------------- Validation -------------------------- */

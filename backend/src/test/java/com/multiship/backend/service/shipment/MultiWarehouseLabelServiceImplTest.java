@@ -1,5 +1,6 @@
 package com.multiship.backend.service.shipment;
 
+import com.multiship.backend.config.AccessScopePolicy;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.LabelGenerationResponse;
 import com.multiship.backend.dto.ManualShipmentRequest;
@@ -11,6 +12,7 @@ import com.multiship.backend.model.ShipmentGroup;
 import com.multiship.backend.repository.ShipmentGroupRepository;
 import com.multiship.backend.repository.ShipmentRepository;
 import com.multiship.backend.service.CarrierService;
+import com.multiship.backend.service.TenantScopeEnforcer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -63,7 +65,10 @@ class MultiWarehouseLabelServiceImplTest {
             s.setId(seq.getAndIncrement());
             return s;
         });
-        service = new MultiWarehouseLabelServiceImpl(carrierService, groupRepo, shipmentRepo);
+        // Sprint 50 Tier 0.5 PR E - enforcer with flag OFF is a pure
+        // pass-through, so existing test behavior is unchanged.
+        service = new MultiWarehouseLabelServiceImpl(carrierService, groupRepo, shipmentRepo,
+                new TenantScopeEnforcer(new AccessScopePolicy(false)));
     }
 
     // ===== Happy path =====
@@ -214,6 +219,38 @@ class MultiWarehouseLabelServiceImplTest {
                 .thenThrow(new RuntimeException("boom"));
         assertThrows(RuntimeException.class, () -> service.generate(req, user));
         verify(groupRepo, never()).save(any());
+    }
+
+    /* -------- Sprint 50 Tier 0.5 PR E: tenant-scope -------- */
+
+    @Test
+    void scopedUserCannotGenerateForForeignTenant() {
+        // Arrange: put a scoped USER (ACME) in the security context.
+        var authorities = List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("acmeuser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails("ACME"));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+        try {
+            MultiWarehouseLabelServiceImpl scopedService = new MultiWarehouseLabelServiceImpl(
+                    carrierService, groupRepo, shipmentRepo,
+                    new TenantScopeEnforcer(new AccessScopePolicy(true)));
+
+            MultiWarehouseLabelRequest req = new MultiWarehouseLabelRequest();
+            req.setClientCode("OTHER");
+            req.setOrderNo(1);
+            req.setLines(new ArrayList<>());
+            req.getLines().add(line("EAST", "SKU-1", 1));
+
+            org.junit.jupiter.api.Assertions.assertThrows(
+                    org.springframework.security.access.AccessDeniedException.class,
+                    () -> scopedService.generate(req, user));
+            verify(groupRepo, never()).save(any());
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
     }
 
     // ===== helpers =====

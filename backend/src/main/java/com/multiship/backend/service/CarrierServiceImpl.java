@@ -73,6 +73,11 @@ public class CarrierServiceImpl implements CarrierService {
     private final com.multiship.backend.repository.ShipmentBatchRepository shipmentBatchRepository;
     private final CarrierLimitService carrierLimitService;
     private final ShipmentSplitter shipmentSplitter;
+    /**
+     * Sprint 50 Tier 0.5 PR E - clamp tenantId on carrier-connect so a
+     * scoped USER cannot persist a CarrierConfig for a foreign tenant.
+     */
+    private final TenantScopeEnforcer tenantScope;
 
     @org.springframework.beans.factory.annotation.Value("${carrier.auto-split-enabled:true}")
     private boolean autoSplitEnabled;
@@ -122,8 +127,12 @@ public class CarrierServiceImpl implements CarrierService {
         );
 
         LocalDateTime now = LocalDateTime.now();
+        // Sprint 50 Tier 0.5 PR E - clamp caller-supplied tenantId. A
+        // scoped USER can only connect a carrier for their own tenant;
+        // platform operators pass any value (including null for a
+        // platform/house account) through unchanged.
         String tenantId = StringUtils.hasText(request.getTenantId())
-                ? request.getTenantId().trim().toUpperCase(Locale.ROOT)
+                ? tenantScope.clampClientCode(request.getTenantId()).trim().toUpperCase(Locale.ROOT)
                 : null;
 
         // Tenant-aware lookup so an operator session (tenantId null) never

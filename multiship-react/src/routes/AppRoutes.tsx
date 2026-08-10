@@ -28,6 +28,7 @@ import ShippingServiceMappingPage from '../components/ShippingServiceMappingPage
 import ApiKeysPage from '../components/ApiKeysPage'
 import ApiReferencePage from '../components/ApiReferencePage'
 import SystemSettingsPage from '../components/SystemSettingsPage'
+import AdminUsersPage from '../components/AdminUsersPage'
 import WarehousesPage from '../components/WarehousesPage'
 import CodeMapsPage from '../components/CodeMapsPage'
 import AuditLogPage from '../components/AuditLogPage'
@@ -94,6 +95,7 @@ export default function AppRoutes() {
                 <Route path="api-keys" element={<ApiKeysPage />} />
                 <Route path="api-reference" element={<ApiReferencePage />} />
                 <Route path="system" element={<SystemSettingsPage />} />
+                <Route path="users" element={<AdminUsersPage />} />
               </Route>
             </Route>
           </Route>

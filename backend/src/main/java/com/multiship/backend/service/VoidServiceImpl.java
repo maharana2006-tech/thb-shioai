@@ -6,6 +6,7 @@ import com.multiship.backend.dto.VoidLabelResponseDTO;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.OrderTracking;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
+import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
 import lombok.RequiredArgsConstructor;
@@ -40,12 +41,27 @@ public class VoidServiceImpl implements VoidService {
     private final CarrierService carrierService;
     private final com.multiship.backend.repository.ShipmentBatchRepository shipmentBatchRepository;
     private final com.multiship.backend.config.CarrierProperties carrierProperties;
+    /**
+     * Sprint 50 Tier 0.5 PR E - tenant guard so a scoped USER cannot void
+     * a label that belongs to a foreign tenant. The tenant discriminator
+     * (tenant_id / cust_no) lives on label_batch (Order), not on the
+     * tracking table.
+     */
+    private final OrderRepository orderRepository;
+    private final TenantScopeEnforcer tenantScope;
 
     @Override
     public ApiResponse<VoidLabelResponseDTO> voidLabel(Integer orderNo) {
         if (orderNo == null) {
             return failure(HttpStatus.BAD_REQUEST, "Order number is required.");
         }
+        // Sprint 50 Tier 0.5 PR E - belt-and-braces tenant guard. The
+        // controller SpEL restricts foreign-tenant access, but any
+        // internal caller bypassing method security lands here first.
+        orderRepository.findByOrderNo(orderNo).ifPresent(o ->
+                tenantScope.requireTenantMatch(
+                        StringUtils.hasText(o.getTenantId()) ? o.getTenantId() : o.getCustNo()));
+
         OrderTracking tracking = orderTrackingRepository.findByOrderNo(orderNo).orElse(null);
         if (tracking == null || !StringUtils.hasText(tracking.getTrackingNumber())) {
             return failure(HttpStatus.NOT_FOUND,

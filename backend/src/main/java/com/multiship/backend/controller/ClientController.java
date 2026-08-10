@@ -67,7 +67,7 @@ public class ClientController {
     }
 
     @Operation(summary = "Get one client with linked accounts and order count")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping("/{clientCode}")
     public ResponseEntity<ApiResponse<ClientDTO>> getClient(@PathVariable String clientCode) {
         ApiResponse<ClientDTO> response = clientService.getClient(clientCode);
@@ -84,7 +84,7 @@ public class ClientController {
     }
 
     @Operation(summary = "Update a client", description = "The client code itself is immutable (it links orders and accounts).")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @PutMapping("/{clientCode}")
     public ResponseEntity<ApiResponse<ClientDTO>> updateClient(
             @PathVariable String clientCode,
@@ -99,7 +99,7 @@ public class ClientController {
                     "otherwise cascades — deactivates carrier accounts (customerNo=X), " +
                     "client-owned warehouses, and drops attachment links. Snapshot goes to " +
                     "audit_log so ENABLE restores only these rows.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @PostMapping("/{clientCode}/toggle-active")
     public ResponseEntity<ApiResponse<ClientDTO>> toggleActive(@PathVariable String clientCode) {
         ApiResponse<ClientDTO> response = clientService.toggleActive(clientCode);
@@ -109,7 +109,7 @@ public class ClientController {
     @Operation(summary = "Preview client-disable cascade",
             description = "Returns pending-order count (hard-block on disable when >0) plus " +
                     "counts of the associated rows a disable would deactivate. Read-only.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping("/{clientCode}/cascade-preview")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ClientCascadePreviewDTO>> previewCascade(
             @PathVariable String clientCode) {
@@ -128,7 +128,7 @@ public class ClientController {
     }
 
     @Operation(summary = "List the client's linked carrier accounts (client default first)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping("/{clientCode}/carrier-accounts")
     public ResponseEntity<ApiResponse<List<CarrierAccountRefDTO>>> listClientAccounts(@PathVariable String clientCode) {
         ApiResponse<List<CarrierAccountRefDTO>> response = clientService.listClientAccounts(clientCode);

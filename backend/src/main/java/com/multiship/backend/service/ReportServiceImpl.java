@@ -36,6 +36,13 @@ public class ReportServiceImpl implements ReportService {
     private final OrderRepository orderRepository;
     private final OrderTrackingRepository orderTrackingRepository;
     private final RateShopHistoryRepository rateShopHistoryRepository;
+    /**
+     * Sprint 50 Tier 0.5 PR E - clamp filter.customerNo so a scoped USER
+     * exports only their own tenant's rows. Optional so pre-PR-E tests
+     * that build the service directly still compile.
+     */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
 
     @Autowired
     public ReportServiceImpl(EntityManager em,
@@ -60,6 +67,9 @@ public class ReportServiceImpl implements ReportService {
     @Override
     @Transactional(readOnly = true, timeout = 300)
     public void streamOrdersCsv(ReportFilters f, OutputStream out) {
+        // Sprint 50 Tier 0.5 PR E - clamp f.customerNo BEFORE the SQL bind
+        // so a scoped USER exports only their own tenant's rows.
+        clampCustomerNo(f);
         StringBuilder sql = new StringBuilder("""
             SELECT o.order_no, o.cust_no, o.tenant_id, o.created_date,
                    t.tracking_number, t.status,
@@ -107,6 +117,9 @@ public class ReportServiceImpl implements ReportService {
     @Override
     @Transactional(readOnly = true, timeout = 300)
     public void streamTrackingCsv(ReportFilters f, OutputStream out) {
+        // Sprint 50 Tier 0.5 PR E - clamp f.customerNo BEFORE the SQL bind
+        // so a scoped USER exports only their own tenant's rows.
+        clampCustomerNo(f);
         // We use OrderTracking snapshots (there isn't a per-event history
         // table on the platform yet) and pair with the order for client
         // context.
@@ -150,6 +163,9 @@ public class ReportServiceImpl implements ReportService {
     @Override
     @Transactional(readOnly = true)
     public void streamRateShopCsv(ReportFilters f, OutputStream out) {
+        // Sprint 50 Tier 0.5 PR E - clamp f.customerNo for consistency
+        // with the other CSV exports; a scoped USER sees only their own.
+        clampCustomerNo(f);
         var rows = rateShopHistoryRepository.reportRows(
                 f.getCustomerNo(), f.getFrom(), f.getTo());
         try (PrintWriter w = new PrintWriter(out)) {
@@ -177,6 +193,9 @@ public class ReportServiceImpl implements ReportService {
     @Override
     @Transactional(readOnly = true)
     public void streamBillingCsv(ReportFilters f, OutputStream out) {
+        // Sprint 50 Tier 0.5 PR E - clamp f.customerNo so a scoped USER
+        // sees only their own tenant's billing rollup.
+        clampCustomerNo(f);
         StringBuilder sql = new StringBuilder("""
             SELECT COALESCE(o.tenant_id, o.cust_no) AS client,
                    TO_CHAR(o.created_date, 'YYYY-MM') AS ym,
@@ -231,6 +250,16 @@ public class ReportServiceImpl implements ReportService {
                             + expectedColumns + " — check for column-order drift in the SELECT.");
         }
         return arr;
+    }
+
+    /**
+     * Sprint 50 Tier 0.5 PR E - null-safe helper: when the enforcer isn't
+     * wired (pure-unit tests) fall back to no-op; otherwise clamp
+     * f.customerNo so a scoped USER exports only their own tenant.
+     */
+    private void clampCustomerNo(ReportFilters f) {
+        if (tenantScope == null || f == null) return;
+        f.setCustomerNo(tenantScope.clampClientCode(f.getCustomerNo()));
     }
 
     private static void bindFilters(Query q, ReportFilters f) {

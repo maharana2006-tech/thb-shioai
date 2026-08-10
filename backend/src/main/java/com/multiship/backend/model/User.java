@@ -76,6 +76,19 @@ public class User {
     @Column(name = "email_verify_expires_at")
     private LocalDateTime emailVerifyExpiresAt;
 
+    /**
+     * Sprint 50 Tier 0.5 PR E — admin-driven soft delete. Non-null blocks
+     * login (403 ACCOUNT_DEACTIVATED). Distinct from an unverified account
+     * so an accidentally-revoked user gets a clear message rather than
+     * "verify your email."
+     */
+    @Column(name = "deactivated_at")
+    private LocalDateTime deactivatedAt;
+
+    /** Which admin performed the deactivation (audit convenience). */
+    @Column(name = "deactivated_by", length = 100)
+    private String deactivatedBy;
+
     // ===== Carrier Integration Fields =====
     @Column(name = "preferred_carrier", length = 50)
     private String preferredCarrier;

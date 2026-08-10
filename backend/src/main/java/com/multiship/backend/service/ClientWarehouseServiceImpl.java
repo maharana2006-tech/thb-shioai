@@ -29,11 +29,17 @@ public class ClientWarehouseServiceImpl implements ClientWarehouseService {
     private final WarehouseRepository warehouseRepository;
     private final ClientRepository clientRepository;
     private final AuditService auditService;
+    /**
+     * Sprint 50 Tier 0.5 PR E - Pattern B on every path-param clientCode
+     * so a scoped USER hitting /clients/OTHER/warehouses gets a 403.
+     */
+    private final TenantScopeEnforcer tenantScope;
 
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<ClientWarehouseDTO>> listForClient(String clientCode) {
         String code = normalize(clientCode);
+        tenantScope.requireTenantMatch(code);
         if (!clientRepository.existsByClientCodeIgnoreCase(code)) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
                     "Client " + code + " was not found.");
@@ -50,6 +56,7 @@ public class ClientWarehouseServiceImpl implements ClientWarehouseService {
     @Transactional
     public ApiResponse<ClientWarehouseDTO> attach(String clientCode, AttachWarehouseRequest request) {
         String code = normalize(clientCode);
+        tenantScope.requireTenantMatch(code);
         if (!clientRepository.existsByClientCodeIgnoreCase(code)) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
                     "Client " + code + " was not found.");
@@ -103,6 +110,7 @@ public class ClientWarehouseServiceImpl implements ClientWarehouseService {
     @Transactional
     public ApiResponse<Void> detach(String clientCode, String warehouseCode) {
         String code = normalize(clientCode);
+        tenantScope.requireTenantMatch(code);
         Warehouse warehouse = warehouseRepository.findByCodeIgnoreCase(normalize(warehouseCode)).orElse(null);
         if (warehouse == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.WAREHOUSE_NOT_FOUND,
@@ -140,6 +148,7 @@ public class ClientWarehouseServiceImpl implements ClientWarehouseService {
     @Transactional
     public ApiResponse<ClientWarehouseDTO> setDefault(String clientCode, String warehouseCode) {
         String code = normalize(clientCode);
+        tenantScope.requireTenantMatch(code);
         Warehouse warehouse = warehouseRepository.findByCodeIgnoreCase(normalize(warehouseCode)).orElse(null);
         if (warehouse == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.WAREHOUSE_NOT_FOUND,

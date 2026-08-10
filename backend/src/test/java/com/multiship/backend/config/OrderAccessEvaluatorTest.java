@@ -26,7 +26,7 @@ class OrderAccessEvaluatorTest {
 
     @BeforeEach
     void setUp() {
-        evaluator = new OrderAccessEvaluator(mock(OrderRepository.class));
+        evaluator = new OrderAccessEvaluator(mock(OrderRepository.class), new AccessScopePolicy(false));
     }
 
     // ===== canViewTenant =====

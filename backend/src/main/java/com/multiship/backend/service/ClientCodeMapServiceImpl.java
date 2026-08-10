@@ -39,11 +39,17 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
     private final ClientPackageCodeMapRepository packageRepo;
     private final ShippingServiceRepository shippingServiceRepository;
     private final PackagePresetRepository packagePresetRepository;
+    /**
+     * Sprint 50 Tier 0.5 PR E - Pattern B on every path-param clientCode
+     * so a scoped USER hitting /clients/OTHER/code-maps/... gets a 403.
+     */
+    private final TenantScopeEnforcer tenantScope;
 
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<ClientCodeMapDTO>> list(String clientCode, ClientCodeMapDTO.Kind kind) {
         String code = normalize(clientCode);
+        tenantScope.requireTenantMatch(code);
         if (!clientRepository.existsByClientCodeIgnoreCase(code)) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
                     "Client " + code + " was not found.");
@@ -66,6 +72,7 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
     public ApiResponse<ClientCodeMapDTO> upsert(
             String clientCode, ClientCodeMapDTO.Kind kind, UpsertClientCodeMapRequest request) {
         String code = normalize(clientCode);
+        tenantScope.requireTenantMatch(code);
         if (!clientRepository.existsByClientCodeIgnoreCase(code)) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
                     "Client " + code + " was not found.");
@@ -101,6 +108,7 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
     @Transactional
     public ApiResponse<Void> remove(String clientCode, ClientCodeMapDTO.Kind kind, Long id) {
         String code = normalize(clientCode);
+        tenantScope.requireTenantMatch(code);
         switch (kind) {
             case SHIPVIA -> shipviaRepo.findById(id)
                     .filter(r -> code.equalsIgnoreCase(r.getClientCode()))

@@ -51,6 +51,9 @@ public class BulkLabelController {
             description = "Kicks off an async job that generates labels for every order in the request. " +
                     "Returns immediately with the job ID; poll status via GET /{jobId} and download the " +
                     "resulting ZIP via GET /{jobId}/download once status=COMPLETED.")
+    // Sprint 50 Tier 0.5 PR E - controller role gate stays broad; the
+    // service verifies EVERY orderNumber in the request belongs to the
+    // caller's tenant via TenantScopeEnforcer.
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping
     public ResponseEntity<ApiResponse<BulkLabelJobDTO>> submit(

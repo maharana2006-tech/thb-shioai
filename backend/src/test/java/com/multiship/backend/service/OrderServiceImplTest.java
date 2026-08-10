@@ -5,6 +5,7 @@ import com.multiship.backend.dto.OrderListFilters;
 import com.multiship.backend.dto.OrderResponseDTO;
 import com.multiship.backend.dto.PageResponseDTO;
 import com.multiship.backend.dto.PaginationRequestDTO;
+import com.multiship.backend.config.AccessScopePolicy;
 import com.multiship.backend.repository.CarrierConfigRepository;
 import com.multiship.backend.repository.LabelPackageRepository;
 import com.multiship.backend.repository.OrderRawCodesRepository;
@@ -61,6 +62,12 @@ class OrderServiceImplTest {
         inject("carrierService", carrierService);
         inject("orderRawCodesRepository", orderRawCodesRepository);
         inject("labelPackageRepository", labelPackageRepository);
+        // Sprint 50 Tier 0.5 PR E — real enforcer wired to an anonymous
+        // Authentication (no context set), so clampClientCode returns
+        // the caller's requested value unchanged (operator behaviour).
+        // Individual tenant-scope tests can flip this by setting the
+        // SecurityContextHolder in the test body.
+        inject("tenantScope", new TenantScopeEnforcer(new AccessScopePolicy(false)));
 
         when(orderRepository.findOrdersUnified(
                 anyString(), anyString(), anyString(), anyString(),

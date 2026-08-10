@@ -55,6 +55,33 @@ class PackingSlipServiceTest {
         assertTrue(ex.getMessage().contains("9999"));
     }
 
+    /* -------- Sprint 50 Tier 0.5 PR E: tenant-scope -------- */
+
+    @Test
+    void scopedUserCannotRenderForeignTenantSlip() throws Exception {
+        var authorities = List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("acmeuser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails("ACME"));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+        try {
+            // Wire optional enforcer via reflection.
+            java.lang.reflect.Field f = PackingSlipServiceImpl.class.getDeclaredField("tenantScope");
+            f.setAccessible(true);
+            f.set(service, new TenantScopeEnforcer(new com.multiship.backend.config.AccessScopePolicy(true)));
+
+            Order foreign = buildOrder(11, "OTHER");
+            when(orderRepository.findByOrderNo(11)).thenReturn(Optional.of(foreign));
+
+            assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                    () -> service.render(11));
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
     @Test
     void render_withNoTemplate_producesValidPdfWithDefaults() throws Exception {
         Order order = buildOrder(100, "ARHDEV");

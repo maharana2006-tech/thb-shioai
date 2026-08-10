@@ -32,7 +32,10 @@ public class VoidController {
                     "USPS + UPS refund the postage when the label hasn't been scanned yet. " +
                     "Idempotent — voiding an already-VOIDED order returns 200 without a " +
                     "carrier round-trip.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    // Sprint 50 Tier 0.5 PR E - scope void to the order's tenant.
+    // Controller SpEL is the fast reject; VoidServiceImpl guards
+    // belt-and-braces for any service-to-service caller.
+    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
     @PostMapping("/{orderNo}/void")
     public ResponseEntity<ApiResponse<VoidLabelResponseDTO>> voidLabel(@PathVariable Integer orderNo) {
         ApiResponse<VoidLabelResponseDTO> response = voidService.voidLabel(orderNo);

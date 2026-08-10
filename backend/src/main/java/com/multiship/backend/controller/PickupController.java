@@ -33,6 +33,10 @@ public class PickupController {
                     "at a given address on a given date + time window. Returns the carrier's " +
                     "confirmation number (PRN / dispatchConfirmationNumber / ConfirmationNumber) " +
                     "which the operator can quote if the driver needs to look the pickup up.")
+    // Sprint 50 Tier 0.5 PR E - controller-level role gate stays broad;
+    // PickupServiceImpl clamps request.customerNo to the caller's own tenant
+    // via TenantScopeEnforcer so a scoped USER cannot schedule a pickup
+    // on a foreign tenant's behalf.
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping
     public ResponseEntity<ApiResponse<PickupResponseDTO>> schedule(
