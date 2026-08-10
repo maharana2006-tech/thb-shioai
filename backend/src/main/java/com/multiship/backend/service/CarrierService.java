@@ -31,6 +31,17 @@ public interface CarrierService {
      */
     ApiResponse<LabelGenerationResponse> generateLabel(Long orderNo, UserDetails user, String idempotencyKey, Long accountId);
 
+    /**
+     * Sprint 50 Tier 1 (finding #3) — extended overload with an explicit
+     * opt-in to bill the platform (house) account when the client's own
+     * carrier credentials fail authentication. The 4-arg overload above
+     * delegates here with {@code useHouseAccount=false} so pre-existing
+     * callers keep the "no silent platform bill" default.
+     */
+    ApiResponse<LabelGenerationResponse> generateLabel(Long orderNo, UserDetails user,
+                                                       String idempotencyKey, Long accountId,
+                                                       boolean useHouseAccount);
+
     /** One-shot manual shipment: purchase a label from explicit operator input and record it as a manual order. */
     ApiResponse<LabelGenerationResponse> generateManualLabel(com.multiship.backend.dto.ManualShipmentRequest request, UserDetails user);
 

@@ -24,4 +24,15 @@ public interface TrackingService {
      * cached longer since their status is terminal.
      */
     ApiResponse<TrackingResponseDTO> getLiveTracking(Integer orderNo);
+
+    /**
+     * Sprint 50 Tier 1 finding #12 — evict a tracking number from the
+     * in-memory cache. Called by {@code WebhookServiceImpl.receive} after
+     * a verified carrier event mutates order state, so the next UI refresh
+     * re-fetches from the carrier instead of serving the stale "in transit"
+     * entry from cache for up to 24h.
+     *
+     * <p>No-op when the tracking number is null/blank or absent from cache.
+     */
+    void invalidate(String trackingNumber);
 }

@@ -65,6 +65,13 @@ public class TrackingServiceImpl implements TrackingService {
             .build();
 
     @Override
+    public void invalidate(String trackingNumber) {
+        if (StringUtils.hasText(trackingNumber)) {
+            cache.invalidate(trackingNumber);
+        }
+    }
+
+    @Override
     public ApiResponse<TrackingResponseDTO> getLiveTracking(Integer orderNo) {
         if (orderNo == null) {
             return failure(HttpStatus.BAD_REQUEST, "Order number is required.");

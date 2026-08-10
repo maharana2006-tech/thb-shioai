@@ -9,6 +9,7 @@ import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.service.carriers.CarrierConnector.TrackingWebhookEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -53,9 +54,12 @@ class WebhookServiceImplTest {
     private LabelPackageRepository labelPackageRepo;
     private WebhookProperties props;
     private CarrierConnector connector;
+    private TrackingService trackingService;
+    private ObjectProvider<TrackingService> trackingServiceProvider;
     private WebhookServiceImpl service;
 
     @BeforeEach
+    @SuppressWarnings("unchecked")
     void setUp() {
         carrierService = mock(CarrierService.class);
         eventRepo = mock(CarrierWebhookEventRepository.class);
@@ -63,9 +67,17 @@ class WebhookServiceImplTest {
         labelPackageRepo = mock(LabelPackageRepository.class);
         props = new WebhookProperties();
         connector = mock(CarrierConnector.class);
+        // Sprint 50 Tier 1 finding #12 — WebhookServiceImpl now invalidates
+        // the tracking cache after a verified state mutation. Wired via an
+        // ObjectProvider so tests can supply a mock TrackingService (or an
+        // empty provider) without spinning up a real cache.
+        trackingService = mock(TrackingService.class);
+        trackingServiceProvider = mock(ObjectProvider.class);
+        when(trackingServiceProvider.getIfAvailable()).thenReturn(trackingService);
 
         service = new WebhookServiceImpl(
-                carrierService, eventRepo, trackingRepo, props, labelPackageRepo);
+                carrierService, eventRepo, trackingRepo, props, labelPackageRepo,
+                trackingServiceProvider);
 
         when(carrierService.getCarrierConnector(anyString())).thenReturn(connector);
         when(eventRepo.save(any(CarrierWebhookEvent.class)))
@@ -131,6 +143,39 @@ class WebhookServiceImplTest {
         assertFalse(Boolean.TRUE.equals(result.getRejected()));
         assertTrue(Boolean.TRUE.equals(result.getVerified()));
         verify(trackingRepo, times(1)).save(any());
+    }
+
+    /* -------- Sprint 50 Tier 1 finding #12 — cache invalidation -------- */
+
+    @Test
+    void verifiedEventInvalidatesTrackingCache() {
+        // Prior bug: a "delivered" webhook updated the DB but the in-memory
+        // tracking cache still served the stale "in transit" entry for up to
+        // 24h. Fix: WebhookServiceImpl calls TrackingService.invalidate() on
+        // the event's tracking number after mutation, so the next
+        // getLiveTracking re-fetches from the carrier.
+        props.getSecrets().setUps("shared-secret");
+        when(connector.verifyWebhookSignature(anyString(), any(), anyString())).thenReturn(true);
+        TrackingWebhookEvent evt = sampleEvent();
+        when(connector.parseWebhookEvent(anyString(), any())).thenReturn(evt);
+        when(trackingRepo.findByTrackingNumberIgnoreCase(anyString()))
+                .thenReturn(Optional.of(new com.multiship.backend.model.OrderTracking()));
+
+        service.receive("UPS", "raw-body", Map.of());
+
+        verify(trackingService, times(1)).invalidate(evt.trackingNumber());
+    }
+
+    @Test
+    void unsignedOptInDoesNotInvalidateCache() {
+        // Unsigned opt-in is audit-only — no state change, no cache eviction.
+        // Guarantees a hostile actor with no HMAC can't blast the cache empty.
+        props.getUnsigned().setUps(true);
+        when(connector.parseWebhookEvent(anyString(), any())).thenReturn(sampleEvent());
+
+        service.receive("UPS", "raw-body", Map.of());
+
+        verify(trackingService, never()).invalidate(anyString());
     }
 
     @Test

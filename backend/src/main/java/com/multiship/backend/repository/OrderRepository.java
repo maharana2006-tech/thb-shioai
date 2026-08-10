@@ -224,12 +224,17 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             AND UPPER(TRIM(COALESCE(r.carrier_code,''))) = """ + ORDER_CARRIER_SQL + ")";
 
     /**
-     * Auto-resolves without a prompt: exactly ONE of the client's accounts on
-     * the carrier, or NONE but a platform account covers it (used in the
-     * background). Only 2+ client accounts require the shipper to choose.
+     * Auto-resolves without a prompt: the client has ZERO accounts on the
+     * carrier but a platform (house) account covers it. Every other case
+     * where the client has any of their own accounts on the carrier — even
+     * exactly one — now requires the shipper to choose which one to bill
+     * (Sprint 50 Tier 1 finding #19 removed the 1-account silent auto-pick
+     * so the "always ask" invariant on {@link
+     * com.multiship.backend.service.CarrierServiceImpl#resolveAccountForOrderWithDetails}
+     * holds uniformly).
      */
-    String CLIENT_AUTO_ACCOUNT_SQL = "((" + CLIENT_CARRIER_ACCOUNT_COUNT_SQL + " = 1) OR ("
-            + CLIENT_CARRIER_ACCOUNT_COUNT_SQL + " = 0 AND " + PLATFORM_CARRIER_ACCOUNT_SQL + "))";
+    String CLIENT_AUTO_ACCOUNT_SQL = "(" + CLIENT_CARRIER_ACCOUNT_COUNT_SQL + " = 0 AND "
+            + PLATFORM_CARRIER_ACCOUNT_SQL + ")";
 
     String RESOLUTION_READY_SQL = "(" + OCD_COMPLETE_SQL
             + " OR (" + OCD_ANY_SQL + " AND " + BOOK_MATCH_SQL + ")"

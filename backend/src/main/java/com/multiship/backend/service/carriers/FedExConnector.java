@@ -1220,6 +1220,14 @@ public class FedExConnector implements CarrierConnector {
      * the closed shipments, and a base64 close-out PDF.
      *
      * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED.
+     *
+     * <p>Sprint 50 Tier 1 (finding #10) — identical bug shape to the
+     * {@link #voidShipment} placeholder Sprint 49 Tier 2 fixed: the
+     * request body used to send the literal {@code "ACCOUNT"} as the
+     * shipper account number. FedEx rejects that with a validation error,
+     * so every real close-out silently failed. Now sourced from the caller's
+     * {@link CloseOutRequest#accountNumber()}; a blank value short-circuits
+     * to ERROR with a machine-readable reason, mirroring voidShipment.
      */
     @Override
     public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken, String environment) {
@@ -1233,9 +1241,18 @@ public class FedExConnector implements CarrierConnector {
             return new CloseOutResult("FEDEX", null, null, null, 0, "ERROR",
                     "FedEx close-out requires at least one tracking number.", null);
         }
+        // Sprint 50 Tier 1 (finding #10) — FedEx rejects a placeholder account
+        // number on end-of-day. The caller (ManifestServiceImpl) resolves the
+        // shipper account and passes it through CloseOutRequest.accountNumber().
+        String accountNumber = request.accountNumber();
+        if (!StringUtils.hasText(accountNumber)) {
+            return new CloseOutResult("FEDEX", null, null, null, tracking.size(), "ERROR",
+                    "FedEx close-out needs the shipper account number that generated the labels; none was passed.",
+                    null);
+        }
         try {
             java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
-            body.put("accountNumber", java.util.Map.of("value", "ACCOUNT"));
+            body.put("accountNumber", java.util.Map.of("value", accountNumber));
             body.put("carrierCode", "FDXG");
 
             String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()

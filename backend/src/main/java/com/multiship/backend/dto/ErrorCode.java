@@ -106,6 +106,38 @@ public enum ErrorCode {
     POLICY_FIXED_SERVICE_REQUIRED,
     /** Markup value must be non-negative; currency must be 3 letters. */
     MARKUP_INVALID,
+    /**
+     * Sprint 50 Tier 1 — the client has no ClientBillingMarkup row and the
+     * caller reached the label write path. Fail loud instead of silently
+     * shipping at 0% margin. An admin sets a per-client markup on the
+     * Clients page.
+     */
+    MARKUP_REQUIRED_FOR_CLIENT,
+
+    // ===== Sprint 50 Tier 1 — no silent fallbacks =====
+    /**
+     * The client's carrier credentials failed at the carrier and the
+     * caller did not opt into the platform (house) account. The old
+     * behaviour silently billed the platform; the new one refuses so the
+     * shipper knows their credentials are broken.
+     */
+    CLIENT_CARRIER_AUTH_FAILED,
+    /**
+     * A shipment/rate request omitted the weight unit. The old behaviour
+     * silently defaulted to LB — a KG shipment would then post as LB
+     * (label under-declares by ~2.2×). Callers must send the unit
+     * explicitly (or, when Sprint 50 Tier 2 lands, Client.defaultWeightUnit
+     * fills it in from the tenant record).
+     */
+    UNIT_REQUIRED,
+    /**
+     * A shipment/rate request omitted the currency for declared value.
+     * The old behaviour silently defaulted to USD — an EUR shipment
+     * would then post as USD (customs risk). Callers must send the
+     * currency explicitly (or Client.defaultCurrency fills it in from
+     * the tenant record once Sprint 50 Tier 2 lands).
+     */
+    CURRENCY_REQUIRED,
 
     // ===== Order intake code translation (Phase 5) =====
     /** ERP shipvia code has no alias for this client. */

@@ -54,6 +54,13 @@ public class WebhookServiceImpl implements WebhookService {
     private final OrderTrackingRepository orderTrackingRepository;
     private final WebhookProperties webhookProperties;
     private final com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
+    /**
+     * Sprint 50 Tier 1 finding #12 — evict the tracking cache after a
+     * verified state mutation so the UI stops serving the stale "in transit"
+     * entry. Optional so tests that spin up a partial WebhookServiceImpl
+     * without a tracking cache still work.
+     */
+    private final org.springframework.beans.factory.ObjectProvider<TrackingService> trackingServiceProvider;
 
     @Override
     public CarrierWebhookEvent receive(String carrierCode, String rawPayload,
@@ -161,6 +168,13 @@ public class WebhookServiceImpl implements WebhookService {
                 }
                 t.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
                 orderTrackingRepository.save(t);
+            }
+            // Sprint 50 Tier 1 finding #12 — evict the tracking cache so the
+            // next /orders/{id}/tracking/live re-fetches the fresh state from
+            // the carrier instead of serving the stale entry for up to 24h.
+            TrackingService trackingService = trackingServiceProvider.getIfAvailable();
+            if (trackingService != null) {
+                trackingService.invalidate(eventTracking);
             }
         }
 

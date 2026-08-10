@@ -223,11 +223,32 @@ public class ExternalApiService {
 
         ExternalParcel p = req.getParcel();
         manual.setWeight(p.getWeight());
-        manual.setWeightUnit(firstNonBlank(p.getWeightUnit(), "lb"));
+        // Sprint 50 Tier 1 finding #16 — no more silent LB default. A KG
+        // shipment posted with a missing unit used to label as LB (under-
+        // declaring by ~2.2×). Require it explicitly. When Sprint 50 Tier 2
+        // lands Client.defaultWeightUnit, that can fill in first before this
+        // check fires. TODO: replace with Client.defaultWeightUnit fallback.
+        if (p.getWeight() != null && !StringUtils.hasText(p.getWeightUnit())) {
+            throw new ExternalApiException(422, ErrorCode.UNIT_REQUIRED,
+                    "parcel.weight was supplied without parcel.weightUnit. "
+                            + "Send 'kg' or 'lb' explicitly — silent defaulting to 'lb' is no longer allowed.");
+        }
+        manual.setWeightUnit(p.getWeightUnit());
         manual.setLength(p.getLength());
         manual.setWidth(p.getWidth());
         manual.setHeight(p.getHeight());
         manual.setDimUnit(p.getDimUnit());
+        // Sprint 50 Tier 1 finding #16 — declared value without currency is
+        // a customs misdeclaration risk (EUR declared as USD). Require an
+        // explicit currency for any non-zero declared value.
+        // TODO: replace with Client.defaultCurrency fallback once Sprint 50 Tier 2 lands.
+        if (req.getDeclaredValue() != null
+                && req.getDeclaredValue().signum() > 0
+                && !StringUtils.hasText(req.getCurrency())) {
+            throw new ExternalApiException(422, ErrorCode.CURRENCY_REQUIRED,
+                    "declaredValue was supplied without currency. Send a 3-letter ISO code "
+                            + "(e.g. 'USD', 'EUR', 'GBP') — silent defaulting to 'USD' is no longer allowed.");
+        }
         // packagingCode: prefer the Phase-5c client alias when configured; else
         // fall back to matching by preset name / carrier package code.
         Long resolvedPresetId = null;
@@ -396,6 +417,9 @@ public class ExternalApiService {
                         .serviceName(s.getName())
                         .scope(s.getScope())
                         .estimatedAmount(null)
+                        // TODO: Sprint 50 Tier 2 — source from Client.defaultCurrency instead of hardcode.
+                        // Safe today because estimatedAmount is null (pricing not enabled here);
+                        // no real currency is riding on this value.
                         .currency("USD")
                         .allowed(noAllowlist || allowed.contains(s.getId()))
                         .build())
