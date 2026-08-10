@@ -147,6 +147,12 @@ public enum ErrorCode {
      * Tier 1 finding #5 wires the consumers.
      */
     CARRIER_RATE_LIMITED,
+    /**
+     * We rate-limited the caller (per-API-key on the public v2 API).
+     * Response carries {@code Retry-After} seconds header + the same
+     * value in the message. Sprint 50 Tier 1 finding #15.
+     */
+    API_KEY_RATE_LIMITED,
 
     // ===== Order intake code translation (Phase 5) =====
     /** ERP shipvia code has no alias for this client. */
