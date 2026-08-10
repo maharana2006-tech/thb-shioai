@@ -138,6 +138,15 @@ public enum ErrorCode {
      * the tenant record once Sprint 50 Tier 2 lands).
      */
     CURRENCY_REQUIRED,
+    /**
+     * The carrier returned HTTP 429 (rate-limited). The mapper on
+     * CarrierExceptionMapper populates {@code retryAfterSeconds} on
+     * {@link com.multiship.backend.service.carriers.exceptions.CarrierRateLimitException};
+     * consumers surface this errorcode + the seconds in the response body
+     * so ops sees the pressure. Sprint 49 wired the exception; Sprint 50
+     * Tier 1 finding #5 wires the consumers.
+     */
+    CARRIER_RATE_LIMITED,
 
     // ===== Order intake code translation (Phase 5) =====
     /** ERP shipvia code has no alias for this client. */

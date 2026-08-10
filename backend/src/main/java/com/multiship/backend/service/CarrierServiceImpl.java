@@ -30,6 +30,7 @@ import com.multiship.backend.repository.ShipViaRepository;
 import com.multiship.backend.repository.UserRepository;
 import com.multiship.backend.model.Warehouse;
 import com.multiship.backend.service.carriers.CarrierConnector;
+import com.multiship.backend.service.carriers.exceptions.CarrierRateLimitException;
 import com.multiship.backend.service.resolution.ShipmentResolutionException;
 import com.multiship.backend.service.resolution.ShipmentResolutionService;
 import lombok.RequiredArgsConstructor;
@@ -470,6 +471,11 @@ public class CarrierServiceImpl implements CarrierService {
         try {
             connector = getCarrierConnector(resolution.carrierCode());
             shipmentResult = attemptShipment(order, resolution, connector);
+        } catch (CarrierRateLimitException rle) {
+            // Sprint 50 Tier 1 finding #5 — 429 from the carrier. Do NOT retry
+            // synchronously on the Tomcat thread; surface Retry-After to the
+            // caller so ops (or the calling job) can back off intelligently.
+            return rateLimitedResponse(order, resolution.carrierCode(), rle);
         } catch (Exception primaryEx) {
             // Client-owned account failed and the shipper did not opt into
             // the platform account → return CLIENT_CARRIER_AUTH_FAILED so the
@@ -509,6 +515,9 @@ public class CarrierServiceImpl implements CarrierService {
                 used = platform;
                 log.info("Order {}: account {} failed ({}); fell back to platform account {} (useHouseAccount={}).",
                         orderNo, resolution.accountNumber(), primaryEx.getMessage(), platform.accountNumber(), useHouseAccount);
+            } catch (CarrierRateLimitException rle) {
+                // Sprint 50 Tier 1 finding #5 — 429 on the platform-fallback path too.
+                return rateLimitedResponse(order, platform.carrierCode(), rle);
             } catch (Exception fallbackEx) {
                 String msg = "Account " + resolution.accountNumber() + " failed (" + primaryEx.getMessage()
                         + ") and the platform account also failed (" + fallbackEx.getMessage() + ").";
@@ -941,6 +950,16 @@ public class CarrierServiceImpl implements CarrierService {
                                 fAccount.getAccountNumber()),
                         t -> fConnector.createShipment(sub, t, fEnv)));
             }
+        } catch (CarrierRateLimitException rle) {
+            // Sprint 50 Tier 1 finding #5 — 429 on the manual-label path.
+            // No order row yet at this point; return an ApiResponse.failure so
+            // the shipper sees the Retry-After hint and doesn't hammer.
+            int retry = rle.getRetryAfterSeconds() != null ? rle.getRetryAfterSeconds() : 0;
+            log.warn("Manual shipment: carrier {} rate-limited (retry-after={}s): {}",
+                    carrier, retry, rle.getMessage());
+            String msg = "Carrier " + carrier + " is rate-limiting requests"
+                    + (retry > 0 ? " — retry after " + retry + "s." : ".");
+            return failure(HttpStatus.TOO_MANY_REQUESTS, ErrorCode.CARRIER_RATE_LIMITED, msg);
         } catch (Exception ex) {
             log.warn("Manual shipment failed at carrier {}: {}", carrier, ex.getMessage());
             // Persist the failed attempt as an ERROR order so it's visible in
@@ -1330,6 +1349,30 @@ public class CarrierServiceImpl implements CarrierService {
                         firstNonBlank(a.getEnvironment(), carrierProperties.getDefaultEnvironment()),
                         a.getAccountName()))
                 .orElse(null);
+    }
+
+    /**
+     * Sprint 50 Tier 1 finding #5 — build the ApiResponse for a carrier 429.
+     * Marks the order tracking row ERROR, logs at WARN, and returns HTTP 429
+     * with {@link ErrorCode#CARRIER_RATE_LIMITED} + the retry-after seconds
+     * in the message so the caller can decide the back-off cadence. Never
+     * sleeps or retries synchronously.
+     */
+    private ApiResponse<LabelGenerationResponse> rateLimitedResponse(Order order, String carrierCode,
+                                                                      CarrierRateLimitException rle) {
+        int retry = rle.getRetryAfterSeconds() != null ? rle.getRetryAfterSeconds() : 0;
+        String msg = "Carrier " + carrierCode + " is rate-limiting requests"
+                + (retry > 0 ? " — retry after " + retry + "s." : ".");
+        log.warn("Order {}: carrier {} rate-limited (retry-after={}s): {}",
+                order.getOrderNo(), carrierCode, retry, rle.getMessage());
+        markTrackingError(order, msg);
+        LabelGenerationResponse body = LabelGenerationResponse.builder()
+                .orderNo(order.getOrderNo() == null ? null : order.getOrderNo().longValue())
+                .carrierCode(carrierCode)
+                .status("ERROR")
+                .message(msg)
+                .build();
+        return failure(HttpStatus.TOO_MANY_REQUESTS, ErrorCode.CARRIER_RATE_LIMITED, msg, body);
     }
 
     /** Marks an order's tracking row ERROR with the failure reason (retryable from the Labels page). */

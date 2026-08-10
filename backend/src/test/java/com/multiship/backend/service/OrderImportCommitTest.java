@@ -127,17 +127,29 @@ class OrderImportCommitTest {
 
     @Test
     void commitPerRowFailureDoesNotKillTheJob() {
-        when(carrierService.generateManualLabel(any(), any()))
-                .thenReturn(ok(1001L, "TN-1"),      // Row 1 OK
-                            failed("carrier down"), // Row 2 fails
-                            ok(1003L, "TN-3"));     // Row 3 OK
+        // Sprint 50 Tier 1 finding #8 — commit loop now runs on
+        // fanOutExecutor, so Mockito's consecutive .thenReturn ordering
+        // no longer maps to input row order. Route the response by the
+        // request's recipient name (which mirrors the input row) so this
+        // test remains deterministic under any thread scheduling.
+        when(carrierService.generateManualLabel(any(), any())).thenAnswer(inv -> {
+            ManualShipmentRequest req = inv.getArgument(0);
+            String name = req.getRecipient() != null ? req.getRecipient().getName() : "";
+            return switch (name) {
+                case "Jane 2" -> failed("carrier down");
+                case "Jane 1" -> ok(1001L, "TN-1");
+                case "Jane 3" -> ok(1003L, "TN-3");
+                default -> failed("unexpected row");
+            };
+        });
 
         ApiResponse<OrderImportPreviewDTO> resp = service.commit(
                 List.of(validRow(1), validRow(2), validRow(3)), "alice");
 
         assertEquals(3, resp.getData().getValidRows(),
                 "All 3 rows validated OK on the server");
-        // Two succeeded, one failed.
+        // Input row order is preserved (invokeAll returns futures in
+        // submission order), so per-row outcomes still line up 1:1.
         List<OrderImportRowDTO> rowsOut = resp.getData().getRows();
         assertEquals("GENERATED", rowsOut.get(0).getGeneratedStatus());
         assertEquals("FAILED", rowsOut.get(1).getGeneratedStatus());

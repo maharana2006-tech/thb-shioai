@@ -39,6 +39,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * Sprint 40 impl. Format detection by filename extension:
@@ -138,6 +142,22 @@ public class OrderImportServiceImpl implements OrderImportService {
             return java.util.List.of();
         }
     }
+
+    /**
+     * Sprint 50 Tier 1 finding #8 — fan-out executor for the commit loop.
+     * Pre-fix the loop processed groups serially on the request thread; a
+     * 500-row XLSX took 40-120 min because each carrier call is 5-15s.
+     * Mirrors {@link BulkLabelServiceImpl#fanOutExecutor} — bounded pool
+     * of daemon threads shared across every commit call. Concurrency cap
+     * matches BulkLabelServiceImpl's WORKER_CONCURRENCY convention.
+     */
+    private static final int IMPORT_COMMIT_CONCURRENCY = 4;
+    private final ExecutorService fanOutExecutor = Executors.newFixedThreadPool(
+            IMPORT_COMMIT_CONCURRENCY, r -> {
+                Thread t = new Thread(r, "order-import-commit");
+                t.setDaemon(true);
+                return t;
+            });
 
     @org.springframework.beans.factory.annotation.Autowired
     public OrderImportServiceImpl(CarrierService carrierService,
@@ -489,14 +509,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         // have introduced a new international row without customs data.
         validateInternationalItems(rows);
 
-        int valid = 0;
-        int invalid = 0;
-        int generated = 0;
-
         // Sprint 48 — group rows by orderRef so multi-row orders (one
         // shipment, N line-items) fold into a single label call. Rows
         // WITHOUT orderRef stay standalone (pre-Sprint-48 behaviour).
-        // Ordering is preserved so preview and commit rows line up 1:1.
+        // Ordering is preserved (LinkedHashMap) so preview and commit rows
+        // line up 1:1 in the output.
         // The first row of each group is the "leader" — its recipient +
         // shipment fields drive the request; subsequent rows contribute
         // only customs line-items.
@@ -508,66 +525,44 @@ public class OrderImportServiceImpl implements OrderImportService {
             groups.computeIfAbsent(key, k -> new ArrayList<>()).add(row);
         }
 
+        // Sprint 50 Tier 1 finding #8 — parallelize the commit loop across
+        // fanOutExecutor. Each group's work is isolated: it only mutates
+        // rows it owns, and generateManualLabel is already @Transactional
+        // per-call (Spring wraps each carrierService call in its own tx),
+        // so no per-thread JPA session leaks. invokeAll preserves task
+        // order → per-group outcomes come back in input row order, so the
+        // aggregate summary matches the pre-fix semantics.
+        int groupCount = groups.size();
+        log.warn("Order import commit ({}): fanning {} groups across {} worker(s).",
+                requestedBy, groupCount, IMPORT_COMMIT_CONCURRENCY);
+
+        List<Callable<GroupOutcome>> tasks = new ArrayList<>(groupCount);
         for (Map.Entry<String, List<OrderImportRowDTO>> entry : groups.entrySet()) {
             List<OrderImportRowDTO> group = entry.getValue();
-            OrderImportRowDTO leader = group.get(0);
-            // Re-validate the leader (has recipient + shipment fields);
-            // item-only rows don't need those, so skip their re-validate.
-            List<String> errors = validateRow(leader);
-            leader.setErrors(errors);
-            if (!errors.isEmpty()) {
-                // Whole group is invalid; count each row so the summary
-                // stays accurate.
-                invalid += group.size();
-                for (int i = 1; i < group.size(); i++) {
-                    group.get(i).setErrors(List.of("orderRef leader failed validation"));
-                }
-                continue;
-            }
-            valid += group.size();
-            if (carrierService == null) continue;
+            tasks.add(() -> processGroup(group, batchId));
+        }
 
-            try {
-                com.multiship.backend.dto.ManualShipmentRequest req = toManualShipmentRequest(group);
-                ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
-                        carrierService.generateManualLabel(req, null);
-                com.multiship.backend.dto.LabelGenerationResponse data =
-                        resp == null ? null : resp.getData();
-                if (resp != null && "success".equalsIgnoreCase(resp.getStatus()) && data != null
-                        && StringUtils.hasText(data.getTrackingNumber())) {
-                    // Stamp the whole group so operators see the label
-                    // outcome on every line-item row, not just the leader.
-                    Integer orderNo = data.getOrderNo() == null ? null : data.getOrderNo().intValue();
-                    for (OrderImportRowDTO gr : group) {
-                        gr.setGeneratedOrderNo(orderNo);
-                        gr.setGeneratedTrackingNumber(data.getTrackingNumber());
-                        gr.setGeneratedStatus("GENERATED");
-                        gr.setGeneratedMessage(data.getMessage());
-                        gr.setBatchId(batchId);
-                    }
-                    if (orderNo != null && batchId != null) {
-                        orderRepository.findByOrderNo(orderNo).ifPresent(order -> {
-                            order.setBatchId(batchId);
-                            orderRepository.save(order);
-                        });
-                    }
-                    generated++;
-                } else {
-                    String msg = resp == null ? "no response" : resp.getMessage();
-                    for (OrderImportRowDTO gr : group) {
-                        gr.setGeneratedStatus("FAILED");
-                        gr.setGeneratedMessage(msg);
-                    }
-                }
-            } catch (Exception ex) {
-                log.warn("Order import group (leader row {}) failed at label generation: {}",
-                        leader.getRowNumber(), ex.getMessage());
-                String msg = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
-                for (OrderImportRowDTO gr : group) {
-                    gr.setGeneratedStatus("FAILED");
-                    gr.setGeneratedMessage(msg);
-                }
+        int valid = 0;
+        int invalid = 0;
+        int generated = 0;
+        try {
+            List<Future<GroupOutcome>> futures = fanOutExecutor.invokeAll(tasks);
+            for (Future<GroupOutcome> f : futures) {
+                GroupOutcome outcome = f.get();
+                valid += outcome.valid;
+                invalid += outcome.invalid;
+                generated += outcome.generated;
             }
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            log.warn("Order import commit interrupted; partial results may be present.");
+        } catch (java.util.concurrent.ExecutionException ee) {
+            // invokeAll's Future.get only throws when a task itself threw an
+            // unchecked exception it didn't catch; processGroup catches every
+            // per-group failure and stamps the row, so this branch means a
+            // bug in the outer plumbing (e.g. an NPE in the aggregator). Log
+            // it and let the caller see a partial summary rather than 500.
+            log.warn("Order import commit worker crashed: {}", ee.getMessage(), ee);
         }
 
         log.info("Order import commit ({}): {} valid, {} invalid, {} labels generated",
@@ -1321,6 +1316,73 @@ public class OrderImportServiceImpl implements OrderImportService {
             }
         }
     }
+
+    /**
+     * Sprint 50 Tier 1 finding #8 — per-group commit worker. Runs on a
+     * fanOutExecutor thread. Mutates only rows in {@code group} + calls
+     * generateManualLabel (which is @Transactional on its own bean, so
+     * each row's persistence gets its own tx — safe under concurrent
+     * invocation). Catches every failure per-group so one bad row can't
+     * take down the whole batch.
+     */
+    private GroupOutcome processGroup(List<OrderImportRowDTO> group, Integer batchId) {
+        OrderImportRowDTO leader = group.get(0);
+        List<String> errors = validateRow(leader);
+        leader.setErrors(errors);
+        if (!errors.isEmpty()) {
+            for (int i = 1; i < group.size(); i++) {
+                group.get(i).setErrors(List.of("orderRef leader failed validation"));
+            }
+            return new GroupOutcome(0, group.size(), 0);
+        }
+        int valid = group.size();
+        if (carrierService == null) return new GroupOutcome(valid, 0, 0);
+
+        try {
+            com.multiship.backend.dto.ManualShipmentRequest req = toManualShipmentRequest(group);
+            ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
+                    carrierService.generateManualLabel(req, null);
+            com.multiship.backend.dto.LabelGenerationResponse data =
+                    resp == null ? null : resp.getData();
+            if (resp != null && "success".equalsIgnoreCase(resp.getStatus()) && data != null
+                    && StringUtils.hasText(data.getTrackingNumber())) {
+                Integer orderNo = data.getOrderNo() == null ? null : data.getOrderNo().intValue();
+                for (OrderImportRowDTO gr : group) {
+                    gr.setGeneratedOrderNo(orderNo);
+                    gr.setGeneratedTrackingNumber(data.getTrackingNumber());
+                    gr.setGeneratedStatus("GENERATED");
+                    gr.setGeneratedMessage(data.getMessage());
+                    gr.setBatchId(batchId);
+                }
+                if (orderNo != null && batchId != null && orderRepository != null) {
+                    orderRepository.findByOrderNo(orderNo).ifPresent(order -> {
+                        order.setBatchId(batchId);
+                        orderRepository.save(order);
+                    });
+                }
+                return new GroupOutcome(valid, 0, 1);
+            } else {
+                String msg = resp == null ? "no response" : resp.getMessage();
+                for (OrderImportRowDTO gr : group) {
+                    gr.setGeneratedStatus("FAILED");
+                    gr.setGeneratedMessage(msg);
+                }
+                return new GroupOutcome(valid, 0, 0);
+            }
+        } catch (Exception ex) {
+            log.warn("Order import group (leader row {}) failed at label generation: {}",
+                    leader.getRowNumber(), ex.getMessage());
+            String msg = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+            for (OrderImportRowDTO gr : group) {
+                gr.setGeneratedStatus("FAILED");
+                gr.setGeneratedMessage(msg);
+            }
+            return new GroupOutcome(valid, 0, 0);
+        }
+    }
+
+    /** Sprint 50 Tier 1 finding #8 — return shape for a per-group commit worker. */
+    private record GroupOutcome(int valid, int invalid, int generated) {}
 
     private static OrderImportPreviewDTO buildPreview(List<OrderImportRowDTO> rows) {
         int invalid = (int) rows.stream()
