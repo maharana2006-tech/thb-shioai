@@ -53,6 +53,29 @@ public class User {
     @Column(name = "client_code", length = 50)
     private String clientCode;
 
+    /**
+     * Sprint 50 Tier 0.5 PR D — login gate. Public-signup users start
+     * {@code false} and must consume the verification email. Invite-created
+     * users start {@code true} (invite acceptance IS the verification).
+     * Legacy rows are backfilled to {@code true} so existing operators
+     * aren't locked out on deploy.
+     */
+    @Column(name = "email_verified", nullable = false)
+    @Default
+    private Boolean emailVerified = true;
+
+    /**
+     * Sprint 50 Tier 0.5 PR D — one-shot token for the "click the link
+     * in your email" step. Null when the account is verified. The token
+     * is opaque high-entropy; the whole row expires with the user's
+     * email_verify_expires_at (24h).
+     */
+    @Column(name = "email_verify_token", length = 100)
+    private String emailVerifyToken;
+
+    @Column(name = "email_verify_expires_at")
+    private LocalDateTime emailVerifyExpiresAt;
+
     // ===== Carrier Integration Fields =====
     @Column(name = "preferred_carrier", length = 50)
     private String preferredCarrier;
