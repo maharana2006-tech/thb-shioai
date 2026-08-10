@@ -478,6 +478,16 @@ public class ClientServiceImpl implements ClientService {
         client.setEmail(trimOrNull(request.getEmail()));
         client.setPhone(trimOrNull(request.getPhone()));
 
+        // Sprint 50 Tier 1 finding #4 — persist per-tenant defaults.
+        // Every value is uppercased (currencies, unit codes, country codes
+        // are all upper by convention) and length-normalised so the CHECK
+        // constraints in V6 don't reject stray whitespace.
+        client.setDefaultCurrency(trimUpperOrNull(request.getDefaultCurrency()));
+        client.setDefaultWeightUnit(trimUpperOrNull(request.getDefaultWeightUnit()));
+        client.setDefaultDimUnit(trimUpperOrNull(request.getDefaultDimUnit()));
+        client.setTimezone(trimOrNull(request.getTimezone()));  // tz identifiers preserve case
+        client.setDefaultOriginCountry(trimUpperOrNull(request.getDefaultOriginCountry()));
+
         Address shipFrom = toAddress(request.getShipFrom());
         client.setShipFrom(shipFrom);
 
@@ -486,6 +496,13 @@ public class ClientServiceImpl implements ClientService {
         // Store the distinct return address only when the client keeps one;
         // otherwise clear it so it visibly mirrors ship-from.
         client.setReturnAddress(sameAsShipFrom ? null : toAddress(request.getReturnAddress()));
+    }
+
+    /** Sprint 50 Tier 1 finding #4 — trim + uppercase a code field, mapping blank to null. */
+    private static String trimUpperOrNull(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed.toUpperCase(Locale.ROOT);
     }
 
     /** Trim an address DTO into an entity Address; uppercase the country (defaults US). */
@@ -535,6 +552,12 @@ public class ClientServiceImpl implements ClientService {
                 .email(client.getEmail())
                 .phone(client.getPhone())
                 .status(client.getStatus())
+                // Sprint 50 Tier 1 finding #4 — per-tenant defaults.
+                .defaultCurrency(client.getDefaultCurrency())
+                .defaultWeightUnit(client.getDefaultWeightUnit())
+                .defaultDimUnit(client.getDefaultDimUnit())
+                .timezone(client.getTimezone())
+                .defaultOriginCountry(client.getDefaultOriginCountry())
                 .shipFrom(toAddressDTO(client.getShipFrom()))
                 .returnAddress(toAddressDTO(
                         Boolean.FALSE.equals(client.getReturnSameAsShipFrom()) ? client.getReturnAddress() : null))

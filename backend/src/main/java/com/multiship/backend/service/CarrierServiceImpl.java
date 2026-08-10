@@ -1175,11 +1175,15 @@ public class CarrierServiceImpl implements CarrierService {
                         new com.multiship.backend.dto.OrderCustomsUpsertRequest();
                 customsReq.setIncoterms(req.getIncoterms());
                 customsReq.setReasonForExport(req.getReasonForExport());
-                // TODO: Sprint 50 Tier 2 finding #16 — source from Client.defaultCurrency
-                // instead of hardcoded USD. The API boundary in ExternalApiService already
-                // fails loud on missing currency + non-zero declared value; this internal
-                // manual-order path still defaults to USD for now.
-                customsReq.setCurrency(firstNonBlank(req.getCurrency(), "USD"));
+                // Sprint 50 Tier 1 finding #4 — request > Client.defaultCurrency > USD.
+                String currencyForCustoms = firstNonBlank(
+                        req.getCurrency(),
+                        hasClient
+                                ? clientRepository.findByClientCodeIgnoreCase(resolvedClient)
+                                        .map(com.multiship.backend.model.Client::getDefaultCurrency).orElse(null)
+                                : null,
+                        "USD");
+                customsReq.setCurrency(currencyForCustoms);
                 customsReq.setItems(lines);
                 try {
                     customsService.upsertCustoms(String.valueOf(orderNo), customsReq);
@@ -1195,11 +1199,17 @@ public class CarrierServiceImpl implements CarrierService {
         // is 0% PERCENT, cutoff is false, warehouseCode is null.
         com.multiship.backend.service.resolution.MarkupApplied markup;
         try {
-            // TODO: Sprint 50 Tier 2 finding #16 — source from Client.defaultCurrency.
+            // Sprint 50 Tier 1 finding #4 — request > Client.defaultCurrency > USD.
             markup = resolutionService.applyMarkup(
                     hasClient ? resolvedClient : "",
                     result.shippingCost(),
-                    firstNonBlank(req.getCurrency(), "USD"));
+                    firstNonBlank(
+                            req.getCurrency(),
+                            hasClient
+                                    ? clientRepository.findByClientCodeIgnoreCase(resolvedClient)
+                                            .map(com.multiship.backend.model.Client::getDefaultCurrency).orElse(null)
+                                    : null,
+                            "USD"));
         } catch (ShipmentResolutionException e) {
             return toResolutionFailure(e);
         }
@@ -1825,12 +1835,26 @@ public class CarrierServiceImpl implements CarrierService {
 
         // Weight/dim unit: from the customs declaration when available, else
         // LB/IN (the historical default the connectors assumed).
-        // TODO: Sprint 50 Tier 2 finding #16 — source from Client.defaultWeightUnit
-        // when customs.weightUnit is absent, instead of hardcoded LB. The API
-        // boundary in ExternalApiService already fails loud when a caller supplies
-        // weight without a unit; this internal path defaults for legacy domestic flows.
-        String weightUnit = customs != null && customs.getWeightUnit() != null ? customs.getWeightUnit() : "LB";
-        String dimUnit = "IN"; // Package presets standardize on inches; a per-preset unit lands with the address model rework.
+        // Sprint 50 Tier 1 finding #4 — source resolution order:
+        //   1. customs.weightUnit (explicit shipment declaration)
+        //   2. Client.defaultWeightUnit (tenant preference)
+        //   3. LB (platform-wide historical default; retained for legacy domestic).
+        String tenantDefaultWeightUnit = null;
+        String tenantDefaultDimUnit = null;
+        String tenantCodeForDefaults = order.getTenantId() != null && !order.getTenantId().isBlank()
+                ? order.getTenantId() : order.getCustNo();
+        if (tenantCodeForDefaults != null && !tenantCodeForDefaults.isBlank()) {
+            var clientRow = clientRepository.findByClientCodeIgnoreCase(tenantCodeForDefaults.trim()).orElse(null);
+            if (clientRow != null) {
+                tenantDefaultWeightUnit = clientRow.getDefaultWeightUnit();
+                tenantDefaultDimUnit = clientRow.getDefaultDimUnit();
+            }
+        }
+        String weightUnit = firstNonBlank(
+                customs != null ? customs.getWeightUnit() : null,
+                tenantDefaultWeightUnit,
+                "LB");
+        String dimUnit = firstNonBlank(tenantDefaultDimUnit, "IN");
 
         return ShipmentRequestDTO.builder()
                 .carrierCode(connector.getCarrierCode())

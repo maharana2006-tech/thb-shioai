@@ -20,6 +20,15 @@ public class ClientDTO {
     private String phone;
     private String status;
 
+    // ===== Sprint 50 Tier 1 finding #4 — first-class per-tenant defaults =====
+    // Nullable; UI shows blank when unset. Consumer code falls back to
+    // platform hardcode on null.
+    private String defaultCurrency;
+    private String defaultWeightUnit;
+    private String defaultDimUnit;
+    private String timezone;
+    private String defaultOriginCountry;
+
     /** Origin address printed in the label FROM block. */
     private AddressDTO shipFrom;
     /** Where returns go; mirrors shipFrom when returnSameAsShipFrom. */

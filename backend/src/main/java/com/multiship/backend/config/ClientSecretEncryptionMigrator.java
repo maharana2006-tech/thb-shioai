@@ -2,8 +2,10 @@ package com.multiship.backend.config;
 
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.CarrierConfig;
+import com.multiship.backend.model.User;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.CarrierConfigRepository;
+import com.multiship.backend.repository.UserRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
@@ -39,6 +41,12 @@ public class ClientSecretEncryptionMigrator implements CommandLineRunner {
     private final CryptoService crypto;
     private final CarrierConfigRepository carrierConfigRepository;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
+    /**
+     * Sprint 50 Tier 1 finding #2 — the User table has a parallel
+     * carrier_client_secret column that Sprint 49 Tier 1 missed. Backfill
+     * it here so a single migrator handles every plaintext secret in the DB.
+     */
+    private final UserRepository userRepository;
 
     @PersistenceContext
     private EntityManager em;
@@ -51,11 +59,12 @@ public class ClientSecretEncryptionMigrator implements CommandLineRunner {
         }
         int carrierConfigCount = migrateCarrierConfig();
         int accountRefCount = migrateCarrierAccountRef();
-        if (carrierConfigCount == 0 && accountRefCount == 0) {
+        int userCount = migrateUser();
+        if (carrierConfigCount == 0 && accountRefCount == 0 && userCount == 0) {
             log.info("ClientSecretEncryptionMigrator: nothing to migrate — all client_secret values already encrypted.");
         } else {
-            log.info("ClientSecretEncryptionMigrator: encrypted {} carrier_config + {} carrier_account_ref rows.",
-                    carrierConfigCount, accountRefCount);
+            log.info("ClientSecretEncryptionMigrator: encrypted {} carrier_config + {} carrier_account_ref + {} users rows.",
+                    carrierConfigCount, accountRefCount, userCount);
         }
     }
 
@@ -87,6 +96,27 @@ public class ClientSecretEncryptionMigrator implements CommandLineRunner {
             CarrierAccountRef row = carrierAccountRefRepository.findById(id).orElse(null);
             if (row == null) continue;
             carrierAccountRefRepository.save(row);
+        }
+        return ids.size();
+    }
+
+    /**
+     * Sprint 50 Tier 1 finding #2 — backfill User.carrier_client_secret.
+     * Same pattern: native query finds plaintext rows, save() triggers
+     * the @Convert(EncryptedStringConverter) on the entity attribute.
+     */
+    @Transactional
+    protected int migrateUser() {
+        List<Long> ids = em.createNativeQuery(
+                        "SELECT id FROM users WHERE carrier_client_secret IS NOT NULL "
+                                + "AND carrier_client_secret <> '' AND carrier_client_secret NOT LIKE 'enc:v1:%'")
+                .getResultList().stream()
+                .map(o -> ((Number) o).longValue())
+                .toList();
+        for (Long id : ids) {
+            User row = userRepository.findById(id).orElse(null);
+            if (row == null) continue;
+            userRepository.save(row);
         }
         return ids.size();
     }

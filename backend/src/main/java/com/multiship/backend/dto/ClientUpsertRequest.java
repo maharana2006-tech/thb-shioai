@@ -31,6 +31,26 @@ public class ClientUpsertRequest {
     @Size(max = 50)
     private String phone;
 
+    // ===== Sprint 50 Tier 1 finding #4 — per-tenant defaults =====
+    // All optional (nullable); the client admin form sets them post-create.
+    // Length caps mirror the V6 CHECK constraints on the DB side.
+    @Size(min = 3, max = 3, message = "defaultCurrency must be a 3-letter ISO 4217 code")
+    @Pattern(regexp = "[A-Za-z]{3}|", message = "defaultCurrency must be alphabetic")
+    private String defaultCurrency;
+
+    @Size(max = 4)
+    private String defaultWeightUnit;
+
+    @Size(max = 4)
+    private String defaultDimUnit;
+
+    @Size(max = 50)
+    private String timezone;
+
+    @Size(min = 2, max = 2, message = "defaultOriginCountry must be a 2-letter ISO-3166 code")
+    @Pattern(regexp = "[A-Za-z]{2}|", message = "defaultOriginCountry must be alphabetic")
+    private String defaultOriginCountry;
+
     @Valid
     private AddressDTO shipFrom;
 

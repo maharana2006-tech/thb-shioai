@@ -96,7 +96,14 @@ public class User {
     @Column(name = "carrier_client_id", length = 255)
     private String carrierClientId;
 
-    @Column(name = "carrier_client_secret", length = 255)
+    // Sprint 50 Tier 1 finding #2 — encrypted at rest via
+    // EncryptedStringConverter, matching Sprint 49 Tier 1's treatment of
+    // CarrierAccountRef.client_secret + CarrierConfig.client_secret.
+    // Column length bumped to 512 to fit the enc:v1: sentinel + AES-GCM
+    // base64 ciphertext (nonce+tag inline). ClientSecretEncryptionMigrator
+    // backfills existing plaintext rows on startup.
+    @Column(name = "carrier_client_secret", length = 512)
+    @jakarta.persistence.Convert(converter = com.multiship.backend.config.EncryptedStringConverter.class)
     private String carrierClientSecret;
 
     @Column(name = "carrier_account_number", length = 100)
