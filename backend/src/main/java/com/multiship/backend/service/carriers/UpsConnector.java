@@ -38,6 +38,16 @@ public class UpsConnector implements CarrierConnector {
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
 
+    /** Per-thread reason the last getAccessToken fell back — read by verify. */
+    private static final ThreadLocal<String> LAST_AUTH_DETAIL = new ThreadLocal<>();
+
+    @Override
+    public String consumeAuthFailureDetail() {
+        String detail = LAST_AUTH_DETAIL.get();
+        LAST_AUTH_DETAIL.remove();
+        return detail;
+    }
+
     @Override
     public String getCarrierCode() {
         return CARRIER_CODE;
@@ -239,19 +249,54 @@ public class UpsConnector implements CarrierConnector {
             String accessToken = jsonNode.path("access_token").asText(null);
             if (!StringUtils.hasText(accessToken)) {
                 log.warn("UPS token endpoint returned no access_token; response: {}", response);
+                LAST_AUTH_DETAIL.set("UPS returned no access token.");
                 return buildFallbackToken(clientId, clientSecret);
             }
+            LAST_AUTH_DETAIL.remove();
             return accessToken;
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             // UPS puts the reason ({"response":{"errors":[{"code":"...","message":"..."}]}})
-            // in the response body. Surface it in the log so verify failures are actionable.
-            log.warn("UPS token request rejected (HTTP {}): {} — using local fallback token.",
-                    ex.getStatusCode().value(), ex.getResponseBodyAsString());
+            // in the response body. Surface it in the log AND to the operator so
+            // verify failures are actionable (invalid ClientId vs env mismatch).
+            String body = ex.getResponseBodyAsString();
+            int status = ex.getStatusCode().value();
+            log.warn("UPS token request rejected (HTTP {}): {} — using local fallback token.", status, body);
+            LAST_AUTH_DETAIL.set(describeUpsAuthError(status, body, isSandbox(environment)));
             return buildFallbackToken(clientId, clientSecret);
         } catch (Exception ex) {
             log.warn("UPS token request failed; using local fallback token. Reason: {}", ex.getMessage());
+            LAST_AUTH_DETAIL.set("could not reach the UPS OAuth endpoint (" + ex.getMessage() + ")");
             return buildFallbackToken(clientId, clientSecret);
         }
+    }
+
+    /**
+     * Turn a UPS OAuth error body into an operator-facing sentence. UPS 10401
+     * "ClientId is Invalid" almost always means the Client ID/Secret aren't
+     * valid keys for the selected environment (a CIE sandbox key used against
+     * production, or vice-versa) — call that out explicitly.
+     */
+    private String describeUpsAuthError(int status, String body, boolean sandbox) {
+        String code = null;
+        String message = null;
+        try {
+            JsonNode err = objectMapper.readTree(Optional.ofNullable(body).orElse("{}"))
+                    .path("response").path("errors").path(0);
+            code = err.path("code").asText(null);
+            message = err.path("message").asText(null);
+        } catch (Exception ignore) {
+            // fall through to the generic message below
+        }
+        String env = sandbox ? "SANDBOX (wwwcie.ups.com)" : "PRODUCTION (onlinetools.ups.com)";
+        if ("10401".equals(code) || (message != null && message.toLowerCase(Locale.ROOT).contains("clientid"))) {
+            return "UPS rejected the Client ID (10401: ClientId is Invalid). "
+                    + "Confirm the Client ID / Secret are UPS OAuth keys for the " + env
+                    + " environment — a sandbox key fails against production and vice-versa.";
+        }
+        if (code != null || message != null) {
+            return "UPS OAuth returned HTTP " + status + " (" + code + ": " + message + ") for " + env + ".";
+        }
+        return "UPS OAuth returned HTTP " + status + " for " + env + ".";
     }
 
     @Override

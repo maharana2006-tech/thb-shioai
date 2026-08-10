@@ -23,6 +23,7 @@ import {
 } from '../../utils/countries'
 import { taxIdentityFor, taxIdentityTitle } from '../../utils/taxIdentity'
 import { SHIPPING_PURPOSES } from '../../utils/customsOptions'
+import { FIELD_LIMITS, validateLength, validateName, validatePhone } from '../../utils/clientValidation'
 import Select from '../workspace/Select'
 import RegionCountryPicker from '../workspace/RegionCountryPicker'
 
@@ -80,19 +81,28 @@ interface CustomsProfileModalProps {
 }
 
 const inputClassName =
-  'w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15] focus:ring-4 focus:ring-[#412d15]/10 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400'
+  'w-full rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition focus:border-[#412d15] focus:ring-4 focus:ring-[#412d15]/10 disabled:cursor-not-allowed disabled:bg-[#eee6d6] disabled:text-[#b6a684]'
+/** inputClassName with the border swapped to a rose error ring when invalid. */
+const inputErrClassName =
+  'w-full rounded-xl border border-rose-400 bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition focus:border-rose-500 focus:ring-4 focus:ring-rose-100'
+const fieldCls = (bad?: string | null) => (bad ? inputErrClassName : inputClassName)
 
 
 const blank = (): CustomsProfile => ({ countries: [] })
 
-function Field({ label, required, children }: { label: string; required?: boolean; children: ReactNode }) {
+function Field({ label, required, error, children }: { label: string; required?: boolean; error?: string | null; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+      <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[#b6a684]">
         {label}
         {required ? <span className="ml-0.5 text-rose-500">*</span> : null}
       </span>
       {children}
+      {error ? (
+        <span className="mt-1 flex items-center gap-1 text-[10.5px] font-semibold text-rose-600">
+          <span aria-hidden>⚠</span> {error}
+        </span>
+      ) : null}
     </label>
   )
 }
@@ -116,16 +126,16 @@ function Section({
   children: ReactNode
 }) {
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-      <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50/60 px-4 py-2.5">
+    <section className="overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white">
+      <div className="flex items-center justify-between gap-3 border-b border-[#eee6d6] bg-[#faf7f0]/60 px-4 py-2.5">
         <div className="flex items-center gap-2.5">
           <span className="grid h-6 w-6 place-items-center rounded-full bg-[#1f150c] text-[10.5px] font-bold text-[#f4eede]">
             {step}
           </span>
           <span className={`inline-flex h-6 w-6 items-center justify-center rounded-lg ${tone}`}>{icon}</span>
           <div>
-            <h4 className="text-[12.5px] font-semibold text-slate-950">{title}</h4>
-            {hint ? <p className="text-[10.5px] text-slate-400">{hint}</p> : null}
+            <h4 className="text-[12.5px] font-semibold text-[#1f150c]">{title}</h4>
+            {hint ? <p className="text-[10.5px] text-[#b6a684]">{hint}</p> : null}
           </div>
         </div>
         {aside}
@@ -257,6 +267,61 @@ export default function CustomsProfileModal({
   const set = (key: keyof CustomsProfile) => (e: { target: { value: string } }) =>
     setForm((cur) => ({ ...cur, [key]: e.target.value }))
 
+  // ── Inline per-field validation (importer + broker input fields) ──────────
+  const [touched, setTouched] = useState<Record<string, boolean>>({})
+  const markTouched = (k: string) => setTouched((cur) => ({ ...cur, [k]: true }))
+  // Section-level gate errors (client / destinations / importer country). These
+  // used to fire as notify popups; now they render inline under their control.
+  // Populated on a failed save attempt; each clears when its input changes.
+  const [gateErrors, setGateErrors] = useState<{ client?: string; destinations?: string; importerCountry?: string }>({})
+  const clearGate = (k: keyof typeof gateErrors) =>
+    setGateErrors((cur) => (cur[k] ? { ...cur, [k]: undefined } : cur))
+  const fieldErrors = useMemo(() => {
+    const s = (v: unknown) => (typeof v === 'string' ? v : v == null ? '' : String(v))
+    // Optional free-text: bounded length + the app-wide <> XSS guard (via
+    // validateLength), skipped when blank so optional fields stay optional.
+    const opt = (v: unknown, max: number, label: string) =>
+      s(v).trim() ? validateLength(s(v), max, label, false) : null
+    const out: Record<string, string | null> = {
+      // Registered importer — name/address1/city are required by the backend.
+      importerName: validateName(s(form.importerName)),
+      importerContact: opt(form.importerContact, FIELD_LIMITS.addr.name, 'Contact'),
+      importerPhone: validatePhone(s(form.importerPhone), false),
+      importerAddress1: validateLength(s(form.importerAddress1), FIELD_LIMITS.addr.line1, 'Address line 1', true, 2),
+      importerAddress2: opt(form.importerAddress2, FIELD_LIMITS.addr.line2, 'Address line 2'),
+      importerCity: validateLength(s(form.importerCity), FIELD_LIMITS.addr.city, 'City', true, 2),
+      importerState: opt(form.importerState, FIELD_LIMITS.addr.state, 'State'),
+      importerPostcode: opt(form.importerPostcode, FIELD_LIMITS.addr.zip, 'Post code'),
+      // Broker — only validated when the operator chose "our own broker".
+      // Name required; the rest are optional but still <>-safe + length-bounded.
+      brokerName: ownBroker ? validateName(s(form.brokerName)) : null,
+      brokerPhone: opt(form.brokerPhone, FIELD_LIMITS.phone, 'Phone'),
+      brokerCompany: ownBroker ? opt(form.brokerCompany, FIELD_LIMITS.name, 'Broker company') : null,
+      brokerAddress1: ownBroker ? opt(form.brokerAddress1, FIELD_LIMITS.addr.line1, 'Address line 1') : null,
+      brokerAddress2: ownBroker ? opt(form.brokerAddress2, FIELD_LIMITS.addr.line2, 'Address line 2') : null,
+      brokerCity: ownBroker ? opt(form.brokerCity, FIELD_LIMITS.addr.city, 'City') : null,
+      brokerState: ownBroker ? opt(form.brokerState, FIELD_LIMITS.addr.state, 'State') : null,
+      brokerPostcode: ownBroker ? opt(form.brokerPostcode, FIELD_LIMITS.addr.zip, 'Postal code') : null,
+      brokerId: ownBroker ? opt(form.brokerId, 50, 'Broker ID / Filer') : null,
+      brokerLicense: ownBroker ? opt(form.brokerLicense, 50, 'License no') : null,
+    }
+    // Country-specific tax identifiers (EIN / VAT+EORI / GSTIN+IEC / CNPJ …).
+    // We don't hard-code each country's exact format, but every ID is <>-safe
+    // and length-bounded so a stray tag or pasted blob can't slip through.
+    const territory = (form.countries ?? []).length ? territoryOf((form.countries ?? [])[0]) : null
+    const spec = territory ? taxIdentityFor(territory) : null
+    if (spec) {
+      for (const f of spec.fields) {
+        out[f.column] = opt((form as Record<string, unknown>)[f.column], 40, f.label)
+      }
+    }
+    return out
+  }, [form, ownBroker])
+  const err = (k: string): string | null => (touched[k] ? fieldErrors[k] : null)
+  const hasFieldErrors = Object.values(fieldErrors).some(Boolean)
+  const touchAllFields = () =>
+    setTouched(Object.keys(fieldErrors).reduce((m, k) => ({ ...m, [k]: true }), {}))
+
   /**
    * Preselect the customs-defaults currency from the picked client's
    * Ship-From country. Only fills when the operator hasn't already picked
@@ -325,54 +390,43 @@ export default function CustomsProfileModal({
   // never belongs in the broker fields; "no broker" is the carrier-default card.
 
   const handleSave = async () => {
-    if (!clientCode) {
-      notify.error('Choose a client.')
-      return
-    }
+    // Collect ALL section-level gate errors so they surface together, inline
+    // under their control — no notify popups. Field-level errors (importer /
+    // broker inputs, incl. an empty broker name) already render under each
+    // input via the Field `error` prop.
+    const gates: { client?: string; destinations?: string; importerCountry?: string } = {}
     const countries = form.countries ?? []
+    if (!clientCode) {
+      gates.client = 'Choose a client.'
+    }
     if (!countries.length) {
-      notify.error('Select at least one destination country.')
-      return
+      gates.destinations = 'Select at least one destination country.'
+    } else {
+      // One region per profile — also catches legacy cross-region data on edit.
+      const region = regionOf(countries[0])
+      if (countries.some((c) => regionOf(c) !== region)) {
+        gates.destinations = 'A profile covers one region — remove countries outside ' + region + '.'
+      } else {
+        // One importer registration is valid for exactly ONE customs territory
+        // (EU/EAEU/GCC/SACU as a whole, or a single country) — a "Europe"
+        // profile mixing the EU with the UK would apply an EU EORI to UK
+        // shipments, which is invalid post-Brexit.
+        const territory = territoryOf(countries[0])
+        const outsider = countries.find((c) => territoryOf(c) !== territory)
+        if (outsider) {
+          gates.destinations = `${countryName(outsider)} is outside ${territoryLabel(territory)} — an importer registration covers one customs territory. Create a separate profile for it.`
+        } else if (form.importerCountry && territoryOf(form.importerCountry) !== territory) {
+          // The Importer of Record must be established IN that territory.
+          gates.importerCountry = `Importer country must be in ${territoryLabel(territory)}.`
+        }
+      }
     }
-    // One region per profile — also catches legacy cross-region data on edit.
-    const region = regionOf(countries[0])
-    if (countries.some((c) => regionOf(c) !== region)) {
-      notify.error('A profile covers one region — remove countries outside ' + region + '.')
-      return
-    }
-    // A usable registered importer is mandatory — the customs gate must never
-    // pass on a husk profile.
-    if (!form.importerName?.trim()) {
-      notify.error('Importer name is required.')
-      return
-    }
-    if (!form.importerAddress1?.trim() || !form.importerCity?.trim()) {
-      notify.error('Importer address line 1 and city are required — customs paperwork needs a real address.')
-      return
-    }
-    // One importer registration is valid for exactly ONE customs territory
-    // (EU/EAEU/GCC/SACU as a whole, or a single country) — a "Europe"
-    // profile mixing the EU with the UK would apply an EU EORI to UK
-    // shipments, which is invalid post-Brexit.
-    const territory = territoryOf(countries[0])
-    const outsider = countries.find((c) => territoryOf(c) !== territory)
-    if (outsider) {
-      notify.error(
-        `${countryName(outsider)} is outside ${territoryLabel(territory)} — an importer registration covers one customs territory. Create a separate profile for it.`
-      )
-      return
-    }
-    // The Importer of Record must be established IN that territory.
-    if (form.importerCountry && territoryOf(form.importerCountry) !== territory) {
-      notify.error(`Importer country must be in ${territoryLabel(territory)}.`)
-      return
-    }
-    // A named broker needs at least a name — otherwise ghost broker data
-    // persists while the backend treats the profile as carrier-default.
-    if (ownBroker && !form.brokerName?.trim()) {
-      notify.error('Enter the broker name — or choose "Carrier clears customs".')
-      return
-    }
+
+    const fieldBad = hasFieldErrors
+    if (fieldBad) touchAllFields()
+    setGateErrors(gates)
+    if (Object.keys(gates).length > 0 || fieldBad) return
+
     setSaving(true)
     try {
       // Carrier-default brokerage carries no broker — blank the fields so
@@ -432,29 +486,29 @@ export default function CustomsProfileModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-label="Importer / Broker profile"
       onClick={onClose}
     >
       <div
-        className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
+        className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* header */}
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
+        <div className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
           <div className="flex items-center gap-3">
             <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#1f150c] text-[14px] font-bold text-[#e1dcc9] shadow-sm">
               {initials || <FiUsers className="h-4 w-4" />}
             </span>
             <div>
-              <p className="inline-flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.16em] text-slate-400">
+              <p className="inline-flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#b6a684]">
                 <FiGlobe className="h-3.5 w-3.5" /> Importer / Broker profile
               </p>
-              <h3 className="mt-1 text-[15px] font-semibold text-slate-950">
+              <h3 className="mt-1 text-[15px] font-semibold text-[#1f150c]">
                 {editing ? 'Edit profile' : 'New profile'}
-                {client ? <span className="text-slate-400"> · {client.name}</span> : null}
+                {client ? <span className="text-[#b6a684]"> · {client.name}</span> : null}
               </h3>
             </div>
           </div>
@@ -469,7 +523,7 @@ export default function CustomsProfileModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
+              className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#8a7959] transition hover:bg-[#faf7f0]"
               aria-label="Close"
             >
               <FiX className="h-4 w-4" />
@@ -477,7 +531,7 @@ export default function CustomsProfileModal({
           </div>
         </div>
 
-        <div className="flex-1 space-y-3.5 overflow-y-auto bg-slate-50/50 px-5 py-4">
+        <div className="flex-1 space-y-3.5 overflow-y-auto bg-[#faf7f0]/50 px-5 py-4">
           {/* 1 — Client & destinations */}
           <Section
             step="1"
@@ -488,11 +542,12 @@ export default function CustomsProfileModal({
           >
             <div className="grid gap-4 md:grid-cols-[minmax(0,250px)_1fr]">
               <div>
-                <Field label="Client" required>
+                <Field label="Client" required error={gateErrors.client}>
                   <Select
                     value={clientCode}
                     onChange={(e) => {
                       setClientCode(e.target.value.toUpperCase())
+                      clearGate('client')
                     }}
                     disabled={clientLocked}
                   >
@@ -503,37 +558,44 @@ export default function CustomsProfileModal({
                   </Select>
                 </Field>
                 {clientLocked ? (
-                  <p className="mt-1.5 text-[11px] text-slate-400">
+                  <p className="mt-1.5 text-[11px] text-[#b6a684]">
                     {editing ? 'Client is fixed while editing.' : 'Pre-selected from the client.'}
                   </p>
                 ) : null}
 
                 {/* selection summary */}
-                <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/80 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Selection</p>
+                <div className="mt-3 rounded-xl border border-[#eee6d6] bg-[#faf7f0]/80 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">Selection</p>
                   {selectedRegion ? (
                     <>
                       <p className="mt-1 text-[12px] font-semibold text-[#412d15]">{selectedRegion.region}</p>
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {selectedRegion.codes.map((c) => (
-                          <span key={c} title={countryName(c)} className="rounded-md bg-white px-1.5 py-0.5 text-[10.5px] font-semibold text-slate-600 ring-1 ring-slate-200">
+                          <span key={c} title={countryName(c)} className="rounded-md bg-white px-1.5 py-0.5 text-[10.5px] font-semibold text-[#5a4526] ring-1 ring-[#e3d9c4]">
                             {c}
                           </span>
                         ))}
                       </div>
                     </>
                   ) : (
-                    <p className="mt-1 text-[11.5px] text-slate-400">Nothing selected yet.</p>
+                    <p className="mt-1 text-[11.5px] text-[#b6a684]">Nothing selected yet.</p>
                   )}
                 </div>
               </div>
 
-              <RegionCountryPicker
-                value={form.countries ?? []}
-                onChange={(codes) => setForm((cur) => ({ ...cur, countries: codes }))}
-                disabledCodes={disabledCodes}
-                territoryConstrained
-              />
+              <div>
+                <RegionCountryPicker
+                  value={form.countries ?? []}
+                  onChange={(codes) => { setForm((cur) => ({ ...cur, countries: codes })); clearGate('destinations') }}
+                  disabledCodes={disabledCodes}
+                  territoryConstrained
+                />
+                {gateErrors.destinations ? (
+                  <p className="mt-1.5 flex items-start gap-1 text-[10.5px] font-semibold text-rose-600">
+                    <span aria-hidden>⚠</span> {gateErrors.destinations}
+                  </p>
+                ) : null}
+              </div>
             </div>
           </Section>
 
@@ -547,48 +609,50 @@ export default function CustomsProfileModal({
           >
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <div className="col-span-2">
-                <Field label="Importer Name" required><input value={form.importerName ?? ''} onChange={set('importerName')} className={inputClassName} /></Field>
+                <Field label="Importer Name" required error={err('importerName')}><input value={form.importerName ?? ''} onChange={set('importerName')} onBlur={() => markTouched('importerName')} maxLength={FIELD_LIMITS.name} className={fieldCls(err('importerName'))} /></Field>
               </div>
-              <Field label="Contact"><input value={form.importerContact ?? ''} onChange={set('importerContact')} className={inputClassName} /></Field>
-              <Field label="Phone"><input value={form.importerPhone ?? ''} onChange={set('importerPhone')} className={inputClassName} /></Field>
+              <Field label="Contact" error={err('importerContact')}><input value={form.importerContact ?? ''} onChange={set('importerContact')} onBlur={() => markTouched('importerContact')} maxLength={FIELD_LIMITS.addr.name} className={fieldCls(err('importerContact'))} /></Field>
+              <Field label="Phone" error={err('importerPhone')}><input value={form.importerPhone ?? ''} onChange={set('importerPhone')} onBlur={() => markTouched('importerPhone')} type="tel" inputMode="tel" maxLength={FIELD_LIMITS.phone} className={fieldCls(err('importerPhone'))} /></Field>
               <div className="col-span-2">
-                <Field label="Address (1)" required><input value={form.importerAddress1 ?? ''} onChange={set('importerAddress1')} className={inputClassName} /></Field>
+                <Field label="Address (1)" required error={err('importerAddress1')}><input value={form.importerAddress1 ?? ''} onChange={set('importerAddress1')} onBlur={() => markTouched('importerAddress1')} maxLength={FIELD_LIMITS.addr.line1} className={fieldCls(err('importerAddress1'))} /></Field>
               </div>
               <div className="col-span-2">
-                <Field label="Address (2)"><input value={form.importerAddress2 ?? ''} onChange={set('importerAddress2')} className={inputClassName} /></Field>
+                <Field label="Address (2)" error={err('importerAddress2')}><input value={form.importerAddress2 ?? ''} onChange={set('importerAddress2')} onBlur={() => markTouched('importerAddress2')} maxLength={FIELD_LIMITS.addr.line2} className={fieldCls(err('importerAddress2'))} /></Field>
               </div>
-              <Field label="Country"><CountrySelect allowedCodes={territoryCodes} region={activeRegion} value={form.importerCountry ?? ''} onChange={(v) => setForm((c) => ({ ...c, importerCountry: v }))} /></Field>
-              <Field label="City" required><input value={form.importerCity ?? ''} onChange={set('importerCity')} className={inputClassName} /></Field>
-              <Field label="State"><input value={form.importerState ?? ''} onChange={set('importerState')} className={inputClassName} /></Field>
-              <Field label="Post Code"><input value={form.importerPostcode ?? ''} onChange={set('importerPostcode')} className={inputClassName} /></Field>
+              <Field label="Country" error={gateErrors.importerCountry}><CountrySelect allowedCodes={territoryCodes} region={activeRegion} value={form.importerCountry ?? ''} onChange={(v) => { setForm((c) => ({ ...c, importerCountry: v })); clearGate('importerCountry') }} /></Field>
+              <Field label="City" required error={err('importerCity')}><input value={form.importerCity ?? ''} onChange={set('importerCity')} onBlur={() => markTouched('importerCity')} maxLength={FIELD_LIMITS.addr.city} className={fieldCls(err('importerCity'))} /></Field>
+              <Field label="State" error={err('importerState')}><input value={form.importerState ?? ''} onChange={set('importerState')} onBlur={() => markTouched('importerState')} maxLength={FIELD_LIMITS.addr.state} className={fieldCls(err('importerState'))} /></Field>
+              <Field label="Post Code" error={err('importerPostcode')}><input value={form.importerPostcode ?? ''} onChange={set('importerPostcode')} onBlur={() => markTouched('importerPostcode')} maxLength={FIELD_LIMITS.addr.zip} className={fieldCls(err('importerPostcode'))} /></Field>
             </div>
 
             {/* Tax identity — COUNTRY-SPECIFIC: every customs territory names
                 its own identifiers (CNPJ, RFC, EIN, VAT+EORI, GSTIN+IEC…),
                 so the fields come from the territory's spec, never a generic
                 "Tax ID Type" dropdown. */}
-            <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/80 p-3">
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+            <div className="mt-3 rounded-xl border border-[#eee6d6] bg-[#faf7f0]/80 p-3">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
                 {activeTerritory ? taxIdentityTitle(activeTerritory) : 'Tax identity'}
               </p>
               {activeTerritory && taxSpec ? (
                 <>
                   <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                     {taxSpec.fields.map((f) => (
-                      <Field key={f.column} label={f.label}>
+                      <Field key={f.column} label={f.label} error={err(f.column)}>
                         <input
                           value={(form[f.column] as string | null | undefined) ?? ''}
                           onChange={set(f.column)}
+                          onBlur={() => markTouched(f.column)}
                           placeholder={f.placeholder}
-                          className={inputClassName}
+                          maxLength={40}
+                          className={fieldCls(err(f.column))}
                         />
                       </Field>
                     ))}
                   </div>
-                  {taxSpec.note ? <p className="mt-2 text-[10.5px] text-sky-700">{taxSpec.note}</p> : null}
+                  {taxSpec.note ? <p className="mt-2 text-[10.5px] text-[#5a4526]">{taxSpec.note}</p> : null}
                 </>
               ) : (
-                <p className="text-[11.5px] text-slate-400">
+                <p className="text-[11.5px] text-[#b6a684]">
                   Pick the destination countries first — each customs territory requires its own identifiers.
                 </p>
               )}
@@ -599,7 +663,7 @@ export default function CustomsProfileModal({
           <Section
             step="3"
             icon={<FiBriefcase className="h-3.5 w-3.5" />}
-            tone="bg-sky-50 text-sky-700"
+            tone="bg-[#faf7f0] text-[#5a4526]"
             title="Customs broker"
             hint="A licensed broker at the destination border — never the shipper itself."
           >
@@ -609,46 +673,46 @@ export default function CustomsProfileModal({
                 type="button"
                 onClick={() => setOwnBroker(false)}
                 className={`rounded-xl border p-3 text-left transition ${
-                  !ownBroker ? 'border-[#412d15] bg-[#412d15]/[0.04] ring-1 ring-[#412d15]/20' : 'border-slate-200 hover:border-slate-300'
+                  !ownBroker ? 'border-[#412d15] bg-[#412d15]/[0.04] ring-1 ring-[#412d15]/20' : 'border-[#e3d9c4] hover:border-[#cdbf9f]'
                 }`}
               >
-                <p className="text-[12px] font-semibold text-slate-900">Carrier clears customs <span className="ml-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-emerald-700">Recommended</span></p>
-                <p className="mt-0.5 text-[11px] text-slate-500">UPS/FedEx brokerage is included with international shipments — nothing to set up.</p>
+                <p className="text-[12px] font-semibold text-[#1f150c]">Carrier clears customs <span className="ml-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-emerald-700">Recommended</span></p>
+                <p className="mt-0.5 text-[11px] text-[#8a7959]">UPS/FedEx brokerage is included with international shipments — nothing to set up.</p>
               </button>
               <button
                 type="button"
                 onClick={() => setOwnBroker(true)}
                 className={`rounded-xl border p-3 text-left transition ${
-                  ownBroker ? 'border-[#412d15] bg-[#412d15]/[0.04] ring-1 ring-[#412d15]/20' : 'border-slate-200 hover:border-slate-300'
+                  ownBroker ? 'border-[#412d15] bg-[#412d15]/[0.04] ring-1 ring-[#412d15]/20' : 'border-[#e3d9c4] hover:border-[#cdbf9f]'
                 }`}
               >
-                <p className="text-[12px] font-semibold text-slate-900">Own broker (Broker Select)</p>
-                <p className="mt-0.5 text-[11px] text-slate-500">The carrier hands the shipment to your named broker at the border.</p>
+                <p className="text-[12px] font-semibold text-[#1f150c]">Own broker (Broker Select)</p>
+                <p className="mt-0.5 text-[11px] text-[#8a7959]">The carrier hands the shipment to your named broker at the border.</p>
               </button>
             </div>
 
             {ownBroker ? (
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <div className="col-span-2">
-                <Field label="Broker Name"><input value={form.brokerName ?? ''} onChange={set('brokerName')} className={inputClassName} /></Field>
+                <Field label="Broker Name" required error={err('brokerName')}><input value={form.brokerName ?? ''} onChange={set('brokerName')} onBlur={() => markTouched('brokerName')} maxLength={FIELD_LIMITS.name} className={fieldCls(err('brokerName'))} /></Field>
               </div>
               <div className="col-span-2">
-                <Field label="Broker Company"><input value={form.brokerCompany ?? ''} onChange={set('brokerCompany')} className={inputClassName} /></Field>
+                <Field label="Broker Company" error={err('brokerCompany')}><input value={form.brokerCompany ?? ''} onChange={set('brokerCompany')} onBlur={() => markTouched('brokerCompany')} maxLength={FIELD_LIMITS.name} className={fieldCls(err('brokerCompany'))} /></Field>
               </div>
               <div className="col-span-2">
-                <Field label="Address (1)"><input value={form.brokerAddress1 ?? ''} onChange={set('brokerAddress1')} className={inputClassName} /></Field>
+                <Field label="Address (1)" error={err('brokerAddress1')}><input value={form.brokerAddress1 ?? ''} onChange={set('brokerAddress1')} onBlur={() => markTouched('brokerAddress1')} maxLength={FIELD_LIMITS.addr.line1} className={fieldCls(err('brokerAddress1'))} /></Field>
               </div>
               <div className="col-span-2">
-                <Field label="Address (2)"><input value={form.brokerAddress2 ?? ''} onChange={set('brokerAddress2')} className={inputClassName} /></Field>
+                <Field label="Address (2)" error={err('brokerAddress2')}><input value={form.brokerAddress2 ?? ''} onChange={set('brokerAddress2')} onBlur={() => markTouched('brokerAddress2')} maxLength={FIELD_LIMITS.addr.line2} className={fieldCls(err('brokerAddress2'))} /></Field>
               </div>
               <Field label="Country"><CountrySelect preferRegion={activeRegion} value={form.brokerCountry ?? ''} onChange={(v) => setForm((c) => ({ ...c, brokerCountry: v }))} /></Field>
-              <Field label="City"><input value={form.brokerCity ?? ''} onChange={set('brokerCity')} className={inputClassName} /></Field>
-              <Field label="State"><input value={form.brokerState ?? ''} onChange={set('brokerState')} className={inputClassName} /></Field>
-              <Field label="Postal Code"><input value={form.brokerPostcode ?? ''} onChange={set('brokerPostcode')} className={inputClassName} /></Field>
-              <Field label="Phone"><input value={form.brokerPhone ?? ''} onChange={set('brokerPhone')} className={inputClassName} /></Field>
-              <Field label="Broker ID / Filer"><input value={form.brokerId ?? ''} onChange={set('brokerId')} className={inputClassName} /></Field>
+              <Field label="City" error={err('brokerCity')}><input value={form.brokerCity ?? ''} onChange={set('brokerCity')} onBlur={() => markTouched('brokerCity')} maxLength={FIELD_LIMITS.addr.city} className={fieldCls(err('brokerCity'))} /></Field>
+              <Field label="State" error={err('brokerState')}><input value={form.brokerState ?? ''} onChange={set('brokerState')} onBlur={() => markTouched('brokerState')} maxLength={FIELD_LIMITS.addr.state} className={fieldCls(err('brokerState'))} /></Field>
+              <Field label="Postal Code" error={err('brokerPostcode')}><input value={form.brokerPostcode ?? ''} onChange={set('brokerPostcode')} onBlur={() => markTouched('brokerPostcode')} maxLength={FIELD_LIMITS.addr.zip} className={fieldCls(err('brokerPostcode'))} /></Field>
+              <Field label="Phone" error={err('brokerPhone')}><input value={form.brokerPhone ?? ''} onChange={set('brokerPhone')} onBlur={() => markTouched('brokerPhone')} type="tel" inputMode="tel" maxLength={FIELD_LIMITS.phone} className={fieldCls(err('brokerPhone'))} /></Field>
+              <Field label="Broker ID / Filer" error={err('brokerId')}><input value={form.brokerId ?? ''} onChange={set('brokerId')} onBlur={() => markTouched('brokerId')} maxLength={50} className={fieldCls(err('brokerId'))} /></Field>
               <div className="col-span-2">
-                <Field label="License No"><input value={form.brokerLicense ?? ''} onChange={set('brokerLicense')} className={inputClassName} /></Field>
+                <Field label="License No" error={err('brokerLicense')}><input value={form.brokerLicense ?? ''} onChange={set('brokerLicense')} onBlur={() => markTouched('brokerLicense')} maxLength={50} className={fieldCls(err('brokerLicense'))} /></Field>
               </div>
             </div>
             ) : null}
@@ -731,7 +795,7 @@ export default function CustomsProfileModal({
         </div>
 
         {/* footer */}
-        <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-5 py-4">
+        <div className="flex items-center justify-between gap-3 border-t border-[#eee6d6] px-5 py-4">
           <div>
             {editing ? (
               <button
@@ -748,7 +812,7 @@ export default function CustomsProfileModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
+              className="rounded-xl border border-[#e3d9c4] bg-white px-4 py-2 text-[13px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
             >
               Cancel
             </button>
@@ -756,7 +820,7 @@ export default function CustomsProfileModal({
               type="button"
               onClick={() => void handleSave()}
               disabled={saving}
-              className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="rounded-xl bg-[#1f150c] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#cdbf9f]"
             >
               {saving ? 'Saving…' : editing ? 'Save changes' : 'Create profile'}
             </button>

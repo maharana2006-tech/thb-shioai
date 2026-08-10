@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   FiAlertTriangle,
@@ -107,36 +107,39 @@ export default function Dashboard() {
   const currentAbortRef = useRef<AbortController | null>(null)
   const mountedRef = useRef(true)
 
+  // Hoisted to component scope (via useCallback) so the Refresh button's
+  // onClick can call it too — previously `load` lived inside the effect and
+  // the JSX reference threw "load is not defined". Refs are stable, so the
+  // callback identity never changes ([] deps).
+  const load = useCallback(() => {
+    if (inFlightRef.current) return  // skip — previous tick still pending
+    const controller = new AbortController()
+    currentAbortRef.current?.abort()  // cancel any stragglers
+    currentAbortRef.current = controller
+    inFlightRef.current = true
+
+    dashboardService
+      .load(controller.signal)
+      .then((d) => {
+        if (!mountedRef.current) return
+        if (d) {
+          setData(d)
+          setUpdatedAt(Date.now())
+        }
+      })
+      .catch((err) => {
+        // Aborted requests are expected on cancellation — silence them.
+        if (isAbortError(err)) return
+        // Any other error: swallow (mirrors prior behaviour); the stats
+        // stay stale until the next tick succeeds.
+      })
+      .finally(() => {
+        inFlightRef.current = false
+      })
+  }, [])
+
   useEffect(() => {
     mountedRef.current = true
-
-    const load = () => {
-      if (inFlightRef.current) return  // skip — previous tick still pending
-      const controller = new AbortController()
-      currentAbortRef.current?.abort()  // cancel any stragglers
-      currentAbortRef.current = controller
-      inFlightRef.current = true
-
-      dashboardService
-        .load(controller.signal)
-        .then((d) => {
-          if (!mountedRef.current) return
-          if (d) {
-            setData(d)
-            setUpdatedAt(Date.now())
-          }
-        })
-        .catch((err) => {
-          // Aborted requests are expected on cancellation — silence them.
-          if (isAbortError(err)) return
-          // Any other error: swallow (mirrors prior behaviour); the stats
-          // stay stale until the next tick succeeds.
-        })
-        .finally(() => {
-          inFlightRef.current = false
-        })
-    }
-
     load()
     timer.current = window.setInterval(load, POLL_MS)
     return () => {
@@ -144,7 +147,7 @@ export default function Dashboard() {
       if (timer.current) window.clearInterval(timer.current)
       currentAbortRef.current?.abort()  // don't leak a pending fetch on unmount
     }
-  }, [])
+  }, [load])
 
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'

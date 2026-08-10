@@ -79,6 +79,21 @@ public interface CarrierConnector {
 
     boolean validateCredentials(String clientId, String clientSecret);
 
+    /**
+     * The specific reason the most recent {@link #getAccessToken} call on THIS
+     * thread fell back to a {@code -local-*} token, if any. Connectors that talk
+     * OAuth/SOAP record the carrier's own rejection detail (UPS error code +
+     * message, Stamps SOAP fault / GUID-format hint) so a verify can tell the
+     * operator WHY authentication failed instead of a generic "rejected".
+     *
+     * <p>Consuming clears it, so a subsequent success reads {@code null}. The
+     * default returns {@code null} — connectors without a live auth handshake
+     * (or a real token) have nothing to explain.
+     */
+    default String consumeAuthFailureDetail() {
+        return null;
+    }
+
     TrackingResult trackShipment(String trackingNumber);
 
     /**

@@ -35,8 +35,22 @@ public class StampsConnector implements CarrierConnector {
 
     private static final String CARRIER_CODE = "USPS";
 
+    /** Stamps.com SWSIM requires the IntegrationID to be a real GUID. */
+    private static final java.util.regex.Pattern GUID_PATTERN = java.util.regex.Pattern.compile(
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
+
+    /** Per-thread reason the last getAccessToken fell back — read by verify. */
+    private static final ThreadLocal<String> LAST_AUTH_DETAIL = new ThreadLocal<>();
+
+    @Override
+    public String consumeAuthFailureDetail() {
+        String detail = LAST_AUTH_DETAIL.get();
+        LAST_AUTH_DETAIL.remove();
+        return detail;
+    }
 
     @Override
     public String getCarrierCode() {
@@ -199,6 +213,19 @@ public class StampsConnector implements CarrierConnector {
                             + "Enter the Stamps.com account number in the Account number field.");
         }
 
+        // Stamps.com rejects a non-GUID IntegrationID at XML-schema validation
+        // (HTTP 500 "value is invalid according to its datatype 'guid'") before
+        // it ever checks the credentials. Catch that here with an actionable
+        // message instead of firing a request we know the schema will bounce.
+        if (clientId == null || !GUID_PATTERN.matcher(clientId.trim()).matches()) {
+            LAST_AUTH_DETAIL.set("the Stamps.com Client ID (IntegrationID) must be a GUID like "
+                    + "\"01234567-89ab-cdef-0123-456789abcdef\". The value entered isn't a GUID — "
+                    + "copy the IntegrationID from your Stamps.com developer portal.");
+            log.warn("Stamps SWSIM: IntegrationID '{}' is not a GUID; skipping call and returning fallback token.",
+                    clientId);
+            return buildFallbackToken(clientId, clientSecret);
+        }
+
         String soap = buildAuthenticateUserEnvelope(clientId, accountNumber.trim(), clientSecret);
 
         try {
@@ -211,11 +238,15 @@ public class StampsConnector implements CarrierConnector {
 
             String authenticator = extractAuthenticator(response);
             if (StringUtils.hasText(authenticator)) {
+                LAST_AUTH_DETAIL.remove();
                 return authenticator;
             }
             String fault = extractSoapFault(response);
             log.warn("Stamps SWSIM AuthenticateUser succeeded (HTTP 200) but returned no Authenticator. Fault: {} · Response head: {}",
                     fault, safeHead(response));
+            LAST_AUTH_DETAIL.set(StringUtils.hasText(fault)
+                    ? "Stamps.com SWSIM returned: " + fault
+                    : "Stamps.com SWSIM returned no Authenticator token.");
             return buildFallbackToken(clientId, clientSecret);
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             int status = ex.getStatusCode().value();
@@ -229,10 +260,14 @@ public class StampsConnector implements CarrierConnector {
             }
             log.warn("Stamps SWSIM AuthenticateUser rejected by {} (HTTP {}): {} · body head: {}",
                     swsimUrl, status, fault, safeHead(body));
+            LAST_AUTH_DETAIL.set(StringUtils.hasText(fault)
+                    ? "Stamps.com rejected the credentials (HTTP " + status + "): " + fault
+                    : "Stamps.com SWSIM returned HTTP " + status + ".");
             return buildFallbackToken(clientId, clientSecret);
         } catch (Exception ex) {
             log.warn("Stamps SWSIM AuthenticateUser call to {} failed; using local fallback token. Reason: {}",
                     swsimUrl, ex.getMessage());
+            LAST_AUTH_DETAIL.set("could not reach the Stamps.com SWSIM endpoint (" + ex.getMessage() + ")");
             return buildFallbackToken(clientId, clientSecret);
         }
     }

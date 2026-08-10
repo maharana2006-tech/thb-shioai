@@ -122,12 +122,21 @@ public class AccountRefServiceImpl implements AccountRefService {
             String token = connector.getAccessToken(clientId, clientSecret, accountNumber, environment);
             boolean realToken = StringUtils.hasText(token) && !token.contains("-local-");
 
+            // On failure, ask the connector WHY it fell back to a local token so
+            // the operator gets an actionable reason (invalid UPS ClientId, a
+            // non-GUID Stamps IntegrationID, env mismatch) instead of a generic
+            // "rejected the credentials".
+            String detail = realToken ? null : connector.consumeAuthFailureDetail();
+            String message = realToken
+                    ? "Credentials verified — " + connector.getCarrierName() + " issued a live token."
+                    : StringUtils.hasText(detail)
+                            ? connector.getCarrierName() + " rejected the credentials — " + detail
+                            : connector.getCarrierName() + " rejected the credentials.";
+
             return CredentialCheckDTO.builder()
                     .verified(realToken)
                     .checkedAt(now)
-                    .message(realToken
-                            ? "Credentials verified — " + connector.getCarrierName() + " issued a live token."
-                            : connector.getCarrierName() + " rejected the credentials.")
+                    .message(message)
                     .build();
         } catch (Exception ex) {
             log.warn("Credential check failed for carrier {}: {}", carrierCode, ex.getMessage());

@@ -35,13 +35,27 @@ export const FIELD_LIMITS = {
 /** Backend Pattern regex — [A-Za-z0-9_-]+. We uppercase-normalize before send. */
 const CLIENT_CODE_RE = /^[A-Z0-9_-]+$/
 
+/**
+ * XSS / injection guard shared across free-text fields — matches the app-wide
+ * convention in {@link shipmentSchema} (`SAFE_TEXT_RE`). A company name can
+ * legitimately hold `&`, `'`, `.`, `+`, `!` (AT&T, Ben & Jerry's, Yahoo!),
+ * so we deliberately allow-list nothing and only BAN the angle brackets that
+ * open an HTML tag. Keep this identical to the shipment schema.
+ */
+const SAFE_TEXT_RE = /^[^<>]*$/
+/** At least one Unicode letter or number — blocks all-punctuation values ("!!!", "---"). */
+const HAS_ALNUM_RE = /[\p{L}\p{N}]/u
+
 /** Pragmatic email format — allows most valid RFC 5322 addresses without the
  *  full spec's edge cases (comments, quoted locals). Good enough for a form. */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-/** E.164-ish phone: optional leading +, then 7–15 digits with optional
- *  spaces / dashes / parens as separators. Rejects letters and stray symbols. */
-const PHONE_RE = /^\+?[\d][\d\s\-().]{5,20}$/
+/** Phone CHARACTER-SET check only: optional leading +, then digits and the
+ *  usual separators (spaces / dashes / parens / dots). Deliberately does NOT
+ *  enforce length — the digit-count checks in validatePhone own the length
+ *  messaging, so a short input like "123" gets the specific "needs at least 7
+ *  digits" error instead of this generic character-set one. */
+const PHONE_RE = /^\+?[\d\s\-().]+$/
 
 /** ISO-2 country code — exactly two letters. */
 const COUNTRY_RE = /^[A-Za-z]{2}$/
@@ -67,20 +81,40 @@ const ZIP_PATTERNS: Record<string, RegExp> = {
   SG: /^\d{6}$/,
 }
 
-export function validateClientCode(value: string): string | null {
+/**
+ * Generic uppercase identifier check — client code, warehouse code, and any
+ * other `[A-Z0-9_-]` code field share these rules. `label` personalizes the
+ * message ("Client code" / "Warehouse code"). Mirrors the backend
+ * `@Pattern("[A-Za-z0-9_-]+")` and adds front-of-house min-length + no
+ * separator-only guards.
+ */
+export function validateCode(value: string, label = 'Code'): string | null {
   const v = (value || '').trim().toUpperCase()
-  if (!v) return 'Client code is required.'
-  // Matches backend @Pattern("[A-Za-z0-9_-]+") — at least 1 char, no spaces,
-  // only letters, digits, dashes, underscores. Uppercase-normalized on save.
-  if (v.length > FIELD_LIMITS.clientCode) return `Client code must be ${FIELD_LIMITS.clientCode} characters or fewer.`
+  if (!v) return `${label} is required.`
+  // Front-of-house minimum: a single-character code is almost always a typo.
+  if (v.length < 2) return `${label} must be at least 2 characters.`
+  if (v.length > FIELD_LIMITS.clientCode) return `${label} must be ${FIELD_LIMITS.clientCode} characters or fewer.`
   if (!CLIENT_CODE_RE.test(v)) return "Only letters, digits, '-' and '_' are allowed (no spaces)."
+  // Reject separator-only codes like "--" or "__" that pass the pattern.
+  if (!/[A-Z0-9]/.test(v)) return `${label} must include at least one letter or digit.`
   return null
+}
+
+export function validateClientCode(value: string): string | null {
+  return validateCode(value, 'Client code')
 }
 
 export function validateName(value: string): string | null {
   const v = (value || '').trim()
   if (!v) return 'Name is required.'
+  if (v.length < 2) return 'Name must be at least 2 characters.'
   if (v.length > FIELD_LIMITS.name) return `Name must be ${FIELD_LIMITS.name} characters or fewer.`
+  // App-wide free-text XSS guard (same rule as the shipment schema): a client /
+  // company name never contains angle brackets, but an attacker's "<script>"
+  // does. Bans only < and > so legitimate business punctuation still passes.
+  if (!SAFE_TEXT_RE.test(v)) return 'Name cannot contain the characters < or >.'
+  // Must carry real content — blocks "!!!", "---", "&&&" and similar.
+  if (!HAS_ALNUM_RE.test(v)) return 'Name must contain at least one letter or number.'
   return null
 }
 
@@ -88,6 +122,11 @@ export function validateEmail(value: string, required = false): string | null {
   const v = (value || '').trim()
   if (!v) return required ? 'Email is required.' : null
   if (v.length > FIELD_LIMITS.email) return `Email must be ${FIELD_LIMITS.email} characters or fewer.`
+  // Reject the common malformed shapes EMAIL_RE alone lets slip:
+  // leading/trailing dot and doubled dots ("a..b@x.com", ".a@x.com").
+  if (v.startsWith('.') || v.endsWith('.') || v.includes('..')) {
+    return 'Enter a valid email address (name@domain).'
+  }
   if (!EMAIL_RE.test(v)) return 'Enter a valid email address (name@domain).'
   return null
 }
@@ -132,11 +171,16 @@ export function validateZip(zip: string, country: string, required = false, maxL
   return null
 }
 
-/** Bounded-length string check — used for line1, city, state, etc. */
-export function validateLength(value: string, max: number, label: string, required = false): string | null {
+/** Bounded free-text check — used for line1, line2, city, state, etc. Beyond
+ *  required + max it now enforces an optional `min` and the app-wide `<>` XSS
+ *  guard (same `SAFE_TEXT_RE` as the shipment schema), so a value bound for a
+ *  carrier label can never smuggle an HTML tag. */
+export function validateLength(value: string, max: number, label: string, required = false, min = 0): string | null {
   const v = (value || '').trim()
   if (!v) return required ? `${label} is required.` : null
+  if (min > 0 && v.length < min) return `${label} must be at least ${min} characters.`
   if (v.length > max) return `${label} must be ${max} characters or fewer.`
+  if (!SAFE_TEXT_RE.test(v)) return `${label} cannot contain the characters < or >.`
   return null
 }
 
@@ -217,11 +261,11 @@ export function validateAddress(
   const zipMax   = caps?.zip   ?? FIELD_LIMITS.addr.zip
   const phoneMax = caps?.phone ?? FIELD_LIMITS.addr.phone
   if (required) {
-    const nameErr = validateLength(a.name || '', nameMax, 'Contact / company', true)
+    const nameErr = validateLength(a.name || '', nameMax, 'Contact / company', true, 2)
     if (nameErr) errors.name = nameErr
-    const line1Err = validateLength(a.line1 || '', lineMax, 'Street address', true)
+    const line1Err = validateLength(a.line1 || '', lineMax, 'Street address', true, 2)
     if (line1Err) errors.line1 = line1Err
-    const cityErr = validateLength(a.city || '', cityMax, 'City', true)
+    const cityErr = validateLength(a.city || '', cityMax, 'City', true, 2)
     if (cityErr) errors.city = cityErr
     const stateErr = validateLength(a.state || '', stateMax, 'State / region', true)
     if (stateErr) errors.state = stateErr

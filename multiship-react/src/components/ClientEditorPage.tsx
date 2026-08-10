@@ -33,11 +33,13 @@ import {
   hasErrors,
   validateAddress,
   validateClientCode,
+  validateCode,
   validateEmail,
   validateName,
   validatePhone,
   type AddressLike,
 } from '../utils/clientValidation'
+import { validateCarrierAccount } from '../validation/carrierAccountValidation'
 import CarrierLogo from './workspace/CarrierLogo'
 import CountrySelect from './workspace/CountrySelect'
 import Select from './workspace/Select'
@@ -537,11 +539,21 @@ export default function ClientEditorPage() {
   }, [isEdit, editingCode, navigate])
 
   useEffect(() => {
-    if (!editingCode) return
     let cancelled = false
-    clientService.listClientAccounts(editingCode)
-      .then((a) => { if (!cancelled) setAccounts(a) })
-      .catch(() => { /* list is cosmetic */ })
+    if (editingCode) {
+      // Edit mode — this client's own accounts drive the pickers.
+      clientService.listClientAccounts(editingCode)
+        .then((a) => { if (!cancelled) setAccounts(a) })
+        .catch(() => { /* list is cosmetic */ })
+    } else {
+      // Create mode — the client has no persisted accounts yet, but the
+      // Mapping step's "platform carrier account" picker needs the shared
+      // platform account book to source a carrier for a rule. Load it so
+      // that picker isn't stuck on "No platform accounts".
+      accountRefService.listAccounts()
+        .then((a) => { if (!cancelled) setAccounts(a) })
+        .catch(() => { /* picker just stays empty — non-fatal */ })
+    }
     return () => { cancelled = true }
   }, [editingCode])
 
@@ -1744,10 +1756,43 @@ function CarrierDraftStep({
     thirdPartyCountry: '',
   })
 
-  const canSave = f.accountNumber.trim() && f.clientId.trim() && f.clientSecret.trim()
+  const [touched, setTouched] = useState<Record<string, boolean>>({})
+  const markTouched = (k: string) => setTouched((cur) => ({ ...cur, [k]: true }))
+
+  // Domain-specific carrier-account validation (per-carrier account-number
+  // format + credential sanity — trims, no embedded whitespace, no <>). Same
+  // validator the standalone Carrier Accounts drawer uses, so both stay in sync.
+  const errors = useMemo(
+    () =>
+      validateCarrierAccount(
+        {
+          carrierCode: f.carrierCode,
+          accountType: 'platform', // staged for THIS client — no separate client picker
+          accountNumber: f.accountNumber,
+          accountName: f.accountName,
+          clientId: f.clientId,
+          clientSecret: f.clientSecret,
+          customerNo: '',
+          environment: f.environment,
+        },
+        {
+          isEdit: false,
+          rotating: false,
+          labels: { accountNumberLabel: 'Account number', idLabel: 'Client ID', secretLabel: 'Client secret' },
+        },
+      ),
+    [f.carrierCode, f.accountNumber, f.accountName, f.clientId, f.clientSecret, f.environment],
+  )
+  const err = (k: 'accountNumber' | 'clientId' | 'clientSecret'): string | undefined =>
+    touched[k] ? errors[k] : undefined
+  const canSave = Object.keys(errors).length === 0
 
   const save = () => {
-    if (!canSave) return
+    if (!canSave) {
+      // Surface every error even for fields the operator hasn't blurred yet.
+      setTouched({ accountNumber: true, clientId: true, clientSecret: true, accountName: true })
+      return
+    }
     addDraft({
       ...f,
       accountNumber: f.accountNumber.trim(),
@@ -1773,6 +1818,7 @@ function CarrierDraftStep({
       thirdPartyPostcode: '',
       thirdPartyCountry: '',
     })
+    setTouched({})
     setAdding(false)
   }
 
@@ -1831,13 +1877,17 @@ function CarrierDraftStep({
                     <input
                       value={f.accountNumber}
                       onChange={(e) => setF((c) => ({ ...c, accountNumber: e.target.value }))}
+                      onBlur={() => markTouched('accountNumber')}
                       maxLength={rule?.maxLength ?? 100}
                       pattern={rule?.pattern}
                       placeholder={rule?.placeholder}
                       autoComplete="off"
-                      className={`${inputBaseClass} ${inputOk}`}
+                      aria-invalid={err('accountNumber') ? true : undefined}
+                      className={`${inputBaseClass} ${err('accountNumber') ? inputErr : inputOk}`}
                     />
-                    {rule ? (
+                    {err('accountNumber') ? (
+                      <span className="mt-0.5 block text-[10.5px] font-semibold leading-4 text-rose-600">{err('accountNumber')}</span>
+                    ) : rule ? (
                       <span className="mt-0.5 block text-[10.5px] leading-4 text-slate-500">{rule.helper}</span>
                     ) : null}
                   </>
@@ -1858,11 +1908,16 @@ function CarrierDraftStep({
               <input
                 value={f.clientId}
                 onChange={(e) => setF((c) => ({ ...c, clientId: e.target.value }))}
+                onBlur={() => markTouched('clientId')}
                 maxLength={255}
                 autoComplete="off"
                 spellCheck={false}
-                className={`${inputBaseClass} ${inputOk}`}
+                aria-invalid={err('clientId') ? true : undefined}
+                className={`${inputBaseClass} ${err('clientId') ? inputErr : inputOk}`}
               />
+              {err('clientId') ? (
+                <span className="mt-0.5 block text-[10.5px] font-semibold leading-4 text-rose-600">{err('clientId')}</span>
+              ) : null}
             </label>
             <label className="block">
               <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Client Secret *</span>
@@ -1870,10 +1925,15 @@ function CarrierDraftStep({
                 type="password"
                 value={f.clientSecret}
                 onChange={(e) => setF((c) => ({ ...c, clientSecret: e.target.value }))}
+                onBlur={() => markTouched('clientSecret')}
                 maxLength={255}
                 autoComplete="new-password"
-                className={`${inputBaseClass} ${inputOk}`}
+                aria-invalid={err('clientSecret') ? true : undefined}
+                className={`${inputBaseClass} ${err('clientSecret') ? inputErr : inputOk}`}
               />
+              {err('clientSecret') ? (
+                <span className="mt-0.5 block text-[10.5px] font-semibold leading-4 text-rose-600">{err('clientSecret')}</span>
+              ) : null}
             </label>
             <label className="flex items-end gap-2 pb-2 text-[12px] font-semibold text-slate-700">
               <input
@@ -2013,7 +2073,7 @@ function CarrierDraftStep({
           <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
             <button
               type="button"
-              onClick={() => setAdding(false)}
+              onClick={() => { setTouched({}); setAdding(false) }}
               className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:bg-slate-100"
             >
               Cancel
@@ -2021,8 +2081,11 @@ function CarrierDraftStep({
             <button
               type="button"
               onClick={save}
-              disabled={!canSave}
-              className="rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+              aria-disabled={!canSave}
+              title={!canSave ? 'Fix the highlighted fields to continue' : undefined}
+              className={`rounded-xl px-4 py-1.5 text-[12px] font-semibold text-white transition ${
+                canSave ? 'bg-[#1f150c] hover:bg-[#412d15]' : 'bg-slate-300'
+              }`}
             >
               Add to list
             </button>
@@ -2143,13 +2206,36 @@ function MappingDraftStep({
     return filteredServices.some((s) => String(s.id) === serviceId) ? serviceId : ''
   }, [serviceId, filteredServices])
 
-  const canSave = !!shipviaCd.trim() && !!effectiveServiceId
+  const [touched, setTouched] = useState<Record<string, boolean>>({})
+  const markTouched = (k: string) => setTouched((cur) => ({ ...cur, [k]: true }))
+
+  // Per-field validation. Order Ship Via is a code (same [A-Z0-9_-] rules as
+  // the client/warehouse codes); the platform account is required only when
+  // the client has no carriers of its own; a carrier service must be picked.
+  const errors = useMemo(() => {
+    const platformRequired = !allowed.hasClientCarriers
+    return {
+      shipviaCd: validateCode(shipviaCd, 'Order Ship Via'),
+      platformAccount:
+        platformRequired && platformAccountId == null
+          ? 'Pick a platform account to source the carrier.'
+          : null,
+      serviceId: !effectiveServiceId ? 'Pick a carrier service.' : null,
+    }
+  }, [shipviaCd, allowed.hasClientCarriers, platformAccountId, effectiveServiceId])
+  const err = (k: 'shipviaCd' | 'platformAccount' | 'serviceId'): string | null =>
+    touched[k] ? errors[k] : null
+  const canSave = Object.values(errors).every((e) => !e)
 
   const save = () => {
-    if (!canSave) return
-    addDraft({ shipviaCd: shipviaCd.trim(), serviceId: Number(effectiveServiceId) })
+    if (!canSave) {
+      setTouched({ shipviaCd: true, platformAccount: true, serviceId: true })
+      return
+    }
+    addDraft({ shipviaCd: shipviaCd.trim().toUpperCase(), serviceId: Number(effectiveServiceId) })
     setShipviaCd('')
     setServiceId('')
+    setTouched({})
     setAdding(false)
   }
 
@@ -2183,9 +2269,15 @@ function MappingDraftStep({
               <input
                 value={shipviaCd}
                 onChange={(e) => setShipviaCd(e.target.value.toUpperCase())}
+                onBlur={() => markTouched('shipviaCd')}
                 placeholder="e.g. P80"
-                className={`${inputBaseClass} ${inputOk} font-mono`}
+                maxLength={FIELD_LIMITS.clientCode}
+                aria-invalid={err('shipviaCd') ? true : undefined}
+                className={`${inputBaseClass} ${err('shipviaCd') ? inputErr : inputOk} font-mono`}
               />
+              {err('shipviaCd') ? (
+                <span className="mt-0.5 block text-[10.5px] font-semibold leading-4 text-rose-600">{err('shipviaCd')}</span>
+              ) : null}
             </label>
             <label className="block">
               <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
@@ -2201,6 +2293,7 @@ function MappingDraftStep({
                   setPlatformAccountId(raw ? Number(raw) : null)
                   setServiceId('')
                 }}
+                onBlur={() => markTouched('platformAccount')}
                 title={
                   allowed.hasClientCarriers
                     ? "Optional — pick to also allow this platform account's carrier."
@@ -2220,10 +2313,13 @@ function MappingDraftStep({
                   </option>
                 ))}
               </Select>
+              {err('platformAccount') ? (
+                <span className="mt-0.5 block text-[10.5px] font-semibold leading-4 text-rose-600">{err('platformAccount')}</span>
+              ) : null}
             </label>
             <label className="block">
               <span className="mb-0.5 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Carrier Ship Via *</span>
-              <Select value={effectiveServiceId} onChange={(e) => setServiceId(e.target.value)}>
+              <Select value={effectiveServiceId} onChange={(e) => setServiceId(e.target.value)} onBlur={() => markTouched('serviceId')}>
                 <option value="">
                   {allowed.carriers.size === 0
                     ? 'Add a carrier account first —'
@@ -2237,12 +2333,15 @@ function MappingDraftStep({
                   </option>
                 ))}
               </Select>
+              {err('serviceId') ? (
+                <span className="mt-0.5 block text-[10.5px] font-semibold leading-4 text-rose-600">{err('serviceId')}</span>
+              ) : null}
             </label>
           </div>
           <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
             <button
               type="button"
-              onClick={() => setAdding(false)}
+              onClick={() => { setTouched({}); setAdding(false) }}
               className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 transition hover:bg-slate-100"
             >
               Cancel
@@ -2250,8 +2349,11 @@ function MappingDraftStep({
             <button
               type="button"
               onClick={save}
-              disabled={!canSave}
-              className="rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
+              aria-disabled={!canSave}
+              title={!canSave ? 'Fix the highlighted fields to continue' : undefined}
+              className={`rounded-xl px-4 py-1.5 text-[12px] font-semibold text-white transition ${
+                canSave ? 'bg-[#1f150c] hover:bg-[#412d15]' : 'bg-slate-300'
+              }`}
             >
               Add to list
             </button>
