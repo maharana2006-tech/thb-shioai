@@ -1,0 +1,21 @@
+services:
+  # Sprint 50 backlog groups C + E — Redis backs Idempotency-Key persistence
+  # and the per-tenant rate limiter. Host port 6379 so Spring Boot can reach
+  # it at spring.data.redis.host=localhost with no extra config.
+  redis:
+    image: redis:7-alpine
+    container_name: thb-shioai-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:

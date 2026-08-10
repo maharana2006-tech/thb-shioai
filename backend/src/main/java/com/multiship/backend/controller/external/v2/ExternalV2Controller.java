@@ -1,5 +1,6 @@
 package com.multiship.backend.controller.external.v2;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.multiship.backend.config.ApiKeyPrincipal;
 import com.multiship.backend.config.ApiKeyScope;
 import com.multiship.backend.config.RequiresScope;
@@ -11,6 +12,7 @@ import com.multiship.backend.service.PickupService;
 import com.multiship.backend.service.RateShopService;
 import com.multiship.backend.service.external.ExternalApiException;
 import com.multiship.backend.service.external.ExternalApiService;
+import com.multiship.backend.service.external.IdempotencyService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -53,24 +55,35 @@ public class ExternalV2Controller {
     private final PickupService pickupService;
     private final ManifestService manifestService;
     private final LandedCostService landedCostService;
+    /**
+     * Sprint 50 Tier 1 finding #7 — Idempotency-Key replay store. Duplicate
+     * POSTs with the same {@code Idempotency-Key} header from the same API
+     * key now short-circuit to the first response for 24h instead of
+     * creating twice. Degrades gracefully when Redis is absent.
+     */
+    private final IdempotencyService idempotency;
 
     // ================================================================
     // Core parcel ops (mirrors v1 with idempotency-key echo)
     // ================================================================
 
-    @Operation(summary = "Rate quote — single carrier")
+    @Operation(summary = "Rate quote — single carrier (idempotent via Idempotency-Key)")
     @PostMapping("/rates")
     @RequiresScope(ApiKeyScope.RATES)
     public ResponseEntity<ApiResponse<ExternalRateResponse>> rates(
             @RequestBody ExternalRateRequest req,
             @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        try {
-            return withIdemp(idempotencyKey,
-                    ok("Rates retrieved.", externalApiService.rate(requireApi(caller), req)));
-        } catch (ExternalApiException e) {
-            return withIdemp(idempotencyKey, error(e));
-        }
+        ApiKeyPrincipal api = requireApi(caller);
+        return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
+                new TypeReference<ApiResponse<ExternalRateResponse>>() {},
+                () -> {
+                    try {
+                        return ok("Rates retrieved.", externalApiService.rate(api, req));
+                    } catch (ExternalApiException e) {
+                        return this.<ExternalRateResponse>error(e);
+                    }
+                });
     }
 
     @Operation(summary = "Create a shipment (idempotent via Idempotency-Key)")
@@ -80,20 +93,24 @@ public class ExternalV2Controller {
             @RequestBody ExternalShipmentRequest req,
             @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        try {
-            // ExternalApiService.createShipment already fans out to
-            // CarrierService.generateManualLabel, which itself de-duplicates
-            // on the order pessimistic lock; the header is echoed here for
-            // caller trace and reserved for a future in-memory replay cache.
-            ExternalShipmentResponse res = externalApiService.createShipment(requireApi(caller), req);
-            return withIdemp(idempotencyKey, ResponseEntity.status(201).body(
-                    ApiResponse.<ExternalShipmentResponse>builder()
-                            .status("SUCCESS").code(201).timestamp(LocalDateTime.now())
-                            .message("Shipment #" + res.getShipmentId() + " created.")
-                            .data(res).build()));
-        } catch (ExternalApiException e) {
-            return withIdemp(idempotencyKey, error(e));
-        }
+        // Sprint 50 Tier 1 finding #7 — Idempotency-Key now actually
+        // persists via IdempotencyService. Duplicate POST from a partner
+        // retry no longer creates two shipments.
+        ApiKeyPrincipal api = requireApi(caller);
+        return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
+                new TypeReference<ApiResponse<ExternalShipmentResponse>>() {},
+                () -> {
+                    try {
+                        ExternalShipmentResponse res = externalApiService.createShipment(api, req);
+                        return ResponseEntity.status(201).body(
+                                ApiResponse.<ExternalShipmentResponse>builder()
+                                        .status("SUCCESS").code(201).timestamp(LocalDateTime.now())
+                                        .message("Shipment #" + res.getShipmentId() + " created.")
+                                        .data(res).build());
+                    } catch (ExternalApiException e) {
+                        return this.<ExternalShipmentResponse>error(e);
+                    }
+                });
     }
 
     @Operation(summary = "Get tracking for a shipment")
@@ -108,18 +125,23 @@ public class ExternalV2Controller {
         }
     }
 
-    @Operation(summary = "Void a shipment")
+    @Operation(summary = "Void a shipment (idempotent via Idempotency-Key)")
     @PostMapping("/shipments/{shipmentId}/void")
     @RequiresScope(ApiKeyScope.VOID)
     public ResponseEntity<ApiResponse<Map<String, Object>>> voidShipment(
             @PathVariable Long shipmentId, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        try {
-            return withIdemp(idempotencyKey,
-                    ok("Shipment voided.", externalApiService.voidShipment(requireApi(caller), shipmentId)));
-        } catch (ExternalApiException e) {
-            return withIdemp(idempotencyKey, error(e));
-        }
+        ApiKeyPrincipal api = requireApi(caller);
+        return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
+                new TypeReference<ApiResponse<Map<String, Object>>>() {},
+                () -> {
+                    try {
+                        return ok("Shipment voided.",
+                                externalApiService.voidShipment(api, shipmentId));
+                    } catch (ExternalApiException e) {
+                        return this.<Map<String, Object>>error(e);
+                    }
+                });
     }
 
     @Operation(summary = "Validate an address")
@@ -139,41 +161,53 @@ public class ExternalV2Controller {
     // Multi-carrier rate-shop
     // ================================================================
 
-    @Operation(summary = "Multi-carrier rate-shop (fan-out across every allowlisted carrier)")
+    @Operation(summary = "Multi-carrier rate-shop (idempotent via Idempotency-Key)")
     @PostMapping("/rate-shop")
     @RequiresScope(ApiKeyScope.RATES)
     public ResponseEntity<ApiResponse<RateShopResponseDTO>> rateShop(
             @RequestBody RateShopRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        requireApi(caller);
-        ApiResponse<RateShopResponseDTO> result = rateShopService.rateShop(req);
-        return withIdemp(idempotencyKey, ResponseEntity.status(result.getCode()).body(result));
+        ApiKeyPrincipal api = requireApi(caller);
+        return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
+                new TypeReference<ApiResponse<RateShopResponseDTO>>() {},
+                () -> {
+                    ApiResponse<RateShopResponseDTO> result = rateShopService.rateShop(req);
+                    return ResponseEntity.status(result.getCode()).body(result);
+                });
     }
 
     // ================================================================
     // Pickup + close-out (Sprints 33-34)
     // ================================================================
 
-    @Operation(summary = "Schedule a courier pickup")
+    @Operation(summary = "Schedule a courier pickup (idempotent via Idempotency-Key)")
     @PostMapping("/pickups")
     @RequiresScope(ApiKeyScope.PICKUPS)
     public ResponseEntity<ApiResponse<PickupResponseDTO>> schedulePickup(
             @RequestBody PickupRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        requireApi(caller);
-        ApiResponse<PickupResponseDTO> result = pickupService.schedule(req);
-        return withIdemp(idempotencyKey, ResponseEntity.status(result.getCode()).body(result));
+        ApiKeyPrincipal api = requireApi(caller);
+        return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
+                new TypeReference<ApiResponse<PickupResponseDTO>>() {},
+                () -> {
+                    ApiResponse<PickupResponseDTO> result = pickupService.schedule(req);
+                    return ResponseEntity.status(result.getCode()).body(result);
+                });
     }
 
-    @Operation(summary = "Close out the day's shipments at a carrier")
+    @Operation(summary = "Close out the day's shipments at a carrier (idempotent via Idempotency-Key)")
     @PostMapping("/close-out")
     @RequiresScope(ApiKeyScope.PICKUPS)
     public ResponseEntity<ApiResponse<ManifestResponseDTO>> closeOut(
             @RequestBody ManifestRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-        requireApi(caller);
-        ApiResponse<ManifestResponseDTO> result = manifestService.closeOut(req);
-        return withIdemp(idempotencyKey, ResponseEntity.status(result.getCode()).body(result));
+        ApiKeyPrincipal api = requireApi(caller);
+        return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
+                new TypeReference<ApiResponse<ManifestResponseDTO>>() {},
+                () -> {
+                    ApiResponse<ManifestResponseDTO> result = manifestService.closeOut(req);
+                    return ResponseEntity.status(result.getCode()).body(result);
+                });
     }
 
     // ================================================================
@@ -235,14 +269,4 @@ public class ExternalV2Controller {
                 .message(e.getMessage()).errorCode(e.getErrorCode().name()).build());
     }
 
-    /** Echo the Idempotency-Key on the response header when provided. */
-    private static <T> ResponseEntity<T> withIdemp(String idempotencyKey, ResponseEntity<T> resp) {
-        if (idempotencyKey == null || idempotencyKey.isBlank()) return resp;
-        return ResponseEntity.status(resp.getStatusCode())
-                .headers(h -> {
-                    h.putAll(resp.getHeaders());
-                    h.set("Idempotency-Key", idempotencyKey);
-                })
-                .body(resp.getBody());
-    }
 }

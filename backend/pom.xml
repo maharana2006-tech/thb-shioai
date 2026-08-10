@@ -71,6 +71,19 @@
 			<artifactId>caffeine</artifactId>
 		</dependency>
 
+		<!-- Sprint 50 Tier 1 finding #7: Spring Data Redis powers the
+		     Idempotency-Key replay store for the public v2 API. Also
+		     lays groundwork for later per-tenant rate-limiter (Group E)
+		     and Redis Streams webhook queue (Phase 2 of the plan). Lettuce
+		     is the default connector — non-blocking, single-connection
+		     multiplexed. Auto-disabled if spring.data.redis.host is unset,
+		     so the unit-test suite (which doesn't start Redis) keeps
+		     working without changes. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis</artifactId>
+		</dependency>
+
 		<!-- Sprint 49 Tier 5 Fix 1: Testcontainers for real-Postgres
 		     integration tests. Every test in the .integration package
 		     is guarded by @EnabledIfEnvironmentVariable(INTEGRATION_TESTS=1)
