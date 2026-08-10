@@ -574,6 +574,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .createdBy(b.getCreatedBy())
                         .fileName(b.getFileName())
                         .status(b.getStatus())
+                        .labelBatchId(b.getLabelBatchId())
                         .createdAt(b.getCreatedAt() == null ? null : b.getCreatedAt().toString())
                         .totalRows(b.getTotalRows())
                         .savedRows(b.getSavedRows())
@@ -602,6 +603,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .createdBy(b.getCreatedBy())
                 .fileName(b.getFileName())
                 .status(b.getStatus())
+                .labelBatchId(b.getLabelBatchId())
                 .createdAt(b.getCreatedAt() == null ? null : b.getCreatedAt().toString())
                 .totalRows(b.getTotalRows())
                 .savedRows(b.getSavedRows())
@@ -648,17 +650,25 @@ public class OrderImportServiceImpl implements OrderImportService {
         int generated = (int) rows.stream()
                 .filter(r -> "GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
                 .count();
+        int failed = (int) rows.stream()
+                .filter(r -> "FAILED".equalsIgnoreCase(r.getGeneratedStatus()))
+                .count();
 
         // savedRows/invalidRows keep their data-validity meaning from save();
         // label progress is conveyed by the status + the per-row Label column.
-        batch.setStatus(deriveGenerationStatus(total, generated));
+        batch.setStatus(deriveGenerationStatus(total, generated, failed));
+        // commit() stamps every generated row with the shared label batchId;
+        // lift it onto the import so the file row shows which All-Orders batch
+        // its labels belong to. Keep any prior id if this run generated none.
+        Integer labelBatchId = firstBatchId(rows);
+        if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
         try {
             if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
         } catch (Exception ignore) { /* keep prior rowsJson */ }
         batch = importBatchRepository.save(batch);
 
-        log.info("Import batch {} label generation ({}): {}/{} labels → {}",
-                id, requestedBy, generated, total, batch.getStatus());
+        log.info("Import batch {} label generation ({}): {}/{} labels → {} (labelBatch {})",
+                id, requestedBy, generated, total, batch.getStatus(), batch.getLabelBatchId());
         return toBatchDTO(batch, rows);
     }
 
@@ -696,23 +706,46 @@ public class OrderImportServiceImpl implements OrderImportService {
         int generated = (int) rows.stream()
                 .filter(r -> "GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
                 .count();
-        batch.setStatus(deriveGenerationStatus(total, generated));
+        int failed = (int) rows.stream()
+                .filter(r -> "FAILED".equalsIgnoreCase(r.getGeneratedStatus()))
+                .count();
+        batch.setStatus(deriveGenerationStatus(total, generated, failed));
+        Integer labelBatchId = firstBatchId(rows);
+        if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
         try {
             if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
         } catch (Exception ignore) { /* keep prior rowsJson */ }
         batch = importBatchRepository.save(batch);
 
-        log.info("Import batch {} row {} label ({}): {} → batch {}",
-                id, rowNumber, requestedBy, target.getGeneratedStatus(), batch.getStatus());
+        log.info("Import batch {} row {} label ({}): {} → batch {} (labelBatch {})",
+                id, rowNumber, requestedBy, target.getGeneratedStatus(), batch.getStatus(), batch.getLabelBatchId());
         return toBatchDTO(batch, rows);
     }
 
-    /** Batch status from label-generation progress: none → INITIATE,
-     *  all → COMPLETE, mixed → PARTIAL_COMPLETE. */
-    private String deriveGenerationStatus(int total, int generated) {
-        if (generated == 0) return "INITIATE";
-        if (generated >= total) return "COMPLETE";
+    /**
+     * Batch status from label-generation outcomes:
+     *   INITIATE         — no row attempted yet (fresh save, nothing generated/failed)
+     *   COMPLETE         — every row got a label
+     *   FAILED           — every row was attempted and all failed
+     *   PARTIAL_COMPLETE — some labels made, or some rows still pending
+     */
+    private String deriveGenerationStatus(int total, int generated, int failed) {
+        if (total == 0) return "INITIATE";
+        if (generated == total) return "COMPLETE";
+        if (failed == total) return "FAILED";
+        if (generated == 0 && failed == 0) return "INITIATE";
         return "PARTIAL_COMPLETE";
+    }
+
+    /** First non-null label batchId across a set of rows (all generated rows
+     *  of one import share it), or null if nothing has generated yet. */
+    private Integer firstBatchId(List<OrderImportRowDTO> rows) {
+        if (rows == null) return null;
+        return rows.stream()
+                .map(OrderImportRowDTO::getBatchId)
+                .filter(java.util.Objects::nonNull)
+                .findFirst()
+                .orElse(null);
     }
 
     /** Build the history DTO (list + rows) from an entity + parsed rows. */
@@ -723,6 +756,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .createdBy(batch.getCreatedBy())
                 .fileName(batch.getFileName())
                 .status(batch.getStatus())
+                .labelBatchId(batch.getLabelBatchId())
                 .createdAt(batch.getCreatedAt() == null ? null : batch.getCreatedAt().toString())
                 .totalRows(batch.getTotalRows())
                 .savedRows(batch.getSavedRows())

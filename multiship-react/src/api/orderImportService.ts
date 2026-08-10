@@ -59,7 +59,7 @@ export interface OrderImportPreview {
 }
 
 /** Lifecycle status of a saved import. */
-export type ImportStatus = 'INITIATE' | 'IN_PROGRESS' | 'PARTIAL_COMPLETE' | 'COMPLETE'
+export type ImportStatus = 'INITIATE' | 'IN_PROGRESS' | 'PARTIAL_COMPLETE' | 'COMPLETE' | 'FAILED'
 
 /** A saved import in the Data History list. */
 export interface ImportBatchSummary {
@@ -69,6 +69,9 @@ export interface ImportBatchSummary {
   fileName?: string | null
   /** INITIATE | IN_PROGRESS | PARTIAL_COMPLETE | COMPLETE. */
   status?: ImportStatus | string | null
+  /** Label batch id shared by every order this import generated a label for.
+   *  Null until the first label is generated. Groups the orders in All Orders. */
+  labelBatchId?: number | null
   createdAt?: string | null
   totalRows: number
   savedRows: number

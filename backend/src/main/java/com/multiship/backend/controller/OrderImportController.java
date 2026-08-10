@@ -135,11 +135,27 @@ public class OrderImportController {
                     .message("Import not found.")
                     .build());
         }
+        long gen = dto.getRows() == null ? 0 : dto.getRows().stream()
+                .filter(r -> "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())).count();
+        int totalRows = dto.getRows() == null ? 0 : dto.getRows().size();
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
-                .message(dto.getSavedRows() + " label(s) generated · status " + dto.getStatus())
+                .message(gen + " of " + totalRows + " label(s) generated · " + statusLabel(dto.getStatus()))
                 .data(dto)
                 .build());
+    }
+
+    /** Human-friendly batch status for API messages. */
+    private static String statusLabel(String status) {
+        if (status == null) return "";
+        switch (status.toUpperCase()) {
+            case "COMPLETE": return "Complete";
+            case "PARTIAL_COMPLETE": return "Partial complete";
+            case "FAILED": return "Failed";
+            case "IN_PROGRESS": return "In progress";
+            case "INITIATE": return "Initiated";
+            default: return status;
+        }
     }
 
     @Operation(summary = "Generate a carrier label for one row of a saved batch")

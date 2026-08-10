@@ -43,6 +43,14 @@ public class ImportBatch {
     @Column(name = "status", length = 24)
     private String status;
 
+    /**
+     * Label batch id — the number stamped on every order this import generated
+     * a label for, so the whole file's orders can be found together in All
+     * Orders. Null until the first label is generated for this import.
+     */
+    @Column(name = "label_batch_id")
+    private Integer labelBatchId;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 

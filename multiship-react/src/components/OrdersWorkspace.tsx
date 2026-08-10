@@ -21,6 +21,11 @@ import {
   FiZap,
   FiPlus,
   FiDatabase,
+  FiHash,
+  FiUser,
+  FiMapPin,
+  FiTag,
+  FiSliders,
 } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import { orderService, type Order, type QueueStats } from '../api/orderService'
@@ -701,6 +706,21 @@ export default function OrdersWorkspace() {
     </select>
   )
 
+  // ── Advanced filter panel (shown when the Filters button is toggled) ────────
+  const advInputCls =
+    'w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[12px] font-medium text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-2 focus:ring-[#f0e9d8]'
+  /** A labeled advanced-filter field: mono uppercase caption + icon, then control.
+   *  Fixed narrow width so fields stay compact and wrap instead of stretching. */
+  const advField = (icon: ReactNode, label: string, control: ReactNode) => (
+    <label className="block w-40">
+      <span className="mb-1 flex items-center gap-1 font-mono text-[8.5px] font-bold uppercase tracking-[0.12em] text-[#a1906d]">
+        <span className="text-[#cdbf9f]">{icon}</span>
+        {label}
+      </span>
+      {control}
+    </label>
+  )
+
   const showStatusColumn = view === 'all'
   const showTracking = view === 'generated'
 
@@ -1096,6 +1116,106 @@ export default function OrdersWorkspace() {
           ) : null}
         </div>
 
+        {/* Advanced filter panel */}
+        {showFilters ? (
+          <div className="mt-3 rounded-2xl border border-[#e3d9c4] bg-[#faf7f0]/70 p-3.5 shadow-sm">
+            <div className="mb-2.5 flex items-center justify-between">
+              <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
+                <FiSliders className="h-3 w-3" /> Advanced filters
+              </span>
+              {activeFilterCount ? (
+                <button
+                  type="button"
+                  onClick={clearColumnFilters}
+                  className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#8a7959] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+                >
+                  <FiX className="h-3.5 w-3.5" /> Clear all
+                </button>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-x-3 gap-y-2.5">
+              {advField(
+                <FiHash className="h-3 w-3" />,
+                'Order #',
+                <input
+                  value={columnFilters.orderNo}
+                  onChange={(e) => setColumnFilter('orderNo')(e.target.value)}
+                  placeholder="e.g. 900044"
+                  className={advInputCls}
+                />,
+              )}
+              {advField(
+                <FiUser className="h-3 w-3" />,
+                'Client code',
+                <input
+                  value={columnFilters.customer}
+                  onChange={(e) => setColumnFilter('customer')(e.target.value)}
+                  placeholder="e.g. ARHDEV"
+                  className={advInputCls}
+                />,
+              )}
+              {advField(
+                <FiMapPin className="h-3 w-3" />,
+                'Destination',
+                <input
+                  value={columnFilters.city}
+                  onChange={(e) => setColumnFilter('city')(e.target.value)}
+                  placeholder="City or state"
+                  className={advInputCls}
+                />,
+              )}
+              {advField(
+                <FiTruck className="h-3 w-3" />,
+                'Tracking #',
+                <input
+                  value={columnFilters.tracking}
+                  onChange={(e) => setColumnFilter('tracking')(e.target.value)}
+                  placeholder="Carrier tracking number"
+                  className={advInputCls}
+                />,
+              )}
+              {showStatusColumn
+                ? advField(
+                    <FiTag className="h-3 w-3" />,
+                    'Status',
+                    <select
+                      value={columnFilters.status}
+                      onChange={(e) => setColumnFilter('status')(e.target.value)}
+                      className={advInputCls}
+                    >
+                      <option value="">Any status</option>
+                      <option value="PENDING">Pending</option>
+                      <option value="GENERATED">Generated</option>
+                      <option value="ERROR">Error</option>
+                    </select>,
+                  )
+                : null}
+              {advField(
+                <FiCalendar className="h-3 w-3" />,
+                'Created from',
+                <input
+                  type="date"
+                  value={dateFrom}
+                  max={dateTo || undefined}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className={advInputCls}
+                />,
+              )}
+              {advField(
+                <FiCalendar className="h-3 w-3" />,
+                'Created to',
+                <input
+                  type="date"
+                  value={dateTo}
+                  min={dateFrom || undefined}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className={advInputCls}
+                />,
+              )}
+            </div>
+          </div>
+        ) : null}
+
         {/* manifest caption strip */}
         <div className="mt-3.5 flex items-center justify-between border-b border-dashed border-[#e3d9c4] pb-1.5">
           <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
@@ -1148,16 +1268,7 @@ export default function OrdersWorkspace() {
                 </th>
               </tr>
 
-              {showFilters ? (
-                <tr className="border-b border-dashed border-[#e3d9c4] bg-[#faf7f0]/70">
-                  {columns.map((col) => (
-                    <th key={col.id} className="px-2 pb-2.5 align-middle">
-                      {col.filter ?? null}
-                    </th>
-                  ))}
-                  <th className="sticky right-0 z-20 bg-[#faf7f0] px-2 pb-2.5 shadow-[-10px_0_12px_-10px_rgba(31,21,12,0.14)]" />
-                </tr>
-              ) : null}
+              {/* Per-column filters were replaced by the Advanced filter panel above. */}
             </thead>
 
             <tbody className="divide-y divide-dashed divide-[#e6dcc7]">

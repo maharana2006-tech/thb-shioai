@@ -16,6 +16,8 @@ public class ImportBatchDTO {
     private String fileName;
     /** INITIATE | IN_PROGRESS | PARTIAL_COMPLETE | COMPLETE. */
     private String status;
+    /** Label batch id shared by every order this import generated. Null until first generation. */
+    private Integer labelBatchId;
     private int totalRows;
     private int savedRows;
     private int invalidRows;

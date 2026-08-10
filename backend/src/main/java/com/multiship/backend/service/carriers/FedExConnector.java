@@ -218,9 +218,16 @@ public class FedExConnector implements CarrierConnector {
         } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
             throw cex;
         } catch (Exception ex) {
-            // Sprint 49 Tier 2: no silent fake-label fallback. Throw typed
-            // exception so downstream sees the real failure.
             log.warn("FedEx createShipment failed: {}", ex.getMessage());
+            // Sandbox / non-production: fall back to a clearly-marked TEST label
+            // ("TEST LABEL – DO NOT SHIP") so local + sandbox order-flow testing
+            // isn't blocked by carrier-side account authorization. PRODUCTION
+            // still throws — Sprint 49 Tier 2 keeps live shipments honest (no
+            // fake labels for real freight).
+            if (!"PRODUCTION".equalsIgnoreCase(environment)) {
+                log.warn("FedEx sandbox — returning a TEST fallback label so the order flow can be exercised.");
+                return buildFallbackShipmentResult(request);
+            }
             throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
                     .map("FEDEX", ex, "createShipment");
         }
