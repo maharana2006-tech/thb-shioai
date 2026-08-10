@@ -31,6 +31,18 @@ public class ImportBatch {
     @Column(name = "created_by", length = 120)
     private String createdBy;
 
+    /** Original uploaded file name (e.g. "orders-jan.xlsx") the data came from. */
+    @Column(name = "file_name", length = 260)
+    private String fileName;
+
+    /**
+     * Lifecycle status of the import:
+     * INITIATE (created, nothing committed), IN_PROGRESS (being applied),
+     * PARTIAL_COMPLETE (some rows saved, some skipped), COMPLETE (all saved).
+     */
+    @Column(name = "status", length = 24)
+    private String status;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 

@@ -78,7 +78,7 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
     setCommitting(true)
     try {
       // Save the imported data to Data History — does NOT generate labels.
-      const response = await orderImportService.save(preview.rows)
+      const response = await orderImportService.save(preview.rows, file?.name)
       if (response.status === 'success' && response.data) {
         setCommittedSummary(response.data)
         notify.success(response.message ?? 'Saved.')

@@ -12,6 +12,10 @@ public class ImportBatchDTO {
     private Long id;
     private String createdBy;
     private String createdAt;
+    /** Original uploaded file name the rows came from. */
+    private String fileName;
+    /** INITIATE | IN_PROGRESS | PARTIAL_COMPLETE | COMPLETE. */
+    private String status;
     private int totalRows;
     private int savedRows;
     private int invalidRows;

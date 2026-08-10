@@ -514,13 +514,17 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     // ── Save to Data History (persist the imported data, no labels) ──────────
     @Override
-    public ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy) {
+    public ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy, String fileName) {
         List<OrderImportRowDTO> safe = rows == null ? java.util.List.of() : rows;
         int total = safe.size();
         int invalid = (int) safe.stream()
                 .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
                 .count();
         int saved = total - invalid;
+        // Freshly saved data has no labels yet → INITIATE. Status advances to
+        // IN_PROGRESS / COMPLETE / PARTIAL_COMPLETE when the operator later
+        // runs "Generate labels" on this batch from Data History.
+        String status = "INITIATE";
         // Mark the valid rows SAVED so the summary UI can badge them.
         for (OrderImportRowDTO r : safe) {
             if (r.getErrors() == null || r.getErrors().isEmpty()) {
@@ -532,6 +536,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (importBatchRepository != null) {
             com.multiship.backend.model.ImportBatch batch = new com.multiship.backend.model.ImportBatch();
             batch.setCreatedBy(requestedBy);
+            batch.setFileName(StringUtils.hasText(fileName) ? fileName.trim() : "Untitled import");
+            batch.setStatus(status);
             batch.setCreatedAt(java.time.LocalDateTime.now());
             batch.setTotalRows(total);
             batch.setSavedRows(saved);
@@ -566,6 +572,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .map(b -> com.multiship.backend.dto.ImportBatchDTO.builder()
                         .id(b.getId())
                         .createdBy(b.getCreatedBy())
+                        .fileName(b.getFileName())
+                        .status(b.getStatus())
                         .createdAt(b.getCreatedAt() == null ? null : b.getCreatedAt().toString())
                         .totalRows(b.getTotalRows())
                         .savedRows(b.getSavedRows())
@@ -592,11 +600,134 @@ public class OrderImportServiceImpl implements OrderImportService {
         return com.multiship.backend.dto.ImportBatchDTO.builder()
                 .id(b.getId())
                 .createdBy(b.getCreatedBy())
+                .fileName(b.getFileName())
+                .status(b.getStatus())
                 .createdAt(b.getCreatedAt() == null ? null : b.getCreatedAt().toString())
                 .totalRows(b.getTotalRows())
                 .savedRows(b.getSavedRows())
                 .invalidRows(b.getInvalidRows())
                 .rows(parsedRows)
+                .build();
+    }
+
+    /**
+     * Generate carrier labels for a previously-saved import (Data History).
+     * The batch moves INITIATE → IN_PROGRESS (persisted so a concurrent read
+     * sees it) → COMPLETE (every row got a label) / PARTIAL_COMPLETE (some
+     * failed) / back to INITIATE (nothing generated — safe to retry).
+     */
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(Long id, String requestedBy) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
+        if (batch == null) return null;
+
+        // Parse the stored rows.
+        List<OrderImportRowDTO> rows = new ArrayList<>();
+        if (importObjectMapper != null && batch.getRowsJson() != null) {
+            try {
+                rows = importObjectMapper.readValue(
+                        batch.getRowsJson(),
+                        new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
+            } catch (Exception e) {
+                rows = new ArrayList<>();
+            }
+        }
+
+        // Mark IN_PROGRESS before the (potentially slow) carrier calls.
+        batch.setStatus("IN_PROGRESS");
+        importBatchRepository.save(batch);
+
+        // Reuse the commit path — it generates labels and stamps each row's
+        // generatedStatus (GENERATED / FAILED) in place.
+        if (!rows.isEmpty()) {
+            commit(rows, requestedBy);
+        }
+
+        int total = rows.size();
+        int generated = (int) rows.stream()
+                .filter(r -> "GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
+                .count();
+
+        // savedRows/invalidRows keep their data-validity meaning from save();
+        // label progress is conveyed by the status + the per-row Label column.
+        batch.setStatus(deriveGenerationStatus(total, generated));
+        try {
+            if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
+        } catch (Exception ignore) { /* keep prior rowsJson */ }
+        batch = importBatchRepository.save(batch);
+
+        log.info("Import batch {} label generation ({}): {}/{} labels → {}",
+                id, requestedBy, generated, total, batch.getStatus());
+        return toBatchDTO(batch, rows);
+    }
+
+    /**
+     * Generate a label for ONE row of a saved batch, so the operator can ship
+     * rows individually straight from Data History. Updates that row's outcome
+     * and re-derives the batch status from all rows.
+     */
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO generateLabelForRow(Long id, int rowNumber, String requestedBy) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
+        if (batch == null) return null;
+
+        List<OrderImportRowDTO> rows = new ArrayList<>();
+        if (importObjectMapper != null && batch.getRowsJson() != null) {
+            try {
+                rows = importObjectMapper.readValue(
+                        batch.getRowsJson(),
+                        new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
+            } catch (Exception e) {
+                rows = new ArrayList<>();
+            }
+        }
+        OrderImportRowDTO target = rows.stream()
+                .filter(r -> r.getRowNumber() == rowNumber)
+                .findFirst()
+                .orElse(null);
+        if (target == null) return toBatchDTO(batch, rows);
+
+        // Generate just this one row (commit mutates it in place).
+        commit(new ArrayList<>(List.of(target)), requestedBy);
+
+        int total = rows.size();
+        int generated = (int) rows.stream()
+                .filter(r -> "GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
+                .count();
+        batch.setStatus(deriveGenerationStatus(total, generated));
+        try {
+            if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
+        } catch (Exception ignore) { /* keep prior rowsJson */ }
+        batch = importBatchRepository.save(batch);
+
+        log.info("Import batch {} row {} label ({}): {} → batch {}",
+                id, rowNumber, requestedBy, target.getGeneratedStatus(), batch.getStatus());
+        return toBatchDTO(batch, rows);
+    }
+
+    /** Batch status from label-generation progress: none → INITIATE,
+     *  all → COMPLETE, mixed → PARTIAL_COMPLETE. */
+    private String deriveGenerationStatus(int total, int generated) {
+        if (generated == 0) return "INITIATE";
+        if (generated >= total) return "COMPLETE";
+        return "PARTIAL_COMPLETE";
+    }
+
+    /** Build the history DTO (list + rows) from an entity + parsed rows. */
+    private com.multiship.backend.dto.ImportBatchDTO toBatchDTO(
+            com.multiship.backend.model.ImportBatch batch, List<OrderImportRowDTO> rows) {
+        return com.multiship.backend.dto.ImportBatchDTO.builder()
+                .id(batch.getId())
+                .createdBy(batch.getCreatedBy())
+                .fileName(batch.getFileName())
+                .status(batch.getStatus())
+                .createdAt(batch.getCreatedAt() == null ? null : batch.getCreatedAt().toString())
+                .totalRows(batch.getTotalRows())
+                .savedRows(batch.getSavedRows())
+                .invalidRows(batch.getInvalidRows())
+                .rows(rows)
                 .build();
     }
 

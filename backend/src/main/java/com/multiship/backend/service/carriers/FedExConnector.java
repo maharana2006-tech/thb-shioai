@@ -735,7 +735,11 @@ public class FedExConnector implements CarrierConnector {
                     "addressesToValidate", java.util.List.of(
                             Map.of("address", addr)));
 
-            String response = HttpClients.newBuilder().baseUrl(getBaseUrl()).build().post()
+            // Read as raw bytes and decode UTF-8 explicitly: FedEx returns UTF-8
+            // JSON but often omits the charset, so the default String converter
+            // would fall back to ISO-8859-1 and mojibake accented place names
+            // (e.g. "Región" → "RegiÃ³n").
+            byte[] raw = HttpClients.newBuilder().baseUrl(getBaseUrl()).build().post()
                     .uri("/address/v1/addresses/resolve")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
@@ -743,10 +747,11 @@ public class FedExConnector implements CarrierConnector {
                     .header("X-locale", "en_US")
                     .body(body)
                     .retrieve()
-                    .body(String.class);
-            // Sprint 49 Tier 1 — full response contained streetLines / city /
-            // postalCode / email / phone for the validated address. Moved to
-            // DEBUG so prod logs no longer leak PII by default.
+                    .body(byte[].class);
+            String response = raw == null ? "{}" : new String(raw, java.nio.charset.StandardCharsets.UTF_8);
+            // Sprint 49 Tier 1 — full response contains PII (streetLines / city /
+            // postalCode / email / phone); logged at DEBUG so prod doesn't leak
+            // it by default.
             log.debug("FedEx AV response: {}", response);
             return parseFedExAvResponse(response);
         } catch (org.springframework.web.client.RestClientResponseException ex) {
@@ -832,9 +837,8 @@ public class FedExConnector implements CarrierConnector {
                     }
                     log.warn("FedEx AV returned no interpretable state / attributes.Matched. Response: {}", response);
                     return new AddressValidationResult(false, "ERROR", classification, null,
-                            java.util.List.of(),
-                            "FedEx AV response did not contain a recognisable state or attributes.Matched field. "
-                                    + "See backend logs for the raw payload.",
+                            java.util.List.of("FedEx could not confirm this address; verify it manually."),
+                            "FedEx couldn't standardize this address (no standardization status).",
                             response);
             }
         } catch (Exception ex) {

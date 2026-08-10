@@ -5,7 +5,9 @@ import {
   FiChevronDown,
   FiChevronRight,
   FiDatabase,
+  FiFileText,
   FiRefreshCw,
+  FiZap,
 } from 'react-icons/fi'
 import PageSectionHeader from './workspace/PageSectionHeader'
 import { notify } from '../utils/notify'
@@ -26,6 +28,8 @@ export default function DataHistoryPage() {
   const [loading, setLoading] = useState(true)
   const [openId, setOpenId] = useState<number | null>(null)
   const [rowsById, setRowsById] = useState<Record<number, OrderImportRow[] | 'loading'>>({})
+  const [generatingId, setGeneratingId] = useState<number | null>(null)
+  const [genRowKey, setGenRowKey] = useState<string | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -62,12 +66,83 @@ export default function DataHistoryPage() {
     }
   }
 
+  /** Kick off label generation for a batch. Optimistically flips the row to
+   *  "In progress" while the carrier calls run, then reflects the result. */
+  const generate = async (id: number) => {
+    setGeneratingId(id)
+    setBatches((list) => list.map((b) => (b.id === id ? { ...b, status: 'IN_PROGRESS' } : b)))
+    try {
+      const res = await orderImportService.generateLabels(id)
+      const updated = res.data
+      if (updated) {
+        setBatches((list) =>
+          list.map((b) =>
+            b.id === id
+              ? { ...b, status: updated.status, savedRows: updated.savedRows, invalidRows: updated.invalidRows }
+              : b,
+          ),
+        )
+        // Refresh the expanded rows so tracking numbers show.
+        if (updated.rows) setRowsById((m) => ({ ...m, [id]: updated.rows }))
+        notify.success(res.message ?? 'Label generation finished.')
+      } else {
+        await load()
+      }
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Label generation failed.')
+      await load()
+    } finally {
+      setGeneratingId(null)
+    }
+  }
+
+  /** Generate a label for a single row inside a batch. */
+  const generateRow = async (batchId: number, rowNumber: number) => {
+    const key = `${batchId}-${rowNumber}`
+    setGenRowKey(key)
+    try {
+      const res = await orderImportService.generateRowLabel(batchId, rowNumber)
+      const updated = res.data
+      if (updated) {
+        if (updated.rows) setRowsById((m) => ({ ...m, [batchId]: updated.rows }))
+        setBatches((list) =>
+          list.map((b) =>
+            b.id === batchId
+              ? { ...b, status: updated.status, savedRows: updated.savedRows, invalidRows: updated.invalidRows }
+              : b,
+          ),
+        )
+        notify.success(res.message ?? 'Label generated.')
+      }
+    } catch (e) {
+      notify.error(e instanceof Error ? e.message : 'Label generation failed.')
+    } finally {
+      setGenRowKey(null)
+    }
+  }
+
   const fmtDate = (v?: string | null) => {
     if (!v) return '—'
     const d = new Date(v)
     return Number.isNaN(d.getTime())
       ? v
       : d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  }
+
+  /** Map an import status to a friendly label + pill classes. */
+  const statusMeta = (status?: string | null): { label: string; cls: string } => {
+    switch ((status || '').toUpperCase()) {
+      case 'COMPLETE':
+        return { label: 'Complete', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' }
+      case 'PARTIAL_COMPLETE':
+        return { label: 'Partial complete', cls: 'bg-amber-50 text-amber-700 ring-amber-200' }
+      case 'IN_PROGRESS':
+        return { label: 'In progress', cls: 'bg-sky-50 text-sky-700 ring-sky-200' }
+      case 'INITIATE':
+        return { label: 'Initiated', cls: 'bg-slate-100 text-slate-600 ring-slate-200' }
+      default:
+        return { label: status || '—', cls: 'bg-slate-100 text-slate-500 ring-slate-200' }
+    }
   }
 
   return (
@@ -119,19 +194,42 @@ export default function DataHistoryPage() {
             {batches.map((b) => {
               const open = openId === b.id
               const rows = rowsById[b.id]
+              const st = (b.status || '').toUpperCase()
+              const canGenerate = st === 'INITIATE' || st === 'PARTIAL_COMPLETE'
+              const busy = generatingId === b.id
               return (
                 <div key={b.id}>
+                  <div className="flex items-stretch transition hover:bg-[#faf7f0]">
                   <button
                     type="button"
                     onClick={() => void toggle(b.id)}
-                    className="grid w-full grid-cols-[24px_90px_1fr_140px_120px] items-center gap-3 px-5 py-3 text-left transition hover:bg-[#faf7f0]"
+                    className="grid flex-1 grid-cols-[24px_60px_minmax(0,1fr)_130px_120px] items-center gap-3 px-5 py-3 text-left"
                   >
                     <span className="text-[#8a7959]">
                       {open ? <FiChevronDown className="h-4 w-4" /> : <FiChevronRight className="h-4 w-4" />}
                     </span>
                     <span className="font-mono text-[13px] font-bold text-[#1f150c]">#{b.id}</span>
-                    <span className="text-[12.5px] text-[#3f3527]">{fmtDate(b.createdAt)}</span>
-                    <span className="text-[12px] text-[#8a7959]">{b.createdBy || '—'}</span>
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-1.5">
+                        <FiFileText className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
+                        <span className="truncate text-[12.5px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
+                          {b.fileName || 'Untitled import'}
+                        </span>
+                      </span>
+                      <span className="mt-0.5 block text-[11px] text-[#8a7959]">
+                        {fmtDate(b.createdAt)} · {b.createdBy || '—'}
+                      </span>
+                    </span>
+                    <span className="flex justify-center">
+                      {(() => {
+                        const s = statusMeta(b.status)
+                        return (
+                          <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>
+                            {s.label}
+                          </span>
+                        )
+                      })()}
+                    </span>
                     <span className="flex items-center justify-end gap-1.5">
                       <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 ring-1 ring-emerald-200">
                         {b.savedRows} saved
@@ -143,6 +241,23 @@ export default function DataHistoryPage() {
                       ) : null}
                     </span>
                   </button>
+                  {canGenerate ? (
+                    <button
+                      type="button"
+                      onClick={() => void generate(b.id)}
+                      disabled={busy}
+                      title={st === 'PARTIAL_COMPLETE' ? 'Retry generating labels for the rows that failed' : 'Generate carrier labels for this saved import'}
+                      className="my-2 mr-4 inline-flex shrink-0 items-center gap-1.5 self-center rounded-xl bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                    >
+                      {busy ? (
+                        <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                      ) : (
+                        <FiZap className="h-3.5 w-3.5" />
+                      )}
+                      {busy ? 'Generating…' : st === 'PARTIAL_COMPLETE' ? 'Retry labels' : 'Generate labels'}
+                    </button>
+                  ) : null}
+                  </div>
 
                   {open ? (
                     <div className="border-t border-dashed border-[#eee6d6] bg-[#faf7f0]/50 px-5 py-3">
@@ -162,11 +277,15 @@ export default function DataHistoryPage() {
                                 <th className="p-2.5">Carrier</th>
                                 <th className="p-2.5 text-right">Weight</th>
                                 <th className="p-2.5">Status</th>
+                                <th className="p-2.5">Label</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-[#eee6d6]">
                               {rows.map((r) => {
                                 const ok = (r.errors?.length ?? 0) === 0
+                                const gen = (r.generatedStatus ?? '').toUpperCase()
+                                const rowKey = `${b.id}-${r.rowNumber}`
+                                const rowBusy = genRowKey === rowKey
                                 return (
                                   <tr key={r.rowNumber} className="transition hover:bg-[#faf7f0]/60">
                                     <td className="p-2.5 font-mono text-[10.5px] text-[#8a7959]">{r.rowNumber}</td>
@@ -198,6 +317,34 @@ export default function DataHistoryPage() {
                                         <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-rose-800">
                                           {r.errors.join(', ')}
                                         </span>
+                                      )}
+                                    </td>
+                                    <td className="p-2.5">
+                                      {gen === 'GENERATED' ? (
+                                        <span className="inline-flex flex-col gap-0.5">
+                                          <span className="w-fit rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-emerald-800">
+                                            Generated
+                                          </span>
+                                          {r.generatedTrackingNumber ? (
+                                            <span className="font-mono text-[9.5px] text-[#8a7959]">{r.generatedTrackingNumber}</span>
+                                          ) : null}
+                                        </span>
+                                      ) : !ok ? (
+                                        <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => void generateRow(b.id, r.rowNumber)}
+                                          disabled={rowBusy}
+                                          className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                                        >
+                                          {rowBusy ? (
+                                            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                                          ) : (
+                                            <FiZap className="h-3 w-3" />
+                                          )}
+                                          {rowBusy ? 'Generating…' : 'Generate label'}
+                                        </button>
                                       )}
                                     </td>
                                   </tr>

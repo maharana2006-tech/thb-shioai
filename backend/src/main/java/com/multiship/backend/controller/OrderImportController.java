@@ -82,9 +82,10 @@ public class OrderImportController {
     @PostMapping("/save")
     public ResponseEntity<ApiResponse<OrderImportPreviewDTO>> save(
             @RequestBody List<OrderImportRowDTO> rows,
+            @org.springframework.web.bind.annotation.RequestParam(required = false) String fileName,
             @AuthenticationPrincipal UserDetails userDetails) {
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
-        ApiResponse<OrderImportPreviewDTO> response = orderImportService.save(rows, username);
+        ApiResponse<OrderImportPreviewDTO> response = orderImportService.save(rows, username, fileName);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
@@ -114,6 +115,51 @@ public class OrderImportController {
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
                 .message("Import loaded.")
+                .data(dto)
+                .build());
+    }
+
+    @Operation(summary = "Generate carrier labels for a saved import batch",
+            description = "Advances the batch status INITIATE → IN_PROGRESS → COMPLETE / " +
+                    "PARTIAL_COMPLETE as it generates a label per saved row.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/history/{id}/generate")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> generateForBatch(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        String username = userDetails == null ? "unknown" : userDetails.getUsername();
+        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.generateLabelsForBatch(id, username);
+        if (dto == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import not found.")
+                    .build());
+        }
+        return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message(dto.getSavedRows() + " label(s) generated · status " + dto.getStatus())
+                .data(dto)
+                .build());
+    }
+
+    @Operation(summary = "Generate a carrier label for one row of a saved batch")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/history/{id}/generate/{rowNumber}")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> generateForRow(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.PathVariable int rowNumber,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        String username = userDetails == null ? "unknown" : userDetails.getUsername();
+        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.generateLabelForRow(id, rowNumber, username);
+        if (dto == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import not found.")
+                    .build());
+        }
+        return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message("Label generation attempted for row " + rowNumber + " · status " + dto.getStatus())
                 .data(dto)
                 .build());
     }

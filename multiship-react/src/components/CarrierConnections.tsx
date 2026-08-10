@@ -41,6 +41,10 @@ import {
   purposeLabel,
   clearanceLabel,
 } from '../utils/customsOptions'
+import {
+  validateCarrierAccount,
+  type CarrierAccountErrors,
+} from '../validation/carrierAccountValidation'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import CarrierLogo from './workspace/CarrierLogo'
@@ -250,10 +254,25 @@ export default function CarrierConnections({
   const accountNameRef = useRef<HTMLInputElement>(null)
   const environmentRef = useRef<HTMLSelectElement>(null)
   const [drawerCheck, setDrawerCheck] = useState<{ state: 'idle' | 'checking' | 'ok' | 'fail'; message?: string }>({ state: 'idle' })
+  // Inline field errors for the drawer form (empty = clean). Populated on save
+  // attempt and cleared as soon as the operator edits any validated field.
+  const [drawerErrors, setDrawerErrors] = useState<CarrierAccountErrors>({})
   const [saving, setSaving] = useState(false)
   // When true, credential fields become editable on edit; when false (default
   // on edit), the drawer shows a masked read-only "credentials on file" note.
   const [rotatingCredentials, setRotatingCredentials] = useState(false)
+  // Clear inline errors the moment the operator edits any validated field.
+  useEffect(() => {
+    setDrawerErrors({})
+  }, [
+    drawer.carrierCode,
+    drawer.accountType,
+    drawer.accountNumber,
+    drawer.accountName,
+    drawer.clientId,
+    drawer.clientSecret,
+    drawer.customerNo,
+  ])
 
   const loadAccounts = useCallback(async () => {
     setLoading(true)
@@ -499,24 +518,35 @@ export default function CarrierConnections({
     const clientSecretEntered = drawer.clientSecret.trim()
     const credentialTerms = credentialLabelsFor(drawer.carrierCode)
 
-    if (!drawer.accountNumber.trim()) {
-      notify.error(`${credentialTerms.accountNumberLabel} is required.`)
+    // Carrier-aware field validation (formats, credential hygiene, required
+    // fields). Surfaces inline errors under each field instead of one modal.
+    const errs = validateCarrierAccount(
+      {
+        carrierCode: drawer.carrierCode,
+        accountType: drawer.accountType,
+        accountNumber: drawer.accountNumber,
+        accountName: drawer.accountName,
+        clientId: drawer.clientId,
+        clientSecret: drawer.clientSecret,
+        customerNo: drawer.customerNo,
+        environment: drawer.environment,
+      },
+      {
+        isEdit,
+        rotating: rotatingCredentials,
+        labels: {
+          accountNumberLabel: credentialTerms.accountNumberLabel,
+          idLabel: credentialTerms.idLong,
+          secretLabel: credentialTerms.secretLong,
+        },
+      },
+    )
+    if (Object.keys(errs).length > 0) {
+      setDrawerErrors(errs)
+      notify.error('Please fix the highlighted fields before saving.')
       return
     }
-    // On CREATE both credential fields are mandatory. On EDIT they're only
-    // required when the user has chosen to rotate them (either field entered).
-    if (!isEdit && (!clientIdEntered || !clientSecretEntered)) {
-      notify.error(`${credentialTerms.idLong} and ${credentialTerms.secretLong} are required for a new account.`)
-      return
-    }
-    if (isEdit && rotatingCredentials && (!clientIdEntered || !clientSecretEntered)) {
-      notify.error(`Enter both the new ${credentialTerms.idShort} and ${credentialTerms.secretShort}, or cancel the rotation.`)
-      return
-    }
-    if (drawer.accountType === 'client' && !drawer.customerNo.trim()) {
-      notify.error('Choose a client for a client account.')
-      return
-    }
+    setDrawerErrors({})
 
     // If the user ran the drawer check on brand-new credentials and it passed,
     // persist that verification after saving so the row lands with verified=true
@@ -632,9 +662,11 @@ export default function CarrierConnections({
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-gradient-to-br from-white to-slate-100 shadow-sm ring-1 ring-slate-100">
                 <CarrierLogo carrierId={account.carrierCode} size={22} className="rounded" />
               </span>
-              <span className="min-w-0">
-                <span className="block font-semibold text-slate-950">{formatCarrierName(account.carrierCode)}</span>
-                <span className="block text-[11px] text-slate-400">{account.accountNumber}</span>
+              <span className="min-w-0 max-w-[200px]">
+                <span className="block truncate font-semibold text-slate-950">{formatCarrierName(account.carrierCode)}</span>
+                <span className="block max-w-[200px] truncate text-[11px] text-slate-400" title={account.accountNumber}>
+                  {account.accountNumber}
+                </span>
               </span>
             </span>
           )
@@ -1090,7 +1122,7 @@ export default function CarrierConnections({
                 ) : null}
                 {drawer.accountType === 'client' ? (
                   <div className="mt-2.5">
-                    <Field label={drawer.editingId ? 'Client (locked once saved)' : 'Client'}>
+                    <Field label={drawer.editingId ? 'Client (locked once saved)' : 'Client'} error={drawerErrors.customerNo}>
                       <Select
                         value={drawer.customerNo}
                         onChange={(e) => setDrawer((c) => ({ ...c, customerNo: e.target.value }))}
@@ -1182,12 +1214,12 @@ export default function CarrierConnections({
               </DrawerStep>
 
               <DrawerStep n="3" title="Credentials">
-                <Field label="Account name">
+                <Field label="Account name" error={drawerErrors.accountName}>
                   <input
                     ref={accountNameRef}
                     value={drawer.accountName}
                     onChange={(e) => setDrawer((c) => ({ ...c, accountName: e.target.value }))}
-                    className={inputClassName}
+                    className={`${inputClassName}${drawerErrors.accountName ? ' !border-rose-400' : ''}`}
                     placeholder='Shown across the app, e.g. "Acme UPS"'
                   />
                 </Field>
@@ -1197,6 +1229,7 @@ export default function CarrierConnections({
                       ? `${credentialLabelsFor(drawer.carrierCode).accountNumberLabel} (locked)`
                       : credentialLabelsFor(drawer.carrierCode).accountNumberLabel
                   }
+                  error={drawerErrors.accountNumber}
                 >
                   <input
                     value={drawer.accountNumber}
@@ -1205,7 +1238,7 @@ export default function CarrierConnections({
                       drawer.editingId !== null
                         ? 'cursor-not-allowed !bg-slate-100 text-slate-500'
                         : ''
-                    }`}
+                    }${drawerErrors.accountNumber ? ' !border-rose-400' : ''}`}
                     placeholder={credentialLabelsFor(drawer.carrierCode).accountNumberPlaceholder}
                     readOnly={drawer.editingId !== null}
                   />
@@ -1269,21 +1302,21 @@ export default function CarrierConnections({
                         </button>
                       </div>
                     ) : null}
-                    <Field label={credentialLabelsFor(drawer.carrierCode).idLong}>
+                    <Field label={credentialLabelsFor(drawer.carrierCode).idLong} error={drawerErrors.clientId}>
                       <input
                         value={drawer.clientId}
                         onChange={(e) => setDrawer((c) => ({ ...c, clientId: e.target.value }))}
-                        className={inputClassName}
+                        className={`${inputClassName}${drawerErrors.clientId ? ' !border-rose-400' : ''}`}
                         placeholder={credentialLabelsFor(drawer.carrierCode).idLong}
                         autoComplete="off"
                       />
                     </Field>
-                    <Field label={credentialLabelsFor(drawer.carrierCode).secretLong}>
+                    <Field label={credentialLabelsFor(drawer.carrierCode).secretLong} error={drawerErrors.clientSecret}>
                       <input
                         type="password"
                         value={drawer.clientSecret}
                         onChange={(e) => setDrawer((c) => ({ ...c, clientSecret: e.target.value }))}
-                        className={inputClassName}
+                        className={`${inputClassName}${drawerErrors.clientSecret ? ' !border-rose-400' : ''}`}
                         placeholder={credentialLabelsFor(drawer.carrierCode).secretLong}
                         autoComplete="off"
                       />
@@ -1712,11 +1745,14 @@ function DrawerStep({ n, title, children }: { n: string; title: string; children
   )
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({ label, error, children }: { label: string; error?: string; children: ReactNode }) {
   return (
     <label className="mb-2.5 block">
       <span className="mb-1 block text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">{label}</span>
       {children}
+      {error ? (
+        <span className="mt-1 block text-[10.5px] font-semibold normal-case tracking-normal text-rose-600">{error}</span>
+      ) : null}
     </label>
   )
 }

@@ -58,10 +58,17 @@ export interface OrderImportPreview {
   rows: OrderImportRow[]
 }
 
+/** Lifecycle status of a saved import. */
+export type ImportStatus = 'INITIATE' | 'IN_PROGRESS' | 'PARTIAL_COMPLETE' | 'COMPLETE'
+
 /** A saved import in the Data History list. */
 export interface ImportBatchSummary {
   id: number
   createdBy?: string | null
+  /** Original uploaded file the rows came from. */
+  fileName?: string | null
+  /** INITIATE | IN_PROGRESS | PARTIAL_COMPLETE | COMPLETE. */
+  status?: ImportStatus | string | null
   createdAt?: string | null
   totalRows: number
   savedRows: number
@@ -101,9 +108,13 @@ export const orderImportService = {
   commit: (rows: OrderImportRow[]) =>
     apiClient.post<ApiResponse<OrderImportPreview>>('/orders/import/commit', rows),
 
-  /** Save the previewed rows to Data History (persists the data, no labels). */
-  save: (rows: OrderImportRow[]) =>
-    apiClient.post<ApiResponse<OrderImportPreview>>('/orders/import/save', rows),
+  /** Save the previewed rows to Data History (persists the data, no labels).
+   *  `fileName` is recorded so the history row shows where the data came from. */
+  save: (rows: OrderImportRow[], fileName?: string | null) =>
+    apiClient.post<ApiResponse<OrderImportPreview>>(
+      `/orders/import/save${fileName ? `?fileName=${encodeURIComponent(fileName)}` : ''}`,
+      rows,
+    ),
 
   /** List saved imports for the Data History page. */
   listHistory: () =>
@@ -112,6 +123,18 @@ export const orderImportService = {
   /** One saved import with its full rows. */
   getHistory: (id: number) =>
     apiClient.get<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}`),
+
+  /** Generate carrier labels for a saved batch — advances its status
+   *  INITIATE → IN_PROGRESS → COMPLETE / PARTIAL_COMPLETE. */
+  generateLabels: (id: number) =>
+    apiClient.post<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}/generate`, {}),
+
+  /** Generate a carrier label for a single row of a saved batch. */
+  generateRowLabel: (id: number, rowNumber: number) =>
+    apiClient.post<ApiResponse<ImportBatchDetail>>(
+      `/orders/import/history/${id}/generate/${rowNumber}`,
+      {},
+    ),
 
   /**
    * Sprint 48 — re-validate rows the operator edited in the preview

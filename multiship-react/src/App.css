@@ -272,3 +272,13 @@ textarea {
 @media (prefers-reduced-motion: reduce) {
   .mb-drift { animation: none !important; }
 }
+
+/* ===== New-Shipment validation toast ===== */
+@keyframes msToastIn {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes msToastBar {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}

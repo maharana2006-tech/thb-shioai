@@ -40,6 +40,9 @@ import LandedCostModal from './shipment/LandedCostModal'
 import type { LandedCostRequest } from '../api/landedCostService'
 import type { CustomsItem, OrderCustomsPayload } from '../api/customsService'
 import { parseIntlValidationMessage } from '../utils/intlValidationErrors'
+import { useFormik, getIn } from 'formik'
+import { shipmentSchema, type ShipmentFormValues } from '../validation/yup/shipmentSchema'
+import { dialCodeFor, postalPlaceholderFor } from '../utils/countryFormats'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -101,15 +104,19 @@ const defaultSender = (): ManualShipmentAddress => ({
 const inputCls =
   'w-full rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-4 focus:ring-[#f4eede] disabled:cursor-not-allowed disabled:bg-[#faf7f0] disabled:text-[#8a7959]'
 
-function Field({ label, required, hint, children, className = '' }: { label: string; required?: boolean; hint?: string; children: ReactNode; className?: string }) {
+function Field({ label, required, hint, error, title, children, className = '' }: { label: string; required?: boolean; hint?: string; error?: string | false | null; title?: string; children: ReactNode; className?: string }) {
   return (
-    <label className={`block space-y-1 ${className}`}>
+    <label className={`block space-y-1 ${className}`} title={title}>
       <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
         {label}
         {required ? <span className="text-rose-500"> *</span> : null}
       </span>
       {children}
-      {hint ? <span className="mt-1 block text-[10.5px] normal-case tracking-normal text-slate-400">{hint}</span> : null}
+      {error ? (
+        <span className="ms-field-error mt-1 block text-[10.5px] font-semibold normal-case tracking-normal text-rose-600">{error}</span>
+      ) : hint ? (
+        <span className="mt-1 block text-[10.5px] normal-case tracking-normal text-slate-400">{hint}</span>
+      ) : null}
     </label>
   )
 }
@@ -192,12 +199,15 @@ function CountrySelect({ value, onChange }: { value: string; onChange: (code: st
   )
 }
 
+type AddressErrors = Partial<Record<keyof ManualShipmentAddress, string>>
+
 function AddressBlock({
   value,
   onChange,
   withEmail,
   hideLine3,
   extraAction,
+  errors,
 }: {
   value: ManualShipmentAddress
   onChange: (patch: Partial<ManualShipmentAddress>) => void
@@ -205,6 +215,8 @@ function AddressBlock({
   hideLine3?: boolean
   /** Extra control (e.g. address-book search) placed on the same line as "Paste & autofill with AI". */
   extraAction?: ReactNode
+  /** Per-field validation messages (only passed after a submit attempt). */
+  errors?: AddressErrors
 }) {
   const [pasteOpen, setPasteOpen] = useState(false)
   const [pasteText, setPasteText] = useState('')
@@ -225,7 +237,9 @@ function AddressBlock({
       for (const k of keys) {
         const v = (parsed as Record<string, unknown>)[k]
         if (typeof v === 'string' && v.trim()) {
-          patch[k] = v.trim()
+          // Every key in `keys` is a string-valued field, but TS widens patch[k]
+          // to the full value union — assign through a string-keyed view.
+          ;(patch as Record<string, string>)[k] = v.trim()
           filled += 1
         }
       }
@@ -290,16 +304,16 @@ function AddressBlock({
         )}
       </div>
       <div className="grid grid-cols-2 gap-3">
-      <Field label="Full name" required className="col-span-2 sm:col-span-1">
+      <Field label="Full name" required error={errors?.name} className="col-span-2 sm:col-span-1">
         <input className={inputCls} value={value.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="Jane Doe" />
       </Field>
-      <Field label="Company" className="col-span-2 sm:col-span-1">
+      <Field label="Company" error={errors?.company} className="col-span-2 sm:col-span-1">
         <input className={inputCls} value={value.company} onChange={(e) => onChange({ company: e.target.value })} placeholder="Acme Inc." />
       </Field>
-      <Field label="Address line 1" required className="col-span-2">
+      <Field label="Address line 1" required error={errors?.addressLine1} className="col-span-2">
         <input className={inputCls} value={value.addressLine1} onChange={(e) => onChange({ addressLine1: e.target.value })} placeholder="123 Market St" />
       </Field>
-      <Field label="Address line 2" className="col-span-2">
+      <Field label="Address line 2" error={errors?.addressLine2} className="col-span-2">
         <input className={inputCls} value={value.addressLine2} onChange={(e) => onChange({ addressLine2: e.target.value })} placeholder="Suite 400" />
       </Field>
       {!hideLine3 && (value.addressLine2 || value.addressLine3) ? (
@@ -317,37 +331,50 @@ function AddressBlock({
         </Field>
       ) : null}
       <div className="col-span-2 grid grid-cols-3 gap-3">
-        <Field label="City" required>
+        <Field label="City" required error={errors?.city}>
           <input className={inputCls} value={value.city} onChange={(e) => onChange({ city: e.target.value })} placeholder="Buffalo" />
         </Field>
-        <Field label="State / region">
+        <Field label="State / region" error={errors?.state}>
           <input className={inputCls} value={value.state} onChange={(e) => onChange({ state: e.target.value })} placeholder="NY" />
         </Field>
-        <Field label="Postal code" required>
-          <input className={inputCls} value={value.postalCode} onChange={(e) => onChange({ postalCode: e.target.value })} placeholder="14201" />
+        <Field label="Postal code" required error={errors?.postalCode}>
+          <input className={inputCls} value={value.postalCode} onChange={(e) => onChange({ postalCode: e.target.value })} placeholder={postalPlaceholderFor(value.countryCode)} />
         </Field>
       </div>
       <div className="col-span-2 grid grid-cols-3 gap-3">
-        <Field label="Country" required>
-          <CountrySelect value={value.countryCode} onChange={(code) => onChange({ countryCode: code })} />
+        <Field label="Country" required error={errors?.countryCode}>
+          <CountrySelect
+            value={value.countryCode}
+            onChange={(code) => {
+              // Picking a country auto-fills its dial code, but never clobbers a
+              // dial code the user typed that doesn't match the previous country.
+              const nextDial = dialCodeFor(code)
+              const current = (value.phoneCountryCode ?? '').trim()
+              const wasAutoFilled = !current || current === dialCodeFor(value.countryCode)
+              onChange({
+                countryCode: code,
+                ...(nextDial && wasAutoFilled ? { phoneCountryCode: nextDial } : {}),
+              })
+            }}
+          />
         </Field>
-        <Field label="Phone country code" title="ISO dial code without the plus — e.g. 1 for US, 44 for GB, 91 for IN">
+        <Field label="Phone country code" error={errors?.phoneCountryCode} title="ISO dial code without the plus — auto-filled from the country; e.g. 1 for US, 44 for GB, 91 for IN">
           <input
             className={inputCls}
             value={value.phoneCountryCode ?? ''}
             onChange={(e) => onChange({ phoneCountryCode: e.target.value.replace(/[^\d]/g, '') })}
-            placeholder="44"
+            placeholder={dialCodeFor(value.countryCode) || '44'}
             inputMode="numeric"
             maxLength={4}
           />
         </Field>
-        <Field label="Phone">
+        <Field label="Phone" error={errors?.phone}>
           <input className={inputCls} value={value.phone} onChange={(e) => onChange({ phone: e.target.value })} placeholder="2125550100" />
         </Field>
       </div>
       <div className="col-span-2 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:items-end">
         {withEmail ? (
-          <Field label="Email">
+          <Field label="Email" error={errors?.email}>
             <input className={inputCls} value={value.email} onChange={(e) => onChange({ email: e.target.value })} placeholder="jane@acme.com" />
           </Field>
         ) : null}
@@ -851,6 +878,91 @@ export default function NewShipmentPage() {
 
   const isCustomPkg = packageChoice === CUSTOM_PKG
 
+  // ── Yup + Formik validation ────────────────────────────────────────────────
+  // The page keeps its own useState for each field (needed by AI autofill, the
+  // rate picker, warehouse resolution, etc.), so Formik is wired as a pure
+  // validation layer: we mirror the live state into `formValues`, feed it to
+  // useFormik via enableReinitialize, and read back `formik.errors`. Messages
+  // only render once the user has attempted "Generate label" (submitAttempted).
+  const [submitAttempted, setSubmitAttempted] = useState(false)
+  // Non-blocking validation toast (replaces the old error modal). Field-level
+  // red messages under each input remain the primary guidance.
+  const [toast, setToast] = useState<{ id: number; title: string; body: string } | null>(null)
+  const showToast = (body: string, title = 'A few details need fixing') =>
+    setToast({ id: Date.now(), title, body })
+  useEffect(() => {
+    if (!toast) return
+    const t = window.setTimeout(() => setToast(null), 6000)
+    return () => window.clearTimeout(t)
+  }, [toast])
+  /** Smooth-scroll the first inline error message into view after a failed submit. */
+  const scrollToFirstError = () => {
+    window.setTimeout(() => {
+      const el = document.querySelector('.ms-field-error')
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 60)
+  }
+  const pickAddr = (a: ManualShipmentAddress) => ({
+    name: a.name ?? '',
+    company: a.company ?? '',
+    addressLine1: a.addressLine1 ?? '',
+    addressLine2: a.addressLine2 ?? '',
+    city: a.city ?? '',
+    state: a.state ?? '',
+    postalCode: a.postalCode ?? '',
+    countryCode: a.countryCode ?? '',
+    phone: a.phone ?? '',
+    phoneCountryCode: a.phoneCountryCode ?? '',
+    email: a.email ?? '',
+  })
+  const formValues = useMemo(
+    () => ({
+      isInternational,
+      isCustomPackage: isCustomPkg,
+      carrier,
+      account: accountNumber,
+      incoterms,
+      reasonForExport,
+      currency,
+      sender: pickAddr(sender),
+      recipient: pickAddr(recipient),
+      weight,
+      declaredValue,
+      insuredValue,
+      length,
+      width,
+      height,
+      items: items.map((it) => ({
+        description: it.description,
+        sku: it.sku,
+        hsCode: it.hsCode,
+        countryOfOrigin: it.countryOfOrigin,
+        quantity: it.quantity,
+        unitValue: it.unitValue,
+      })),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isInternational, isCustomPkg, carrier, accountNumber, incoterms, reasonForExport,
+      currency, sender, recipient, weight, declaredValue, insuredValue, length, width, height, items],
+  )
+  const formik = useFormik<ShipmentFormValues>({
+    initialValues: formValues as unknown as ShipmentFormValues,
+    enableReinitialize: true,
+    validationSchema: shipmentSchema,
+    onSubmit: () => {},
+  })
+  /** Field error at `path` — only surfaced after a submit attempt. */
+  const errAt = (path: string): string | undefined =>
+    submitAttempted ? (getIn(formik.errors, path) as string | undefined) : undefined
+  /** Whole address-block error map for AddressBlock (sender / recipient). */
+  const addrErrors = (prefix: 'sender' | 'recipient'): AddressErrors | undefined => {
+    if (!submitAttempted) return undefined
+    return getIn(formik.errors, prefix) as AddressErrors | undefined
+  }
+  /** Per-item error map (description, quantity, unitValue, …). */
+  const itemErrAt = (index: number, field: string): string | undefined =>
+    submitAttempted ? (getIn(formik.errors, `items[${index}].${field}`) as string | undefined) : undefined
+
   // Importer/broker resolve from the client's profile covering the destination country.
   const destCountry = (recipient.countryCode || '').toUpperCase()
   const importerProfile = useMemo(
@@ -1214,17 +1326,35 @@ export default function NewShipmentPage() {
     }
   }
 
+  /** Flatten a (possibly nested/array) Formik error tree into a list of messages. */
+  const flattenErrors = (node: unknown): string[] => {
+    if (!node) return []
+    if (typeof node === 'string') return [node]
+    if (Array.isArray(node)) return node.flatMap(flattenErrors)
+    return Object.values(node as Record<string, unknown>).flatMap(flattenErrors)
+  }
+
   const submit = async () => {
-    if (!carrier) return notify.error('Pick a carrier you have a verified account with.')
-    if (!accountNumber.trim()) return notify.error('Enter the bill-to account number.')
-    if (!recipient.name.trim() || !recipient.addressLine1.trim() || !recipient.city.trim() || !recipient.postalCode.trim()) {
-      return notify.error('Recipient name, address, city and postal code are required.')
+    // Yup + Formik gate — validate the mirrored form values before anything else.
+    setSubmitAttempted(true)
+    const errs = await formik.validateForm(formValues as unknown as ShipmentFormValues)
+    const msgs = flattenErrors(errs)
+    if (msgs.length > 0) {
+      const more = msgs.length - 1
+      // Lightweight toast (not a blocking modal) — the field-level red messages
+      // below each input are the primary guidance.
+      showToast(
+        more > 0
+          ? `${msgs[0]} — and ${more} other field${more === 1 ? '' : 's'} highlighted in red.`
+          : msgs[0],
+        `${msgs.length} field${msgs.length === 1 ? '' : 's'} need attention`,
+      )
+      // Bring the first invalid field into view.
+      scrollToFirstError()
+      return
     }
+
     const w = Number(weight)
-    if (!w || w <= 0) return notify.error('Enter a shipment weight greater than zero.')
-    if (isCustomPkg && (!Number(length) || !Number(width) || !Number(height))) {
-      return notify.error('Custom packaging needs length, width and height.')
-    }
 
     const cleanItems: ManualShipmentItem[] = items
       .filter((it) => it.description.trim())
@@ -1240,14 +1370,6 @@ export default function NewShipmentPage() {
         // when at least one item is assigned.
         boxSeq: it.boxSeq ? Number(it.boxSeq) : undefined,
       }))
-    if (isInternational) {
-      if (!cleanItems.length) {
-        return notify.error('International shipments need at least one commercial-invoice item.')
-      }
-      if (cleanItems.some((it) => it.unitValue == null || it.unitValue <= 0)) {
-        return notify.error('Each commercial-invoice item needs a unit value greater than zero.')
-      }
-    }
 
     // Match the typed bill-to number to a known account on this carrier (for credentials);
     // if it's not on file, the backend falls back to the carrier's platform credentials.
@@ -1363,6 +1485,33 @@ export default function NewShipmentPage() {
 
   return (
     <div className="pb-6">
+      {/* Validation toast — non-blocking; auto-dismisses. */}
+      {toast ? (
+        <div
+          key={toast.id}
+          role="alert"
+          className="fixed right-4 top-4 z-[100] w-[min(92vw,360px)] animate-[msToastIn_0.25s_ease-out] overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-[0_12px_40px_-12px_rgba(159,18,57,0.35)]"
+        >
+          <div className="flex items-start gap-3 p-3.5">
+            <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-rose-600 ring-1 ring-rose-100">
+              <FiAlertTriangle className="h-4 w-4" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[12.5px] font-bold text-[#1f150c]">{toast.title}</p>
+              <p className="mt-0.5 text-[12px] leading-snug text-[#5a4526]">{toast.body}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setToast(null)}
+              aria-label="Dismiss"
+              className="-mr-1 -mt-1 shrink-0 rounded-lg p-1 text-[#b6a684] transition hover:bg-[#faf7f0] hover:text-[#5a4526]"
+            >
+              <FiX className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="h-1 w-full origin-left animate-[msToastBar_6s_linear_forwards] bg-rose-400/70" />
+        </div>
+      ) : null}
       <div className="w-full space-y-4">
         {loading ? (
           <section className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-[#8a7959] shadow-sm">
@@ -1456,21 +1605,21 @@ export default function NewShipmentPage() {
                     ))}
                   </select>
                 </Field>
-                <Field label="Carrier" required>
+                <Field label="Carrier" required error={errAt('carrier')}>
                   <select className={inputCls} value={carrier} onChange={(e) => setCarrier(e.target.value)}>
                     {carrierOptions.map((c) => (
                       <option key={c} value={c}>{CARRIER_LABEL[c] || c}</option>
                     ))}
                   </select>
                 </Field>
-                <Field label="Reason of export">
+                <Field label="Reason of export" error={errAt('reasonForExport')}>
                   <select className={inputCls} value={reasonForExport} onChange={(e) => setReasonForExport(e.target.value)}>
                     {EXPORT_REASONS.map((r) => (
                       <option key={r} value={r}>{r.charAt(0) + r.slice(1).toLowerCase()}</option>
                     ))}
                   </select>
                 </Field>
-                <Field label="Currency">
+                <Field label="Currency" error={errAt('currency')}>
                   <select className={inputCls} value={currency} onChange={(e) => setCurrency(e.target.value)}>
                     {CURRENCIES.map((c) => (
                       <option key={c} value={c}>{c}</option>
@@ -1487,7 +1636,7 @@ export default function NewShipmentPage() {
                 title={isReturn ? 'Return from · customer' : 'Ship from · sender'}
                 className="xl:row-span-2"
               >
-                <AddressBlock value={sender} onChange={(patch) => setSender((s) => ({ ...s, ...patch }))} withEmail={isReturn} />
+                <AddressBlock value={sender} onChange={(patch) => setSender((s) => ({ ...s, ...patch }))} withEmail={isReturn} errors={addrErrors('sender')} />
               </SectionCard>
               <SectionCard
                 icon={<FiMapPin className="h-3.5 w-3.5" />}
@@ -1496,9 +1645,16 @@ export default function NewShipmentPage() {
               >
                 <AddressBlock
                   value={recipient}
-                  onChange={(patch) => setRecipient((r) => ({ ...r, ...patch }))}
+                  onChange={(patch) => {
+                    setRecipient((r) => ({ ...r, ...patch }))
+                    // Editing the address invalidates any prior validation result,
+                    // so clear the stale carrier / format-check banners.
+                    setCarrierAddressResult(null)
+                    setRecipientCheck(null)
+                  }}
                   withEmail={!isReturn}
                   hideLine3
+                  errors={addrErrors('recipient')}
                   extraAction={
                     // Sprint 38 — address-book combobox. Type ≥ 2 chars to
                     // search; picking a suggestion overwrites every field
@@ -1600,6 +1756,7 @@ export default function NewShipmentPage() {
                 {carrierAddressResult ? (
                   <CarrierAddressBanner
                     result={carrierAddressResult}
+                    requestCountry={recipient.countryCode}
                     onApply={applyCarrierSuggestion}
                     onDismiss={() => setCarrierAddressResult(null)}
                   />
@@ -1631,7 +1788,7 @@ export default function NewShipmentPage() {
                 }
               >
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <Field label="Account (bill to)" required>
+                  <Field label="Account (bill to)" required error={errAt('account')}>
                     <input
                       className={inputCls}
                       list="bill-to-accounts"
@@ -1695,7 +1852,7 @@ export default function NewShipmentPage() {
                       </button>
                     ) : null}
                   </Field>
-                  <Field label="Incoterms">
+                  <Field label="Incoterms" error={errAt('incoterms')}>
                     <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
                       <option value="DDP">DDP — sender pays duties</option>
                       <option value="DAP">DAP — receiver pays duties</option>
@@ -1776,10 +1933,10 @@ export default function NewShipmentPage() {
                       <option value={CUSTOM_PKG}>Custom package…</option>
                     </select>
                   </Field>
-                  <Field label={`Weight (${weightUnit.toLowerCase()})`} required>
+                  <Field label={`Weight (${weightUnit.toLowerCase()})`} required error={errAt('weight')}>
                     <input className={inputCls} type="number" min="0" step="0.1" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="2.5" />
                   </Field>
-                  <Field label={`Declared value (${currency})`}>
+                  <Field label={`Declared value (${currency})`} error={errAt('declaredValue')}>
                     <input className={inputCls} type="number" min="0" step="0.01" value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value)} placeholder="100.00" />
                   </Field>
                 </div>
@@ -1802,6 +1959,7 @@ export default function NewShipmentPage() {
                     </select>
                   </Field>
                   <Field label={`Insured value (${currency})`}
+                         error={errAt('insuredValue')}
                          hint="Beyond the carrier's free $100 tier">
                     <input className={inputCls} type="number" min="0" step="0.01"
                            value={insuredValue}
@@ -1811,13 +1969,13 @@ export default function NewShipmentPage() {
                 </div>
                 {isCustomPkg ? (
                   <div className="grid grid-cols-3 gap-3">
-                    <Field label={`Length (${dimUnit.toLowerCase()})`} required>
+                    <Field label={`Length (${dimUnit.toLowerCase()})`} required error={errAt('length')}>
                       <input className={inputCls} type="number" min="0" step="0.1" value={length} onChange={(e) => setLength(e.target.value)} placeholder="12" />
                     </Field>
-                    <Field label={`Width (${dimUnit.toLowerCase()})`} required>
+                    <Field label={`Width (${dimUnit.toLowerCase()})`} required error={errAt('width')}>
                       <input className={inputCls} type="number" min="0" step="0.1" value={width} onChange={(e) => setWidth(e.target.value)} placeholder="9" />
                     </Field>
-                    <Field label={`Height/depth (${dimUnit.toLowerCase()})`} required>
+                    <Field label={`Height/depth (${dimUnit.toLowerCase()})`} required error={errAt('height')}>
                       <input className={inputCls} type="number" min="0" step="0.1" value={height} onChange={(e) => setHeight(e.target.value)} placeholder="4" />
                     </Field>
                   </div>
@@ -2078,6 +2236,7 @@ export default function NewShipmentPage() {
                     totalPkgs={1 + extraPackages.length}
                     canRemove={items.length > 1}
                     inputCls={inputCls}
+                    itemErr={itemErrAt}
                   />
 
                   {/* invoice total */}
@@ -2105,9 +2264,11 @@ export default function NewShipmentPage() {
         />
       ) : null}
 
-      {/* sticky footer action bar — stays within the content column */}
+      {/* sticky footer action bar — stays within the content column.
+          `!mt-6` beats the parent space-y-4 so there's a clear gap between the
+          form cards and the action bar. */}
       {!loading && !noCarriers ? (
-        <div className="sticky bottom-4 z-30 space-y-2">
+        <div className="sticky bottom-4 z-30 !mt-6 space-y-2">
           {reviewWarnings ? (
             <div className="rounded-2xl border border-[#e3d9c4] bg-white p-3.5 shadow-[0_18px_50px_rgba(31,21,12,0.14)]">
               <div className="mb-2 flex items-center justify-between">
@@ -2278,10 +2439,13 @@ export default function NewShipmentPage() {
  */
 function CarrierAddressBanner({
   result,
+  requestCountry,
   onApply,
   onDismiss,
 }: {
   result: AddressValidationResponse
+  /** The country the user actually typed — used to reject cross-country suggestions. */
+  requestCountry?: string | null
   onApply: () => void
   onDismiss: () => void
 }) {
@@ -2294,7 +2458,15 @@ function CarrierAddressBanner({
         : level === 'NOT_SUPPORTED'
           ? { border: 'border-slate-200', bg: 'bg-slate-50', text: 'text-slate-700' }
           : { border: 'border-rose-200', bg: 'bg-rose-50', text: 'text-rose-800' }
-  const s = result.suggested
+  // Guard against the carrier returning a nonsensical suggestion in a different
+  // country (seen from the FedEx sandbox: a Chilean address for a US shipment).
+  // If the suggested country doesn't match what the user typed, don't offer it.
+  const rawSuggested = result.suggested
+  const countryMismatch =
+    !!rawSuggested?.countryCode &&
+    !!requestCountry &&
+    rawSuggested.countryCode.toUpperCase() !== requestCountry.toUpperCase()
+  const s = countryMismatch ? null : rawSuggested
   return (
     <div className={`mt-3 rounded-xl border ${palette.border} ${palette.bg} px-3 py-2 text-[12px] ${palette.text}`}>
       <div className="flex items-start justify-between gap-2">
@@ -2310,6 +2482,11 @@ function CarrierAddressBanner({
             ) : null}
           </p>
           <p className="mt-1">{result.message}</p>
+          {countryMismatch ? (
+            <p className="mt-1 text-[11px] italic opacity-80">
+              The carrier suggested an address in a different country ({rawSuggested?.countryCode}) — ignored. Please verify the address manually.
+            </p>
+          ) : null}
           {s ? (
             <div className="mt-2 rounded-lg bg-white/60 px-2.5 py-1.5 font-mono text-[10.5px]">
               <p>{s.addressLine1}</p>
@@ -2374,6 +2551,10 @@ export type NewShipmentItemRow = {
  * descriptions or an open HsCodeCombobox dropdown expand naturally.
  * 60vh scroll container is responsive to viewport height.
  */
+/** Red-outline modifier appended to an input's class when it has an error. */
+const itemErrRing = (msg?: string): string =>
+  msg ? ' !border-rose-400 focus:!border-rose-400 focus:!ring-rose-100' : ''
+
 export function VirtualizedNewShipmentItems({
   items,
   patchItem,
@@ -2381,6 +2562,7 @@ export function VirtualizedNewShipmentItems({
   totalPkgs,
   canRemove,
   inputCls,
+  itemErr,
 }: {
   items: NewShipmentItemRow[]
   patchItem: (i: number, patch: Partial<NewShipmentItemRow>) => void
@@ -2388,6 +2570,8 @@ export function VirtualizedNewShipmentItems({
   totalPkgs: number
   canRemove: boolean
   inputCls: string
+  /** Per-item validation lookup (only returns messages after a submit attempt). */
+  itemErr?: (index: number, field: string) => string | undefined
 }) {
   const parentRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({
@@ -2431,6 +2615,7 @@ export function VirtualizedNewShipmentItems({
               totalPkgs={totalPkgs}
               canRemove={canRemove}
               inputCls={inputCls}
+              itemErr={itemErr}
             />
           </div>
         ))}
@@ -2448,6 +2633,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
   totalPkgs,
   canRemove,
   inputCls,
+  itemErr,
 }: {
   index: number
   it: NewShipmentItemRow
@@ -2456,15 +2642,17 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
   totalPkgs: number
   canRemove: boolean
   inputCls: string
+  itemErr?: (index: number, field: string) => string | undefined
 }) {
   const patch = useCallback((delta: Partial<NewShipmentItemRow>) => patchItem(index, delta), [patchItem, index])
   const remove = useCallback(() => removeItem(index), [removeItem, index])
   const amount = (Number(it.quantity) || 0) * (Number(it.unitValue) || 0)
+  const err = (field: string) => (itemErr ? itemErr(index, field) : undefined)
   return (
     <div className="space-y-1">
       <div className="grid min-w-[820px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_0.6fr_44px] items-start gap-2">
-        <input className={inputCls} value={it.description} onChange={(e) => patch({ description: e.target.value })} placeholder="Cotton t-shirt" />
-        <input className={inputCls} value={it.sku} onChange={(e) => patch({ sku: e.target.value })} placeholder="SKU-001" />
+        <input className={`${inputCls}${itemErrRing(err('description'))}`} value={it.description} onChange={(e) => patch({ description: e.target.value })} placeholder="Cotton t-shirt" />
+        <input className={`${inputCls}${itemErrRing(err('sku'))}`} value={it.sku} onChange={(e) => patch({ sku: e.target.value })} placeholder="SKU-001" />
         <HsCodeCombobox
           value={it.hsCode}
           onChange={(v) => patch({ hsCode: v })}
@@ -2472,9 +2660,9 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
             if (!it.description || !it.description.trim()) patch({ description: desc })
           }}
         />
-        <input className={`${inputCls} uppercase`} value={it.countryOfOrigin} onChange={(e) => patch({ countryOfOrigin: e.target.value })} placeholder="US" maxLength={2} />
-        <input className={inputCls} type="number" min="1" step="1" value={it.quantity} onChange={(e) => patch({ quantity: e.target.value })} placeholder="1" />
-        <input className={inputCls} type="number" min="0" step="0.01" value={it.unitValue} onChange={(e) => patch({ unitValue: e.target.value })} placeholder="20.00" />
+        <input className={`${inputCls} uppercase${itemErrRing(err('countryOfOrigin'))}`} value={it.countryOfOrigin} onChange={(e) => patch({ countryOfOrigin: e.target.value })} placeholder="US" maxLength={2} />
+        <input className={`${inputCls}${itemErrRing(err('quantity'))}`} type="number" min="1" step="1" value={it.quantity} onFocus={(e) => e.currentTarget.select()} onChange={(e) => patch({ quantity: e.target.value })} placeholder="1" />
+        <input className={`${inputCls}${itemErrRing(err('unitValue'))}`} type="number" min="0" step="0.01" value={it.unitValue} onChange={(e) => patch({ unitValue: e.target.value })} placeholder="20.00" />
         <div className={`${inputCls} flex items-center justify-end bg-[#faf7f0] font-mono tabular-nums`}>
           {amount > 0 ? amount.toFixed(2) : '—'}
         </div>
@@ -2501,6 +2689,19 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
           </button>
         </div>
       </div>
+      {(() => {
+        const msgs = [
+          err('description'),
+          err('sku'),
+          err('hsCode'),
+          err('countryOfOrigin'),
+          err('quantity'),
+          err('unitValue'),
+        ].filter(Boolean)
+        return msgs.length ? (
+          <p className="ms-field-error px-1 text-[10.5px] font-semibold text-rose-600">{msgs.join(' · ')}</p>
+        ) : null
+      })()}
     </div>
   )
 })

@@ -42,13 +42,22 @@ public interface OrderImportService {
      * generate labels). Persists an {@link com.multiship.backend.model.ImportBatch}
      * with the full row payload; returns the summary + batch id.
      */
-    ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy);
+    ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy, String fileName);
 
     /** All saved imports, newest first (row payload omitted from the list). */
     java.util.List<com.multiship.backend.dto.ImportBatchDTO> history();
 
     /** One saved import with its full row payload, or null if not found. */
     com.multiship.backend.dto.ImportBatchDTO historyDetail(Long id);
+
+    /**
+     * Generate carrier labels for a saved import batch, advancing its status
+     * INITIATE → IN_PROGRESS → COMPLETE / PARTIAL_COMPLETE. Null if not found.
+     */
+    com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(Long id, String requestedBy);
+
+    /** Generate a label for a single row of a saved batch. Null if not found. */
+    com.multiship.backend.dto.ImportBatchDTO generateLabelForRow(Long id, int rowNumber, String requestedBy);
 
     /**
      * Sprint 48 — dry-run validation on rows the operator may have edited
