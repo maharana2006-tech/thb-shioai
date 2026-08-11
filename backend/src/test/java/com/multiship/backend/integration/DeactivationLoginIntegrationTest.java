@@ -69,7 +69,10 @@ class DeactivationLoginIntegrationTest extends AbstractIntegrationTest {
 
         assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
         MessageResponse body = assertInstanceOf(MessageResponse.class, response.getBody());
-        assertEquals(ErrorCode.ACCOUNT_DEACTIVATED, body.getErrorCode());
+        // MessageResponse.errorCode is a String (see the two-arg constructor
+        // that stores ErrorCode.name()) — compare against .name() rather
+        // than the enum itself.
+        assertEquals(ErrorCode.ACCOUNT_DEACTIVATED.name(), body.getErrorCode());
     }
 
     @Test
@@ -96,7 +99,7 @@ class DeactivationLoginIntegrationTest extends AbstractIntegrationTest {
 
         assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
         MessageResponse body = assertInstanceOf(MessageResponse.class, response.getBody());
-        assertEquals(ErrorCode.ACCOUNT_DEACTIVATED, body.getErrorCode(),
+        assertEquals(ErrorCode.ACCOUNT_DEACTIVATED.name(), body.getErrorCode(),
                 "Deactivation must win over EMAIL_NOT_VERIFIED to avoid misleading operators");
     }
 }
