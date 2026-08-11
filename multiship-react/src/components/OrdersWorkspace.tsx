@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import {
@@ -123,6 +123,7 @@ export default function OrdersWorkspace() {
   const [sortBy, setSortBy] = useState('orderNo')
   const [sortDirection, setSortDirection] = useState<'ASC' | 'DESC'>('DESC')
   const [showFilters, setShowFilters] = useState(false)
+  const filtersRef = useRef<HTMLDivElement>(null)
   const emptyColumnFilters = { orderNo: '', customer: '', city: '', status: '', tracking: '' }
   const [columnFilters, setColumnFilters] = useState(emptyColumnFilters)
   const [debouncedFilters, setDebouncedFilters] = useState(emptyColumnFilters)
@@ -180,6 +181,23 @@ export default function OrdersWorkspace() {
     const timer = setTimeout(() => setDebouncedFilters(columnFilters), 350)
     return () => clearTimeout(timer)
   }, [columnFilters])
+
+  // Close the Filters popover on outside click / Escape.
+  useEffect(() => {
+    if (!showFilters) return
+    const onDocClick = (e: MouseEvent) => {
+      if (!filtersRef.current?.contains(e.target as Node)) setShowFilters(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowFilters(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [showFilters])
 
   useEffect(() => {
     setPage(1)
@@ -710,9 +728,9 @@ export default function OrdersWorkspace() {
   const advInputCls =
     'w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[12px] font-medium text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-2 focus:ring-[#f0e9d8]'
   /** A labeled advanced-filter field: mono uppercase caption + icon, then control.
-   *  Fixed narrow width so fields stay compact and wrap instead of stretching. */
+   *  Full width so fields stack one per row in the popover. */
   const advField = (icon: ReactNode, label: string, control: ReactNode) => (
-    <label className="block w-40">
+    <label className="block w-full">
       <span className="mb-1 flex items-center gap-1 font-mono text-[8.5px] font-bold uppercase tracking-[0.12em] text-[#a1906d]">
         <span className="text-[#cdbf9f]">{icon}</span>
         {label}
@@ -1088,22 +1106,138 @@ export default function OrdersWorkspace() {
             />
           </label>
 
-          <button
-            type="button"
-            onClick={() => setShowFilters((cur) => !cur)}
-            aria-pressed={showFilters}
-            className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-2 text-[12px] font-semibold transition ${
-              showFilters || activeFilterCount
-                ? 'bg-[#1f150c] text-[#f4eede] shadow-sm'
-                : 'border border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-            }`}
-          >
-            <FiFilter className="h-3.5 w-3.5" />
-            Filters
-            {activeFilterCount ? (
-              <span className="rounded-full bg-white/25 px-1.5 py-0.5 text-[10px] tabular-nums">{activeFilterCount}</span>
+          <div ref={filtersRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setShowFilters((cur) => !cur)}
+              aria-pressed={showFilters}
+              aria-expanded={showFilters}
+              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-2 text-[12px] font-semibold transition ${
+                showFilters || activeFilterCount
+                  ? 'bg-[#1f150c] text-[#f4eede] shadow-sm'
+                  : 'border border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+              }`}
+            >
+              <FiFilter className="h-3.5 w-3.5" />
+              Filters
+              {activeFilterCount ? (
+                <span className="rounded-full bg-white/25 px-1.5 py-0.5 text-[10px] tabular-nums">{activeFilterCount}</span>
+              ) : null}
+            </button>
+
+            {/* Advanced filter popover */}
+            {showFilters ? (
+              <div
+                role="dialog"
+                aria-label="Advanced filters"
+                className="absolute left-0 top-full z-30 mt-1.5 w-64 rounded-2xl border border-[#e3d9c4] bg-[#faf7f0] p-3.5 shadow-[0_20px_60px_rgba(31,21,12,0.18)]"
+              >
+                <div className="mb-2.5 flex items-center justify-between">
+                  <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
+                    <FiSliders className="h-3 w-3" /> Advanced filters
+                  </span>
+                  <button
+                    type="button"
+                    onClick={clearColumnFilters}
+                    disabled={!activeFilterCount}
+                    className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#8a7959] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#e3d9c4] disabled:hover:bg-white disabled:hover:text-[#8a7959]"
+                  >
+                    <FiX className="h-3.5 w-3.5" /> Clear all
+                  </button>
+                </div>
+                <div className="flex flex-col gap-2.5">
+                  {advField(
+                    <FiHash className="h-3 w-3" />,
+                    'Order #',
+                    <input
+                      value={columnFilters.orderNo}
+                      onChange={(e) => setColumnFilter('orderNo')(e.target.value)}
+                      placeholder="e.g. 900044"
+                      className={advInputCls}
+                    />,
+                  )}
+                  {advField(
+                    <FiUser className="h-3 w-3" />,
+                    'Client code',
+                    <input
+                      value={columnFilters.customer}
+                      onChange={(e) => setColumnFilter('customer')(e.target.value)}
+                      placeholder="e.g. ARHDEV"
+                      className={advInputCls}
+                    />,
+                  )}
+                  {advField(
+                    <FiMapPin className="h-3 w-3" />,
+                    'Destination',
+                    <input
+                      value={columnFilters.city}
+                      onChange={(e) => setColumnFilter('city')(e.target.value)}
+                      placeholder="City or state"
+                      className={advInputCls}
+                    />,
+                  )}
+                  {advField(
+                    <FiTruck className="h-3 w-3" />,
+                    'Tracking #',
+                    <input
+                      value={columnFilters.tracking}
+                      onChange={(e) => setColumnFilter('tracking')(e.target.value)}
+                      placeholder="Carrier tracking number"
+                      className={advInputCls}
+                    />,
+                  )}
+                  {showStatusColumn
+                    ? advField(
+                        <FiTag className="h-3 w-3" />,
+                        'Status',
+                        <select
+                          value={columnFilters.status}
+                          onChange={(e) => setColumnFilter('status')(e.target.value)}
+                          className={advInputCls}
+                        >
+                          <option value="">Any status</option>
+                          <option value="PENDING">Pending</option>
+                          <option value="GENERATED">Generated</option>
+                          <option value="ERROR">Error</option>
+                        </select>,
+                      )
+                    : null}
+                  {advField(
+                    <FiCalendar className="h-3 w-3" />,
+                    'Created from',
+                    <input
+                      type="date"
+                      value={dateFrom}
+                      max={dateTo || undefined}
+                      onChange={(e) => setDateFrom(e.target.value)}
+                      className={advInputCls}
+                    />,
+                  )}
+                  {advField(
+                    <FiCalendar className="h-3 w-3" />,
+                    'Created to',
+                    <input
+                      type="date"
+                      value={dateTo}
+                      min={dateFrom || undefined}
+                      onChange={(e) => setDateTo(e.target.value)}
+                      className={advInputCls}
+                    />,
+                  )}
+                </div>
+
+                <div className="mt-3 flex items-center justify-end gap-2 border-t border-dashed border-[#e3d9c4] pt-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowFilters(false)}
+                    className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-[#f4eede] transition hover:bg-[#412d15]"
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
             ) : null}
-          </button>
+          </div>
 
           {activeFilterCount ? (
             <button
@@ -1115,106 +1249,6 @@ export default function OrdersWorkspace() {
             </button>
           ) : null}
         </div>
-
-        {/* Advanced filter panel */}
-        {showFilters ? (
-          <div className="mt-3 rounded-2xl border border-[#e3d9c4] bg-[#faf7f0]/70 p-3.5 shadow-sm">
-            <div className="mb-2.5 flex items-center justify-between">
-              <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
-                <FiSliders className="h-3 w-3" /> Advanced filters
-              </span>
-              {activeFilterCount ? (
-                <button
-                  type="button"
-                  onClick={clearColumnFilters}
-                  className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#8a7959] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
-                >
-                  <FiX className="h-3.5 w-3.5" /> Clear all
-                </button>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap gap-x-3 gap-y-2.5">
-              {advField(
-                <FiHash className="h-3 w-3" />,
-                'Order #',
-                <input
-                  value={columnFilters.orderNo}
-                  onChange={(e) => setColumnFilter('orderNo')(e.target.value)}
-                  placeholder="e.g. 900044"
-                  className={advInputCls}
-                />,
-              )}
-              {advField(
-                <FiUser className="h-3 w-3" />,
-                'Client code',
-                <input
-                  value={columnFilters.customer}
-                  onChange={(e) => setColumnFilter('customer')(e.target.value)}
-                  placeholder="e.g. ARHDEV"
-                  className={advInputCls}
-                />,
-              )}
-              {advField(
-                <FiMapPin className="h-3 w-3" />,
-                'Destination',
-                <input
-                  value={columnFilters.city}
-                  onChange={(e) => setColumnFilter('city')(e.target.value)}
-                  placeholder="City or state"
-                  className={advInputCls}
-                />,
-              )}
-              {advField(
-                <FiTruck className="h-3 w-3" />,
-                'Tracking #',
-                <input
-                  value={columnFilters.tracking}
-                  onChange={(e) => setColumnFilter('tracking')(e.target.value)}
-                  placeholder="Carrier tracking number"
-                  className={advInputCls}
-                />,
-              )}
-              {showStatusColumn
-                ? advField(
-                    <FiTag className="h-3 w-3" />,
-                    'Status',
-                    <select
-                      value={columnFilters.status}
-                      onChange={(e) => setColumnFilter('status')(e.target.value)}
-                      className={advInputCls}
-                    >
-                      <option value="">Any status</option>
-                      <option value="PENDING">Pending</option>
-                      <option value="GENERATED">Generated</option>
-                      <option value="ERROR">Error</option>
-                    </select>,
-                  )
-                : null}
-              {advField(
-                <FiCalendar className="h-3 w-3" />,
-                'Created from',
-                <input
-                  type="date"
-                  value={dateFrom}
-                  max={dateTo || undefined}
-                  onChange={(e) => setDateFrom(e.target.value)}
-                  className={advInputCls}
-                />,
-              )}
-              {advField(
-                <FiCalendar className="h-3 w-3" />,
-                'Created to',
-                <input
-                  type="date"
-                  value={dateTo}
-                  min={dateFrom || undefined}
-                  onChange={(e) => setDateTo(e.target.value)}
-                  className={advInputCls}
-                />,
-              )}
-            </div>
-          </div>
-        ) : null}
 
         {/* manifest caption strip */}
         <div className="mt-3.5 flex items-center justify-between border-b border-dashed border-[#e3d9c4] pb-1.5">

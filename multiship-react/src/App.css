@@ -282,3 +282,15 @@ textarea {
   from { transform: scaleX(1); }
   to   { transform: scaleX(0); }
 }
+
+/* ===== Data History: indeterminate progress bar while labels generate ===== */
+@keyframes dataHistoryProgress {
+  0%   { left: -33%; }
+  100% { left: 100%; }
+}
+.data-history-progress-bar {
+  animation: dataHistoryProgress 1.1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .data-history-progress-bar { animation: none !important; }
+}

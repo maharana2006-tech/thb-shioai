@@ -608,6 +608,12 @@ export default function DataHistoryPage() {
                   ) : null}
                   </div>
 
+                  {busy ? (
+                    <div className="relative h-1 w-full overflow-hidden bg-[#eee6d6]">
+                      <div className="data-history-progress-bar absolute inset-y-0 w-1/3 rounded-full bg-[#1f150c]" />
+                    </div>
+                  ) : null}
+
                   {open ? (
                     <div className="border-t border-dashed border-[#eee6d6] bg-[#faf7f0]/50 px-5 py-3">
                       {rows === 'loading' || rows === undefined ? (

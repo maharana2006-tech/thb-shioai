@@ -1,0 +1,4 @@
+orderRef,clientCode,billTo,warehouseCode,recipientName,recipientCompany,recipientPhone,recipientEmail,addressLine1,addressLine2,city,state,postalCode,countryCode,carrierCode,accountNumber,serviceType,packageType,weight,weightUnit,currency,reference,itemDescription,itemSku,itemQuantity,itemUnitValue,hsCode,countryOfOrigin
+,,SENDER,,Ava Chen,,555-123-4567,ava@example.com,42 Sample Way,,Portland,OR,97201,US,UPS,,UPS Ground,UPS Letter,2.5,LB,USD,ORDER-001,Silk lining natural,SKU-100,1,45.00,,
+,,SENDER,,John Smith,Acme Inc,555-987-6543,john@example.com,100 Main St,Suite 2,Seattle,WA,98101,US,UPS,,UPS Ground,UPS Letter,1.2,LB,USD,ORDER-002,Cotton scarf,SKU-101,2,20.00,,
+,,RECIPIENT,,Lena Ortiz,,555-222-3333,lena@example.com,7 Rue de Paris,,Paris,,75001,FR,UPS,,UPS Worldwide Expedited,UPS Small Box,3.0,KG,EUR,ORDER-003,Wool sweater,SKU-102,1,60.00,610990,FR

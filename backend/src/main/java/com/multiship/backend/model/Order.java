@@ -154,6 +154,6 @@ public class Order {
      * as "no prior version" and inserts version=0 on first save).
      */
     @jakarta.persistence.Version
-    @jakarta.persistence.Column(name = "version")
+    @jakarta.persistence.Column(name = "version", nullable = true)
     private Long version;
 }
