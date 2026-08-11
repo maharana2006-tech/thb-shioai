@@ -32,7 +32,7 @@ public class CustomFieldController {
     // ===== Definitions =====
 
     @Operation(summary = "List every definition for a tenant (active + inactive)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER') or @orderAccess.canViewTenant(authentication, #tenantId)")
+    @PreAuthorize("(hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #tenantId)) or @orderAccess.canViewTenant(authentication, #tenantId)")
     @GetMapping("/api/v1/custom-fields")
     public ResponseEntity<ApiResponse<List<CustomFieldDefinitionDTO>>> list(
             @RequestParam(name = "tenantId", required = false) String tenantId) {
@@ -42,7 +42,7 @@ public class CustomFieldController {
     }
 
     @Operation(summary = "List definitions applicable to a tenant's order form (active only)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER') or @orderAccess.canViewTenant(authentication, #tenantId)")
+    @PreAuthorize("(hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #tenantId)) or @orderAccess.canViewTenant(authentication, #tenantId)")
     @GetMapping("/api/v1/custom-fields/applicable")
     public ResponseEntity<ApiResponse<List<CustomFieldDefinitionDTO>>> applicable(
             @RequestParam(name = "tenantId", required = false) String tenantId) {

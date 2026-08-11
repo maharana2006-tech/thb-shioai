@@ -31,7 +31,17 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
 
     @Override
     public Optional<LabelTemplate> findById(Long id) {
-        return repo.findById(id);
+        Optional<LabelTemplate> found = repo.findById(id);
+        // Sprint 50 Tier 0.5 PR F - defence-in-depth: even though
+        // /label-templates/{id} today allows any ADMIN/USER, a scoped
+        // USER must not load a foreign tenant's row by id enumeration.
+        // Platform templates (tenantId == null) remain readable by all.
+        if (tenantScope != null) {
+            found.map(LabelTemplate::getTenantId)
+                    .filter(t -> t != null && !t.isBlank())
+                    .ifPresent(tenantScope::requireTenantMatch);
+        }
+        return found;
     }
 
     @Override

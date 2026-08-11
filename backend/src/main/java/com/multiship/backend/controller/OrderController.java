@@ -95,7 +95,7 @@ public class OrderController {
      */
     @Operation(summary = "List orders (THE list endpoint)",
             description = "Server-side pagination, sorting, and filtering; all filters compose. TENANT callers must pass tenantId equal to their own tenant.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER') or @orderAccess.canViewTenant(authentication, #tenantId)")
+    @PreAuthorize("(hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #tenantId)) or @orderAccess.canViewTenant(authentication, #tenantId)")
     @GetMapping
     public ResponseEntity<ApiResponse<PageResponseDTO<OrderResponseDTO>>> listOrders(
             @RequestParam(defaultValue = "0") int page,

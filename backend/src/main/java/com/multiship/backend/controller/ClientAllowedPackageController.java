@@ -35,7 +35,7 @@ public class ClientAllowedPackageController {
     private final ClientAllowedPackageService service;
 
     @Operation(summary = "List packages allowed for a client (default first)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping
     public ResponseEntity<ApiResponse<List<ClientAllowedPackageDTO>>> list(@PathVariable String clientCode) {
         ApiResponse<List<ClientAllowedPackageDTO>> response = service.listForClient(clientCode);

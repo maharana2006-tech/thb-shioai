@@ -29,7 +29,7 @@ public class RoutingRuleController {
     private final RoutingRuleService service;
 
     @Operation(summary = "List a client's routing rules ordered by priority")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping
     public ResponseEntity<ApiResponse<List<RoutingRuleDTO>>> list(@PathVariable String clientCode) {
         List<RoutingRuleDTO> data = service.listForClient(clientCode).stream()
@@ -38,7 +38,7 @@ public class RoutingRuleController {
     }
 
     @Operation(summary = "Create or update a routing rule")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @PostMapping
     public ResponseEntity<ApiResponse<RoutingRuleDTO>> save(
             @PathVariable String clientCode,
@@ -67,7 +67,7 @@ public class RoutingRuleController {
     }
 
     @Operation(summary = "Dry-run: preview which rule fires for a synthetic shipment")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @PostMapping("/dry-run")
     public ResponseEntity<ApiResponse<RoutingEvaluationResult>> dryRun(
             @PathVariable String clientCode,

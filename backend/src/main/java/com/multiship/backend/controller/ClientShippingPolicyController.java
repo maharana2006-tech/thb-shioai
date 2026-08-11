@@ -33,7 +33,7 @@ public class ClientShippingPolicyController {
 
     @Operation(summary = "Get the client's shipping policy",
             description = "Returns the synthetic default (CHEAPEST, no cutoff) when nothing is stored.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping
     public ResponseEntity<ApiResponse<ClientShippingPolicyDTO>> get(@PathVariable String clientCode) {
         ApiResponse<ClientShippingPolicyDTO> response = service.get(clientCode);

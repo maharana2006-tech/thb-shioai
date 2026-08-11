@@ -30,7 +30,7 @@ public class ClientCustomsProfileController {
     private final ClientCustomsProfileService service;
 
     @Operation(summary = "List a client's importer/broker profiles")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping
     public ResponseEntity<ApiResponse<List<ClientCustomsProfileDTO>>> list(@PathVariable String clientCode) {
         ApiResponse<List<ClientCustomsProfileDTO>> r = service.list(clientCode);
@@ -38,7 +38,7 @@ public class ClientCustomsProfileController {
     }
 
     @Operation(summary = "Get one profile by id")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping("/{id}")
     public ResponseEntity<ApiResponse<ClientCustomsProfileDTO>> get(
             @PathVariable String clientCode, @PathVariable Long id) {
@@ -47,7 +47,7 @@ public class ClientCustomsProfileController {
     }
 
     @Operation(summary = "Create a new importer/broker profile for a set of destination countries")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @PostMapping
     public ResponseEntity<ApiResponse<ClientCustomsProfileDTO>> create(
             @PathVariable String clientCode, @Valid @RequestBody ClientCustomsProfileDTO request) {
@@ -57,7 +57,7 @@ public class ClientCustomsProfileController {
     }
 
     @Operation(summary = "Update an existing importer/broker profile")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<ClientCustomsProfileDTO>> update(
             @PathVariable String clientCode, @PathVariable Long id,
@@ -68,7 +68,7 @@ public class ClientCustomsProfileController {
     }
 
     @Operation(summary = "Delete a client's importer/broker profile by id")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Void>> delete(
             @PathVariable String clientCode, @PathVariable Long id) {

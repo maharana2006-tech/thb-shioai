@@ -95,6 +95,76 @@ class LabelTemplateServiceTest {
         }
     }
 
+    /* -------- Sprint 50 Tier 0.5 PR F: defence-in-depth on findById -------- */
+
+    @Test
+    void scopedUserCannotFindByIdForeignTemplate() throws Exception {
+        LabelTemplate foreign = new LabelTemplate();
+        foreign.setId(7L);
+        foreign.setTenantId("OTHER");
+        when(repo.findById(7L)).thenReturn(Optional.of(foreign));
+
+        LabelTemplateServiceImpl scopedService = wireScopedService("ACME");
+        try {
+            assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                    () -> scopedService.findById(7L));
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
+    @Test
+    void scopedUserCanFindByIdOwnTemplate() throws Exception {
+        LabelTemplate own = new LabelTemplate();
+        own.setId(8L);
+        own.setTenantId("ACME");
+        when(repo.findById(8L)).thenReturn(Optional.of(own));
+
+        LabelTemplateServiceImpl scopedService = wireScopedService("ACME");
+        try {
+            Optional<LabelTemplate> result = scopedService.findById(8L);
+            assertTrue(result.isPresent());
+            assertEquals("ACME", result.get().getTenantId());
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
+    @Test
+    void platformTemplateAlwaysReadableByScopedUser() throws Exception {
+        // tenantId == null means "platform default" — every caller may
+        // read it regardless of scope. The belt only fires when the row
+        // has a concrete tenant.
+        LabelTemplate platform = new LabelTemplate();
+        platform.setId(9L);
+        platform.setTenantId(null);
+        when(repo.findById(9L)).thenReturn(Optional.of(platform));
+
+        LabelTemplateServiceImpl scopedService = wireScopedService("ACME");
+        try {
+            Optional<LabelTemplate> result = scopedService.findById(9L);
+            assertTrue(result.isPresent());
+            assertNull(result.get().getTenantId());
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
+    private LabelTemplateServiceImpl wireScopedService(String callerClientCode) throws Exception {
+        var authorities = java.util.List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("scopeduser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails(callerClientCode));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+        LabelTemplateServiceImpl scoped = new LabelTemplateServiceImpl(repo);
+        java.lang.reflect.Field f = LabelTemplateServiceImpl.class.getDeclaredField("tenantScope");
+        f.setAccessible(true);
+        f.set(scoped, new TenantScopeEnforcer(new com.multiship.backend.config.AccessScopePolicy(true)));
+        return scoped;
+    }
+
     @Test
     void save_newTemplate_setsBothTimestampsAndDefaultsType() {
         LabelTemplate t = new LabelTemplate();

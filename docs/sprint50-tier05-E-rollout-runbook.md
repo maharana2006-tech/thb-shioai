@@ -144,18 +144,67 @@ The flag is idempotent — flipping it OFF then ON again during the same session
 
 ---
 
-## Known caveats (from PR body)
+## Known caveats
 
-1. **`BulkLabelController`, `ManifestController`, `PickupController`, `OrderController#/multi-warehouse-label`** — controller-layer SpEL kept as `hasAnyRole('ADMIN','USER')` because SpEL can't inspect request body. Service layer clamps via `TenantScopeEnforcer`. The clamping happens before any DB write, so this is safe — but body-level rejection surfaces one call later than SpEL would.
-2. **`PackingSlipServiceImpl.render`** — if any legacy order has BOTH `tenant_id` AND `cust_no` null, a scoped user hitting that order will get a 403. Audit before flip:
+Updated for PR F (`sprint50/tier05-F-caveat-cleanup`), which tightened controller SpEL on ~15 controllers and added a defence-in-depth belt on `LabelTemplateServiceImpl.findById`. See the PR body for the full list.
 
-   ```sql
-   SELECT COUNT(*) FROM label_batch WHERE tenant_id IS NULL AND cust_no IS NULL;
-   ```
+### 1. Body-only tenant-scoped endpoints (service-layer clamped)
 
-   Should be 0. If not, backfill `cust_no` on those rows.
+SpEL can't inspect a JSON request body, so the following endpoints keep their controller-level `@PreAuthorize("hasAnyRole('ADMIN','USER')")` gate. Each one relies on `TenantScopeEnforcer` inside the service to clamp / reject a foreign-tenant body. Rejection surfaces one call later than SpEL would, but never after a persistence side effect. As of PR F, the coverage is:
 
-3. **`CustomFieldServiceImpl.upsertValues`** — belt-and-braces guard uses optional bean wiring. In prod both beans exist, but this will be tightened to `required` in PR F.
+**Body-only clamped in service (verified):**
+
+- `POST /api/v1/pickups` → `PickupServiceImpl.schedule` (clamps `request.customerNo`).
+- `POST /api/v1/manifests` → `ManifestServiceImpl.closeOut` (clamps `request.customerNo`).
+- `POST /api/v1/bulk-labels` → `BulkLabelServiceImpl.submit` (per-`orderNumber` `requireTenantMatch`).
+- `POST /api/v1/orders/multi-warehouse-label` → `MultiWarehouseLabelServiceImpl.generate` (clamps `request.clientCode`).
+- `GET /api/v1/reports/*.csv` (all four datasets) → `ReportServiceImpl` (clamps `f.customerNo`).
+- `POST /api/v1/recipients`, `PUT /api/v1/recipients/{id}` → `SavedRecipientServiceImpl` (clamps + `requireTenantMatch`).
+- `POST /api/v1/custom-fields` → `CustomFieldServiceImpl.saveDefinition` (clamps tenant via `resolveTenant`).
+- `POST /api/v1/label-templates` → `LabelTemplateServiceImpl.save` (bucket-D SpEL upgraded in PR F; service clamps `body.tenantId`).
+
+**Admin-only surfaces (no tenant dimension, intentionally org-wide):**
+
+- `/api/v1/warehouses/**`, `/api/v1/shipping-services/**`, `/api/v1/package-presets/**`, `/api/v1/ship-method-rules/**` — global catalog.
+- `/api/v1/customs-profiles`, `/api/v1/allowlist-usage/*` — cross-tenant operator settings.
+- `/api/v1/dashboard`, `/api/v1/audit-log`, `/api/v1/rate-cache/stats`, `/api/v1/carriers`, `/api/v1/label-templates` (list). See known GAP for scoped-USER aggregate views.
+- `/api/v1/customs/hs-codes`, `/api/v1/dg/un`, `/api/v1/address`, `/api/v1/rate-shop`, `/api/v1/landed-cost`, `/api/v1/addresses/validate` — reference lookups and stateless external estimates.
+- `/api/v1/carrier-accounts/**` — the shared account book is intentionally cross-tenant (see AMBIGUOUS #2 in the PR F audit — product decision pending).
+- `/api/v1/webhook-subscriptions` (Sprint 46 admin) — cross-key ops.
+
+**Path/query-param endpoints (now SpEL-tightened in PR F, no longer need caveat):**
+
+All `/api/v1/clients/{clientCode}/**` surfaces (`allowed-packages`, `services`, `services/{id}/destinations`, `services/{id}/warehouses`, `billing-markup`, `code-maps/{kind}`, `customs-profiles`, `destinations`, `policy`, `warehouses` including `select-nearest`, `routing-rules` including `dry-run`) gained `hasAnyRole('ADMIN','USER') and @accessScope.canAccessTenant(authentication, #clientCode)`. `WarehouseController#listWarehouses` gained the null-safe `#ownerClientCode` guard. `SavedRecipientController#search` gained the null-safe `#customerNo` guard. `OrderController#listOrders`, `CustomFieldController#list/applicable`, `LabelTemplateController#resolve/tenant/save`, and `ShipmentGroupController#list` gained the complementary bucket-D form so scoped USER no longer bypasses the tenant check on the `hasAnyRole` branch.
+
+### 2. `PackingSlipServiceImpl.render`
+
+If any legacy order has BOTH `tenant_id` AND `cust_no` null, a scoped user hitting that order will get a 403. Audit before flip:
+
+```sql
+SELECT COUNT(*) FROM label_batch WHERE tenant_id IS NULL AND cust_no IS NULL;
+```
+
+Should be 0. If not, backfill `cust_no` on those rows.
+
+### 3. `CustomFieldServiceImpl.upsertValues`
+
+Belt-and-braces guard uses optional bean wiring (`@Autowired(required = false)`). In prod both beans exist. Flipping to `required = true` is deferred to a follow-up PR — leaving optional to avoid breaking pure-unit tests that construct the service directly.
+
+### 4. Known service-layer GAPs after PR F (blockers on prod flag flip)
+
+These are gaps the PR F audit surfaced that were intentionally out of scope for PR F. Each one must be fixed before enabling `access.scope-user-by-client=true` in prod. Tracked as PR G:
+
+- `OrderImportServiceImpl` (entire class) — no `TenantScopeEnforcer` reference. All `/orders/import/*` endpoints unclamped; a scoped USER can preview/commit rows for a foreign tenant.
+- `MultiWarehousePreviewServiceImpl.preview` — no clamp; leaks foreign-client warehouse reachability.
+- `CarrierServiceImpl.generateManualLabel` — `request.customerNo` unclamped.
+- `CarrierServiceImpl.resolveOrderAccounts` — per-order guard missing.
+- `ClientServiceImpl.createClient` — POST body `clientCode` unclamped.
+- `BulkLabelServiceImpl.status(jobId)` / `.findRaw(jobId)` — jobId enumeration reveals foreign jobs even though submit-time is clamped.
+- `SavedRecipientServiceImpl.byId` / `.delete` — loaded-row `requireTenantMatch` missing.
+- `ScheduledReportController` save / run-now / generated-download — no tenant guards on the schedule row or its CSV output.
+- `OrderServiceImpl.getQueueStats` / `.getDashboardStats` — aggregate over all orders regardless of caller scope; scoped USER sees org-wide numbers.
+
+Track in `#security` with the `pr-g-followup` label.
 
 ---
 

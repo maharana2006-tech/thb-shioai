@@ -36,7 +36,7 @@ public class SavedRecipientController {
             description = "Fuzzy substring match against name, company, city, or postalCode. " +
                     "customerNo=<code> scopes to that customer's book + platform-wide entries; " +
                     "omit for platform-wide only. Capped at 25 hits.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and (#customerNo == null or @accessScope.canAccessTenant(authentication, #customerNo))")
     @GetMapping("/search")
     public ResponseEntity<ApiResponse<List<SavedRecipientDTO>>> search(
             @RequestParam(name = "q", required = false) String q,

@@ -34,7 +34,7 @@ public class ClientDestinationRuleController {
 
     @Operation(summary = "Get the client's ship-to rules",
             description = "mode is null + countries=[] means no restriction (ship anywhere).")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping
     public ResponseEntity<ApiResponse<ClientDestinationRulesDTO>> get(@PathVariable String clientCode) {
         ApiResponse<ClientDestinationRulesDTO> response = service.get(clientCode);
