@@ -14,8 +14,10 @@ import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.service.events.CarrierConfigChangedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -39,6 +41,25 @@ public class AccountRefServiceImpl implements AccountRefService {
     private final AuditService auditService;
     /** Sprint 49 Tier 3 Fix 1 — publish rate-cache invalidation on account writes. */
     private final ApplicationEventPublisher eventPublisher;
+
+    /** Sprint 50 Tier 0.5 PR H — clamp tenant on carrier-account writes/reads so a
+     *  scoped USER cannot verify, re-default, toggle, delete, or hijack another
+     *  tenant's carrier account. Optional so unit tests that construct the
+     *  service via the RequiredArgsConstructor still compile. */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
+
+    /** Null-safe wrapper around {@link TenantScopeEnforcer#clampClientCode(String)}.
+     *  Returns the input unchanged when the enforcer isn't wired (tests). */
+    private String clamp(String requested) {
+        return tenantScope == null ? requested : tenantScope.clampClientCode(requested);
+    }
+
+    /** Null-safe wrapper around {@link TenantScopeEnforcer#requireTenantMatch(String)}.
+     *  No-op when the enforcer isn't wired (tests). */
+    private void requireMatch(String rowClientCode) {
+        if (tenantScope != null) tenantScope.requireTenantMatch(rowClientCode);
+    }
 
     private record Usage(long labels, LocalDateTime lastUsed) {}
 
@@ -75,6 +96,10 @@ public class AccountRefServiceImpl implements AccountRefService {
         if (account == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ACCOUNT_NOT_FOUND, "Carrier account " + accountId + " was not found.");
         }
+
+        // Sprint 50 Tier 0.5 PR H — a scoped USER must not verify a foreign
+        // tenant's carrier account (IDOR by numeric id enumeration).
+        requireMatch(account.getCustomerNo());
 
         if (!account.isComplete()) {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.ACCOUNT_INCOMPLETE,
@@ -156,6 +181,13 @@ public class AccountRefServiceImpl implements AccountRefService {
         // normalizes legacy codes (P80/F77/L01) and rejects unknown carriers.
         String carrierCode = carrierService.getCarrierConnector(request.getCarrierCode()).getCarrierCode();
 
+        // Sprint 50 Tier 0.5 PR H — clamp the requested customerNo to the
+        // caller's tenant. A scoped USER cannot upsert an account for another
+        // tenant; a null/blank customerNo is forced to their own tenant.
+        // Operators are pass-through so PLATFORM upserts (blank customerNo)
+        // still work through the ADMIN branch.
+        request.setCustomerNo(clamp(request.getCustomerNo()));
+
         // Match strictly on (accountNumber, carrierCode) — the table's unique
         // constraint. An account_number-only fallback would let, e.g., adding
         // a FedEx account overwrite an existing UPS row that happens to share
@@ -165,6 +197,19 @@ public class AccountRefServiceImpl implements AccountRefService {
                 .orElseGet(CarrierAccountRef::new);
 
         boolean isNewAccount = account.getId() == null;
+        // Sprint 50 Tier 0.5 PR H — natural-key hijack guard: if the existing
+        // (accountNumber, carrierCode) row belongs to a DIFFERENT tenant, a
+        // scoped USER must not be able to reassign it. Operators are silent.
+        if (!isNewAccount && StringUtils.hasText(account.getCustomerNo())) {
+            String existing = account.getCustomerNo();
+            String incoming = request.getCustomerNo();
+            if (incoming != null && !existing.equalsIgnoreCase(incoming.trim())) {
+                throw new AccessDeniedException(
+                        ErrorCode.CROSS_TENANT_ACCESS_DENIED.name()
+                                + ": carrier account " + carrierCode + "/" + accountNumber
+                                + " already belongs to another tenant.");
+            }
+        }
         account.setAccountNumber(accountNumber);
         account.setCarrierCode(carrierCode);
 
@@ -269,6 +314,11 @@ public class AccountRefServiceImpl implements AccountRefService {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ACCOUNT_NOT_FOUND, "Carrier account " + accountId + " was not found.");
         }
 
+        // Sprint 50 Tier 0.5 PR H — critical: without this a scoped USER
+        // could re-point another tenant's default account at their own
+        // client via IDOR on the numeric accountId.
+        requireMatch(account.getCustomerNo());
+
         if (!StringUtils.hasText(account.getCustomerNo())) {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
                     "Account " + account.getAccountNumber() + " is not linked to a client, so it cannot be a client default.");
@@ -309,6 +359,10 @@ public class AccountRefServiceImpl implements AccountRefService {
         if (account == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ACCOUNT_NOT_FOUND, "Carrier account " + accountId + " was not found.");
         }
+
+        // Sprint 50 Tier 0.5 PR H — scoped USER cannot activate/deactivate
+        // a foreign tenant's carrier account.
+        requireMatch(account.getCustomerNo());
 
         boolean nextActive = Boolean.FALSE.equals(account.getActive());
         account.setActive(nextActive);
@@ -436,6 +490,9 @@ public class AccountRefServiceImpl implements AccountRefService {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ACCOUNT_NOT_FOUND,
                     "Carrier account " + accountId + " was not found.");
         }
+        // Sprint 50 Tier 0.5 PR H — scoped USER cannot delete a foreign
+        // tenant's carrier account.
+        requireMatch(account.getCustomerNo());
         long labels = orderTrackingRepository
                 .countByAccountNumberIgnoreCaseAndIsLabelGeneratedTrue(account.getAccountNumber());
         if (labels > 0) {

@@ -19,6 +19,7 @@ import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.repository.ClientWarehouseRepository;
 import com.multiship.backend.repository.ShippingServiceRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,6 +28,7 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 
 @Service
@@ -40,10 +42,20 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
     private final ClientRepository clientRepository;
     private final ShippingServiceRepository shippingServiceRepository;
 
+    /**
+     * Sprint 50 Tier 0.5 PR H - clamp {@link #listAllAssignments} so a
+     * scoped USER only sees their own client's allowlist rows. Optional so
+     * pre-Sprint-50 unit tests that construct the service directly still
+     * compile.
+     */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
+
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<ClientAllowedServiceDTO>> listForClient(String clientCode) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         if (!clientRepository.existsByClientCodeIgnoreCase(code)) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
                     "Client " + code + " was not found.");
@@ -58,6 +70,7 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
     @Transactional
     public ApiResponse<ClientAllowedServiceDTO> allow(String clientCode, AllowServiceRequest request) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         if (!clientRepository.existsByClientCodeIgnoreCase(code)) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
                     "Client " + code + " was not found.");
@@ -97,6 +110,7 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
     @Transactional
     public ApiResponse<Void> remove(String clientCode, Long serviceId) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ClientAllowedService link = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
         if (link == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
@@ -120,7 +134,15 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<ClientAllowedServiceDTO>> listAllAssignments() {
-        List<ClientAllowedServiceDTO> rows = repo.findAll().stream().map(this::toDTO).toList();
+        // Sprint 50 Tier 0.5 PR H - scoped USERs only see their own client's
+        // rows; platform operators (empty scope) see the full org-wide list.
+        Optional<String> scope = tenantScope == null ? Optional.empty() : tenantScope.resolveScope();
+        List<ClientAllowedServiceDTO> rows = repo.findAll().stream()
+                .filter(link -> scope.isEmpty()
+                        || (link.getClientCode() != null
+                                && scope.get().equalsIgnoreCase(link.getClientCode().trim())))
+                .map(this::toDTO)
+                .toList();
         return success("Service allowlist usage retrieved successfully.", rows);
     }
 
@@ -128,6 +150,7 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
     @Transactional
     public ApiResponse<ClientAllowedServiceDTO> setDefault(String clientCode, Long serviceId) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ClientAllowedService target = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
         if (target == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
@@ -171,6 +194,7 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
     @Transactional(readOnly = true)
     public ApiResponse<ClientAllowedServiceDestinationsDTO> getDestinations(String clientCode, Long serviceId) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ClientAllowedService allow = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
         if (allow == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
@@ -192,6 +216,7 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
     public ApiResponse<ClientAllowedServiceDestinationsDTO> replaceDestinations(
             String clientCode, Long serviceId, ReplaceAllowedServiceDestinationsRequest request) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ClientAllowedService allow = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
         if (allow == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
@@ -224,6 +249,7 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
     @Transactional
     public ApiResponse<Void> clearDestinations(String clientCode, Long serviceId) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ClientAllowedService allow = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
         if (allow == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
@@ -239,6 +265,7 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
     @Transactional(readOnly = true)
     public ApiResponse<ClientAllowedServiceWarehousesDTO> getWarehouses(String clientCode, Long serviceId) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ClientAllowedService allow = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
         if (allow == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
@@ -260,6 +287,7 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
     public ApiResponse<ClientAllowedServiceWarehousesDTO> replaceWarehouses(
             String clientCode, Long serviceId, ReplaceAllowedServiceWarehousesRequest request) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ClientAllowedService allow = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
         if (allow == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
@@ -298,6 +326,7 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
     @Transactional
     public ApiResponse<Void> clearWarehouses(String clientCode, Long serviceId) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ClientAllowedService allow = repo.findByClientCodeIgnoreCaseAndServiceId(code, serviceId).orElse(null);
         if (allow == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,

@@ -13,6 +13,7 @@ import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.repository.ClientWarehouseRepository;
 import com.multiship.backend.repository.WarehouseRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -32,6 +33,27 @@ public class WarehouseServiceImpl implements WarehouseService {
     private final ClientWarehouseRepository clientWarehouseRepository;
     private final ClientRepository clientRepository;
     private final AuditService auditService;
+
+    /** Sprint 50 Tier 0.5 PR H — clamp tenant on CLIENT-owned warehouse
+     *  writes/reads so a scoped USER cannot see, mutate, toggle, delete, or
+     *  hijack another tenant's warehouse. PLATFORM warehouses (ownerType ==
+     *  PLATFORM, ownerClientCode null) are the org-wide catalog and skip the
+     *  guard. Optional so unit tests that construct the service via the
+     *  RequiredArgsConstructor still compile. */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
+
+    /** Null-safe wrapper around {@link TenantScopeEnforcer#clampClientCode(String)}.
+     *  Returns the input unchanged when the enforcer isn't wired (tests). */
+    private String clamp(String requested) {
+        return tenantScope == null ? requested : tenantScope.clampClientCode(requested);
+    }
+
+    /** Null-safe wrapper around {@link TenantScopeEnforcer#requireTenantMatch(String)}.
+     *  No-op when the enforcer isn't wired (tests). */
+    private void requireMatch(String rowClientCode) {
+        if (tenantScope != null) tenantScope.requireTenantMatch(rowClientCode);
+    }
 
     @Override
     @Transactional(readOnly = true)
@@ -65,6 +87,12 @@ public class WarehouseServiceImpl implements WarehouseService {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.WAREHOUSE_NOT_FOUND,
                     "Warehouse " + normalize(code) + " was not found.");
         }
+        // Sprint 50 Tier 0.5 PR H — a scoped USER must not resolve a foreign
+        // client's warehouse by code enumeration. PLATFORM warehouses are the
+        // org-wide catalog and stay readable.
+        if (Warehouse.OWNER_CLIENT.equalsIgnoreCase(w.getOwnerType())) {
+            requireMatch(w.getOwnerClientCode());
+        }
         return success("Warehouse retrieved successfully.", toDTO(w));
     }
 
@@ -75,6 +103,14 @@ public class WarehouseServiceImpl implements WarehouseService {
         if (warehouseRepository.existsByCodeIgnoreCase(code)) {
             return failure(HttpStatus.CONFLICT, ErrorCode.WAREHOUSE_CODE_TAKEN,
                     "Warehouse code " + code + " is already registered.");
+        }
+
+        // Sprint 50 Tier 0.5 PR H — clamp ownerClientCode when CLIENT-owned so
+        // a scoped USER cannot create a warehouse under another tenant. Skip
+        // for PLATFORM (operator-only anyway; clamping would corrupt PLATFORM
+        // semantics by attaching a tenant to the org-wide catalog row).
+        if (Warehouse.OWNER_CLIENT.equalsIgnoreCase(normalize(request.getOwnerType()))) {
+            request.setOwnerClientCode(clamp(request.getOwnerClientCode()));
         }
 
         ApiResponse<WarehouseDTO> ownerCheck = validateOwner(request);
@@ -102,6 +138,18 @@ public class WarehouseServiceImpl implements WarehouseService {
         if (w == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.WAREHOUSE_NOT_FOUND,
                     "Warehouse " + normalize(code) + " was not found.");
+        }
+        // Sprint 50 Tier 0.5 PR H — reject scoped USER updating another
+        // tenant's CLIENT-owned warehouse. PLATFORM rows stay operator-only
+        // via the controller SpEL; still exempt them here.
+        if (Warehouse.OWNER_CLIENT.equalsIgnoreCase(w.getOwnerType())) {
+            requireMatch(w.getOwnerClientCode());
+        }
+        // Also clamp the incoming ownerClientCode so a scoped USER cannot
+        // re-parent the warehouse to another tenant on update. PLATFORM
+        // requests skip clamping.
+        if (Warehouse.OWNER_CLIENT.equalsIgnoreCase(normalize(request.getOwnerType()))) {
+            request.setOwnerClientCode(clamp(request.getOwnerClientCode()));
         }
 
         ApiResponse<WarehouseDTO> ownerCheck = validateOwner(request);
@@ -132,6 +180,11 @@ public class WarehouseServiceImpl implements WarehouseService {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.WAREHOUSE_NOT_FOUND,
                     "Warehouse " + normalize(code) + " was not found.");
         }
+        // Sprint 50 Tier 0.5 PR H — scoped USER cannot toggle a foreign
+        // client's warehouse. PLATFORM warehouses are operator-only anyway.
+        if (Warehouse.OWNER_CLIENT.equalsIgnoreCase(w.getOwnerType())) {
+            requireMatch(w.getOwnerClientCode());
+        }
         w.setActive(!Boolean.TRUE.equals(w.getActive()));
         warehouseRepository.save(w);
         String state = Boolean.TRUE.equals(w.getActive()) ? "active" : "inactive";
@@ -149,6 +202,12 @@ public class WarehouseServiceImpl implements WarehouseService {
         if (w == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.WAREHOUSE_NOT_FOUND,
                     "Warehouse " + c + " was not found.");
+        }
+        // Sprint 50 Tier 0.5 PR H — defence-in-depth alongside controller's
+        // hasRole('ADMIN') SpEL: if a scoped role ever calls this, refuse
+        // when the warehouse belongs to a different tenant.
+        if (Warehouse.OWNER_CLIENT.equalsIgnoreCase(w.getOwnerType())) {
+            requireMatch(w.getOwnerClientCode());
         }
         // Detach every client link along with the warehouse itself; ShipViaMapping
         // rows keep their now-orphan warehouse_id and fall back to any-warehouse

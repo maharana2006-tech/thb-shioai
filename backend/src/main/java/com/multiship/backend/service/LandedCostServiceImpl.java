@@ -11,6 +11,7 @@ import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.service.carriers.CarrierConnector.LandedCostResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -31,11 +32,25 @@ public class LandedCostServiceImpl implements LandedCostService {
 
     private final CarrierService carrierService;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
+    /**
+     * Sprint 50 Tier 0.5 PR H - clamp caller-supplied {@code customerNo} so
+     * a scoped USER cannot fire a duty/tax estimate through another
+     * tenant's carrier account. Optional so pre-PR-H tests that build the
+     * service directly still compile without plumbing another dep.
+     */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
 
     @Override
     public ApiResponse<LandedCostResponseDTO> estimate(LandedCostRequestDTO request) {
         if (request == null || request.getShipment() == null) {
             return failure(HttpStatus.BAD_REQUEST, "shipment is required.");
+        }
+        // Sprint 50 Tier 0.5 PR H - clamp caller-supplied customerNo BEFORE
+        // it's used to resolve the carrier account. A scoped USER posting
+        // {customerNo: OTHER} would otherwise probe OTHER's account.
+        if (tenantScope != null) {
+            request.setCustomerNo(tenantScope.clampClientCode(request.getCustomerNo()));
         }
         if (!StringUtils.hasText(request.getCarrierCode())) {
             return failure(HttpStatus.BAD_REQUEST, "carrierCode is required.");

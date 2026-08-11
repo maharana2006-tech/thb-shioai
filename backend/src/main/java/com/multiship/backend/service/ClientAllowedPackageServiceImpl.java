@@ -10,6 +10,7 @@ import com.multiship.backend.repository.ClientAllowedPackageRepository;
 import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.repository.PackagePresetRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -26,10 +28,19 @@ public class ClientAllowedPackageServiceImpl implements ClientAllowedPackageServ
     private final ClientRepository clientRepository;
     private final PackagePresetRepository packagePresetRepository;
 
+    /**
+     * Sprint 50 Tier 0.5 PR H - clamp {@link #listAllAssignments} so a
+     * scoped USER only sees their own client's package allowlist rows.
+     * Optional so pre-Sprint-50 unit tests still compile.
+     */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
+
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<ClientAllowedPackageDTO>> listForClient(String clientCode) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         if (!clientRepository.existsByClientCodeIgnoreCase(code)) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
                     "Client " + code + " was not found.");
@@ -44,6 +55,7 @@ public class ClientAllowedPackageServiceImpl implements ClientAllowedPackageServ
     @Transactional
     public ApiResponse<ClientAllowedPackageDTO> allow(String clientCode, AllowPackageRequest request) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         if (!clientRepository.existsByClientCodeIgnoreCase(code)) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
                     "Client " + code + " was not found.");
@@ -81,6 +93,7 @@ public class ClientAllowedPackageServiceImpl implements ClientAllowedPackageServ
     @Transactional
     public ApiResponse<Void> remove(String clientCode, Long presetId) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ClientAllowedPackage link = repo.findByClientCodeIgnoreCaseAndPresetId(code, presetId).orElse(null);
         if (link == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,
@@ -102,7 +115,15 @@ public class ClientAllowedPackageServiceImpl implements ClientAllowedPackageServ
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<ClientAllowedPackageDTO>> listAllAssignments() {
-        List<ClientAllowedPackageDTO> rows = repo.findAll().stream().map(this::toDTO).toList();
+        // Sprint 50 Tier 0.5 PR H - scoped USERs only see their own client's
+        // rows; platform operators (empty scope) see the full org-wide list.
+        Optional<String> scope = tenantScope == null ? Optional.empty() : tenantScope.resolveScope();
+        List<ClientAllowedPackageDTO> rows = repo.findAll().stream()
+                .filter(link -> scope.isEmpty()
+                        || (link.getClientCode() != null
+                                && scope.get().equalsIgnoreCase(link.getClientCode().trim())))
+                .map(this::toDTO)
+                .toList();
         return success("Package allowlist usage retrieved successfully.", rows);
     }
 
@@ -110,6 +131,7 @@ public class ClientAllowedPackageServiceImpl implements ClientAllowedPackageServ
     @Transactional
     public ApiResponse<ClientAllowedPackageDTO> setDefault(String clientCode, Long presetId) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ClientAllowedPackage target = repo.findByClientCodeIgnoreCaseAndPresetId(code, presetId).orElse(null);
         if (target == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ALLOWLIST_ENTRY_NOT_FOUND,

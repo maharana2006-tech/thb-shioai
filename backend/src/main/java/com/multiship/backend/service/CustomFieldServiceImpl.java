@@ -71,6 +71,10 @@ public class CustomFieldServiceImpl implements CustomFieldService {
         if (d.getLabel() == null || d.getLabel().isBlank()) {
             throw new IllegalArgumentException("label is required");
         }
+        // Sprint 50 Tier 0.5 PR H - clamp body tenantId so a scoped USER
+        // cannot persist a definition for a foreign tenant (or a platform
+        // definition with tenantId==null). Platform operators pass through.
+        d.setTenantId(clamp(d.getTenantId()));
         d.setTenantId(normalise(d.getTenantId()));
         d.setFieldKey(d.getFieldKey().trim());
         if (d.getFieldType() == null) d.setFieldType(FieldType.TEXT);
@@ -89,7 +93,17 @@ public class CustomFieldServiceImpl implements CustomFieldService {
 
     @Override
     public void deleteDefinition(Long id) {
-        defRepo.deleteById(id);
+        // Sprint 50 Tier 0.5 PR H - load-and-verify: a scoped USER cannot
+        // delete a definition belonging to another tenant. Platform
+        // definitions (tenantId==null) are ADMIN-only at the controller
+        // SpEL layer; here we simply let platform operators through and
+        // reject scoped users trying to touch a tenantId==null row.
+        defRepo.findById(id).ifPresent(def -> {
+            if (tenantScope != null && def.getTenantId() != null) {
+                tenantScope.requireTenantMatch(def.getTenantId());
+            }
+            defRepo.delete(def);
+        });
     }
 
     @Override

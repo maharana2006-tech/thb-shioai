@@ -104,6 +104,11 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
     @Override
     @Transactional(readOnly = true)
     public RoutingEvaluationResult evaluate(String clientCode, RoutingEvaluationRequest req) {
+        // Sprint 50 Tier 0.5 PR H - defence-in-depth belt: controller SpEL
+        // from PR F already blocks a scoped USER at /clients/OTHER/routing/*,
+        // but a future refactor could regress it — reject here too so the
+        // service enforces tenant scope regardless of the caller path.
+        if (tenantScope != null) tenantScope.requireTenantMatch(safe(clientCode));
         List<RoutingRule> rules = ruleRepo
                 .findByClientCodeIgnoreCaseOrderByPriorityAscIdAsc(safe(clientCode));
         List<TraceEntry> trace = new ArrayList<>();
