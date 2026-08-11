@@ -16,6 +16,23 @@ public enum ErrorCode {
     EMAIL_TAKEN,
     ADMIN_SIGNUP_FORBIDDEN,
 
+    // ===== Sprint 50 Tier 0.5 PR C — API key lifecycle =====
+    API_KEY_EXPIRED,
+    API_KEY_ROTATED,
+
+    // ===== Sprint 50 Tier 0.5 PR D — invite-only signup + rate limit =====
+    /** Public signup is disabled — the operator must use an invite. */
+    SIGNUP_DISABLED,
+    /** Signup blocked by rate limit — retry after the window. */
+    SIGNUP_RATE_LIMITED,
+    /** Login refused for an account that has not verified its email. */
+    EMAIL_NOT_VERIFIED,
+    INVITE_NOT_FOUND,
+    INVITE_EXPIRED,
+    INVITE_ALREADY_USED,
+    /** Signup / invite payload missing the required clientCode. */
+    CLIENT_CODE_REQUIRED,
+
     // ===== Orders =====
     ORDER_NOT_FOUND,
     VALIDATION_ERROR,

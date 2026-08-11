@@ -16,6 +16,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Boolean existsByUsername(String username);
     Boolean existsByEmail(String email);
 
+    /** Sprint 50 Tier 0.5 PR D — click-through email verification lookup. */
+    Optional<User> findByEmailVerifyToken(String token);
+
     @Modifying
     @Query(value = """
         update users

@@ -24,4 +24,18 @@ public class SignupRequest {
     private String fullName;
 
     private String role;
+
+    /**
+     * Sprint 50 Tier 0.5 PR D — public signup now REQUIRES a clientCode
+     * (validated server-side). Invite-based signups get their clientCode
+     * from the invite row, not the caller.
+     */
+    private String clientCode;
+
+    /**
+     * Sprint 50 Tier 0.5 PR D — CAPTCHA token from Turnstile / hCaptcha.
+     * NoOpCaptchaVerifier accepts any value (default); prod deploys wire
+     * a real verifier via a follow-up bean.
+     */
+    private String captchaToken;
 }
