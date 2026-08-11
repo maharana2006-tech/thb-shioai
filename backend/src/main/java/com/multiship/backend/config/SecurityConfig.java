@@ -29,11 +29,29 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
+    /**
+     * Sprint 50 finding #15 (A) — {@link com.multiship.backend.service.ratelimit.TenantRateLimitFilter}
+     * is a {@code @Component} so its {@code @Value} fields resolve, but
+     * Spring Boot would otherwise auto-register it on the servlet container
+     * BEFORE the security chain, which would run it before auth. Registering
+     * it disabled here prevents that; the chain wires it in via
+     * {@code addFilterAfter} so it runs after JwtAuthenticationFilter.
+     */
+    @Bean
+    public org.springframework.boot.web.servlet.FilterRegistrationBean<com.multiship.backend.service.ratelimit.TenantRateLimitFilter>
+            tenantRateLimitFilterRegistration(
+                    com.multiship.backend.service.ratelimit.TenantRateLimitFilter filter) {
+        var reg = new org.springframework.boot.web.servlet.FilterRegistrationBean<>(filter);
+        reg.setEnabled(false);
+        return reg;
+    }
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwtService,
                                                    com.multiship.backend.service.ApiKeyService apiKeyService,
                                                    com.multiship.backend.repository.ApiKeyRepository apiKeyRepository,
-                                                   com.multiship.backend.repository.UserRepository userRepository)
+                                                   com.multiship.backend.repository.UserRepository userRepository,
+                                                   com.multiship.backend.service.ratelimit.TenantRateLimitFilter tenantRateLimitFilter)
             throws Exception {
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -88,7 +106,11 @@ public class SecurityConfig {
                 // Sprint 50 Tier 0.5 PR A — UserRepository injected for the
                 // pre-migration-token clientCode fallback lookup (cached 5m).
                 .addFilterBefore(new JwtAuthenticationFilter(jwtService, apiKeyRepository, userRepository),
-                        UsernamePasswordAuthenticationFilter.class);
+                        UsernamePasswordAuthenticationFilter.class)
+                // Sprint 50 finding #15 (A) — must run AFTER the two auth filters
+                // above so the SecurityContext already carries the caller's
+                // authentication when the rate check reads the tenant.
+                .addFilterAfter(tenantRateLimitFilter, JwtAuthenticationFilter.class);
 
         return http.build();
     }
