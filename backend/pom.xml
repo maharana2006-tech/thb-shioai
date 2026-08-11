@@ -56,6 +56,12 @@
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-postgresql</artifactId>
 		</dependency>
+		<!-- Spring Boot 4 splits auto-configuration into modules; without this
+		     one, flyway-core sits on the classpath but migrations never run. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-flyway</artifactId>
+		</dependency>
 
 		<!-- Sprint 49 Tier 3 Fix 6: Caffeine for bounded in-memory caches
 		     (rate cache, tracking cache). Replaces plain ConcurrentHashMaps
