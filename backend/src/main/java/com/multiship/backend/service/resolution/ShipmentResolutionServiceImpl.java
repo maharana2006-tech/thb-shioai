@@ -307,11 +307,21 @@ public class ShipmentResolutionServiceImpl implements ShipmentResolutionService 
     @Transactional(readOnly = true)
     public MarkupApplied applyMarkup(String clientCode, BigDecimal carrierRate, String carrierCurrency) {
         BigDecimal safeRate = carrierRate != null ? carrierRate : BigDecimal.ZERO;
-        Optional<ClientBillingMarkup> row = markupRepository.findByClientCodeIgnoreCase(normalize(clientCode));
+        String normalizedClient = normalize(clientCode);
+        Optional<ClientBillingMarkup> row = markupRepository.findByClientCodeIgnoreCase(normalizedClient);
 
-        // No markup stored = pass-through. Snapshot carries a 0/PERCENT so
-        // shipments always have concrete values on the row.
+        // Sprint 50 Tier 1 finding #11 — no more silent 0% margin. When a
+        // client is named but has no markup row configured, refuse and
+        // prompt the admin to set one on the Clients page. Ad-hoc / manual
+        // shipments (blank clientCode) legitimately have no markup owner
+        // and keep pass-through so ops-issued labels still generate.
         if (row.isEmpty()) {
+            if (normalizedClient != null && !normalizedClient.isBlank()) {
+                throw new ShipmentResolutionException(ErrorCode.MARKUP_REQUIRED_FOR_CLIENT,
+                        "Client " + normalizedClient + " has no billing markup configured. "
+                                + "An admin must set one on the Clients page before this "
+                                + "client's labels can be billed.");
+            }
             String currency = carrierCurrency != null ? carrierCurrency.toUpperCase(Locale.ROOT) : "USD";
             return new MarkupApplied(round(safeRate), round(safeRate),
                     ClientBillingMarkup.KIND_PERCENT, BigDecimal.ZERO, currency);

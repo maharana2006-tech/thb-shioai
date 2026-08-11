@@ -364,12 +364,28 @@ public interface CarrierConnector {
      * @param address         The ship-from address the driver will
      *                        collect from — some carriers include this
      *                        on the manifest for the driver's route.
+     * @param accountNumber   Sprint 50 Tier 1 (finding #10) — the shipper
+     *                        account number the manifest belongs to. FedEx
+     *                        end-of-day previously hardcoded {@code "ACCOUNT"}
+     *                        here, mirroring the void bug fixed in Sprint 49
+     *                        Tier 2; every real close-out silently failed
+     *                        because FedEx rejects that placeholder. The
+     *                        caller ({@link com.multiship.backend.service.ManifestServiceImpl})
+     *                        now passes the resolved
+     *                        {@link com.multiship.backend.model.CarrierAccountRef#getAccountNumber()}.
+     *                        Connectors that don't need it (UPS, Stamps)
+     *                        ignore the field.
      */
     record CloseOutRequest(
             List<String> trackingNumbers,
             java.time.LocalDate closeDate,
-            AddressToValidate address
+            AddressToValidate address,
+            String accountNumber
     ) {
+        /** Backward-compat convenience — omits the account number (Sprint 34 shape). */
+        public CloseOutRequest(List<String> trackingNumbers, java.time.LocalDate closeDate, AddressToValidate address) {
+            this(trackingNumbers, closeDate, address, null);
+        }
     }
 
     /**

@@ -597,7 +597,7 @@ public class OrderController {
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "errorCode ORDER_NOT_FOUND")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "errorCode LABEL_ALREADY_GENERATED — existing tracking details in data")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "errorCode NEEDS_CARRIER_DETAILS (prefill in data), ACCOUNT_SELECTION_REQUIRED (pick an account and resend with body {accountId}), or CLIENT_NOT_FOUND")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "errorCode CARRIER_FAILURE — the upstream carrier rejected the request")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "errorCode CARRIER_FAILURE — the upstream carrier rejected the request; or CLIENT_CARRIER_AUTH_FAILED (Sprint 50 T1 #3) — the client's carrier credentials failed and the caller did not opt into the platform account (resend with useHouseAccount=true to bill the house account)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/{orderNo}/label")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>> generateLabel(
@@ -607,8 +607,13 @@ public class OrderController {
             @org.springframework.web.bind.annotation.RequestBody(required = false) com.multiship.backend.dto.GenerateLabelRequest request,
             @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
         Long accountId = request != null ? request.getAccountId() : null;
+        // Sprint 50 Tier 1 (finding #3) — thread the shipper's opt-in for
+        // billing the platform (house) account on a client-credential failure.
+        // Default false: without the opt-in, the failure surfaces
+        // CLIENT_CARRIER_AUTH_FAILED instead of a silent platform bill.
+        boolean useHouseAccount = request != null && request.isUseHouseAccount();
         ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> response =
-                carrierService.generateLabel(orderNo, userDetails, idempotencyKey, accountId);
+                carrierService.generateLabel(orderNo, userDetails, idempotencyKey, accountId, useHouseAccount);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 

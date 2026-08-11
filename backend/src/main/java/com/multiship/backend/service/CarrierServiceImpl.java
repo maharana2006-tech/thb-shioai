@@ -288,6 +288,17 @@ public class CarrierServiceImpl implements CarrierService {
     @Override
     @Transactional
     public ApiResponse<LabelGenerationResponse> generateLabel(Long orderNo, UserDetails userDetails, String idempotencyKey, Long accountId) {
+        // Back-compat overload — default useHouseAccount=false so callers that
+        // don't opt in never silently bill the platform account (Sprint 50
+        // Tier 1 finding #3).
+        return generateLabel(orderNo, userDetails, idempotencyKey, accountId, false);
+    }
+
+    @Override
+    @Transactional
+    public ApiResponse<LabelGenerationResponse> generateLabel(Long orderNo, UserDetails userDetails,
+                                                              String idempotencyKey, Long accountId,
+                                                              boolean useHouseAccount) {
         User user = resolveUser(userDetails);
 
         // Row lock: concurrent generations for this order (double-click,
@@ -443,13 +454,49 @@ public class CarrierServiceImpl implements CarrierService {
         // The account actually used — may switch to the platform account below.
         AccountResolution used = resolution;
 
+        // Sprint 50 Tier 1 (finding #3) — a client-account failure is only
+        // silently retried on the PLATFORM (house) account when the shipper
+        // explicitly opted in via {@code useHouseAccount=true}. Without the
+        // opt-in, the failure surfaces as CLIENT_CARRIER_AUTH_FAILED so the
+        // shipper knows their credentials broke instead of the platform
+        // absorbing the bill in the background. The auto-fallback still
+        // fires for resolutions that were already on the platform (SCENARIO_DEFAULT
+        // / SCENARIO_PLATFORM_FALLBACK) or when there is no client-owned
+        // credential to point at (no scenario carries client credentials there).
+        boolean clientOwnedResolution = AccountResolution.SCENARIO_ORDER.equals(resolution.scenario())
+                || AccountResolution.SCENARIO_REFERENCE.equals(resolution.scenario())
+                || AccountResolution.SCENARIO_CLIENT_DEFAULT.equals(resolution.scenario())
+                || AccountResolution.SCENARIO_MANUAL.equals(resolution.scenario());
         try {
             connector = getCarrierConnector(resolution.carrierCode());
             shipmentResult = attemptShipment(order, resolution, connector);
         } catch (Exception primaryEx) {
-            // Fallback: when the resolved (client) account fails at the carrier,
-            // retry with the PLATFORM (house) account for the same carrier so a
-            // client's bad credentials don't block the shipment.
+            // Client-owned account failed and the shipper did not opt into
+            // the platform account → return CLIENT_CARRIER_AUTH_FAILED so the
+            // operator either fixes the client's credentials or resends with
+            // useHouseAccount=true to bill the platform explicitly.
+            if (clientOwnedResolution && !useHouseAccount) {
+                String msg = "Client account " + resolution.accountNumber()
+                        + " failed at " + resolution.carrierCode() + ": " + primaryEx.getMessage()
+                        + ". Fix the client's carrier credentials, or resend with useHouseAccount=true"
+                        + " to explicitly bill the platform (house) account.";
+                markTrackingError(order, msg);
+                log.warn("Order {}: client account {} failed and no useHouseAccount opt-in — refusing silent platform bill.",
+                        orderNo, resolution.accountNumber());
+                LabelGenerationResponse authFail = LabelGenerationResponse.builder()
+                        .orderNo(orderNo)
+                        .carrierCode(resolution.carrierCode())
+                        .carrierAccountCode(resolution.accountNumber())
+                        .clientCode(tenantId)
+                        .status("ERROR")
+                        .message(msg)
+                        .accountSource(resolution.scenario())
+                        .build();
+                return failure(HttpStatus.BAD_GATEWAY, ErrorCode.CLIENT_CARRIER_AUTH_FAILED, msg, authFail);
+            }
+            // Fallback: either the resolution wasn't client-owned (e.g. platform
+            // account resolution failed on its own) OR the shipper opted in.
+            // Retry with the PLATFORM (house) account for the same carrier.
             AccountResolution platform = platformFallback(resolution.carrierCode(), resolution.accountNumber());
             if (platform == null) {
                 markTrackingError(order, primaryEx.getMessage());
@@ -460,8 +507,8 @@ public class CarrierServiceImpl implements CarrierService {
                 connector = getCarrierConnector(platform.carrierCode());
                 shipmentResult = attemptShipment(order, platform, connector);
                 used = platform;
-                log.info("Order {}: account {} failed ({}); fell back to platform account {}.",
-                        orderNo, resolution.accountNumber(), primaryEx.getMessage(), platform.accountNumber());
+                log.info("Order {}: account {} failed ({}); fell back to platform account {} (useHouseAccount={}).",
+                        orderNo, resolution.accountNumber(), primaryEx.getMessage(), platform.accountNumber(), useHouseAccount);
             } catch (Exception fallbackEx) {
                 String msg = "Account " + resolution.accountNumber() + " failed (" + primaryEx.getMessage()
                         + ") and the platform account also failed (" + fallbackEx.getMessage() + ").";
@@ -1109,6 +1156,10 @@ public class CarrierServiceImpl implements CarrierService {
                         new com.multiship.backend.dto.OrderCustomsUpsertRequest();
                 customsReq.setIncoterms(req.getIncoterms());
                 customsReq.setReasonForExport(req.getReasonForExport());
+                // TODO: Sprint 50 Tier 2 finding #16 — source from Client.defaultCurrency
+                // instead of hardcoded USD. The API boundary in ExternalApiService already
+                // fails loud on missing currency + non-zero declared value; this internal
+                // manual-order path still defaults to USD for now.
                 customsReq.setCurrency(firstNonBlank(req.getCurrency(), "USD"));
                 customsReq.setItems(lines);
                 try {
@@ -1125,6 +1176,7 @@ public class CarrierServiceImpl implements CarrierService {
         // is 0% PERCENT, cutoff is false, warehouseCode is null.
         com.multiship.backend.service.resolution.MarkupApplied markup;
         try {
+            // TODO: Sprint 50 Tier 2 finding #16 — source from Client.defaultCurrency.
             markup = resolutionService.applyMarkup(
                     hasClient ? resolvedClient : "",
                     result.shippingCost(),
@@ -1380,12 +1432,19 @@ public class CarrierServiceImpl implements CarrierService {
                     null, null, null, null, null);
         }
 
-        // The client's own complete, active accounts ON THIS CARRIER decide it:
-        //   exactly 1 → use it automatically (no prompt),
-        //   2 or more → the operator chooses which one at generation time,
-        //   0         → nothing to auto-pick → choose from the whole book.
-        // (A client with several UPS accounts must always be asked which UPS
-        //  account to bill — the client's requirement.)
+        // Sprint 50 Tier 1 (finding #19) — the "always ask" invariant is now
+        // upheld: no matter how many of the client's own accounts exist on
+        // this carrier (1, 2, or 10), the operator picks one at generation
+        // time. Previously a single account silently auto-picked, which
+        // contradicted the same method's earlier comment ("A client with
+        // several UPS accounts must always be asked which UPS account to
+        // bill"). Uniformity trumps convenience: a "single-account shortcut"
+        // is a per-client opt-in setting, not a silent code default.
+        //
+        // Zero client accounts on this carrier still falls through to the
+        // platform (house) account so unonboarded carriers keep shipping;
+        // any failure at the carrier surfaces as CLIENT_CARRIER_AUTH_FAILED
+        // (finding #3) rather than a silent platform-bill.
         String carrier = carrierCode;
         List<CarrierAccountRef> clientCarrierAccounts = carrierAccountRefRepository
                 .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(clientCode).stream()
@@ -1394,15 +1453,6 @@ public class CarrierServiceImpl implements CarrierService {
                 .filter(a -> carrier.equalsIgnoreCase(
                         resolveCanonicalCarrierCode(firstNonBlank(a.getCarrierCode(), carrier))))
                 .toList();
-
-        if (clientCarrierAccounts.size() == 1) {
-            CarrierAccountRef only = clientCarrierAccounts.get(0);
-            return AccountResolution.of(AccountResolution.SCENARIO_CLIENT_DEFAULT,
-                    resolveCanonicalCarrierCode(firstNonBlank(only.getCarrierCode(), carrier)),
-                    only.getAccountNumber(), only.getClientId(), only.getClientSecret(),
-                    firstNonBlank(only.getEnvironment(), carrierProperties.getDefaultEnvironment()),
-                    only.getAccountName());
-        }
 
         if (clientCarrierAccounts.isEmpty()) {
             // No account for this client on this carrier → ship on the PLATFORM
@@ -1423,13 +1473,17 @@ public class CarrierServiceImpl implements CarrierService {
                     null, null, null, null, null);
         }
 
-        // 2+ of the CLIENT's own accounts on this carrier → the operator picks
-        // one of them. The client's per-carrier default rides along (in the
-        // accountNumber slot) so the picker can pre-select it.
+        // 1+ of the CLIENT's own accounts on this carrier → the operator picks
+        // one of them (Sprint 50 Tier 1 removed the 1-account auto-pick shortcut).
+        // The client's per-carrier default rides along (in the accountNumber
+        // slot) so the picker can pre-select it — for a lone account that
+        // pre-selection is the entire pick.
         String suggested = clientCarrierAccounts.stream()
                 .filter(a -> Boolean.TRUE.equals(a.getClientDefault()))
                 .map(CarrierAccountRef::getAccountNumber)
-                .findFirst().orElse(null);
+                .findFirst()
+                // No explicit default flag — pre-select the only/first account.
+                .orElseGet(() -> clientCarrierAccounts.get(0).getAccountNumber());
         return AccountResolution.of(AccountResolution.SCENARIO_CHOOSE_ACCOUNT, carrier,
                 suggested, null, null, null, null);
     }
@@ -1492,6 +1546,14 @@ public class CarrierServiceImpl implements CarrierService {
     ) {
         static final String SCENARIO_ORDER = "ORDER";
         static final String SCENARIO_REFERENCE = "REFERENCE";
+        /**
+         * Retained for wire-format compatibility with older clients that
+         * may still branch on the string. Sprint 50 Tier 1 (finding #19)
+         * stopped emitting it from resolveAccountForOrderWithDetails: a
+         * single client-owned account no longer auto-picks; the shipper
+         * always chooses (CHOOSE_ACCOUNT) so the "always ask" invariant
+         * is uniform.
+         */
         static final String SCENARIO_CLIENT_DEFAULT = "CLIENT_DEFAULT";
         static final String SCENARIO_MANUAL = "MANUAL";
         static final String SCENARIO_PLATFORM_FALLBACK = "PLATFORM_FALLBACK";
@@ -1720,6 +1782,10 @@ public class CarrierServiceImpl implements CarrierService {
 
         // Weight/dim unit: from the customs declaration when available, else
         // LB/IN (the historical default the connectors assumed).
+        // TODO: Sprint 50 Tier 2 finding #16 — source from Client.defaultWeightUnit
+        // when customs.weightUnit is absent, instead of hardcoded LB. The API
+        // boundary in ExternalApiService already fails loud when a caller supplies
+        // weight without a unit; this internal path defaults for legacy domestic flows.
         String weightUnit = customs != null && customs.getWeightUnit() != null ? customs.getWeightUnit() : "LB";
         String dimUnit = "IN"; // Package presets standardize on inches; a per-preset unit lands with the address model rework.
 

@@ -96,10 +96,14 @@ public class ManifestServiceImpl implements ManifestService {
                     request.getCountryCode());
         }
 
+        // Sprint 50 Tier 1 (finding #10) — pass the resolved shipper account
+        // number so the FedEx close-out doesn't send the "ACCOUNT" placeholder.
+        // Same shape as the Sprint 49 Tier 2 voidShipment fix.
         CloseOutRequest connectorRequest = new CloseOutRequest(
                 List.copyOf(request.getTrackingNumbers()),
                 request.getCloseDate() == null ? LocalDate.now() : request.getCloseDate(),
-                address);
+                address,
+                account.getAccountNumber());
 
         CloseOutResult result;
         try {

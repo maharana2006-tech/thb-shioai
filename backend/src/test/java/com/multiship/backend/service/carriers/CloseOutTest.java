@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -230,5 +231,62 @@ class CloseOutTest {
                 </soap:Envelope>""";
         CloseOutResult r = c.parseCreateScanFormResponse(baseRequest(), canned);
         assertEquals("ERROR", r.status());
+    }
+
+    /* -------------------------- Sprint 50 Tier 1 finding #10 -------------------------- */
+
+    /**
+     * Sprint 50 Tier 1 finding #10 regression guard — FedEx close-out used to
+     * hardcode {@code "ACCOUNT"} as the shipper account number, so every real
+     * end-of-day silently failed at FedEx's validator. The 3-arg backward-compat
+     * constructor leaves {@code accountNumber=null}; calling with a REAL token
+     * (i.e. past the {@code -local-} short-circuit) must now surface an ERROR
+     * whose message points the caller at the missing account number rather
+     * than firing an HTTP request that will 4xx.
+     */
+    @Test
+    void fedexCloseOutBlankAccountReturnsErrorEarly() {
+        // 3-arg ctor → accountNumber is null.
+        CloseOutRequest req = new CloseOutRequest(
+                List.of("794999999999"), LocalDate.of(2026, 8, 1),
+                new AddressToValidate("Acme", null,
+                        "1 Warehouse Way", null, null,
+                        "Louisville", "KY", "40209", "US"));
+        FedExConnector c = new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx());
+
+        CloseOutResult r = c.closeOutDay(req, "REAL-TOKEN", null);
+
+        assertEquals("ERROR", r.status());
+        assertEquals("FEDEX", r.carrierCode());
+        assertTrue(r.message() != null && r.message().toLowerCase().contains("account number"),
+                "Expected the error message to mention the missing account number, got: " + r.message());
+    }
+
+    /**
+     * Sprint 50 Tier 1 finding #10 — when a real account number is supplied
+     * via the 4-arg ctor, the blank-account guard must NOT fire. We can't
+     * assert the outbound request body without a live sandbox, but we can
+     * verify the guard passes (status becomes ERROR only via the downstream
+     * HTTP call — not the "none was passed" early return) by checking the
+     * message no longer mentions "none was passed".
+     */
+    @Test
+    void fedexCloseOutPassesRealAccountIntoRequestBody() {
+        CloseOutRequest req = new CloseOutRequest(
+                List.of("794999999999"), LocalDate.of(2026, 8, 1),
+                new AddressToValidate("Acme", null,
+                        "1 Warehouse Way", null, null,
+                        "Louisville", "KY", "40209", "US"),
+                "99999");
+        FedExConnector c = new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx());
+
+        CloseOutResult r = c.closeOutDay(req, "REAL-TOKEN", null);
+
+        // With no live FedEx endpoint the call still ERRORs — but through the
+        // HTTP path, not the missing-account short-circuit. If the account
+        // guard regressed, r.message() would contain "none was passed".
+        assertEquals("ERROR", r.status());
+        assertFalse(r.message() != null && r.message().toLowerCase().contains("none was passed"),
+                "Real account was supplied — the 'none was passed' short-circuit must not fire. Message: " + r.message());
     }
 }
