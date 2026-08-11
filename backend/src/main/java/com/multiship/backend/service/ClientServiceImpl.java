@@ -175,7 +175,9 @@ public class ClientServiceImpl implements ClientService {
     @Override
     @Transactional
     public ApiResponse<ClientDTO> createClient(ClientUpsertRequest request) {
-        String code = normalize(request.getClientCode());
+        // Sprint 50 Tier 0.5 PR G — clamp so a scoped USER can't POST a
+        // client for a foreign clientCode. Operators pass through unchanged.
+        String code = normalize(tenantScope.clampClientCode(request.getClientCode()));
 
         if (clientRepository.existsByClientCodeIgnoreCase(code)) {
             return failure(HttpStatus.CONFLICT, ErrorCode.CLIENT_CODE_TAKEN,

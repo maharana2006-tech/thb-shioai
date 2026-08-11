@@ -532,6 +532,10 @@ public class CarrierServiceImpl implements CarrierService {
         if (req == null || req.getRecipient() == null) {
             return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "Recipient details are required.");
         }
+        // Sprint 50 Tier 0.5 PR G — clamp so a scoped USER can't submit a
+        // manual shipment against a foreign clientCode. Null/blank input
+        // gets forced to the caller's own tenant; operators pass through.
+        req.setClientCode(tenantScope.clampClientCode(req.getClientCode()));
         com.multiship.backend.dto.ManualShipmentRequest.Address to = req.getRecipient();
         com.multiship.backend.dto.ManualShipmentRequest.Address from = req.getSender();
 
@@ -1453,6 +1457,11 @@ public class CarrierServiceImpl implements CarrierService {
         for (Integer orderNo : distinctNos) {
             Order order = orders.get(orderNo);
             if (order == null) continue;  // skip missing orders — same as prior .filter(nonNull)
+            // Sprint 50 Tier 0.5 PR G — per-order tenant guard. A scoped
+            // USER passing a foreign orderNo in the batch aborts the whole
+            // resolve (fail-fast). Operators pass through unchanged.
+            tenantScope.requireTenantMatch(
+                    StringUtils.hasText(order.getTenantId()) ? order.getTenantId() : order.getCustNo());
             AccountResolution resolution = resolveAccountForOrderWithDetails(
                     order, detailsByOrder.get(orderNo));
             resolutions.add(OrderAccountResolutionDTO.builder()

@@ -8,8 +8,10 @@ import com.multiship.backend.dto.MultiWarehousePreviewResponse;
 import com.multiship.backend.dto.MultiWarehousePreviewResponse.GroupPreview;
 import com.multiship.backend.dto.MultiWarehousePreviewResponse.LinePreview;
 import com.multiship.backend.dto.WarehouseSelectionResult;
+import com.multiship.backend.service.TenantScopeEnforcer;
 import com.multiship.backend.service.warehouse.WarehouseSelector;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -25,6 +27,12 @@ public class MultiWarehousePreviewServiceImpl implements MultiWarehousePreviewSe
 
     private final WarehouseSelector warehouseSelector;
 
+    /** Sprint 50 Tier 0.5 PR G — clamp clientCode so a scoped USER can't
+     *  preview foreign-client warehouse reachability. Optional to keep the
+     *  no-arg unit-test constructor compiling. */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
+
     @Override
     public ApiResponse<MultiWarehousePreviewResponse> preview(MultiWarehouseLabelRequest request) {
         if (request == null) {
@@ -32,6 +40,9 @@ public class MultiWarehousePreviewServiceImpl implements MultiWarehousePreviewSe
         }
         if (request.getClientCode() == null || request.getClientCode().isBlank()) {
             return failure(HttpStatus.BAD_REQUEST, "clientCode is required.");
+        }
+        if (tenantScope != null) {
+            request.setClientCode(tenantScope.clampClientCode(request.getClientCode()));
         }
         if (request.getLines() == null || request.getLines().isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "At least one line is required.");
