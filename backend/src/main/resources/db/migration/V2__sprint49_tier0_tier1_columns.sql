@@ -23,8 +23,17 @@ ALTER TABLE IF EXISTS carrier_webhook_events
     ADD COLUMN IF NOT EXISTS duplicate BOOLEAN DEFAULT FALSE;
 
 -- Look up prior events by hash within the dedup window — hot path on every write.
-CREATE INDEX IF NOT EXISTS idx_carrier_webhook_events_event_hash
-    ON carrier_webhook_events (event_hash);
+-- Skip if the table hasn't been created yet by Hibernate: CREATE INDEX ... ON
+-- <table> errors when the table is missing even though the surrounding ALTER
+-- TABLE IF EXISTS statements would have no-op'd. Hibernate ddl-auto=update
+-- creates the table + this same index later; Flyway just records the version.
+DO $$
+BEGIN
+    IF to_regclass('carrier_webhook_events') IS NOT NULL THEN
+        CREATE INDEX IF NOT EXISTS idx_carrier_webhook_events_event_hash
+            ON carrier_webhook_events (event_hash);
+    END IF;
+END $$;
 
 -- ---------- Tier 1: encrypt carrier client_secret at rest ----------
 -- Widen the column so the base64(nonce||ciphertext||tag) wire format fits.
