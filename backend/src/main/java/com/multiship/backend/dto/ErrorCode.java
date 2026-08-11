@@ -43,6 +43,10 @@ public enum ErrorCode {
     /** Admin tried to modify or deactivate a user that does not exist. */
     ADMIN_TARGET_USER_NOT_FOUND,
 
+    // ===== Sprint 50 finding #15 — per-tenant rate limit + fair scheduler =====
+    /** Tenant exceeded the per-minute request budget on a write endpoint. */
+    TENANT_RATE_LIMITED,
+
     // ===== Orders =====
     ORDER_NOT_FOUND,
     VALIDATION_ERROR,
