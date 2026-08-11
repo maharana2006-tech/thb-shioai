@@ -52,6 +52,15 @@ public class OrderServiceImpl implements OrderService {
     @Autowired
     private com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
 
+    /**
+     * Sprint 50 Tier 0.5 PR E — clamps caller-supplied tenant filters to the
+     * authenticated caller's own tenant when the caller is tenant-scoped
+     * (USER-with-clientCode + flag on, or TENANT / API-key). Platform
+     * operators (ADMIN, legacy USER) get the request as-is.
+     */
+    @Autowired
+    private TenantScopeEnforcer tenantScope;
+
     private static final Set<String> VALID_STATUSES = Set.of("PENDING", "GENERATED", "ERROR");
     private static final Set<String> VALID_RESOLUTIONS = Set.of("READY", "NEEDS_DETAILS", "CHOOSE_ACCOUNT", "CLIENT_MISSING");
 
@@ -69,7 +78,14 @@ public class OrderServiceImpl implements OrderService {
         String resolution = filters.getResolution();
         String statusFilter = normalizeFilter(status);
         String resolutionFilter = normalizeFilter(resolution);
-        String tenantFilter = normalizeFilter(filters.getTenantId());
+        // Sprint 50 Tier 0.5 PR E — clamp to caller's own tenant when scoped.
+        // clampClientCode: platform operators pass through unchanged; a
+        // tenant-scoped caller either has null overridden with their own
+        // clientCode, or (if they named a foreign one) is 403'd.
+        String rawTenantFilter = trimmed(filters.getTenantId());
+        String clampedTenant = tenantScope.clampClientCode(
+                rawTenantFilter.isEmpty() ? null : rawTenantFilter);
+        String tenantFilter = normalizeFilter(clampedTenant);
         String keywordFilter = trimmed(filters.getSearch());
         String customerFilter = trimmed(filters.getCustomer());
         String cityFilter = trimmed(filters.getCity());
@@ -148,7 +164,11 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<Map<String, Long>> getQueueStats() {
-        Object[] row = orderRepository.getQueueStats().get(0);
+        // Sprint 50 Tier 0.5 PR E — scoped caller sees only own tenant's queue.
+        Object[] row = tenantScope.resolveScope()
+                .map(orderRepository::getQueueStatsForTenant)
+                .orElseGet(orderRepository::getQueueStats)
+                .get(0);
 
         Map<String, Long> stats = new LinkedHashMap<>();
         stats.put("ready", toLong(row[0]));
@@ -227,6 +247,13 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public ApiResponse<OrderResponseDTO> getOrderWithTracking(Integer orderNo) {
+        // Sprint 50 Tier 0.5 PR E — belt-and-braces post-load tenant guard.
+        // Controller SpEL (@orderAccess.canViewOrder) already scopes the read,
+        // but any service-to-service caller bypassing method security lands
+        // here directly. The extra findByOrderNo is a cheap PK lookup.
+        orderRepository.findByOrderNo(orderNo).ifPresent(o ->
+                tenantScope.requireTenantMatch(resolveTenantKey(o)));
+
         List<Object[]> results = orderRepository.findOrderWithTracking(orderNo);
 
         if (results.isEmpty()) {
@@ -287,6 +314,9 @@ public class OrderServiceImpl implements OrderService {
         }
 
         Order entity = order.get();
+        // Sprint 50 Tier 0.5 PR E — belt-and-braces guard for service-to-service
+        // callers that bypass the controller's @orderAccess.canViewOrder SpEL.
+        tenantScope.requireTenantMatch(resolveTenantKey(entity));
         List<OrderLineDTO> lines = entity.getOrderLines() == null
                 ? Collections.emptyList()
                 : entity.getOrderLines().stream()
@@ -350,7 +380,11 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public ApiResponse<Map<String, Object>> getDashboardStats() {
-        List<Object[]> results = orderRepository.getDashboardStats();
+        // Sprint 50 Tier 0.5 PR E — scoped caller sees only own tenant's stats.
+        Optional<String> scope = tenantScope.resolveScope();
+        List<Object[]> results = scope
+                .map(orderRepository::getDashboardStatsForTenant)
+                .orElseGet(orderRepository::getDashboardStats);
 
         if (results.isEmpty()) {
             return ApiResponse.<Map<String, Object>>builder()
@@ -365,7 +399,9 @@ public class OrderServiceImpl implements OrderService {
 
         Object[] row = results.get(0);
 
-        List<Object[]> cityData = orderRepository.getCityDistribution();
+        List<Object[]> cityData = scope
+                .map(orderRepository::getCityDistributionForTenant)
+                .orElseGet(orderRepository::getCityDistribution);
         List<Map<String, Object>> cityDistribution = cityData.stream()
                 .map(cityRow -> {
                     Map<String, Object> cityMap = new LinkedHashMap<>();
@@ -385,7 +421,7 @@ public class OrderServiceImpl implements OrderService {
 
         stats.put("weightStats", Map.of(
                 "totalWeight", row[5] != null ? ((Number) row[5]).doubleValue() : 0.0,
-                "averageWeight", calculateAverageWeight()
+                "averageWeight", calculateAverageWeight(scope)
         ));
 
         stats.put("cityDistribution", cityDistribution);
@@ -568,8 +604,10 @@ public class OrderServiceImpl implements OrderService {
                 .build();
     }
 
-    private double calculateAverageWeight() {
-        List<Object[]> results = orderRepository.getAverageWeight();
+    private double calculateAverageWeight(Optional<String> tenantScope) {
+        List<Object[]> results = tenantScope
+                .map(orderRepository::getAverageWeightForTenant)
+                .orElseGet(orderRepository::getAverageWeight);
         if (results.isEmpty() || results.get(0)[0] == null) {
             return 0.0;
         }

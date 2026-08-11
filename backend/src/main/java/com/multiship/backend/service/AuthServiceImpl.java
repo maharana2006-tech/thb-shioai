@@ -252,6 +252,19 @@ public class AuthServiceImpl implements AuthService {
         if (userOptional.isPresent() && passwordEncoder.matches(loginRequest.getPassword(), userOptional.get().getPassword())) {
             User user = userOptional.get();
 
+            // Sprint 50 Tier 0.5 PR E — reject login for an admin-revoked
+            // account. Distinct from unverified so the user sees a clear
+            // "your account has been deactivated" rather than "verify your
+            // email." Check ordered BEFORE the email-verified check because
+            // a deactivated unverified account should hit the deactivation
+            // message, not the verify-your-email one.
+            if (user.getDeactivatedAt() != null) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(new MessageResponse(
+                                "This account has been deactivated. Contact your administrator.",
+                                ErrorCode.ACCOUNT_DEACTIVATED));
+            }
+
             // Sprint 50 Tier 0.5 PR D — block login until email verified.
             // Legacy rows backfilled to emailVerified=true (V4) so existing
             // operators aren't locked out on deploy. Invite-accepted users

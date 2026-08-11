@@ -13,6 +13,7 @@ import com.multiship.backend.model.ShipmentGroup;
 import com.multiship.backend.repository.ShipmentGroupRepository;
 import com.multiship.backend.repository.ShipmentRepository;
 import com.multiship.backend.service.CarrierService;
+import com.multiship.backend.service.TenantScopeEnforcer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -34,6 +35,12 @@ public class MultiWarehouseLabelServiceImpl implements MultiWarehouseLabelServic
     private final CarrierService carrierService;
     private final ShipmentGroupRepository groupRepository;
     private final ShipmentRepository shipmentRepository;
+    /**
+     * Sprint 50 Tier 0.5 PR E - clamp the request-supplied clientCode so a
+     * scoped USER cannot request a multi-warehouse split for a foreign
+     * tenant. Platform operators pass through unchanged.
+     */
+    private final TenantScopeEnforcer tenantScope;
 
     // TODO(sprint49-tier2-fix6-followup): the loop below calls
     // generateManualLabel (itself @Transactional) N times inside this
@@ -55,6 +62,11 @@ public class MultiWarehouseLabelServiceImpl implements MultiWarehouseLabelServic
         if (request.getClientCode() == null || request.getClientCode().isBlank()) {
             return failure(HttpStatus.BAD_REQUEST, "clientCode is required for a multi-warehouse split.");
         }
+        // Sprint 50 Tier 0.5 PR E - clamp the caller-supplied clientCode
+        // to the caller's own tenant when scoped. Foreign values throw
+        // AccessDeniedException surfaced as 403 by the global handler;
+        // platform operators pass through unchanged.
+        request.setClientCode(tenantScope.clampClientCode(request.getClientCode()));
         if (request.getLines() == null || request.getLines().isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "At least one line is required.");
         }

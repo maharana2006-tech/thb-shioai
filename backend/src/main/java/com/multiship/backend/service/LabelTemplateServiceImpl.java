@@ -14,6 +14,15 @@ import java.util.Optional;
 public class LabelTemplateServiceImpl implements LabelTemplateService {
 
     private final LabelTemplateRepository repo;
+    /**
+     * Sprint 50 Tier 0.5 PR E - clamp tenantId so a scoped USER cannot
+     * resolve a foreign tenant's label template. Optional so pre-PR-E
+     * tests that construct the service directly still compile; also
+     * PackingSlipServiceImpl passes the platform tenantId==null branch
+     * (fallback template lookup) which remains valid.
+     */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
 
     @Autowired
     public LabelTemplateServiceImpl(LabelTemplateRepository repo) {
@@ -27,17 +36,31 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
 
     @Override
     public Optional<LabelTemplate> resolve(String tenantId, String templateType) {
-        if (tenantId != null && !tenantId.isBlank()) {
-            Optional<LabelTemplate> scoped = repo.findByTenantAndType(tenantId, templateType);
-            if (scoped.isPresent()) return scoped;
+        // Sprint 50 Tier 0.5 PR E - clamp the caller-supplied tenantId
+        // so a scoped USER cannot request a foreign tenant's template.
+        String scoped = clamp(tenantId);
+        if (scoped != null && !scoped.isBlank()) {
+            Optional<LabelTemplate> matched = repo.findByTenantAndType(scoped, templateType);
+            if (matched.isPresent()) return matched;
         }
         return repo.findByTenantAndType(null, templateType);
     }
 
     @Override
     public Optional<LabelTemplate> findForTenant(String tenantId, String templateType) {
-        String normalised = (tenantId == null || tenantId.isBlank()) ? null : tenantId;
+        // Sprint 50 Tier 0.5 PR E - clamp before hitting the repo so a
+        // scoped USER can't peek at another tenant's template.
+        String scoped = clamp(tenantId);
+        String normalised = (scoped == null || scoped.isBlank()) ? null : scoped;
         return repo.findByTenantAndType(normalised, templateType);
+    }
+
+    /**
+     * Sprint 50 Tier 0.5 PR E - null-safe helper: when the enforcer isn't
+     * wired (pure-unit tests) fall back to the raw value; otherwise clamp.
+     */
+    private String clamp(String tenantId) {
+        return tenantScope == null ? tenantId : tenantScope.clampClientCode(tenantId);
     }
 
     @Override

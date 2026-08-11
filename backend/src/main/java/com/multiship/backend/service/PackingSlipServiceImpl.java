@@ -77,6 +77,15 @@ public class PackingSlipServiceImpl implements PackingSlipService {
     @Autowired(required = false)
     private CustomFieldService customFieldService;
 
+    /**
+     * Sprint 50 Tier 0.5 PR E - cross-repo tenant guard on the order.
+     * Optional so pre-PR-E tests that build the service directly still
+     * compile; when wired, a scoped USER rendering a slip for a foreign
+     * order gets a 403 rather than the raw PDF.
+     */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
+
     @Autowired
     public PackingSlipServiceImpl(OrderRepository orderRepository,
                                   OrderLineRepository orderLineRepository,
@@ -95,6 +104,10 @@ public class PackingSlipServiceImpl implements PackingSlipService {
                         "Order not found: " + orderNo));
 
         String tenantId = order.getTenantId() != null ? order.getTenantId() : order.getCustNo();
+        // Sprint 50 Tier 0.5 PR E - Pattern C: tenant guard on the
+        // just-loaded order so a scoped USER can't render a slip for a
+        // foreign tenant's order.
+        if (tenantScope != null) tenantScope.requireTenantMatch(tenantId);
         LabelTemplate template = labelTemplateService
                 .resolve(tenantId, "PACKING_SLIP")
                 .orElse(null);

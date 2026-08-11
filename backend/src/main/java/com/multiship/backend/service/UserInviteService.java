@@ -37,6 +37,12 @@ public class UserInviteService {
 
     private final UserInviteRepository repository;
     private final MailSender mailSender;
+    /**
+     * Sprint 50 Tier 0.5 PR E - clamp clientCode on invite mint so a
+     * scoped USER (in the unlikely case they're allowed to invite) cannot
+     * mint an invite for a foreign tenant. Platform ADMIN pass-through.
+     */
+    private final TenantScopeEnforcer tenantScope;
 
     @Value("${invite.token-ttl-days:7}")
     private int tokenTtlDays;
@@ -55,10 +61,13 @@ public class UserInviteService {
     @Transactional
     public UserInvite mint(String email, String clientCode, String role, String invitedBy,
                             String acceptLinkBaseUrl) {
+        // Sprint 50 Tier 0.5 PR E - Pattern A clamp: scoped USER can only
+        // invite to their own tenant. ADMIN pass-through.
+        String scopedClientCode = tenantScope.clampClientCode(clientCode);
         UserInvite invite = new UserInvite();
         invite.setToken(randomToken());
         invite.setEmail(email.trim().toLowerCase());
-        invite.setClientCode(clientCode.trim().toUpperCase());
+        invite.setClientCode(scopedClientCode.trim().toUpperCase());
         invite.setRole(role.trim().toUpperCase());
         invite.setInvitedBy(invitedBy);
         invite.setCreatedAt(LocalDateTime.now());

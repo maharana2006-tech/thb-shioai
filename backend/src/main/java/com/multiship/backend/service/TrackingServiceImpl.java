@@ -6,6 +6,7 @@ import com.multiship.backend.dto.TrackingResponseDTO;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.OrderTracking;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
+import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
 import lombok.RequiredArgsConstructor;
@@ -50,6 +51,13 @@ public class TrackingServiceImpl implements TrackingService {
     private final OrderTrackingRepository orderTrackingRepository;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     private final CarrierService carrierService;
+    /**
+     * Sprint 50 Tier 0.5 PR E — tenant guard. TrackingServiceImpl needs the
+     * Order (not just OrderTracking) to reach the tenant discriminator
+     * (tenant_id / cust_no lives on label_batch, mirrored on Order).
+     */
+    private final OrderRepository orderRepository;
+    private final TenantScopeEnforcer tenantScope;
 
     private final Cache<String, CacheEntry> cache = Caffeine.newBuilder()
             .maximumSize(MAX_ENTRIES)
@@ -61,6 +69,13 @@ public class TrackingServiceImpl implements TrackingService {
         if (orderNo == null) {
             return failure(HttpStatus.BAD_REQUEST, "Order number is required.");
         }
+
+        // Sprint 50 Tier 0.5 PR E — belt-and-braces post-load tenant guard.
+        // Controller SpEL (@orderAccess.canViewOrder) already scopes the read,
+        // but any internal caller bypassing method security lands here first.
+        orderRepository.findByOrderNo(orderNo).ifPresent(o ->
+                tenantScope.requireTenantMatch(
+                        StringUtils.hasText(o.getTenantId()) ? o.getTenantId() : o.getCustNo()));
 
         OrderTracking tracking = orderTrackingRepository.findByOrderNo(orderNo).orElse(null);
         if (tracking == null || !StringUtils.hasText(tracking.getTrackingNumber())) {

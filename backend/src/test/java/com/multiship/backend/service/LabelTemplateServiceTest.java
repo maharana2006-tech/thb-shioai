@@ -68,6 +68,33 @@ class LabelTemplateServiceTest {
         verify(repo).findByTenantAndType(isNull(), eq("PACKING_SLIP"));
     }
 
+    /* -------- Sprint 50 Tier 0.5 PR E: tenant-scope -------- */
+
+    @Test
+    void scopedUserCannotResolveForeignTenantTemplate() throws Exception {
+        var authorities = java.util.List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("acmeuser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails("ACME"));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+        try {
+            LabelTemplateServiceImpl scopedService = new LabelTemplateServiceImpl(repo);
+            // Wire the optional enforcer via reflection so we don't need a Spring context.
+            java.lang.reflect.Field f = LabelTemplateServiceImpl.class.getDeclaredField("tenantScope");
+            f.setAccessible(true);
+            f.set(scopedService, new TenantScopeEnforcer(new com.multiship.backend.config.AccessScopePolicy(true)));
+
+            assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                    () -> scopedService.resolve("OTHER", "PACKING_SLIP"));
+            assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                    () -> scopedService.findForTenant("OTHER", "PACKING_SLIP"));
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
     @Test
     void save_newTemplate_setsBothTimestampsAndDefaultsType() {
         LabelTemplate t = new LabelTemplate();

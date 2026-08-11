@@ -109,6 +109,26 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
     """, nativeQuery = true)
     List<Object[]> getDashboardStats();
 
+    /**
+     * Sprint 50 Tier 0.5 PR E — tenant-scoped variant of {@link #getDashboardStats()}.
+     * Callers filter through {@code TenantScopeEnforcer.resolveScope()}: platform
+     * operators keep the org-wide query; scoped USER-with-clientCode / TENANT / API
+     * key get their own tenant's stats only.
+     */
+    @Query(value = """
+        SELECT
+            COUNT(*) as total_orders,
+            COUNT(CASE WHEN COALESCE(t.status, 'PENDING') = 'PENDING' THEN 1 END) as pending_labels,
+            COUNT(CASE WHEN t.status = 'GENERATED' THEN 1 END) as generated_labels,
+            COUNT(CASE WHEN t.status = 'ERROR' THEN 1 END) as failed_labels,
+            COUNT(CASE WHEN t.is_label_generated = true THEN 1 END) as labels_generated,
+            COALESCE(SUM(b.weight), 0) as total_weight
+        FROM label_batch b
+        LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
+        WHERE UPPER(COALESCE(b.tenant_id, b.cust_no)) = UPPER(:tenantId)
+    """, nativeQuery = true)
+    List<Object[]> getDashboardStatsForTenant(@Param("tenantId") String tenantId);
+
     @Query(value = """
         SELECT shipto_city, COUNT(*) as count
         FROM label_batch
@@ -117,8 +137,26 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
     """, nativeQuery = true)
     List<Object[]> getCityDistribution();
 
+    /** Sprint 50 Tier 0.5 PR E — tenant-scoped variant of {@link #getCityDistribution()}. */
+    @Query(value = """
+        SELECT shipto_city, COUNT(*) as count
+        FROM label_batch
+        WHERE UPPER(COALESCE(tenant_id, cust_no)) = UPPER(:tenantId)
+        GROUP BY shipto_city
+        ORDER BY count DESC
+    """, nativeQuery = true)
+    List<Object[]> getCityDistributionForTenant(@Param("tenantId") String tenantId);
+
     @Query(value = "SELECT AVG(weight) FROM label_batch WHERE weight IS NOT NULL", nativeQuery = true)
     List<Object[]> getAverageWeight();
+
+    /** Sprint 50 Tier 0.5 PR E — tenant-scoped variant of {@link #getAverageWeight()}. */
+    @Query(value = """
+        SELECT AVG(weight) FROM label_batch
+        WHERE weight IS NOT NULL
+          AND UPPER(COALESCE(tenant_id, cust_no)) = UPPER(:tenantId)
+    """, nativeQuery = true)
+    List<Object[]> getAverageWeightForTenant(@Param("tenantId") String tenantId);
 
     /**
      * Pending (unlabelled) order count for a client — powers the
@@ -334,4 +372,27 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
     """, nativeQuery = true)
     List<Object[]> getQueueStats();
+
+    /**
+     * Sprint 50 Tier 0.5 PR E — tenant-scoped variant of {@link #getQueueStats()}.
+     * Scoped USER-with-clientCode / TENANT / API key sees only their own tenant's
+     * queue counts; platform operators use the org-wide {@link #getQueueStats()}.
+     */
+    @Query(value = """
+        SELECT
+            COUNT(*) FILTER (WHERE COALESCE(t.status, 'PENDING') = 'PENDING' AND """ + RESOLUTION_READY_SQL + """
+            ) as ready,
+            COUNT(*) FILTER (WHERE COALESCE(t.status, 'PENDING') = 'PENDING' AND """ + RESOLUTION_NEEDS_DETAILS_SQL + """
+            ) as needs_details,
+            COUNT(*) FILTER (WHERE COALESCE(t.status, 'PENDING') = 'PENDING' AND """ + RESOLUTION_CHOOSE_ACCOUNT_SQL + """
+            ) as choose_account,
+            COUNT(*) FILTER (WHERE COALESCE(t.status, 'PENDING') = 'PENDING' AND """ + RESOLUTION_CLIENT_MISSING_SQL + """
+            ) as client_missing,
+            COUNT(*) FILTER (WHERE t.status = 'ERROR') as failed,
+            COUNT(*) FILTER (WHERE t.status = 'GENERATED') as generated
+        FROM label_batch b
+        LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
+        WHERE UPPER(COALESCE(b.tenant_id, b.cust_no)) = UPPER(:tenantId)
+    """, nativeQuery = true)
+    List<Object[]> getQueueStatsForTenant(@Param("tenantId") String tenantId);
 }

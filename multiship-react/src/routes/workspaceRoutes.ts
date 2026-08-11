@@ -35,6 +35,10 @@ export const settingsPaths = {
   /** Sprint 49 Tier 0 — admin-managed secrets (OpenAI key, etc.) stored
    *  encrypted in the DB and rotated at runtime. ADMIN role only. */
   system: '/settings/system',
+  /** Sprint 50 Tier 0.5 PR E — admin-only user management: assign
+   *  clientCode to legacy USER rows, deactivate revoked accounts, audit
+   *  the changes. Backing surface for the tenant-scope flag rollout. */
+  users: '/settings/users',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -88,6 +92,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN', 'USER'] },
   { key: 'system', label: 'System', to: settingsPaths.system, iconKey: 'apiKey',
     description: 'Admin-managed encrypted secrets — OpenAI key and other overrides for env vars. AES-GCM at rest.',
+    roles: ['ADMIN'] },
+  { key: 'users', label: 'Users', to: settingsPaths.users, iconKey: 'clients',
+    description: 'Assign each USER account to a client, deactivate revoked accounts, and audit the changes. Backfill client_code before flipping the tenant-scope flag.',
     roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep

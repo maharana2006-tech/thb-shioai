@@ -5,9 +5,11 @@ import com.multiship.backend.model.CustomFieldDefinition.FieldType;
 import com.multiship.backend.model.OrderCustomFieldValue;
 import com.multiship.backend.repository.CustomFieldDefinitionRepository;
 import com.multiship.backend.repository.OrderCustomFieldValueRepository;
+import com.multiship.backend.repository.OrderRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -28,6 +30,21 @@ public class CustomFieldServiceImpl implements CustomFieldService {
 
     private final CustomFieldDefinitionRepository defRepo;
     private final OrderCustomFieldValueRepository valueRepo;
+    /**
+     * Sprint 50 Tier 0.5 PR E - clamp tenantId so a scoped USER cannot
+     * list / mutate a foreign tenant's custom-field definitions or values.
+     * Optional so pre-PR-E tests that construct the service directly
+     * without Spring don't have to plumb another dep.
+     */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
+    /**
+     * Sprint 50 Tier 0.5 PR E - cross-repo tenant lookup on the passed
+     * orderNo (belt-and-braces guard in addition to the tenantId clamp).
+     * Optional so pre-PR-E tests still compile.
+     */
+    @Autowired(required = false)
+    private OrderRepository orderRepository;
 
     @Autowired
     public CustomFieldServiceImpl(CustomFieldDefinitionRepository defRepo,
@@ -38,12 +55,12 @@ public class CustomFieldServiceImpl implements CustomFieldService {
 
     @Override
     public List<CustomFieldDefinition> listAllForTenant(String tenantId) {
-        return defRepo.findAllForTenant(normalise(tenantId));
+        return defRepo.findAllForTenant(normalise(clamp(tenantId)));
     }
 
     @Override
     public List<CustomFieldDefinition> listApplicable(String tenantId) {
-        return defRepo.findApplicable(normalise(tenantId));
+        return defRepo.findApplicable(normalise(clamp(tenantId)));
     }
 
     @Override
@@ -92,7 +109,19 @@ public class CustomFieldServiceImpl implements CustomFieldService {
                                             Map<String, String> values) {
         if (values == null || values.isEmpty()) return loadValues(orderNo);
 
-        List<CustomFieldDefinition> applicable = defRepo.findApplicable(normalise(tenantId));
+        // Sprint 50 Tier 0.5 PR E - clamp the caller-supplied tenantId to
+        // the caller's own tenant. A scoped USER cannot use another
+        // tenant's custom-field definitions.
+        String scoped = clamp(tenantId);
+        // Sprint 50 Tier 0.5 PR E - defense in depth: also verify the
+        // order the caller is writing values on belongs to the caller's
+        // tenant, in case tenantId was omitted / manipulated.
+        if (tenantScope != null && orderRepository != null && orderNo != null) {
+            orderRepository.findByOrderNo(orderNo).ifPresent(o ->
+                    tenantScope.requireTenantMatch(
+                            StringUtils.hasText(o.getTenantId()) ? o.getTenantId() : o.getCustNo()));
+        }
+        List<CustomFieldDefinition> applicable = defRepo.findApplicable(normalise(scoped));
         Map<String, CustomFieldDefinition> byKey = applicable.stream()
                 .collect(Collectors.toMap(CustomFieldDefinition::getFieldKey, d -> d));
 
@@ -169,6 +198,14 @@ public class CustomFieldServiceImpl implements CustomFieldService {
 
     private static String normalise(String tenantId) {
         return (tenantId == null || tenantId.isBlank()) ? null : tenantId;
+    }
+
+    /**
+     * Sprint 50 Tier 0.5 PR E - null-safe helper: when the enforcer isn't
+     * wired (pure-unit tests) fall back to the raw value; otherwise clamp.
+     */
+    private String clamp(String tenantId) {
+        return tenantScope == null ? tenantId : tenantScope.clampClientCode(tenantId);
     }
 
     /**

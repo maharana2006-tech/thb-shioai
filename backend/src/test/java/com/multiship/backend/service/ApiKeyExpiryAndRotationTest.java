@@ -1,5 +1,6 @@
 package com.multiship.backend.service;
 
+import com.multiship.backend.config.AccessScopePolicy;
 import com.multiship.backend.model.ApiKey;
 import com.multiship.backend.repository.ApiKeyRepository;
 import com.multiship.backend.service.ApiKeyService.AuthResult;
@@ -39,7 +40,9 @@ class ApiKeyExpiryAndRotationTest {
     void setUp() {
         repo = mock(ApiKeyRepository.class);
         encoder = mock(PasswordEncoder.class);
-        service = new ApiKeyService(repo, encoder);
+        // Sprint 50 Tier 0.5 PR E - enforcer with flag OFF is a pass-through.
+        service = new ApiKeyService(repo, encoder,
+                new TenantScopeEnforcer(new AccessScopePolicy(false)));
     }
 
     /* -------- token parsing / invalid -------- */
@@ -68,6 +71,29 @@ class ApiKeyExpiryAndRotationTest {
         when(encoder.matches(anyString(), anyString())).thenReturn(false);
         assertEquals(AuthResult.Kind.INVALID,
                 service.authenticateDetailed("msk_live_deadbeef_wrongsecret").kind());
+    }
+
+    /* -------- Sprint 50 Tier 0.5 PR E: tenant-scope -------- */
+
+    @Test
+    void scopedUserCannotIssueKeyForForeignTenant() {
+        var authorities = java.util.List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("acmeuser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails("ACME"));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+        try {
+            ApiKeyService scopedService = new ApiKeyService(repo, encoder,
+                    new TenantScopeEnforcer(new AccessScopePolicy(true)));
+
+            org.junit.jupiter.api.Assertions.assertThrows(
+                    org.springframework.security.access.AccessDeniedException.class,
+                    () -> scopedService.issue("name", "OTHER", "live", null, "actor"));
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
     }
 
     /* -------- happy path -------- */

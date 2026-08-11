@@ -46,6 +46,11 @@ public class ClientServiceImpl implements ClientService {
     private final ClientWarehouseRepository clientWarehouseRepository;
     private final AuditService auditService;
     private final AuditLogRepository auditLogRepository;
+    /**
+     * Sprint 50 Tier 0.5 PR E — tenant clamp so a scoped USER hitting
+     * /clients sees only their own client row (rather than every client).
+     */
+    private final TenantScopeEnforcer tenantScope;
     private final ObjectMapper cascadeJson = new ObjectMapper();
 
     @Override
@@ -55,7 +60,9 @@ public class ClientServiceImpl implements ClientService {
         String status = norm(filters.getStatus());
         String carrier = norm(filters.getCarrier());
         String hasOrders = norm(filters.getHasOrders());
-        String code = norm(filters.getCode());
+        // Sprint 50 Tier 0.5 PR E - clamp so a scoped USER exports only
+        // their own client row even when they omit / spoof the code param.
+        String code = norm(tenantScope.clampClientCode(filters.getCode()));
         String name = norm(filters.getName());
         String city = norm(filters.getCity());
         String sortBy = filters.getSortBy() != null ? filters.getSortBy() : "code";
@@ -119,7 +126,11 @@ public class ClientServiceImpl implements ClientService {
         String status = norm(filters.getStatus());
         String carrier = norm(filters.getCarrier());
         String hasOrders = norm(filters.getHasOrders());
-        String code = norm(filters.getCode());
+        // Sprint 50 Tier 0.5 PR E — clamp the caller-supplied code filter
+        // to the caller's own tenant when scoped. Platform operators pass
+        // through unchanged; tenant-scoped callers see only their own row
+        // even if they omitted the code param.
+        String code = norm(tenantScope.clampClientCode(filters.getCode()));
         String name = norm(filters.getName());
         String city = norm(filters.getCity());
         String sortBy = filters.getSortBy() != null ? filters.getSortBy() : "code";
@@ -152,6 +163,11 @@ public class ClientServiceImpl implements ClientService {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
                     "Client " + normalize(clientCode) + " was not found.");
         }
+        // Sprint 50 Tier 0.5 PR E — defense in depth: the controller-level
+        // @PreAuthorize on this endpoint already blocks cross-tenant reads,
+        // but service callers (batch jobs, other services) can bypass method
+        // security. Guard here too so no path leaks a row for a foreign tenant.
+        tenantScope.requireTenantMatch(client.getClientCode());
 
         return success("Client retrieved successfully.", toDTO(client));
     }

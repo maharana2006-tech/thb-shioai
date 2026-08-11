@@ -34,6 +34,30 @@ class CustomFieldServiceTest {
         service = new CustomFieldServiceImpl(defRepo, valueRepo);
     }
 
+    /* -------- Sprint 50 Tier 0.5 PR E: tenant-scope -------- */
+
+    @Test
+    void scopedUserCannotListForeignTenantDefinitions() throws Exception {
+        var authorities = List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("acmeuser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails("ACME"));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+        try {
+            CustomFieldServiceImpl scopedService = new CustomFieldServiceImpl(defRepo, valueRepo);
+            java.lang.reflect.Field f = CustomFieldServiceImpl.class.getDeclaredField("tenantScope");
+            f.setAccessible(true);
+            f.set(scopedService, new TenantScopeEnforcer(new com.multiship.backend.config.AccessScopePolicy(true)));
+
+            assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                    () -> scopedService.listAllForTenant("OTHER"));
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+    }
+
     // ===== saveDefinition =====
 
     @Test

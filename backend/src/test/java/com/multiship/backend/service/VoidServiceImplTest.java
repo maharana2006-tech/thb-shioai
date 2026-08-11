@@ -1,11 +1,13 @@
 package com.multiship.backend.service;
 
+import com.multiship.backend.config.AccessScopePolicy;
 import com.multiship.backend.config.CarrierProperties;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.VoidLabelResponseDTO;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.OrderTracking;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
+import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
 import com.multiship.backend.repository.ShipmentBatchRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
@@ -41,6 +43,7 @@ class VoidServiceImplTest {
     private ShipmentBatchRepository batchRepo;
     private CarrierProperties carrierProperties;
     private CarrierConnector connector;
+    private OrderRepository orderRepo;
     private VoidServiceImpl service;
 
     @BeforeEach
@@ -71,8 +74,13 @@ class VoidServiceImplTest {
         }
 
         connector = mock(CarrierConnector.class);
+        orderRepo = mock(OrderRepository.class);
 
-        service = new VoidServiceImpl(trackingRepo, accountRepo, carrierService, batchRepo, carrierProperties);
+        // Sprint 50 Tier 0.5 PR E - enforcer with flag OFF is a pure
+        // pass-through, so existing test behavior is unchanged.
+        service = new VoidServiceImpl(trackingRepo, accountRepo, carrierService, batchRepo,
+                carrierProperties, orderRepo,
+                new TenantScopeEnforcer(new AccessScopePolicy(false)));
     }
 
     private OrderTracking trackingRow(String status, String tracking, String carrier, String accountNo) {
@@ -204,6 +212,37 @@ class VoidServiceImplTest {
 
         ApiResponse<VoidLabelResponseDTO> resp = service.voidLabel(1);
         assertEquals(422, resp.getCode());
+    }
+
+    /* -------- Sprint 50 Tier 0.5 PR E: tenant-scope -------- */
+
+    @Test
+    void scopedUserCannotVoidForeignTenantOrder() {
+        // Arrange: put a scoped USER (ACME) in the security context.
+        var authorities = java.util.List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("acmeuser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails("ACME"));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+        try {
+            // Enforcer with flag ON so USER-with-clientCode is tenant-scoped.
+            VoidServiceImpl scopedService = new VoidServiceImpl(trackingRepo, accountRepo, carrierService, batchRepo,
+                    carrierProperties, orderRepo,
+                    new TenantScopeEnforcer(new AccessScopePolicy(true)));
+
+            com.multiship.backend.model.Order foreignOrder = new com.multiship.backend.model.Order();
+            foreignOrder.setOrderNo(1);
+            foreignOrder.setTenantId("OTHER");
+            when(orderRepo.findByOrderNo(1)).thenReturn(Optional.of(foreignOrder));
+
+            org.junit.jupiter.api.Assertions.assertThrows(
+                    org.springframework.security.access.AccessDeniedException.class,
+                    () -> scopedService.voidLabel(1));
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
     }
 
     /* -------- helpers -------- */

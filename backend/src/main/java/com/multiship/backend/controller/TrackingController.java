@@ -32,7 +32,10 @@ public class TrackingController {
                     "the connector's authenticated tracking API. Response includes an oldest-first events " +
                     "list plus a source flag (LIVE / STUB / CACHE) so the UI can decide what freshness " +
                     "badge to show. Cached ~5 minutes for in-flight shipments, 24h for delivered.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    // Sprint 50 Tier 0.5 PR E — scope live tracking to the order's tenant.
+    // Controller SpEL is the fast reject; TrackingServiceImpl guards
+    // belt-and-braces for any service-to-service caller.
+    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
     @GetMapping("/{orderNo}/tracking/live")
     public ResponseEntity<ApiResponse<TrackingResponseDTO>> getLiveTracking(@PathVariable Integer orderNo) {
         ApiResponse<TrackingResponseDTO> response = trackingService.getLiveTracking(orderNo);

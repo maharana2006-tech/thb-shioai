@@ -1,11 +1,13 @@
 package com.multiship.backend.service;
 
+import com.multiship.backend.config.AccessScopePolicy;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.BulkLabelJobDTO;
 import com.multiship.backend.dto.BulkLabelRequestDTO;
 import com.multiship.backend.dto.LabelGenerationResponse;
 import com.multiship.backend.model.BulkLabelJob;
 import com.multiship.backend.repository.BulkLabelJobRepository;
+import com.multiship.backend.repository.OrderRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -42,6 +44,7 @@ class BulkLabelServiceImplTest {
 
     private BulkLabelJobRepository jobRepo;
     private CarrierService carrierService;
+    private OrderRepository orderRepo;
     private BulkLabelServiceImpl service;
 
     /** Track saved job states so we can inspect terminal state. */
@@ -52,6 +55,7 @@ class BulkLabelServiceImplTest {
     void setUp() {
         jobRepo = mock(BulkLabelJobRepository.class);
         carrierService = mock(CarrierService.class);
+        orderRepo = mock(OrderRepository.class);
 
         // Simulate JPA save + findById against an in-memory Map.
         doAnswer(inv -> {
@@ -63,7 +67,10 @@ class BulkLabelServiceImplTest {
         when(jobRepo.findById(anyLong()))
                 .thenAnswer(inv -> Optional.ofNullable(saved.get(inv.<Long>getArgument(0))));
 
-        service = new BulkLabelServiceImpl(jobRepo, carrierService);
+        // Sprint 50 Tier 0.5 PR E - enforcer with flag OFF is a pure
+        // pass-through, so existing test behavior is unchanged.
+        service = new BulkLabelServiceImpl(jobRepo, carrierService, orderRepo,
+                new TenantScopeEnforcer(new AccessScopePolicy(false)));
     }
 
     private static LabelGenerationResponse okLabel(long orderNo) {
@@ -108,6 +115,38 @@ class BulkLabelServiceImplTest {
     void submitRejectsNullRequest() {
         ApiResponse<BulkLabelJobDTO> resp = service.submit(null, "alice");
         assertEquals(400, resp.getCode());
+    }
+
+    /* -------- Sprint 50 Tier 0.5 PR E: tenant-scope -------- */
+
+    @Test
+    void scopedUserCannotSubmitForeignTenantOrders() {
+        // Arrange: put a scoped USER (ACME) in the security context.
+        var authorities = List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("acmeuser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails("ACME"));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+        try {
+            BulkLabelServiceImpl scopedService = new BulkLabelServiceImpl(
+                    jobRepo, carrierService, orderRepo,
+                    new TenantScopeEnforcer(new AccessScopePolicy(true)));
+
+            com.multiship.backend.model.Order foreignOrder = new com.multiship.backend.model.Order();
+            foreignOrder.setOrderNo(7);
+            foreignOrder.setTenantId("OTHER");
+            when(orderRepo.findByOrderNo(7)).thenReturn(Optional.of(foreignOrder));
+
+            org.junit.jupiter.api.Assertions.assertThrows(
+                    org.springframework.security.access.AccessDeniedException.class,
+                    () -> scopedService.submit(
+                            BulkLabelRequestDTO.builder().orderNumbers(List.of(7L)).build(),
+                            "acmeuser"));
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
     }
 
     /* -------------------------- Worker -------------------------- */

@@ -639,6 +639,9 @@ public class OrderController {
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Group + child shipments created")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation error — missing clientCode / lines / per-line warehouseCode")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "One of the child shipments failed; batch aborted")
+    // Sprint 50 Tier 0.5 PR E - controller role gate stays broad; the
+    // service clamps request.clientCode to the caller's own tenant so a
+    // scoped USER cannot generate a split for a foreign tenant.
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/multi-warehouse-label")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.MultiWarehouseLabelResponse>> generateMultiWarehouseLabel(

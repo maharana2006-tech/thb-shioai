@@ -2,76 +2,56 @@ package com.multiship.backend.config;
 
 import com.multiship.backend.repository.OrderRepository;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.GrantedAuthority;
 import org.springframework.stereotype.Component;
 
+import java.util.Optional;
+
 /**
- * SpEL helper used in @PreAuthorize expressions to scope TENANT users to
- * their own orders. A TENANT user maps to a tenant code by the uppercase
- * username convention (user "arhdev" -> tenant "ARHDEV"), mirroring
- * COALESCE(tenant_id, cust_no) on the order.
+ * SpEL helper used in {@code @PreAuthorize} expressions to scope
+ * non-operator callers to their own tenant's orders.
+ *
+ * <p>Sprint 50 Tier 0.5 PR E — delegates the operator/tenant decision to
+ * {@link AccessScopePolicy} so USER-with-clientCode (when the flag is on)
+ * is treated as a tenant-scoped caller like TENANT. Pre-PR-E behavior
+ * mapped USER to tenant via the uppercase-username convention; that path
+ * is preserved as a fallback for pre-PR-A tokens that carry no clientCode
+ * claim.
  */
 @Component("orderAccess")
 public class OrderAccessEvaluator {
 
     private final OrderRepository orderRepository;
+    private final AccessScopePolicy accessScope;
 
-    public OrderAccessEvaluator(OrderRepository orderRepository) {
+    public OrderAccessEvaluator(OrderRepository orderRepository,
+                                 AccessScopePolicy accessScope) {
         this.orderRepository = orderRepository;
+        this.accessScope = accessScope;
     }
 
-    /** Operators see every order; a TENANT only orders of their own tenant. */
+    /** Platform operators see every order; tenant-scoped callers only their own. */
     public boolean canViewOrder(Authentication authentication, Integer orderNo) {
-        if (isOperator(authentication)) {
+        Optional<String> scope = accessScope.tenantOf(authentication);
+        if (scope.isEmpty()) {
             return true;
         }
-
-        if (!hasRole(authentication, "ROLE_TENANT") || orderNo == null) {
+        if (orderNo == null) {
             return false;
         }
-
-        String ownTenant = tenantIdOf(authentication);
-
+        String owner = scope.get();
         return orderRepository.findByOrderNo(orderNo)
                 .map(order -> {
                     String orderTenant = order.getTenantId() != null && !order.getTenantId().isBlank()
                             ? order.getTenantId()
                             : order.getCustNo();
-                    return orderTenant != null && orderTenant.trim().toUpperCase().equals(ownTenant);
+                    return orderTenant != null
+                            && orderTenant.trim().toUpperCase().equals(owner);
                 })
                 .orElse(false);
     }
 
-    /** Operators may query any tenant; a TENANT only their own tenant id. */
+    /** Platform operators may query any tenant; tenant-scoped callers only their own. */
     public boolean canViewTenant(Authentication authentication, String tenantId) {
-        if (isOperator(authentication)) {
-            return true;
-        }
-
-        return hasRole(authentication, "ROLE_TENANT")
-                && tenantId != null
-                && tenantId.trim().toUpperCase().equals(tenantIdOf(authentication));
-    }
-
-    private boolean isOperator(Authentication authentication) {
-        return hasRole(authentication, "ROLE_ADMIN") || hasRole(authentication, "ROLE_USER");
-    }
-
-    private boolean hasRole(Authentication authentication, String role) {
-        if (authentication == null || !authentication.isAuthenticated()) {
-            return false;
-        }
-
-        for (GrantedAuthority authority : authentication.getAuthorities()) {
-            if (role.equals(authority.getAuthority())) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private String tenantIdOf(Authentication authentication) {
-        return authentication.getName().trim().toUpperCase();
+        return accessScope.canAccessTenant(authentication, tenantId);
     }
 }

@@ -34,6 +34,10 @@ public class ManifestController {
                     "FedEx CloseShipment, SWSIM CreateScanForm). Returns the carrier's manifest " +
                     "identifier + PDF (or URL) the driver signs at pickup. DHL manifests are " +
                     "implicit via the pickup request (Sprint 33) — the response has status=NOT_SUPPORTED.")
+    // Sprint 50 Tier 0.5 PR E - controller-level role gate stays broad;
+    // ManifestServiceImpl clamps request.customerNo to the caller's own
+    // tenant via TenantScopeEnforcer so a scoped USER cannot close out a
+    // foreign tenant's manifest even though the SpEL doesn't inspect the body.
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping
     public ResponseEntity<ApiResponse<ManifestResponseDTO>> closeOut(

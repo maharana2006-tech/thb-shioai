@@ -33,6 +33,16 @@ public enum ErrorCode {
     /** Signup / invite payload missing the required clientCode. */
     CLIENT_CODE_REQUIRED,
 
+    // ===== Sprint 50 Tier 0.5 PR E — tenant scope + admin user mgmt =====
+    /** Login refused: an admin revoked this account (deactivated_at set). */
+    ACCOUNT_DEACTIVATED,
+    /** Caller tried to read/write a row that belongs to a different client. */
+    CROSS_TENANT_ACCESS_DENIED,
+    /** Admin tried to move a user to a client that does not exist. */
+    ADMIN_TARGET_CLIENT_NOT_FOUND,
+    /** Admin tried to modify or deactivate a user that does not exist. */
+    ADMIN_TARGET_USER_NOT_FOUND,
+
     // ===== Orders =====
     ORDER_NOT_FOUND,
     VALIDATION_ERROR,
