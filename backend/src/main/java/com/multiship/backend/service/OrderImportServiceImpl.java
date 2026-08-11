@@ -92,6 +92,53 @@ public class OrderImportServiceImpl implements OrderImportService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.fasterxml.jackson.databind.ObjectMapper importObjectMapper;
 
+    /** Sprint 50 Tier 0.5 PR G — tenant-scope clamp on every entry point.
+     *  Optional so unit tests that construct the service via the no-arg
+     *  or reduced-args constructor still compile. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.TenantScopeEnforcer tenantScope;
+
+    /** Null-safe wrapper around {@link TenantScopeEnforcer#clampClientCode(String)}.
+     *  Returns the input unchanged when the enforcer isn't wired (tests). */
+    private String clamp(String requested) {
+        return tenantScope == null ? requested : tenantScope.clampClientCode(requested);
+    }
+
+    /** Null-safe wrapper around {@link TenantScopeEnforcer#requireTenantMatch(String)}.
+     *  No-op when the enforcer isn't wired (tests). */
+    private void requireMatch(String rowClientCode) {
+        if (tenantScope != null) tenantScope.requireTenantMatch(rowClientCode);
+    }
+
+    /** Sprint 50 Tier 0.5 PR G — inspect the first non-blank clientCode across
+     *  a batch's persisted rows. Used to enforce tenant match on batch-level
+     *  operations (historyDetail, generateLabelsForBatch, generateLabelForRow)
+     *  since {@link com.multiship.backend.model.ImportBatch} carries no direct
+     *  tenant column — the tenant identity lives on each row of the payload. */
+    private String firstClientCode(List<OrderImportRowDTO> rows) {
+        if (rows == null) return null;
+        for (OrderImportRowDTO r : rows) {
+            String c = r.getClientCode();
+            if (StringUtils.hasText(c)) return c;
+        }
+        return null;
+    }
+
+    /** Sprint 50 Tier 0.5 PR G — parse an ImportBatch's rowsJson to a list of
+     *  OrderImportRowDTO. Empty list on any failure. */
+    private List<OrderImportRowDTO> parseBatchRows(com.multiship.backend.model.ImportBatch batch) {
+        if (batch == null || batch.getRowsJson() == null || importObjectMapper == null) {
+            return java.util.List.of();
+        }
+        try {
+            return importObjectMapper.readValue(
+                    batch.getRowsJson(),
+                    new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
+        } catch (Exception e) {
+            return java.util.List.of();
+        }
+    }
+
     @org.springframework.beans.factory.annotation.Autowired
     public OrderImportServiceImpl(CarrierService carrierService,
                                   CarrierAccountRefRepository accountRefRepository,
@@ -255,6 +302,14 @@ public class OrderImportServiceImpl implements OrderImportService {
                 return failure(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                         "Only .csv, .txt, and .xlsx files are supported.");
             }
+            // Sprint 50 Tier 0.5 PR G — clamp each row's clientCode to the
+            // caller's tenant scope. For scoped USERs a blank code is forced
+            // to their own tenant; a foreign code throws 403 immediately so
+            // the upload never persists cross-tenant rows. Operators pass
+            // through unchanged.
+            for (OrderImportRowDTO row : rows) {
+                row.setClientCode(clamp(row.getClientCode()));
+            }
             // Mint one batch id for this file upload right away and stamp
             // every row with it, so the whole sheet is grouped together
             // from the moment it's uploaded — commit() re-uses this same
@@ -309,6 +364,12 @@ public class OrderImportServiceImpl implements OrderImportService {
     @Override
     public ApiResponse<OrderImportPreviewDTO> validate(List<OrderImportRowDTO> rows) {
         if (rows == null) rows = List.of();
+        // Sprint 50 Tier 0.5 PR G — clamp before any validation so a
+        // tenant-scoped USER re-submitting rows edited to a foreign
+        // clientCode is rejected 403 before we spend cycles validating.
+        for (OrderImportRowDTO row : rows) {
+            row.setClientCode(clamp(row.getClientCode()));
+        }
         // Re-run the sanitize → name-lookup → per-row → international
         // pipeline over the (possibly-edited) rows. We DON'T re-parse
         // strings through sanitise() here because the payload is JSON,
@@ -330,6 +391,13 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (addressValidationService == null) {
             return failure(HttpStatus.SERVICE_UNAVAILABLE,
                     "Address validation service not wired.");
+        }
+        // Sprint 50 Tier 0.5 PR G — clamp before we call the carrier's
+        // address validator (which is billed on the tenant's account) so
+        // a scoped USER can't burn a foreign tenant's address-validation
+        // quota by re-labeling a row.
+        for (OrderImportRowDTO row : rows) {
+            row.setClientCode(clamp(row.getClientCode()));
         }
         // Per-row: build an AddressValidationRequestDTO from the recipient
         // block, call the carrier's validateAddress, append a warning if
@@ -392,6 +460,13 @@ public class OrderImportServiceImpl implements OrderImportService {
     public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy) {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
+        }
+        // Sprint 50 Tier 0.5 PR G — clamp before we mint labels / persist
+        // orders. Frontend edits between preview and commit could otherwise
+        // slip a foreign clientCode past preview's clamp; re-clamping here
+        // ensures every persisted order + carrier call is tenant-correct.
+        for (OrderImportRowDTO row : rows) {
+            row.setClientCode(clamp(row.getClientCode()));
         }
         // One id per file upload — every order this commit() call generates a
         // label for gets stamped with the same batchId, so the whole sheet's
@@ -516,6 +591,12 @@ public class OrderImportServiceImpl implements OrderImportService {
     @Override
     public ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy, String fileName) {
         List<OrderImportRowDTO> safe = rows == null ? java.util.List.of() : rows;
+        // Sprint 50 Tier 0.5 PR G — clamp before we persist rowsJson so a
+        // scoped USER can't seed the import_batch table with foreign
+        // clientCodes that later history() calls would surface.
+        for (OrderImportRowDTO row : safe) {
+            row.setClientCode(clamp(row.getClientCode()));
+        }
         int total = safe.size();
         int invalid = (int) safe.stream()
                 .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
@@ -568,7 +649,20 @@ public class OrderImportServiceImpl implements OrderImportService {
     @Override
     public java.util.List<com.multiship.backend.dto.ImportBatchDTO> history() {
         if (importBatchRepository == null) return java.util.List.of();
+        // Sprint 50 Tier 0.5 PR G — filter to the caller's tenant when
+        // scoped. ImportBatch has no direct tenant column so we derive
+        // membership from the first non-blank clientCode in the payload
+        // (all rows in one save() call share the same clamped code).
+        // Operators (resolveScope empty) see everything.
+        java.util.Optional<String> scope = tenantScope == null
+                ? java.util.Optional.empty()
+                : tenantScope.resolveScope();
         return importBatchRepository.findAllByOrderByIdDesc().stream()
+                .filter(b -> {
+                    if (scope.isEmpty()) return true;
+                    String owner = firstClientCode(parseBatchRows(b));
+                    return owner != null && scope.get().equalsIgnoreCase(owner.trim());
+                })
                 .map(b -> com.multiship.backend.dto.ImportBatchDTO.builder()
                         .id(b.getId())
                         .createdBy(b.getCreatedBy())
@@ -598,6 +692,12 @@ public class OrderImportServiceImpl implements OrderImportService {
                 parsedRows = java.util.List.of();
             }
         }
+        // Sprint 50 Tier 0.5 PR G — enforce tenant match before returning
+        // the payload. ImportBatch has no direct tenant column, so the
+        // clientCode on the persisted rows is the source of truth.
+        // Throws AccessDeniedException (→ 403) for a scoped USER whose
+        // tenant doesn't own this batch. Silent for operators.
+        requireMatch(firstClientCode(parsedRows));
         return com.multiship.backend.dto.ImportBatchDTO.builder()
                 .id(b.getId())
                 .createdBy(b.getCreatedBy())
@@ -635,6 +735,11 @@ public class OrderImportServiceImpl implements OrderImportService {
                 rows = new ArrayList<>();
             }
         }
+        // Sprint 50 Tier 0.5 PR G — enforce tenant match before we spend
+        // any carrier-billing cycles generating labels. A scoped USER
+        // trying to fire label generation on a foreign tenant's batch
+        // gets 403 here rather than after we've minted N labels.
+        requireMatch(firstClientCode(rows));
 
         // Mark IN_PROGRESS before the (potentially slow) carrier calls.
         batch.setStatus("IN_PROGRESS");
@@ -693,6 +798,10 @@ public class OrderImportServiceImpl implements OrderImportService {
                 rows = new ArrayList<>();
             }
         }
+        // Sprint 50 Tier 0.5 PR G — enforce tenant match on the parent
+        // batch before we generate for a single row. Single-row generation
+        // must have the same tenant boundary as full-batch generation.
+        requireMatch(firstClientCode(rows));
         OrderImportRowDTO target = rows.stream()
                 .filter(r -> r.getRowNumber() == rowNumber)
                 .findFirst()

@@ -315,13 +315,33 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     @Override
     public ApiResponse<BulkLabelJobDTO> status(Long jobId) {
         Optional<BulkLabelJob> job = jobRepository.findById(jobId);
-        return job.map(b -> success(toDto(b), b.getStatus()))
-                .orElseGet(() -> failure(HttpStatus.NOT_FOUND, "Bulk-label job " + jobId + " not found."));
+        if (job.isEmpty()) {
+            return failure(HttpStatus.NOT_FOUND, "Bulk-label job " + jobId + " not found.");
+        }
+        // Sprint 50 Tier 0.5 PR G — belt guard on jobId enumeration.
+        // The submit path clamps every order in the job, so all orders
+        // belong to a single tenant. Load the first order and match its
+        // tenant against the caller's scope.
+        requireJobTenantMatch(job.get());
+        return success(toDto(job.get()), job.get().getStatus());
     }
 
     @Override
     public Optional<BulkLabelJob> findRaw(Long jobId) {
-        return jobRepository.findById(jobId);
+        Optional<BulkLabelJob> job = jobRepository.findById(jobId);
+        job.ifPresent(this::requireJobTenantMatch);
+        return job;
+    }
+
+    /** Sprint 50 Tier 0.5 PR G — cheapest possible loaded-row guard: the
+     *  submit path clamps every order, so the whole job is tenant-uniform.
+     *  Pull the first orderNumber, load the order, requireTenantMatch. */
+    private void requireJobTenantMatch(BulkLabelJob job) {
+        long[] orderNos = parseOrderNumbers(job.getOrderNumbers());
+        if (orderNos.length == 0) return;
+        orderRepository.findByOrderNo((int) orderNos[0]).ifPresent(o ->
+                tenantScope.requireTenantMatch(
+                        StringUtils.hasText(o.getTenantId()) ? o.getTenantId() : o.getCustNo()));
     }
 
     static BulkLabelJobDTO toDto(BulkLabelJob j) {

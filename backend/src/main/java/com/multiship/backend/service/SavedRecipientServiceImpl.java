@@ -60,10 +60,14 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
 
     @Override
     public ApiResponse<SavedRecipientDTO> byId(Long id) {
-        return repository.findById(id)
-                .map(r -> success(toDto(r), "Found."))
-                .orElseGet(() -> failure(HttpStatus.NOT_FOUND,
-                        "Saved recipient " + id + " not found."));
+        Optional<SavedRecipient> maybe = repository.findById(id);
+        if (maybe.isEmpty()) {
+            return failure(HttpStatus.NOT_FOUND, "Saved recipient " + id + " not found.");
+        }
+        // Sprint 50 Tier 0.5 PR G - Pattern B on the loaded row so a
+        // scoped USER can't read a foreign tenant's recipient by id.
+        tenantScope.requireTenantMatch(maybe.get().getOwnerCustomerNo());
+        return success(toDto(maybe.get()), "Found.");
     }
 
     @Override
@@ -119,13 +123,17 @@ public class SavedRecipientServiceImpl implements SavedRecipientService {
 
     @Override
     public ApiResponse<Void> delete(Long id) {
-        if (!repository.existsById(id)) {
+        Optional<SavedRecipient> maybe = repository.findById(id);
+        if (maybe.isEmpty()) {
             return ApiResponse.<Void>builder()
                     .status("error").code(404)
                     .errorCode(ErrorCode.VALIDATION_ERROR.name())
                     .message("Saved recipient " + id + " not found.")
                     .data(null).build();
         }
+        // Sprint 50 Tier 0.5 PR G - Pattern B on the loaded row so a
+        // scoped USER can't delete a foreign tenant's recipient by id.
+        tenantScope.requireTenantMatch(maybe.get().getOwnerCustomerNo());
         repository.deleteById(id);
         return ApiResponse.<Void>builder()
                 .status("success").code(200)

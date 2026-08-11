@@ -7,6 +7,7 @@ import com.multiship.backend.model.ScheduledReport;
 import com.multiship.backend.repository.GeneratedReportRepository;
 import com.multiship.backend.repository.ScheduledReportRepository;
 import com.multiship.backend.service.ScheduledReportRunner;
+import com.multiship.backend.service.TenantScopeEnforcer;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
@@ -23,6 +24,7 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Sprint 45 — scheduled report CRUD + "run now" + generated download.
@@ -37,6 +39,10 @@ public class ScheduledReportController {
     private final ScheduledReportRepository scheduleRepo;
     private final GeneratedReportRepository generatedRepo;
     private final ScheduledReportRunner runner;
+    /** Sprint 50 Tier 0.5 PR G — tenant clamp on schedule / generated
+     *  rows so a scoped USER can't read, write, or trigger a foreign
+     *  tenant's schedule. Operators pass through unchanged. */
+    private final TenantScopeEnforcer tenantScope;
 
     // ===== CRUD =====
 
@@ -45,9 +51,13 @@ public class ScheduledReportController {
     @GetMapping
     public ResponseEntity<ApiResponse<List<ScheduledReportDTO>>> list(
             @RequestParam(name = "tenantId", required = false) String tenantId) {
-        List<ScheduledReport> rows = (tenantId == null || tenantId.isBlank())
+        // Sprint 50 Tier 0.5 PR G — clamp tenantId so a scoped USER
+        // omitting the param sees only their own schedules; foreign
+        // spoofed value → 403. Operators pass through unchanged.
+        String scoped = tenantScope.clampClientCode(tenantId);
+        List<ScheduledReport> rows = (scoped == null || scoped.isBlank())
                 ? scheduleRepo.findAllByOrderByNameAsc()
-                : scheduleRepo.findByTenantIdOrderByNameAsc(tenantId);
+                : scheduleRepo.findByTenantIdOrderByNameAsc(scoped);
         return ok(rows.stream().map(ScheduledReportDTO::from).toList(), "Schedules loaded");
     }
 
@@ -55,6 +65,9 @@ public class ScheduledReportController {
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping
     public ResponseEntity<ApiResponse<ScheduledReportDTO>> save(@RequestBody ScheduledReportDTO body) {
+        // Sprint 50 Tier 0.5 PR G — clamp body.tenantId so a scoped USER
+        // can't create/edit a schedule aimed at a foreign tenant.
+        body.setTenantId(tenantScope.clampClientCode(body.getTenantId()));
         ScheduledReport s = body.toEntity();
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         if (s.getId() == null) {
@@ -112,6 +125,9 @@ public class ScheduledReportController {
     public ResponseEntity<ApiResponse<Long>> runNow(@PathVariable Long id) {
         ScheduledReport s = scheduleRepo.findById(id).orElse(null);
         if (s == null) return notFound("No such schedule");
+        // Sprint 50 Tier 0.5 PR G — belt guard on loaded schedule so a
+        // scoped USER can't trigger a foreign tenant's schedule by id.
+        tenantScope.requireTenantMatch(s.getTenantId());
         GeneratedReport gr = runner.runOne(s, LocalDateTime.now(ZoneOffset.UTC));
         return ok(gr.getId(), "Run completed (generated #" + gr.getId() + ")");
     }
@@ -123,9 +139,12 @@ public class ScheduledReportController {
     @GetMapping("/generated")
     public ResponseEntity<ApiResponse<List<GeneratedReport>>> generated(
             @RequestParam(name = "tenantId", required = false) String tenantId) {
-        List<GeneratedReport> rows = (tenantId == null || tenantId.isBlank())
+        // Sprint 50 Tier 0.5 PR G — clamp tenantId so a scoped USER
+        // sees only their own generated reports.
+        String scoped = tenantScope.clampClientCode(tenantId);
+        List<GeneratedReport> rows = (scoped == null || scoped.isBlank())
                 ? generatedRepo.findTop50ByOrderByGeneratedAtDesc()
-                : generatedRepo.findByTenantIdOrderByGeneratedAtDesc(tenantId);
+                : generatedRepo.findByTenantIdOrderByGeneratedAtDesc(scoped);
         // Strip csvBytes on list — download hits the dedicated endpoint below.
         rows.forEach(r -> r.setCsvBytes(null));
         return ok(rows, "Recent generated");
@@ -140,6 +159,9 @@ public class ScheduledReportController {
             response.sendError(HttpStatus.NOT_FOUND.value(), "Not found");
             return;
         }
+        // Sprint 50 Tier 0.5 PR G — belt guard on loaded report so a
+        // scoped USER can't download a foreign tenant's CSV by id.
+        tenantScope.requireTenantMatch(gr.getTenantId());
         response.setContentType("text/csv");
         response.setCharacterEncoding("UTF-8");
         response.setHeader("Content-Disposition", "attachment; filename=" + gr.getFilename());
