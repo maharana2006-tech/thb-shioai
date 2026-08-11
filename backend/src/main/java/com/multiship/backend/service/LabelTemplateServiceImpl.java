@@ -4,10 +4,12 @@ import com.multiship.backend.model.LabelTemplate;
 import com.multiship.backend.repository.LabelTemplateRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 @Service
@@ -91,6 +93,16 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
 
     @Override
     public void delete(Long id) {
+        // Sprint 50 Tier 0.5 PR H - belt on delete-by-id: load first, verify
+        // the row's tenantId matches the caller's scope, then delete. Mirrors
+        // the findById belt from PR F. Platform-owned templates (tenantId ==
+        // null) stay operator-only via the existing controller SpEL.
+        if (tenantScope != null) {
+            repo.findById(id)
+                    .map(LabelTemplate::getTenantId)
+                    .filter(t -> t != null && !t.isBlank())
+                    .ifPresent(tenantScope::requireTenantMatch);
+        }
         repo.deleteById(id);
     }
 
@@ -103,6 +115,25 @@ public class LabelTemplateServiceImpl implements LabelTemplateService {
         String t = templateType == null ? "" : templateType.trim();
         String h = hasLogo == null ? "" : hasLogo.trim().toUpperCase();
         if (!h.isEmpty() && !"Y".equals(h) && !"N".equals(h)) h = "";
-        return repo.search(s, t, h, pageable);
+        Page<LabelTemplate> raw = repo.search(s, t, h, pageable);
+        // Sprint 50 Tier 0.5 PR H - post-fetch tenant filter so a scoped
+        // USER only sees platform templates (tenantId == null) and their
+        // own tenant's templates. Simpler than threading an extra param
+        // through the repo signature; the page is already bounded.
+        if (tenantScope == null) return raw;
+        Optional<String> scope = tenantScope.resolveScope();
+        if (scope.isEmpty()) return raw;
+        String mine = scope.get();
+        List<LabelTemplate> filtered = raw.getContent().stream()
+                .filter(row -> row.getTenantId() == null
+                        || row.getTenantId().isBlank()
+                        || mine.equalsIgnoreCase(row.getTenantId().trim()))
+                .toList();
+        // Rewrap into a PageImpl carrying the same pageable + a total that
+        // reflects the filtered content. Total is best-effort — a fully
+        // accurate total would require a second scoped count query; the
+        // audit UI treats this list as read-only so an approximate total is
+        // acceptable and matches the shape of the response.
+        return new PageImpl<>(filtered, pageable, filtered.size());
     }
 }

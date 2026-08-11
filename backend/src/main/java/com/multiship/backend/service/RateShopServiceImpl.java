@@ -107,6 +107,16 @@ public class RateShopServiceImpl implements RateShopService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ShippingServiceRepository shippingServiceRepository;
 
+    /**
+     * Sprint 50 Tier 0.5 PR H - clamp caller-supplied {@code customerNo} so
+     * a scoped USER cannot rate-shop through another tenant's default
+     * carrier account (which would reveal that tenant's negotiated pricing).
+     * Optional so pre-PR-H tests that build the service directly still
+     * compile without plumbing another dep.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
+
     @Autowired
     public RateShopServiceImpl(CarrierService carrierService,
                                 CarrierAccountRefRepository carrierAccountRefRepository,
@@ -145,6 +155,16 @@ public class RateShopServiceImpl implements RateShopService {
     public ApiResponse<RateShopResponseDTO> rateShop(RateShopRequestDTO request) {
         if (request == null || request.getShipment() == null) {
             return failure(HttpStatus.BAD_REQUEST, "shipment is required.");
+        }
+
+        // Sprint 50 Tier 0.5 PR H - clamp caller-supplied customerNo BEFORE
+        // it's used to resolve a carrier account. A scoped USER posting
+        // {customerNo: OTHER} would otherwise rate-shop through OTHER's
+        // default account and see their negotiated pricing. Clamping here
+        // also covers the routing-preview branch (enrichWithRoutingPreview
+        // reads request.getCustomerNo() later in this same call).
+        if (tenantScope != null) {
+            request.setCustomerNo(tenantScope.clampClientCode(request.getCustomerNo()));
         }
 
         List<String> carriers = resolveCarriers(request.getCarriers());

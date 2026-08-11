@@ -9,6 +9,7 @@ import com.multiship.backend.model.ClientCustomsProfile;
 import com.multiship.backend.repository.ClientCustomsProfileRepository;
 import com.multiship.backend.repository.ClientRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +24,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -32,6 +34,15 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
 
     private final ClientCustomsProfileRepository repository;
     private final ClientRepository clientRepository;
+
+    /**
+     * Sprint 50 Tier 0.5 PR H - clamp {@link #listPaginated},
+     * {@link #getStats} and {@link #exportProfilesCsv} so a scoped USER only
+     * sees their own client's importer/broker data. Optional so pre-Sprint-50
+     * unit tests still compile.
+     */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
 
     @Override
     @Transactional(readOnly = true)
@@ -55,6 +66,10 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<PageResponseDTO<ClientCustomsProfileDTO>> listPaginated(CustomsProfileFilters filters) {
+        // Sprint 50 Tier 0.5 PR H - a scoped USER only ever sees their own
+        // client's profiles. Clamp filters.clientCode: foreign → 403, own
+        // stays, unset → forced to their tenant.
+        clampTenantFilter(filters);
         List<ClientCustomsProfileDTO> filtered = fetchFiltered(filters);
         int page = Math.max(filters.getPage(), 0);
         int size = Math.min(Math.max(filters.getSize(), 1), 200);
@@ -70,16 +85,37 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
         // Sprint 49 Tier 3 Fix 5 — the page's health strip called findAll()
         // and derived three totals in Java. Now three lightweight count
         // queries run at the DB and return scalars. Response identical.
+        // Sprint 50 Tier 0.5 PR H — a scoped USER sees only their tenant's
+        // slice; clientsConfigured collapses to 1 (their own has ≥1 profile)
+        // or 0 (they've configured none). Platform operators unchanged.
+        Optional<String> scope = tenantScope == null ? Optional.empty() : tenantScope.resolveScope();
         Map<String, Long> out = new LinkedHashMap<>();
-        out.put("profiles", repository.count());
-        out.put("destinationsCovered", repository.countDistinctCountries());
-        out.put("clientsConfigured", repository.countDistinctClientCodes());
+        if (scope.isPresent()) {
+            String code = scope.get();
+            List<ClientCustomsProfile> mine = repository.findByClientCodeIgnoreCase(code);
+            out.put("profiles", (long) mine.size());
+            Set<String> destinations = new java.util.HashSet<>();
+            for (ClientCustomsProfile p : mine) {
+                for (String c : p.getCountries()) {
+                    if (c != null && !c.isBlank()) destinations.add(c.toUpperCase(Locale.ROOT));
+                }
+            }
+            out.put("destinationsCovered", (long) destinations.size());
+            out.put("clientsConfigured", mine.isEmpty() ? 0L : 1L);
+        } else {
+            out.put("profiles", repository.count());
+            out.put("destinationsCovered", repository.countDistinctCountries());
+            out.put("clientsConfigured", repository.countDistinctClientCodes());
+        }
         return success("Customs profile stats.", out);
     }
 
     @Override
     @Transactional(readOnly = true)
     public String exportProfilesCsv(CustomsProfileFilters filters) {
+        // Sprint 50 Tier 0.5 PR H — same clamp as listPaginated so a scoped
+        // USER's CSV export never leaks foreign tenants' rows.
+        clampTenantFilter(filters);
         List<ClientCustomsProfileDTO> profiles = fetchFiltered(filters);
         StringBuilder csv = new StringBuilder(96 + profiles.size() * 128);
         csv.append("Client code,Client name,Countries,Importer type,Importer,Importer city,Broker,Broker city,Account carrier,Account no,Incoterms,Currency\r\n");
@@ -229,6 +265,10 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
     @Transactional(readOnly = true)
     public ApiResponse<List<ClientCustomsProfileDTO>> list(String clientCode) {
         String code = norm(clientCode);
+        // Sprint 50 Tier 0.5 PR H - defence-in-depth belt on path-param
+        // clientCode. Controller SpEL from PR F already blocks scoped USERs;
+        // this survives future refactors.
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ApiResponse<List<ClientCustomsProfileDTO>> guard = requireClient(code);
         if (guard != null) return guard;
 
@@ -244,6 +284,7 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
     @Transactional(readOnly = true)
     public ApiResponse<ClientCustomsProfileDTO> get(String clientCode, Long id) {
         String code = norm(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ApiResponse<ClientCustomsProfileDTO> guard = requireClient(code);
         if (guard != null) return guard;
 
@@ -257,6 +298,7 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
     @Transactional
     public ApiResponse<ClientCustomsProfileDTO> upsert(String clientCode, ClientCustomsProfileDTO r) {
         String code = norm(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ApiResponse<ClientCustomsProfileDTO> guard = requireClient(code);
         if (guard != null) return guard;
 
@@ -369,6 +411,7 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
     @Transactional
     public ApiResponse<Void> delete(String clientCode, Long id) {
         String code = norm(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         ApiResponse<Void> guard = requireClient(code);
         if (guard != null) return guard;
 
@@ -434,6 +477,23 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
                 .createdAt(p.getCreatedAt())
                 .updatedAt(p.getUpdatedAt())
                 .build();
+    }
+
+    /**
+     * Sprint 50 Tier 0.5 PR H — apply the tenant scope to
+     * {@link CustomsProfileFilters#getClientCode()}. Platform operators
+     * (empty scope) leave the filter alone; scoped USERs get their filter
+     * clamped to their tenant (foreign value → 403, unset → forced to
+     * their tenant).
+     */
+    private void clampTenantFilter(CustomsProfileFilters filters) {
+        if (tenantScope == null) return;
+        String clamped = tenantScope.clampClientCode(filters.getClientCode());
+        // Only mutate when clamping actually changed something to avoid
+        // mutating the caller-supplied DTO for platform operators.
+        if (clamped != null) {
+            filters.setClientCode(clamped);
+        }
     }
 
     private String norm(String v) { return v != null ? v.trim().toUpperCase(Locale.ROOT) : ""; }

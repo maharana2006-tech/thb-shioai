@@ -8,6 +8,7 @@ import com.multiship.backend.model.ClientBillingMarkup;
 import com.multiship.backend.repository.ClientBillingMarkupRepository;
 import com.multiship.backend.repository.ClientRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,11 +23,20 @@ public class ClientBillingMarkupServiceImpl implements ClientBillingMarkupServic
 
     private final ClientBillingMarkupRepository repo;
     private final ClientRepository clientRepository;
+    /**
+     * Sprint 50 Tier 0.5 PR H - defence-in-depth belt on path-param
+     * clientCode. Controller SpEL from PR F already blocks scoped USERs at
+     * /clients/OTHER/**, but the service-layer guard survives future
+     * refactors. Optional so pre-PR-H tests still compile.
+     */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
 
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<ClientBillingMarkupDTO> get(String clientCode) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         if (!clientRepository.existsByClientCodeIgnoreCase(code)) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
                     "Client " + code + " was not found.");
@@ -47,6 +57,7 @@ public class ClientBillingMarkupServiceImpl implements ClientBillingMarkupServic
     @Transactional
     public ApiResponse<ClientBillingMarkupDTO> update(String clientCode, UpdateClientMarkupRequest request) {
         String code = normalize(clientCode);
+        if (tenantScope != null) tenantScope.requireTenantMatch(code);
         if (!clientRepository.existsByClientCodeIgnoreCase(code)) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.CLIENT_NOT_FOUND,
                     "Client " + code + " was not found.");

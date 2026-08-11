@@ -12,6 +12,7 @@ import com.multiship.backend.model.OrderCustomsItem;
 import com.multiship.backend.repository.OrderCustomsRepository;
 import com.multiship.backend.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +29,14 @@ public class CustomsServiceImpl implements CustomsService {
 
     private final OrderCustomsRepository customsRepository;
     private final OrderRepository orderRepository;
+    /**
+     * Sprint 50 Tier 0.5 PR H - tenant guard so a scoped USER cannot read
+     * or upsert the customs declaration for a foreign tenant's order. The
+     * tenant discriminator (tenant_id / cust_no) lives on the order, not
+     * on the customs row. Optional so pre-PR-H tests still compile.
+     */
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
 
     @Override
     @Transactional(readOnly = true)
@@ -96,9 +105,22 @@ public class CustomsServiceImpl implements CustomsService {
     /** Returns a failure response when the order does not exist, else null. */
     private ApiResponse<OrderCustomsDTO> requireOrder(String orderNo) {
         Integer parsed = parseOrderNo(orderNo);
-        if (parsed == null || orderRepository.findByOrderNo(parsed).isEmpty()) {
+        if (parsed == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.ORDER_NOT_FOUND,
                     "Order " + orderNo + " was not found.");
+        }
+        var loaded = orderRepository.findByOrderNo(parsed);
+        if (loaded.isEmpty()) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.ORDER_NOT_FOUND,
+                    "Order " + orderNo + " was not found.");
+        }
+        // Sprint 50 Tier 0.5 PR H - belt-and-braces tenant guard: reject
+        // a scoped USER trying to touch a foreign tenant's order customs.
+        // Mirrors VoidServiceImpl:62. Prefer tenantId, fall back to custNo.
+        if (tenantScope != null) {
+            com.multiship.backend.model.Order order = loaded.get();
+            tenantScope.requireTenantMatch(
+                    StringUtils.hasText(order.getTenantId()) ? order.getTenantId() : order.getCustNo());
         }
         return null;
     }
