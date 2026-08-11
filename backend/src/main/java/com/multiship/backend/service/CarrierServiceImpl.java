@@ -1153,6 +1153,16 @@ public class CarrierServiceImpl implements CarrierService {
             labelPackageRepository.saveAll(pieceRows);
         }
 
+        // Sprint 50 Tier 1 finding #4 — dedup: hoist Client.defaultCurrency
+        // lookup to a single ClientRepository hit. Both the customs and the
+        // applyMarkup blocks below fall back to the tenant default currency,
+        // and the pre-dedup shape called findByClientCodeIgnoreCase twice
+        // per label (once each), doubling the DB round-trips.
+        String tenantDefaultCurrency = hasClient
+                ? clientRepository.findByClientCodeIgnoreCase(resolvedClient)
+                        .map(com.multiship.backend.model.Client::getDefaultCurrency).orElse(null)
+                : null;
+
         // International: persist the operator's commercial-invoice line items so the
         // commercial invoice renders. Importer/broker resolve from the client's
         // customs profile at document time (unchanged).
@@ -1178,10 +1188,7 @@ public class CarrierServiceImpl implements CarrierService {
                 // Sprint 50 Tier 1 finding #4 — request > Client.defaultCurrency > USD.
                 String currencyForCustoms = firstNonBlank(
                         req.getCurrency(),
-                        hasClient
-                                ? clientRepository.findByClientCodeIgnoreCase(resolvedClient)
-                                        .map(com.multiship.backend.model.Client::getDefaultCurrency).orElse(null)
-                                : null,
+                        tenantDefaultCurrency,
                         "USD");
                 customsReq.setCurrency(currencyForCustoms);
                 customsReq.setItems(lines);
@@ -1205,10 +1212,7 @@ public class CarrierServiceImpl implements CarrierService {
                     result.shippingCost(),
                     firstNonBlank(
                             req.getCurrency(),
-                            hasClient
-                                    ? clientRepository.findByClientCodeIgnoreCase(resolvedClient)
-                                            .map(com.multiship.backend.model.Client::getDefaultCurrency).orElse(null)
-                                    : null,
+                            tenantDefaultCurrency,
                             "USD"));
         } catch (ShipmentResolutionException e) {
             return toResolutionFailure(e);
