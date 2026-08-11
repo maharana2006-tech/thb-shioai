@@ -26,6 +26,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    # BackendApplicationTests is a @SpringBootTest that loads the full
+    # ApplicationContext — including the JPA EntityManagerFactory, which
+    # opens a real JDBC connection during startup. A Postgres service on
+    # the runner keeps that smoke test honest instead of dropping to H2
+    # (which would diverge from prod SQL dialect).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: multiship_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DB_URL: jdbc:postgresql://localhost:5432/multiship_db
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      # Sprint 49 Tier 0: JwtService rejects short/compromised secrets on
+      # startup. Throwaway value; every real deploy sets its own.
+      JWT_SECRET: test-only-jwt-secret-do-not-use-in-production-32b
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
