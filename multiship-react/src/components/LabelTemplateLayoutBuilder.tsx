@@ -290,18 +290,18 @@ export default function LabelTemplateLayoutBuilder({
           Single Preview button — opens a modal containing the HTML iframe
           plus Open-as-PDF and Download-ZPL actions. The always-visible
           inline iframe was removed so the builder gets more vertical room. */}
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#e3d9c4] bg-[#1f150c] px-3 py-2 shadow-sm">
+        <FiGrid className="h-3.5 w-3.5 text-[#b6a684]" />
+        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-[#e3d9c4]">Layout studio</span>
+        <span className="hidden text-[10.5px] text-[#8a7959] sm:inline">Free-form blocks · renders to PDF &amp; ZPL</span>
         <button
           type="button"
           onClick={() => setPreviewOpen(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[#1f150c] bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-black"
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-[#f4eede] px-3 py-1.5 text-[12px] font-semibold text-[#1f150c] transition hover:bg-white"
         >
           <FiEye className="h-3.5 w-3.5" />
-          Preview
+          Preview &amp; export
         </button>
-        <span className="text-[10.5px] text-slate-500">
-          Opens a modal with HTML, PDF, and ZPL renders against a built-in sample shipment.
-        </span>
       </div>
 
       {previewOpen ? (
@@ -318,12 +318,13 @@ export default function LabelTemplateLayoutBuilder({
       ) : null}
 
       <div className="grid grid-cols-12 gap-3">
-      {/* ===== Left: block palette ===== */}
-      <aside className="col-span-3 rounded-2xl border border-slate-200 bg-white p-2">
-        <p className="mb-1.5 px-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
-          Add block
-        </p>
-        <div className="space-y-1">
+      {/* ===== Left: block palette (toolbox) ===== */}
+      <aside className="col-span-3 overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
+        <div className="flex items-center gap-1.5 border-b border-[#eee6d6] bg-[#faf7f0]/70 px-3 py-2">
+          <FiGrid className="h-3 w-3 text-[#b6a684]" />
+          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#412d15]">Toolbox</span>
+        </div>
+        <div className="space-y-1 p-2">
           {PALETTE.map((p) => {
             const Icon = p.icon
             return (
@@ -331,19 +332,21 @@ export default function LabelTemplateLayoutBuilder({
                 key={p.kind}
                 type="button"
                 onClick={() => addBlock(p.kind)}
-                className="flex w-full items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-left text-[11.5px] font-semibold text-slate-700 transition hover:border-[#412d15]/40 hover:bg-slate-50"
+                className="group flex w-full items-center gap-2 rounded-lg border border-[#e3d9c4] bg-[#faf7f0]/40 px-2 py-1.5 text-left text-[11.5px] font-semibold text-[#412d15] transition hover:border-[#cdbf9f] hover:bg-white"
                 title={`Add a ${p.label} block`}
               >
-                <Icon className="h-3.5 w-3.5 text-slate-500" />
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-white text-[#8a7959] ring-1 ring-[#e3d9c4] transition group-hover:bg-[#1f150c] group-hover:text-[#f4eede] group-hover:ring-[#1f150c]">
+                  <Icon className="h-3.5 w-3.5" />
+                </span>
                 {p.label}
-                <FiPlus className="ml-auto h-3 w-3 text-slate-400" />
+                <FiPlus className="ml-auto h-3 w-3 text-[#b6a684] transition group-hover:text-[#412d15]" />
               </button>
             )
           })}
+          <p className="px-1 pt-1 text-[10px] leading-4 text-[#b6a684]">
+            Click to drop a block, then drag to move · corner handle to resize · snap {SNAP_MM} mm.
+          </p>
         </div>
-        <p className="mt-2 px-1.5 text-[10px] leading-4 text-slate-400">
-          Click to add a block at the top-left of the page. Then drag it into position, or drag the corner handle to resize. Snap: {SNAP_MM} mm.
-        </p>
       </aside>
 
       {/* ===== Middle: free 2D canvas =====
@@ -352,17 +355,19 @@ export default function LabelTemplateLayoutBuilder({
           pointer events; positions snap to a 2mm grid. Click to select,
           click again brings the block to the front of the z-order so
           overlapped blocks are always reachable. */}
-      <div className="col-span-6 rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
-        <div className="mb-2 flex items-center justify-between gap-2 px-1">
-          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
-            Canvas — {layout.blocks.length} block{layout.blocks.length === 1 ? '' : 's'} · {pageWidthMm}×{pageHeightMm} mm
-          </p>
-          <span className="text-[10px] text-slate-400">Drag to move · corner handle to resize · snap {SNAP_MM}mm</span>
+      <div className="col-span-6 overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-2 border-b border-[#eee6d6] bg-[#faf7f0]/70 px-3 py-2">
+          <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[#412d15]">
+            <FiFileText className="h-3 w-3 text-[#b6a684]" /> Artboard
+          </span>
+          <span className="font-mono text-[9.5px] font-semibold tabular-nums text-[#8a7959]">
+            {layout.blocks.length} block{layout.blocks.length === 1 ? '' : 's'} · {pageWidthMm}×{pageHeightMm}mm · snap {SNAP_MM}mm
+          </span>
         </div>
 
         {/* Scrollable viewport so operators on smaller screens can still
             reach every corner of an A4 page. The page itself is centered. */}
-        <div className="max-h-[720px] overflow-auto rounded-xl bg-slate-100 p-4">
+        <div className="max-h-[720px] overflow-auto bg-[#eee6d6] p-4">
           <div
             className="relative mx-auto bg-white shadow-[0_10px_30px_rgba(15,23,42,.12)]"
             style={{ width: toPx(pageWidthMm), height: toPx(pageHeightMm) }}
@@ -370,7 +375,7 @@ export default function LabelTemplateLayoutBuilder({
           >
             {/* Margin frame — visible dashed rectangle marking the printable area. */}
             <div
-              className="pointer-events-none absolute rounded-sm border border-dashed border-slate-200"
+              className="pointer-events-none absolute rounded-sm border border-dashed border-[#e3d9c4]"
               style={{
                 left: toPx(marginMm), top: toPx(marginMm),
                 width: toPx(innerWMm), height: toPx(innerHMm),
@@ -387,7 +392,7 @@ export default function LabelTemplateLayoutBuilder({
               }}
             >
               {layout.blocks.length === 0 ? (
-                <div className="absolute inset-0 flex items-center justify-center rounded-md border border-dashed border-slate-300 text-[12px] text-slate-500">
+                <div className="absolute inset-0 flex items-center justify-center rounded-md border border-dashed border-[#cdbf9f] text-[12px] text-[#8a7959]">
                   Empty page. Click a block on the left to drop it here.
                 </div>
               ) : null}
@@ -406,7 +411,7 @@ export default function LabelTemplateLayoutBuilder({
                     className={`absolute select-none rounded-md border bg-white shadow-sm transition ${
                       selected
                         ? 'border-[#1f150c] ring-2 ring-[#412d15]/25'
-                        : 'border-slate-200 hover:border-slate-400'
+                        : 'border-[#e3d9c4] hover:border-[#b6a684]'
                     }`}
                     style={{
                       left: toPx(pos.xMm), top: toPx(pos.yMm),
@@ -428,7 +433,7 @@ export default function LabelTemplateLayoutBuilder({
                         type="button"
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={(e) => { e.stopPropagation(); removeBlock(b.id) }}
-                        className="absolute -top-2 -right-2 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow hover:border-rose-200 hover:text-rose-600"
+                        className="absolute -top-2 -right-2 z-10 inline-flex h-5 w-5 items-center justify-center rounded-full border border-[#e3d9c4] bg-white text-[#8a7959] shadow hover:border-rose-200 hover:text-rose-600"
                         aria-label={`Remove ${b.kind} block`}
                       >
                         <FiTrash2 className="h-2.5 w-2.5" />
@@ -437,7 +442,7 @@ export default function LabelTemplateLayoutBuilder({
 
                     {/* Block preview fills the block's bounding rect. Overflow
                         hidden so oversized content doesn't spill into the page. */}
-                    <div className="pointer-events-none h-full w-full overflow-hidden rounded-md bg-slate-50 p-1">
+                    <div className="pointer-events-none h-full w-full overflow-hidden rounded-md bg-[#faf7f0] p-1">
                       <BlockPreview block={b} />
                     </div>
 
@@ -471,12 +476,18 @@ export default function LabelTemplateLayoutBuilder({
         </div>
       </div>
 
-      {/* ===== Right: selected-block config + binding tree ===== */}
-      <aside className="col-span-3 rounded-2xl border border-slate-200 bg-white p-2 space-y-3">
+      {/* ===== Right: selected-block config + binding tree (inspector) ===== */}
+      <aside className="col-span-3 overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-1.5 border-b border-[#eee6d6] bg-[#faf7f0]/70 px-3 py-2">
+          <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[#412d15]">
+            <FiType className="h-3 w-3 text-[#b6a684]" /> Inspector
+          </span>
+          {selectedBlock ? (
+            <span className="rounded-full bg-[#1f150c] px-1.5 py-0.5 font-mono text-[8.5px] font-bold uppercase tracking-wide text-[#f4eede]">{selectedBlock.kind}</span>
+          ) : null}
+        </div>
+        <div className="space-y-3 p-2">
         <div>
-          <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
-            Block settings
-          </p>
           {selectedBlock ? (
             <BlockEditor
               block={selectedBlock}
@@ -484,13 +495,14 @@ export default function LabelTemplateLayoutBuilder({
               textAreaRef={(el) => { textAreaRefs.current[selectedBlock.id] = el }}
             />
           ) : (
-            <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50/60 px-2 py-2 text-[11px] text-slate-500">
-              Click a block on the canvas to edit it.
+            <p className="rounded-lg border border-dashed border-[#e3d9c4] bg-[#faf7f0]/60 px-2 py-3 text-center text-[11px] text-[#8a7959]">
+              Select a block on the artboard to edit it.
             </p>
           )}
         </div>
 
         <BindingsPanel onInsert={insertBindingAtCaret} disabled={!selectedBlock} />
+        </div>
       </aside>
       </div>
     </div>
@@ -538,12 +550,12 @@ function PreviewModal({
   }, [onClose])
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/50 p-4">
       <div className="flex h-full max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-        <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-3">
+        <header className="flex items-start justify-between gap-3 border-b border-[#e3d9c4] px-5 py-3">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">Template preview</h2>
-            <p className="text-[12px] text-slate-500">
+            <h2 className="text-base font-semibold text-[#1f150c]">Template preview</h2>
+            <p className="text-[12px] text-[#8a7959]">
               Rendered against the built-in sample shipment context. Edits re-render automatically.
             </p>
           </div>
@@ -551,18 +563,18 @@ function PreviewModal({
             type="button"
             onClick={onClose}
             aria-label="Close preview"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[#8a7959] transition hover:bg-[#eee6d6] hover:text-[#1f150c]"
           >
             <FiX className="h-4 w-4" />
           </button>
         </header>
-        <div className="flex flex-wrap gap-2 border-b border-slate-100 bg-slate-50/60 px-5 py-3">
+        <div className="flex flex-wrap gap-2 border-b border-[#eee6d6] bg-[#faf7f0]/60 px-5 py-3">
           <button
             type="button"
             onClick={onRefresh}
             disabled={previewLoading}
             title="Force-refresh HTML preview"
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] disabled:opacity-50"
           >
             {previewLoading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiRefreshCw className="h-3.5 w-3.5" />}
             Refresh HTML
@@ -572,7 +584,7 @@ function PreviewModal({
             onClick={onOpenPdf}
             disabled={pdfLoading}
             title="Open the same layout rendered as PDF in a new tab"
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] disabled:opacity-50"
           >
             {pdfLoading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiDownload className="h-3.5 w-3.5" />}
             Open as PDF
@@ -582,24 +594,24 @@ function PreviewModal({
             onClick={onDownloadZpl}
             disabled={zplLoading}
             title="Download the layout as ZPL for a 203-dpi Zebra thermal printer (paste into labelary.com/viewer.html to visualise)"
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12.5px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] disabled:opacity-50"
           >
             {zplLoading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiCode className="h-3.5 w-3.5" />}
             Download ZPL
           </button>
         </div>
-        <div className="flex-1 overflow-hidden bg-slate-100 p-3">
+        <div className="flex-1 overflow-hidden bg-[#eee6d6] p-3">
           {previewHtml ? (
             <iframe
               // srcDoc keeps everything self-contained — the endpoint returns
               // a full HTML document; no external assets to sandbox.
               srcDoc={previewHtml}
               title="Template preview"
-              className="h-full w-full rounded-lg border border-slate-200 bg-white"
+              className="h-full w-full rounded-lg border border-[#e3d9c4] bg-white"
               sandbox=""
             />
           ) : (
-            <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-slate-200 bg-white text-[12.5px] text-slate-500">
+            <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-[#e3d9c4] bg-white text-[12.5px] text-[#8a7959]">
               {previewLoading ? 'Loading preview…' : 'Preview will render once the backend responds.'}
             </div>
           )}
@@ -617,44 +629,44 @@ function BlockPreview({ block }: { block: TemplateBlock }) {
       return (
         <p className={`whitespace-pre-wrap ${block.kind === 'text' && (block as { bold?: boolean }).bold ? 'font-bold' : ''}`}
            style={{ textAlign: (block as { align?: 'left'|'center'|'right' }).align, fontSize: (block as { sizePx?: number }).sizePx ?? 11 }}>
-          {(block as { content: string }).content || <span className="italic text-slate-400">empty</span>}
+          {(block as { content: string }).content || <span className="italic text-[#b6a684]">empty</span>}
         </p>
       )
     case 'logo':
       return block.src
         ? <img src={block.src} alt="logo" style={{ width: block.widthPx ?? 120 }} className="max-h-24 object-contain" />
-        : <span className="italic text-slate-400">Logo placeholder — set image src in Block settings</span>
+        : <span className="italic text-[#b6a684]">Logo placeholder — set image src in Block settings</span>
     case 'address':
-      return <span className="italic text-slate-500">↳ {block.which} address (rendered from shipment)</span>
+      return <span className="italic text-[#8a7959]">↳ {block.which} address (rendered from shipment)</span>
     case 'items':
       return (
         <table className="w-full border-collapse text-[10.5px]">
           <thead>
             <tr>
-              {block.columns.map((c) => <th key={c} className="border-b border-slate-200 px-1 py-0.5 text-left font-semibold text-slate-500">{c}</th>)}
+              {block.columns.map((c) => <th key={c} className="border-b border-[#e3d9c4] px-1 py-0.5 text-left font-semibold text-[#8a7959]">{c}</th>)}
             </tr>
           </thead>
           <tbody>
             <tr>
-              {block.columns.map((c) => <td key={c} className="px-1 py-0.5 text-slate-400 italic">…{c}…</td>)}
+              {block.columns.map((c) => <td key={c} className="px-1 py-0.5 text-[#b6a684] italic">…{c}…</td>)}
             </tr>
           </tbody>
         </table>
       )
     case 'barcode':
-      return <span className="font-mono italic text-slate-500">▉▊▉ {block.binding}</span>
+      return <span className="font-mono italic text-[#8a7959]">▉▊▉ {block.binding}</span>
     case 'qr':
       return (
-        <div className="inline-block rounded border border-slate-200 bg-white p-1 text-center text-[9px] text-slate-400" style={{ width: block.sizePx ?? 90, height: block.sizePx ?? 90 }}>
+        <div className="inline-block rounded border border-[#e3d9c4] bg-white p-1 text-center text-[9px] text-[#b6a684]" style={{ width: block.sizePx ?? 90, height: block.sizePx ?? 90 }}>
           QR<br />{block.binding}
         </div>
       )
     case 'divider':
       return <hr style={{ borderTopWidth: block.thicknessPx ?? 1, borderColor: block.color ?? '#94a3b8' }} />
     case 'spacer':
-      return <div style={{ height: block.heightPx ?? 12 }} className="rounded bg-slate-100 text-center text-[9px] leading-none text-slate-400">↕ spacer</div>
+      return <div style={{ height: block.heightPx ?? 12 }} className="rounded bg-[#eee6d6] text-center text-[9px] leading-none text-[#b6a684]">↕ spacer</div>
     case 'totals':
-      return <span className="italic text-slate-500">Totals: {block.include.join(' · ')}</span>
+      return <span className="italic text-[#8a7959]">Totals: {block.include.join(' · ')}</span>
   }
 }
 
@@ -667,8 +679,8 @@ function BlockEditor({
   onChange: (patch: Partial<TemplateBlock>) => void
   textAreaRef: (el: HTMLTextAreaElement | null) => void
 }) {
-  const labelCls = 'mb-0.5 block text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-500'
-  const inputCls = 'w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11.5px] text-slate-800 outline-none focus:border-[#412d15]'
+  const labelCls = 'mb-0.5 block text-[9.5px] font-bold uppercase tracking-[0.14em] text-[#8a7959]'
+  const inputCls = 'w-full rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11.5px] text-[#412d15] outline-none focus:border-[#412d15]'
 
   // Position card — precise coordinates for operators who don't want to
   // eyeball drag-and-drop. Rendered above the kind-specific settings so it's
@@ -677,23 +689,23 @@ function BlockEditor({
   const setPos = (patch: Partial<typeof pos>) =>
     onChange({ position: { ...pos, ...patch } } as Partial<TemplateBlock>)
   const positionCard = (
-    <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-2">
+    <div className="rounded-lg border border-[#eee6d6] bg-[#faf7f0]/60 p-2">
       <p className={labelCls}>Position (mm)</p>
       <div className="grid grid-cols-2 gap-1.5">
         <label className="block">
-          <span className="text-[9.5px] font-semibold text-slate-500">X</span>
+          <span className="text-[9.5px] font-semibold text-[#8a7959]">X</span>
           <input type="number" value={pos.xMm} onChange={(e) => setPos({ xMm: Number(e.target.value) || 0 })} className={inputCls} />
         </label>
         <label className="block">
-          <span className="text-[9.5px] font-semibold text-slate-500">Y</span>
+          <span className="text-[9.5px] font-semibold text-[#8a7959]">Y</span>
           <input type="number" value={pos.yMm} onChange={(e) => setPos({ yMm: Number(e.target.value) || 0 })} className={inputCls} />
         </label>
         <label className="block">
-          <span className="text-[9.5px] font-semibold text-slate-500">Width</span>
+          <span className="text-[9.5px] font-semibold text-[#8a7959]">Width</span>
           <input type="number" value={pos.wMm} onChange={(e) => setPos({ wMm: Number(e.target.value) || 1 })} className={inputCls} />
         </label>
         <label className="block">
-          <span className="text-[9.5px] font-semibold text-slate-500">Height</span>
+          <span className="text-[9.5px] font-semibold text-[#8a7959]">Height</span>
           <input type="number" value={pos.hMm} onChange={(e) => setPos({ hMm: Number(e.target.value) || 1 })} className={inputCls} />
         </label>
       </div>
@@ -728,7 +740,7 @@ function BlockEditor({
                 <span className={labelCls}>Size (px)</span>
                 <input type="number" min={6} max={72} value={block.sizePx ?? 11} onChange={(e) => onChange({ sizePx: Number(e.target.value) } as Partial<TemplateBlock>)} className={inputCls} />
               </label>
-              <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-700">
+              <label className="flex items-center gap-1.5 text-[11px] font-semibold text-[#412d15]">
                 <input type="checkbox" checked={!!block.bold} onChange={(e) => onChange({ bold: e.target.checked } as Partial<TemplateBlock>)} className="h-3.5 w-3.5" />
                 Bold
               </label>
@@ -772,7 +784,7 @@ function BlockEditor({
             className={inputCls}
             placeholder="sku,description,qty,unitPrice,lineTotal"
           />
-          <p className="mt-1 text-[10.5px] text-slate-400">
+          <p className="mt-1 text-[10.5px] text-[#b6a684]">
             Allowed: sku · description · qty · unitPrice · lineTotal · weight · hsCode · originCountry
           </p>
         </label>
@@ -783,7 +795,7 @@ function BlockEditor({
           <label className="block">
             <span className={labelCls}>Binding (data source)</span>
             <input value={block.binding} onChange={(e) => onChange({ binding: e.target.value } as Partial<TemplateBlock>)} className={inputCls} placeholder="shipment.trackingNumber" />
-            <p className="mt-1 text-[10.5px] text-slate-400">Or click a field on the right to set it.</p>
+            <p className="mt-1 text-[10.5px] text-[#b6a684]">Or click a field on the right to set it.</p>
           </label>
           <label className="block">
             <span className={labelCls}>Format</span>
@@ -820,7 +832,7 @@ function BlockEditor({
           </label>
           <label className="block">
             <span className={labelCls}>Color</span>
-            <input type="color" value={block.color ?? '#94a3b8'} onChange={(e) => onChange({ color: e.target.value } as Partial<TemplateBlock>)} className="h-8 w-full rounded-lg border border-slate-200" />
+            <input type="color" value={block.color ?? '#94a3b8'} onChange={(e) => onChange({ color: e.target.value } as Partial<TemplateBlock>)} className="h-8 w-full rounded-lg border border-[#e3d9c4]" />
           </label>
         </div>
       )
@@ -841,7 +853,7 @@ function BlockEditor({
               onChange={(e) => onChange({ include: e.target.value.split(/[,\s]+/).filter(Boolean) as typeof block.include } as Partial<TemplateBlock>)}
               className={inputCls}
             />
-            <p className="mt-1 text-[10.5px] text-slate-400">Allowed: subtotal · freight · duties · insurance · grandTotal</p>
+            <p className="mt-1 text-[10.5px] text-[#b6a684]">Allowed: subtotal · freight · duties · insurance · grandTotal</p>
           </label>
           <label className="block">
             <span className={labelCls}>Currency</span>
@@ -878,13 +890,13 @@ function BindingsPanel({
   }
   return (
     <div>
-      <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
+      <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-[0.16em] text-[#8a7959]">
         Available fields
       </p>
-      <p className="mb-1.5 px-1 text-[10.5px] leading-4 text-slate-400">
+      <p className="mb-1.5 px-1 text-[10.5px] leading-4 text-[#b6a684]">
         Click a field to insert <span className="font-mono">{`{{path}}`}</span> at the cursor of the selected block.
       </p>
-      <div className={`max-h-96 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 ${disabled ? 'opacity-40' : ''}`}>
+      <div className={`max-h-96 overflow-y-auto rounded-lg border border-[#e3d9c4] bg-white p-1 ${disabled ? 'opacity-40' : ''}`}>
         {BINDING_GROUPS.map((g) => {
           const open = openGroups.has(g.key)
           return (
@@ -892,13 +904,13 @@ function BindingsPanel({
               <button
                 type="button"
                 onClick={() => toggle(g.key)}
-                className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-[11px] font-semibold text-[#412d15] hover:bg-[#faf7f0]"
               >
                 {open ? <FiChevronDown className="h-3 w-3" /> : <FiChevronRight className="h-3 w-3" />}
                 {g.label}
               </button>
               {open ? (
-                <ul className="ml-2 border-l border-slate-100">
+                <ul className="ml-2 border-l border-[#eee6d6]">
                   {g.fields.map((f: BindingField) => (
                     <li key={f.path}>
                       <button
@@ -906,10 +918,10 @@ function BindingsPanel({
                         onClick={() => !disabled && onInsert(f.path)}
                         disabled={disabled}
                         title={f.sample ? `Sample: ${f.sample}` : undefined}
-                        className="flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-[10.5px] text-slate-600 hover:bg-[#412d15]/[0.06] hover:text-[#1f150c] disabled:cursor-not-allowed"
+                        className="flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-[10.5px] text-[#5a4526] hover:bg-[#412d15]/[0.06] hover:text-[#1f150c] disabled:cursor-not-allowed"
                       >
                         <span className="truncate">{f.label}</span>
-                        <span className="ml-auto shrink-0 font-mono text-[9.5px] text-slate-400">{f.path.split('.').slice(1).join('.')}</span>
+                        <span className="ml-auto shrink-0 font-mono text-[9.5px] text-[#b6a684]">{f.path.split('.').slice(1).join('.')}</span>
                       </button>
                     </li>
                   ))}
