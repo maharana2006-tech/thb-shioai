@@ -32,7 +32,8 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwtService,
                                                    com.multiship.backend.service.ApiKeyService apiKeyService,
-                                                   com.multiship.backend.repository.ApiKeyRepository apiKeyRepository)
+                                                   com.multiship.backend.repository.ApiKeyRepository apiKeyRepository,
+                                                   com.multiship.backend.repository.UserRepository userRepository)
             throws Exception {
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -84,7 +85,10 @@ public class SecurityConfig {
                                         "FORBIDDEN", "You do not have permission to perform this action."))
                 )
                 .addFilterBefore(new ApiKeyAuthenticationFilter(apiKeyService), UsernamePasswordAuthenticationFilter.class)
-                .addFilterBefore(new JwtAuthenticationFilter(jwtService, apiKeyRepository), UsernamePasswordAuthenticationFilter.class);
+                // Sprint 50 Tier 0.5 PR A — UserRepository injected for the
+                // pre-migration-token clientCode fallback lookup (cached 5m).
+                .addFilterBefore(new JwtAuthenticationFilter(jwtService, apiKeyRepository, userRepository),
+                        UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

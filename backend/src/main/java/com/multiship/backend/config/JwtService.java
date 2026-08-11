@@ -54,12 +54,38 @@ public class JwtService {
         }
     }
 
+    /**
+     * @deprecated Sprint 50 Tier 0.5 PR A — prefer
+     * {@link #generateToken(String, String, String)} which carries the
+     * caller's clientCode so downstream tenant-scope checks don't hit the
+     * DB per request. Kept for backward-compat during rollout; existing
+     * callers land in the null-clientCode overload below.
+     */
+    @Deprecated
     public String generateToken(String username, String role) {
+        return generateToken(username, role, null);
+    }
+
+    /**
+     * Sprint 50 Tier 0.5 PR A — issues an HS256 JWT carrying the caller's
+     * clientCode as an additional claim.
+     *
+     * <p>{@code clientCode} MAY be null for legacy internal ADMIN + USER
+     * accounts (org-wide operator scope) — {@link JwtAuthenticationFilter}
+     * accepts a missing claim and falls back to a per-token DB lookup for
+     * the transitional window (max {@code jwt.expiration} = 24h). PR F
+     * removes the fallback once all valid tokens carry the claim.
+     */
+    public String generateToken(String username, String role, String clientCode) {
         Date now = new Date();
 
-        return Jwts.builder()
+        var builder = Jwts.builder()
                 .subject(username)
-                .claim("role", role)
+                .claim("role", role);
+        if (clientCode != null && !clientCode.isBlank()) {
+            builder.claim("clientCode", clientCode);
+        }
+        return builder
                 .issuedAt(now)
                 .expiration(new Date(now.getTime() + expirationMillis))
                 .signWith(signingKey)

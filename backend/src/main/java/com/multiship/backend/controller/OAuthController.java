@@ -74,7 +74,9 @@ public class OAuthController {
         }
         ApiKey key = verified.get();
         String subject = "apikey:" + key.getId();
-        String jwt = jwtService.generateToken(subject, "API");
+        // Sprint 50 Tier 0.5 PR A — API-key tokens carry the key's clientCode
+        // as a JWT claim so downstream tenant checks don't hit the DB per call.
+        String jwt = jwtService.generateToken(subject, "API", key.getClientCode());
 
         return ResponseEntity.ok(TokenResponse.builder()
                 .accessToken(jwt)
