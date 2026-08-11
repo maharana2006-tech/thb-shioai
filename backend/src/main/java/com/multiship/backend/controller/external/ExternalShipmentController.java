@@ -1,6 +1,8 @@
 package com.multiship.backend.controller.external;
 
 import com.multiship.backend.config.ApiKeyPrincipal;
+import com.multiship.backend.config.ApiKeyScope;
+import com.multiship.backend.config.RequiresScope;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.external.*;
 import com.multiship.backend.service.external.ExternalApiException;
@@ -33,6 +35,7 @@ public class ExternalShipmentController {
 
     @Operation(summary = "List available services (and pricing when enabled) for a route")
     @PostMapping("/rates")
+    @RequiresScope(ApiKeyScope.RATES)
     public ResponseEntity<ApiResponse<ExternalRateResponse>> rates(
             @RequestBody ExternalRateRequest req, @AuthenticationPrincipal ApiKeyPrincipal caller) {
         try {
@@ -44,6 +47,7 @@ public class ExternalShipmentController {
 
     @Operation(summary = "Create a shipment and get back the label (+ commercial invoice for international)")
     @PostMapping("/shipments")
+    @RequiresScope(ApiKeyScope.SHIPMENTS)
     public ResponseEntity<ApiResponse<ExternalShipmentResponse>> create(
             @RequestBody ExternalShipmentRequest req, @AuthenticationPrincipal ApiKeyPrincipal caller) {
         try {
@@ -59,6 +63,7 @@ public class ExternalShipmentController {
 
     @Operation(summary = "Get the current tracking status for a shipment")
     @GetMapping("/shipments/{shipmentId}/tracking")
+    @RequiresScope(ApiKeyScope.TRACKING)
     public ResponseEntity<ApiResponse<ExternalTrackingResponse>> tracking(
             @PathVariable Long shipmentId, @AuthenticationPrincipal ApiKeyPrincipal caller) {
         try {
@@ -70,6 +75,7 @@ public class ExternalShipmentController {
 
     @Operation(summary = "Void a shipment (platform-level cancellation)")
     @PostMapping("/shipments/{shipmentId}/void")
+    @RequiresScope(ApiKeyScope.VOID)
     public ResponseEntity<ApiResponse<Map<String, Object>>> voidShipment(
             @PathVariable Long shipmentId, @AuthenticationPrincipal ApiKeyPrincipal caller) {
         try {
@@ -81,6 +87,7 @@ public class ExternalShipmentController {
 
     @Operation(summary = "Validate an address (structural)")
     @PostMapping("/addresses/validate")
+    @RequiresScope(ApiKeyScope.ADDRESSES)
     public ResponseEntity<ApiResponse<ExternalAddressValidationResponse>> validate(
             @RequestBody ExternalAddress address, @AuthenticationPrincipal ApiKeyPrincipal caller) {
         try {
