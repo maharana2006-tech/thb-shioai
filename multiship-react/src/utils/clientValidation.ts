@@ -143,6 +143,99 @@ export function validatePhone(value: string, required = false): string | null {
   return null
 }
 
+/**
+ * Per-country phone rules for the countries the app most commonly ships
+ * from/to (same set as {@link ZIP_PATTERNS}). `cc` is the E.164 calling code,
+ * `min`/`max` bound the NATIONAL number length in digits (trunk '0' stripped),
+ * and `pattern` (optional) shape-checks the national number — e.g. NANP
+ * numbers can't have an area code or exchange starting with 0/1.
+ */
+const PHONE_RULES: Record<string, { cc: string; min: number; max: number; pattern?: RegExp; trunk?: boolean }> = {
+  // NANP: area code can't start 0/1. (We deliberately don't police the
+  // exchange digit — that would reject the common "555 123 4567" shape.)
+  // `trunk: false` because NANP has no trunk-'0' prefix to strip.
+  US: { cc: '1', min: 10, max: 10, pattern: /^[2-9]\d{9}$/, trunk: false },
+  CA: { cc: '1', min: 10, max: 10, pattern: /^[2-9]\d{9}$/, trunk: false },
+  GB: { cc: '44', min: 9, max: 10 },
+  DE: { cc: '49', min: 7, max: 11 },
+  FR: { cc: '33', min: 9, max: 9 },
+  IT: { cc: '39', min: 6, max: 11 },
+  ES: { cc: '34', min: 9, max: 9 },
+  NL: { cc: '31', min: 9, max: 9 },
+  AU: { cc: '61', min: 9, max: 9 },
+  IN: { cc: '91', min: 10, max: 10 },
+  JP: { cc: '81', min: 9, max: 10 },
+  CN: { cc: '86', min: 10, max: 11 },
+  BR: { cc: '55', min: 10, max: 11 },
+  MX: { cc: '52', min: 10, max: 10 },
+  SG: { cc: '65', min: 8, max: 8 },
+}
+
+/**
+ * Country-aware phone validation — the "correct" checker for forms that also
+ * know the address country (pickup, warehouse, customs contacts):
+ *
+ *  1. charset + length caps (same as {@link validatePhone})
+ *  2. junk guard — all-identical digits ("0000000000") are rejected
+ *  3. `+` numbers must be valid E.164 AND start with the selected country's
+ *     calling code (a US pickup can't have a +44 contact number)
+ *  4. national numbers (no `+`) must match the country's expected digit
+ *     length after stripping the trunk '0' — e.g. US = exactly 10, and NANP
+ *     shape is enforced (area code / exchange can't start with 0 or 1)
+ *
+ * Unmodelled countries fall back to the generic 7–15 digit rule so we never
+ * block a country we haven't specced. Falls back entirely to
+ * {@link validatePhone} when no country is provided.
+ */
+export function validatePhoneForCountry(value: string, country: string, required = false): string | null {
+  const v = (value || '').trim()
+  if (!v) return required ? 'Phone is required.' : null
+  if (v.length > FIELD_LIMITS.phone) return `Phone must be ${FIELD_LIMITS.phone} characters or fewer.`
+  if (!PHONE_RE.test(v)) return 'Enter a valid phone (digits, spaces, +, -, (), . only).'
+  const digits = v.replace(/\D/g, '')
+  if (digits.length < 7) return 'Phone needs at least 7 digits.'
+  if (digits.length > 15) return 'Phone must not exceed 15 digits (E.164 max).'
+  // Junk guard: "0000000000" / "1111111" pass every length rule but are never real.
+  if (/^(\d)\1+$/.test(digits)) return 'Enter a real phone number.'
+
+  const iso = (country || '').trim().toUpperCase()
+  const rule = PHONE_RULES[iso]
+  if (!rule) return null // unmodelled country — generic checks above are all we can assert
+
+  if (v.startsWith('+')) {
+    // International format: must carry this country's calling code.
+    if (!digits.startsWith(rule.cc)) {
+      return `An international ${iso} number must start with +${rule.cc}.`
+    }
+    const national = rule.trunk === false
+      ? digits.slice(rule.cc.length)
+      : digits.slice(rule.cc.length).replace(/^0/, '')
+    if (national.length < rule.min || national.length > rule.max) {
+      return rule.min === rule.max
+        ? `A ${iso} phone number needs ${rule.min} digits after +${rule.cc}.`
+        : `A ${iso} phone number needs ${rule.min}–${rule.max} digits after +${rule.cc}.`
+    }
+    if (rule.pattern && !rule.pattern.test(national)) {
+      return `That doesn't look like a valid ${iso} phone number.`
+    }
+    return null
+  }
+
+  // National format: strip the trunk '0' (e.g. GB 07911… → 7911…) then check
+  // length. NANP countries have no trunk prefix, so a leading 0 there stays
+  // and correctly fails the area-code shape check instead.
+  const national = rule.trunk === false ? digits : digits.replace(/^0/, '')
+  if (national.length < rule.min || national.length > rule.max) {
+    return rule.min === rule.max
+      ? `A ${iso} phone number needs ${rule.min} digits.`
+      : `A ${iso} phone number needs ${rule.min}–${rule.max} digits.`
+  }
+  if (rule.pattern && !rule.pattern.test(national)) {
+    return `That doesn't look like a valid ${iso} phone number.`
+  }
+  return null
+}
+
 export function validateCountry(value: string, required = false): string | null {
   const v = (value || '').trim()
   if (!v) return required ? 'Country is required.' : null
