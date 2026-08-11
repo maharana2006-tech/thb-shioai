@@ -39,7 +39,7 @@ public class ClientAllowedServiceController {
     private final ClientAllowedServiceService service;
 
     @Operation(summary = "List services allowed for a client (default first)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping
     public ResponseEntity<ApiResponse<List<ClientAllowedServiceDTO>>> list(@PathVariable String clientCode) {
         ApiResponse<List<ClientAllowedServiceDTO>> response = service.listForClient(clientCode);
@@ -82,7 +82,7 @@ public class ClientAllowedServiceController {
 
     @Operation(summary = "Get destinations the client may ship on this allowed service",
             description = "Empty list = unrestricted (any destination).")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping("/{serviceId}/destinations")
     public ResponseEntity<ApiResponse<ClientAllowedServiceDestinationsDTO>> getDestinations(
             @PathVariable String clientCode,
@@ -118,7 +118,7 @@ public class ClientAllowedServiceController {
 
     @Operation(summary = "Get warehouses the client may ship on this allowed service",
             description = "Empty list = unrestricted (any warehouse attached to the client).")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping("/{serviceId}/warehouses")
     public ResponseEntity<ApiResponse<ClientAllowedServiceWarehousesDTO>> getWarehouses(
             @PathVariable String clientCode,

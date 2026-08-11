@@ -38,7 +38,7 @@ public class ClientCodeMapController {
     private final ClientCodeMapService service;
 
     @Operation(summary = "List every alias of this kind for the client")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping
     public ResponseEntity<ApiResponse<List<ClientCodeMapDTO>>> list(
             @PathVariable String clientCode,

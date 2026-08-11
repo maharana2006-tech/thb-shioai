@@ -39,7 +39,7 @@ public class WarehouseController {
 
     @Operation(summary = "List warehouses",
             description = "Paginated + filtered by owner type, owning client, or active. Search matches code, name, or city.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and (#ownerClientCode == null or @accessScope.canAccessTenant(authentication, #ownerClientCode))")
     @GetMapping
     public ResponseEntity<ApiResponse<PageResponseDTO<WarehouseDTO>>> listWarehouses(
             @RequestParam(required = false) String search,

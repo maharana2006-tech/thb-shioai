@@ -77,7 +77,7 @@ public class ShipmentGroupController {
     @Operation(summary = "List shipment groups",
             description = "Filter by clientCode (any authorised caller in scope) or by orderNo (operators only). " +
                     "Exactly one of the two must be supplied.")
-    @PreAuthorize("(#clientCode != null and (hasAnyRole('ADMIN','USER') or @orderAccess.canViewTenant(authentication, #clientCode))) " +
+    @PreAuthorize("(#clientCode != null and ((hasAnyRole('ADMIN','USER') and @accessScope.canAccessTenant(authentication, #clientCode)) or @orderAccess.canViewTenant(authentication, #clientCode))) " +
             "or (#orderNo != null and hasAnyRole('ADMIN','USER'))")
     @GetMapping
     public ResponseEntity<ApiResponse<List<ShipmentGroupSummaryDTO>>> list(

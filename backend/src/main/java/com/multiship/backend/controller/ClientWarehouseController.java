@@ -39,7 +39,7 @@ public class ClientWarehouseController {
     private final WarehouseSelector warehouseSelector;
 
     @Operation(summary = "List warehouses attached to a client (default first)")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @GetMapping
     public ResponseEntity<ApiResponse<List<ClientWarehouseDTO>>> list(@PathVariable String clientCode) {
         ApiResponse<List<ClientWarehouseDTO>> response = service.listForClient(clientCode);
@@ -48,7 +48,7 @@ public class ClientWarehouseController {
 
     @Operation(summary = "Attach a warehouse to the client",
             description = "409 WAREHOUSE_ALREADY_ATTACHED when the link already exists; 403 WAREHOUSE_ATTACH_FORBIDDEN for CLIENT-owned warehouses not owned by this client. Setting makeDefault=true (or attaching the first warehouse) clears any existing default.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @PostMapping
     public ResponseEntity<ApiResponse<ClientWarehouseDTO>> attach(
             @PathVariable String clientCode,
@@ -59,7 +59,7 @@ public class ClientWarehouseController {
 
     @Operation(summary = "Detach a warehouse from the client",
             description = "If the detached row was the default, the oldest remaining link is promoted so the client always has a default.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @DeleteMapping("/{warehouseCode}")
     public ResponseEntity<ApiResponse<Void>> detach(
             @PathVariable String clientCode,
@@ -70,7 +70,7 @@ public class ClientWarehouseController {
 
     @Operation(summary = "Set the client's default warehouse",
             description = "Idempotent — clears the previous default and marks the named link as default.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @PutMapping("/{warehouseCode}/default")
     public ResponseEntity<ApiResponse<ClientWarehouseDTO>> setDefault(
             @PathVariable String clientCode,
@@ -83,7 +83,7 @@ public class ClientWarehouseController {
 
     @Operation(summary = "Preview which attached warehouse would fulfil this destination",
             description = "Scores every attached warehouse (same-country > postal-prefix within-country > any) and returns the winner plus a per-candidate trace so a dry-run UI can show why. Read-only — does not commit anything.")
-    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @PostMapping("/select-nearest")
     public ResponseEntity<ApiResponse<WarehouseSelectionResult>> selectNearest(
             @PathVariable String clientCode,
