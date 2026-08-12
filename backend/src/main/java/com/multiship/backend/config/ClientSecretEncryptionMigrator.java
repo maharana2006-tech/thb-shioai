@@ -1,9 +1,5 @@
 package com.multiship.backend.config;
 
-import com.multiship.backend.model.CarrierAccountRef;
-import com.multiship.backend.model.CarrierConfig;
-import com.multiship.backend.repository.CarrierAccountRefRepository;
-import com.multiship.backend.repository.CarrierConfigRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
@@ -17,14 +13,22 @@ import java.util.List;
 
 /**
  * Sprint 49 Tier 1 — one-shot migration to encrypt existing plaintext
- * client_secret values on {@link CarrierConfig} and
- * {@link CarrierAccountRef}.
+ * {@code client_secret} values on {@code carrier_config},
+ * {@code carrier_account_ref}, and (Sprint 50 Tier 1 finding #2)
+ * {@code users.carrier_client_secret}.
  *
  * <p>Detects unmigrated rows via a native query filtering for values that
- * don't carry the {@code enc:v1:} sentinel prefix. For each such row it
- * loads the entity (converter passes the plaintext through) and re-saves
- * it (converter prepends the prefix + AES-GCM ciphertext). Idempotent:
- * subsequent startups find zero rows and log a skip.
+ * don't carry the {@code enc:v1:} sentinel prefix. Encrypts each in-place
+ * via a native UPDATE. Idempotent: subsequent startups find zero rows
+ * and log a skip.
+ *
+ * <p>Native SQL is deliberate: going through JPA {@code save()} on a
+ * managed entity is a no-op when the loaded attribute equals the DB
+ * snapshot (which it always does for a legacy plaintext row —
+ * {@link EncryptedStringConverter#convertToEntityAttribute} passes
+ * unmigrated plaintext through unchanged). Hibernate's dirty check
+ * then skips the UPDATE and the migration silently fails. Bypassing
+ * the entity manager side-steps that entirely.
  *
  * <p>Guards: skips entirely when
  * {@link CryptoService#isAvailable()} is false so dev environments that
@@ -37,8 +41,6 @@ import java.util.List;
 public class ClientSecretEncryptionMigrator implements CommandLineRunner {
 
     private final CryptoService crypto;
-    private final CarrierConfigRepository carrierConfigRepository;
-    private final CarrierAccountRefRepository carrierAccountRefRepository;
 
     @PersistenceContext
     private EntityManager em;
@@ -51,43 +53,59 @@ public class ClientSecretEncryptionMigrator implements CommandLineRunner {
         }
         int carrierConfigCount = migrateCarrierConfig();
         int accountRefCount = migrateCarrierAccountRef();
-        if (carrierConfigCount == 0 && accountRefCount == 0) {
+        int userCount = migrateUser();
+        if (carrierConfigCount == 0 && accountRefCount == 0 && userCount == 0) {
             log.info("ClientSecretEncryptionMigrator: nothing to migrate — all client_secret values already encrypted.");
         } else {
-            log.info("ClientSecretEncryptionMigrator: encrypted {} carrier_config + {} carrier_account_ref rows.",
-                    carrierConfigCount, accountRefCount);
+            log.info("ClientSecretEncryptionMigrator: encrypted {} carrier_config + {} carrier_account_ref + {} users rows.",
+                    carrierConfigCount, accountRefCount, userCount);
         }
     }
 
     @Transactional
     protected int migrateCarrierConfig() {
-        List<Long> ids = em.createNativeQuery(
-                        "SELECT id FROM carrier_config WHERE client_secret IS NOT NULL "
-                                + "AND client_secret <> '' AND client_secret NOT LIKE 'enc:v1:%'")
-                .getResultList().stream()
-                .map(o -> ((Number) o).longValue())
-                .toList();
-        for (Long id : ids) {
-            CarrierConfig row = carrierConfigRepository.findById(id).orElse(null);
-            if (row == null) continue;
-            carrierConfigRepository.save(row);  // converter encrypts on write
-        }
-        return ids.size();
+        return encryptPlaintextColumn("carrier_config", "client_secret");
     }
 
     @Transactional
     protected int migrateCarrierAccountRef() {
-        List<Long> ids = em.createNativeQuery(
-                        "SELECT id FROM carrier_account_ref WHERE client_secret IS NOT NULL "
-                                + "AND client_secret <> '' AND client_secret NOT LIKE 'enc:v1:%'")
-                .getResultList().stream()
-                .map(o -> ((Number) o).longValue())
-                .toList();
-        for (Long id : ids) {
-            CarrierAccountRef row = carrierAccountRefRepository.findById(id).orElse(null);
-            if (row == null) continue;
-            carrierAccountRefRepository.save(row);
+        return encryptPlaintextColumn("carrier_account_ref", "client_secret");
+    }
+
+    /**
+     * Sprint 50 Tier 1 finding #2 — backfill User.carrier_client_secret.
+     */
+    @Transactional
+    protected int migrateUser() {
+        return encryptPlaintextColumn("users", "carrier_client_secret");
+    }
+
+    /**
+     * Read every plaintext row for {@code table.column}, run each value
+     * through {@link CryptoService#encrypt}, and write it back with the
+     * {@code enc:v1:} sentinel via a native UPDATE. See the class-level
+     * javadoc for why native SQL rather than JPA {@code save()}.
+     */
+    private int encryptPlaintextColumn(String table, String column) {
+        @SuppressWarnings("unchecked")
+        List<Object[]> rows = em.createNativeQuery(
+                        "SELECT id, " + column + " FROM " + table
+                                + " WHERE " + column + " IS NOT NULL"
+                                + " AND " + column + " <> ''"
+                                + " AND " + column + " NOT LIKE 'enc:v1:%'")
+                .getResultList();
+        int migrated = 0;
+        for (Object[] r : rows) {
+            long id = ((Number) r[0]).longValue();
+            String plaintext = String.valueOf(r[1]);
+            String ciphertext = EncryptedStringConverter.PREFIX + crypto.encrypt(plaintext);
+            int updated = em.createNativeQuery(
+                            "UPDATE " + table + " SET " + column + " = :ct WHERE id = :id")
+                    .setParameter("ct", ciphertext)
+                    .setParameter("id", id)
+                    .executeUpdate();
+            migrated += updated;
         }
-        return ids.size();
+        return migrated;
     }
 }

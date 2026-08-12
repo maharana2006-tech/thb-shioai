@@ -217,38 +217,63 @@ public class ExternalApiService {
         manual.setSource("API");
         manual.setReference(req.getReference());
         manual.setDeclaredValue(req.getDeclaredValue());
-        manual.setCurrency(req.getCurrency());
+        // Sprint 50 Tier 1 finding #4 — currency is set below after we've
+        // resolved the tenant-default fallback; leaving it unset here keeps
+        // the fallback path the single source of truth.
         manual.setReasonForExport(req.getReasonForExport());
         manual.setIncoterms(req.getIncoterms());
 
+        // Sprint 50 Tier 1 finding #4 — resolve per-tenant defaults up front
+        // so the missing-unit / missing-currency checks below can fall back
+        // to the client's stored values before failing loud. When the client
+        // hasn't set a default AND the caller didn't supply one, we still
+        // throw UNIT_REQUIRED / CURRENCY_REQUIRED per Tier 1-A finding #16.
+        com.multiship.backend.model.Client tenantDefaults =
+                clientRepository.findByClientCodeIgnoreCase(clientCode).orElse(null);
+        String tenantWeightUnit = tenantDefaults != null ? tenantDefaults.getDefaultWeightUnit() : null;
+        String tenantCurrency = tenantDefaults != null ? tenantDefaults.getDefaultCurrency() : null;
+        String tenantDimUnit = tenantDefaults != null ? tenantDefaults.getDefaultDimUnit() : null;
+
         ExternalParcel p = req.getParcel();
         manual.setWeight(p.getWeight());
-        // Sprint 50 Tier 1 finding #16 — no more silent LB default. A KG
-        // shipment posted with a missing unit used to label as LB (under-
-        // declaring by ~2.2×). Require it explicitly. When Sprint 50 Tier 2
-        // lands Client.defaultWeightUnit, that can fill in first before this
-        // check fires. TODO: replace with Client.defaultWeightUnit fallback.
-        if (p.getWeight() != null && !StringUtils.hasText(p.getWeightUnit())) {
+        // Sprint 50 Tier 1 finding #16 — no more silent LB default. If the
+        // caller omitted the unit, first try Client.defaultWeightUnit; only
+        // fail loud when both are missing.
+        String effectiveWeightUnit = StringUtils.hasText(p.getWeightUnit())
+                ? p.getWeightUnit()
+                : tenantWeightUnit;
+        if (p.getWeight() != null && !StringUtils.hasText(effectiveWeightUnit)) {
             throw new ExternalApiException(422, ErrorCode.UNIT_REQUIRED,
-                    "parcel.weight was supplied without parcel.weightUnit. "
-                            + "Send 'kg' or 'lb' explicitly — silent defaulting to 'lb' is no longer allowed.");
+                    "parcel.weight was supplied without parcel.weightUnit "
+                            + "and client " + clientCode + " has no defaultWeightUnit set. "
+                            + "Send 'kg' or 'lb' explicitly, or configure the default on the Clients page.");
         }
-        manual.setWeightUnit(p.getWeightUnit());
+        manual.setWeightUnit(effectiveWeightUnit);
         manual.setLength(p.getLength());
         manual.setWidth(p.getWidth());
         manual.setHeight(p.getHeight());
-        manual.setDimUnit(p.getDimUnit());
+        // Dim unit: same fallback pattern. No fail-loud here — length/width/
+        // height with no unit is a legacy shape that most carriers handle by
+        // assuming IN; the Tier 1-A finding #16 fail-loud was for weight and
+        // currency (higher misdeclaration risk).
+        manual.setDimUnit(StringUtils.hasText(p.getDimUnit()) ? p.getDimUnit() : tenantDimUnit);
         // Sprint 50 Tier 1 finding #16 — declared value without currency is
-        // a customs misdeclaration risk (EUR declared as USD). Require an
-        // explicit currency for any non-zero declared value.
-        // TODO: replace with Client.defaultCurrency fallback once Sprint 50 Tier 2 lands.
+        // a customs misdeclaration risk. First try Client.defaultCurrency;
+        // fail loud only when both are missing.
+        String effectiveCurrency = StringUtils.hasText(req.getCurrency())
+                ? req.getCurrency()
+                : tenantCurrency;
         if (req.getDeclaredValue() != null
                 && req.getDeclaredValue().signum() > 0
-                && !StringUtils.hasText(req.getCurrency())) {
+                && !StringUtils.hasText(effectiveCurrency)) {
             throw new ExternalApiException(422, ErrorCode.CURRENCY_REQUIRED,
-                    "declaredValue was supplied without currency. Send a 3-letter ISO code "
-                            + "(e.g. 'USD', 'EUR', 'GBP') — silent defaulting to 'USD' is no longer allowed.");
+                    "declaredValue was supplied without currency and client " + clientCode
+                            + " has no defaultCurrency set. Send a 3-letter ISO code "
+                            + "(e.g. 'USD', 'EUR', 'GBP') or configure the default on the Clients page.");
         }
+        // Persist the effective currency onto the manual request so
+        // downstream carrier calls see the tenant fallback too.
+        manual.setCurrency(effectiveCurrency);
         // packagingCode: prefer the Phase-5c client alias when configured; else
         // fall back to matching by preset name / carrier package code.
         Long resolvedPresetId = null;
@@ -365,6 +390,13 @@ public class ExternalApiService {
     public ExternalRateResponse rate(ApiKeyPrincipal caller, ExternalRateRequest req) {
         String clientCode = effectiveClient(caller, req.getClientCode());
         String destCountry = req.getShipTo() != null ? req.getShipTo().getCountryCode() : null;
+        // Sprint 50 Tier 1 finding #4 — per-tenant default currency for the
+        // stub rate-shop response. Falls back to USD only when the client
+        // hasn't set one (matches pre-Sprint-50 behavior).
+        String tenantCurrency = clientRepository.findByClientCodeIgnoreCase(clientCode)
+                .map(com.multiship.backend.model.Client::getDefaultCurrency)
+                .filter(StringUtils::hasText)
+                .orElse("USD");
 
         // 3PL guardrail: destination allowed for this client?
         try {
@@ -417,10 +449,9 @@ public class ExternalApiService {
                         .serviceName(s.getName())
                         .scope(s.getScope())
                         .estimatedAmount(null)
-                        // TODO: Sprint 50 Tier 2 — source from Client.defaultCurrency instead of hardcode.
-                        // Safe today because estimatedAmount is null (pricing not enabled here);
-                        // no real currency is riding on this value.
-                        .currency("USD")
+                        // Sprint 50 Tier 1 finding #4 — sources from Client.defaultCurrency
+                        // (resolved above), falls back to USD only if unset.
+                        .currency(tenantCurrency)
                         .allowed(noAllowlist || allowed.contains(s.getId()))
                         .build())
                 .collect(Collectors.toList());

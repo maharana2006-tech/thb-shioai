@@ -96,6 +96,35 @@ public class Client {
     @Default
     private String status = STATUS_ACTIVE;
 
+    // ===== Sprint 50 Tier 1 finding #4 — first-class per-tenant defaults =====
+    //
+    // Populated by the client admin page; consulted by the label / rate /
+    // customs pipelines before falling back to platform hardcodes. When
+    // NULL, callers behave as they did pre-Sprint-50 (silent hardcode);
+    // once ops backfills every active client's defaults, consumers can
+    // graduate to Tier 1-A's UNIT_REQUIRED / CURRENCY_REQUIRED loud fails
+    // on absence. Kept nullable for zero-downtime deploy.
+
+    /** ISO 4217 3-letter code (USD, EUR, GBP, …). */
+    @Column(name = "default_currency", length = 3)
+    private String defaultCurrency;
+
+    /** LB / KG / OZ / G. Matches the UnitConverter enum. */
+    @Column(name = "default_weight_unit", length = 4)
+    private String defaultWeightUnit;
+
+    /** IN / CM / MM. Matches the UnitConverter enum. */
+    @Column(name = "default_dim_unit", length = 4)
+    private String defaultDimUnit;
+
+    /** IANA tz identifier (e.g. "America/New_York"). Used for cutoff calc + display. */
+    @Column(name = "timezone", length = 50)
+    private String timezone;
+
+    /** ISO-3166-1 alpha-2 country code (US, IN, GB, …) for the client's default ship-from country. */
+    @Column(name = "default_origin_country", length = 2)
+    private String defaultOriginCountry;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
