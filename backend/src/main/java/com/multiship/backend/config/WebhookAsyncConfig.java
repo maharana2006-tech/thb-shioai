@@ -35,8 +35,13 @@ public class WebhookAsyncConfig {
      */
     public static final String BEAN_NAME = "webhookExecutor";
 
+    // Sprint 50 PR M — M8: return concrete ThreadPoolTaskExecutor rather than
+    // the TaskExecutor interface. If a second TaskExecutor bean is added later
+    // (e.g. an @Async default), a plain by-type autowire in WebhookServiceImpl
+    // would become ambiguous. Concrete type avoids that trap; @Qualifier is
+    // still available via BEAN_NAME for the same reason.
     @Bean(name = BEAN_NAME)
-    public TaskExecutor webhookExecutor() {
+    public ThreadPoolTaskExecutor webhookExecutor() {
         ThreadPoolTaskExecutor exec = new ThreadPoolTaskExecutor();
         exec.setCorePoolSize(8);
         exec.setMaxPoolSize(8);

@@ -117,6 +117,16 @@ public class IdempotencyService {
         return m;
     }
 
+    /** Sprint 50 PR M — L2: truncate the idempotency key before logging so
+     *  a client that stuffs PII / auth into the header (against convention
+     *  but possible) doesn't leak the full value into ops logs. 40 chars
+     *  is enough to correlate a support ticket without exposing arbitrary
+     *  suffix contents. */
+    private static String truncKey(String key) {
+        if (key == null) return "null";
+        return key.length() <= 40 ? key : key.substring(0, 40) + "…";
+    }
+
     /**
      * Fail-open overload — matches the pre-Tier-1-C behavior for
      * endpoints where re-running the handler on Redis failure is safe
@@ -199,7 +209,7 @@ public class IdempotencyService {
             claimed = redis.opsForValue().setIfAbsent(pendingKey, "1", PENDING_TTL);
         } catch (Exception ex) {
             log.warn("Idempotency SETNX failed for apiKey={} key={}: {}",
-                    apiKeyId, idempotencyKey, ex.getMessage());
+                    apiKeyId, truncKey(idempotencyKey), ex.getMessage());
             if (failClosedOnRedisError) {
                 return (ResponseEntity<T>) redisUnavailableResponse();
             }
@@ -217,7 +227,7 @@ public class IdempotencyService {
                 }
             } catch (Exception ex) {
                 log.warn("Idempotency defensive GET failed for apiKey={} key={}: {}",
-                        apiKeyId, idempotencyKey, ex.getMessage());
+                        apiKeyId, truncKey(idempotencyKey), ex.getMessage());
                 if (failClosedOnRedisError) {
                     return (ResponseEntity<T>) redisUnavailableResponse();
                 }
@@ -242,10 +252,10 @@ public class IdempotencyService {
                 redis.opsForValue().set(mainKey, stored, TTL);
             } catch (JsonProcessingException ex) {
                 log.warn("Idempotency store serialisation failed for apiKey={} key={}: {}",
-                        apiKeyId, idempotencyKey, ex.getMessage());
+                        apiKeyId, truncKey(idempotencyKey), ex.getMessage());
             } catch (Exception ex) {
                 log.warn("Idempotency store write failed for apiKey={} key={}: {}",
-                        apiKeyId, idempotencyKey, ex.getMessage());
+                        apiKeyId, truncKey(idempotencyKey), ex.getMessage());
             }
 
             // Return the fresh response with Idempotency-Key echoed.
@@ -265,7 +275,7 @@ public class IdempotencyService {
             cached = redis.opsForValue().get(mainKey);
         } catch (Exception ex) {
             log.warn("Idempotency replay probe failed for apiKey={} key={}: {}",
-                    apiKeyId, idempotencyKey, ex.getMessage());
+                    apiKeyId, truncKey(idempotencyKey), ex.getMessage());
             if (failClosedOnRedisError) {
                 return (ResponseEntity<T>) redisUnavailableResponse();
             }
@@ -290,11 +300,24 @@ public class IdempotencyService {
             CachedResponse hit = INTERNAL_MAPPER.readValue(cached, CachedResponse.class);
             T body = INTERNAL_MAPPER.readValue(hit.bodyJson(), typeRef);
             log.info("Idempotent replay for apiKey={} key={} → status={}",
-                    apiKeyId, idempotencyKey, hit.status());
+                    apiKeyId, truncKey(idempotencyKey), hit.status());
 
             HttpHeaders headers = new HttpHeaders();
             if (hit.headers() != null) {
-                hit.headers().forEach(headers::addAll);
+                hit.headers().forEach((name, values) -> {
+                    // Sprint 50 PR M — L5: don't replay length/hop-by-hop
+                    // headers. Cached Content-Length/Content-MD5 can be
+                    // wrong for the freshly-serialised body (Jackson field
+                    // ordering, mapper differences) and Servlet writes its
+                    // own Content-Length anyway. Transfer-Encoding /
+                    // Connection are hop-by-hop and must not be replayed.
+                    if (!"content-length".equalsIgnoreCase(name)
+                            && !"content-md5".equalsIgnoreCase(name)
+                            && !"transfer-encoding".equalsIgnoreCase(name)
+                            && !"connection".equalsIgnoreCase(name)) {
+                        headers.addAll(name, values);
+                    }
+                });
             }
             // These must win over any cached values.
             headers.set("X-Idempotent-Replay", "true");
@@ -305,7 +328,7 @@ public class IdempotencyService {
                     .body(body);
         } catch (Exception ex) {
             log.warn("Idempotency replay deserialization failed for apiKey={} key={}: {}",
-                    apiKeyId, idempotencyKey, ex.getMessage());
+                    apiKeyId, truncKey(idempotencyKey), ex.getMessage());
             // Corrupt cache entry — surface as in-progress so the caller
             // retries rather than getting a silently different response.
             @SuppressWarnings("unchecked")
