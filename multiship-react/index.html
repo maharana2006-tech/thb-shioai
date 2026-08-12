@@ -4,6 +4,26 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Sprint 50 PR P post-audit #15 interim mitigation — Content Security
+      Policy. The auth token still lives in localStorage (moving to
+      httpOnly cookies is a separate architectural PR), so a strict CSP
+      is the smallest change that materially reduces the XSS blast
+      radius today: scripts limited to self + Vite's inlined module
+      loader (via 'unsafe-inline' unavoidable for the current build);
+      no framing, no 3rd-party origins for script/style. Loosen only if
+      a specific integration needs it — record why in this comment.
+    -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self';
+                   script-src 'self' 'unsafe-inline';
+                   style-src 'self' 'unsafe-inline';
+                   img-src 'self' data: https:;
+                   font-src 'self' data:;
+                   connect-src 'self' https: http://localhost:* http://127.0.0.1:* http://192.168.*:* http://10.*:* http://172.16.*:* http://172.17.*:* http://172.18.*:* http://172.19.*:* http://172.2*.*:* http://172.30.*:* http://172.31.*:*;
+                   frame-ancestors 'none';
+                   base-uri 'self';
+                   form-action 'self';" />
     <title>multiship-react</title>
   </head>
   <body>

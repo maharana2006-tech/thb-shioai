@@ -375,7 +375,11 @@ export default function ExternalApiReference() {
   const [open, setOpen] = useState<string | null>(null)
   const [apiKey, setApiKey] = useState(() => {
     try {
-      return localStorage.getItem(API_KEY_STORAGE) || ''
+      // Sprint 50 PR P post-audit #16 — sessionStorage instead of
+      // localStorage: the API-key playground is a developer convenience;
+      // persisting a live msk_ key across sessions is a real leak vector
+      // if any XSS gets in. sessionStorage dies on tab close.
+      return sessionStorage.getItem(API_KEY_STORAGE) || ''
     } catch {
       return ''
     }
@@ -383,7 +387,7 @@ export default function ExternalApiReference() {
   const updateKey = (v: string) => {
     setApiKey(v)
     try {
-      localStorage.setItem(API_KEY_STORAGE, v)
+      sessionStorage.setItem(API_KEY_STORAGE, v)
     } catch {
       /* ignore storage errors */
     }
