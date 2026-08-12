@@ -184,7 +184,7 @@ class AuthServiceImplPRDTest {
         com.multiship.backend.dto.LoginRequest req = new com.multiship.backend.dto.LoginRequest();
         req.setUsername("newuser");
         req.setPassword("p4ssw0rd!");
-        ResponseEntity<?> resp = service.loginUser(req);
+        ResponseEntity<?> resp = service.loginUser(req, new org.springframework.mock.web.MockHttpServletResponse());
 
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
         MessageResponse body = (MessageResponse) resp.getBody();

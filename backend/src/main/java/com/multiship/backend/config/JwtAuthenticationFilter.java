@@ -6,6 +6,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -108,6 +109,34 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
     }
 
+    /** Sprint 50 PR Q1 — cookie name auth writes on login. Kept in sync
+     *  with {@code AuthServiceImpl.AUTH_COOKIE}. Duplicated here rather
+     *  than referenced to avoid a config→service compile cycle. */
+    private static final String AUTH_COOKIE_NAME = "multiship_token";
+
+    /** Sprint 50 PR Q1 — accept the JWT from either the Authorization
+     *  header (back-compat with pre-cookie clients + server-to-server
+     *  callers) or the httpOnly cookie set on login. Header wins when
+     *  both are present so a manual API test with a Bearer header still
+     *  identifies the caller during the transitional window. */
+    private String resolveToken(HttpServletRequest request) {
+        String h = request.getHeader("Authorization");
+        if (h != null && h.startsWith("Bearer ")) {
+            return h.substring(7);
+        }
+        Cookie[] cookies = request.getCookies();
+        if (cookies != null) {
+            for (Cookie c : cookies) {
+                if (AUTH_COOKIE_NAME.equals(c.getName())
+                        && c.getValue() != null
+                        && !c.getValue().isBlank()) {
+                    return c.getValue();
+                }
+            }
+        }
+        return null;
+    }
+
     @Override
     protected void doFilterInternal(
             HttpServletRequest request,
@@ -120,11 +149,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         // is present. Open endpoints stay open via permitAll, and a token
         // sent to /api/v1/auth/signup still identifies the caller (used to
         // authorize ADMIN account creation).
-        String authHeader = request.getHeader("Authorization");
+        //
+        // Sprint 50 PR Q1 — resolveToken() prefers the Authorization header
+        // (back-compat with pre-cookie clients) and falls through to the
+        // multiship_token httpOnly cookie set by AuthServiceImpl on login.
+        // Both paths reach the same JWT-parse block below.
+        String token = resolveToken(request);
 
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            String token = authHeader.substring(7);
-
+        if (token != null) {
             // API keys (msk_...) are handled by ApiKeyAuthenticationFilter — don't
             // treat one as a JWT (parsing would fail and clear a valid context).
             if (token.startsWith("msk_")) {

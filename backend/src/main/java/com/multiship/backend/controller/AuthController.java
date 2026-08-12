@@ -9,6 +9,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -46,18 +47,34 @@ public class AuthController {
     }
 
     @Operation(summary = "Log in",
-            description = "Returns {token, username, role}. The JWT carries the role claim and expires in 24h. "
+            description = "Returns {token, username, role}. Sprint 50 PR Q1: ALSO sets the JWT as an "
+                    + "httpOnly cookie so a subsequent SPA session can bootstrap via /session without JS "
+                    + "ever seeing the token. The body `token` field remains populated for one deploy cycle "
+                    + "so unmigrated FE builds keep working. The JWT carries the role claim and expires in 24h. "
                     + "401 INVALID_CREDENTIALS on bad credentials. "
                     + "403 EMAIL_NOT_VERIFIED for a public-signup user who has not consumed the verification link.")
     @SecurityRequirements
     @PostMapping("/login")
-    public ResponseEntity<?> authenticateUser(@Valid @RequestBody LoginRequest loginRequest) {
-        return authService.loginUser(loginRequest);
+    public ResponseEntity<?> authenticateUser(@Valid @RequestBody LoginRequest loginRequest,
+                                              HttpServletResponse response) {
+        return authService.loginUser(loginRequest, response);
+    }
+
+    /** Sprint 50 PR Q1 — SPA bootstrap after page refresh. Returns
+     *  {username, role, clientCode} from the SecurityContext populated
+     *  by the httpOnly cookie (or Authorization header for legacy
+     *  callers). 401 if the cookie is missing/expired/invalid. */
+    @Operation(summary = "Current session (bootstrap after page refresh)")
+    @GetMapping("/session")
+    public ResponseEntity<?> currentSession() {
+        return authService.currentSession();
     }
 
     @PostMapping("/logout")
-    public ResponseEntity<MessageResponse> logoutUser(@RequestHeader("Authorization") String tokenHeader) {
-        return authService.logoutUser(tokenHeader);
+    public ResponseEntity<MessageResponse> logoutUser(
+            @RequestHeader(value = "Authorization", required = false) String tokenHeader,
+            HttpServletResponse response) {
+        return authService.logoutUser(tokenHeader, response);
     }
 
     /**

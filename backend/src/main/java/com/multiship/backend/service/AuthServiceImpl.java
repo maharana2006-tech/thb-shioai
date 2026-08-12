@@ -9,21 +9,28 @@ import com.multiship.backend.dto.SignupRequest;
 import com.multiship.backend.config.JwtService;
 import com.multiship.backend.model.User;
 import com.multiship.backend.model.UserInvite;
+import com.multiship.backend.config.JwtAuthenticationFilter;
+import com.multiship.backend.dto.SessionResponse;
 import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.repository.UserRepository;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.MessageSource; // Added for enterprise string lookups
 import org.springframework.context.i18n.LocaleContextHolder; // Automatically tracks runtime system defaults
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.Optional;
@@ -245,8 +252,34 @@ public class AuthServiceImpl implements AuthService {
         return HexFormat.of().formatHex(buf);
     }
 
+    /** Sprint 50 PR Q1 — httpOnly cookie name. Public constant so the
+     *  filter can reference it symmetrically. */
+    public static final String AUTH_COOKIE = "multiship_token";
+
+    @Value("${cookie.secure:false}")
+    private boolean cookieSecure;
+
+    @Value("${cookie.samesite:Strict}")
+    private String cookieSameSite;
+
+    /** Sprint 50 PR Q1 — cookie Max-Age must match JWT expiry so the
+     *  browser stops sending it at the same moment the token would
+     *  have failed validation. Same property JwtService reads. */
+    @Value("${jwt.expiration:86400000}")
+    private long jwtExpirationMillis;
+
+    private ResponseCookie authCookie(String token, long maxAgeSeconds) {
+        return ResponseCookie.from(AUTH_COOKIE, token == null ? "" : token)
+                .httpOnly(true)
+                .secure(cookieSecure)
+                .path("/")
+                .maxAge(maxAgeSeconds)
+                .sameSite(cookieSameSite)
+                .build();
+    }
+
     @Override
-    public ResponseEntity<?> loginUser(LoginRequest loginRequest) {
+    public ResponseEntity<?> loginUser(LoginRequest loginRequest, HttpServletResponse response) {
         Optional<User> userOptional = userRepository.findByUsername(loginRequest.getUsername());
 
         if (userOptional.isPresent() && passwordEncoder.matches(loginRequest.getPassword(), userOptional.get().getPassword())) {
@@ -280,6 +313,13 @@ public class AuthServiceImpl implements AuthService {
             // Null for legacy internal ADMIN + USER (org-wide); populated for
             // TENANT + any USER assigned to a client via PR E's admin UI.
             String token = jwtService.generateToken(user.getUsername(), user.getRole(), user.getClientCode());
+
+            // Sprint 50 PR Q1 — write the JWT as an httpOnly cookie so the SPA
+            // can't be XSS-exfiltrated. Body still carries `token` for one
+            // deploy cycle so unmigrated FE builds keep working; the follow-up
+            // frontend PR flips to cookie-only.
+            response.addHeader(HttpHeaders.SET_COOKIE,
+                    authCookie(token, Duration.ofMillis(jwtExpirationMillis).toSeconds()).toString());
             return ResponseEntity.ok(new AuthResponse(token, user.getUsername(), user.getRole()));
         }
 
@@ -288,7 +328,7 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
-    public ResponseEntity<MessageResponse> logoutUser(String tokenHeader) {
+    public ResponseEntity<MessageResponse> logoutUser(String tokenHeader, HttpServletResponse response) {
         // 1. In a production JWT setup, you would parse the token here:
         // String jwt = tokenHeader.substring(7); // Removes "Bearer "
         // tokenBlacklistService.blacklist(jwt);
@@ -296,9 +336,37 @@ public class AuthServiceImpl implements AuthService {
         // 2. Clear current thread-bound authentication token states
         SecurityContextHolder.clearContext();
 
+        // Sprint 50 PR Q1 — clear the auth cookie. Must set the SAME
+        // path + secure + sameSite attributes as the login cookie —
+        // browsers only DELETE a cookie when every attribute matches.
+        response.addHeader(HttpHeaders.SET_COOKIE, authCookie("", 0).toString());
+
         // 3. Resolve the success text cleanly using your MessageSource engine
         String logoutSuccessMsg = messageSource.getMessage("success.user.loggedout", null, LocaleContextHolder.getLocale());
 
         return ResponseEntity.ok(new MessageResponse(logoutSuccessMsg));
+    }
+
+    @Override
+    public ResponseEntity<?> currentSession() {
+        // Sprint 50 PR Q1 — SPA bootstrap after page refresh. The
+        // JwtAuthenticationFilter has already populated the SecurityContext
+        // from the cookie (or header, for transitional callers). If nothing
+        // was set, return 401 so the SPA redirects to /login.
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated()
+                || "anonymousUser".equals(String.valueOf(auth.getPrincipal()))) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new MessageResponse(
+                            "Not authenticated.", ErrorCode.UNAUTHORIZED));
+        }
+        String role = auth.getAuthorities().stream().findFirst()
+                .map(g -> g.getAuthority().replaceFirst("^ROLE_", ""))
+                .orElse(null);
+        String clientCode = null;
+        if (auth.getDetails() instanceof JwtAuthenticationFilter.AuthDetails d) {
+            clientCode = d.clientCode();
+        }
+        return ResponseEntity.ok(new SessionResponse(auth.getName(), role, clientCode));
     }
 }
