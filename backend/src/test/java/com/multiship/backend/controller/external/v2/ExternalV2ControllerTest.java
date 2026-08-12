@@ -59,7 +59,8 @@ class ExternalV2ControllerTest {
         // touching Redis (that's the "not idempotent, pass through" branch).
         ObjectProvider<StringRedisTemplate> redisProvider = mock(ObjectProvider.class);
         when(redisProvider.getIfAvailable()).thenReturn(null);
-        IdempotencyService idempotency = new IdempotencyService(redisProvider, new ObjectMapper());
+        // Sprint 50 PR K — IdempotencyService owns its own ObjectMapper now.
+        IdempotencyService idempotency = new IdempotencyService(redisProvider);
         controller = new ExternalV2Controller(
                 mock(ExternalApiService.class),
                 rateShopService, pickupService, manifestService, landedCostService,

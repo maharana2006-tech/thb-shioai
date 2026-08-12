@@ -53,8 +53,12 @@ class IdempotencyServiceTest {
         when(redisProvider.getIfAvailable()).thenReturn(redis);
         when(redis.opsForValue()).thenReturn(valueOps);
 
+        // Sprint 50 PR K — service owns its own JavaTimeModule-registered
+        // mapper. The test-local `objectMapper` below still matches
+        // sufficiently for the round-trip tests since we use plain String
+        // bodies here — no LocalDateTime in the CachedResponse fixtures.
         objectMapper = new ObjectMapper();
-        service = new IdempotencyService(redisProvider, objectMapper);
+        service = new IdempotencyService(redisProvider);
     }
 
     /** Convenience typed handler that just returns a 200 with the given body. */

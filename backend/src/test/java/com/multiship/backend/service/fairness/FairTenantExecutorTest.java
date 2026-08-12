@@ -168,7 +168,7 @@ class FairTenantExecutorTest {
     }
 
     @Test
-    void interruptDuringAcquirePropagates() throws Exception {
+    void saturatedTenantSecondSubmitAborts() throws Exception {
         pool = Executors.newFixedThreadPool(2);
         // Very short acquire timeout so the test doesn't hang if the code
         // is buggy — 1s is generous for CI.
@@ -179,14 +179,21 @@ class FairTenantExecutorTest {
         fair.submitAll("SLOW", List.of(() -> { hold.await(); return null; }));
 
         // Now try to submit another SLOW task — should time out because
-        // the sole permit is held.
-        boolean threw = false;
+        // the sole permit is held. Sprint 50 PR K: the deadline
+        // enforcement throws TenantSaturatedException (RuntimeException)
+        // instead of the old ad-hoc InterruptedException — same intent,
+        // richer diagnostics for the HTTP caller.
+        FairTenantExecutor.TenantSaturatedException caught = null;
         try {
             fair.submitAll("SLOW", List.of(() -> null));
-        } catch (InterruptedException expected) {
-            threw = true;
+        } catch (FairTenantExecutor.TenantSaturatedException expected) {
+            caught = expected;
         }
-        assertTrue(threw, "second SLOW submit must time out with InterruptedException");
+        assertTrue(caught != null,
+                "second SLOW submit must abort with TenantSaturatedException");
+        assertEquals("SLOW", caught.getTenantKey());
+        assertEquals(0, caught.getSubmittedTasks(), "no tasks made it in");
+        assertEquals(1, caught.getTotalTasks());
         hold.countDown();
     }
 }

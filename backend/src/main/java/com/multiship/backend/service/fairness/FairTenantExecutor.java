@@ -72,6 +72,16 @@ public class FairTenantExecutor {
      *  submitting anyway (defence-in-depth against a stuck permit leak). */
     private final long acquireTimeoutSeconds;
 
+    /** Sprint 50 PR K — how long the CALLER thread is allowed to be
+     *  blocked in {@link #submitAll} in total across all task acquires.
+     *  Once elapsed, remaining acquires bail out with a
+     *  {@link TenantSaturatedException} so a saturated tenant can't
+     *  monopolise a Tomcat thread for the entire batch duration. Set
+     *  liberally (minutes) when {@code submitAll} is called from a
+     *  background dispatcher; keep short (seconds) when called from an
+     *  HTTP handler. */
+    private final long maxBatchWaitMs;
+
     /**
      * Semaphores keyed by tenant. Kept in a ConcurrentHashMap; entries
      * live until the JVM restarts. In steady state the set of tenants
@@ -83,13 +93,27 @@ public class FairTenantExecutor {
     public FairTenantExecutor(ExecutorService delegate,
                                int maxConcurrentPerTenant,
                                long acquireTimeoutSeconds) {
+        // Backward-compat: batches default to Long.MAX_VALUE ms, matching
+        // the pre-PR-K "block indefinitely" behaviour. Callers on HTTP
+        // threads should use the 4-arg constructor with a bounded value.
+        this(delegate, maxConcurrentPerTenant, acquireTimeoutSeconds, Long.MAX_VALUE);
+    }
+
+    public FairTenantExecutor(ExecutorService delegate,
+                               int maxConcurrentPerTenant,
+                               long acquireTimeoutSeconds,
+                               long maxBatchWaitMs) {
         if (delegate == null) throw new IllegalArgumentException("delegate must not be null");
         if (maxConcurrentPerTenant <= 0) {
             throw new IllegalArgumentException("maxConcurrentPerTenant must be > 0");
         }
+        if (maxBatchWaitMs <= 0) {
+            throw new IllegalArgumentException("maxBatchWaitMs must be > 0");
+        }
         this.delegate = delegate;
         this.maxConcurrentPerTenant = maxConcurrentPerTenant;
         this.acquireTimeoutSeconds = acquireTimeoutSeconds;
+        this.maxBatchWaitMs = maxBatchWaitMs;
     }
 
     /**
@@ -120,18 +144,30 @@ public class FairTenantExecutor {
                 normalized, k -> new Semaphore(maxConcurrentPerTenant));
 
         List<Future<T>> futures = new ArrayList<>(tasks.size());
+        // Sprint 50 PR K — bound the CALLER thread's total time in submitAll
+        // so a saturated tenant + big batch can't hold an HTTP thread for
+        // hours. Once the deadline passes, subsequent acquires bail via
+        // TenantSaturatedException; already-submitted futures are returned
+        // in the exception so the caller can decide (release, cancel, etc).
+        long deadlineNanos = System.nanoTime()
+                + (maxBatchWaitMs == Long.MAX_VALUE
+                        ? Long.MAX_VALUE
+                        : TimeUnit.MILLISECONDS.toNanos(maxBatchWaitMs));
         for (Callable<T> raw : tasks) {
-            // Block until this tenant has a free slot. If the caller is
-            // interrupted mid-batch, propagate — the futures list carries
-            // whatever's already submitted so partial results are safe.
-            if (!semaphore.tryAcquire(acquireTimeoutSeconds, TimeUnit.SECONDS)) {
-                // Defence-in-depth: log + fail closed on the current task
-                // rather than blindly submit and blow the fairness contract.
-                // Callers see this as an InterruptedException-shaped stop.
-                log.warn("FairTenantExecutor: tenant {} timed out waiting {}s for a permit — batch aborted after {} tasks",
-                        normalized, acquireTimeoutSeconds, futures.size());
-                throw new InterruptedException(
-                        "Fair-share permit acquire timed out for tenant " + normalized);
+            long remainingBatchNanos = deadlineNanos == Long.MAX_VALUE
+                    ? Long.MAX_VALUE
+                    : Math.max(0L, deadlineNanos - System.nanoTime());
+            long perAcquireNanos = Math.min(
+                    TimeUnit.SECONDS.toNanos(acquireTimeoutSeconds),
+                    remainingBatchNanos);
+            if (perAcquireNanos <= 0 || !semaphore.tryAcquire(perAcquireNanos, TimeUnit.NANOSECONDS)) {
+                log.warn("FairTenantExecutor: tenant {} could not acquire a permit within batch budget "
+                                + "({}ms max) — {} of {} tasks submitted before abort",
+                        normalized, maxBatchWaitMs, futures.size(), tasks.size());
+                throw new TenantSaturatedException(normalized,
+                        futures.size(), tasks.size(),
+                        maxConcurrentPerTenant - semaphore.availablePermits(),
+                        futures);
             }
 
             futures.add(delegate.submit(() -> {
@@ -148,6 +184,39 @@ public class FairTenantExecutor {
     /** Convenience for the single-task path (still fair-share throttled). */
     public <T> Future<T> submit(String tenantKey, Callable<T> task) throws InterruptedException {
         return submitAll(tenantKey, List.of(task)).get(0);
+    }
+
+    /**
+     * Sprint 50 PR K — thrown by {@link #submitAll} when the caller thread
+     * exhausted its per-batch permit-acquire budget. Carries partial
+     * progress so the caller can surface it as an actionable 429 (with
+     * how many tasks got in) instead of a bare timeout.
+     */
+    public static class TenantSaturatedException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        private final String tenantKey;
+        private final int submittedTasks;
+        private final int totalTasks;
+        private final int inflightAtAbort;
+        private final transient List<? extends Future<?>> partialFutures;
+
+        TenantSaturatedException(String tenantKey, int submittedTasks, int totalTasks,
+                                 int inflightAtAbort, List<? extends Future<?>> partialFutures) {
+            super("Fair-share permit acquire deadline exceeded for tenant "
+                    + tenantKey + " (" + submittedTasks + "/" + totalTasks
+                    + " tasks submitted, " + inflightAtAbort + " in flight)");
+            this.tenantKey = tenantKey;
+            this.submittedTasks = submittedTasks;
+            this.totalTasks = totalTasks;
+            this.inflightAtAbort = inflightAtAbort;
+            this.partialFutures = partialFutures;
+        }
+
+        public String getTenantKey() { return tenantKey; }
+        public int getSubmittedTasks() { return submittedTasks; }
+        public int getTotalTasks() { return totalTasks; }
+        public int getInflightAtAbort() { return inflightAtAbort; }
+        public List<? extends Future<?>> getPartialFutures() { return partialFutures; }
     }
 
     /**
