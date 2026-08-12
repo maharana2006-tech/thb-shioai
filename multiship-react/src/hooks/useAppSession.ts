@@ -193,12 +193,61 @@ const subscribe = (callback: () => void) => {
 
 export const useAppSession = () => useSyncExternalStore(subscribe, getSnapshot, () => emptySnapshot)
 
-export const storeAuthSession = (payload: { token: string; username: string; role: string }) => {
+/**
+ * Sprint 50 PR Q2 — SPA bootstrap after page refresh. Under cookie-mode
+ * auth the JWT is httpOnly, so JS can't tell "am I logged in?" from
+ * localStorage alone. Call this once at app root mount; it hits
+ * /auth/session which returns 200 + non-sensitive session facts when
+ * the cookie is valid, or 401 to trigger the SPA's login redirect.
+ *
+ * Populates username/role in localStorage (non-sensitive, drives UI
+ * gating in a few components). The token stays cookie-only.
+ */
+export const bootstrapSessionFromCookie = async (): Promise<void> => {
+  if (!isBrowser()) return
+  try {
+    const base =
+      (import.meta.env?.VITE_API_BASE_URL as string | undefined) ||
+      `${window.location.protocol}//${window.location.hostname}:8080/api/v1`
+    const res = await fetch(`${base}/auth/session`, {
+      method: 'GET',
+      credentials: 'include',
+    })
+    if (!res.ok) {
+      // Not logged in — clear any stale localStorage username/role so
+      // UI-gating components don't render the wrong shell.
+      clearAuthSession()
+      return
+    }
+    const s = (await res.json()) as { username?: string; role?: string }
+    if (s?.username && s?.role) {
+      // Non-sensitive; drives UI gating (multiship_role reads across
+      // several settings pages). Token stays httpOnly.
+      window.localStorage.setItem(STORAGE_KEYS.username, s.username)
+      window.localStorage.setItem(STORAGE_KEYS.role, s.role)
+      emitSessionChange()
+    }
+  } catch {
+    // Network error / offline: leave whatever localStorage says. A
+    // real 401 would show up on the next actual API call and trigger
+    // apiClient's /login redirect.
+  }
+}
+
+export const storeAuthSession = (payload: { token?: string | null; username: string; role: string }) => {
   if (!isBrowser()) {
     return
   }
 
-  window.localStorage.setItem(STORAGE_KEYS.token, payload.token)
+  // Sprint 50 PR Q2 — token is optional now. Cookie-mode auth means the
+  // JWT lives in an httpOnly cookie the JS can never read; the SPA
+  // only needs the non-sensitive username + role to drive UI gating.
+  // Transitional writes keep localStorage populated so a rolling
+  // deploy where the FE still runs old code sees a token to send —
+  // once ops confirms every FE build is on cookie mode, drop this.
+  if (payload.token) {
+    window.localStorage.setItem(STORAGE_KEYS.token, payload.token)
+  }
   window.localStorage.setItem(STORAGE_KEYS.username, payload.username)
   window.localStorage.setItem(STORAGE_KEYS.role, payload.role)
   emitSessionChange()
