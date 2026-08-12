@@ -24,4 +24,16 @@ public class AuthResponse {
         this.username = username;
         this.role = role;
     }
+
+    /**
+     * Sprint 50 PR Q1 (JWT httpOnly cookie migration) — cookie-mode
+     * constructor: no token in the JSON body, only the SPA-visible
+     * username + role. The JWT itself is written by AuthServiceImpl as
+     * a Set-Cookie header (HttpOnly, so JS never sees it). Existing FE
+     * builds that read {@code .token} will see null and can fall
+     * through to the cookie-driven flow.
+     */
+    public AuthResponse(String username, String role) {
+        this(null, username, role);
+    }
 }

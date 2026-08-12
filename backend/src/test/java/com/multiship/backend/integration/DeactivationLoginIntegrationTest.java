@@ -65,7 +65,7 @@ class DeactivationLoginIntegrationTest extends AbstractIntegrationTest {
         LoginRequest req = new LoginRequest();
         req.setUsername("revoked");
         req.setPassword("secret");
-        ResponseEntity<?> response = authService.loginUser(req);
+        ResponseEntity<?> response = authService.loginUser(req, new org.springframework.mock.web.MockHttpServletResponse());
 
         assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
         MessageResponse body = assertInstanceOf(MessageResponse.class, response.getBody());
@@ -95,7 +95,7 @@ class DeactivationLoginIntegrationTest extends AbstractIntegrationTest {
         LoginRequest req = new LoginRequest();
         req.setUsername("unverified-revoked");
         req.setPassword("secret");
-        ResponseEntity<?> response = authService.loginUser(req);
+        ResponseEntity<?> response = authService.loginUser(req, new org.springframework.mock.web.MockHttpServletResponse());
 
         assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
         MessageResponse body = assertInstanceOf(MessageResponse.class, response.getBody());
