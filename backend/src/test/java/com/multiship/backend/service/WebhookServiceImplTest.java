@@ -10,6 +10,7 @@ import com.multiship.backend.service.carriers.CarrierConnector.TrackingWebhookEv
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.core.task.SyncTaskExecutor;
 
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -75,9 +76,14 @@ class WebhookServiceImplTest {
         trackingServiceProvider = mock(ObjectProvider.class);
         when(trackingServiceProvider.getIfAvailable()).thenReturn(trackingService);
 
+        // Sprint 50 Tier 1 finding #9 — SyncTaskExecutor keeps the state-
+        // mutation branch on the caller thread in tests, so verifyables
+        // (trackingRepo.save, trackingService.invalidate) fire before the
+        // assertion runs. Production wiring uses a bounded pool from
+        // WebhookAsyncConfig.
         service = new WebhookServiceImpl(
                 carrierService, eventRepo, trackingRepo, props, labelPackageRepo,
-                trackingServiceProvider);
+                trackingServiceProvider, new SyncTaskExecutor());
 
         when(carrierService.getCarrierConnector(anyString())).thenReturn(connector);
         when(eventRepo.save(any(CarrierWebhookEvent.class)))

@@ -40,6 +40,18 @@ import org.testcontainers.containers.PostgreSQLContainer;
         "jwt.secret=integration-test-jwt-secret-do-not-use-in-prod-32b",
         // 32-byte base64 for SECRETS_ENCRYPTION_KEY (all zeros — test only).
         "secrets.encryption-key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        // Sprint 50 Tier 1-C: Redis autoconfig hard-fails on the empty default
+        // host. Integration tests that don't need Redis stay clean by excluding
+        // it here. Subclasses that DO need Redis (IdempotencyIntegrationTest)
+        // override this to an empty string via their own @TestPropertySource
+        // so autoconfig runs against the container-provided host/port.
+        "spring.autoconfigure.exclude=org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration,org.springframework.boot.data.redis.autoconfigure.DataRedisRepositoriesAutoConfiguration",
+        // Sprint 50 Tier 1-C: prod pool size (50) × N cached test contexts
+        // overwhelms Testcontainers Postgres' default max_connections (100)
+        // and integration tests start failing with "too many clients already."
+        // 5 is comfortable for a single-test suite while still letting the
+        // pool exercise its own logic.
+        "spring.datasource.hikari.maximum-pool-size=5",
 })
 public abstract class AbstractIntegrationTest {
 

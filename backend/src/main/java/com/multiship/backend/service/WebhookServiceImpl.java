@@ -61,6 +61,14 @@ public class WebhookServiceImpl implements WebhookService {
      * without a tracking cache still work.
      */
     private final org.springframework.beans.factory.ObjectProvider<TrackingService> trackingServiceProvider;
+    /**
+     * Sprint 50 Tier 1 finding #9 — bounded executor for the state-mutation
+     * branch of receive(). Sync path (parse + verify + persist audit) stays
+     * on the Tomcat thread so the controller can respond immediately; the
+     * heavy tail (order lookup + save + cache invalidation) runs here so
+     * high-rate carrier bursts don't starve Tomcat's thread pool.
+     */
+    private final org.springframework.core.task.TaskExecutor webhookExecutor;
 
     @Override
     public CarrierWebhookEvent receive(String carrierCode, String rawPayload,
@@ -142,8 +150,37 @@ public class WebhookServiceImpl implements WebhookService {
         //
         // Sprint 49 Tier 0: `mutateState` (not raw `sigOk`) drives this — the
         // unsigned-opt-in path is intentionally audit-only.
+        //
+        // Sprint 50 Tier 1 finding #9: the heavy tail (per-piece bump,
+        // master lookup, save, cache invalidation) now runs on
+        // webhookExecutor. Sync path returns the saved audit row to the
+        // controller immediately; state advances a few ms later on a
+        // worker thread. CallerRunsPolicy on the executor pushes back on
+        // the carrier under sustained overload.
         if (mutateState && StringUtils.hasText(event.trackingNumber())) {
-            String eventTracking = event.trackingNumber();
+            final String eventTracking = event.trackingNumber();
+            final String eventDescription = event.description();
+            webhookExecutor.execute(() ->
+                    mutateStateForVerifiedEvent(eventTracking, eventDescription));
+        }
+        return saved;
+    }
+
+    // Sprint 50 Tier 1 finding #9 — deliberately NOT @Transactional. The two
+    // saves (label_packages, order_trackings) target different aggregate
+    // roots and a partial update is recoverable: any missed row is healed by
+    // the carrier's redelivery through Sprint 49 Tier 1's dedup. Adding a
+    // transaction here would need a separate proxy bean because the executor
+    // lambda bypasses this method's own proxy, and the cascade of extracting
+    // a WebhookStateMutator @Component wasn't worth the correctness win over
+    // the redelivery safety net.
+    /**
+     * Sprint 50 Tier 1 finding #9 — the async tail of {@link #receive}. Runs
+     * on {@code webhookExecutor}. Kept package-private for test override
+     * (a test can inject a SyncTaskExecutor + still cover this method).
+     */
+    void mutateStateForVerifiedEvent(String eventTracking, String eventDescription) {
+        try {
             // Per-piece resolution — the LabelPackage row for this exact box.
             labelPackageRepository.findByTrackingNumber(eventTracking).ifPresent(pkg -> {
                 // Bump the per-piece updated_at; status column TBD in a
@@ -163,8 +200,8 @@ public class WebhookServiceImpl implements WebhookService {
             }
             if (tracking.isPresent()) {
                 OrderTracking t = tracking.get();
-                if (StringUtils.hasText(event.description())) {
-                    t.setStatus(event.description());
+                if (StringUtils.hasText(eventDescription)) {
+                    t.setStatus(eventDescription);
                 }
                 t.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
                 orderTrackingRepository.save(t);
@@ -176,9 +213,15 @@ public class WebhookServiceImpl implements WebhookService {
             if (trackingService != null) {
                 trackingService.invalidate(eventTracking);
             }
+        } catch (Exception ex) {
+            // Sprint 50 Tier 1 finding #9 — the async worker never rethrows.
+            // The carrier already got a 200 for this event; a downstream save
+            // failure is only ever ops-visible via this WARN. Re-delivery
+            // dedup (Sprint 49 Tier 1) means the carrier's retry heals the
+            // missed state advance without us needing durable retries here.
+            log.warn("Webhook async state-mutation failed for tracking={}: {}",
+                    eventTracking, ex.getMessage());
         }
-
-        return saved;
     }
 
     /**

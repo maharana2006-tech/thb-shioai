@@ -169,6 +169,12 @@ public enum ErrorCode {
     // ===== Split-shipment groups (Sprint 47) =====
     SHIPMENT_GROUP_NOT_FOUND,
 
+    // ===== Sprint 50 Tier 1-C — idempotency store =====
+    /** Another request with this Idempotency-Key is still processing; retry after a few seconds. */
+    IDEMPOTENCY_IN_PROGRESS,
+    /** The idempotency store (Redis) is unavailable; retry after Retry-After header. Only returned on money-touching endpoints where fail-open would risk duplicates. */
+    IDEMPOTENCY_UNAVAILABLE,
+
     // ===== Fallback =====
     INTERNAL_ERROR
 }

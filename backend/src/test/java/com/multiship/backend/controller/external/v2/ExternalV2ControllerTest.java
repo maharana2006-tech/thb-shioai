@@ -14,9 +14,13 @@ import com.multiship.backend.service.LandedCostService;
 import com.multiship.backend.service.ManifestService;
 import com.multiship.backend.service.PickupService;
 import com.multiship.backend.service.RateShopService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multiship.backend.service.external.ExternalApiService;
+import com.multiship.backend.service.external.IdempotencyService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.Set;
 
@@ -42,14 +46,24 @@ class ExternalV2ControllerTest {
     private ExternalV2Controller controller;
 
     @BeforeEach
+    @SuppressWarnings("unchecked")
     void setUp() {
         rateShopService = mock(RateShopService.class);
         pickupService = mock(PickupService.class);
         manifestService = mock(ManifestService.class);
         landedCostService = mock(LandedCostService.class);
+        // Sprint 50 Tier 1 finding #7 — IdempotencyService requires a
+        // StringRedisTemplate provider + ObjectMapper. All controller
+        // methods in this test invoke the endpoint with idempotencyKey=null,
+        // so executeOrReplay short-circuits to handler.get() without ever
+        // touching Redis (that's the "not idempotent, pass through" branch).
+        ObjectProvider<StringRedisTemplate> redisProvider = mock(ObjectProvider.class);
+        when(redisProvider.getIfAvailable()).thenReturn(null);
+        IdempotencyService idempotency = new IdempotencyService(redisProvider, new ObjectMapper());
         controller = new ExternalV2Controller(
                 mock(ExternalApiService.class),
-                rateShopService, pickupService, manifestService, landedCostService);
+                rateShopService, pickupService, manifestService, landedCostService,
+                idempotency);
     }
 
     @Test
