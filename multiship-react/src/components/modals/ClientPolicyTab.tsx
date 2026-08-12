@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { notify } from '../../utils/notify'
-import { ApiError } from '../../api/apiClient'
 import {
   clientShippingPolicyService,
   type RateStrategy,
@@ -70,7 +69,7 @@ export default function ClientPolicyTab({ clientCode }: { clientCode: string }) 
       }
       setAllowedServices(allowedResp.data ?? [])
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to load shipping policy.')
+      notify.apiError(error, 'Failed to load shipping policy.')
     } finally {
       setLoading(false)
     }
@@ -107,11 +106,8 @@ export default function ClientPolicyTab({ clientCode }: { clientCode: string }) 
       notify.success(`Policy saved for ${clientCode}.`)
       await load()
     } catch (error) {
-      if (error instanceof ApiError && error.errorCode === 'POLICY_FIXED_SERVICE_REQUIRED') {
-        notify.error(error.message || 'Pick a fixed service on the client allowlist.')
-      } else {
-        notify.error(error instanceof Error ? error.message : 'Failed to save the policy.')
-      }
+      // POLICY_FIXED_SERVICE_REQUIRED is handled by the friendly-message map.
+      notify.apiError(error, 'Failed to save the policy.')
     } finally {
       setSaving(false)
     }

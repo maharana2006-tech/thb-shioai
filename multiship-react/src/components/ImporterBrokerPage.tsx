@@ -178,7 +178,7 @@ export default function ImporterBrokerPage() {
         setTotalPages(Math.max(r.data?.totalPages ?? 1, 1))
       })
       .catch((error) => {
-        if (!cancelled) notify.error(error instanceof Error ? error.message : 'Failed to load profiles.')
+        if (!cancelled) notify.apiError(error, 'Failed to load profiles.')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -247,7 +247,7 @@ export default function ImporterBrokerPage() {
       notify.success('Profile deleted.')
       refresh()
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to delete.')
+      notify.apiError(e, 'Failed to delete.')
     }
   }
 
@@ -255,7 +255,7 @@ export default function ImporterBrokerPage() {
     try {
       await customsProfileService.exportProfilesCsv(listParams)
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to export profiles.')
+      notify.apiError(error, 'Failed to export profiles.')
     }
   }
 

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { FiPlus, FiTrash2 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
-import { ApiError } from '../api/apiClient'
 import {
   clientCodeMapService,
   type ClientCodeMap,
@@ -110,7 +109,7 @@ export default function CodeMapsPage() {
       const r = await clientCodeMapService.list(selectedClient, tab)
       setRows(r.data ?? [])
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to load aliases.')
+      notify.apiError(error, 'Failed to load aliases.')
     } finally {
       setLoading(false)
     }
@@ -141,7 +140,7 @@ export default function CodeMapsPage() {
       setErpCode(''); setTargetId(''); setIso2('')
       await load()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to save alias.')
+      notify.apiError(error, 'Failed to save alias.')
     } finally {
       setSaving(false)
     }
@@ -156,8 +155,7 @@ export default function CodeMapsPage() {
       notify.success('Alias removed.')
       await load()
     } catch (error) {
-      if (error instanceof ApiError) notify.error(error.message)
-      else notify.error(error instanceof Error ? error.message : 'Failed to remove.')
+      notify.apiError(error, 'Failed to remove.')
     }
   }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import {
   FiAlertTriangle,
   FiCheck,
@@ -59,7 +60,7 @@ export default function ApiKeysPage() {
       const res = await apiKeyService.list()
       setKeys(Array.isArray(res.data) ? res.data : [])
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to load API keys.')
+      notify.apiError(e, 'Failed to load API keys.')
     } finally {
       setLoading(false)
     }
@@ -99,7 +100,7 @@ export default function ApiKeysPage() {
       setIssued(res.data ?? null)
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to issue the API key.')
+      notify.apiError(e, 'Failed to issue the API key.')
     } finally {
       setIssuing(false)
     }
@@ -125,7 +126,7 @@ export default function ApiKeysPage() {
       setRevoking(null)
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to revoke the API key.')
+      notify.apiError(e, 'Failed to revoke the API key.')
     } finally {
       setRevokeBusy(false)
     }

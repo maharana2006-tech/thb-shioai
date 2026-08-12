@@ -32,6 +32,21 @@ describe('errorMessages', () => {
     }
   })
 
+  it('exposes a friendly entry for pre-Sprint-50 codes lifted out of inline branches', () => {
+    // These codes existed before Sprint 50 but had bespoke messages inlined in
+    // components. During the PR J migration we moved them into the map so
+    // notify.apiError picks them up uniformly.
+    const migratedCodes = [
+      'CLIENT_HAS_ORDERS',
+      'ALLOWLIST_ALREADY_EXISTS',
+      'POLICY_FIXED_SERVICE_REQUIRED',
+    ]
+    for (const code of migratedCodes) {
+      expect(errorMessages[code], `missing entry for ${code}`).toBeDefined()
+      expect(errorMessages[code].message.length).toBeGreaterThan(10)
+    }
+  })
+
   it('every entry has a non-empty message', () => {
     for (const [code, entry] of Object.entries(errorMessages)) {
       expect(entry.message.trim(), `empty message for ${code}`).not.toEqual('')

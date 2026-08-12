@@ -102,7 +102,7 @@ export default function LabelTemplateLayoutBuilder({
       const html = await previewTemplateHtml(layoutJson)
       setPreviewHtml(html)
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Preview failed.')
+      notify.apiError(error, 'Preview failed.')
     } finally {
       setPreviewLoading(false)
     }

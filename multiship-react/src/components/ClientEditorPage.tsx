@@ -413,7 +413,7 @@ export default function ClientEditorPage() {
       }
       setPickWarehouses(merged)
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to load warehouses.')
+      notify.apiError(error, 'Failed to load warehouses.')
     } finally {
       setPickWarehousesLoading(false)
     }
@@ -527,7 +527,7 @@ export default function ClientEditorPage() {
       })
       .catch((err: unknown) => {
         if (cancelled) return
-        notify.error(err instanceof Error ? err.message : 'Failed to load client.')
+        notify.apiError(err, 'Failed to load client.')
         navigate('/settings/clients')
       })
       .finally(() => {
@@ -1014,10 +1014,12 @@ export default function ClientEditorPage() {
         state: { advanceTo: 'carriers' },
       })
     } catch (error) {
+      // CLIENT_CODE_TAKEN needs the caller-typed code interpolated, so it
+      // stays inline. Everything else flows through the friendly-message map.
       if (error instanceof ApiError && error.errorCode === 'CLIENT_CODE_TAKEN') {
         notify.error(`Client code ${form.clientCode.toUpperCase()} is already registered.`)
       } else {
-        notify.error(error instanceof Error ? error.message : 'Failed to save the client.')
+        notify.apiError(error, 'Failed to save the client.')
       }
     } finally {
       setSaving(false)
@@ -1087,7 +1089,7 @@ export default function ClientEditorPage() {
       }
       notify.success(`Client ${response.data.clientCode} updated.`)
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to save the client.')
+      notify.apiError(error, 'Failed to save the client.')
     } finally {
       setSaving(false)
     }
@@ -2801,7 +2803,7 @@ function ImporterBrokerStep({
       const list = await customsProfileService.list(clientCode)
       setProfiles(list)
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to load importer / broker profiles.')
+      notify.apiError(error, 'Failed to load importer / broker profiles.')
     } finally {
       setLoading(false)
     }
@@ -2825,7 +2827,7 @@ function ImporterBrokerStep({
       notify.success('Profile removed.')
       await refresh()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to remove the profile.')
+      notify.apiError(error, 'Failed to remove the profile.')
     }
   }
 

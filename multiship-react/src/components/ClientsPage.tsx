@@ -16,7 +16,6 @@ import {
   FiX,
 } from 'react-icons/fi'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
-import { ApiError } from '../api/apiClient'
 import { clientService, type Client } from '../api/clientService'
 import { formatCarrierName } from '../utils/carrierUtils'
 import { countryName } from '../utils/countries'
@@ -118,7 +117,7 @@ export default function ClientsPage() {
         setTotalPages(Math.max(r.data?.totalPages ?? 1, 1))
       })
       .catch((error) => {
-        if (!cancelled) notify.error(error instanceof Error ? error.message : 'Failed to load clients.')
+        if (!cancelled) notify.apiError(error, 'Failed to load clients.')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -175,7 +174,7 @@ export default function ClientsPage() {
         })
         if (!ok) return
       } catch (error) {
-        notify.error(error instanceof Error ? error.message : 'Failed to preview the cascade.')
+        notify.apiError(error, 'Failed to preview the cascade.')
         return
       }
     }
@@ -186,12 +185,9 @@ export default function ClientsPage() {
       notify.success(`${client.clientCode} is now ${r.data.status}.`)
       refresh()
     } catch (error) {
-      if (error instanceof ApiError && error.errorCode === 'CLIENT_HAS_ORDERS') {
-        // Race: someone created a pending order between preview and toggle.
-        notify.error(error.message)
-      } else {
-        notify.error(error instanceof Error ? error.message : 'Failed to update the client status.')
-      }
+      // CLIENT_HAS_ORDERS (race: someone created a pending order between
+      // preview and toggle) is handled by the friendly-message map.
+      notify.apiError(error, 'Failed to update the client status.')
     } finally {
       setBusyId(null)
     }
@@ -207,11 +203,8 @@ export default function ClientsPage() {
       notify.success(`Client ${client.clientCode} deleted.`)
       refresh()
     } catch (error) {
-      if (error instanceof ApiError && error.errorCode === 'CLIENT_HAS_ORDERS') {
-        notify.error(`${client.clientCode} has orders and cannot be deleted — deactivate it instead.`)
-      } else {
-        notify.error(error instanceof Error ? error.message : 'Failed to delete the client.')
-      }
+      // CLIENT_HAS_ORDERS is handled by the friendly-message map.
+      notify.apiError(error, 'Failed to delete the client.')
     }
   }
 
@@ -229,7 +222,7 @@ export default function ClientsPage() {
         sortDirection,
       })
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to export clients.')
+      notify.apiError(error, 'Failed to export clients.')
     }
   }
 
