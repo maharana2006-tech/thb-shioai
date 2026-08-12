@@ -8,12 +8,15 @@
  *   notify.error('Failed to save.')
  *   notify.info('Nothing to sync.')
  *   if (await notify.confirm('Remove this P80 mapping?')) { ... }
+ *   catch (err) { notify.apiError(err) }
  *
  * A single <NotifyHost /> mounted at the app root renders one modal at a time
  * (FIFO queue). Each call returns a Promise that resolves when the user
  * dismisses the modal; `notify.confirm` resolves to true/false, everything
  * else to void.
  */
+
+import { getFriendlyError } from './errorMessages'
 
 export type NotifyType = 'success' | 'error' | 'info' | 'confirm'
 
@@ -81,6 +84,29 @@ export const notify = {
   error(opts: OptionsOrString): Promise<void> {
     return new Promise<void>((resolve) => {
       push({ type: 'error', ...normalize(opts), _resolve: () => resolve() })
+    })
+  },
+  /**
+   * Sprint 50 PR J — one-shot error handler for ApiClient rejections.
+   *
+   * Every catch block that used to inline `if (error instanceof ApiError && error.errorCode === ...)`
+   * can now just call `notify.apiError(error)` and get uniform friendly-message
+   * lookup + fallback. Unknown codes fall through to the raw server message,
+   * which was the pre-fix behavior — so this is strictly an upgrade.
+   *
+   *   catch (err) { notify.apiError(err) }
+   *   catch (err) { notify.apiError(err, 'Failed to save shipping policy.') }
+   */
+  apiError(err: unknown, fallback?: string): Promise<void> {
+    const anyErr = err as { errorCode?: string | null; message?: string | null }
+    const friendly = getFriendlyError(anyErr?.errorCode, anyErr?.message, fallback)
+    return new Promise<void>((resolve) => {
+      push({
+        type: 'error',
+        title: friendly.title,
+        body: friendly.message,
+        _resolve: () => resolve(),
+      })
     })
   },
   info(opts: OptionsOrString): Promise<void> {
