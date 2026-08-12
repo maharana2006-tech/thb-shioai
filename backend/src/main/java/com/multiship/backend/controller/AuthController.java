@@ -14,14 +14,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+// Sprint 50 PR N post-audit finding #18 — class-level @CrossOrigin removed.
+// Sprint 49 Tier 1 removed @CrossOrigin from every other controller and
+// centralised CORS in SecurityConfig.corsConfigurationSource(). AuthController
+// was the last hold-out; the annotation silently overrode the global config
+// on /auth/**, so a future edit to global CORS (adding a header, tightening
+// an origin) wouldn't have applied here. Global config now governs.
 @Tag(name = "Auth", description = "Login, signup, logout, invite accept, email verify — the only endpoints that work without a token")
 @RestController
 @RequestMapping("/api/v1/auth")
-@CrossOrigin(originPatterns = {
-        "http://localhost:*",
-        "http://127.0.0.1:*",
-        "http://[::1]:*"
-})
 public class AuthController {
 
     @Autowired

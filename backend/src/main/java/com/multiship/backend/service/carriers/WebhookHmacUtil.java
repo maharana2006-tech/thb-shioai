@@ -1,10 +1,13 @@
 package com.multiship.backend.service.carriers;
 
+import lombok.extern.slf4j.Slf4j;
+
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Shared HMAC-SHA256 utilities for Sprint 36 webhook signature
@@ -12,9 +15,16 @@ import java.util.HexFormat;
  * using a secret we registered — same algorithm, different header + hex
  * encoding + case conventions.
  */
+@Slf4j
 public final class WebhookHmacUtil {
 
     private WebhookHmacUtil() {}
+
+    /** Sprint 50 PR N post-audit #14 — log HMAC init failures once so
+     *  a misconfigured JVM/policy (which strips HmacSHA256) doesn't
+     *  silently reject every webhook. Fail-closed behaviour is correct
+     *  but silence hides the ops-actionable root cause. */
+    private static final AtomicBoolean loggedInitFailure = new AtomicBoolean(false);
 
     /**
      * Compute the lowercase hex HMAC-SHA256 of {@code body} using
@@ -29,6 +39,14 @@ public final class WebhookHmacUtil {
             byte[] digest = mac.doFinal(body.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest);
         } catch (Exception ex) {
+            // Sprint 50 PR N post-audit #14 — one-shot WARN on first failure.
+            // Subsequent failures stay silent to avoid flooding the log if
+            // the misconfiguration persists.
+            if (loggedInitFailure.compareAndSet(false, true)) {
+                log.warn("WebhookHmacUtil: HmacSHA256 init failed — every webhook "
+                        + "signature verification will fail-closed. Check the JVM's "
+                        + "crypto provider policy. Error: {}", ex.getMessage());
+            }
             return null;
         }
     }
