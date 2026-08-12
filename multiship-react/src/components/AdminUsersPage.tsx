@@ -38,8 +38,8 @@ export default function AdminUsersPage() {
         }),
         adminUserService.recentAudit(50),
       ])
-      setUsers(userRes.data.data ?? [])
-      setAudit(auditRes.data.data ?? [])
+      setUsers(userRes.data ?? [])
+      setAudit(auditRes.data ?? [])
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to load users.')
     } finally {
@@ -55,7 +55,7 @@ export default function AdminUsersPage() {
     void clientService
       .listClients({ page: 0, size: 500 })
       .then((res) => {
-        const codes = (res.data.data?.content ?? []).map((c) => c.clientCode)
+        const codes = (res.data?.content ?? []).map((c) => c.clientCode)
         setClientOptions(codes)
       })
       .catch(() => setClientOptions([]))
@@ -274,7 +274,7 @@ function UserAuditDrawer({
     let cancelled = false
     adminUserService
       .userAudit(user.id)
-      .then((res) => { if (!cancelled) setEntries(res.data.data ?? []) })
+      .then((res) => { if (!cancelled) setEntries(res.data ?? []) })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load audit.') })
     return () => { cancelled = true }
   }, [user.id])

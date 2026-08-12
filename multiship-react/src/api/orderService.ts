@@ -106,6 +106,20 @@ export interface OrderLine {
 }
 
 /** Backend OrderWithLinesDTO (flat order shape used by /orders/{orderNo}/details). */
+/** Per-package row persisted alongside a multi-package shipment. Backend
+ *  attaches this list to /orders/{orderNo}/label so the label renderer can
+ *  print the correct per-box tracking number, weight, and dimensions. */
+export interface OrderPackage {
+  sequenceNumber?: number | null
+  trackingNumber?: string | null
+  weight?: number | null
+  weightUnit?: string | null
+  length?: number | null
+  width?: number | null
+  height?: number | null
+  dimUnit?: string | null
+}
+
 export interface OrderWithLines {
   orderNo: number
   orderSuffix: number | null
@@ -122,9 +136,15 @@ export interface OrderWithLines {
   shipviaCd: string | null
   tenantId: string | null
   weight: number | null
+  /** LB | KG — unit for the top-level `weight` field. Falls back per label renderer. */
+  weightUnit?: string | null
   goodsDesc: string | null
   createdDate: string | null
   orderLines: OrderLine[]
+  /** Sprint 29 — multi-package count column on the order (1 for legacy single-box). */
+  packageCount?: number | null
+  /** Sprint 29 — per-package rows (tracking / weight / dims) when this is a multi-package shipment. */
+  packages?: OrderPackage[] | null
 }
 
 /** Configured ship-from address exposed by /orders/{orderNo}/label. */

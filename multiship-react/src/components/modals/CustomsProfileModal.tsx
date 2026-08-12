@@ -312,7 +312,7 @@ export default function CustomsProfileModal({
     const spec = territory ? taxIdentityFor(territory) : null
     if (spec) {
       for (const f of spec.fields) {
-        out[f.column] = opt((form as Record<string, unknown>)[f.column], 40, f.label)
+        out[f.column] = opt((form as unknown as Record<string, unknown>)[f.column], 40, f.label)
       }
     }
     return out

@@ -2,7 +2,7 @@ import { type ReactElement } from 'react'
 import { render, type RenderOptions } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { BrowserRouter } from 'react-router-dom'
-import { configureStore, type Reducer } from '@reduxjs/toolkit'
+import { combineReducers, configureStore } from '@reduxjs/toolkit'
 import carrierReducer from '../store/carrierSlice'
 import orderReducer from '../store/orderSlice'
 
@@ -24,11 +24,12 @@ export function renderWithProviders(
     ...renderOptions
   }: { preloadedState?: Record<string, unknown> } & Omit<RenderOptions, 'wrapper'> = {},
 ) {
+  const rootReducer = combineReducers({
+    carriers: carrierReducer,
+    orders: orderReducer,
+  })
   const store = configureStore({
-    reducer: {
-      carriers: carrierReducer as Reducer,
-      orders: orderReducer as Reducer,
-    },
+    reducer: rootReducer,
     preloadedState: preloadedState as never,
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({ serializableCheck: false }),

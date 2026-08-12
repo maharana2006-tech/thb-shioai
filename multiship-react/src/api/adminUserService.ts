@@ -5,6 +5,17 @@ import type { ApiResponse } from './orderService'
  * Sprint 50 Tier 0.5 PR E — /settings/users page bindings. ADMIN-only.
  */
 
+/** Build a `?k=v&…` suffix from a params object, skipping null/undefined/empty. */
+function toQueryString(params: object): string {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v === null || v === undefined || v === '') continue
+    qs.set(k, String(v))
+  }
+  const s = qs.toString()
+  return s ? `?${s}` : ''
+}
+
 export interface AdminUser {
   id: number
   username: string
@@ -44,7 +55,7 @@ export interface AdminUserListParams {
 
 export const adminUserService = {
   list: (params: AdminUserListParams = {}) =>
-    apiClient.get<ApiResponse<AdminUser[]>>('/admin/users', { params }),
+    apiClient.get<ApiResponse<AdminUser[]>>(`/admin/users${toQueryString(params)}`),
 
   assignClient: (id: number, payload: AdminUserAssignClientPayload) =>
     apiClient.patch<ApiResponse<AdminUser>>(`/admin/users/${id}/client`, payload),
@@ -56,7 +67,7 @@ export const adminUserService = {
     apiClient.post<ApiResponse<AdminUser>>(`/admin/users/${id}/reactivate`, { reason: reason ?? null }),
 
   recentAudit: (limit = 50) =>
-    apiClient.get<ApiResponse<AdminUserAudit[]>>('/admin/users/audit', { params: { limit } }),
+    apiClient.get<ApiResponse<AdminUserAudit[]>>(`/admin/users/audit${toQueryString({ limit })}`),
 
   userAudit: (id: number) =>
     apiClient.get<ApiResponse<AdminUserAudit[]>>(`/admin/users/${id}/audit`),

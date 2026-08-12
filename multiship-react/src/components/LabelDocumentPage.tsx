@@ -289,7 +289,7 @@ export default function LabelDocumentPage() {
   // persistence — every downstream read falls back to the shipment-level
   // label + order fields.
   const perPkg = Array.isArray(order?.packages)
-    ? order.packages.find((p: { sequenceNumber?: number }) => p?.sequenceNumber === pkgIndex) ?? null
+    ? order.packages.find((p) => p?.sequenceNumber === pkgIndex) ?? null
     : null
   const trackingNumber = perPkg?.trackingNumber || label?.trackingNumber || null
   const generated = Boolean(label?.isGenerated && trackingNumber)
