@@ -58,6 +58,10 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      * bulk job containing an order from a foreign tenant. We check every
      * order in the request at submit time; any foreign hit rejects the
      * whole batch (fail-fast, per the existing invariant).
+     *
+     * <p>Sprint 50 Tier 1 finding #15 — also used at job start to derive
+     * the tenant key for {@link #fairExecutor} so one tenant's giant
+     * batch can't monopolise the fan-out pool.
      */
     private final OrderRepository orderRepository;
     private final TenantScopeEnforcer tenantScope;
@@ -70,6 +74,18 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 t.setDaemon(true);
                 return t;
             });
+
+    /**
+     * Sprint 50 Tier 1 finding #15 — per-tenant fair-share wrapper. Caps
+     * each tenant at {@value #MAX_PER_TENANT} concurrent labels so one
+     * tenant's giant batch can't drain the {@link #WORKER_CONCURRENCY}-slot
+     * pool while another tenant waits. 60s acquire timeout is a safety
+     * net; under normal load a permit frees in seconds.
+     */
+    private static final int MAX_PER_TENANT = 2;
+    private final com.multiship.backend.service.fairness.FairTenantExecutor fairExecutor =
+            new com.multiship.backend.service.fairness.FairTenantExecutor(
+                    fanOutExecutor, MAX_PER_TENANT, 60);
 
     /** Dispatch executor that lifts the job kick-off off the calling
      *  HTTP thread — otherwise the POST /bulk-labels response wouldn't
@@ -163,12 +179,19 @@ public class BulkLabelServiceImpl implements BulkLabelService {
              ZipOutputStream zip = new ZipOutputStream(zipBytes)) {
 
             // Submit every order to the fan-out pool. The pool size (4)
-            // bounds concurrency naturally; extra tasks queue.
+            // bounds total concurrency; the FairTenantExecutor caps each
+            // tenant at MAX_PER_TENANT so a giant batch from tenant A
+            // doesn't monopolise while tenant B's small batch waits.
             java.util.List<java.util.concurrent.Callable<OrderOutcome>> tasks = new java.util.ArrayList<>(orderNos.length);
             for (long orderNo : orderNos) {
                 tasks.add(() -> processOneOrder(orderNo));
             }
-            java.util.List<java.util.concurrent.Future<OrderOutcome>> futures = fanOutExecutor.invokeAll(tasks);
+            // Sprint 50 Tier 1 finding #15 — derive tenant key from the
+            // first order's tenantId/custNo. Cheap lookup, avoids a schema
+            // change on BulkLabelJob. Falls back to requestedBy when the
+            // order can't be found (unusual — the batch would fail anyway).
+            String tenantKey = resolveTenantKey(orderNos, job.getRequestedBy());
+            java.util.List<java.util.concurrent.Future<OrderOutcome>> futures = fairExecutor.submitAll(tenantKey, tasks);
 
             // Aggregate in input order so the ZIP is stable + failure messages
             // read in the order the caller submitted.
@@ -225,6 +248,23 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             job.setCompletedAt(LocalDateTime.now(ZoneOffset.UTC));
             jobRepository.save(job);
         }
+    }
+
+    /**
+     * Sprint 50 Tier 1 finding #15 — resolve a batch's tenant key for
+     * fair-share accounting. Uses the first order's tenantId (fall back
+     * to custNo, then requestedBy). Blank/null return means "no tenant
+     * scoping" — FairTenantExecutor short-circuits to plain invokeAll.
+     */
+    private String resolveTenantKey(long[] orderNos, String requestedBy) {
+        if (orderRepository == null || orderNos.length == 0) return requestedBy;
+        return orderRepository.findByOrderNo((int) orderNos[0])
+                .map(o -> {
+                    if (o.getTenantId() != null && !o.getTenantId().isBlank()) return o.getTenantId();
+                    if (o.getCustNo() != null && !o.getCustNo().isBlank()) return o.getCustNo();
+                    return requestedBy;
+                })
+                .orElse(requestedBy);
     }
 
     /**

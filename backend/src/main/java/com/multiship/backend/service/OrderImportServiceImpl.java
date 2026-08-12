@@ -152,12 +152,22 @@ public class OrderImportServiceImpl implements OrderImportService {
      * matches BulkLabelServiceImpl's WORKER_CONCURRENCY convention.
      */
     private static final int IMPORT_COMMIT_CONCURRENCY = 4;
+    private static final int IMPORT_MAX_PER_TENANT = 2;
     private final ExecutorService fanOutExecutor = Executors.newFixedThreadPool(
             IMPORT_COMMIT_CONCURRENCY, r -> {
                 Thread t = new Thread(r, "order-import-commit");
                 t.setDaemon(true);
                 return t;
             });
+
+    /**
+     * Sprint 50 Tier 1 finding #15 — fair-share wrapper so one tenant's
+     * 500-row import can't monopolise the {@value #IMPORT_COMMIT_CONCURRENCY}-slot
+     * pool while another tenant's 10-row import waits.
+     */
+    private final com.multiship.backend.service.fairness.FairTenantExecutor fairExecutor =
+            new com.multiship.backend.service.fairness.FairTenantExecutor(
+                    fanOutExecutor, IMPORT_MAX_PER_TENANT, 60);
 
     @org.springframework.beans.factory.annotation.Autowired
     public OrderImportServiceImpl(CarrierService carrierService,
@@ -542,11 +552,21 @@ public class OrderImportServiceImpl implements OrderImportService {
             tasks.add(() -> processGroup(group, batchId));
         }
 
+        // Sprint 50 Tier 1 finding #15 — tenant key for fair-share. Groups
+        // in a single import file usually share a client; pick the first
+        // group's leader clientCode. Blank means "no fairness" which is
+        // fine for platform-owned imports.
+        String tenantKey = groups.values().stream()
+                .findFirst()
+                .filter(g -> !g.isEmpty())
+                .map(g -> g.get(0).getClientCode())
+                .orElse(requestedBy);
+
         int valid = 0;
         int invalid = 0;
         int generated = 0;
         try {
-            List<Future<GroupOutcome>> futures = fanOutExecutor.invokeAll(tasks);
+            List<Future<GroupOutcome>> futures = fairExecutor.submitAll(tenantKey, tasks);
             for (Future<GroupOutcome> f : futures) {
                 GroupOutcome outcome = f.get();
                 valid += outcome.valid;
