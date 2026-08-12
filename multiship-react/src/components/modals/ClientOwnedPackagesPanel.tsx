@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { FiEdit3, FiPlus, FiTrash2, FiX } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
-import { ApiError } from '../../api/apiClient'
 import {
   shippingConfigService,
   type PackagePreset,
@@ -32,7 +31,7 @@ export default function ClientOwnedPackagesPanel({ clientCode }: { clientCode: s
         && (p.ownerClientCode || '').toUpperCase() === clientCode.toUpperCase(),
       ))
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to load client packages.')
+      notify.apiError(error, 'Failed to load client packages.')
     } finally {
       setLoading(false)
     }
@@ -77,8 +76,7 @@ export default function ClientOwnedPackagesPanel({ clientCode }: { clientCode: s
       setEditing(null)
       await load()
     } catch (error) {
-      if (error instanceof ApiError) notify.error(error.message)
-      else notify.error(error instanceof Error ? error.message : 'Failed to save package.')
+      notify.apiError(error, 'Failed to save package.')
     } finally {
       setSaving(false)
     }
@@ -94,7 +92,7 @@ export default function ClientOwnedPackagesPanel({ clientCode }: { clientCode: s
       notify.success('Package deleted.')
       await load()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to delete package.')
+      notify.apiError(error, 'Failed to delete package.')
     }
   }
 

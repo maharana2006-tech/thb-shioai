@@ -112,7 +112,7 @@ export default function ShippingServicesPage() {
       // Usage is decorative — a fetch failure shouldn't break the catalog view.
       setAssignments(usageResp.data ?? [])
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to load the catalog.')
+      notify.apiError(e, 'Failed to load the catalog.')
     } finally {
       setLoading(false)
     }
@@ -175,7 +175,7 @@ export default function ShippingServicesPage() {
       }
       await load()
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to sync from the carrier.')
+      notify.apiError(e, 'Failed to sync from the carrier.')
     } finally {
       setSyncing(null)
     }
@@ -186,7 +186,7 @@ export default function ShippingServicesPage() {
     try {
       await shippingConfigService.setServiceEnabled(svc.id, !svc.enabled)
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to update the service.')
+      notify.apiError(e, 'Failed to update the service.')
       void load()
     }
   }
@@ -208,7 +208,7 @@ export default function ShippingServicesPage() {
       setPkgService(null)
       void load()
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to save packages.')
+      notify.apiError(e, 'Failed to save packages.')
     }
   }
 

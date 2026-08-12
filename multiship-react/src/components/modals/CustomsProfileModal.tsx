@@ -451,7 +451,7 @@ export default function CustomsProfileModal({
       onSaved?.()
       onClose()
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to save the profile.')
+      notify.apiError(e, 'Failed to save the profile.')
     } finally {
       setSaving(false)
     }
@@ -471,7 +471,7 @@ export default function CustomsProfileModal({
       onSaved?.()
       onClose()
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to delete the profile.')
+      notify.apiError(e, 'Failed to delete the profile.')
     } finally {
       setSaving(false)
     }

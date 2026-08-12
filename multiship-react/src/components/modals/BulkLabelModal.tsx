@@ -41,7 +41,7 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Bulk-label ZIP download failed.'
       setError(msg)
-      notify.error(msg)
+      notify.apiError(e, 'Bulk-label ZIP download failed.')
     } finally {
       setDownloading(false)
     }
@@ -67,7 +67,7 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Bulk-label submit failed.'
       setError(msg)
-      notify.error(msg)
+      notify.apiError(e, 'Bulk-label submit failed.')
     } finally {
       setSubmitting(false)
     }

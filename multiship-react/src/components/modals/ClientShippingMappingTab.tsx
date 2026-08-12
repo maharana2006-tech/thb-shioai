@@ -146,7 +146,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
       }
       setRuleIdToPresets(groupedPkg)
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to load mappings.')
+      notify.apiError(error, 'Failed to load mappings.')
     } finally {
       setLoading(false)
     }
@@ -328,7 +328,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
       closeAdd()
       void load()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to save the mapping.')
+      notify.apiError(error, 'Failed to save the mapping.')
     }
   }
 
@@ -353,7 +353,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
       setZoneFor(null)
       void load()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to update the zone.')
+      notify.apiError(error, 'Failed to update the zone.')
     }
   }
 
@@ -367,7 +367,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
       notify.success('Warehouses updated.')
       void load()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to update warehouses.')
+      notify.apiError(error, 'Failed to update warehouses.')
     }
   }
 
@@ -435,7 +435,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
       }
       void load()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to update the carrier service.')
+      notify.apiError(error, 'Failed to update the carrier service.')
     }
   }
 
@@ -450,7 +450,7 @@ export default function ClientShippingMappingTab({ clientCode }: { clientCode: s
       await shippingConfigService.deleteRule(rule.id)
       void load()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to remove the mapping.')
+      notify.apiError(error, 'Failed to remove the mapping.')
     }
   }
 

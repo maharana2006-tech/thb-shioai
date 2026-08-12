@@ -80,7 +80,7 @@ export default function FillCarrierDetailsModal({
       onClose()
       await onSaved()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to save the carrier account.')
+      notify.apiError(error, 'Failed to save the carrier account.')
     } finally {
       setSaving(false)
     }

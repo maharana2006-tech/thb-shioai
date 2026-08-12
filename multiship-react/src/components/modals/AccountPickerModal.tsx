@@ -57,7 +57,7 @@ export default function AccountPickerModal({
         setAccounts(own)
       })
       .catch((error) => {
-        notify.error(error instanceof Error ? error.message : 'Failed to load carrier accounts.')
+        notify.apiError(error, 'Failed to load carrier accounts.')
       })
       .finally(() => setLoading(false))
   }, [clientCode, carrierCode])

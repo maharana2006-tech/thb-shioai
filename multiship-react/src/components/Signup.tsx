@@ -9,14 +9,6 @@ import AuthLayout from './auth/AuthLayout'
 import { signupFormConfig } from '../validation/formik/signupFormConfig'
 import { signupValidationSchema, type SignupFormValues } from '../validation/yup/signupSchema'
 
-const getErrorMessage = (error: unknown) => {
-  if (error instanceof Error && error.message) {
-    return error.message
-  }
-
-  return 'Registration failed. Please check your inputs.'
-}
-
 export default function Signup() {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
@@ -46,7 +38,7 @@ export default function Signup() {
           navigate('/login')
         }, 1200)
       } catch (error) {
-        notify.error(getErrorMessage(error))
+        notify.apiError(error, 'Registration failed. Please check your inputs.')
       } finally {
         setLoading(false)
       }
