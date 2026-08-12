@@ -5,7 +5,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import jakarta.annotation.PostConstruct;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
 import lombok.RequiredArgsConstructor;
@@ -79,9 +78,14 @@ public class IdempotencyService {
     private static final Duration TTL = Duration.ofHours(24);
 
     /** TTL on the pending marker. Kept short so a crashed/never-completed
-     *  first request can't lock the key for the full 24h. 60s is a
-     *  comfortable ceiling for any single handler invocation. */
-    private static final Duration PENDING_TTL = Duration.ofSeconds(60);
+     *  first request can't lock the key for the full 24h. Sprint 50 PR K
+     *  raised this from 60s to 120s: with 60s, a winner crash between
+     *  SETNX and SET-main gave duplicate-charge risk once the marker
+     *  expired (retry #2 after 60s+ becomes the new winner and re-runs
+     *  the handler). 120s matches most gateway/client HTTP timeouts, so
+     *  a real crashed winner is beyond ANY reasonable retry window and
+     *  the app has visibility to alert on the stuck marker via metrics. */
+    private static final Duration PENDING_TTL = Duration.ofSeconds(120);
 
     /** Retry-After (seconds) surfaced when the service returns 409 or 503
      *  so clients back off before the pending marker or Redis outage
@@ -96,24 +100,21 @@ public class IdempotencyService {
     private static final String PENDING_SUFFIX = ":pending";
 
     private final ObjectProvider<StringRedisTemplate> redisProvider;
-    private final ObjectMapper objectMapper;
+    /** Sprint 50 PR K — private, purpose-built ObjectMapper with the
+     *  JavaTimeModule guaranteed registered. Prior code autowired
+     *  Spring Boot's shared mapper and tried to register the module on
+     *  it lazily at @PostConstruct time; that gave the illusion of
+     *  safety but broke in two ways: (a) if a starter mutated the shared
+     *  mapper AFTER our @PostConstruct, our module could be dropped;
+     *  (b) if some code path bypassed the shared mapper (autoconfig
+     *  order-of-init edge case), our safety net never fired. A private
+     *  mapper is 40 bytes and always right. */
+    private static final ObjectMapper INTERNAL_MAPPER = buildInternalMapper();
 
-    /**
-     * Sprint 50 Tier 1-C — the autowired ObjectMapper is Spring Boot's
-     * default, which should carry JavaTimeModule via
-     * spring-boot-starter-jackson. Belt-and-braces register anyway so a
-     * caller wiring a bare {@code new ObjectMapper()} in unit tests or a
-     * downstream config that overrides the Boot mapper still serialises
-     * {@code ApiResponse.timestamp} (LocalDateTime) correctly. Missing
-     * the module silently loses the mainKey write (the try/catch logs
-     * WARN), which breaks the second-call replay contract.
-     */
-    @PostConstruct
-    void ensureJavaTimeModule() {
-        if (objectMapper != null
-                && !objectMapper.getRegisteredModuleIds().contains(new JavaTimeModule().getTypeId())) {
-            objectMapper.registerModule(new JavaTimeModule());
-        }
+    private static ObjectMapper buildInternalMapper() {
+        ObjectMapper m = new ObjectMapper();
+        m.registerModule(new JavaTimeModule());
+        return m;
     }
 
     /**
@@ -234,9 +235,9 @@ public class IdempotencyService {
                 // via forEach so Jackson can serialize the plain map.
                 Map<String, List<String>> headers = new LinkedHashMap<>();
                 fresh.getHeaders().forEach(headers::put);
-                String bodyJson = objectMapper.writeValueAsString(fresh.getBody());
+                String bodyJson = INTERNAL_MAPPER.writeValueAsString(fresh.getBody());
                 int status = fresh.getStatusCode().value();
-                String stored = objectMapper.writeValueAsString(
+                String stored = INTERNAL_MAPPER.writeValueAsString(
                         new CachedResponse(status, bodyJson, headers));
                 redis.opsForValue().set(mainKey, stored, TTL);
             } catch (JsonProcessingException ex) {
@@ -286,8 +287,8 @@ public class IdempotencyService {
     private <T> ResponseEntity<T> replay(String cached, TypeReference<T> typeRef,
                                          String idempotencyKey, Long apiKeyId) {
         try {
-            CachedResponse hit = objectMapper.readValue(cached, CachedResponse.class);
-            T body = objectMapper.readValue(hit.bodyJson(), typeRef);
+            CachedResponse hit = INTERNAL_MAPPER.readValue(cached, CachedResponse.class);
+            T body = INTERNAL_MAPPER.readValue(hit.bodyJson(), typeRef);
             log.info("Idempotent replay for apiKey={} key={} → status={}",
                     apiKeyId, idempotencyKey, hit.status());
 

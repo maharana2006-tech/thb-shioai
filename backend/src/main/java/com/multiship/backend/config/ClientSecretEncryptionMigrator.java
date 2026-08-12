@@ -45,6 +45,19 @@ public class ClientSecretEncryptionMigrator implements CommandLineRunner {
     @PersistenceContext
     private EntityManager em;
 
+    // Sprint 50 PR K post-audit finding H4 — DEFERRED. The audit flagged
+    // that two instances booting concurrently could race on encryption of
+    // rows inserted mid-migration. The clean fix (Postgres advisory lock
+    // via pg_try_advisory_lock) needs the lock and the migration writes
+    // on the SAME connection to work — Hikari's pool doesn't guarantee
+    // that, so a naive @Transactional wrapper leaks the lock into other
+    // pool connections and breaks concurrent test runs. The correct fix
+    // is to extract migration into a separate @Component bean with a
+    // single @Transactional method that acquires pg_try_advisory_xact_lock
+    // and does all the encryption inline. That's a follow-up refactor;
+    // for single-instance deployments (the common case) the current code
+    // is safe. Multi-instance concurrent boot risk documented here.
+
     @Override
     public void run(String... args) {
         if (!crypto.isAvailable()) {
@@ -61,6 +74,7 @@ public class ClientSecretEncryptionMigrator implements CommandLineRunner {
                     carrierConfigCount, accountRefCount, userCount);
         }
     }
+
 
     @Transactional
     protected int migrateCarrierConfig() {

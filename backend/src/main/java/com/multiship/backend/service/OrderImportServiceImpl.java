@@ -164,10 +164,17 @@ public class OrderImportServiceImpl implements OrderImportService {
      * Sprint 50 Tier 1 finding #15 — fair-share wrapper so one tenant's
      * 500-row import can't monopolise the {@value #IMPORT_COMMIT_CONCURRENCY}-slot
      * pool while another tenant's 10-row import waits.
+     *
+     * <p>Sprint 50 PR K — commit() is called synchronously from the
+     * OrderImportController HTTP handler, so the caller thread IS a
+     * Tomcat worker. Bound the total time the HTTP thread can be blocked
+     * on permit acquire to 30s; on overflow the batch aborts with a
+     * TenantSaturatedException that the controller surfaces as 429.
      */
+    private static final long IMPORT_MAX_BATCH_WAIT_MS = 30_000L;
     private final com.multiship.backend.service.fairness.FairTenantExecutor fairExecutor =
             new com.multiship.backend.service.fairness.FairTenantExecutor(
-                    fanOutExecutor, IMPORT_MAX_PER_TENANT, 60);
+                    fanOutExecutor, IMPORT_MAX_PER_TENANT, 60, IMPORT_MAX_BATCH_WAIT_MS);
 
     @org.springframework.beans.factory.annotation.Autowired
     public OrderImportServiceImpl(CarrierService carrierService,
@@ -729,6 +736,19 @@ public class OrderImportServiceImpl implements OrderImportService {
                 invalid += outcome.invalid;
                 generated += outcome.generated;
             }
+        } catch (com.multiship.backend.service.fairness.FairTenantExecutor.TenantSaturatedException sat) {
+            // Sprint 50 PR K — tenant already has IMPORT_MAX_PER_TENANT batches
+            // in flight; refuse rather than pin an HTTP thread. Any already-
+            // submitted tasks complete on their own; caller retries the rest.
+            log.warn("Order import commit for tenant {} aborted: {} of {} groups submitted",
+                    tenantKey, sat.getSubmittedTasks(), sat.getTotalTasks());
+            return ApiResponse.<OrderImportPreviewDTO>builder()
+                    .status("error").code(HttpStatus.TOO_MANY_REQUESTS.value())
+                    .errorCode(ErrorCode.TENANT_RATE_LIMITED.name())
+                    .message("Too many concurrent import batches for this client. "
+                            + sat.getSubmittedTasks() + " of " + sat.getTotalTasks()
+                            + " groups accepted; retry the remainder in ~30s.")
+                    .build();
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             log.warn("Order import commit interrupted; partial results may be present.");

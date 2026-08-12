@@ -160,10 +160,40 @@ public class WebhookServiceImpl implements WebhookService {
         if (mutateState && StringUtils.hasText(event.trackingNumber())) {
             final String eventTracking = event.trackingNumber();
             final String eventDescription = event.description();
-            webhookExecutor.execute(() ->
-                    mutateStateForVerifiedEvent(eventTracking, eventDescription));
+            try {
+                webhookExecutor.execute(() ->
+                        mutateStateForVerifiedEvent(eventTracking, eventDescription));
+            } catch (java.util.concurrent.RejectedExecutionException rex) {
+                // Sprint 50 PR K — WebhookAsyncConfig is now AbortPolicy;
+                // executor saturation means the app is overloaded, so we
+                // acknowledge the audit save but signal the carrier to
+                // retry by returning a specific status. Sprint 49 Tier 1
+                // event-hash dedup makes the retry safe. Log to WARN so
+                // ops sees the pressure.
+                log.warn("Webhook async executor saturated for tracking={}; "
+                        + "audit row saved but state mutation deferred to carrier redelivery",
+                        eventTracking);
+                throw new WebhookProcessingOverloadedException(eventTracking);
+            }
         }
         return saved;
+    }
+
+    /**
+     * Sprint 50 PR K — signals the controller to return 503 so the carrier
+     * retries. Not a subclass of Exception on purpose (RuntimeException) so
+     * it bubbles through {@link #receive}'s callers without a checked-throws
+     * cascade. Field carries the tracking number so the controller can log
+     * a correlatable line.
+     */
+    public static class WebhookProcessingOverloadedException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        private final String trackingNumber;
+        WebhookProcessingOverloadedException(String trackingNumber) {
+            super("Webhook async executor saturated for tracking=" + trackingNumber);
+            this.trackingNumber = trackingNumber;
+        }
+        public String getTrackingNumber() { return trackingNumber; }
     }
 
     // Sprint 50 Tier 1 finding #9 — deliberately NOT @Transactional. The two
@@ -206,13 +236,6 @@ public class WebhookServiceImpl implements WebhookService {
                 t.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
                 orderTrackingRepository.save(t);
             }
-            // Sprint 50 Tier 1 finding #12 — evict the tracking cache so the
-            // next /orders/{id}/tracking/live re-fetches the fresh state from
-            // the carrier instead of serving the stale entry for up to 24h.
-            TrackingService trackingService = trackingServiceProvider.getIfAvailable();
-            if (trackingService != null) {
-                trackingService.invalidate(eventTracking);
-            }
         } catch (Exception ex) {
             // Sprint 50 Tier 1 finding #9 — the async worker never rethrows.
             // The carrier already got a 200 for this event; a downstream save
@@ -221,6 +244,22 @@ public class WebhookServiceImpl implements WebhookService {
             // missed state advance without us needing durable retries here.
             log.warn("Webhook async state-mutation failed for tracking={}: {}",
                     eventTracking, ex.getMessage());
+        } finally {
+            // Sprint 50 PR K — cache invalidation MUST run even when the
+            // save above throws. For terminal states (DELIVERED) many
+            // carriers don't redeliver, so a stale cache entry that would
+            // otherwise live 24h can cause the UI to keep showing "in
+            // transit" indefinitely. Move to finally so the tracking
+            // service always sees a fresh miss on next read.
+            try {
+                TrackingService trackingService = trackingServiceProvider.getIfAvailable();
+                if (trackingService != null) {
+                    trackingService.invalidate(eventTracking);
+                }
+            } catch (Exception ex) {
+                log.warn("Webhook cache-invalidate failed for tracking={}: {}",
+                        eventTracking, ex.getMessage());
+            }
         }
     }
 

@@ -43,11 +43,17 @@ public class WebhookAsyncConfig {
         exec.setQueueCapacity(500);
         exec.setThreadNamePrefix("webhook-proc-");
         exec.setDaemon(true);
-        // CallerRunsPolicy: when saturated, the calling Tomcat thread does
-        // the work synchronously — pushing back on the carrier so we
-        // don't just drop scans on the floor.
+        // Sprint 50 PR K — AbortPolicy: when the queue+in-flight exceeds
+        // 508 tasks, reject new submissions with RejectedExecutionException
+        // instead of running them on the Tomcat request thread. The prior
+        // CallerRunsPolicy defeated the async design under sustained load —
+        // 200 Tomcat threads got pinned as the queue drained. Callers of
+        // this executor MUST catch RejectedExecutionException and return
+        // 503 to the carrier; carriers retry, and Sprint 49 Tier 1's
+        // event-hash dedup ensures the eventual redelivery doesn't
+        // double-process.
         exec.setRejectedExecutionHandler(
-                new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
         // Graceful shutdown: with setDaemon(true) above, a JVM stop would
         // otherwise hard-kill any in-flight mutateStateForVerifiedEvent
         // mid-save and leave an OrderTracking row half-updated. The Sprint
