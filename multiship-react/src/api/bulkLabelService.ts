@@ -2,15 +2,17 @@ import { apiClient, BASE_URL } from './apiClient'
 import type { ApiResponse } from './orderService'
 
 /**
- * Fetch the ZIP with the current Bearer token and trigger a save via a
- * synthetic anchor click. Necessary because the endpoint is JWT-gated —
- * a plain <a href> download would 401 (browser navigations carry no
- * Authorization header). Mirrors the pattern in reportService.
+ * Fetch the ZIP with the auth cookie and trigger a save via a synthetic
+ * anchor click. Necessary because the endpoint is JWT-gated — a plain
+ * <a href> download would 401 without the same-origin cookie flow, and
+ * we need control of the response headers for the filename. Mirrors the
+ * pattern in reportService.
  */
 async function downloadZip(jobId: number, filename: string): Promise<void> {
-  const token = localStorage.getItem('multiship_token')
+  // Sprint 50 PR Q3 — cookie-mode auth. credentials:'include' sends the
+  // httpOnly JWT cookie; no manual Authorization header needed.
   const resp = await fetch(`${BASE_URL}/bulk-labels/${jobId}/download`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    credentials: 'include',
   })
   if (!resp.ok) throw new Error(`Download failed: HTTP ${resp.status}`)
   const blob = await resp.blob()

@@ -5,9 +5,14 @@ export interface LoginRequest {
   password: string
 }
 
+// Sprint 50 PR Q3 — cookie-mode auth: JWT lives in an httpOnly cookie
+// set by the backend, no longer in the response body. `token` is
+// declared optional because the backend field was retained (null-valued)
+// so old FE code doesn't crash on the missing key; new code must not
+// depend on it.
 export interface AuthResponse {
-  token: string
-  type: string; 
+  token?: string | null
+  type?: string
   username: string
   role: string
 }

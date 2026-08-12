@@ -315,12 +315,11 @@ public class AuthServiceImpl implements AuthService {
             String token = jwtService.generateToken(user.getUsername(), user.getRole(), user.getClientCode());
 
             // Sprint 50 PR Q1 — write the JWT as an httpOnly cookie so the SPA
-            // can't be XSS-exfiltrated. Body still carries `token` for one
-            // deploy cycle so unmigrated FE builds keep working; the follow-up
-            // frontend PR flips to cookie-only.
+            // can't be XSS-exfiltrated. PR Q3 dropped the transitional body
+            // `token` field; the SPA now reads it exclusively from the cookie.
             response.addHeader(HttpHeaders.SET_COOKIE,
                     authCookie(token, Duration.ofMillis(jwtExpirationMillis).toSeconds()).toString());
-            return ResponseEntity.ok(new AuthResponse(token, user.getUsername(), user.getRole()));
+            return ResponseEntity.ok(new AuthResponse(user.getUsername(), user.getRole()));
         }
 
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
