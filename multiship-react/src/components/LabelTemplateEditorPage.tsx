@@ -684,8 +684,6 @@ function TemplatePreview({ logo, color, header, footer, showItems, typeLabel }: 
 
 // ===== helpers =====
 
-const fieldLabel =
-  'mb-1.5 block font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-[#b6a684]'
 const fieldHint = 'mt-1.5 text-[10.5px] leading-4 text-[#b6a684]'
 
 /** Quick-pick brand colours for the primary-colour control (espresso + common). */

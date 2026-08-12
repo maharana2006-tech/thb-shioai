@@ -14,7 +14,6 @@ import { accountRefService, type CarrierAccountRef } from '../api/accountRefServ
 import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
 import { shippingConfigService, type ShippingServiceItem, type PackagePreset } from '../api/shippingConfigService'
-import { addressService } from '../api/addressService'
 import { addressValidationService, type AddressValidationResponse } from '../api/addressValidationService'
 import { recipientBookService, type SavedRecipient } from '../api/recipientBookService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
@@ -497,8 +496,6 @@ export default function NewShipmentPage() {
   const [recipientSearch, setRecipientSearch] = useState('')
   const [recipientSuggestions, setRecipientSuggestions] = useState<SavedRecipient[]>([])
   const [recipientDropdownOpen, setRecipientDropdownOpen] = useState(false)
-  const [savingRecipient, setSavingRecipient] = useState(false)
-  const [validating, setValidating] = useState(false)
 
   // AI-assist per-section busy flags + pre-ship review result.
   const [pkgBusy, setPkgBusy] = useState(false)
@@ -1012,22 +1009,6 @@ export default function NewShipmentPage() {
     setRecipientCheck(null)
   }, [recipient.addressLine1, recipient.city, recipient.state, recipient.postalCode, recipient.countryCode])
 
-  /** Validate the ship-to address against the platform's address checks. */
-  const validateRecipient = async () => {
-    setValidating(true)
-    try {
-      const res = await addressService.validate(recipient)
-      const d = res.data
-      setRecipientCheck({ valid: !!d?.valid, issues: d?.issues ?? [] })
-      if (d?.valid) notify.success('Recipient address looks valid.')
-      else notify.error('Recipient address has issues.')
-    } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Address validation failed.')
-    } finally {
-      setValidating(false)
-    }
-  }
-
   /**
    * Sprint 31 — validate the ship-to address against the SELECTED carrier's
    * own database (UPS AVS / FedEx AV / DHL address-validate / SWSIM
@@ -1112,43 +1093,6 @@ export default function NewShipmentPage() {
     setRecipientSuggestions([])
     setRecipientDropdownOpen(false)
     notify.success(`Loaded ${r.name} from the address book.`)
-  }
-
-  /**
-   * Save the current recipient to the address book. Idempotent —
-   * backend returns the existing row if it's a duplicate.
-   */
-  const saveCurrentRecipient = async () => {
-    if (!recipient.name?.trim() || !recipient.addressLine1?.trim()
-        || !recipient.city?.trim() || !recipient.postalCode?.trim()
-        || !recipient.countryCode?.trim()) {
-      notify.error('Fill name + address + city + postal code + country before saving.')
-      return
-    }
-    setSavingRecipient(true)
-    try {
-      const response = await recipientBookService.save({
-        ownerCustomerNo: clientCode || null,
-        name: recipient.name,
-        company: recipient.company ?? null,
-        phone: recipient.phone ?? null,
-        phoneCountryCode: recipient.phoneCountryCode ?? null,
-        email: recipient.email ?? null,
-        addressLine1: recipient.addressLine1,
-        addressLine2: recipient.addressLine2 ?? null,
-        addressLine3: recipient.addressLine3 ?? null,
-        city: recipient.city,
-        state: recipient.state ?? null,
-        postalCode: recipient.postalCode,
-        countryCode: recipient.countryCode,
-        residential: recipient.residential ?? null,
-      })
-      notify.success(response.message ?? 'Recipient saved.')
-    } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Save failed.')
-    } finally {
-      setSavingRecipient(false)
-    }
   }
 
   /** Apply the carrier's suggested address to the recipient block. */
