@@ -307,6 +307,153 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
     }
 
+    /* ---------------- Tier 2: dynamic reference validation ---------------- */
+
+    /** Carriers the platform can generate labels for. */
+    private static final java.util.Set<String> KNOWN_CARRIERS =
+            java.util.Set.of("UPS", "FEDEX", "USPS", "DHL");
+
+    /**
+     * Validate every code-bearing cell against the live reference data —
+     * clients, per-client warehouse attachments, carrier accounts, and the
+     * service/package catalogs. Rules are read fresh per call, so the
+     * checks track whatever is registered at upload time (nothing is
+     * hard-coded except the carrier set).
+     *
+     * <p>Severity follows the platform convention: a code that cannot
+     * resolve at commit time (unknown client / detached warehouse /
+     * unknown carrier) is an ERROR; a value the resolution cascade could
+     * still legitimately handle (unknown account number, uncataloged
+     * service or package code) is a WARNING.
+     */
+    void validateReferences(List<OrderImportRowDTO> rows) {
+        if (clientRepository == null || rows.isEmpty()) return;
+
+        // ---- one snapshot per call: batched lookups, no per-row queries ----
+        java.util.Set<String> activeClients = new java.util.HashSet<>();
+        java.util.Set<String> inactiveClients = new java.util.HashSet<>();
+        for (Client c : clientRepository.findAll()) {
+            String code = c.getClientCode() == null ? null : c.getClientCode().toUpperCase(Locale.ROOT);
+            if (code == null) continue;
+            if (c.isActive()) activeClients.add(code); else inactiveClients.add(code);
+        }
+        Map<Long, String> warehouseCodeById = new LinkedHashMap<>();
+        if (warehouseRepository != null) {
+            for (Warehouse w : warehouseRepository.findAll()) {
+                if (w.getCode() != null) warehouseCodeById.put(w.getId(), w.getCode().toUpperCase(Locale.ROOT));
+            }
+        }
+        // clientCode → set of attached warehouse codes
+        Map<String, java.util.Set<String>> attachedByClient = new LinkedHashMap<>();
+        if (clientWarehouseRepository != null) {
+            for (OrderImportRowDTO row : rows) {
+                String cc = row.getClientCode();
+                if (!StringUtils.hasText(cc)) continue;
+                String key = cc.toUpperCase(Locale.ROOT);
+                if (attachedByClient.containsKey(key)) continue;
+                java.util.Set<String> codes = new java.util.HashSet<>();
+                for (ClientWarehouse cw : clientWarehouseRepository
+                        .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(key)) {
+                    String code = warehouseCodeById.get(cw.getWarehouseId());
+                    if (code != null) codes.add(code);
+                }
+                attachedByClient.put(key, codes);
+            }
+        }
+        // carrier → set of known account numbers (uppercased)
+        Map<String, java.util.Set<String>> accountsByCarrier = new LinkedHashMap<>();
+        if (accountRefRepository != null) {
+            for (CarrierAccountRef ref : accountRefRepository.findAll()) {
+                if (ref.getCarrierCode() == null || ref.getAccountNumber() == null) continue;
+                accountsByCarrier
+                        .computeIfAbsent(ref.getCarrierCode().toUpperCase(Locale.ROOT), k -> new java.util.HashSet<>())
+                        .add(ref.getAccountNumber().trim().toUpperCase(Locale.ROOT));
+            }
+        }
+        // carrier → set of catalog service codes
+        Map<String, java.util.Set<String>> servicesByCarrier = new LinkedHashMap<>();
+        if (shippingServiceRepository != null) {
+            for (com.multiship.backend.model.ShippingService s
+                    : shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()) {
+                if (s.getCarrier() == null || s.getServiceCode() == null) continue;
+                servicesByCarrier
+                        .computeIfAbsent(s.getCarrier().toUpperCase(Locale.ROOT), k -> new java.util.HashSet<>())
+                        .add(s.getServiceCode().toUpperCase(Locale.ROOT));
+            }
+        }
+        // package codes/names known to the catalog (any carrier)
+        java.util.Set<String> knownPackages = new java.util.HashSet<>();
+        if (packagePresetRepository != null) {
+            for (com.multiship.backend.model.PackagePreset p
+                    : packagePresetRepository.findAllByOrderByIsDefaultDescNameAsc()) {
+                if (p.getName() != null) knownPackages.add(p.getName().toUpperCase(Locale.ROOT));
+                if (p.getCarrierPackageCode() != null && !p.getCarrierPackageCode().isBlank()) {
+                    knownPackages.add(p.getCarrierPackageCode().toUpperCase(Locale.ROOT));
+                }
+            }
+        }
+
+        // ---- per-row checks against the snapshot ----
+        for (OrderImportRowDTO row : rows) {
+            List<String> errors = new ArrayList<>(row.getErrors() == null ? List.of() : row.getErrors());
+            List<String> warnings = new ArrayList<>(row.getWarnings() == null ? List.of() : row.getWarnings());
+
+            String client = normalizeOrNull(row.getClientCode());
+            if (client != null) {
+                if (inactiveClients.contains(client)) {
+                    errors.add("clientCode " + client + " is deactivated");
+                } else if (!activeClients.contains(client)) {
+                    errors.add("clientCode " + client + " is not registered");
+                }
+            }
+
+            String warehouse = normalizeOrNull(row.getWarehouseCode());
+            if (warehouse != null && client != null && activeClients.contains(client)) {
+                java.util.Set<String> attached = attachedByClient.getOrDefault(client, java.util.Set.of());
+                if (!attached.contains(warehouse)) {
+                    errors.add("warehouseCode " + warehouse + " is not attached to client " + client);
+                }
+            }
+
+            String carrier = normalizeOrNull(row.getCarrierCode());
+            if (carrier != null && !KNOWN_CARRIERS.contains(carrier)) {
+                errors.add("carrierCode '" + carrier + "' is not supported (UPS, FEDEX, USPS, DHL)");
+            }
+
+            String account = normalizeOrNull(row.getAccountNumber());
+            boolean thirdParty = "THIRD_PARTY".equalsIgnoreCase(
+                    row.getBillTo() == null ? "" : row.getBillTo().trim());
+            if (account != null && carrier != null && KNOWN_CARRIERS.contains(carrier) && !thirdParty) {
+                java.util.Set<String> known = accountsByCarrier.getOrDefault(carrier, java.util.Set.of());
+                if (!known.contains(account)) {
+                    warnings.add("accountNumber " + account + " is not a registered "
+                            + carrier + " account; the default account cascade may override it");
+                }
+            }
+
+            String service = normalizeOrNull(row.getServiceType());
+            if (service != null && carrier != null && KNOWN_CARRIERS.contains(carrier)) {
+                java.util.Set<String> known = servicesByCarrier.getOrDefault(carrier, java.util.Set.of());
+                if (!known.isEmpty() && !known.contains(service)) {
+                    warnings.add("serviceType '" + service + "' is not in the " + carrier
+                            + " service catalog; the carrier may reject it");
+                }
+            }
+
+            String pkg = normalizeOrNull(row.getPackageType());
+            if (pkg != null && !knownPackages.isEmpty() && !knownPackages.contains(pkg)) {
+                warnings.add("packageType '" + pkg + "' is not a registered package preset");
+            }
+
+            row.setErrors(errors);
+            row.setWarnings(warnings);
+        }
+    }
+
+    private static String normalizeOrNull(String v) {
+        return StringUtils.hasText(v) ? v.trim().toUpperCase(Locale.ROOT) : null;
+    }
+
     /** Heuristic — treat a value as a display name when it contains a
      *  space or a lowercase letter. Wire codes are UPPER + digits by
      *  convention across UPS / FedEx / DHL. */
@@ -354,6 +501,9 @@ public class OrderImportServiceImpl implements OrderImportService {
             // wire codes ("03") on service / package cells. The universal
             // template writes names; every carrier connector expects codes.
             resolveNamesToCodes(rows);
+            // Dynamic rule validation — codes checked against the live
+            // client / warehouse / account / catalog tables.
+            validateReferences(rows);
             // Sprint 48 — international shipments must carry customs
             // commodity data on at least one row in the group.
             validateInternationalItems(rows);
@@ -411,6 +561,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             row.setWarnings(List.of()); // clear warnings; will be re-added by validators below
         }
         resolveNamesToCodes(rows);
+        validateReferences(rows);
         validateInternationalItems(rows);
         return success(buildPreview(rows), rows.size() + " row(s) validated.");
     }
@@ -515,6 +666,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         // ("UPS Ground") still resolves to the wire code before the
         // carrier connector sees it.
         resolveNamesToCodes(rows);
+        // Final server-side gate for the dynamic reference checks — start
+        // from a clean slate (rows round-trip stale preview errors) so the
+        // merge below sees only current failures.
+        for (OrderImportRowDTO row : rows) row.setErrors(List.of());
+        validateReferences(rows);
         // Same for the international-item rule — operator edits could
         // have introduced a new international row without customs data.
         validateInternationalItems(rows);
@@ -1216,7 +1372,13 @@ public class OrderImportServiceImpl implements OrderImportService {
         out.setAccountNumber(s.read("accountNumber"));
         out.setServiceType(s.read("serviceType"));
         out.setPackageType(s.read("packageType"));
-        out.setWeight(parseDecimal(s.read("weight")));
+        // Capture the raw numeric strings so an unparseable value ("2 lbs",
+        // "abc") surfaces as an explicit row error instead of silently
+        // becoming null and tripping a misleading "is required" later.
+        String rawWeight = s.read("weight");
+        String rawQty = s.read("itemQuantity");
+        String rawUnitValue = s.read("itemUnitValue");
+        out.setWeight(parseDecimal(rawWeight));
         out.setWeightUnit(upper(s.read("weightUnit")));
         out.setCurrency(upper(s.read("currency")));
         out.setReference(s.read("reference"));
@@ -1225,11 +1387,21 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Sprint 48 — per-item customs data.
         out.setItemDescription(s.read("itemDescription"));
         out.setItemSku(s.read("itemSku"));
-        out.setItemQuantity(parseInt(s.read("itemQuantity")));
-        out.setItemUnitValue(parseDecimal(s.read("itemUnitValue")));
+        out.setItemQuantity(parseInt(rawQty));
+        out.setItemUnitValue(parseDecimal(rawUnitValue));
         out.setHsCode(s.read("hsCode"));
         out.setCountryOfOrigin(upper(s.read("countryOfOrigin")));
-        out.setErrors(validateRow(out));
+        List<String> errors = new ArrayList<>(validateRow(out));
+        if (StringUtils.hasText(rawWeight) && out.getWeight() == null) {
+            errors.add("weight '" + rawWeight + "' is not a number");
+        }
+        if (StringUtils.hasText(rawQty) && out.getItemQuantity() == null) {
+            errors.add("itemQuantity '" + rawQty + "' is not a whole number");
+        }
+        if (StringUtils.hasText(rawUnitValue) && out.getItemUnitValue() == null) {
+            errors.add("itemUnitValue '" + rawUnitValue + "' is not a number");
+        }
+        out.setErrors(errors);
         return out;
     }
 
@@ -1263,6 +1435,45 @@ public class OrderImportServiceImpl implements OrderImportService {
         catch (NumberFormatException ex) { return null; }
     }
 
+    /* ------------------- Tier 1: field-shape validation ------------------- */
+
+    /** Pragmatic email shape — mirrors the manual-form validator. */
+    private static final java.util.regex.Pattern EMAIL_RE =
+            java.util.regex.Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
+    /** Phone charset — optional +, digits, spaces, dashes, parens, dots. */
+    private static final java.util.regex.Pattern PHONE_RE =
+            java.util.regex.Pattern.compile("^\\+?[\\d\\s\\-().]+$");
+    private static final java.util.regex.Pattern ISO2_RE =
+            java.util.regex.Pattern.compile("^[A-Za-z]{2}$");
+    private static final java.util.regex.Pattern CURRENCY_RE =
+            java.util.regex.Pattern.compile("^[A-Za-z]{3}$");
+    /** HS code — 6 to 10 digits, dots allowed ("6109.10.0012"). */
+    private static final java.util.regex.Pattern HS_RE =
+            java.util.regex.Pattern.compile("^\\d{4,6}(\\.?\\d{2,4}){0,2}$");
+    private static final java.util.Set<String> WEIGHT_UNITS = java.util.Set.of("LB", "KG", "LBS", "KGS", "OZ");
+    private static final java.util.Set<String> BILL_TO_VALUES = java.util.Set.of("SENDER", "RECIPIENT", "THIRD_PARTY");
+    /** Sanity cap so a stray grams value doesn't book a 5-ton parcel. */
+    private static final BigDecimal MAX_WEIGHT = new BigDecimal("9999");
+
+    /** Country-aware postal patterns — same country set as the manual forms.
+     *  Unmodelled countries fall back to a permissive alphanumeric check. */
+    private static final Map<String, java.util.regex.Pattern> ZIP_PATTERNS = Map.ofEntries(
+            Map.entry("US", java.util.regex.Pattern.compile("^\\d{5}(-\\d{4})?$")),
+            Map.entry("CA", java.util.regex.Pattern.compile("^[A-Za-z]\\d[A-Za-z][ -]?\\d[A-Za-z]\\d$")),
+            Map.entry("GB", java.util.regex.Pattern.compile("^[A-Za-z]{1,2}\\d[A-Za-z\\d]?[ ]?\\d[A-Za-z]{2}$")),
+            Map.entry("DE", java.util.regex.Pattern.compile("^\\d{5}$")),
+            Map.entry("FR", java.util.regex.Pattern.compile("^\\d{5}$")),
+            Map.entry("IT", java.util.regex.Pattern.compile("^\\d{5}$")),
+            Map.entry("ES", java.util.regex.Pattern.compile("^\\d{5}$")),
+            Map.entry("NL", java.util.regex.Pattern.compile("^\\d{4}\\s?[A-Za-z]{2}$")),
+            Map.entry("AU", java.util.regex.Pattern.compile("^\\d{4}$")),
+            Map.entry("IN", java.util.regex.Pattern.compile("^\\d{6}$")),
+            Map.entry("JP", java.util.regex.Pattern.compile("^\\d{3}-?\\d{4}$")),
+            Map.entry("CN", java.util.regex.Pattern.compile("^\\d{6}$")),
+            Map.entry("BR", java.util.regex.Pattern.compile("^\\d{5}-?\\d{3}$")),
+            Map.entry("MX", java.util.regex.Pattern.compile("^\\d{5}$")),
+            Map.entry("SG", java.util.regex.Pattern.compile("^\\d{6}$")));
+
     static List<String> validateRow(OrderImportRowDTO row) {
         List<String> errors = new ArrayList<>();
         if (!StringUtils.hasText(row.getRecipientName())) errors.add("recipientName is required");
@@ -1272,6 +1483,66 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (!StringUtils.hasText(row.getCountryCode())) errors.add("countryCode is required");
         if (row.getWeight() == null || row.getWeight().signum() <= 0) {
             errors.add("weight must be > 0");
+        } else if (row.getWeight().compareTo(MAX_WEIGHT) > 0) {
+            errors.add("weight must be " + MAX_WEIGHT + " or less");
+        }
+
+        // --- shape checks: only fire when the value is present ---
+        String country = row.getCountryCode();
+        if (StringUtils.hasText(country) && !ISO2_RE.matcher(country.trim()).matches()) {
+            errors.add("countryCode '" + country + "' must be a 2-letter ISO code");
+        }
+        String zip = row.getPostalCode();
+        if (StringUtils.hasText(zip) && StringUtils.hasText(country)
+                && ISO2_RE.matcher(country.trim()).matches()) {
+            java.util.regex.Pattern p = ZIP_PATTERNS.get(country.trim().toUpperCase(Locale.ROOT));
+            if (p != null && !p.matcher(zip.trim()).matches()) {
+                errors.add("postalCode '" + zip + "' doesn't match the "
+                        + country.trim().toUpperCase(Locale.ROOT) + " format");
+            }
+        }
+        String email = row.getRecipientEmail();
+        if (StringUtils.hasText(email) && !EMAIL_RE.matcher(email.trim()).matches()) {
+            errors.add("recipientEmail '" + email + "' is not a valid email");
+        }
+        String phone = row.getRecipientPhone();
+        if (StringUtils.hasText(phone)) {
+            String digits = phone.replaceAll("\\D", "");
+            if (!PHONE_RE.matcher(phone.trim()).matches()) {
+                errors.add("recipientPhone '" + phone + "' contains invalid characters");
+            } else if (digits.length() < 7 || digits.length() > 15) {
+                errors.add("recipientPhone needs 7-15 digits");
+            }
+        }
+        String unit = row.getWeightUnit();
+        if (StringUtils.hasText(unit) && !WEIGHT_UNITS.contains(unit.trim().toUpperCase(Locale.ROOT))) {
+            errors.add("weightUnit '" + unit + "' must be LB or KG");
+        }
+        String currency = row.getCurrency();
+        if (StringUtils.hasText(currency) && !CURRENCY_RE.matcher(currency.trim()).matches()) {
+            errors.add("currency '" + currency + "' must be a 3-letter ISO code (e.g. USD)");
+        }
+        String billTo = row.getBillTo();
+        if (StringUtils.hasText(billTo) && !BILL_TO_VALUES.contains(billTo.trim().toUpperCase(Locale.ROOT))) {
+            errors.add("billTo '" + billTo + "' must be SENDER, RECIPIENT, or THIRD_PARTY");
+        }
+        if ("THIRD_PARTY".equalsIgnoreCase(billTo == null ? "" : billTo.trim())
+                && !StringUtils.hasText(row.getAccountNumber())) {
+            errors.add("billTo=THIRD_PARTY requires an accountNumber");
+        }
+        String hs = row.getHsCode();
+        if (StringUtils.hasText(hs) && !HS_RE.matcher(hs.trim()).matches()) {
+            errors.add("hsCode '" + hs + "' must be 6-10 digits (dots allowed)");
+        }
+        String origin = row.getCountryOfOrigin();
+        if (StringUtils.hasText(origin) && !ISO2_RE.matcher(origin.trim()).matches()) {
+            errors.add("countryOfOrigin '" + origin + "' must be a 2-letter ISO code");
+        }
+        if (row.getItemQuantity() != null && row.getItemQuantity() < 1) {
+            errors.add("itemQuantity must be 1 or more");
+        }
+        if (row.getItemUnitValue() != null && row.getItemUnitValue().signum() <= 0) {
+            errors.add("itemUnitValue must be > 0");
         }
         return errors;
     }
@@ -1347,7 +1618,15 @@ public class OrderImportServiceImpl implements OrderImportService {
      */
     private GroupOutcome processGroup(List<OrderImportRowDTO> group, Integer batchId) {
         OrderImportRowDTO leader = group.get(0);
-        List<String> errors = validateRow(leader);
+        // Merge shape errors with the reference/international errors already
+        // stamped on the row by the pre-loop validators (commit() runs
+        // validateReferences + validateInternationalItems before fanning out).
+        List<String> errors = new ArrayList<>(validateRow(leader));
+        if (leader.getErrors() != null) {
+            for (String e : leader.getErrors()) {
+                if (!errors.contains(e)) errors.add(e);
+            }
+        }
         leader.setErrors(errors);
         if (!errors.isEmpty()) {
             for (int i = 1; i < group.size(); i++) {
