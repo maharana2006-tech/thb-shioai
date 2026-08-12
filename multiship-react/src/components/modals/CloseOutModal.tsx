@@ -75,7 +75,7 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
         notify.error(response.data.message)
       }
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Close-out call failed.')
+      notify.apiError(e, 'Close-out call failed.')
     } finally {
       setSubmitting(false)
     }

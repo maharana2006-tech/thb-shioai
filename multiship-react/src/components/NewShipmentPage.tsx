@@ -251,7 +251,7 @@ function AddressBlock({
       setPasteOpen(false)
       setPasteText('')
     } catch (err) {
-      notify.error(err instanceof ApiError ? err.message : 'AI autofill failed. Enter the address manually.')
+      notify.apiError(err, 'AI autofill failed. Enter the address manually.')
     } finally {
       setParsing(false)
     }
@@ -537,7 +537,7 @@ export default function NewShipmentPage() {
         setPackages(presets)
         setClients(clientPage.data?.content ?? [])
       } catch (e) {
-        notify.error(e instanceof Error ? e.message : 'Failed to load shipment options.')
+        notify.apiError(e, 'Failed to load shipment options.')
       } finally {
         if (alive) setLoading(false)
       }
@@ -1043,7 +1043,7 @@ export default function NewShipmentPage() {
         notify.error(`${carrier}: ${d.message}`)
       }
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Carrier address validation failed.')
+      notify.apiError(e, 'Carrier address validation failed.')
     } finally {
       setCarrierValidating(false)
     }
@@ -1196,7 +1196,7 @@ export default function NewShipmentPage() {
       const why = r.rationale ? ` — ${r.rationale.replace(/\s*\.\s*$/, '')}` : ''
       notify.success(`Suggested ${filled.join(' + ')}${why}. Please review.`)
     } catch (err) {
-      notify.error(err instanceof ApiError ? err.message : 'Packaging suggestion failed.')
+      notify.apiError(err, 'Packaging suggestion failed.')
     } finally {
       setPkgBusy(false)
     }
@@ -1228,7 +1228,7 @@ export default function NewShipmentPage() {
         `${applied.length ? `Applied ${applied.join(' + ')}. ` : ''}${r.rationale || `Recommended ${r.serviceName || r.serviceCode || 'a service'}`}`,
       )
     } catch (err) {
-      notify.error(err instanceof ApiError ? err.message : 'Service recommendation failed.')
+      notify.apiError(err, 'Service recommendation failed.')
     } finally {
       setSvcBusy(false)
     }
@@ -1264,7 +1264,7 @@ export default function NewShipmentPage() {
       setReviewWarnings(r.warnings || [])
       if (!r.warnings?.length) notify.success('AI review: no issues found — good to ship.')
     } catch (err) {
-      notify.error(err instanceof ApiError ? err.message : 'AI review failed.')
+      notify.apiError(err, 'AI review failed.')
     } finally {
       setReviewBusy(false)
     }

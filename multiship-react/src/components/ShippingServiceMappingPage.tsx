@@ -147,7 +147,7 @@ function ClientEditor({
       await onSaveField(row, { clientCode: value || null })
       finish(dir)
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to update mapping.')
+      notify.apiError(e, 'Failed to update mapping.')
     } finally {
       setBusy(false)
     }
@@ -192,7 +192,7 @@ function ShipViaEditor({
       await onSaveField(row, { shipviaCd: trimmed })
       finish(dir)
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to update mapping.')
+      notify.apiError(e, 'Failed to update mapping.')
     } finally {
       setBusy(false)
     }
@@ -244,7 +244,7 @@ function ServiceEditor({
       await onSaveField(row, { serviceId: nextId })
       finish(dir)
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to update mapping.')
+      notify.apiError(e, 'Failed to update mapping.')
     } finally {
       setBusy(false)
     }
@@ -377,7 +377,7 @@ export default function ShippingServiceMappingPage() {
       }
       setRuleWarehouseMap(groupedWh)
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to load the mapping catalog.')
+      notify.apiError(e, 'Failed to load the mapping catalog.')
     } finally {
       setLoading(false)
     }
@@ -617,7 +617,7 @@ export default function ShippingServiceMappingPage() {
       closeAddForm()
       void load()
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to save the mapping.')
+      notify.apiError(e, 'Failed to save the mapping.')
     }
   }
 
@@ -648,7 +648,7 @@ export default function ShippingServiceMappingPage() {
       setZoneFor(null)
       void load()
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to update the zone.')
+      notify.apiError(e, 'Failed to update the zone.')
     }
   }
 
@@ -731,7 +731,7 @@ export default function ShippingServiceMappingPage() {
         }
         void load()
       } catch (error) {
-        notify.error(error instanceof Error ? error.message : 'Failed to update the carrier service.')
+        notify.apiError(error, 'Failed to update the carrier service.')
       }
     },
     [serviceById, ruleIdToPresets, ruleWarehouseMap, logicalPackageCount, load],
@@ -750,7 +750,7 @@ export default function ShippingServiceMappingPage() {
         notify.success('Warehouses updated.')
         void load()
       } catch (error) {
-        notify.error(error instanceof Error ? error.message : 'Failed to update warehouses.')
+        notify.apiError(error, 'Failed to update warehouses.')
       }
     },
     [ruleIdToPresets, load],
@@ -767,7 +767,7 @@ export default function ShippingServiceMappingPage() {
       await shippingConfigService.deleteRule(rule.id)
       void load()
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to remove the mapping.')
+      notify.apiError(e, 'Failed to remove the mapping.')
     }
   }
 

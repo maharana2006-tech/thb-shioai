@@ -220,7 +220,7 @@ export default function RulePackagesDrawer({
       }
       onSaved(nextIds)
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to save.')
+      notify.apiError(error, 'Failed to save.')
     } finally {
       setSaving(false)
     }

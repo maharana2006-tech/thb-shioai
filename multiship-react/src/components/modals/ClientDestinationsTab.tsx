@@ -30,7 +30,7 @@ export default function ClientDestinationsTab({ clientCode }: { clientCode: stri
       setMode(nextMode)
       setSelected(new Set((data?.countries ?? []).map((c) => c.toUpperCase())))
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to load destination rules.')
+      notify.apiError(error, 'Failed to load destination rules.')
     } finally {
       setLoading(false)
     }
@@ -89,7 +89,7 @@ export default function ClientDestinationsTab({ clientCode }: { clientCode: stri
       }
       await load()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to save destination rules.')
+      notify.apiError(error, 'Failed to save destination rules.')
     } finally {
       setSaving(false)
     }

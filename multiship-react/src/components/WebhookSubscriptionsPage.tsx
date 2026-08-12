@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { FiEdit3, FiPlus, FiTrash2, FiX, FiZap } from 'react-icons/fi'
 import { notify } from '../utils/notify'
-import { ApiError } from '../api/apiClient'
 import { apiKeyService, type ApiKey } from '../api/apiKeyService'
 import {
   webhookSubscriptionService,
@@ -182,7 +181,7 @@ function SubscriptionEditor({
       notify.success('Subscription saved.')
       onSaved()
     } catch (err) {
-      notify.error(err instanceof ApiError ? err.message : 'Save failed.')
+      notify.apiError(err, 'Save failed.')
     } finally {
       setSaving(false)
     }

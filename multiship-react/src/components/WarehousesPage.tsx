@@ -99,7 +99,7 @@ export default function WarehousesPage() {
         setTotalPages(Math.max(r.data?.totalPages ?? 1, 1))
       })
       .catch((error) => {
-        if (!cancelled) notify.error(error instanceof Error ? error.message : 'Failed to load warehouses.')
+        if (!cancelled) notify.apiError(error, 'Failed to load warehouses.')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -130,7 +130,7 @@ export default function WarehousesPage() {
       notify.success(`${warehouse.code} is now ${r.data.active ? 'active' : 'inactive'}.`)
       refresh()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to update the warehouse.')
+      notify.apiError(error, 'Failed to update the warehouse.')
     } finally {
       setBusyId(null)
     }
@@ -151,7 +151,7 @@ export default function WarehousesPage() {
       notify.success(`Warehouse ${warehouse.code} deleted.`)
       refresh()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to delete the warehouse.')
+      notify.apiError(error, 'Failed to delete the warehouse.')
     }
   }
 

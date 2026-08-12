@@ -141,7 +141,7 @@ export default function PackagesPage() {
       setPresets(presetList)
       setAssignments(usageResp.data ?? [])
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to load packages.')
+      notify.apiError(e, 'Failed to load packages.')
     } finally {
       setLoading(false)
     }
@@ -185,7 +185,7 @@ export default function PackagesPage() {
       setEditing(null)
       void load()
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to save the package.')
+      notify.apiError(e, 'Failed to save the package.')
     } finally {
       setSaving(false)
     }
@@ -198,7 +198,7 @@ export default function PackagesPage() {
       notify.success(`'${p.name}' is now the default package.`)
       void load()
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to set the default.')
+      notify.apiError(e, 'Failed to set the default.')
     }
   }
 
@@ -214,7 +214,7 @@ export default function PackagesPage() {
       notify.success(`Package '${p.name}' removed.`)
       void load()
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Failed to delete the package.')
+      notify.apiError(e, 'Failed to delete the package.')
     }
   }
 
