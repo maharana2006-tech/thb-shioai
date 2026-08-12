@@ -413,7 +413,14 @@ public class BulkLabelServiceImpl implements BulkLabelService {
 
     /** Test / test-hook: force the executors to drain — used in tests
      *  to wait for the async work to finish deterministically. Not
-     *  called by production code. */
+     *  called by production code.
+     *
+     *  <p>Sprint 50 PR M — L1: permanently shuts down {@code dispatchExecutor};
+     *  any {@code dispatchExecutor.submit(...)} on this bean AFTER this call
+     *  will throw {@code RejectedExecutionException}. Fine for tests that
+     *  do one submit and dispose, but a footgun if a test reuses the bean.
+     *  If you need a re-usable wait, extend this to snapshot completion
+     *  counts and poll rather than close the pool. */
     public void awaitQuiescenceForTests() {
         try {
             dispatchExecutor.shutdown();
