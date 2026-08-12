@@ -46,7 +46,7 @@ export default function ServiceWarehousesDrawer({
         setAttached((attachedResp.data ?? []).filter((cw) => cw.warehouse !== null))
       } catch (error) {
         if (!alive) return
-        notify.error(error instanceof Error ? error.message : 'Failed to load warehouses.')
+        notify.apiError(error, 'Failed to load warehouses.')
       } finally {
         if (alive) setLoading(false)
       }
@@ -84,7 +84,7 @@ export default function ServiceWarehousesDrawer({
       }
       onSaved()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to save warehouses.')
+      notify.apiError(error, 'Failed to save warehouses.')
     } finally {
       setSaving(false)
     }

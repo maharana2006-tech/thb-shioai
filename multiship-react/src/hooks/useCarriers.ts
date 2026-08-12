@@ -11,12 +11,6 @@ import {
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import type { RootState } from '../store/store'
 
-const getErrorMessage = (error: unknown, fallback: string) =>
-  typeof error === 'string'
-    ? error
-    : error instanceof Error && error.message
-    ? error.message
-    : fallback
 
 export const useCarriers = () => {
   const dispatch = useAppDispatch()
@@ -26,7 +20,7 @@ export const useCarriers = () => {
     try {
       return await dispatch(fetchCarriersThunk()).unwrap()
     } catch (error) {
-      notify.error(getErrorMessage(error, 'Failed to fetch available carriers'))
+      notify.apiError(error, 'Failed to fetch available carriers')
       return []
     }
   }, [dispatch])
@@ -35,7 +29,7 @@ export const useCarriers = () => {
     try {
       return await dispatch(getCarrierStatusThunk()).unwrap()
     } catch (error) {
-      notify.error(getErrorMessage(error, 'Failed to fetch carrier status'))
+      notify.apiError(error, 'Failed to fetch carrier status')
       return null
     }
   }, [dispatch])
@@ -45,7 +39,7 @@ export const useCarriers = () => {
       try {
         return await dispatch(connectCarrierThunk(payload)).unwrap()
       } catch (error) {
-        notify.error(getErrorMessage(error, `Failed to connect ${payload.carrierCode}`))
+        notify.apiError(error, `Failed to connect ${payload.carrierCode}`)
         return null
       }
     },
@@ -57,7 +51,7 @@ export const useCarriers = () => {
       try {
         return await dispatch(disconnectCarrierThunk(carrierCode)).unwrap()
       } catch (error) {
-        notify.error(getErrorMessage(error, 'Failed to disconnect carrier'))
+        notify.apiError(error, 'Failed to disconnect carrier')
         return null
       }
     },

@@ -67,7 +67,7 @@ export default function TenantOrdersView({ tenantId }: TenantOrdersViewProps) {
         setTotalPages(Math.max(response.data?.totalPages ?? 1, 1))
       } catch (error) {
         if (cancelled) return
-        notify.error(error instanceof Error ? error.message : 'Failed to load your orders.')
+        notify.apiError(error, 'Failed to load your orders.')
         setOrders([])
       } finally {
         if (!cancelled) setLoading(false)

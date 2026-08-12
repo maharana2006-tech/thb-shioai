@@ -37,7 +37,7 @@ export default function ServiceDestinationsDrawer({
         setSelected(new Set((r.data?.countries ?? []).map((c) => c.toUpperCase())))
       } catch (error) {
         if (!alive) return
-        notify.error(error instanceof Error ? error.message : 'Failed to load destinations.')
+        notify.apiError(error, 'Failed to load destinations.')
       } finally {
         if (alive) setLoading(false)
       }
@@ -78,7 +78,7 @@ export default function ServiceDestinationsDrawer({
       }
       onSaved()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to save destinations.')
+      notify.apiError(error, 'Failed to save destinations.')
     } finally {
       setSaving(false)
     }

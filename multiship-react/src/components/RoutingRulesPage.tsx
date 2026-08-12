@@ -10,7 +10,6 @@ import {
   FiX,
 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
-import { ApiError } from '../api/apiClient'
 import { clientService, type Client } from '../api/clientService'
 import {
   routingRuleService,
@@ -322,7 +321,7 @@ function RuleEditorModal({
       notify.success('Rule saved.')
       onSaved()
     } catch (err) {
-      notify.error(err instanceof ApiError ? err.message : 'Failed to save rule.')
+      notify.apiError(err, 'Failed to save rule.')
     } finally {
       setSaving(false)
     }
@@ -536,7 +535,7 @@ function DryRunPanel({
     try {
       setResult(await routingRuleService.dryRun(clientCode, req))
     } catch (err) {
-      notify.error(err instanceof ApiError ? err.message : 'Dry-run failed.')
+      notify.apiError(err, 'Dry-run failed.')
     } finally {
       setRunning(false)
     }
@@ -550,7 +549,7 @@ function DryRunPanel({
         destPostal: destPostal.trim() || null,
       }))
     } catch (err) {
-      notify.error(err instanceof ApiError ? err.message : 'Warehouse preview failed.')
+      notify.apiError(err, 'Warehouse preview failed.')
     } finally {
       setWhRunning(false)
     }

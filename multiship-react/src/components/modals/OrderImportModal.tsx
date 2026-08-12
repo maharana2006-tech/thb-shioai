@@ -90,7 +90,7 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
     try {
       await orderImportService.downloadXlsxTemplate(null)
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Template download failed.')
+      notify.apiError(e, 'Template download failed.')
     } finally {
       setDownloadingXlsx(false)
     }
@@ -130,7 +130,7 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
         notify.error(response.message ?? 'Save failed.')
       }
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Save failed.')
+      notify.apiError(e, 'Save failed.')
     } finally {
       setCommitting(false)
     }
@@ -148,7 +148,7 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
         notify.error(response.message ?? 'Validation failed.')
       }
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Validation failed.')
+      notify.apiError(e, 'Validation failed.')
     } finally {
       setValidating(null)
     }
@@ -166,7 +166,7 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
         notify.error(response.message ?? 'Address validation failed.')
       }
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Address validation failed.')
+      notify.apiError(e, 'Address validation failed.')
     } finally {
       setValidating(null)
     }

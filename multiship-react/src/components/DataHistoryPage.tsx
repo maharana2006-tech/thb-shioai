@@ -161,7 +161,7 @@ export default function DataHistoryPage() {
       const res = await orderImportService.listHistory()
       setBatches(res.data ?? [])
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Could not load import history.')
+      notify.apiError(e, 'Could not load import history.')
       setBatches([])
     } finally {
       setLoading(false)
@@ -184,7 +184,7 @@ export default function DataHistoryPage() {
         const res = await orderImportService.getHistory(id)
         setRowsById((m) => ({ ...m, [id]: res.data?.rows ?? [] }))
       } catch (e) {
-        notify.error(e instanceof Error ? e.message : 'Could not load import rows.')
+        notify.apiError(e, 'Could not load import rows.')
         setRowsById((m) => ({ ...m, [id]: [] }))
       }
     }
@@ -232,7 +232,7 @@ export default function DataHistoryPage() {
         await load()
       }
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Label generation failed.')
+      notify.apiError(e, 'Label generation failed.')
       await load()
     } finally {
       setGeneratingId(null)
@@ -267,7 +267,7 @@ export default function DataHistoryPage() {
         }
       }
     } catch (e) {
-      notify.error(e instanceof Error ? e.message : 'Label generation failed.')
+      notify.apiError(e, 'Label generation failed.')
     } finally {
       setGenRowKey(null)
     }

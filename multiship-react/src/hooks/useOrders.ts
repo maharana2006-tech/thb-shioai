@@ -111,7 +111,7 @@ export const useOrders = (): UseOrdersReturn => {
     try {
       await loadOrders()
     } catch (err: any) {
-      notify.error(err.message || 'Failed to fetch orders')
+      notify.apiError(err, 'Failed to fetch orders')
     }
   }, [loadOrders])
 
@@ -120,7 +120,7 @@ export const useOrders = (): UseOrdersReturn => {
       try {
         dispatch(setStatusFilter(status as 'ALL' | 'PENDING' | 'GENERATED' | 'ERROR'))
       } catch (err: any) {
-        notify.error(err.message || `Failed to switch to ${status} orders`)
+        notify.apiError(err, `Failed to switch to ${status} orders`)
       }
     },
     [dispatch]
@@ -131,7 +131,7 @@ export const useOrders = (): UseOrdersReturn => {
       try {
         dispatch(setSearchKeyword(keyword))
       } catch (err: any) {
-        notify.error(err.message || 'Failed to search orders')
+        notify.apiError(err, 'Failed to search orders')
       }
     },
     [dispatch]
@@ -141,7 +141,7 @@ export const useOrders = (): UseOrdersReturn => {
     try {
       await dispatch(fetchDashboardStatsThunk()).unwrap()
     } catch (err: any) {
-      notify.error(err.message || 'Failed to fetch dashboard stats')
+      notify.apiError(err, 'Failed to fetch dashboard stats')
     }
   }, [dispatch])
 

@@ -265,7 +265,7 @@ export default function OrdersWorkspace() {
       })
       .catch((error) => {
         if (cancelled) return
-        notify.error(error instanceof Error ? error.message : 'Failed to load orders.')
+        notify.apiError(error, 'Failed to load orders.')
         setRows([])
       })
       .finally(() => {
@@ -304,10 +304,7 @@ export default function OrdersWorkspace() {
         notify.error(`Void failed: ${data?.message ?? 'Unknown error.'}`)
       }
     } catch (e) {
-      const msg = e instanceof ApiError ? (e.payload?.message ?? e.message)
-        : e instanceof Error ? e.message
-        : 'Void call failed.'
-      notify.error(msg)
+      notify.apiError(e, 'Void call failed.')
     } finally {
       setVoidingOrderNo(null)
     }
@@ -544,7 +541,7 @@ export default function OrdersWorkspace() {
         setRows((cur) => cur.filter((o) => o.orderDetails.orderNo !== orderNo))
         generated = true
       } else {
-        notify.error(error instanceof Error ? error.message : `Order #${orderNo} failed — see the Failed tab.`)
+        notify.apiError(error, `Order #${orderNo} failed — see the Failed tab.`)
       }
     } finally {
       setGeneratingOrderNos((cur) => cur.filter((n) => n !== orderNo))
@@ -570,7 +567,7 @@ export default function OrdersWorkspace() {
         navigate(`/label/${orderNo}`)
         return
       }
-      notify.error(error instanceof Error ? error.message : `Order #${orderNo} failed — see the Failed tab.`)
+      notify.apiError(error, `Order #${orderNo} failed — see the Failed tab.`)
     } finally {
       setGeneratingOrderNos((cur) => cur.filter((n) => n !== orderNo))
     }

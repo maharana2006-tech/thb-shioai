@@ -102,7 +102,7 @@ export default function LabelTemplateLayoutBuilder({
       const html = await previewTemplateHtml(layoutJson)
       setPreviewHtml(html)
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Preview failed.')
+      notify.apiError(error, 'Preview failed.')
     } finally {
       setPreviewLoading(false)
     }
@@ -121,7 +121,7 @@ export default function LabelTemplateLayoutBuilder({
       // Revoke after a delay so the target tab has time to load the PDF.
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'PDF preview failed.')
+      notify.apiError(error, 'PDF preview failed.')
     } finally {
       setPdfLoading(false)
     }
@@ -143,7 +143,7 @@ export default function LabelTemplateLayoutBuilder({
       document.body.removeChild(a)
       window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'ZPL preview failed.')
+      notify.apiError(error, 'ZPL preview failed.')
     } finally {
       setZplLoading(false)
     }

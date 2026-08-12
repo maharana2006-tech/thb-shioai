@@ -40,8 +40,8 @@ export default function CustomFieldsPage() {
     setLoading(true)
     try {
       setDefs(await customFieldService.list(effectiveTenantId))
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Failed to load definitions.')
+    } catch (err) {
+      notify.apiError(err, 'Failed to load definitions.')
     } finally {
       setLoading(false)
     }
@@ -257,8 +257,8 @@ function CustomFieldEditorModal({
       await customFieldService.save(draft)
       notify.success('Definition saved.')
       onSaved()
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Failed to save.')
+    } catch (err) {
+      notify.apiError(err, 'Failed to save.')
     } finally {
       setSaving(false)
     }

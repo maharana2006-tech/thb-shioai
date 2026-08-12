@@ -11,7 +11,6 @@ import {
   FiX,
 } from 'react-icons/fi'
 import { notify } from '../utils/notify'
-import { ApiError } from '../api/apiClient'
 import { clientService, type Client } from '../api/clientService'
 import {
   reportService,
@@ -333,7 +332,7 @@ function Schedules({ clients }: { clients: Client[] }) {
                 <td className="px-4 py-2 text-right">
                   <button
                     type="button"
-                    onClick={() => reportService.downloadGenerated(g.id, g.filename).catch((e) => notify.error(e.message))}
+                    onClick={() => reportService.downloadGenerated(g.id, g.filename).catch((e) => notify.apiError(e, 'Download failed.'))}
                     className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11.5px] font-semibold text-slate-700 hover:bg-slate-50"
                   >
                     <FiDownload /> CSV
@@ -390,7 +389,7 @@ function ScheduleEditor({
       notify.success('Schedule saved.')
       onSaved()
     } catch (err) {
-      notify.error(err instanceof ApiError ? err.message : 'Save failed.')
+      notify.apiError(err, 'Save failed.')
     } finally {
       setSaving(false)
     }

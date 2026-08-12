@@ -64,7 +64,7 @@ export default function AuditLogPage() {
       })
       .catch((err: unknown) => {
         if (cancelled) return
-        notify.error(err instanceof Error ? err.message : 'Failed to load the audit log.')
+        notify.apiError(err, 'Failed to load the audit log.')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
