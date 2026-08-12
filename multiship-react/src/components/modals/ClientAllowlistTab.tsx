@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { FiPlus, FiStar, FiTrash2 } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
-import { ApiError } from '../../api/apiClient'
 import Select from '../workspace/Select'
 
 /**
@@ -96,7 +95,7 @@ export default function ClientAllowlistTab<TAllowed, TCatalog>({
     try {
       setAllowed(await fetchAllowed(clientCode))
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : `Failed to load ${headline.toLowerCase()}.`)
+      notify.apiError(error, `Failed to load ${headline.toLowerCase()}.`)
     } finally {
       setLoading(false)
     }
@@ -121,7 +120,7 @@ export default function ClientAllowlistTab<TAllowed, TCatalog>({
         .filter((c) => (catalogEligible ? catalogEligible(c) : true))
       setPickerChoices(filtered)
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to load the catalog.')
+      notify.apiError(error, 'Failed to load the catalog.')
       setPickerChoices([])
     }
   }
@@ -135,11 +134,8 @@ export default function ClientAllowlistTab<TAllowed, TCatalog>({
       setPickerOpen(false)
       await refresh()
     } catch (error) {
-      if (error instanceof ApiError && error.errorCode === 'ALLOWLIST_ALREADY_EXISTS') {
-        notify.error('That entry is already on the allowlist.')
-      } else {
-        notify.error(error instanceof Error ? error.message : 'Failed to add.')
-      }
+      // ALLOWLIST_ALREADY_EXISTS is handled by the friendly-message map.
+      notify.apiError(error, 'Failed to add.')
     } finally {
       setBusy(false)
     }
@@ -152,7 +148,7 @@ export default function ClientAllowlistTab<TAllowed, TCatalog>({
       await setDefault(clientCode, key)
       await refresh()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to set the default.')
+      notify.apiError(error, 'Failed to set the default.')
     } finally {
       setBusy(false)
     }
@@ -170,7 +166,7 @@ export default function ClientAllowlistTab<TAllowed, TCatalog>({
       notify.success(`${humanKey} removed.`)
       await refresh()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to remove.')
+      notify.apiError(error, 'Failed to remove.')
     } finally {
       setBusy(false)
     }

@@ -123,6 +123,24 @@ export const errorMessages: Readonly<Record<string, FriendlyError>> = {
     message:
       'The client you tried to assign doesn’t exist. Refresh the client dropdown and try again.',
   },
+
+  // ===== Pre-Sprint-50 codes surfaced during PR J migration =====
+  // Motivated by ClientsPage.tsx (toggle-active + delete race).
+  CLIENT_HAS_ORDERS: {
+    title: 'Client has pending orders',
+    message:
+      'This client still has pending orders. Complete or void them before deactivating or deleting the client.',
+  },
+  // Motivated by modals/ClientAllowlistTab.tsx (submit picker).
+  ALLOWLIST_ALREADY_EXISTS: {
+    title: 'Already on the allowlist',
+    message: 'That entry is already on the allowlist.',
+  },
+  // Motivated by modals/ClientPolicyTab.tsx (save policy).
+  POLICY_FIXED_SERVICE_REQUIRED: {
+    title: 'Fixed service required',
+    message: 'Pick a fixed service on the client allowlist before saving the policy.',
+  },
 }
 
 /**

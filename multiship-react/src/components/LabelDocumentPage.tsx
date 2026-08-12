@@ -134,7 +134,7 @@ export default function LabelDocumentPage() {
     try {
       return await orderService.getLabelZpl(orderNo)
     } catch (err) {
-      notify.error(err instanceof Error ? err.message : 'Failed to fetch the ZPL label.')
+      notify.apiError(err, 'Failed to fetch the ZPL label.')
       return null
     } finally {
       setZplBusy(false)

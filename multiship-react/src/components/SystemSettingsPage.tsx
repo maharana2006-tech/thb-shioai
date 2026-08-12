@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import { FiCheck, FiLock, FiSave } from 'react-icons/fi'
 import { systemSettingsService, type SystemSetting } from '../api/systemSettingsService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
@@ -26,7 +27,7 @@ export default function SystemSettingsPage() {
       const res = await systemSettingsService.list()
       setItems(Array.isArray(res) ? res : [])
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to load system settings.')
+      notify.apiError(e, 'Failed to load system settings.')
     } finally {
       setLoading(false)
     }
@@ -53,7 +54,7 @@ export default function SystemSettingsPage() {
       setInputs((prev) => ({ ...prev, [key]: '' }))
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to update the setting.')
+      notify.apiError(e, 'Failed to update the setting.')
     } finally {
       setSavingKey(null)
     }

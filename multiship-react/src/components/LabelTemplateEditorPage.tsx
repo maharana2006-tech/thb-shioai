@@ -103,8 +103,8 @@ export default function LabelTemplateEditorPage() {
       // In edit mode, tenant + type are dictated by the row.
       setTenantId(t.tenantId ?? PLATFORM_DEFAULT_VALUE)
       setTemplateType(t.templateType ?? 'PACKING_SLIP')
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Failed to load template.')
+    } catch (err) {
+      notify.apiError(err, 'Failed to load template.')
       navigate('/settings/templates')
     } finally {
       setLoading(false)
@@ -171,8 +171,8 @@ export default function LabelTemplateEditorPage() {
       if (!isEdit && resp.data?.id != null) {
         navigate(`/settings/templates/${resp.data.id}`, { replace: true })
       }
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Failed to save template.')
+    } catch (err) {
+      notify.apiError(err, 'Failed to save template.')
     } finally {
       setSaving(false)
     }
@@ -194,8 +194,8 @@ export default function LabelTemplateEditorPage() {
       await labelTemplateService.remove(template.id)
       notify.success('Template deleted.')
       navigate('/settings/templates')
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Failed to delete template.')
+    } catch (err) {
+      notify.apiError(err, 'Failed to delete template.')
     }
   }
 

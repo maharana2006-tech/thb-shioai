@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import { notify } from '../utils/notify'
 import { FiActivity, FiCheck, FiClock, FiSlash, FiUsers, FiX } from 'react-icons/fi'
 import {
   adminUserService,
@@ -41,7 +42,7 @@ export default function AdminUsersPage() {
       setUsers(userRes.data ?? [])
       setAudit(auditRes.data ?? [])
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to load users.')
+      notify.apiError(e, 'Failed to load users.')
     } finally {
       setLoading(false)
     }
@@ -85,7 +86,7 @@ export default function AdminUsersPage() {
       }
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to update user.')
+      notify.apiError(e, 'Failed to update user.')
     }
   }
 
@@ -382,7 +383,7 @@ function AssignClientDialog({
       toast.success(`Updated ${user.username}.`)
       onSaved()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to update client assignment.')
+      notify.apiError(e, 'Failed to update client assignment.')
     } finally {
       setSaving(false)
     }

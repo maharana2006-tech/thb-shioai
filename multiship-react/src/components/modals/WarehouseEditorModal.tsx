@@ -146,20 +146,14 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
         }
       }
     } catch (error) {
-      if (error instanceof ApiError) {
-        // Structured backend codes get bespoke copy; everything else falls to
-        // the message the server sent.
-        if (error.errorCode === 'WAREHOUSE_CODE_TAKEN') {
-          notify.error(`Warehouse code ${code.trim().toUpperCase()} is already in use.`)
-        } else if (error.errorCode === 'WAREHOUSE_OWNER_INVALID') {
-          notify.error(error.message)
-        } else if (error.errorCode === 'CLIENT_NOT_FOUND') {
-          notify.error(`Client ${ownerClientCode.trim().toUpperCase()} was not found.`)
-        } else {
-          notify.error(error.message)
-        }
+      // Two codes want local-value interpolation so we intercept before
+      // handing the rest off to the friendly-message map.
+      if (error instanceof ApiError && error.errorCode === 'WAREHOUSE_CODE_TAKEN') {
+        notify.error(`Warehouse code ${code.trim().toUpperCase()} is already in use.`)
+      } else if (error instanceof ApiError && error.errorCode === 'CLIENT_NOT_FOUND') {
+        notify.error(`Client ${ownerClientCode.trim().toUpperCase()} was not found.`)
       } else {
-        notify.error(error instanceof Error ? error.message : 'Failed to save the warehouse.')
+        notify.apiError(error, 'Failed to save the warehouse.')
       }
     } finally {
       setSaving(false)

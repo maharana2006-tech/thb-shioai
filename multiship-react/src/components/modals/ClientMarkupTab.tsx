@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { notify } from '../../utils/notify'
-import { ApiError } from '../../api/apiClient'
 import {
   clientBillingMarkupService,
   type MarkupKind,
@@ -36,7 +35,7 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
         setCurrency(m.currency || 'USD')
       }
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to load billing markup.')
+      notify.apiError(error, 'Failed to load billing markup.')
     } finally {
       setLoading(false)
     }
@@ -68,11 +67,9 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
       notify.success(`Markup saved for ${clientCode}.`)
       await load()
     } catch (error) {
-      if (error instanceof ApiError && error.errorCode === 'MARKUP_INVALID') {
-        notify.error(error.message)
-      } else {
-        notify.error(error instanceof Error ? error.message : 'Failed to save the markup.')
-      }
+      // MARKUP_INVALID falls through the friendly-message map (no entry) to the
+      // raw server message, which is what the inline branch surfaced too.
+      notify.apiError(error, 'Failed to save the markup.')
     } finally {
       setSaving(false)
     }

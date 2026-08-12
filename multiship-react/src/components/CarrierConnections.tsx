@@ -279,7 +279,7 @@ export default function CarrierConnections({
     try {
       setAccounts(await accountRefService.listAccounts())
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to load the account book.')
+      notify.apiError(error, 'Failed to load the account book.')
     } finally {
       setLoading(false)
     }
@@ -390,7 +390,7 @@ export default function CarrierConnections({
       response.data?.verified ? notify.success(response.message) : notify.error(response.message)
       await loadAccounts()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Verification failed.')
+      notify.apiError(error, 'Verification failed.')
     } finally {
       setBusyId(null)
     }
@@ -403,7 +403,7 @@ export default function CarrierConnections({
       notify.success(account.active ? 'Account deactivated.' : 'Account activated.')
       await loadAccounts()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to update the account.')
+      notify.apiError(error, 'Failed to update the account.')
     } finally {
       setBusyId(null)
     }
@@ -416,7 +416,7 @@ export default function CarrierConnections({
       notify.success(`${account.accountNumber} is now ${account.customerNo}'s default account.`)
       await loadAccounts()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to set the client default.')
+      notify.apiError(error, 'Failed to set the client default.')
     } finally {
       setBusyId(null)
     }
@@ -599,7 +599,7 @@ export default function CarrierConnections({
       setDrawerOpen(false)
       await loadAccounts()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to save the account.')
+      notify.apiError(error, 'Failed to save the account.')
     } finally {
       setSaving(false)
     }
@@ -619,7 +619,7 @@ export default function CarrierConnections({
       notify.success(`Account ${account.accountNumber} removed from the account book.`)
       await loadAccounts()
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : 'Failed to delete the account.')
+      notify.apiError(error, 'Failed to delete the account.')
     } finally {
       setBusyId(null)
     }
