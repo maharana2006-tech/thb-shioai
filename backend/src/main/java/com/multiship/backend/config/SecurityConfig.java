@@ -1,6 +1,7 @@
 package com.multiship.backend.config;
 
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -12,6 +13,8 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -23,6 +26,17 @@ import java.util.Arrays;
 @EnableWebSecurity
 @EnableMethodSecurity
 public class SecurityConfig {
+
+    // Sprint 50 PR Q2 — cookie flags mirrored from application.properties
+    // so the CSRF cookie (which the SPA reads) uses the same Secure /
+    // SameSite settings as the auth cookie itself. Otherwise browsers
+    // may reject a Secure=false CSRF cookie when the auth cookie is
+    // Secure=true, breaking the double-submit-cookie protocol.
+    @Value("${cookie.secure:false}")
+    private boolean cookieSecure;
+
+    @Value("${cookie.samesite:Strict}")
+    private String cookieSameSite;
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -53,9 +67,41 @@ public class SecurityConfig {
                                                    com.multiship.backend.repository.UserRepository userRepository,
                                                    com.multiship.backend.service.ratelimit.TenantRateLimitFilter tenantRateLimitFilter)
             throws Exception {
+        // Sprint 50 PR Q2 — CSRF via double-submit cookie. The
+        // SPA reads the XSRF-TOKEN cookie (HttpOnly=false so JS can
+        // read it) and echoes it as the X-XSRF-TOKEN header on every
+        // state-changing request. Spring compares the two. Sync the
+        // cookie Secure/SameSite with the auth-cookie flags so the
+        // browser doesn't reject one and accept the other under
+        // cross-origin dev.
+        CookieCsrfTokenRepository csrfRepo = CookieCsrfTokenRepository.withHttpOnlyFalse();
+        csrfRepo.setCookieCustomizer(c -> c.secure(cookieSecure).sameSite(cookieSameSite).path("/"));
+
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-                .csrf(csrf -> csrf.disable())
+                .csrf(csrf -> csrf
+                        .csrfTokenRepository(csrfRepo)
+                        // Spring 6 default XorCsrfTokenRequestAttributeHandler
+                        // BREACH-encodes the token, which forces the SPA to
+                        // call the server to "resolve" it — but the SPA
+                        // reads the raw cookie value. Use the plain handler
+                        // so the raw value is what Spring compares.
+                        .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
+                        // Endpoints that authenticate via API key / HMAC / OAuth
+                        // client-credentials — CSRF is irrelevant there (the
+                        // caller can't produce a browser's XSRF-TOKEN cookie
+                        // and isn't logged in via a session cookie either).
+                        .ignoringRequestMatchers(
+                                "/api/v1/auth/login",
+                                "/api/v1/auth/signup",
+                                "/api/v1/auth/accept-invite",
+                                "/api/v1/auth/verify-email",
+                                "/api/v1/oauth/token",
+                                "/api/v1/webhooks/carrier/**",
+                                "/api/v1/external/**",
+                                "/api/v2/external/**"
+                        )
+                )
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         // Open endpoints
@@ -160,7 +206,9 @@ public class SecurityConfig {
                         .filter(s -> !s.isEmpty())
                         .toList());
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Cache-Control", "Idempotency-Key", "X-API-Key"));
+        // Sprint 50 PR Q2 — X-XSRF-TOKEN added for the double-submit CSRF
+        // header the SPA echoes on state-changing requests.
+        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Cache-Control", "Idempotency-Key", "X-API-Key", "X-XSRF-TOKEN"));
         // Headers the browser must expose to JS via response.headers.get().
         // Content-Disposition is critical for binary downloads (order-import
         // template.xlsm, packing-slip PDF, template preview PDF, bulk-label

@@ -29,21 +29,46 @@ interface FetchOptions extends RequestInit {
   data?: any;
 }
 
+// Sprint 50 PR Q2 — cookie-based auth flow. Every fetch must send the
+// httpOnly auth cookie (`credentials: 'include'`), and state-changing
+// requests must echo the CSRF token the backend set as XSRF-TOKEN
+// (double-submit-cookie pattern).
+const CSRF_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+function readCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 async function apiRequest<T>(endpoint: string, options: FetchOptions = {}): Promise<T> {
   const { data, ...customConfig } = options;
-  
+  const method = (customConfig.method || 'GET').toUpperCase();
+
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
     ...(customConfig.headers || {}),
   };
 
-  // Automatically attach JWT token if it exists in local storage
-  const token = localStorage.getItem('multiship_token');
-  if (token) {
-    (headers as any)['Authorization'] = `Bearer ${token}`;
+  // Sprint 50 PR Q2 — legacy header path preserved for one deploy cycle
+  // via VITE_LEGACY_HEADER_AUTH. Once every deployment has cut over to
+  // cookies, remove this block and the localStorage token cleanup below.
+  if (import.meta.env?.VITE_LEGACY_HEADER_AUTH === 'true') {
+    const token = localStorage.getItem('multiship_token');
+    if (token) {
+      (headers as any)['Authorization'] = `Bearer ${token}`;
+    }
+  }
+
+  // CSRF echo — Spring compares the cookie value with this header.
+  if (CSRF_METHODS.has(method)) {
+    const csrf = readCookie('XSRF-TOKEN');
+    if (csrf) {
+      (headers as any)['X-XSRF-TOKEN'] = csrf;
+    }
   }
 
   const config: RequestInit = {
+    credentials: 'include',   // send the httpOnly auth cookie
     ...customConfig,
     headers,
   };
@@ -103,12 +128,25 @@ async function apiRequest<T>(endpoint: string, options: FetchOptions = {}): Prom
  * present, falling back to a generic status line.
  */
 export async function authFetch(endpoint: string, options: RequestInit = {}): Promise<Response> {
-  const token = localStorage.getItem('multiship_token');
   const headers = new Headers(options.headers);
-  if (token && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${token}`);
+  // Sprint 50 PR Q2 — legacy header path preserved for one deploy cycle.
+  if (import.meta.env?.VITE_LEGACY_HEADER_AUTH === 'true') {
+    const token = localStorage.getItem('multiship_token');
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
   }
-  const response = await fetch(`${BASE_URL}${endpoint}`, { ...options, headers });
+  // CSRF echo for state-changing requests.
+  const method = (options.method || 'GET').toUpperCase();
+  if (CSRF_METHODS.has(method) && !headers.has('X-XSRF-TOKEN')) {
+    const csrf = readCookie('XSRF-TOKEN');
+    if (csrf) headers.set('X-XSRF-TOKEN', csrf);
+  }
+  const response = await fetch(`${BASE_URL}${endpoint}`, {
+    credentials: 'include',   // send the httpOnly auth cookie
+    ...options,
+    headers,
+  });
   if (response.ok) return response;
 
   // Non-2xx — try to surface a useful error message. Backend error
