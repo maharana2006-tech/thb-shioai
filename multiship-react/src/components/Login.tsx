@@ -12,13 +12,13 @@ import { getHomePathForRole, normalizeRole } from '../utils/roles'
 import { loginValidationSchema } from '../validation/yup/loginSchema'
 import { loginFormConfig } from '../validation/formik/loginFormConfig'
 
-const getErrorMessage = (error: unknown) => {
-  if (error instanceof Error && error.message) {
-    return error.message
-  }
-
-  return 'Invalid username or password.'
-}
+// Sprint 50 PR J — login failures now flow through notify.apiError so the
+// scoped ErrorCode friendly-message map fires. That covers EMAIL_NOT_VERIFIED
+// (post-Tier 0.5-D signup) and ACCOUNT_DEACTIVATED (post-Tier 0.5-E admin
+// revoke) with the intended UX instead of the raw backend message. Kept the
+// generic fallback below in case the error carries neither errorCode nor a
+// server-supplied message string.
+const LOGIN_FALLBACK = 'Invalid username or password.'
 
 type AuthPayload = AuthResponse & {
   data?: AuthResponse
@@ -80,7 +80,7 @@ export default function Login() {
           throw new Error('Invalid authentication token payload format received.')
         }
       } catch (error) {
-        notify.error(getErrorMessage(error))
+        notify.apiError(error, LOGIN_FALLBACK)
       } finally {
         setLoading(false)
       }
