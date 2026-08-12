@@ -1,16 +1,22 @@
 package com.multiship.backend.service.fairness;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Sprint 50 Tier 1 finding #15 — per-tenant fair-share wrapper around a
@@ -83,12 +89,23 @@ public class FairTenantExecutor {
     private final long maxBatchWaitMs;
 
     /**
-     * Semaphores keyed by tenant. Kept in a ConcurrentHashMap; entries
-     * live until the JVM restarts. In steady state the set of tenants
-     * is bounded (a client list, ~1000s at most), so no eviction
-     * needed — each entry is a Semaphore(K) which is ~100 bytes.
+     * Semaphores keyed by tenant. Sprint 50 PR L — bounded Caffeine cache
+     * so a rotating tenant-key space (e.g. attacker feeding random
+     * {@code requestedBy} strings when clientCode is blank) can't OOM the
+     * JVM by growing the map without bound. Cap at 10 000 entries with
+     * a 24h idle-eviction — well beyond any real client list size, tiny
+     * memory footprint (~100 bytes/entry). Semaphores that get evicted
+     * while a permit is in flight are safe: the underlying Semaphore
+     * object is still reachable from the running Callable, its release
+     * still fires, and any new submission for the same tenant just gets
+     * a fresh Semaphore (worst case: brief over-cap window for one
+     * tenant).
      */
-    private final ConcurrentHashMap<String, Semaphore> tenantSemaphores = new ConcurrentHashMap<>();
+    private static final int MAX_TRACKED_TENANTS = 10_000;
+    private final Cache<String, Semaphore> tenantSemaphores = Caffeine.newBuilder()
+            .maximumSize(MAX_TRACKED_TENANTS)
+            .expireAfterAccess(Duration.ofHours(24))
+            .build();
 
     public FairTenantExecutor(ExecutorService delegate,
                                int maxConcurrentPerTenant,
@@ -140,8 +157,17 @@ public class FairTenantExecutor {
         }
 
         String normalized = tenantKey.trim().toUpperCase();
-        Semaphore semaphore = tenantSemaphores.computeIfAbsent(
+        Semaphore semaphore = tenantSemaphores.get(
                 normalized, k -> new Semaphore(maxConcurrentPerTenant));
+
+        // Sprint 50 PR L — snapshot SecurityContext + MDC on the caller
+        // thread so each task restores them inside the worker. Without
+        // this the fanOutExecutor threads run with no auth (audit
+        // stampers persist operator=null) and no correlation MDC (log
+        // lines can't be traced to their request). Snapshot ONCE per
+        // batch — every task in a batch shares the same caller.
+        SecurityContext ctxSnapshot = SecurityContextHolder.getContext();
+        Map<String, String> mdcSnapshot = MDC.getCopyOfContextMap();
 
         List<Future<T>> futures = new ArrayList<>(tasks.size());
         // Sprint 50 PR K — bound the CALLER thread's total time in submitAll
@@ -171,9 +197,19 @@ public class FairTenantExecutor {
             }
 
             futures.add(delegate.submit(() -> {
+                SecurityContext prevCtx = SecurityContextHolder.getContext();
+                Map<String, String> prevMdc = MDC.getCopyOfContextMap();
                 try {
+                    SecurityContextHolder.setContext(ctxSnapshot);
+                    if (mdcSnapshot != null) MDC.setContextMap(mdcSnapshot);
                     return raw.call();
                 } finally {
+                    // Restore whatever the worker thread had (usually
+                    // empty) so a subsequent task on the same thread
+                    // doesn't inherit ours.
+                    SecurityContextHolder.setContext(prevCtx);
+                    if (prevMdc != null) MDC.setContextMap(prevMdc);
+                    else MDC.clear();
                     semaphore.release();
                 }
             }));
@@ -226,7 +262,7 @@ public class FairTenantExecutor {
      */
     int inflightForTenant(String tenantKey) {
         if (tenantKey == null || tenantKey.isBlank()) return 0;
-        Semaphore s = tenantSemaphores.get(tenantKey.trim().toUpperCase());
+        Semaphore s = tenantSemaphores.getIfPresent(tenantKey.trim().toUpperCase());
         return s == null ? 0 : maxConcurrentPerTenant - s.availablePermits();
     }
 }

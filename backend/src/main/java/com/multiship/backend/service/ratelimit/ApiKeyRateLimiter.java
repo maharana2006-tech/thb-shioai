@@ -58,13 +58,17 @@ public class ApiKeyRateLimiter {
      *         configured limit, and Retry-After hint (0 if allowed)
      */
     public Decision tryAcquire(Long apiKeyId) {
-        // Disabled config, unknown caller, or Redis down → allow.
+        // Disabled config or unknown caller → allow, count truly known (= 0).
         if (apiKeyId == null || requestsPerMinute <= 0) {
             return Decision.allowed(0, requestsPerMinute);
         }
+        // Sprint 50 PR L — Redis absent means we CAN'T count. Signal that
+        // to callers so response headers don't lie ("Remaining=full budget"
+        // during an outage). Interceptors should omit the header instead
+        // of emitting a stale number that integrators pace against.
         StringRedisTemplate redis = redisProvider.getIfAvailable();
         if (redis == null) {
-            return Decision.allowed(0, requestsPerMinute);
+            return Decision.allowedButCountUnknown(requestsPerMinute);
         }
 
         long now = Instant.now().getEpochSecond();
@@ -77,7 +81,7 @@ public class ApiKeyRateLimiter {
                 // Redis returned unexpected null; fail-open rather than
                 // fail-closed — a monitoring gap should never DoS callers.
                 log.warn("Rate limiter INCR returned null for key={}; allowing", key);
-                return Decision.allowed(0, requestsPerMinute);
+                return Decision.allowedButCountUnknown(requestsPerMinute);
             }
             // Set TTL only on the first bump — INCR alone doesn't touch expiry.
             // A stray extra EXPIRE call is a small no-op cost we tolerate for
@@ -94,19 +98,33 @@ public class ApiKeyRateLimiter {
         } catch (Exception ex) {
             // Redis blip — fail-open. A monitoring degradation should not
             // deny legitimate traffic; the alert on redis-down is separate.
+            // Signal countUnknown so the interceptor doesn't emit a
+            // misleading Remaining header.
             log.warn("Rate limiter Redis op failed for apiKey={}: {}",
                     apiKeyId, ex.getMessage());
-            return Decision.allowed(0, requestsPerMinute);
+            return Decision.allowedButCountUnknown(requestsPerMinute);
         }
     }
 
-    /** Immutable result of a rate-limit decision. */
-    public record Decision(boolean allowed, int currentCount, int limit, int retryAfterSeconds) {
+    /**
+     * Immutable result of a rate-limit decision.
+     *
+     * <p>Sprint 50 PR L — {@code countKnown=false} means the limiter
+     * fell through (Redis down, INCR returned null, exception caught).
+     * Callers should omit the {@code X-RateLimit-Remaining} response
+     * header in that case rather than surface a lying "full budget"
+     * value that integrators pace against.
+     */
+    public record Decision(boolean allowed, int currentCount, int limit,
+                           int retryAfterSeconds, boolean countKnown) {
         static Decision allowed(int current, int limit) {
-            return new Decision(true, current, limit, 0);
+            return new Decision(true, current, limit, 0, true);
+        }
+        static Decision allowedButCountUnknown(int limit) {
+            return new Decision(true, 0, limit, 0, false);
         }
         static Decision denied(int current, int limit, int retry) {
-            return new Decision(false, current, limit, retry);
+            return new Decision(false, current, limit, retry, true);
         }
     }
 }

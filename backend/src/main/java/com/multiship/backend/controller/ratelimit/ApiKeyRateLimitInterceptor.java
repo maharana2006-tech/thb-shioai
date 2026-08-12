@@ -46,10 +46,16 @@ public class ApiKeyRateLimitInterceptor implements HandlerInterceptor {
         ApiKeyRateLimiter.Decision decision = rateLimiter.tryAcquire(apiKeyId);
 
         // Even allowed responses carry the rate-limit headers so
-        // integrators can adapt their pacing in real time.
+        // integrators can adapt their pacing in real time. Sprint 50 PR L
+        // — omit X-RateLimit-Remaining when Redis is down / count is
+        // unknown; emitting the full-budget number would trick integrators
+        // into hammering the API during an outage. Limit stays; only
+        // Remaining is conditionally set.
         response.setHeader("X-RateLimit-Limit", String.valueOf(decision.limit()));
-        response.setHeader("X-RateLimit-Remaining",
-                String.valueOf(Math.max(0, decision.limit() - decision.currentCount())));
+        if (decision.countKnown()) {
+            response.setHeader("X-RateLimit-Remaining",
+                    String.valueOf(Math.max(0, decision.limit() - decision.currentCount())));
+        }
 
         if (decision.allowed()) {
             return true;

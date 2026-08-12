@@ -116,6 +116,42 @@ class ApiKeyRateLimiterTest {
         assertTrue(d.allowed(), "Redis blip must not deny legitimate traffic");
     }
 
+    /* -------- Sprint 50 PR L: countKnown flag on Redis-unavailable -------- */
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void redisAbsenceReportsCountUnknown() throws Exception {
+        // Signals the interceptor to OMIT X-RateLimit-Remaining rather
+        // than emit a lying full-budget number that would trick integrators
+        // into hammering the API during an outage.
+        ObjectProvider<StringRedisTemplate> empty = mock(ObjectProvider.class);
+        when(empty.getIfAvailable()).thenReturn(null);
+        ApiKeyRateLimiter offline = new ApiKeyRateLimiter(empty);
+        Field f = ApiKeyRateLimiter.class.getDeclaredField("requestsPerMinute");
+        f.setAccessible(true);
+        f.set(offline, LIMIT);
+
+        ApiKeyRateLimiter.Decision d = offline.tryAcquire(42L);
+        assertTrue(d.allowed(), "no Redis → fail-open, still allowed");
+        assertFalse(d.countKnown(), "no Redis → countKnown must be false");
+    }
+
+    @Test
+    void redisThrowsReportsCountUnknown() {
+        when(valueOps.increment(anyString())).thenThrow(new RuntimeException("connection lost"));
+        ApiKeyRateLimiter.Decision d = limiter.tryAcquire(42L);
+        assertTrue(d.allowed(), "Redis blip → fail-open, still allowed");
+        assertFalse(d.countKnown(), "Redis blip → countKnown must be false so header omits");
+    }
+
+    @Test
+    void redisHealthyReportsCountKnown() {
+        ApiKeyRateLimiter.Decision d = limiter.tryAcquire(42L);
+        assertTrue(d.allowed());
+        assertTrue(d.countKnown(), "healthy Redis → countKnown=true so header emits");
+        assertEquals(1, d.currentCount(), "first request bumps to 1");
+    }
+
     private void inject(String field, int value) throws Exception {
         Field f = ApiKeyRateLimiter.class.getDeclaredField(field);
         f.setAccessible(true);

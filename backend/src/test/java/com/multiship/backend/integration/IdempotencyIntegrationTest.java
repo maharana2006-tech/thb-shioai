@@ -148,5 +148,23 @@ class IdempotencyIntegrationTest extends AbstractIntegrationTest {
         assertEquals("value-B", b.getBody().getData());
         assertNotEquals(a.getBody().getData(), b.getBody().getData(),
                 "no cross-tenant leak: values must differ");
+
+        // Sprint 50 PR L — bidirectional namespace check: a THIRD apiKey
+        // using the same idempotencyKey must ALSO run a fresh handler
+        // (i.e. it can't cross-hit A's cached response or B's). Original
+        // test only proved A vs B; this closes the "namespace one-way
+        // leak" gap the audit flagged.
+        AtomicInteger callsC = new AtomicInteger();
+        ResponseEntity<ApiResponse<String>> c = idempotency.executeOrReplay(
+                333L, idempotencyKey, typeRef,
+                () -> {
+                    callsC.incrementAndGet();
+                    return ResponseEntity.ok(ApiResponse.<String>builder()
+                            .status("SUCCESS").code(200).message("C").data("value-C").build());
+                });
+        assertEquals(1, callsC.get(),
+                "apiKey 333 handler must run — namespace isolation is bidirectional");
+        assertEquals("value-C", c.getBody().getData(),
+                "third caller cannot get replayed A/B response");
     }
 }
