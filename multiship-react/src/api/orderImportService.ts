@@ -8,6 +8,10 @@ export interface OrderImportRow {
    *  fold into one shipment; the first row supplies recipient/carrier/
    *  service, subsequent rows carry only orderRef + item columns. */
   orderRef?: string | null
+  /** Sprint 48 — universal-template columns (serialized by the backend). */
+  clientCode?: string | null
+  billTo?: string | null
+  warehouseCode?: string | null
   recipientCompany?: string | null
   recipientPhone?: string | null
   recipientEmail?: string | null

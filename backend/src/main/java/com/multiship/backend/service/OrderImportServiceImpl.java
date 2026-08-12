@@ -1598,11 +1598,18 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
             }
             if (!hasFullItem) {
+                // Emit one short error PER missing customs field on the
+                // leader row — each message starts with the column name so
+                // the review UI renders it directly under that field's
+                // input instead of as one long row-level sentence.
                 List<String> errs = new ArrayList<>(
                         leader.getErrors() == null ? List.of() : leader.getErrors());
-                errs.add("International shipment (countryCode=" + country
-                        + ") requires at least one row with itemDescription + hsCode"
-                        + " + countryOfOrigin + itemQuantity + itemUnitValue");
+                String suffix = " is required for international shipments (countryCode=" + country + ")";
+                if (!StringUtils.hasText(leader.getItemDescription())) errs.add("itemDescription" + suffix);
+                if (!StringUtils.hasText(leader.getHsCode()))           errs.add("hsCode" + suffix);
+                if (!StringUtils.hasText(leader.getCountryOfOrigin()))  errs.add("countryOfOrigin" + suffix);
+                if (leader.getItemQuantity() == null)                   errs.add("itemQuantity" + suffix);
+                if (leader.getItemUnitValue() == null)                  errs.add("itemUnitValue" + suffix);
                 leader.setErrors(errs);
             }
         }
