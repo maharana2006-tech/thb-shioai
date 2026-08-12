@@ -15,6 +15,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -217,5 +218,155 @@ class OrderImportCommitTest {
         assertEquals("success", resp.getStatus());
         // Row was validated OK but no label generated (carrierService null).
         assertNull(resp.getData().getRows().get(0).getGeneratedStatus());
+    }
+
+    /* -------------------------- Sprint 50 Tier 0.5 PR G — tenant clamp/requireMatch -------------------------- */
+
+    /**
+     * Helper: seed a scoped-tenant enforcer that rejects every code
+     * except the ones we let through (matching-tenant). Wired via
+     * reflection because the field is optional-@Autowired.
+     */
+    private static TenantScopeEnforcer rejectingEnforcer() {
+        TenantScopeEnforcer enforcer = mock(TenantScopeEnforcer.class);
+        // Foreign clientCode from row throws immediately.
+        when(enforcer.clampClientCode("OTHER"))
+                .thenThrow(new org.springframework.security.access.AccessDeniedException(
+                        "cross tenant"));
+        org.mockito.Mockito.doThrow(new org.springframework.security.access.AccessDeniedException(
+                        "cross tenant"))
+                .when(enforcer).requireTenantMatch("OTHER");
+        return enforcer;
+    }
+
+    private static OrderImportRowDTO foreignRow(int rowNumber) {
+        OrderImportRowDTO row = validRow(rowNumber);
+        row.setClientCode("OTHER");
+        return row;
+    }
+
+    @Test
+    void previewClampsForeignClientCode() throws Exception {
+        // Uses the full-arg constructor + reflection-wired enforcer so the
+        // preview path pulls the row.clientCode through clamp().
+        OrderImportServiceImpl scoped = new OrderImportServiceImpl(
+                carrierService, null, null, null, null, null, null, null);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                scoped, "tenantScope", rejectingEnforcer());
+
+        String csv = "recipientName,addressLine1,city,postalCode,countryCode,weight,clientCode\n"
+                + "Jane,42 Broadway,NYC,10001,US,2.5,OTHER\n";
+        ApiResponse<OrderImportPreviewDTO> resp = scoped.preview(
+                "orders.csv",
+                new java.io.ByteArrayInputStream(csv.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+
+        // Preview wraps the AccessDeniedException in a friendly BAD_REQUEST.
+        assertEquals("error", resp.getStatus());
+        assertTrue(resp.getMessage().toLowerCase().contains("cross tenant"),
+                "Expected error message to surface the AccessDenied cause: " + resp.getMessage());
+    }
+
+    @Test
+    void commitRejectsRowWithForeignClientCode() {
+        OrderImportServiceImpl scoped = new OrderImportServiceImpl(carrierService);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                scoped, "tenantScope", rejectingEnforcer());
+
+        // AccessDeniedException from clamp propagates out of commit().
+        assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                () -> scoped.commit(List.of(foreignRow(1)), "alice"));
+    }
+
+    @Test
+    void saveRejectsRowWithForeignClientCode() {
+        OrderImportServiceImpl scoped = new OrderImportServiceImpl(carrierService);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                scoped, "tenantScope", rejectingEnforcer());
+
+        assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                () -> scoped.save(List.of(foreignRow(1)), "alice", "orders.xlsx"));
+    }
+
+    @Test
+    void historyDetailRejectsBatchOwnedByForeignTenant() throws Exception {
+        OrderImportServiceImpl scoped = new OrderImportServiceImpl(carrierService);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                scoped, "tenantScope", rejectingEnforcer());
+
+        // Wire the optional repo + mapper so historyDetail can parse a batch.
+        com.multiship.backend.repository.ImportBatchRepository batchRepo =
+                mock(com.multiship.backend.repository.ImportBatchRepository.class);
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                scoped, "importBatchRepository", batchRepo);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                scoped, "importObjectMapper", mapper);
+
+        com.multiship.backend.model.ImportBatch batch =
+                new com.multiship.backend.model.ImportBatch();
+        batch.setId(11L);
+        batch.setRowsJson(mapper.writeValueAsString(List.of(foreignRow(1))));
+        when(batchRepo.findById(11L))
+                .thenReturn(java.util.Optional.of(batch));
+
+        assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                () -> scoped.historyDetail(11L));
+    }
+
+    @Test
+    void generateLabelsForBatchRejectsForeignTenantBatch() throws Exception {
+        OrderImportServiceImpl scoped = new OrderImportServiceImpl(carrierService);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                scoped, "tenantScope", rejectingEnforcer());
+
+        com.multiship.backend.repository.ImportBatchRepository batchRepo =
+                mock(com.multiship.backend.repository.ImportBatchRepository.class);
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                scoped, "importBatchRepository", batchRepo);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                scoped, "importObjectMapper", mapper);
+
+        com.multiship.backend.model.ImportBatch batch =
+                new com.multiship.backend.model.ImportBatch();
+        batch.setId(22L);
+        batch.setRowsJson(mapper.writeValueAsString(List.of(foreignRow(1))));
+        when(batchRepo.findById(22L))
+                .thenReturn(java.util.Optional.of(batch));
+
+        assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                () -> scoped.generateLabelsForBatch(22L, "alice"));
+        // Refused before any status flip / carrier call.
+        verify(batchRepo, org.mockito.Mockito.never()).save(any());
+        verify(carrierService, org.mockito.Mockito.never()).generateManualLabel(any(), any());
+    }
+
+    @Test
+    void generateLabelForRowRejectsForeignTenantBatch() throws Exception {
+        OrderImportServiceImpl scoped = new OrderImportServiceImpl(carrierService);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                scoped, "tenantScope", rejectingEnforcer());
+
+        com.multiship.backend.repository.ImportBatchRepository batchRepo =
+                mock(com.multiship.backend.repository.ImportBatchRepository.class);
+        com.fasterxml.jackson.databind.ObjectMapper mapper =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                scoped, "importBatchRepository", batchRepo);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                scoped, "importObjectMapper", mapper);
+
+        com.multiship.backend.model.ImportBatch batch =
+                new com.multiship.backend.model.ImportBatch();
+        batch.setId(33L);
+        batch.setRowsJson(mapper.writeValueAsString(List.of(foreignRow(1))));
+        when(batchRepo.findById(33L))
+                .thenReturn(java.util.Optional.of(batch));
+
+        assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                () -> scoped.generateLabelForRow(33L, 1, "alice"));
+        verify(carrierService, org.mockito.Mockito.never()).generateManualLabel(any(), any());
     }
 }

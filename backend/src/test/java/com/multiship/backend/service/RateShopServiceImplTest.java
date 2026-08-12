@@ -572,4 +572,29 @@ class RateShopServiceImplTest {
         s.setId(id);
         return s;
     }
+
+    /* -------------------------- Sprint 50 Tier 0.5 PR H — tenant clamp -------------------------- */
+
+    @Test
+    void rateShopClampsForeignCustomerNo() {
+        // A scoped USER supplying customerNo=OTHER must be rejected at the
+        // clamp — the fan-out never runs, so no carrier account is looked
+        // up. Wire the enforcer via reflection (it's optional-injected).
+        TenantScopeEnforcer enforcer = mock(TenantScopeEnforcer.class);
+        when(enforcer.clampClientCode("OTHER"))
+                .thenThrow(new org.springframework.security.access.AccessDeniedException(
+                        "cross tenant"));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "tenantScope", enforcer);
+
+        var request = RateShopRequestDTO.builder()
+                .shipment(shipment()).customerNo("OTHER").build();
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                org.springframework.security.access.AccessDeniedException.class,
+                () -> service.rateShop(request));
+
+        // No carrier account resolution should have happened.
+        org.mockito.Mockito.verify(accountRepo, org.mockito.Mockito.never())
+                .findByCustomerNoIgnoreCaseAndClientDefaultTrue(anyString());
+    }
 }
