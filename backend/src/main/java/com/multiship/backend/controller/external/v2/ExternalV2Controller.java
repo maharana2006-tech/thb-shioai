@@ -97,6 +97,9 @@ public class ExternalV2Controller {
         // persists via IdempotencyService. Duplicate POST from a partner
         // retry no longer creates two shipments.
         ApiKeyPrincipal api = requireApi(caller);
+        // Sprint 50 Tier 1-C — money-touching endpoint. failClosedOnRedisError=true
+        // so a Redis outage surfaces as 503 IDEMPOTENCY_UNAVAILABLE instead of
+        // executing the handler without a dedup guarantee (which could double-charge).
         return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
                 new TypeReference<ApiResponse<ExternalShipmentResponse>>() {},
                 () -> {
@@ -110,7 +113,7 @@ public class ExternalV2Controller {
                     } catch (ExternalApiException e) {
                         return this.<ExternalShipmentResponse>error(e);
                     }
-                });
+                }, true);
     }
 
     @Operation(summary = "Get tracking for a shipment")
@@ -132,6 +135,8 @@ public class ExternalV2Controller {
             @PathVariable Long shipmentId, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         ApiKeyPrincipal api = requireApi(caller);
+        // Sprint 50 Tier 1-C — money-touching (voids a live label). Fail-closed
+        // so a Redis outage can't trigger duplicate voids on retry.
         return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
                 new TypeReference<ApiResponse<Map<String, Object>>>() {},
                 () -> {
@@ -141,7 +146,7 @@ public class ExternalV2Controller {
                     } catch (ExternalApiException e) {
                         return this.<Map<String, Object>>error(e);
                     }
-                });
+                }, true);
     }
 
     @Operation(summary = "Validate an address")
@@ -187,12 +192,14 @@ public class ExternalV2Controller {
             @RequestBody PickupRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         ApiKeyPrincipal api = requireApi(caller);
+        // Sprint 50 Tier 1-C — money-touching (a scheduled pickup dispatches a
+        // truck and may be billed by the carrier). Fail-closed on Redis outage.
         return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
                 new TypeReference<ApiResponse<PickupResponseDTO>>() {},
                 () -> {
                     ApiResponse<PickupResponseDTO> result = pickupService.schedule(req);
                     return ResponseEntity.status(result.getCode()).body(result);
-                });
+                }, true);
     }
 
     @Operation(summary = "Close out the day's shipments at a carrier (idempotent via Idempotency-Key)")
@@ -202,12 +209,14 @@ public class ExternalV2Controller {
             @RequestBody ManifestRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         ApiKeyPrincipal api = requireApi(caller);
+        // Sprint 50 Tier 1-C — money-touching (close-out commits the day's
+        // labels to the carrier and triggers manifests + billing). Fail-closed.
         return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
                 new TypeReference<ApiResponse<ManifestResponseDTO>>() {},
                 () -> {
                     ApiResponse<ManifestResponseDTO> result = manifestService.closeOut(req);
                     return ResponseEntity.status(result.getCode()).body(result);
-                });
+                }, true);
     }
 
     // ================================================================

@@ -19,7 +19,12 @@ import org.springframework.test.context.TestPropertySource;
         // metadata (AbstractIntegrationTest does the same via
         // DynamicPropertySource for the integration suite).
         "spring.flyway.enabled=false",
-        "spring.jpa.hibernate.ddl-auto=create-drop"
+        "spring.jpa.hibernate.ddl-auto=create-drop",
+        // Sprint 50 Tier 1-C: Redis autoconfig sees the empty default host
+        // and hard-fails on 'host must not be empty'. The smoke test doesn't
+        // need Redis. IdempotencyIntegrationTest re-enables autoconfig when
+        // it wires a real container.
+        "spring.autoconfigure.exclude=org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration,org.springframework.boot.data.redis.autoconfigure.DataRedisRepositoriesAutoConfiguration"
 })
 class BackendApplicationTests {
 

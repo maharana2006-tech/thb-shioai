@@ -48,6 +48,15 @@ public class WebhookAsyncConfig {
         // don't just drop scans on the floor.
         exec.setRejectedExecutionHandler(
                 new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        // Graceful shutdown: with setDaemon(true) above, a JVM stop would
+        // otherwise hard-kill any in-flight mutateStateForVerifiedEvent
+        // mid-save and leave an OrderTracking row half-updated. The Sprint
+        // 49 Tier 1 dedup means a carrier redelivery would eventually heal
+        // it, but the 30s drain (matching Spring Boot's default graceful
+        // shutdown window) avoids that extra retry loop in the common
+        // deploy/restart case.
+        exec.setWaitForTasksToCompleteOnShutdown(true);
+        exec.setAwaitTerminationSeconds(30);
         exec.initialize();
         return exec;
     }

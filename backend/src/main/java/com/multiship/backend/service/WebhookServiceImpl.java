@@ -166,6 +166,14 @@ public class WebhookServiceImpl implements WebhookService {
         return saved;
     }
 
+    // Sprint 50 Tier 1 finding #9 — deliberately NOT @Transactional. The two
+    // saves (label_packages, order_trackings) target different aggregate
+    // roots and a partial update is recoverable: any missed row is healed by
+    // the carrier's redelivery through Sprint 49 Tier 1's dedup. Adding a
+    // transaction here would need a separate proxy bean because the executor
+    // lambda bypasses this method's own proxy, and the cascade of extracting
+    // a WebhookStateMutator @Component wasn't worth the correctness win over
+    // the redelivery safety net.
     /**
      * Sprint 50 Tier 1 finding #9 — the async tail of {@link #receive}. Runs
      * on {@code webhookExecutor}. Kept package-private for test override
