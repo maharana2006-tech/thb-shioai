@@ -48,6 +48,7 @@ class MigrationsFreshDbIntegrationTest {
             "V2__sprint49_tier0_tier1_columns.sql",
             "V5__sprint50_tier05_E_scope_tightening.sql",
             "V6__sprint50_tier1_B_data_model.sql",
+            "V7__post_audit_indexes.sql",
     };
 
     protected static final PostgreSQLContainer<?> postgres;

@@ -124,19 +124,41 @@ public class SecurityConfig {
                 status, errorCode, message, Instant.now()));
     }
 
+    /**
+     * Sprint 50 PR N post-audit finding #17 — CORS origins are now
+     * env-driven. Prior code hard-coded private-LAN patterns
+     * ({@code http://192.168.*:*} etc.) with {@code allowCredentials=true},
+     * so any device on the same corporate LAN could stand up a page that
+     * fetched the app with cookies. In prod that's a real cross-origin
+     * risk — the LAN-wide patterns should ONLY be enabled in dev/staging.
+     *
+     * <p>Env vars:
+     * <ul>
+     *   <li>{@code CORS_ALLOWED_ORIGIN_PATTERNS} — comma-separated list;
+     *       defaults to localhost + private-LAN for backward-compat on
+     *       existing dev machines. Prod deploy MUST set this to the
+     *       app's known FQDN(s) only (e.g. {@code https://app.example.com}).</li>
+     * </ul>
+     */
+    @org.springframework.beans.factory.annotation.Value("${cors.allowed-origin-patterns:"
+            + "http://localhost:*,"
+            + "http://127.0.0.1:*,"
+            + "http://[::1]:*,"
+            + "http://192.168.*:*,"
+            + "http://10.*:*,"
+            + "http://172.16.*:*,http://172.17.*:*,http://172.18.*:*,http://172.19.*:*,"
+            + "http://172.2*.*:*,http://172.30.*:*,http://172.31.*:*"
+            + "}")
+    private String corsAllowedOriginPatterns;
+
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOriginPatterns(Arrays.asList(
-                "http://localhost:*",
-                "http://127.0.0.1:*",
-                "http://[::1]:*",
-                // Private LAN ranges so the app works from other devices on the network.
-                "http://192.168.*:*",
-                "http://10.*:*",
-                "http://172.16.*:*", "http://172.17.*:*", "http://172.18.*:*", "http://172.19.*:*",
-                "http://172.2*.*:*", "http://172.30.*:*", "http://172.31.*:*"
-        ));
+        configuration.setAllowedOriginPatterns(
+                Arrays.stream(corsAllowedOriginPatterns.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .toList());
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Cache-Control", "Idempotency-Key", "X-API-Key"));
         // Headers the browser must expose to JS via response.headers.get().

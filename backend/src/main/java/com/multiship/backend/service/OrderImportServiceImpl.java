@@ -962,7 +962,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
         try {
             if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
-        } catch (Exception ignore) { /* keep prior rowsJson */ }
+        } catch (Exception ex) {
+            // Sprint 50 PR N post-audit #12 — was `ignore`; that hid every
+            // serialisation failure. If rowsJson silently stops reflecting
+            // the latest outcomes, data-history rows drift with no
+            // diagnostic. Log so ops can trace regressions.
+            log.warn("Import batch {} rowsJson serialisation failed — keeping prior payload: {}",
+                    id, ex.getMessage());
+        }
         batch = importBatchRepository.save(batch);
 
         log.info("Import batch {} label generation ({}): {}/{} labels → {} (labelBatch {})",
@@ -988,6 +995,16 @@ public class OrderImportServiceImpl implements OrderImportService {
                         batch.getRowsJson(),
                         new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
             } catch (Exception e) {
+                // Sprint 50 PR N post-audit #13 — was silent; that gave
+                // an empty rows list, firstClientCode(rows)==null, and
+                // requireMatch(null) which for OPERATORS is a no-op —
+                // effectively a silent operator-only tenant guard skip.
+                // Log the corruption so ops can see + investigate, and
+                // still fall through with empty rows (the guard below
+                // throws for scoped users on null; operators get an
+                // empty result which is the safer response).
+                log.warn("Import batch {} rowsJson parse failed — treating as empty: {}",
+                        id, e.getMessage());
                 rows = new ArrayList<>();
             }
         }
@@ -1016,7 +1033,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
         try {
             if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
-        } catch (Exception ignore) { /* keep prior rowsJson */ }
+        } catch (Exception ex) {
+            // Sprint 50 PR N post-audit #12 — was `ignore`; that hid every
+            // serialisation failure. If rowsJson silently stops reflecting
+            // the latest outcomes, data-history rows drift with no
+            // diagnostic. Log so ops can trace regressions.
+            log.warn("Import batch {} rowsJson serialisation failed — keeping prior payload: {}",
+                    id, ex.getMessage());
+        }
         batch = importBatchRepository.save(batch);
 
         log.info("Import batch {} row {} label ({}): {} → batch {} (labelBatch {})",
