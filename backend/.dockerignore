@@ -1,0 +1,28 @@
+# Sprint 51 M-Ops (BP-M3) — keep the Docker build context lean so cold
+# `docker build` doesn't ship the target/ directory and IDE files into
+# the builder stage layer cache.
+
+# Build output
+target/
+!target/backend-*.jar
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.classpath
+.project
+.settings/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+._*
+
+# Git — the build doesn't need history
+.git/
+.gitignore
+
+# Tests logs (fine to ignore; unit tests don't run inside the image build)
+surefire-reports/
+failsafe-reports/
