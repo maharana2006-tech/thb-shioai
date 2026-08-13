@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -78,8 +79,16 @@ public class ExternalWebhookDispatcher {
     public void fire(EventType event, Long apiKeyIdFilter, Map<String, Object> payload) {
         try {
             String body = objectMapper.writeValueAsString(payload);
-            for (ExternalWebhookSubscription sub : subscriptionRepo.findByEventAndActiveTrue(event)) {
-                if (apiKeyIdFilter != null && !apiKeyIdFilter.equals(sub.getApiKeyId())) continue;
+            // Sprint 51 M-Perf (BP-M1) — push the apiKeyId filter into
+            // the DB WHERE clause when supplied. Pre-M-Perf we allocated
+            // the entire active-subscription list, then Java-side-filtered.
+            // The narrower query lets Postgres seek via the composite
+            // index V10 adds on (event, api_key_id) instead of scanning
+            // every active row.
+            List<ExternalWebhookSubscription> subs = apiKeyIdFilter != null
+                    ? subscriptionRepo.findByEventAndApiKeyIdAndActiveTrue(event, apiKeyIdFilter)
+                    : subscriptionRepo.findByEventAndActiveTrue(event);
+            for (ExternalWebhookSubscription sub : subs) {
                 deliverOne(sub, event, body);
             }
         } catch (Exception ex) {

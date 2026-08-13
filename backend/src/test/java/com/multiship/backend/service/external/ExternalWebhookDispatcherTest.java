@@ -43,29 +43,43 @@ class ExternalWebhookDispatcherTest {
 
     @Test
     void fire_noSubscriptions_isNoOp() {
-        when(subRepo.findByEventAndActiveTrue(EventType.LABEL_GENERATED))
+        // Sprint 51 M-Perf (BP-M1) — dispatcher now calls the filtered
+        // variant when apiKeyIdFilter is non-null, so tests must stub
+        // findByEventAndApiKeyIdAndActiveTrue instead of the broad find.
+        when(subRepo.findByEventAndApiKeyIdAndActiveTrue(EventType.LABEL_GENERATED, 42L))
                 .thenReturn(List.of());
         dispatcher.fire(EventType.LABEL_GENERATED, 42L, Map.of("orderNo", 1));
         verifyNoInteractions(deliveryRepo);
     }
 
     @Test
-    void fire_perApiKeyFiltering_onlyFiresMatchingSubs() {
+    void fire_perApiKeyFiltering_returnsOnlyMatchingSubs() {
+        // Sprint 51 M-Perf — the WHERE-clause filter now happens DB-side.
+        // The repo returns just "mine" when queried with apiKeyIdFilter=42;
+        // dispatcher iterates only those. The prior Java-side-filter
+        // semantics are preserved from the caller's perspective.
         ExternalWebhookSubscription mine = subscription(1L, 42L, "https://mine.example");
-        ExternalWebhookSubscription other = subscription(2L, 99L, "https://other.example");
-        when(subRepo.findByEventAndActiveTrue(EventType.LABEL_GENERATED))
-                .thenReturn(List.of(mine, other));
+        when(subRepo.findByEventAndApiKeyIdAndActiveTrue(EventType.LABEL_GENERATED, 42L))
+                .thenReturn(List.of(mine));
 
-        // Trigger the dispatch. We don't have a real HTTP client wired,
-        // so the delivery loop will bail out inside the retry attempts;
-        // the important assertion is that only mine's dispatch was
-        // attempted (i.e. exactly one delivery row saved for sub 1).
         dispatcher.fire(EventType.LABEL_GENERATED, 42L, Map.of("shipmentId", 1000));
 
-        // Both attempts land in deliveryRepo.save; a save for sub 2 would
-        // be a leak of the per-apiKey filter.
         verify(deliveryRepo, atLeastOnce()).save(argThat(d -> d.getSubscriptionId() == 1L));
         verify(deliveryRepo, never()).save(argThat(d -> d.getSubscriptionId() == 2L));
+        // The broad find must NOT be consulted when a filter is present —
+        // that's the whole point of the DB-side filter.
+        verify(subRepo, never()).findByEventAndActiveTrue(any());
+    }
+
+    @Test
+    void fire_nullApiKeyFilter_usesBroadFind() {
+        // apiKeyIdFilter = null → dispatcher hits the unfiltered method
+        // (broadcast to every subscription for the event, all tenants).
+        when(subRepo.findByEventAndActiveTrue(EventType.LABEL_GENERATED))
+                .thenReturn(List.of());
+        dispatcher.fire(EventType.LABEL_GENERATED, null, Map.of("orderNo", 1));
+        verify(subRepo).findByEventAndActiveTrue(EventType.LABEL_GENERATED);
+        verify(subRepo, never()).findByEventAndApiKeyIdAndActiveTrue(any(), any());
     }
 
     @Test
