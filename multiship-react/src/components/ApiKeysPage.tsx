@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import toast from 'react-hot-toast'
 import { notify } from '../utils/notify'
 import {
   FiAlertTriangle,
@@ -85,7 +84,7 @@ export default function ApiKeysPage() {
 
   const submitIssue = async () => {
     if (!form.name.trim()) {
-      toast.error('A key name is required.')
+      notify.error('A key name is required.')
       return
     }
     setIssuing(true)
@@ -111,9 +110,9 @@ export default function ApiKeysPage() {
     try {
       await navigator.clipboard.writeText(issued.token)
       setCopied(true)
-      toast.success('Token copied to clipboard.')
+      notify.success('Token copied to clipboard.')
     } catch {
-      toast.error('Copy failed — select the token text and copy it manually.')
+      notify.error('Copy failed — select the token text and copy it manually.')
     }
   }
 
@@ -122,7 +121,7 @@ export default function ApiKeysPage() {
     setRevokeBusy(true)
     try {
       await apiKeyService.revoke(revoking.id)
-      toast.success(`API key "${revoking.name}" revoked.`)
+      notify.success(`API key "${revoking.name}" revoked.`)
       setRevoking(null)
       void load()
     } catch (e) {
