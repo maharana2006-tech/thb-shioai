@@ -47,17 +47,22 @@ public class AuthController {
     }
 
     @Operation(summary = "Log in",
-            description = "Returns {token, username, role}. Sprint 50 PR Q1: ALSO sets the JWT as an "
-                    + "httpOnly cookie so a subsequent SPA session can bootstrap via /session without JS "
-                    + "ever seeing the token. The body `token` field remains populated for one deploy cycle "
-                    + "so unmigrated FE builds keep working. The JWT carries the role claim and expires in 24h. "
+            description = "Returns {username, role}; the JWT itself is set as an httpOnly cookie "
+                    + "(Sprint 50 PR Q1) so the SPA can never read it. The token carries the role "
+                    + "claim + Sprint 51 T2 tv/jti claims and expires in 24h. "
                     + "401 INVALID_CREDENTIALS on bad credentials. "
-                    + "403 EMAIL_NOT_VERIFIED for a public-signup user who has not consumed the verification link.")
+                    + "403 EMAIL_NOT_VERIFIED for a public-signup user who has not consumed the verification link. "
+                    + "429 AUTH_FAILURE_LOCKOUT after too many failed attempts on the same (IP, username) pair.")
     @SecurityRequirements
     @PostMapping("/login")
     public ResponseEntity<?> authenticateUser(@Valid @RequestBody LoginRequest loginRequest,
+                                              HttpServletRequest request,
                                               HttpServletResponse response) {
-        return authService.loginUser(loginRequest, response);
+        // Sprint 51 T2 finding #6 — pass the caller's IP so the auth
+        // failure limiter can lock out a scripted brute-forcer without
+        // touching the wider TenantRateLimitFilter (which sits AFTER
+        // auth and can't see pre-auth attempts).
+        return authService.loginUser(loginRequest, response, resolveClientIp(request));
     }
 
     /** Sprint 50 PR Q1 — SPA bootstrap after page refresh. Returns

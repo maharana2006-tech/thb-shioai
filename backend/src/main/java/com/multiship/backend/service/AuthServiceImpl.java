@@ -13,6 +13,7 @@ import com.multiship.backend.config.JwtAuthenticationFilter;
 import com.multiship.backend.dto.SessionResponse;
 import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.repository.UserRepository;
+import com.multiship.backend.service.ratelimit.AuthFailureLimiter;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -70,6 +71,22 @@ public class AuthServiceImpl implements AuthService {
 
     @Autowired
     private com.multiship.backend.service.mail.MailSender mailSender;
+
+    /** Sprint 51 T2 finding #6 — brute-force lockout on login. */
+    @Autowired
+    private AuthFailureLimiter authFailureLimiter;
+
+    /**
+     * Sprint 51 T2 finding #6 (secondary) — timing side channel fix.
+     * When the username doesn't exist we still run a bcrypt compare
+     * against this precomputed hash so a scripted attacker can't
+     * distinguish "no such user" from "wrong password" by measuring
+     * response latency. Precomputed once at class load; the exact
+     * plaintext is irrelevant — only the CPU-cost matters.
+     */
+    private static final String DUMMY_BCRYPT_HASH =
+            new org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder()
+                    .encode("dummy-hash-for-timing-parity");
 
     @Value("${signup.public-enabled:false}")
     private boolean publicSignupEnabled;
@@ -285,9 +302,48 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public ResponseEntity<?> loginUser(LoginRequest loginRequest, HttpServletResponse response) {
-        Optional<User> userOptional = userRepository.findByUsername(loginRequest.getUsername());
+        // Sprint 51 T2 finding #6 — delegate to the IP-aware overload.
+        // "unknown" disables per-IP lockout for callers without a servlet
+        // context (integration tests, internal callers). Per-username
+        // half of the composite still bounds automated abuse.
+        return loginUser(loginRequest, response, "unknown");
+    }
 
-        if (userOptional.isPresent() && passwordEncoder.matches(loginRequest.getPassword(), userOptional.get().getPassword())) {
+    @Override
+    public ResponseEntity<?> loginUser(LoginRequest loginRequest, HttpServletResponse response, String remoteIp) {
+        String ip = remoteIp == null || remoteIp.isBlank() ? "unknown" : remoteIp;
+        String username = loginRequest.getUsername();
+
+        // Sprint 51 T2 finding #6 — brute-force lockout check BEFORE
+        // bcrypt so a locked-out caller doesn't cost 150ms of CPU per
+        // hit (that would amplify a DDoS). 429 + Retry-After.
+        if (authFailureLimiter.isLocked(ip, username)) {
+            int retry = authFailureLimiter.retryAfterSeconds(ip, username);
+            log.warn("Login lockout hit for ip={} username={} retry={}s", ip, username, retry);
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .header("Retry-After", String.valueOf(retry))
+                    .body(new MessageResponse(
+                            "Too many failed login attempts. Try again in "
+                                    + Math.max(1, retry / 60) + " minute(s).",
+                            ErrorCode.AUTH_FAILURE_LOCKOUT));
+        }
+
+        Optional<User> userOptional = userRepository.findByUsername(username);
+
+        // Sprint 51 T2 finding #6 (secondary) — timing side channel fix.
+        // Run a dummy bcrypt compare when the user doesn't exist so
+        // response time doesn't reveal username validity. Result is
+        // discarded — the authOK check below uses userOptional.isPresent().
+        boolean passwordOk = false;
+        if (userOptional.isPresent()) {
+            passwordOk = passwordEncoder.matches(loginRequest.getPassword(),
+                    userOptional.get().getPassword());
+        } else {
+            // Same-cost bcrypt against a throwaway hash.
+            passwordEncoder.matches(loginRequest.getPassword(), DUMMY_BCRYPT_HASH);
+        }
+
+        if (userOptional.isPresent() && passwordOk) {
             User user = userOptional.get();
 
             // Sprint 50 Tier 0.5 PR E — reject login for an admin-revoked
@@ -330,9 +386,19 @@ public class AuthServiceImpl implements AuthService {
             // `token` field; the SPA now reads it exclusively from the cookie.
             response.addHeader(HttpHeaders.SET_COOKIE,
                     authCookie(token, Duration.ofMillis(jwtExpirationMillis).toSeconds()).toString());
+            // Sprint 51 T2 finding #6 — clear the failure counter so
+            // legitimate typos earlier in the session don't leave the
+            // account half-locked at next login.
+            authFailureLimiter.recordSuccess(ip, username);
             return ResponseEntity.ok(new AuthResponse(user.getUsername(), user.getRole()));
         }
 
+        // Sprint 51 T2 finding #6 — bad credentials → count toward
+        // lockout. Deliberately covers both "no such user" and "wrong
+        // password" (paired with the DUMMY_BCRYPT_HASH above so timing
+        // matches). Deactivated + unverified paths above do NOT count
+        // — those aren't brute-force signals.
+        authFailureLimiter.recordFailure(ip, username);
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(new MessageResponse("Error: Invalid username or password!", ErrorCode.INVALID_CREDENTIALS));
     }

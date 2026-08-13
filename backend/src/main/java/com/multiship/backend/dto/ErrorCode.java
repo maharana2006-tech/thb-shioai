@@ -47,6 +47,13 @@ public enum ErrorCode {
     /** Tenant exceeded the per-minute request budget on a write endpoint. */
     TENANT_RATE_LIMITED,
 
+    // ===== Sprint 51 T2 finding #6 — auth brute-force lockout =====
+    /**
+     * Too many failed login / OAuth token attempts for this
+     * (ip, username) pair. Response carries {@code Retry-After} seconds.
+     */
+    AUTH_FAILURE_LOCKOUT,
+
     // ===== Orders =====
     ORDER_NOT_FOUND,
     VALIDATION_ERROR,

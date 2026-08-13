@@ -70,6 +70,10 @@ class AuthServiceImplPRDTest {
         injectField("clientRepository", clientRepository);
         injectField("mailSender", mailSender);
         injectField("emailVerifyTtlHours", 24);
+        // Sprint 51 T2 finding #6 — loginUser now checks the auth-failure
+        // limiter before running bcrypt. Inject a mock that always allows.
+        injectField("authFailureLimiter",
+                mock(com.multiship.backend.service.ratelimit.AuthFailureLimiter.class));
 
         when(passwordEncoder.encode(anyString())).thenReturn("bcrypt-hash");
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("ok");

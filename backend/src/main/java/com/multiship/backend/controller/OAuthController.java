@@ -3,8 +3,10 @@ package com.multiship.backend.controller;
 import com.multiship.backend.config.JwtService;
 import com.multiship.backend.model.ApiKey;
 import com.multiship.backend.service.ApiKeyService;
+import com.multiship.backend.service.ratelimit.AuthFailureLimiter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -45,13 +47,22 @@ public class OAuthController {
 
     private final ApiKeyService apiKeyService;
     private final JwtService jwtService;
+    /** Sprint 51 T2 finding #6 — locks out repeated failed OAuth token
+     *  attempts on the same (ip, client_id) pair. Same policy as
+     *  /auth/login; audit called out that {@code invalid_client} vs
+     *  {@code invalid_grant} otherwise makes secret-guessing trivial once
+     *  the 8-char client_id prefix is public. */
+    private final AuthFailureLimiter authFailureLimiter;
 
-    @Operation(summary = "Issue an access token from an API key")
+    @Operation(summary = "Issue an access token from an API key",
+            description = "429 with error='rate_limited' when the (IP, client_id) pair has hit the "
+                    + "auth-failure lockout (Sprint 51 T2). Otherwise 401 invalid_client on a bad secret.")
     @PostMapping(value = "/token",
             consumes = { MediaType.APPLICATION_FORM_URLENCODED_VALUE, MediaType.APPLICATION_JSON_VALUE })
     public ResponseEntity<?> token(
             @RequestParam(required = false) MultiValueMap<String, String> form,
-            @RequestBody(required = false) TokenRequest body) {
+            @RequestBody(required = false) TokenRequest body,
+            HttpServletRequest request) {
         String grantType = extract(form, body, "grant_type", TokenRequest::getGrantType);
         String clientId = extract(form, body, "client_id", TokenRequest::getClientId);
         String clientSecret = extract(form, body, "client_secret", TokenRequest::getClientSecret);
@@ -65,13 +76,29 @@ public class OAuthController {
                     "client_id and client_secret are required");
         }
 
+        // Sprint 51 T2 finding #6 — brute-force check BEFORE the msk_
+        // verifier. Rejecting a locked-out caller without running the
+        // bcrypt/hash verifier keeps DDoS amplification off the table.
+        String ip = resolveClientIp(request);
+        if (authFailureLimiter.isLocked(ip, clientId)) {
+            int retry = authFailureLimiter.retryAfterSeconds(ip, clientId);
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .header("Retry-After", String.valueOf(retry))
+                    .body(java.util.Map.of(
+                            "error", "rate_limited",
+                            "error_description", "Too many failed attempts; retry in "
+                                    + Math.max(1, retry / 60) + " minute(s)."));
+        }
+
         // Rebuild the msk_ token from the OAuth params and re-use the
         // existing verifier so authentication semantics stay identical.
         Optional<ApiKey> verified = tryEnvironments(clientId, clientSecret);
         if (verified.isEmpty()) {
+            authFailureLimiter.recordFailure(ip, clientId);
             return err(HttpStatus.UNAUTHORIZED, "invalid_client",
                     "Client credentials did not authenticate");
         }
+        authFailureLimiter.recordSuccess(ip, clientId);
         ApiKey key = verified.get();
         String subject = "apikey:" + key.getId();
         // Sprint 50 Tier 0.5 PR A — API-key tokens carry the key's clientCode
@@ -112,6 +139,18 @@ public class OAuthController {
                 "error", code,
                 "error_description", description
         ));
+    }
+
+    /** Sprint 51 T2 finding #6 — mirrors AuthController.resolveClientIp.
+     *  Prefers the first hop of X-Forwarded-For; falls back to the socket
+     *  peer. Kept static since the controller isn't tenant-scoped. */
+    private static String resolveClientIp(HttpServletRequest request) {
+        String xff = request.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) {
+            int comma = xff.indexOf(',');
+            return (comma > 0 ? xff.substring(0, comma) : xff).trim();
+        }
+        return request.getRemoteAddr();
     }
 
     @Data
