@@ -114,7 +114,32 @@ jobs:
     timeout-minutes: 30
     needs: test
 
+    # BackendApplicationTests (@SpringBootTest smoke) opens a real JDBC
+    # connection at boot to validate the ApplicationContext. It runs in
+    # BOTH the unit + integration jobs so we need the same runner-side
+    # postgres service here. AbstractIntegrationTest classes still get
+    # their own Testcontainers-managed postgres per JVM — this service
+    # container is just for the smoke test.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: multiship_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     env:
+      # Runner-side DB for BackendApplicationTests (mirrors the unit job).
+      DB_URL: jdbc:postgresql://localhost:5432/multiship_db
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
       # Same throwaway values the unit-test job uses. AbstractIntegrationTest
       # overrides jwt.secret + secrets.encryption-key via @TestPropertySource
       # so these are only used by classes that don't override.
