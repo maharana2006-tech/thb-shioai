@@ -24,7 +24,9 @@ import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
+import jakarta.annotation.PostConstruct;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -144,37 +146,59 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /**
-     * Sprint 50 Tier 1 finding #8 — fan-out executor for the commit loop.
-     * Pre-fix the loop processed groups serially on the request thread; a
-     * 500-row XLSX took 40-120 min because each carrier call is 5-15s.
-     * Mirrors {@link BulkLabelServiceImpl#fanOutExecutor} — bounded pool
-     * of daemon threads shared across every commit call. Concurrency cap
-     * matches BulkLabelServiceImpl's WORKER_CONCURRENCY convention.
+     * Sprint 50 Tier 1 finding #8 / Sprint 51 R4 (finding #4) — fan-out
+     * executor for the commit loop. Pre-Sprint-50 the loop processed
+     * groups serially on the request thread; a 500-row XLSX took 40-120 min.
+     * Sprint 50 introduced the pool with a hardcoded 4 workers; Sprint 51
+     * R4 externalises the size via application.properties (import.commit-
+     * concurrency, import.max-per-tenant) with the same defaults chosen
+     * for the bulk-label pool.
      */
-    private static final int IMPORT_COMMIT_CONCURRENCY = 4;
-    private static final int IMPORT_MAX_PER_TENANT = 2;
-    private final ExecutorService fanOutExecutor = Executors.newFixedThreadPool(
-            IMPORT_COMMIT_CONCURRENCY, r -> {
-                Thread t = new Thread(r, "order-import-commit");
-                t.setDaemon(true);
-                return t;
-            });
+    /**
+     * Instance-field defaults kick in for pure-Mockito unit tests that
+     * construct this service via {@code new} — Spring never resolves the
+     * {@code @Value} annotations in that path, and {@link #initExecutors()}
+     * won't fire either. {@link #ensureExecutors()} handles the lazy
+     * fallback for the same reason.
+     */
+    @Value("${import.commit-concurrency:24}")
+    private int importCommitConcurrency = 24;
+
+    @Value("${import.max-per-tenant:8}")
+    private int importMaxPerTenant = 8;
+
+    private ExecutorService fanOutExecutor;
 
     /**
-     * Sprint 50 Tier 1 finding #15 — fair-share wrapper so one tenant's
-     * 500-row import can't monopolise the {@value #IMPORT_COMMIT_CONCURRENCY}-slot
-     * pool while another tenant's 10-row import waits.
-     *
-     * <p>Sprint 50 PR K — commit() is called synchronously from the
+     * Sprint 50 PR K — commit() is called synchronously from the
      * OrderImportController HTTP handler, so the caller thread IS a
      * Tomcat worker. Bound the total time the HTTP thread can be blocked
      * on permit acquire to 30s; on overflow the batch aborts with a
      * TenantSaturatedException that the controller surfaces as 429.
      */
     private static final long IMPORT_MAX_BATCH_WAIT_MS = 30_000L;
-    private final com.multiship.backend.service.fairness.FairTenantExecutor fairExecutor =
-            new com.multiship.backend.service.fairness.FairTenantExecutor(
-                    fanOutExecutor, IMPORT_MAX_PER_TENANT, 60, IMPORT_MAX_BATCH_WAIT_MS);
+    private com.multiship.backend.service.fairness.FairTenantExecutor fairExecutor;
+
+    @PostConstruct
+    void initExecutors() {
+        ensureExecutors();
+        log.info("OrderImportServiceImpl fan-out ready: commitConcurrency={} maxPerTenant={}",
+                importCommitConcurrency, importMaxPerTenant);
+    }
+
+    /** Lazy fallback — see the BulkLabelServiceImpl.ensureExecutors javadoc.
+     *  Same rationale: pure-Mockito tests skip @PostConstruct, so we init
+     *  on first use with whatever the compiled-in defaults are. */
+    private synchronized void ensureExecutors() {
+        if (fairExecutor != null) return;
+        this.fanOutExecutor = Executors.newFixedThreadPool(importCommitConcurrency, r -> {
+            Thread t = new Thread(r, "order-import-commit");
+            t.setDaemon(true);
+            return t;
+        });
+        this.fairExecutor = new com.multiship.backend.service.fairness.FairTenantExecutor(
+                fanOutExecutor, importMaxPerTenant, 60, IMPORT_MAX_BATCH_WAIT_MS);
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public OrderImportServiceImpl(CarrierService carrierService,
@@ -709,7 +733,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Sprint 50 PR M — L3: was WARN (log-spam risk under high-throughput
         // commits); this is informational fan-out telemetry, not an alert.
         log.info("Order import commit ({}): fanning {} groups across {} worker(s).",
-                requestedBy, groupCount, IMPORT_COMMIT_CONCURRENCY);
+                requestedBy, groupCount, importCommitConcurrency);
 
         List<Callable<GroupOutcome>> tasks = new ArrayList<>(groupCount);
         for (Map.Entry<String, List<OrderImportRowDTO>> entry : groups.entrySet()) {
@@ -731,6 +755,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         int invalid = 0;
         int generated = 0;
         try {
+            ensureExecutors();
             List<Future<GroupOutcome>> futures = fairExecutor.submitAll(tenantKey, tasks);
             for (Future<GroupOutcome> f : futures) {
                 GroupOutcome outcome = f.get();

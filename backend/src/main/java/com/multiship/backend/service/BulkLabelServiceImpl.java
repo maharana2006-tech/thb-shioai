@@ -8,8 +8,10 @@ import com.multiship.backend.dto.LabelGenerationResponse;
 import com.multiship.backend.model.BulkLabelJob;
 import com.multiship.backend.repository.BulkLabelJobRepository;
 import com.multiship.backend.repository.OrderRepository;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -43,10 +45,26 @@ import java.util.zip.ZipOutputStream;
 @RequiredArgsConstructor
 public class BulkLabelServiceImpl implements BulkLabelService {
 
-    /** Max concurrent per-order labels — carriers rate-limit at ~5-10 rps
-     *  per account. Keeping it conservative so a big job doesn't trip
-     *  carrier throttling. */
-    private static final int WORKER_CONCURRENCY = 4;
+    /**
+     * Sprint 51 R4 (audit finding #4) — pool sizes are now externalised
+     * via application.properties (bulk.worker-concurrency, bulk.max-per-tenant).
+     * Pre-R4 these were hardcoded to 4 and 2, capping bulk throughput at
+     * ~12 shipments/min/tenant against a 5-15s carrier RTT — an order of
+     * magnitude below the 100/min/tenant target. Defaults are set in
+     * application.properties and env-overrideable per-deployment via
+     * BULK_WORKER_CONCURRENCY / BULK_MAX_PER_TENANT.
+     *
+     * <p>Instance-field defaults kick in for pure-Mockito unit tests that
+     * construct this service via {@code new} — Spring never resolves the
+     * {@code @Value} annotations in that path, and {@link #initExecutors()}
+     * won't fire either, so {@link #ensureExecutors()} handles the lazy
+     * fallback there.
+     */
+    @Value("${bulk.worker-concurrency:24}")
+    private int workerConcurrency = 24;
+
+    @Value("${bulk.max-per-tenant:8}")
+    private int maxPerTenant = 8;
 
     /** HTTP timeout for downloading a label PDF from the carrier's CDN. */
     private static final Duration LABEL_FETCH_TIMEOUT = Duration.ofSeconds(15);
@@ -67,25 +85,45 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     private final TenantScopeEnforcer tenantScope;
 
     /** Fan-out executor for the per-order workers. Shared across every
-     *  job because job kick-off already runs on its own thread. */
-    private final ExecutorService fanOutExecutor = Executors.newFixedThreadPool(
-            WORKER_CONCURRENCY, r -> {
-                Thread t = new Thread(r, "bulk-label-worker");
-                t.setDaemon(true);
-                return t;
-            });
+     *  job because job kick-off already runs on its own thread. Built in
+     *  {@link #initExecutors()} so the {@code @Value} sizes have resolved. */
+    private ExecutorService fanOutExecutor;
 
     /**
      * Sprint 50 Tier 1 finding #15 — per-tenant fair-share wrapper. Caps
-     * each tenant at {@value #MAX_PER_TENANT} concurrent labels so one
-     * tenant's giant batch can't drain the {@link #WORKER_CONCURRENCY}-slot
+     * each tenant at {@code maxPerTenant} concurrent labels so one
+     * tenant's giant batch can't drain the {@code workerConcurrency}-slot
      * pool while another tenant waits. 60s acquire timeout is a safety
      * net; under normal load a permit frees in seconds.
      */
-    private static final int MAX_PER_TENANT = 2;
-    private final com.multiship.backend.service.fairness.FairTenantExecutor fairExecutor =
-            new com.multiship.backend.service.fairness.FairTenantExecutor(
-                    fanOutExecutor, MAX_PER_TENANT, 60);
+    private com.multiship.backend.service.fairness.FairTenantExecutor fairExecutor;
+
+    @PostConstruct
+    void initExecutors() {
+        ensureExecutors();
+        log.info("BulkLabelServiceImpl fan-out ready: workerConcurrency={} maxPerTenant={}",
+                workerConcurrency, maxPerTenant);
+    }
+
+    /**
+     * Lazy fallback for tests that construct this service via {@code new}
+     * (Mockito {@code @InjectMocks} / pure JUnit) — in that path Spring
+     * never runs {@link #initExecutors()} and the executor fields stay
+     * null. Called from every submitAll site so tests exercising the
+     * fan-out path get a working executor with the compiled-in defaults.
+     * Idempotent + synchronized so concurrent first-callers can't
+     * double-create the pool.
+     */
+    private synchronized void ensureExecutors() {
+        if (fairExecutor != null) return;
+        this.fanOutExecutor = Executors.newFixedThreadPool(workerConcurrency, r -> {
+            Thread t = new Thread(r, "bulk-label-worker");
+            t.setDaemon(true);
+            return t;
+        });
+        this.fairExecutor = new com.multiship.backend.service.fairness.FairTenantExecutor(
+                fanOutExecutor, maxPerTenant, 60);
+    }
 
     /** Dispatch executor that lifts the job kick-off off the calling
      *  HTTP thread — otherwise the POST /bulk-labels response wouldn't
@@ -145,7 +183,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
 
     /**
      * Job worker. Loads the freshly-saved job, submits each order to the
-     * fan-out pool ({@link #WORKER_CONCURRENCY} labels in flight at once),
+     * fan-out pool ({@code workerConcurrency} labels in flight at once),
      * assembles the results in input order into a ZIP, and persists a
      * running progress count throttled to every {@value #PROGRESS_FLUSH_EVERY_N}
      * orders or {@value #PROGRESS_FLUSH_EVERY_MS} ms.
@@ -191,6 +229,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             // change on BulkLabelJob. Falls back to requestedBy when the
             // order can't be found (unusual — the batch would fail anyway).
             String tenantKey = resolveTenantKey(orderNos, job.getRequestedBy());
+            ensureExecutors();
             java.util.List<java.util.concurrent.Future<OrderOutcome>> futures = fairExecutor.submitAll(tenantKey, tasks);
 
             // Aggregate in input order so the ZIP is stable + failure messages
