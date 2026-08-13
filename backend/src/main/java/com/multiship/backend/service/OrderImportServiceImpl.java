@@ -718,7 +718,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Sprint 50 PR M — L3: was WARN (log-spam risk under high-throughput
         // commits); this is informational fan-out telemetry, not an alert.
         log.info("Order import commit ({}): fanning {} groups across {} worker(s).",
-                requestedBy, groupCount, IMPORT_COMMIT_CONCURRENCY);
+                requestedBy, groupCount, importCommitConcurrency);
 
         List<Callable<GroupOutcome>> tasks = new ArrayList<>(groupCount);
         for (Map.Entry<String, List<OrderImportRowDTO>> entry : groups.entrySet()) {

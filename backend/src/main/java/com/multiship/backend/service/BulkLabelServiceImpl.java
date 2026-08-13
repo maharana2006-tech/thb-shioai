@@ -163,7 +163,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
 
     /**
      * Job worker. Loads the freshly-saved job, submits each order to the
-     * fan-out pool ({@link #WORKER_CONCURRENCY} labels in flight at once),
+     * fan-out pool ({@code workerConcurrency} labels in flight at once),
      * assembles the results in input order into a ZIP, and persists a
      * running progress count throttled to every {@value #PROGRESS_FLUSH_EVERY_N}
      * orders or {@value #PROGRESS_FLUSH_EVERY_MS} ms.
