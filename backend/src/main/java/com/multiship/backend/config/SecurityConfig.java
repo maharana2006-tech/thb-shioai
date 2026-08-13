@@ -122,6 +122,16 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/oauth/token").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+                        // Sprint 51 M-Ops (BP-M4) — actuator probes must
+                        // work without a JWT so Kubernetes liveness /
+                        // readiness endpoints + Prometheus scrapers can
+                        // reach the app. show-details=when-authorized in
+                        // application.properties still hides the component
+                        // breakdown from anonymous callers. Only the
+                        // whitelisted endpoints (health, prometheus, info)
+                        // are exposed at all.
+                        .requestMatchers("/actuator/health", "/actuator/health/**",
+                                "/actuator/prometheus", "/actuator/info").permitAll()
                         // CSV template is static schema (headers + one dummy row) — safe
                         // to expose publicly so the browser can download it via a plain
                         // <a href>, no Bearer header to attach.

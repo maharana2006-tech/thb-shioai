@@ -39,6 +39,19 @@
 			<artifactId>spring-boot-starter-web</artifactId>
 		</dependency>
 
+		<!-- Sprint 51 M-Ops (BP-M4) — Actuator exposes /actuator/health,
+		     /actuator/prometheus, /actuator/info. Micrometer's Prometheus
+		     registry publishes JVM + HTTP + custom counters/timers in
+		     Prometheus text format so ops can scrape without a bridge. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-prometheus</artifactId>
+		</dependency>
+
 		<dependency>
 			<groupId>org.postgresql</groupId>
 			<artifactId>postgresql</artifactId>
