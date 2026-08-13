@@ -142,6 +142,23 @@ public class IdempotencyService {
     }
 
     /**
+     * Sprint 51 R2 — session-caller overload. Same semantics as the Long
+     * apiKeyId variant, but namespaced by a String caller id so
+     * session-authenticated endpoints (manual-label, multi-warehouse-label)
+     * can participate in idempotent replay. Convention: pass
+     * {@code "user:" + username} so namespaces stay disjoint from the
+     * API-key path (which uses numeric strings).
+     */
+    public <T> ResponseEntity<T> executeOrReplay(
+            String callerId,
+            String idempotencyKey,
+            TypeReference<T> typeRef,
+            Supplier<ResponseEntity<T>> handler,
+            boolean failClosedOnRedisError) {
+        return executeOrReplayInternal(callerId, idempotencyKey, typeRef, handler, failClosedOnRedisError);
+    }
+
+    /**
      * The core primitive. Behaves as one of:
      * <ol>
      *   <li>Redis is absent OR idempotencyKey is null/blank OR apiKeyId is
@@ -176,16 +193,30 @@ public class IdempotencyService {
      *                               503 with {@code IDEMPOTENCY_UNAVAILABLE}
      *                               instead of falling through to the handler
      */
-    @SuppressWarnings("unchecked")
     public <T> ResponseEntity<T> executeOrReplay(
             Long apiKeyId,
             String idempotencyKey,
             TypeReference<T> typeRef,
             Supplier<ResponseEntity<T>> handler,
             boolean failClosedOnRedisError) {
+        // Sprint 51 R2 — delegate to the String-callerId internal impl.
+        // Namespacing note: API-key callers pass "1", "2", ... (numeric);
+        // session callers pass "user:alice" — disjoint by construction.
+        return executeOrReplayInternal(
+                apiKeyId == null ? null : String.valueOf(apiKeyId),
+                idempotencyKey, typeRef, handler, failClosedOnRedisError);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> ResponseEntity<T> executeOrReplayInternal(
+            String callerId,
+            String idempotencyKey,
+            TypeReference<T> typeRef,
+            Supplier<ResponseEntity<T>> handler,
+            boolean failClosedOnRedisError) {
 
         // No key supplied → not idempotent; pass through unchanged.
-        if (idempotencyKey == null || idempotencyKey.isBlank() || apiKeyId == null) {
+        if (idempotencyKey == null || idempotencyKey.isBlank() || callerId == null || callerId.isBlank()) {
             return handler.get();
         }
 
@@ -199,7 +230,7 @@ public class IdempotencyService {
         }
 
         String trimmed = idempotencyKey.trim();
-        String mainKey = KEY_PREFIX + apiKeyId + ":" + trimmed;
+        String mainKey = KEY_PREFIX + callerId + ":" + trimmed;
         String pendingKey = mainKey + PENDING_SUFFIX;
 
         // Step 1: try to atomically claim the pending marker. TRUE → we're
@@ -208,8 +239,8 @@ public class IdempotencyService {
         try {
             claimed = redis.opsForValue().setIfAbsent(pendingKey, "1", PENDING_TTL);
         } catch (Exception ex) {
-            log.warn("Idempotency SETNX failed for apiKey={} key={}: {}",
-                    apiKeyId, truncKey(idempotencyKey), ex.getMessage());
+            log.warn("Idempotency SETNX failed for caller={} key={}: {}",
+                    callerId, truncKey(idempotencyKey), ex.getMessage());
             if (failClosedOnRedisError) {
                 return (ResponseEntity<T>) redisUnavailableResponse();
             }
@@ -223,11 +254,11 @@ public class IdempotencyService {
             try {
                 String cached = redis.opsForValue().get(mainKey);
                 if (cached != null) {
-                    return replay(cached, typeRef, idempotencyKey, apiKeyId);
+                    return replay(cached, typeRef, idempotencyKey, callerId);
                 }
             } catch (Exception ex) {
-                log.warn("Idempotency defensive GET failed for apiKey={} key={}: {}",
-                        apiKeyId, truncKey(idempotencyKey), ex.getMessage());
+                log.warn("Idempotency defensive GET failed for caller={} key={}: {}",
+                        callerId, truncKey(idempotencyKey), ex.getMessage());
                 if (failClosedOnRedisError) {
                     return (ResponseEntity<T>) redisUnavailableResponse();
                 }
@@ -251,11 +282,11 @@ public class IdempotencyService {
                         new CachedResponse(status, bodyJson, headers));
                 redis.opsForValue().set(mainKey, stored, TTL);
             } catch (JsonProcessingException ex) {
-                log.warn("Idempotency store serialisation failed for apiKey={} key={}: {}",
-                        apiKeyId, truncKey(idempotencyKey), ex.getMessage());
+                log.warn("Idempotency store serialisation failed for caller={} key={}: {}",
+                        callerId, truncKey(idempotencyKey), ex.getMessage());
             } catch (Exception ex) {
-                log.warn("Idempotency store write failed for apiKey={} key={}: {}",
-                        apiKeyId, truncKey(idempotencyKey), ex.getMessage());
+                log.warn("Idempotency store write failed for caller={} key={}: {}",
+                        callerId, truncKey(idempotencyKey), ex.getMessage());
             }
 
             // Return the fresh response with Idempotency-Key echoed.
@@ -274,8 +305,8 @@ public class IdempotencyService {
         try {
             cached = redis.opsForValue().get(mainKey);
         } catch (Exception ex) {
-            log.warn("Idempotency replay probe failed for apiKey={} key={}: {}",
-                    apiKeyId, truncKey(idempotencyKey), ex.getMessage());
+            log.warn("Idempotency replay probe failed for caller={} key={}: {}",
+                    callerId, truncKey(idempotencyKey), ex.getMessage());
             if (failClosedOnRedisError) {
                 return (ResponseEntity<T>) redisUnavailableResponse();
             }
@@ -283,7 +314,7 @@ public class IdempotencyService {
         }
 
         if (cached != null) {
-            return replay(cached, typeRef, idempotencyKey, apiKeyId);
+            return replay(cached, typeRef, idempotencyKey, callerId);
         }
 
         // Still in flight → tell the client to back off.
@@ -295,12 +326,12 @@ public class IdempotencyService {
      *  ({@code X-Idempotent-Replay}, {@code Idempotency-Key}) are set
      *  LAST so they're guaranteed to survive. */
     private <T> ResponseEntity<T> replay(String cached, TypeReference<T> typeRef,
-                                         String idempotencyKey, Long apiKeyId) {
+                                         String idempotencyKey, String callerId) {
         try {
             CachedResponse hit = INTERNAL_MAPPER.readValue(cached, CachedResponse.class);
             T body = INTERNAL_MAPPER.readValue(hit.bodyJson(), typeRef);
-            log.info("Idempotent replay for apiKey={} key={} → status={}",
-                    apiKeyId, truncKey(idempotencyKey), hit.status());
+            log.info("Idempotent replay for caller={} key={} → status={}",
+                    callerId, truncKey(idempotencyKey), hit.status());
 
             HttpHeaders headers = new HttpHeaders();
             if (hit.headers() != null) {
@@ -327,8 +358,8 @@ public class IdempotencyService {
                     .headers(headers)
                     .body(body);
         } catch (Exception ex) {
-            log.warn("Idempotency replay deserialization failed for apiKey={} key={}: {}",
-                    apiKeyId, truncKey(idempotencyKey), ex.getMessage());
+            log.warn("Idempotency replay deserialization failed for caller={} key={}: {}",
+                    callerId, truncKey(idempotencyKey), ex.getMessage());
             // Corrupt cache entry — surface as in-progress so the caller
             // retries rather than getting a silently different response.
             @SuppressWarnings("unchecked")
