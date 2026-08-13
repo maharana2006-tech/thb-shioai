@@ -53,6 +53,11 @@ public class AuthServiceImpl implements AuthService {
     @Autowired
     private JwtService jwtService;
 
+    /** Sprint 51 T2 finding #5 — blacklists the token's jti on logout so the
+     *  same JWT can't be replayed after the user hits sign out. */
+    @Autowired
+    private TokenRevocationService tokenRevocationService;
+
     /** Sprint 50 Tier 0.5 PR D — signup gating + invite acceptance. */
     @Autowired
     private SignupRateLimiter rateLimiter;
@@ -312,7 +317,13 @@ public class AuthServiceImpl implements AuthService {
             // Sprint 50 Tier 0.5 PR A — carry the user's clientCode in the JWT.
             // Null for legacy internal ADMIN + USER (org-wide); populated for
             // TENANT + any USER assigned to a client via PR E's admin UI.
-            String token = jwtService.generateToken(user.getUsername(), user.getRole(), user.getClientCode());
+            //
+            // Sprint 51 T2 finding #5 — also carry the user's current
+            // token_version so revocation via bumpTokenVersion() invalidates
+            // this JWT on the next request.
+            long tv = user.getTokenVersion() == null ? 0L : user.getTokenVersion();
+            String token = jwtService.generateToken(user.getUsername(), user.getRole(),
+                    user.getClientCode(), tv);
 
             // Sprint 50 PR Q1 — write the JWT as an httpOnly cookie so the SPA
             // can't be XSS-exfiltrated. PR Q3 dropped the transitional body
@@ -328,11 +339,32 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public ResponseEntity<MessageResponse> logoutUser(String tokenHeader, HttpServletResponse response) {
-        // 1. In a production JWT setup, you would parse the token here:
-        // String jwt = tokenHeader.substring(7); // Removes "Bearer "
-        // tokenBlacklistService.blacklist(jwt);
+        // Sprint 51 T2 finding #5 — blacklist the presented token's jti so
+        // the JWT can't be replayed after sign out. Per-device: leaves
+        // other sessions for the same user intact (bumpTokenVersion() is
+        // the global variant used by admin deactivate / role change).
+        //
+        // Header parsing is best-effort — if the caller signed out with
+        // only the cookie set (SPA flow), the interceptor already cleared
+        // the SecurityContext by the time we get here so JWTs from other
+        // devices remain the only ones needing revocation, which is
+        // exactly what per-device logout intends.
+        if (tokenHeader != null && tokenHeader.startsWith("Bearer ")) {
+            String jwt = tokenHeader.substring(7);
+            try {
+                var claims = jwtService.parseClaims(jwt);
+                String jti = claims.getId();
+                java.util.Date exp = claims.getExpiration();
+                if (jti != null && exp != null) {
+                    tokenRevocationService.blacklistJti(jti, exp.toInstant());
+                }
+            } catch (Exception ex) {
+                // Malformed / expired token — nothing to blacklist. Cookie
+                // clear + context clear below still run.
+                log.debug("Logout with unparseable token — skipping jti blacklist: {}", ex.getMessage());
+            }
+        }
 
-        // 2. Clear current thread-bound authentication token states
         SecurityContextHolder.clearContext();
 
         // Sprint 50 PR Q1 — clear the auth cookie. Must set the SAME
@@ -340,7 +372,6 @@ public class AuthServiceImpl implements AuthService {
         // browsers only DELETE a cookie when every attribute matches.
         response.addHeader(HttpHeaders.SET_COOKIE, authCookie("", 0).toString());
 
-        // 3. Resolve the success text cleanly using your MessageSource engine
         String logoutSuccessMsg = messageSource.getMessage("success.user.loggedout", null, LocaleContextHolder.getLocale());
 
         return ResponseEntity.ok(new MessageResponse(logoutSuccessMsg));

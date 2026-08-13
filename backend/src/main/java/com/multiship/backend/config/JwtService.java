@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
+import java.util.UUID;
 
 /**
  * Issues and validates HS256-signed JWTs. The token carries the username as
@@ -63,25 +64,43 @@ public class JwtService {
      */
     @Deprecated
     public String generateToken(String username, String role) {
-        return generateToken(username, role, null);
+        return generateToken(username, role, null, 0L);
     }
 
     /**
-     * Sprint 50 Tier 0.5 PR A — issues an HS256 JWT carrying the caller's
-     * clientCode as an additional claim.
-     *
-     * <p>{@code clientCode} MAY be null for legacy internal ADMIN + USER
-     * accounts (org-wide operator scope) — {@link JwtAuthenticationFilter}
-     * accepts a missing claim and falls back to a per-token DB lookup for
-     * the transitional window (max {@code jwt.expiration} = 24h). PR F
-     * removes the fallback once all valid tokens carry the claim.
+     * Sprint 50 Tier 0.5 PR A — three-arg overload retained for callers
+     * that don't yet carry the user's {@code tokenVersion}. Delegates to
+     * the four-arg variant with {@code tv=0}, matching the DB default —
+     * a token issued this way stays valid until the user's {@code
+     * token_version} row is bumped past 0, at which point revocation
+     * kicks in (see {@link JwtAuthenticationFilter}).
      */
     public String generateToken(String username, String role, String clientCode) {
+        return generateToken(username, role, clientCode, 0L);
+    }
+
+    /**
+     * Sprint 51 T2 finding #5 — issues an HS256 JWT with:
+     * <ul>
+     *   <li>{@code tv}: the user's {@code token_version} at issue time.
+     *       {@link JwtAuthenticationFilter} compares against the current
+     *       DB value and rejects tokens whose tv &lt; DB.</li>
+     *   <li>{@code jti}: a per-token UUID. Enables per-device logout
+     *       (Redis blacklist) without a global {@code token_version}
+     *       bump — the filter checks the jti set on every request.</li>
+     * </ul>
+     *
+     * <p>Sprint 50 Tier 0.5 PR A — {@code clientCode} MAY be null for
+     * legacy internal ADMIN + USER accounts (org-wide operator scope).
+     */
+    public String generateToken(String username, String role, String clientCode, long tokenVersion) {
         Date now = new Date();
 
         var builder = Jwts.builder()
                 .subject(username)
-                .claim("role", role);
+                .id(UUID.randomUUID().toString())
+                .claim("role", role)
+                .claim("tv", tokenVersion);
         if (clientCode != null && !clientCode.isBlank()) {
             builder.claim("clientCode", clientCode);
         }

@@ -65,6 +65,18 @@ public class User {
     private Boolean emailVerified = true;
 
     /**
+     * Sprint 51 T2 finding #5 — JWT session revocation. Bumped monotonically
+     * on any credential-material change (logout-all, deactivate, role change,
+     * future password reset). {@code JwtAuthenticationFilter} rejects any
+     * token whose {@code tv} claim is less than the DB value, so a single
+     * UPDATE invalidates every outstanding token for the user. Combined
+     * with the Redis jti blacklist for per-device revocation.
+     */
+    @Column(name = "token_version", nullable = false)
+    @Default
+    private Long tokenVersion = 0L;
+
+    /**
      * Sprint 50 Tier 0.5 PR D — one-shot token for the "click the link
      * in your email" step. Null when the account is verified. The token
      * is opaque high-entropy; the whole row expires with the user's
