@@ -45,4 +45,17 @@ public interface ClientCustomsProfileRepository extends JpaRepository<ClientCust
 
     @Query("select count(distinct c.country) from CustomsProfileCountry c")
     long countDistinctCountries();
+
+    /**
+     * Sprint 51 M-Perf (audit BP-M7) — JOIN FETCH variant of findAll() so
+     * the customs-profile list page doesn't LAZY-load one countryLinks
+     * collection per profile. Pre-M-Perf {@code fetchFiltered} called
+     * plain findAll() and then {@code matchesCountries} touched
+     * {@code p.getCountryLinks()} → one SELECT per profile per page
+     * render. At a few thousand profiles this hit the connection pool
+     * hard during any burst. DISTINCT collapses cartesian rows
+     * introduced by the JOIN.
+     */
+    @Query("select distinct p from ClientCustomsProfile p left join fetch p.countryLinks")
+    List<ClientCustomsProfile> findAllWithCountryLinks();
 }

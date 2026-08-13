@@ -51,7 +51,9 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
                 .collect(Collectors.toMap(
                         c -> c.getClientCode().toUpperCase(Locale.ROOT),
                         com.multiship.backend.model.Client::getName, (a, b) -> a));
-        List<ClientCustomsProfileDTO> all = repository.findAll().stream()
+        // Sprint 51 M-Perf (BP-M7) — JOIN FETCH so the sort comparator's
+        // firstCountry(p) + downstream toDTO don't LAZY-load per profile.
+        List<ClientCustomsProfileDTO> all = repository.findAllWithCountryLinks().stream()
                 .sorted(Comparator.comparing(ClientCustomsProfile::getClientCode)
                         .thenComparing(p -> firstCountry(p)))
                 .map(p -> {
@@ -167,7 +169,10 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
                     .map(s -> s.toUpperCase(Locale.ROOT))
                     .collect(Collectors.toSet());
 
-        return repository.findAll().stream()
+        // Sprint 51 M-Perf (BP-M7) — JOIN FETCH the countryLinks in the
+        // same query so the matchesCountries filter below doesn't
+        // trigger one LAZY SELECT per profile.
+        return repository.findAllWithCountryLinks().stream()
                 .filter(p -> matchesClient(p, clientCode))
                 .filter(p -> matchesCarrier(p, carrier))
                 .filter(p -> matchesBroker(p, broker))
