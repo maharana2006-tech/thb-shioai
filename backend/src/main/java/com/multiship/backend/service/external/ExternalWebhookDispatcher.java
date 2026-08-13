@@ -7,6 +7,7 @@ import com.multiship.backend.model.ExternalWebhookSubscription;
 import com.multiship.backend.model.ExternalWebhookSubscription.EventType;
 import com.multiship.backend.repository.ExternalWebhookDeliveryRepository;
 import com.multiship.backend.repository.ExternalWebhookSubscriptionRepository;
+import com.multiship.backend.service.carriers.HttpClients;
 import com.multiship.backend.service.carriers.WebhookHmacUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,6 +53,22 @@ public class ExternalWebhookDispatcher {
     private RestClient testRestClient;
 
     /**
+     * Sprint 51 T4 finding #8 — shared {@link RestClient} with connect
+     * + read timeouts. Pre-T4 the dispatcher called
+     * {@code RestClient.create()} per delivery, which used the JDK
+     * default (unbounded read timeout). One stuck partner receiver
+     * pinned an {@code @Async} pool thread for the OS TCP default
+     * (minutes to indefinite); at 100 events/min × N tenants the
+     * pool drains + CallerRunsPolicy cascades into the caller's
+     * label-generation thread.
+     *
+     * <p>Reuses {@link HttpClients#newBuilder()} so the webhook client
+     * inherits the same 5s/30s policy already applied to every carrier
+     * call, keeping one knob to tune.
+     */
+    private final RestClient sharedRestClient = HttpClients.newBuilder().build();
+
+    /**
      * Broadcast an event to every active subscription. When
      * {@code apiKeyIdFilter} is non-null, only subscriptions owned by
      * that API key fire — typically the caller who just generated a
@@ -95,7 +112,7 @@ public class ExternalWebhookDispatcher {
         delivery.setAttemptedAt(LocalDateTime.now());
 
         String signature = WebhookHmacUtil.hmacSha256Hex(body, sub.getSecret());
-        RestClient client = testRestClient != null ? testRestClient : RestClient.create();
+        RestClient client = testRestClient != null ? testRestClient : sharedRestClient;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             delivery.setAttempts(attempt);
