@@ -6,8 +6,9 @@ package com.multiship.backend.service;
  * resolution service, tracking service, etc.). The following behaviors from
  * PR #119 are only covered transitively by the passing full-suite run:
  *
- *   - Finding #3: client-account failure returns CLIENT_CARRIER_AUTH_FAILED
- *     when useHouseAccount=false, and falls back to platform when true.
+ *   - Label generation failures never fall back to the platform (house)
+ *     account: any carrier/account failure marks the order's tracking row
+ *     ERROR with the failure message so it surfaces in the order list.
  *   - Finding #19: resolveAccountForOrderWithDetails no longer emits
  *     SCENARIO_CLIENT_DEFAULT for a single client-owned account; always
  *     surfaces SCENARIO_CHOOSE_ACCOUNT with the sole account pre-selected.

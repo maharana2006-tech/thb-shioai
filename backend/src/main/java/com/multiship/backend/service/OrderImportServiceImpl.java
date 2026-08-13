@@ -371,7 +371,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         Map<Long, String> warehouseCodeById = new LinkedHashMap<>();
         if (warehouseRepository != null) {
             for (Warehouse w : warehouseRepository.findAll()) {
-                if (w.getCode() != null) warehouseCodeById.put(w.getId(), w.getCode().toUpperCase(Locale.ROOT));
+                if (w.getCode() != null) warehouseCodeById.put(w.getId(), w.getCode().trim().toUpperCase(Locale.ROOT));
             }
         }
         // clientCode → set of attached warehouse codes
@@ -380,7 +380,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             for (OrderImportRowDTO row : rows) {
                 String cc = row.getClientCode();
                 if (!StringUtils.hasText(cc)) continue;
-                String key = cc.toUpperCase(Locale.ROOT);
+                String key = cc.trim().toUpperCase(Locale.ROOT);
                 if (attachedByClient.containsKey(key)) continue;
                 java.util.Set<String> codes = new java.util.HashSet<>();
                 for (ClientWarehouse cw : clientWarehouseRepository

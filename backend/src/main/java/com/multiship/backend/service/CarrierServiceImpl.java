@@ -477,54 +477,36 @@ public class CarrierServiceImpl implements CarrierService {
             // caller so ops (or the calling job) can back off intelligently.
             return rateLimitedResponse(order, resolution.carrierCode(), rle);
         } catch (Exception primaryEx) {
-            // Client-owned account failed and the shipper did not opt into
-            // the platform account → return CLIENT_CARRIER_AUTH_FAILED so the
-            // operator either fixes the client's credentials or resends with
-            // useHouseAccount=true to bill the platform explicitly.
+            // No platform (house-account) fallback: any carrier failure marks
+            // the order's tracking row ERROR with the failure message so it
+            // surfaces directly in the order list. The operator fixes the
+            // underlying credential/carrier issue and re-triggers generation.
+            String msg;
+            ErrorCode errorCode;
             if (clientOwnedResolution && !useHouseAccount) {
-                String msg = "Client account " + resolution.accountNumber()
+                msg = "Client account " + resolution.accountNumber()
                         + " failed at " + resolution.carrierCode() + ": " + primaryEx.getMessage()
-                        + ". Fix the client's carrier credentials, or resend with useHouseAccount=true"
-                        + " to explicitly bill the platform (house) account.";
-                markTrackingError(order, msg);
-                log.warn("Order {}: client account {} failed and no useHouseAccount opt-in — refusing silent platform bill.",
+                        + ". Fix the client's carrier credentials and retry.";
+                errorCode = ErrorCode.CLIENT_CARRIER_AUTH_FAILED;
+                log.warn("Order {}: client account {} failed — no fallback, marking order ERROR.",
                         orderNo, resolution.accountNumber());
-                LabelGenerationResponse authFail = LabelGenerationResponse.builder()
-                        .orderNo(orderNo)
-                        .carrierCode(resolution.carrierCode())
-                        .carrierAccountCode(resolution.accountNumber())
-                        .clientCode(tenantId)
-                        .status("ERROR")
-                        .message(msg)
-                        .accountSource(resolution.scenario())
-                        .build();
-                return failure(HttpStatus.BAD_GATEWAY, ErrorCode.CLIENT_CARRIER_AUTH_FAILED, msg, authFail);
+            } else {
+                msg = "Label generation failed for order " + orderNo + " at " + resolution.carrierCode()
+                        + " (account " + resolution.accountNumber() + "): " + primaryEx.getMessage();
+                errorCode = ErrorCode.CARRIER_FAILURE;
+                log.warn("Label generation failed for order {}: {}", orderNo, primaryEx.getMessage());
             }
-            // Fallback: either the resolution wasn't client-owned (e.g. platform
-            // account resolution failed on its own) OR the shipper opted in.
-            // Retry with the PLATFORM (house) account for the same carrier.
-            AccountResolution platform = platformFallback(resolution.carrierCode(), resolution.accountNumber());
-            if (platform == null) {
-                markTrackingError(order, primaryEx.getMessage());
-                log.warn("Label generation failed for order {}: {} (no platform fallback available)", orderNo, primaryEx.getMessage());
-                return failure(HttpStatus.BAD_GATEWAY, ErrorCode.CARRIER_FAILURE, primaryEx.getMessage());
-            }
-            try {
-                connector = getCarrierConnector(platform.carrierCode());
-                shipmentResult = attemptShipment(order, platform, connector);
-                used = platform;
-                log.info("Order {}: account {} failed ({}); fell back to platform account {} (useHouseAccount={}).",
-                        orderNo, resolution.accountNumber(), primaryEx.getMessage(), platform.accountNumber(), useHouseAccount);
-            } catch (CarrierRateLimitException rle) {
-                // Sprint 50 Tier 1 finding #5 — 429 on the platform-fallback path too.
-                return rateLimitedResponse(order, platform.carrierCode(), rle);
-            } catch (Exception fallbackEx) {
-                String msg = "Account " + resolution.accountNumber() + " failed (" + primaryEx.getMessage()
-                        + ") and the platform account also failed (" + fallbackEx.getMessage() + ").";
-                markTrackingError(order, msg);
-                log.warn("Order {}: client + platform account both failed.", orderNo);
-                return failure(HttpStatus.BAD_GATEWAY, ErrorCode.CARRIER_FAILURE, msg);
-            }
+            markTrackingError(order, msg);
+            LabelGenerationResponse errorResponse = LabelGenerationResponse.builder()
+                    .orderNo(orderNo)
+                    .carrierCode(resolution.carrierCode())
+                    .carrierAccountCode(resolution.accountNumber())
+                    .clientCode(tenantId)
+                    .status("ERROR")
+                    .message(msg)
+                    .accountSource(resolution.scenario())
+                    .build();
+            return failure(HttpStatus.BAD_GATEWAY, errorCode, msg, errorResponse);
         }
 
         OrderTracking tracking = orderTrackingRepository.findByOrderNo(order.getOrderNo()).orElseGet(OrderTracking::new);
@@ -1345,24 +1327,6 @@ public class CarrierServiceImpl implements CarrierService {
         String dest = order.getShiptoCountryCd();
         return StringUtils.hasText(origin) && StringUtils.hasText(dest)
                 && !origin.trim().equalsIgnoreCase(dest.trim());
-    }
-
-    /**
-     * The platform (house) account for a carrier to fall back to when a client
-     * account fails — the newest complete, active platform account that isn't the
-     * one that just failed. Null when there's no distinct platform account.
-     */
-    private AccountResolution platformFallback(String carrierCode, String failedAccountNumber) {
-        String canonical = resolveCanonicalCarrierCode(carrierCode);
-        return carrierAccountRefRepository.findPlatformAccountsByCarrier(canonical).stream()
-                .filter(a -> failedAccountNumber == null || !failedAccountNumber.equalsIgnoreCase(a.getAccountNumber()))
-                .findFirst()
-                .map(a -> AccountResolution.of(AccountResolution.SCENARIO_PLATFORM_FALLBACK,
-                        resolveCanonicalCarrierCode(firstNonBlank(a.getCarrierCode(), carrierCode)),
-                        a.getAccountNumber(), a.getClientId(), a.getClientSecret(),
-                        firstNonBlank(a.getEnvironment(), carrierProperties.getDefaultEnvironment()),
-                        a.getAccountName()))
-                .orElse(null);
     }
 
     /**

@@ -14,10 +14,13 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfFilter;
+import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.time.Instant;
 import java.util.Arrays;
@@ -159,9 +162,35 @@ public class SecurityConfig {
                 // Sprint 50 finding #15 (A) — must run AFTER the two auth filters
                 // above so the SecurityContext already carries the caller's
                 // authentication when the rate check reads the tenant.
-                .addFilterAfter(tenantRateLimitFilter, JwtAuthenticationFilter.class);
+                .addFilterAfter(tenantRateLimitFilter, JwtAuthenticationFilter.class)
+                // CsrfTokenRequestAttributeHandler defers resolving the
+                // CsrfToken — the XSRF-TOKEN cookie is only written when
+                // something actually calls CsrfToken.getToken() during the
+                // request. Without this filter the cookie may never get
+                // set during normal browsing, so the SPA's echoed
+                // X-XSRF-TOKEN header is always empty and every
+                // state-changing request 403s as "no permission" even for
+                // an ADMIN. Force the resolve on every request so the
+                // cookie is always present after the first response.
+                .addFilterAfter(csrfCookieFilter(), CsrfFilter.class);
 
         return http.build();
+    }
+
+    private OncePerRequestFilter csrfCookieFilter() {
+        return new OncePerRequestFilter() {
+            @Override
+            protected void doFilterInternal(jakarta.servlet.http.HttpServletRequest request,
+                                             HttpServletResponse response,
+                                             jakarta.servlet.FilterChain filterChain)
+                    throws jakarta.servlet.ServletException, java.io.IOException {
+                CsrfToken csrfToken = (CsrfToken) request.getAttribute(CsrfToken.class.getName());
+                if (csrfToken != null) {
+                    csrfToken.getToken();
+                }
+                filterChain.doFilter(request, response);
+            }
+        };
     }
 
     private static void writeJsonError(HttpServletResponse response, int status, String errorCode, String message)
