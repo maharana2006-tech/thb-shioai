@@ -8,8 +8,10 @@ import com.multiship.backend.dto.LabelGenerationResponse;
 import com.multiship.backend.model.BulkLabelJob;
 import com.multiship.backend.repository.BulkLabelJobRepository;
 import com.multiship.backend.repository.OrderRepository;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -43,10 +45,20 @@ import java.util.zip.ZipOutputStream;
 @RequiredArgsConstructor
 public class BulkLabelServiceImpl implements BulkLabelService {
 
-    /** Max concurrent per-order labels — carriers rate-limit at ~5-10 rps
-     *  per account. Keeping it conservative so a big job doesn't trip
-     *  carrier throttling. */
-    private static final int WORKER_CONCURRENCY = 4;
+    /**
+     * Sprint 51 R4 (audit finding #4) — pool sizes are now externalised
+     * via application.properties (bulk.worker-concurrency, bulk.max-per-tenant).
+     * Pre-R4 these were hardcoded to 4 and 2, capping bulk throughput at
+     * ~12 shipments/min/tenant against a 5-15s carrier RTT — an order of
+     * magnitude below the 100/min/tenant target. Defaults are set in
+     * application.properties and env-overrideable per-deployment via
+     * BULK_WORKER_CONCURRENCY / BULK_MAX_PER_TENANT.
+     */
+    @Value("${bulk.worker-concurrency:24}")
+    private int workerConcurrency;
+
+    @Value("${bulk.max-per-tenant:8}")
+    private int maxPerTenant;
 
     /** HTTP timeout for downloading a label PDF from the carrier's CDN. */
     private static final Duration LABEL_FETCH_TIMEOUT = Duration.ofSeconds(15);
@@ -67,25 +79,31 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     private final TenantScopeEnforcer tenantScope;
 
     /** Fan-out executor for the per-order workers. Shared across every
-     *  job because job kick-off already runs on its own thread. */
-    private final ExecutorService fanOutExecutor = Executors.newFixedThreadPool(
-            WORKER_CONCURRENCY, r -> {
-                Thread t = new Thread(r, "bulk-label-worker");
-                t.setDaemon(true);
-                return t;
-            });
+     *  job because job kick-off already runs on its own thread. Built in
+     *  {@link #initExecutors()} so the {@code @Value} sizes have resolved. */
+    private ExecutorService fanOutExecutor;
 
     /**
      * Sprint 50 Tier 1 finding #15 — per-tenant fair-share wrapper. Caps
-     * each tenant at {@value #MAX_PER_TENANT} concurrent labels so one
-     * tenant's giant batch can't drain the {@link #WORKER_CONCURRENCY}-slot
+     * each tenant at {@code maxPerTenant} concurrent labels so one
+     * tenant's giant batch can't drain the {@code workerConcurrency}-slot
      * pool while another tenant waits. 60s acquire timeout is a safety
      * net; under normal load a permit frees in seconds.
      */
-    private static final int MAX_PER_TENANT = 2;
-    private final com.multiship.backend.service.fairness.FairTenantExecutor fairExecutor =
-            new com.multiship.backend.service.fairness.FairTenantExecutor(
-                    fanOutExecutor, MAX_PER_TENANT, 60);
+    private com.multiship.backend.service.fairness.FairTenantExecutor fairExecutor;
+
+    @PostConstruct
+    void initExecutors() {
+        this.fanOutExecutor = Executors.newFixedThreadPool(workerConcurrency, r -> {
+            Thread t = new Thread(r, "bulk-label-worker");
+            t.setDaemon(true);
+            return t;
+        });
+        this.fairExecutor = new com.multiship.backend.service.fairness.FairTenantExecutor(
+                fanOutExecutor, maxPerTenant, 60);
+        log.info("BulkLabelServiceImpl fan-out ready: workerConcurrency={} maxPerTenant={}",
+                workerConcurrency, maxPerTenant);
+    }
 
     /** Dispatch executor that lifts the job kick-off off the calling
      *  HTTP thread — otherwise the POST /bulk-labels response wouldn't
