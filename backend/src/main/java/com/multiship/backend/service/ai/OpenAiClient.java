@@ -3,6 +3,7 @@ package com.multiship.backend.service.ai;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multiship.backend.service.SystemSettingService;
+import com.multiship.backend.service.carriers.HttpClients;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -40,6 +41,16 @@ public class OpenAiClient {
     private final String model;
     private final String baseUrl;
 
+    /**
+     * Sprint 51 T4 finding #9 — shared {@link RestClient} built ONCE
+     * in the constructor with 5s connect / 30s read via
+     * {@link HttpClients#newBuilder()}. Pre-T4 the client was rebuilt
+     * per call inside {@link #completeJson} with no timeout config,
+     * so an OpenAI stall (30-120s hangs are routine) drained Tomcat
+     * threads and there was needless handshake cost per request.
+     */
+    private final RestClient sharedRestClient;
+
     public static final String SETTING_KEY = "openai.api-key";
 
     public OpenAiClient(
@@ -53,6 +64,7 @@ public class OpenAiClient {
         this.envApiKey = envApiKey;
         this.model = model;
         this.baseUrl = baseUrl;
+        this.sharedRestClient = HttpClients.newBuilder().baseUrl(baseUrl).build();
     }
 
     private String resolveApiKey() {
@@ -91,7 +103,7 @@ public class OpenAiClient {
 
         String raw;
         try {
-            raw = RestClient.builder().baseUrl(baseUrl).build()
+            raw = sharedRestClient
                     .post()
                     .uri("/chat/completions")
                     .contentType(MediaType.APPLICATION_JSON)
