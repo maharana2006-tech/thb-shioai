@@ -15,6 +15,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -31,7 +32,13 @@ class ExternalWebhookDispatcherTest {
     void setUp() {
         subRepo = mock(ExternalWebhookSubscriptionRepository.class);
         deliveryRepo = mock(ExternalWebhookDeliveryRepository.class);
-        dispatcher = new ExternalWebhookDispatcher(subRepo, deliveryRepo, new ObjectMapper());
+        // Sprint 51 T3 finding #7 — pass a validator mock that never
+        // blocks so the existing tests exercise the dispatch path they
+        // were written for. WebhookUrlValidatorTest covers the guard
+        // behaviour directly.
+        WebhookUrlValidator urlValidator = mock(WebhookUrlValidator.class);
+        when(urlValidator.isBlocked(anyString())).thenReturn(false);
+        dispatcher = new ExternalWebhookDispatcher(subRepo, deliveryRepo, new ObjectMapper(), urlValidator);
     }
 
     @Test

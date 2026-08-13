@@ -5,6 +5,7 @@ import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ExternalWebhookSubscriptionDTO;
 import com.multiship.backend.model.ExternalWebhookSubscription;
 import com.multiship.backend.repository.ExternalWebhookSubscriptionRepository;
+import com.multiship.backend.service.external.WebhookUrlValidator;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +33,8 @@ import java.util.List;
 public class ExternalWebhookController {
 
     private final ExternalWebhookSubscriptionRepository subscriptionRepo;
+    /** Sprint 51 T3 finding #7 — SSRF guard applied on every save. */
+    private final WebhookUrlValidator urlValidator;
 
     @Operation(summary = "List my subscriptions")
     @GetMapping
@@ -55,6 +58,14 @@ public class ExternalWebhookController {
         if (body.getEvent() == null) return bad("event is required");
         if (body.getUrl() == null || body.getUrl().isBlank()) return bad("url is required");
         if (body.getSecret() == null || body.getSecret().isBlank()) return bad("secret is required");
+        // Sprint 51 T3 finding #7 — reject URLs pointing at private
+        // networks / cloud metadata / non-https scheme. Fail-fast at
+        // save time so no unsafe row ever lands in the DB.
+        try {
+            urlValidator.validate(body.getUrl());
+        } catch (WebhookUrlValidator.WebhookUrlRejectedException ex) {
+            return bad(ex.getMessage());
+        }
 
         ExternalWebhookSubscription entity;
         if (body.getId() != null) {

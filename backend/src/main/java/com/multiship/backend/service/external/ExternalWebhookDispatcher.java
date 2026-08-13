@@ -41,6 +41,11 @@ public class ExternalWebhookDispatcher {
     private final ExternalWebhookSubscriptionRepository subscriptionRepo;
     private final ExternalWebhookDeliveryRepository deliveryRepo;
     private final ObjectMapper objectMapper;
+    /** Sprint 51 T3 finding #7 — belt-and-braces SSRF guard. Save-time
+     *  validation is authoritative, but stored rows that predate this
+     *  validator (or slipped in via a bypass) still get dropped here
+     *  before we POST to them. */
+    private final WebhookUrlValidator urlValidator;
 
     /** Package-private RestClient injection point for tests. */
     @Autowired(required = false)
@@ -66,6 +71,23 @@ public class ExternalWebhookDispatcher {
     }
 
     private void deliverOne(ExternalWebhookSubscription sub, EventType event, String body) {
+        // Sprint 51 T3 finding #7 — refuse to POST to a URL that the
+        // validator flags as unsafe (private IP, cloud metadata, non-https
+        // when strict). Persist a FAILED delivery so ops can see the
+        // rejection instead of a silent skip.
+        if (urlValidator.isBlocked(sub.getUrl())) {
+            ExternalWebhookDelivery blocked = new ExternalWebhookDelivery();
+            blocked.setSubscriptionId(sub.getId());
+            blocked.setEvent(event.name());
+            blocked.setPayloadJson(body);
+            blocked.setAttemptedAt(LocalDateTime.now());
+            blocked.setAttempts(0);
+            blocked.setStatus(Status.FAILED);
+            blocked.setErrorMessage("URL blocked by SSRF guard.");
+            deliveryRepo.save(blocked);
+            return;
+        }
+
         ExternalWebhookDelivery delivery = new ExternalWebhookDelivery();
         delivery.setSubscriptionId(sub.getId());
         delivery.setEvent(event.name());

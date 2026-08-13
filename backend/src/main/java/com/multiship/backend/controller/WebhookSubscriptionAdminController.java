@@ -4,6 +4,7 @@ import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ExternalWebhookSubscriptionDTO;
 import com.multiship.backend.model.ExternalWebhookSubscription;
 import com.multiship.backend.repository.ExternalWebhookSubscriptionRepository;
+import com.multiship.backend.service.external.WebhookUrlValidator;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +30,11 @@ import java.util.List;
 public class WebhookSubscriptionAdminController {
 
     private final ExternalWebhookSubscriptionRepository subscriptionRepo;
+    /** Sprint 51 T3 finding #7 — SSRF guard. Admin path is more privileged
+     *  (can save subs on any api_key) so a hostile admin is out of scope,
+     *  but a compromised admin session should still not be able to point
+     *  a subscription at internal infra. */
+    private final WebhookUrlValidator urlValidator;
 
     @Operation(summary = "List subscriptions by apiKeyId (or all when omitted)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
@@ -52,6 +58,13 @@ public class WebhookSubscriptionAdminController {
         if (body.getEvent() == null)     return bad("event is required");
         if (body.getUrl() == null || body.getUrl().isBlank()) return bad("url is required");
         if (body.getSecret() == null || body.getSecret().isBlank()) return bad("secret is required");
+        // Sprint 51 T3 finding #7 — same SSRF guard as the v2 external
+        // save path. Applied even for admin callers.
+        try {
+            urlValidator.validate(body.getUrl());
+        } catch (WebhookUrlValidator.WebhookUrlRejectedException ex) {
+            return bad(ex.getMessage());
+        }
 
         ExternalWebhookSubscription entity;
         if (body.getId() != null) {
