@@ -1,6 +1,8 @@
+import { useRef } from 'react'
 import { FiHome, FiX } from 'react-icons/fi'
 import type { Warehouse } from '../../api/warehouseService'
 import AttachClientsStep from './AttachClientsStep'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
 
 /**
  * Standalone "attach clients to warehouse" modal — used from the warehouse
@@ -14,6 +16,9 @@ export default function AttachClientsModal({
   warehouse: Warehouse
   onClose: () => void
 }) {
+  // Sprint 51 T6b — focus trap.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(true, dialogRef)
   return (
     <div
       className="fixed inset-0 z-[55] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
@@ -21,7 +26,7 @@ export default function AttachClientsModal({
       aria-modal="true"
       aria-labelledby="attach-clients-title"
     >
-      <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
+      <div ref={dialogRef} className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]">
         <header className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
           <div className="flex items-center gap-2.5">
             <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[#412d15]/10 text-[#412d15]">

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { notify } from '../../utils/notify'
 import { FiX } from 'react-icons/fi'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { accountRefService, type CarrierAccountRef } from '../../api/accountRefService'
 import { formatCarrierName } from '../../utils/carrierUtils'
 import CarrierLogo from '../workspace/CarrierLogo'
@@ -33,6 +34,10 @@ export default function AccountPickerModal({
 }: AccountPickerModalProps) {
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
   const [loading, setLoading] = useState(true)
+  // Sprint 51 T6b — focus trap so Tab stays inside the modal; Esc restore
+  // returns focus to whatever opened the modal.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(true, dialogRef)
 
   useEffect(() => {
     accountRefService
@@ -71,6 +76,7 @@ export default function AccountPickerModal({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
         onClick={(event) => event.stopPropagation()}
       >

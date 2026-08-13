@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { notify } from '../../utils/notify'
 import {
   FiBriefcase,
@@ -222,6 +223,9 @@ export default function CustomsProfileModal({
   onClose,
   onSaved,
 }: CustomsProfileModalProps) {
+  // Sprint 51 T6b — focus trap.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(true, dialogRef)
   const [form, setForm] = useState<CustomsProfile>(() => profile ?? blank())
   const [clientCode, setClientCode] = useState<string>(
     () => (profile?.clientCode ?? lockedClientCode ?? '').toUpperCase()
@@ -493,6 +497,7 @@ export default function CustomsProfileModal({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
         onClick={(e) => e.stopPropagation()}
       >
