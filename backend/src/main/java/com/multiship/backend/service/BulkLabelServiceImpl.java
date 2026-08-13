@@ -9,6 +9,7 @@ import com.multiship.backend.model.BulkLabelJob;
 import com.multiship.backend.repository.BulkLabelJobRepository;
 import com.multiship.backend.repository.OrderRepository;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -29,6 +30,7 @@ import java.util.Base64;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -137,6 +139,34 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(LABEL_FETCH_TIMEOUT)
             .build();
+
+    /**
+     * Sprint 51 M-Ops (BP-M2) — graceful shutdown. Give the fan-out
+     * pool up to 30s to drain in-flight labels + the dispatcher up to
+     * 5s to hand off any pending job. Paired with
+     * server.shutdown=graceful in application.properties which stops
+     * Tomcat accepting NEW requests before this fires. Without this,
+     * SIGTERM hard-kills daemon threads mid-carrier-call — the label
+     * ships from the carrier but the DB row never gets written.
+     */
+    @PreDestroy
+    void shutdownExecutors() {
+        dispatchExecutor.shutdown();
+        if (fanOutExecutor != null) fanOutExecutor.shutdown();
+        try {
+            if (!dispatchExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                dispatchExecutor.shutdownNow();
+            }
+            if (fanOutExecutor != null && !fanOutExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                log.warn("Bulk-label fan-out did not drain in 30s; forcing shutdownNow.");
+                fanOutExecutor.shutdownNow();
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            dispatchExecutor.shutdownNow();
+            if (fanOutExecutor != null) fanOutExecutor.shutdownNow();
+        }
+    }
 
     @Override
     public ApiResponse<BulkLabelJobDTO> submit(BulkLabelRequestDTO request, String requestedBy) {

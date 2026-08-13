@@ -17,6 +17,7 @@ import com.multiship.backend.repository.ShippingServiceRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.service.fx.FxRateService;
 import com.multiship.backend.util.UnitConverter;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -28,6 +29,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -134,6 +136,30 @@ public class RateShopServiceImpl implements RateShopService {
             t.setDaemon(true);
             return t;
         });
+    }
+
+    /**
+     * Sprint 51 M-Ops (BP-M2) — graceful shutdown. On SIGTERM the JVM
+     * hard-kills daemon threads; a rate-shop in flight would return
+     * incomplete results (some carriers stubbed with "unreachable") and
+     * the caller's response would look like carriers are down. Give the
+     * fan-out up to 30s to drain, then hard-shutdown. Paired with
+     * server.shutdown=graceful + spring.lifecycle.timeout-per-shutdown-phase=30s
+     * in application.properties, which stops Tomcat accepting NEW
+     * requests first so this drains a KNOWN set of in-flight ones.
+     */
+    @PreDestroy
+    void shutdownExecutor() {
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                log.warn("Rate-shop fan-out did not drain in 30s; forcing shutdownNow.");
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            executor.shutdownNow();
+        }
     }
 
     /** Package-private constructor for tests — inject a custom executor

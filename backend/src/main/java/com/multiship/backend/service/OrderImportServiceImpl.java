@@ -25,6 +25,7 @@ import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -45,6 +46,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Sprint 40 impl. Format detection by filename extension:
@@ -198,6 +200,28 @@ public class OrderImportServiceImpl implements OrderImportService {
         });
         this.fairExecutor = new com.multiship.backend.service.fairness.FairTenantExecutor(
                 fanOutExecutor, importMaxPerTenant, 60, IMPORT_MAX_BATCH_WAIT_MS);
+    }
+
+    /**
+     * Sprint 51 M-Ops (BP-M2) — graceful shutdown. Give the commit pool
+     * up to 30s to drain the current XLSX / CSV batch. Paired with
+     * server.shutdown=graceful. Without this, SIGTERM mid-import
+     * hard-kills workers between "row validated" and "carrier called",
+     * leaving half-processed rows the next boot has no way to reconcile.
+     */
+    @PreDestroy
+    void shutdownExecutor() {
+        if (fanOutExecutor == null) return;
+        fanOutExecutor.shutdown();
+        try {
+            if (!fanOutExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                log.warn("Order-import fan-out did not drain in 30s; forcing shutdownNow.");
+                fanOutExecutor.shutdownNow();
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            fanOutExecutor.shutdownNow();
+        }
     }
 
     @org.springframework.beans.factory.annotation.Autowired
