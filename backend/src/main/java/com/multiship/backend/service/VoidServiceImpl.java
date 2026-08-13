@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -50,7 +51,28 @@ public class VoidServiceImpl implements VoidService {
     private final OrderRepository orderRepository;
     private final TenantScopeEnforcer tenantScope;
 
+    /**
+     * Sprint 51 R1 (audit finding #1) — the void path used to read
+     * {@link OrderTracking} without a row lock and without a transaction
+     * boundary. Two concurrent voids (double-click, retry-on-timeout, or a
+     * malicious repeat) both saw {@code status != "VOIDED"}, both called
+     * the carrier, and some carriers (UPS, FedEx) charge a re-attempt fee
+     * on the second call or corrupt the audit trail.
+     *
+     * <p>The {@link Transactional} boundary + {@link
+     * com.multiship.backend.repository.OrderTrackingRepository#findByOrderNoForUpdate}
+     * pessimistic-write lookup serialise concurrent voids on the DB row:
+     * the loser sees {@code status = "VOIDED"} and returns
+     * {@code ALREADY_VOIDED} without a carrier round-trip. The tx is
+     * intentionally scoped to hold across the carrier HTTP call so the
+     * status flip and the carrier call happen atomically — see the
+     * follow-up note in {@code CarrierServiceImpl} at line 280 about
+     * splitting label-generation into A) reserve IN_FLIGHT + release
+     * lock, B) carrier call, C) persist result. Same trade-off applies
+     * here; deferring for the same reason (needs a new "IN_FLIGHT" tri-state).
+     */
     @Override
+    @Transactional
     public ApiResponse<VoidLabelResponseDTO> voidLabel(Integer orderNo) {
         if (orderNo == null) {
             return failure(HttpStatus.BAD_REQUEST, "Order number is required.");
@@ -62,13 +84,14 @@ public class VoidServiceImpl implements VoidService {
                 tenantScope.requireTenantMatch(
                         StringUtils.hasText(o.getTenantId()) ? o.getTenantId() : o.getCustNo()));
 
-        OrderTracking tracking = orderTrackingRepository.findByOrderNo(orderNo).orElse(null);
+        OrderTracking tracking = orderTrackingRepository.findByOrderNoForUpdate(orderNo).orElse(null);
         if (tracking == null || !StringUtils.hasText(tracking.getTrackingNumber())) {
             return failure(HttpStatus.NOT_FOUND,
                     "Order " + orderNo + " has no tracking number to void.");
         }
 
-        // Idempotent short-circuit.
+        // Idempotent short-circuit — now safe from the concurrent-void
+        // race because we hold PESSIMISTIC_WRITE on the tracking row.
         if ("VOIDED".equalsIgnoreCase(tracking.getStatus())) {
             return success(dto(orderNo, tracking, true, "ALREADY_VOIDED",
                     "Order " + orderNo + " was already voided."));
