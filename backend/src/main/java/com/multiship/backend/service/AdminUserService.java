@@ -44,6 +44,12 @@ public class AdminUserService {
      */
     private final TenantScopeEnforcer tenantScope;
 
+    /** Sprint 51 T2 finding #5 — deactivate / assign-client mutations bump
+     *  the target user's token_version so any outstanding JWT stops working
+     *  on the next request. Without this, the deactivate feature was
+     *  cosmetic — the user kept full API access until the 24h JWT expired. */
+    private final TokenRevocationService tokenRevocationService;
+
     public enum ActionResult {
         OK,
         USER_NOT_FOUND,
@@ -101,7 +107,12 @@ public class AdminUserService {
             return new MutationOutcome(ActionResult.ALREADY_IN_TARGET_STATE, toDTO(u));
         }
         u.setClientCode(normalized);
-        userRepository.save(u);
+        // Sprint 51 T2 finding #5 — the JWT carries clientCode as a claim.
+        // Re-scoping the user without bumping token_version leaves the old
+        // JWT usable with its stale (possibly foreign) clientCode until it
+        // expires. Bump invalidates every outstanding token so the user
+        // must re-login and get a JWT with the new scope.
+        tokenRevocationService.bumpTokenVersion(u);
 
         auditRepository.save(UserAdminAudit.builder()
                 .subjectUserId(u.getId())
@@ -131,7 +142,10 @@ public class AdminUserService {
         }
         u.setDeactivatedAt(LocalDateTime.now());
         u.setDeactivatedBy(actorUsername);
-        userRepository.save(u);
+        // Sprint 51 T2 finding #5 — invalidate every outstanding JWT for
+        // this account in one write. bumpTokenVersion() saves u; no
+        // separate userRepository.save needed.
+        tokenRevocationService.bumpTokenVersion(u);
 
         auditRepository.save(UserAdminAudit.builder()
                 .subjectUserId(u.getId())

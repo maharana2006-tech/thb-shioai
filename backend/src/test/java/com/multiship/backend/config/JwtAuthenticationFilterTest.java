@@ -2,6 +2,7 @@ package com.multiship.backend.config;
 
 import com.multiship.backend.model.ApiKey;
 import com.multiship.backend.repository.ApiKeyRepository;
+import com.multiship.backend.service.TokenRevocationService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -123,6 +124,68 @@ class JwtAuthenticationFilterTest {
         assertNotNull(auth);
         assertEquals("alice", auth.getName());
         verifyNoInteractions(apiKeyRepository);
+    }
+
+    /**
+     * Sprint 51 T2 finding #5 — a token whose {@code tv} claim is less
+     * than the user's current DB {@code token_version} must be rejected.
+     * This is the mechanism that makes admin deactivate / assign-client /
+     * logout-all actually kill sessions.
+     */
+    @Test
+    void staleTokenVersion_rejectsRequest() throws Exception {
+        TokenRevocationService rev = mock(TokenRevocationService.class);
+        when(rev.currentTokenVersion("alice")).thenReturn(5L);
+        when(rev.isJtiBlacklisted(org.mockito.ArgumentMatchers.anyString())).thenReturn(false);
+        JwtAuthenticationFilter revFilter = new JwtAuthenticationFilter(
+                jwtService, apiKeyRepository, null, rev);
+
+        // Token issued at tv=2, DB now at tv=5 — post-bump.
+        setAuthHeader(jwtService.generateToken("alice", "USER", null, 2L));
+
+        revFilter.doFilter(request, response, chain);
+
+        assertNull(SecurityContextHolder.getContext().getAuthentication(),
+                "Token with tv < current DB tv must not authenticate");
+    }
+
+    @Test
+    void freshTokenVersion_authenticates() throws Exception {
+        TokenRevocationService rev = mock(TokenRevocationService.class);
+        when(rev.currentTokenVersion("alice")).thenReturn(5L);
+        when(rev.isJtiBlacklisted(org.mockito.ArgumentMatchers.anyString())).thenReturn(false);
+        JwtAuthenticationFilter revFilter = new JwtAuthenticationFilter(
+                jwtService, apiKeyRepository, null, rev);
+
+        // Token issued at tv=5, DB also at tv=5 — current.
+        setAuthHeader(jwtService.generateToken("alice", "USER", null, 5L));
+
+        revFilter.doFilter(request, response, chain);
+
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        assertNotNull(auth, "Token with tv == current DB tv must authenticate");
+        assertEquals("alice", auth.getName());
+    }
+
+    /**
+     * Sprint 51 T2 finding #5 — a token whose jti is in the Redis
+     * blacklist must be rejected even if tv is fresh (per-device logout
+     * via {@code AuthServiceImpl.logoutUser}).
+     */
+    @Test
+    void blacklistedJti_rejectsRequest() throws Exception {
+        TokenRevocationService rev = mock(TokenRevocationService.class);
+        when(rev.currentTokenVersion("alice")).thenReturn(0L);
+        when(rev.isJtiBlacklisted(org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
+        JwtAuthenticationFilter revFilter = new JwtAuthenticationFilter(
+                jwtService, apiKeyRepository, null, rev);
+
+        setAuthHeader(jwtService.generateToken("alice", "USER", null, 0L));
+
+        revFilter.doFilter(request, response, chain);
+
+        assertNull(SecurityContextHolder.getContext().getAuthentication(),
+                "Token with blacklisted jti must not authenticate");
     }
 
     // ===== helpers =====

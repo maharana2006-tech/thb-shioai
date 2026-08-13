@@ -65,6 +65,7 @@ public class SecurityConfig {
                                                    com.multiship.backend.service.ApiKeyService apiKeyService,
                                                    com.multiship.backend.repository.ApiKeyRepository apiKeyRepository,
                                                    com.multiship.backend.repository.UserRepository userRepository,
+                                                   com.multiship.backend.service.TokenRevocationService revocationService,
                                                    com.multiship.backend.service.ratelimit.TenantRateLimitFilter tenantRateLimitFilter)
             throws Exception {
         // Sprint 50 PR Q2 — CSRF via double-submit cookie. The
@@ -151,7 +152,9 @@ public class SecurityConfig {
                 .addFilterBefore(new ApiKeyAuthenticationFilter(apiKeyService), UsernamePasswordAuthenticationFilter.class)
                 // Sprint 50 Tier 0.5 PR A — UserRepository injected for the
                 // pre-migration-token clientCode fallback lookup (cached 5m).
-                .addFilterBefore(new JwtAuthenticationFilter(jwtService, apiKeyRepository, userRepository),
+                // Sprint 51 T2 — TokenRevocationService drives per-request
+                // tv + jti checks so a revoked token can never authenticate.
+                .addFilterBefore(new JwtAuthenticationFilter(jwtService, apiKeyRepository, userRepository, revocationService),
                         UsernamePasswordAuthenticationFilter.class)
                 // Sprint 50 finding #15 (A) — must run AFTER the two auth filters
                 // above so the SecurityContext already carries the caller's

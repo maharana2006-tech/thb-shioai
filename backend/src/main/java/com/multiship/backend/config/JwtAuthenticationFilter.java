@@ -19,6 +19,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import com.multiship.backend.model.ApiKey;
 import com.multiship.backend.repository.ApiKeyRepository;
 import com.multiship.backend.repository.UserRepository;
+import com.multiship.backend.service.TokenRevocationService;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -42,6 +43,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
      *  no clientCode claim, the filter falls back to a DB lookup here so
      *  pre-migration tokens keep working through the 24h JWT window. */
     private final UserRepository userRepository;
+    /** Sprint 51 T2 finding #5 — optional; when non-null, every JWT is
+     *  checked against the DB {@code token_version} (Caffeine-cached) and
+     *  the Redis jti blacklist. Null in old three-arg tests that don't
+     *  exercise revocation. */
+    private final TokenRevocationService revocationService;
 
     /**
      * Sprint 50 Tier 0.5 PR A — 5-min cache on the username → clientCode
@@ -56,18 +62,25 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     .build();
 
     public JwtAuthenticationFilter(JwtService jwtService) {
-        this(jwtService, null, null);
+        this(jwtService, null, null, null);
     }
 
     public JwtAuthenticationFilter(JwtService jwtService, ApiKeyRepository apiKeyRepository) {
-        this(jwtService, apiKeyRepository, null);
+        this(jwtService, apiKeyRepository, null, null);
     }
 
     public JwtAuthenticationFilter(JwtService jwtService, ApiKeyRepository apiKeyRepository,
                                     UserRepository userRepository) {
+        this(jwtService, apiKeyRepository, userRepository, null);
+    }
+
+    public JwtAuthenticationFilter(JwtService jwtService, ApiKeyRepository apiKeyRepository,
+                                    UserRepository userRepository,
+                                    TokenRevocationService revocationService) {
         this.jwtService = jwtService;
         this.apiKeyService = apiKeyRepository;
         this.userRepository = userRepository;
+        this.revocationService = revocationService;
     }
 
     /**
@@ -168,6 +181,40 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 Claims claims = jwtService.parseClaims(token);
                 String username = claims.getSubject();
                 String role = claims.get("role", String.class);
+
+                // Sprint 51 T2 finding #5 — revocation checks. Run BEFORE
+                // populating the SecurityContext so a revoked token can
+                // never authenticate.
+                //
+                // (a) jti in Redis blacklist → per-device logout since
+                //     issue. Fast-path; no-op if Redis absent.
+                // (b) tv claim < current DB token_version → global bump
+                //     (logout-all, deactivate, role change). Caffeine
+                //     cache absorbs the DB read; TTL 60s bounds
+                //     multi-instance propagation delay.
+                //
+                // Human-users only. API-key tokens (subject "apikey:...")
+                // are governed by ApiKey.active — nothing to check here.
+                if (revocationService != null
+                        && username != null
+                        && !username.startsWith("apikey:")) {
+                    String jti = claims.getId();
+                    if (jti != null && revocationService.isJtiBlacklisted(jti)) {
+                        SecurityContextHolder.clearContext();
+                        filterChain.doFilter(request, response);
+                        return;
+                    }
+                    Long tokenTv = claims.get("tv", Long.class);
+                    // Legacy tokens (pre-T2) have no tv claim; treat as 0.
+                    long tv = tokenTv == null ? 0L : tokenTv;
+                    long currentTv = revocationService.currentTokenVersion(username);
+                    if (tv < currentTv) {
+                        SecurityContextHolder.clearContext();
+                        filterChain.doFilter(request, response);
+                        return;
+                    }
+                }
+
                 // Sprint 50 Tier 0.5 PR A — new claim; MAY be null for
                 // pre-migration tokens. Filter attaches it to
                 // Authentication.details so downstream OrderAccessEvaluator
