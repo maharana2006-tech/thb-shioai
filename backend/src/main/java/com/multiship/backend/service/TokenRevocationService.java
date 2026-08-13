@@ -8,7 +8,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -96,20 +95,20 @@ public class TokenRevocationService {
     }
 
     /**
-     * Increment the user's token_version, invalidating every outstanding
-     * JWT for that account. Called from logout-all, admin deactivate,
-     * admin role change, future password reset. Idempotent w.r.t. the
-     * cache: local Caffeine entry is invalidated so the next read pulls
-     * the fresh value from the DB.
+     * Increment the user's token_version in place and invalidate the
+     * local cache. Called from logout-all, admin deactivate, admin role
+     * change, future password reset. The caller MUST persist the User
+     * (typically via {@code userRepository.save} within the same
+     * transaction) — this method deliberately does not save so it
+     * composes with other mutations on the same entity in one round-trip
+     * (see {@code AdminUserService.deactivate}).
      */
-    @Transactional
     public void bumpTokenVersion(User user) {
         if (user == null || user.getUsername() == null) {
             return;
         }
         long current = user.getTokenVersion() == null ? 0L : user.getTokenVersion();
         user.setTokenVersion(current + 1L);
-        userRepository.save(user);
         tokenVersionCache.invalidate(user.getUsername());
     }
 

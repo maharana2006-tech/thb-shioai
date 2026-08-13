@@ -113,6 +113,7 @@ public class AdminUserService {
         // expires. Bump invalidates every outstanding token so the user
         // must re-login and get a JWT with the new scope.
         tokenRevocationService.bumpTokenVersion(u);
+        userRepository.save(u);
 
         auditRepository.save(UserAdminAudit.builder()
                 .subjectUserId(u.getId())
@@ -143,9 +144,10 @@ public class AdminUserService {
         u.setDeactivatedAt(LocalDateTime.now());
         u.setDeactivatedBy(actorUsername);
         // Sprint 51 T2 finding #5 — invalidate every outstanding JWT for
-        // this account in one write. bumpTokenVersion() saves u; no
-        // separate userRepository.save needed.
+        // this account. bumpTokenVersion mutates the field + local cache;
+        // save persists deactivatedAt + tokenVersion in one row write.
         tokenRevocationService.bumpTokenVersion(u);
+        userRepository.save(u);
 
         auditRepository.save(UserAdminAudit.builder()
                 .subjectUserId(u.getId())

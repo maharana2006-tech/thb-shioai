@@ -78,7 +78,10 @@ class TokenRevocationServiceTest {
 
         svc.bumpTokenVersion(alice);
         assertEquals(4L, alice.getTokenVersion());
-        verify(userRepository).save(alice);
+        // Deliberately does NOT save — caller composes the persistence
+        // with other mutations (e.g. AdminUserService.deactivate sets
+        // deactivatedAt + bumps tv + saves once).
+        verify(userRepository, never()).save(alice);
 
         // Next read should hit DB again (cache invalidated).
         when(userRepository.findByUsername("alice")).thenReturn(Optional.of(user("alice", 4L)));
@@ -88,9 +91,9 @@ class TokenRevocationServiceTest {
 
     @Test
     void bumpTokenVersionHandlesNullOrMissingUser() {
+        // Must not throw; no repo interaction.
         svc.bumpTokenVersion(null);
         svc.bumpTokenVersion(User.builder().username(null).build());
-        verify(userRepository, never()).save(org.mockito.ArgumentMatchers.any());
     }
 
     @Test

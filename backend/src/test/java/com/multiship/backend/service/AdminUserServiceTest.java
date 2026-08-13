@@ -39,8 +39,13 @@ class AdminUserServiceTest {
         auditRepo = mock(UserAdminAuditRepository.class);
         clientRepo = mock(ClientRepository.class);
         // Sprint 50 Tier 0.5 PR E - enforcer with flag OFF is a pass-through.
+        // Sprint 51 T2 finding #5 — pass a mock TokenRevocationService.
+        // Real one would need Redis + Caffeine; mock is transparent since
+        // bumpTokenVersion is invoked via side-effect and the tests here
+        // don't assert on tv (see TokenRevocationServiceTest for that).
         service = new AdminUserService(userRepo, auditRepo, clientRepo,
-                new TenantScopeEnforcer(new AccessScopePolicy(false)));
+                new TenantScopeEnforcer(new AccessScopePolicy(false)),
+                mock(com.multiship.backend.service.TokenRevocationService.class));
     }
 
     private User legacyUser() {
@@ -74,7 +79,8 @@ class AdminUserServiceTest {
         org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
         try {
             AdminUserService scopedService = new AdminUserService(userRepo, auditRepo, clientRepo,
-                    new TenantScopeEnforcer(new AccessScopePolicy(true)));
+                    new TenantScopeEnforcer(new AccessScopePolicy(true)),
+                    mock(com.multiship.backend.service.TokenRevocationService.class));
             // Prime findById so we reach the clamp (else USER_NOT_FOUND short-
             // circuits before tenantScope is consulted).
             when(userRepo.findById(42L)).thenReturn(Optional.of(legacyUser()));
