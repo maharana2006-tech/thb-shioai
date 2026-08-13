@@ -159,7 +159,12 @@ public class SecurityConfig {
                 // Sprint 50 finding #15 (A) — must run AFTER the two auth filters
                 // above so the SecurityContext already carries the caller's
                 // authentication when the rate check reads the tenant.
-                .addFilterAfter(tenantRateLimitFilter, JwtAuthenticationFilter.class);
+                .addFilterAfter(tenantRateLimitFilter, JwtAuthenticationFilter.class)
+                // Sprint 51 M-Ops (BP-M5) — populates MDC with requestId +
+                // tenant + userId so every downstream log line carries the
+                // correlation. Also runs after auth (SecurityContext must
+                // be populated by then).
+                .addFilterAfter(new MdcCorrelationFilter(), JwtAuthenticationFilter.class);
 
         return http.build();
     }
