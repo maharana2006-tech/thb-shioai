@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import toast from 'react-hot-toast'
 import { notify } from '../utils/notify'
 import { FiCheck, FiLock, FiSave } from 'react-icons/fi'
 import { systemSettingsService, type SystemSetting } from '../api/systemSettingsService'
@@ -44,13 +43,13 @@ export default function SystemSettingsPage() {
   const save = async (key: string) => {
     const value = (inputs[key] ?? '').trim()
     if (!value) {
-      toast.error('Enter a value to save.')
+      notify.error('Enter a value to save.')
       return
     }
     setSavingKey(key)
     try {
       await systemSettingsService.update(key, value)
-      toast.success('Setting updated.')
+      notify.success('Setting updated.')
       setInputs((prev) => ({ ...prev, [key]: '' }))
       void load()
     } catch (e) {
