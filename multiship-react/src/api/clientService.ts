@@ -153,10 +153,10 @@ export const clientService = {
     if (params.name?.trim()) query.set('name', params.name.trim())
     if (params.city?.trim()) query.set('city', params.city.trim())
 
-    const token = localStorage.getItem('multiship_token')
+    // Sprint 50 PR Q3 — cookie-mode auth.
     const response = await fetch(`${BASE_URL}/clients/export.csv?${query.toString()}`, {
       method: 'GET',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      credentials: 'include',
     })
     if (!response.ok) throw new Error(`Export failed (HTTP ${response.status}).`)
     const blob = await response.blob()

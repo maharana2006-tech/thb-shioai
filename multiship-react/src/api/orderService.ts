@@ -591,9 +591,9 @@ export const orderService = {
    * ready to send to a Zebra printer or preview on labelary.com.
    */
   getLabelZpl: async (orderNo: number): Promise<string> => {
-    const token = localStorage.getItem('multiship_token')
+    // Sprint 50 PR Q3 — cookie-mode auth.
     const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/zpl`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: 'include',
     })
 
     if (!response.ok) {

@@ -68,9 +68,9 @@ async function downloadCsv(dataset: Dataset, filters: ReportFilters, filename: s
     if (v !== undefined && v !== null && v !== '') params.set(k, String(v))
   })
   const url = `${BASE_URL}${DATASET_PATH[dataset]}?${params.toString()}`
-  const token = localStorage.getItem('multiship_token')
+  // Sprint 50 PR Q3 — cookie-mode auth.
   const resp = await fetch(url, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    credentials: 'include',
   })
   if (!resp.ok) throw new Error(`Download failed: HTTP ${resp.status}`)
   const blob = await resp.blob()
@@ -110,9 +110,9 @@ export const reportService = {
 
   downloadGenerated: async (id: number, filename: string) => {
     const url = `${BASE_URL}/scheduled-reports/generated/${id}/download`
-    const token = localStorage.getItem('multiship_token')
+    // Sprint 50 PR Q3 — cookie-mode auth.
     const resp = await fetch(url, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      credentials: 'include',
     })
     if (!resp.ok) throw new Error(`Download failed: HTTP ${resp.status}`)
     const blob = await resp.blob()

@@ -1,4 +1,4 @@
-import { apiClient, BASE_URL } from './apiClient'
+import { apiClient, authFetch } from './apiClient'
 import type { ApiResponse } from './orderService'
 
 /**
@@ -61,18 +61,13 @@ const BASE = '/label-templates'
  * @PreAuthorize passes.
  */
 export async function previewTemplateHtml(layoutJson: string | null): Promise<string> {
-  const token = localStorage.getItem('multiship_token')
-  const response = await fetch(`${BASE_URL}${BASE}/preview`, {
+  // Sprint 50 PR Q3 — authFetch handles credentials:'include' + CSRF echo.
+  // authFetch throws on non-2xx, so no separate response.ok check.
+  const response = await authFetch(`${BASE}/preview`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ layoutJson }),
   })
-  if (!response.ok) {
-    throw new Error(`Preview failed (HTTP ${response.status})`)
-  }
   return response.text()
 }
 
@@ -83,18 +78,11 @@ export async function previewTemplateHtml(layoutJson: string | null): Promise<st
  * tab's lifetime.
  */
 export async function previewTemplatePdfObjectUrl(layoutJson: string | null): Promise<string> {
-  const token = localStorage.getItem('multiship_token')
-  const response = await fetch(`${BASE_URL}${BASE}/preview.pdf`, {
+  const response = await authFetch(`${BASE}/preview.pdf`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ layoutJson }),
   })
-  if (!response.ok) {
-    throw new Error(`PDF preview failed (HTTP ${response.status})`)
-  }
   const blob = await response.blob()
   return URL.createObjectURL(blob)
 }
@@ -109,18 +97,11 @@ export async function previewTemplateZpl(
   layoutJson: string | null,
   dpi: 203 | 300 = 203,
 ): Promise<string> {
-  const token = localStorage.getItem('multiship_token')
-  const response = await fetch(`${BASE_URL}${BASE}/preview.zpl?dpi=${dpi}`, {
+  const response = await authFetch(`${BASE}/preview.zpl?dpi=${dpi}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ layoutJson }),
   })
-  if (!response.ok) {
-    throw new Error(`ZPL preview failed (HTTP ${response.status})`)
-  }
   return response.text()
 }
 
@@ -197,13 +178,8 @@ export const labelTemplateService = {
    * done to avoid leaking a Blob into memory for the tab's lifetime.
    */
   fetchPreviewObjectUrl: async (orderNo: number | string): Promise<string> => {
-    const token = localStorage.getItem('multiship_token')
-    const resp = await fetch(`${BASE_URL}/orders/${orderNo}/packing-slip`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    })
-    if (!resp.ok) {
-      throw new Error(`Packing-slip preview failed (HTTP ${resp.status}).`)
-    }
+    // Sprint 50 PR Q3 — cookie-mode auth via authFetch (credentials:'include').
+    const resp = await authFetch(`/orders/${orderNo}/packing-slip`)
     const blob = await resp.blob()
     return URL.createObjectURL(blob)
   },

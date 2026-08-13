@@ -120,10 +120,10 @@ export const customsProfileService = {
   exportProfilesCsv: async (params: CustomsProfileListParams = {}): Promise<void> => {
     const query = new URLSearchParams()
     appendListParams(query, params)
-    const token = localStorage.getItem('multiship_token')
+    // Sprint 50 PR Q3 — cookie-mode auth.
     const response = await fetch(`${BASE_URL}/customs-profiles/export.csv?${query.toString()}`, {
       method: 'GET',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      credentials: 'include',
     })
     if (!response.ok) throw new Error(`Export failed (HTTP ${response.status}).`)
     const blob = await response.blob()

@@ -20,15 +20,17 @@ interface CarrierConnection extends CarrierDefinition {
 }
 
 interface SessionSnapshot {
-  token: string | null
   username: string | null
   role: string | null
   connectedCarriers: CarrierConnection[]
   hasConnectedCarrier: boolean
 }
 
+// Sprint 50 PR Q3 — the JWT itself no longer lives in localStorage;
+// it's an httpOnly cookie set by the backend. Only the non-sensitive
+// username/role remain here to drive UI gating (role-based nav visibility,
+// welcome text, etc.). Route guards gate on `username` presence.
 const STORAGE_KEYS = {
-  token: 'multiship_token',
   username: 'multiship_user',
   role: 'multiship_role',
   carriers: 'multiship_connected_carriers',
@@ -64,7 +66,6 @@ const carrierCatalog: CarrierDefinition[] = [
 ]
 
 const emptySnapshot: SessionSnapshot = {
-  token: null,
   username: null,
   role: null,
   connectedCarriers: [],
@@ -151,11 +152,10 @@ const writeConnectedCarriers = (connections: CarrierConnection[]) => {
 }
 
 const getSnapshot = (): SessionSnapshot => {
-  const token = readStorageValue(STORAGE_KEYS.token)
   const username = readStorageValue(STORAGE_KEYS.username)
   const role = readStorageValue(STORAGE_KEYS.role)
   const carriersRaw = readStorageValue(STORAGE_KEYS.carriers)
-  const nextSnapshotKey = JSON.stringify([token, username, role, carriersRaw])
+  const nextSnapshotKey = JSON.stringify([username, role, carriersRaw])
 
   if (nextSnapshotKey === cachedSnapshotKey) {
     return cachedSnapshot
@@ -165,7 +165,6 @@ const getSnapshot = (): SessionSnapshot => {
 
   cachedSnapshotKey = nextSnapshotKey
   cachedSnapshot = {
-    token,
     username,
     role,
     connectedCarriers,
@@ -234,20 +233,14 @@ export const bootstrapSessionFromCookie = async (): Promise<void> => {
   }
 }
 
-export const storeAuthSession = (payload: { token?: string | null; username: string; role: string }) => {
+export const storeAuthSession = (payload: { username: string; role: string }) => {
   if (!isBrowser()) {
     return
   }
 
-  // Sprint 50 PR Q2 — token is optional now. Cookie-mode auth means the
-  // JWT lives in an httpOnly cookie the JS can never read; the SPA
-  // only needs the non-sensitive username + role to drive UI gating.
-  // Transitional writes keep localStorage populated so a rolling
-  // deploy where the FE still runs old code sees a token to send —
-  // once ops confirms every FE build is on cookie mode, drop this.
-  if (payload.token) {
-    window.localStorage.setItem(STORAGE_KEYS.token, payload.token)
-  }
+  // Sprint 50 PR Q3 — cookie-mode auth is now the only path. The JWT
+  // lives in an httpOnly cookie the JS can never read; the SPA only
+  // needs the non-sensitive username + role to drive UI gating.
   window.localStorage.setItem(STORAGE_KEYS.username, payload.username)
   window.localStorage.setItem(STORAGE_KEYS.role, payload.role)
   emitSessionChange()
@@ -258,7 +251,6 @@ export const clearAuthSession = () => {
     return
   }
 
-  window.localStorage.removeItem(STORAGE_KEYS.token)
   window.localStorage.removeItem(STORAGE_KEYS.username)
   window.localStorage.removeItem(STORAGE_KEYS.role)
   emitSessionChange()

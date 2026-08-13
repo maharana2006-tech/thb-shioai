@@ -49,16 +49,6 @@ async function apiRequest<T>(endpoint: string, options: FetchOptions = {}): Prom
     ...(customConfig.headers || {}),
   };
 
-  // Sprint 50 PR Q2 — legacy header path preserved for one deploy cycle
-  // via VITE_LEGACY_HEADER_AUTH. Once every deployment has cut over to
-  // cookies, remove this block and the localStorage token cleanup below.
-  if (import.meta.env?.VITE_LEGACY_HEADER_AUTH === 'true') {
-    const token = localStorage.getItem('multiship_token');
-    if (token) {
-      (headers as any)['Authorization'] = `Bearer ${token}`;
-    }
-  }
-
   // CSRF echo — Spring compares the cookie value with this header.
   if (CSRF_METHODS.has(method)) {
     const csrf = readCookie('XSRF-TOKEN');
@@ -87,8 +77,9 @@ async function apiRequest<T>(endpoint: string, options: FetchOptions = {}): Prom
       // Expired or invalid session: clear local auth state and send the user
       // back to the login screen. Login/signup 401s (wrong password) are the
       // endpoint's own business and must not trigger a redirect loop.
+      // The JWT itself lives in an httpOnly cookie — the server clears it
+      // on logout; here we only wipe the non-sensitive UI-gating fields.
       if (response.status === 401 && !endpoint.startsWith('/auth/')) {
-        localStorage.removeItem('multiship_token');
         localStorage.removeItem('multiship_user');
         localStorage.removeItem('multiship_role');
 
@@ -129,13 +120,6 @@ async function apiRequest<T>(endpoint: string, options: FetchOptions = {}): Prom
  */
 export async function authFetch(endpoint: string, options: RequestInit = {}): Promise<Response> {
   const headers = new Headers(options.headers);
-  // Sprint 50 PR Q2 — legacy header path preserved for one deploy cycle.
-  if (import.meta.env?.VITE_LEGACY_HEADER_AUTH === 'true') {
-    const token = localStorage.getItem('multiship_token');
-    if (token && !headers.has('Authorization')) {
-      headers.set('Authorization', `Bearer ${token}`);
-    }
-  }
   // CSRF echo for state-changing requests.
   const method = (options.method || 'GET').toUpperCase();
   if (CSRF_METHODS.has(method) && !headers.has('X-XSRF-TOKEN')) {
@@ -173,7 +157,6 @@ export async function authFetch(endpoint: string, options: RequestInit = {}): Pr
   // Skip on /auth/ endpoints so wrong-password on the login form doesn't
   // trigger a redirect loop.
   if (response.status === 401 && !endpoint.startsWith('/auth/')) {
-    localStorage.removeItem('multiship_token');
     localStorage.removeItem('multiship_user');
     localStorage.removeItem('multiship_role');
     if (!window.location.pathname.startsWith('/login')) {

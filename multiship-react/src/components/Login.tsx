@@ -45,11 +45,14 @@ export default function Login() {
 
         const authPayload = res as AuthPayload
         const authData: AuthResponse = authPayload.data ?? authPayload
-        if (authData && authData.token) {
+        // Sprint 50 PR Q3 — cookie-mode auth. The JWT is set as an
+        // httpOnly cookie by the backend on this same response; we no
+        // longer read it here. A successful login is signalled by the
+        // presence of the username field on the AuthResponse body.
+        if (authData && authData.username) {
           const role = normalizeRole(authData.role)
 
           storeAuthSession({
-            token: authData.token,
             username: authData.username || values.username,
             role: authData.role || role,
           })
