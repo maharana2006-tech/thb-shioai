@@ -94,3 +94,62 @@ jobs:
           name: surefire-reports
           path: backend/target/surefire-reports/
           retention-days: 7
+
+  # Sprint 51 T5a — closes audit finding #10. Pre-T5a the CI only ran
+  # `mvn -DskipITs test`, and INTEGRATION_TESTS was never set — so every
+  # class extending AbstractIntegrationTest (guarded by
+  # @EnabledIfEnvironmentVariable) was silently skipped. That meant the
+  # fresh-DB Flyway migration guard, tenant-scope enforcement,
+  # idempotency Redis semantics, user-secret encryption, webhook
+  # HMAC roundtrip, and login-deactivation flow were only checked on
+  # developer laptops. This job wires up the integration suite so
+  # migration + tenant-scope regressions can't merge green.
+  #
+  # Runs `mvn verify` with INTEGRATION_TESTS=1 set. Testcontainers spins
+  # up its own Postgres (16-alpine) per JVM — Docker is preinstalled on
+  # ubuntu-latest, no service container needed.
+  integration-test:
+    name: mvn verify (integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: test
+
+    env:
+      # Same throwaway values the unit-test job uses. AbstractIntegrationTest
+      # overrides jwt.secret + secrets.encryption-key via @TestPropertySource
+      # so these are only used by classes that don't override.
+      JWT_SECRET: test-only-jwt-secret-do-not-use-in-production-32b
+      SECRETS_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      # Flip the guard so @EnabledIfEnvironmentVariable(named="INTEGRATION_TESTS")
+      # matches. Without this the class-level guards keep every IT skipped
+      # even though we run `verify`.
+      INTEGRATION_TESTS: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Temurin JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+
+      # Surefire discovers *IntegrationTest.java classes by default —
+      # the reason they're skipped in the unit job is the class-level
+      # @EnabledIfEnvironmentVariable guard, not a Maven include filter.
+      # Setting INTEGRATION_TESTS=1 lets JUnit run them; `mvn test`
+      # is enough (no failsafe binding is configured in the pom).
+      - name: Run integration tests
+        working-directory: backend
+        run: mvn -B -ntp test
+
+      - name: Upload surefire reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-reports
+          path: backend/target/surefire-reports/
+          retention-days: 7
