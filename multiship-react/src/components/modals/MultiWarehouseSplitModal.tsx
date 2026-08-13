@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
 import {
   FiAlertCircle,
   FiCheckCircle,
@@ -105,6 +106,9 @@ export default function MultiWarehouseSplitModal({
   initialRecipient,
   initialLines,
 }: MultiWarehouseSplitModalProps) {
+  // Sprint 51 T6b — focus trap.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(true, dialogRef)
   const [clientCode, setClientCode] = useState(initialClientCode ?? '')
   const [orderNo, setOrderNo] = useState<number | ''>(initialOrderNo ?? '')
   const [recipient, setRecipient] = useState<ManualShipmentAddress>(
@@ -384,6 +388,7 @@ export default function MultiWarehouseSplitModal({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         className="flex h-[min(720px,92vh)] w-full max-w-[900px] flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]"
         onClick={(e) => e.stopPropagation()}
       >
