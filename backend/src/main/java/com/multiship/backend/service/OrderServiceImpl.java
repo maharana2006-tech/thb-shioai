@@ -18,6 +18,8 @@ import com.multiship.backend.model.OrderLine;
 import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.CarrierConfigRepository;
 import com.multiship.backend.repository.OrderRawCodesRepository;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +27,7 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -48,6 +51,24 @@ public class OrderServiceImpl implements OrderService {
 
     @Autowired
     private OrderRawCodesRepository orderRawCodesRepository;
+
+    /**
+     * Sprint 51 M-Perf (BP-M8) — 60s tenant-keyed cache on the city-
+     * distribution query. Even with the LIMIT 25 the query still has
+     * to GROUP + ORDER BY over the entire label_batch (either
+     * platform-wide or scoped). Caching one result per tenant keeps
+     * a dashboard refresh from re-scanning; TTL 60s means users still
+     * see fresh-enough numbers.
+     *
+     * <p>Key format: {@code tenantCode} for scoped calls, empty string
+     * "" for the platform-wide variant. Bounded at 200 entries — well
+     * above any realistic N-of-tenants ceiling — so the cache is safe
+     * against a runaway key insert.
+     */
+    private final Cache<String, List<Object[]>> cityDistributionCache = Caffeine.newBuilder()
+            .maximumSize(200)
+            .expireAfterWrite(Duration.ofSeconds(60))
+            .build();
 
     @Autowired
     private com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
@@ -399,9 +420,12 @@ public class OrderServiceImpl implements OrderService {
 
         Object[] row = results.get(0);
 
-        List<Object[]> cityData = scope
-                .map(orderRepository::getCityDistributionForTenant)
-                .orElseGet(orderRepository::getCityDistribution);
+        // Sprint 51 M-Perf (BP-M8) — 60s Caffeine cache per (tenant OR "").
+        String cityCacheKey = scope.orElse("");
+        List<Object[]> cityData = cityDistributionCache.get(cityCacheKey, k ->
+                k.isEmpty()
+                        ? orderRepository.getCityDistribution()
+                        : orderRepository.getCityDistributionForTenant(k));
         List<Map<String, Object>> cityDistribution = cityData.stream()
                 .map(cityRow -> {
                     Map<String, Object> cityMap = new LinkedHashMap<>();

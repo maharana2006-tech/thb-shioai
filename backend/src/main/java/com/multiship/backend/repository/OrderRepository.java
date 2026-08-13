@@ -129,11 +129,19 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
     """, nativeQuery = true)
     List<Object[]> getDashboardStatsForTenant(@Param("tenantId") String tenantId);
 
+    // Sprint 51 M-Perf (audit BP-M8) — LIMIT 25 on both getCityDistribution*
+    // queries. City cardinality grows unboundedly with label_batch size;
+    // at 100 ship/min/tenant × 10 tenants over a year (~52M rows) this was
+    // a several-second query returning tens of thousands of cities the
+    // dashboard consumer only rendered top-N anyway. Postgres also had
+    // to sort the whole distinct set on every call. LIMIT 25 caps both
+    // memory and CPU cost.
     @Query(value = """
         SELECT shipto_city, COUNT(*) as count
         FROM label_batch
         GROUP BY shipto_city
         ORDER BY count DESC
+        LIMIT 25
     """, nativeQuery = true)
     List<Object[]> getCityDistribution();
 
@@ -144,6 +152,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
         WHERE UPPER(COALESCE(tenant_id, cust_no)) = UPPER(:tenantId)
         GROUP BY shipto_city
         ORDER BY count DESC
+        LIMIT 25
     """, nativeQuery = true)
     List<Object[]> getCityDistributionForTenant(@Param("tenantId") String tenantId);
 
