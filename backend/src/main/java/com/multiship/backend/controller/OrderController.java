@@ -68,6 +68,14 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.shipment.MultiWarehousePreviewService multiWarehousePreviewService;
 
+    /**
+     * Sprint 51 R2 — money-touching endpoints (manual-label,
+     * multi-warehouse-label) route through this to dedupe partner /
+     * operator retries. See audit finding #2.
+     */
+    @Autowired
+    private com.multiship.backend.service.external.IdempotencyService idempotency;
+
     /** Map a client Address value object into the label payload shape. */
     private Map<String, Object> addressMap(com.multiship.backend.model.Address a, String fallbackName) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -629,10 +637,22 @@ public class OrderController {
     @PostMapping("/manual-label")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>> generateManualLabel(
             @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.ManualShipmentRequest request,
-            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
-        ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> response =
-                carrierService.generateManualLabel(request, userDetails);
-        return ResponseEntity.status(response.getCode()).body(response);
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        // Sprint 51 R2 (audit finding #2) — money-touching. A double-click,
+        // browser retry, or 502-then-retry used to purchase N labels; now
+        // the same Idempotency-Key replays the first response. Fail-closed
+        // on Redis outage: without the dedup guarantee we could double-charge.
+        // Namespaced by "user:" + username so this can never collide with
+        // the API-key path's numeric namespace (see IdempotencyService).
+        String callerId = userDetails != null ? "user:" + userDetails.getUsername() : null;
+        return idempotency.executeOrReplay(callerId, idempotencyKey,
+                new com.fasterxml.jackson.core.type.TypeReference<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>>() {},
+                () -> {
+                    ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> response =
+                            carrierService.generateManualLabel(request, userDetails);
+                    return ResponseEntity.status(response.getCode()).body(response);
+                }, true);
     }
 
     @Operation(summary = "Generate labels for a shipment split across warehouses (Sprint 47)",
@@ -651,24 +671,37 @@ public class OrderController {
     @PostMapping("/multi-warehouse-label")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.MultiWarehouseLabelResponse>> generateMultiWarehouseLabel(
             @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.MultiWarehouseLabelRequest request,
-            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails) {
-        try {
-            ApiResponse<com.multiship.backend.dto.MultiWarehouseLabelResponse> response =
-                    multiWarehouseLabelService.generate(request, userDetails);
-            return ResponseEntity.status(response.getCode()).body(response);
-        } catch (com.multiship.backend.service.shipment.SplitAbortException ex) {
-            // The service throws when any child fails so @Transactional rolls
-            // back everything. Map to a 422 with the offending warehouse +
-            // detail so the operator can see exactly which one aborted.
-            return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY).body(
-                    ApiResponse.<com.multiship.backend.dto.MultiWarehouseLabelResponse>builder()
-                            .status("error")
-                            .code(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY.value())
-                            .errorCode(com.multiship.backend.dto.ErrorCode.CARRIER_FAILURE.name())
-                            .message("Split aborted at warehouse " + ex.getWarehouseCode()
-                                    + ": " + ex.getDetail() + ". No labels were bought.")
-                            .build());
-        }
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        // Sprint 51 R2 (audit finding #2) — money-touching. Multi-warehouse
+        // fans out to N carrier calls per request; a retry mid-fanout used
+        // to double-generate every warehouse. Same fail-closed policy as
+        // /manual-label above. SplitAbortException must be handled INSIDE
+        // the wrapped supplier so the mapped 422 response is what gets
+        // cached (not thrown past IdempotencyService).
+        String callerId = userDetails != null ? "user:" + userDetails.getUsername() : null;
+        return idempotency.executeOrReplay(callerId, idempotencyKey,
+                new com.fasterxml.jackson.core.type.TypeReference<ApiResponse<com.multiship.backend.dto.MultiWarehouseLabelResponse>>() {},
+                () -> {
+                    try {
+                        ApiResponse<com.multiship.backend.dto.MultiWarehouseLabelResponse> response =
+                                multiWarehouseLabelService.generate(request, userDetails);
+                        return ResponseEntity.status(response.getCode()).body(response);
+                    } catch (com.multiship.backend.service.shipment.SplitAbortException ex) {
+                        // The service throws when any child fails so @Transactional
+                        // rolls back everything. Map to a 422 with the offending
+                        // warehouse + detail so the operator can see exactly which
+                        // one aborted.
+                        return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY).body(
+                                ApiResponse.<com.multiship.backend.dto.MultiWarehouseLabelResponse>builder()
+                                        .status("error")
+                                        .code(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY.value())
+                                        .errorCode(com.multiship.backend.dto.ErrorCode.CARRIER_FAILURE.name())
+                                        .message("Split aborted at warehouse " + ex.getWarehouseCode()
+                                                + ": " + ex.getDetail() + ". No labels were bought.")
+                                        .build());
+                    }
+                }, true);
     }
 
     @Operation(summary = "Preview a multi-warehouse split without generating labels (Sprint 47)",
