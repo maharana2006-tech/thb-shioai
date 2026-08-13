@@ -107,7 +107,7 @@ class VoidServiceImplTest {
 
     @Test
     void alreadyVoidedShortCircuitsWithoutHittingCarrier() {
-        when(trackingRepo.findByOrderNo(1))
+        when(trackingRepo.findByOrderNoForUpdate(1))
                 .thenReturn(Optional.of(trackingRow("VOIDED", "1Z999", "UPS", "A1")));
 
         ApiResponse<VoidLabelResponseDTO> resp = service.voidLabel(1);
@@ -127,7 +127,7 @@ class VoidServiceImplTest {
 
     @Test
     void unknownOrderReturns404() {
-        when(trackingRepo.findByOrderNo(42)).thenReturn(Optional.empty());
+        when(trackingRepo.findByOrderNoForUpdate(42)).thenReturn(Optional.empty());
         ApiResponse<VoidLabelResponseDTO> resp = service.voidLabel(42);
         assertEquals(404, resp.getCode());
     }
@@ -189,7 +189,7 @@ class VoidServiceImplTest {
 
     @Test
     void unknownCarrierReturns422() {
-        when(trackingRepo.findByOrderNo(1)).thenReturn(Optional.of(
+        when(trackingRepo.findByOrderNoForUpdate(1)).thenReturn(Optional.of(
                 trackingRow("GENERATED", "1Z999", "BOGUS_CARRIER", "A1")));
         when(carrierService.getCarrierConnector(anyString()))
                 .thenThrow(new RuntimeException("unknown carrier"));
@@ -200,7 +200,7 @@ class VoidServiceImplTest {
 
     @Test
     void missingCredentialsReturns422() {
-        when(trackingRepo.findByOrderNo(1)).thenReturn(Optional.of(
+        when(trackingRepo.findByOrderNoForUpdate(1)).thenReturn(Optional.of(
                 trackingRow("GENERATED", "1Z999", "UPS", "A1")));
         when(carrierService.getCarrierConnector(anyString())).thenReturn(connector);
         when(connector.getCarrierCode()).thenReturn("UPS");
@@ -248,7 +248,7 @@ class VoidServiceImplTest {
     /* -------- helpers -------- */
 
     private void setupHappyPathWiring() {
-        when(trackingRepo.findByOrderNo(1)).thenReturn(Optional.of(
+        when(trackingRepo.findByOrderNoForUpdate(1)).thenReturn(Optional.of(
                 trackingRow("GENERATED", "1Z999", "UPS", "A1")));
         when(carrierService.getCarrierConnector(anyString())).thenReturn(connector);
         when(connector.getCarrierCode()).thenReturn("UPS");
