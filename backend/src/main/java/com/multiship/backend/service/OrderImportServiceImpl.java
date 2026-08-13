@@ -154,11 +154,18 @@ public class OrderImportServiceImpl implements OrderImportService {
      * concurrency, import.max-per-tenant) with the same defaults chosen
      * for the bulk-label pool.
      */
+    /**
+     * Instance-field defaults kick in for pure-Mockito unit tests that
+     * construct this service via {@code new} — Spring never resolves the
+     * {@code @Value} annotations in that path, and {@link #initExecutors()}
+     * won't fire either. {@link #ensureExecutors()} handles the lazy
+     * fallback for the same reason.
+     */
     @Value("${import.commit-concurrency:24}")
-    private int importCommitConcurrency;
+    private int importCommitConcurrency = 24;
 
     @Value("${import.max-per-tenant:8}")
-    private int importMaxPerTenant;
+    private int importMaxPerTenant = 8;
 
     private ExecutorService fanOutExecutor;
 
@@ -174,6 +181,16 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     @PostConstruct
     void initExecutors() {
+        ensureExecutors();
+        log.info("OrderImportServiceImpl fan-out ready: commitConcurrency={} maxPerTenant={}",
+                importCommitConcurrency, importMaxPerTenant);
+    }
+
+    /** Lazy fallback — see the BulkLabelServiceImpl.ensureExecutors javadoc.
+     *  Same rationale: pure-Mockito tests skip @PostConstruct, so we init
+     *  on first use with whatever the compiled-in defaults are. */
+    private synchronized void ensureExecutors() {
+        if (fairExecutor != null) return;
         this.fanOutExecutor = Executors.newFixedThreadPool(importCommitConcurrency, r -> {
             Thread t = new Thread(r, "order-import-commit");
             t.setDaemon(true);
@@ -181,8 +198,6 @@ public class OrderImportServiceImpl implements OrderImportService {
         });
         this.fairExecutor = new com.multiship.backend.service.fairness.FairTenantExecutor(
                 fanOutExecutor, importMaxPerTenant, 60, IMPORT_MAX_BATCH_WAIT_MS);
-        log.info("OrderImportServiceImpl fan-out ready: commitConcurrency={} maxPerTenant={}",
-                importCommitConcurrency, importMaxPerTenant);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -740,6 +755,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         int invalid = 0;
         int generated = 0;
         try {
+            ensureExecutors();
             List<Future<GroupOutcome>> futures = fairExecutor.submitAll(tenantKey, tasks);
             for (Future<GroupOutcome> f : futures) {
                 GroupOutcome outcome = f.get();

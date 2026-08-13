@@ -53,12 +53,18 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      * magnitude below the 100/min/tenant target. Defaults are set in
      * application.properties and env-overrideable per-deployment via
      * BULK_WORKER_CONCURRENCY / BULK_MAX_PER_TENANT.
+     *
+     * <p>Instance-field defaults kick in for pure-Mockito unit tests that
+     * construct this service via {@code new} — Spring never resolves the
+     * {@code @Value} annotations in that path, and {@link #initExecutors()}
+     * won't fire either, so {@link #ensureExecutors()} handles the lazy
+     * fallback there.
      */
     @Value("${bulk.worker-concurrency:24}")
-    private int workerConcurrency;
+    private int workerConcurrency = 24;
 
     @Value("${bulk.max-per-tenant:8}")
-    private int maxPerTenant;
+    private int maxPerTenant = 8;
 
     /** HTTP timeout for downloading a label PDF from the carrier's CDN. */
     private static final Duration LABEL_FETCH_TIMEOUT = Duration.ofSeconds(15);
@@ -94,6 +100,22 @@ public class BulkLabelServiceImpl implements BulkLabelService {
 
     @PostConstruct
     void initExecutors() {
+        ensureExecutors();
+        log.info("BulkLabelServiceImpl fan-out ready: workerConcurrency={} maxPerTenant={}",
+                workerConcurrency, maxPerTenant);
+    }
+
+    /**
+     * Lazy fallback for tests that construct this service via {@code new}
+     * (Mockito {@code @InjectMocks} / pure JUnit) — in that path Spring
+     * never runs {@link #initExecutors()} and the executor fields stay
+     * null. Called from every submitAll site so tests exercising the
+     * fan-out path get a working executor with the compiled-in defaults.
+     * Idempotent + synchronized so concurrent first-callers can't
+     * double-create the pool.
+     */
+    private synchronized void ensureExecutors() {
+        if (fairExecutor != null) return;
         this.fanOutExecutor = Executors.newFixedThreadPool(workerConcurrency, r -> {
             Thread t = new Thread(r, "bulk-label-worker");
             t.setDaemon(true);
@@ -101,8 +123,6 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         });
         this.fairExecutor = new com.multiship.backend.service.fairness.FairTenantExecutor(
                 fanOutExecutor, maxPerTenant, 60);
-        log.info("BulkLabelServiceImpl fan-out ready: workerConcurrency={} maxPerTenant={}",
-                workerConcurrency, maxPerTenant);
     }
 
     /** Dispatch executor that lifts the job kick-off off the calling
@@ -209,6 +229,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             // change on BulkLabelJob. Falls back to requestedBy when the
             // order can't be found (unusual — the batch would fail anyway).
             String tenantKey = resolveTenantKey(orderNos, job.getRequestedBy());
+            ensureExecutors();
             java.util.List<java.util.concurrent.Future<OrderOutcome>> futures = fairExecutor.submitAll(tenantKey, tasks);
 
             // Aggregate in input order so the ZIP is stable + failure messages
