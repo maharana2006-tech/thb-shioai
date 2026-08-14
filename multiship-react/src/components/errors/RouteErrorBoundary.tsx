@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { reportClientError } from '../../utils/errorReport'
 
 /**
  * Sprint 49 Tier 4 Fix 1 — route-scoped boundary.
@@ -29,6 +30,9 @@ export default class RouteErrorBoundary extends Component<RouteErrorBoundaryProp
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('[RouteErrorBoundary]', this.props.routeLabel ?? 'route', error, info)
+    // Sprint 51 FE-M3 — ship the render error to the backend telemetry
+    // sink so ops sees it, not just the operator's console.
+    reportClientError(error, { componentStack: info.componentStack })
   }
 
   private handleRetry = () => {
