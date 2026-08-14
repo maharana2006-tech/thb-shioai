@@ -9,6 +9,7 @@ import {
 } from '../api/adminUserService'
 import { clientService } from '../api/clientService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
+import IconButton from './ui/IconButton'
 
 /**
  * Sprint 50 Tier 0.5 PR E — admin-only user management. Powers the
@@ -293,9 +294,12 @@ function UserAuditDrawer({
             <FiActivity className="mr-1 inline h-4 w-4 text-slate-500" />
             Audit trail for <span className="font-mono">{user.username}</span>
           </h3>
-          <button onClick={onClose} className="rounded p-1 text-slate-500 hover:bg-slate-100">
-            <FiX className="h-4 w-4" />
-          </button>
+          <IconButton
+            onClick={onClose}
+            label="Close audit trail"
+            icon={<FiX className="h-4 w-4" />}
+            className="rounded p-1 text-slate-500 hover:bg-slate-100"
+          />
         </header>
 
         <div className="max-h-[60vh] overflow-y-auto rounded-md border border-slate-100">
@@ -395,9 +399,12 @@ function AssignClientDialog({
           <h3 className="text-[15px] font-semibold text-slate-900">
             Assign client for <span className="font-mono">{user.username}</span>
           </h3>
-          <button onClick={onClose} className="rounded p-1 text-slate-500 hover:bg-slate-100">
-            <FiX className="h-4 w-4" />
-          </button>
+          <IconButton
+            onClick={onClose}
+            label="Close assign-client dialog"
+            icon={<FiX className="h-4 w-4" />}
+            className="rounded p-1 text-slate-500 hover:bg-slate-100"
+          />
         </header>
 
         <label className="mb-1 block text-[12.5px] font-medium text-slate-700">

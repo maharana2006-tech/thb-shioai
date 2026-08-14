@@ -1,9 +1,10 @@
-// Point the API at the same host the app is opened on, so it works both on
-// localhost and over the LAN (e.g. http://192.168.x.x:5175 → :8080 on that host).
-// Override with VITE_API_BASE_URL if the backend lives elsewhere.
+// Sprint 51 FE-M1 — no dev-hostname:8080 fallback in shipped code.
+// Prod builds must set VITE_API_BASE_URL (asserted in vite.config.ts).
+// In dev, Vite's proxy (or the same origin) serves /api/v1 directly, so
+// a relative default keeps localhost and LAN access working without
+// baking assumptions about the backend port into the bundle.
 export const BASE_URL =
-  (import.meta.env?.VITE_API_BASE_URL as string | undefined) ||
-  `${window.location.protocol}//${window.location.hostname}:8080/api/v1`;
+  (import.meta.env?.VITE_API_BASE_URL as string | undefined) || '/api/v1';
 
 /**
  * Error thrown for non-2xx responses. Carries the HTTP status so callers
@@ -96,11 +97,25 @@ async function apiRequest<T>(endpoint: string, options: FetchOptions = {}): Prom
       );
     }
 
-    if (response.status === 204) return {} as T; 
-    
+    if (response.status === 204) return {} as T;
+
     return responseData as T;
   } catch (error: any) {
-    console.error(`[API Client Error] ${options.method || 'GET'} to ${endpoint}:`, error.message);
+    // Sprint 51 FE-L2 — a plain console.error for every non-2xx (including
+    // the many expected 401/409/422 flows) drowned real 5xx and network
+    // failures in log noise. Aborts (component unmount) are silenced,
+    // expected client errors go to debug, only true failures stay at error.
+    if (isAbortError(error)) {
+      throw error;
+    }
+    const status: number | undefined =
+      error instanceof ApiError ? error.status : undefined;
+    const label = `[API Client] ${options.method || 'GET'} to ${endpoint}`;
+    if (status && status >= 400 && status < 500) {
+      console.debug(`${label} — ${status}`, error.message);
+    } else {
+      console.error(`${label}:`, error.message);
+    }
     throw error;
   }
 }

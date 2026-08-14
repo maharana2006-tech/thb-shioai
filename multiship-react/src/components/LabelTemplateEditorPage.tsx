@@ -23,6 +23,8 @@ import { labelTemplateService, type LabelTemplate } from '../api/labelTemplateSe
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import LabelTemplateLayoutBuilder from './LabelTemplateLayoutBuilder'
 import { emptyLayout, type TemplateLayout } from '../utils/templateLayout'
+import { useAppSession } from '../hooks/useAppSession'
+import { normalizeRole } from '../utils/roles'
 
 const PLATFORM_DEFAULT_VALUE = '__PLATFORM__'
 const DEFAULT_HEADER = 'PACKING SLIP'
@@ -30,9 +32,6 @@ const DEFAULT_COLOR = '#1f150c'
 /** Template types the editor can create/edit. Wire values match the backend
  *  {@code label_templates.template_type} enum; unique per (tenant, type). */
 const TEMPLATE_TYPES = ['SHIPPING_LABEL', 'PACKING_SLIP', 'COMMERCIAL_INVOICE', 'RETURN_COVER']
-
-const isAdmin = () =>
-  (localStorage.getItem('multiship_role') || '').toUpperCase() === 'ADMIN'
 
 /**
  * Editor for a single label template. Two entry points:
@@ -49,7 +48,9 @@ export default function LabelTemplateEditorPage() {
   const { id } = useParams<{ id?: string }>()
   const editingId = id && id !== 'new' ? Number(id) : null
   const isEdit = editingId != null
-  const admin = isAdmin()
+  // Sprint 51 FE-L1 — replace per-render localStorage read.
+  const { role } = useAppSession()
+  const admin = normalizeRole(role) === 'ADMIN'
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
 
   const [clients, setClients] = useState<Client[]>([])

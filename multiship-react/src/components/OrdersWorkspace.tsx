@@ -27,7 +27,7 @@ import {
   FiTag,
   FiSliders,
 } from 'react-icons/fi'
-import { ApiError } from '../api/apiClient'
+import { ApiError, isAbortError } from '../api/apiClient'
 import { orderService, type Order, type QueueStats } from '../api/orderService'
 import { clientService } from '../api/clientService'
 import type { CarrierAccountRef, OrderAccountResolution } from '../api/accountRefService'
@@ -214,7 +214,10 @@ export default function OrdersWorkspace() {
     clientService
       .listClients({ size: 100 })
       .then((response) => setClientCodes((response.data?.content ?? []).map((client) => client.clientCode)))
-      .catch(() => {})
+      // Sprint 51 FE-L3 — log instead of silently swallowing a secondary load.
+      .catch((e) => {
+        if (!isAbortError(e)) console.debug('[secondary load] listClients', e)
+      })
   }, [reloadToken])
 
   // Tab counts (all tabs at once) — one aggregate query server-side.
