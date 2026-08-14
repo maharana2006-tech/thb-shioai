@@ -393,6 +393,7 @@ export default function AdvancedDataTable<T>({
   const densityMenuRef = useDismissable(openMenu === 'density', () => setOpenMenu(null))
   const exportMenuRef = useDismissable(openMenu === 'export', () => setOpenMenu(null))
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Table's useReactTable() returns functions that cannot be memoized safely — library-level incompatibility with react-hooks analyzer, not a code issue
   const table = useReactTable<T>({
     data,
     columns,

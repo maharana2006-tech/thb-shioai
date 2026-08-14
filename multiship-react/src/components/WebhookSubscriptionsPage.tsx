@@ -49,6 +49,7 @@ export default function WebhookSubscriptionsPage() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount / manual refresh; load() sets loading + subs state
     load()
   }, [load, reloadToken])
 

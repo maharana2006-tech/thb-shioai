@@ -423,6 +423,7 @@ export function VirtualizedCommodityList({
   onRemove: (index: number) => void
 }) {
   const parentRef = useRef<HTMLDivElement>(null)
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual's useVirtualizer() returns functions that cannot be memoized safely — library-level incompatibility with react-hooks analyzer, not a code issue
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => parentRef.current,

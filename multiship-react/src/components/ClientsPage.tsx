@@ -72,6 +72,7 @@ export default function ClientsPage() {
   }, [colFilters])
   // Snap back to first page whenever the effective filter/sort set changes.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paging when filters/sort change; must respond to prop-derived filter values, not derivable at render
     setPageIndex(0)
   }, [debouncedSearch, statusFilter, carrierFilter, ordersFilter, debouncedCols, sorting, pageSize])
 
@@ -98,6 +99,7 @@ export default function ClientsPage() {
 
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async paginated client-list fetch
     setLoading(true)
     clientService
       .listClients({

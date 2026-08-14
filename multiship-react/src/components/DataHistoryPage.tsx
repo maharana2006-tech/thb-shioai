@@ -116,7 +116,7 @@ export default function DataHistoryPage() {
     }
     const dir = sortDir === 'ASC' ? 1 : -1
     rows.sort((a, b) => {
-      let cmp = 0
+      let cmp: number
       switch (sortKey) {
         case 'fileName':
           cmp = (a.fileName || '').localeCompare(b.fileName || '')
@@ -145,6 +145,7 @@ export default function DataHistoryPage() {
   // Reset to the first page whenever the filter/sort set changes, so the user
   // never lands on an out-of-range page after narrowing the results.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- snap paging back to 1 on filter change; user-input-driven, not derivable at render
     setPage(1)
   }, [search, statusFilter, sortKey, sortDir, dateFrom, dateTo, createdBy, batchPresence, minSaved, pageSize])
 
@@ -169,6 +170,7 @@ export default function DataHistoryPage() {
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount; load() sets loading + batches state
     void load()
   }, [])
 

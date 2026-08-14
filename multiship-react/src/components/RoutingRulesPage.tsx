@@ -86,6 +86,7 @@ export default function RoutingRulesPage() {
   }, [clientCode])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client change / manual refresh; load() sets loading + rules state
     load()
   }, [load, reloadToken])
 

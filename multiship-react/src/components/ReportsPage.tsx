@@ -211,6 +211,7 @@ function Schedules({ clients }: { clients: Client[] }) {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount / manual refresh; load() sets loading + schedules state
     load()
   }, [load, reloadToken])
 

@@ -103,6 +103,7 @@ export default function LabelTemplatesListPage() {
 
   // Snap to first page whenever filter/sort/pageSize changes.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- snap paging back to 1 on filter change; user-input-driven, not derivable at render
     setPageIndex(0)
   }, [debouncedSearch, typeFilter, logoFilter, sorting, pageSize])
 
@@ -112,6 +113,7 @@ export default function LabelTemplatesListPage() {
   // ===== fetch =====
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async paginated template-list fetch
     setLoading(true)
     const params: LabelTemplateListParams = {
       search: debouncedSearch || undefined,

@@ -420,6 +420,7 @@ export default function ClientEditorPage() {
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client change; loadPickWarehouses() sets warehouse list state
     void loadPickWarehouses()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingCode])
@@ -506,6 +507,7 @@ export default function ClientEditorPage() {
   useEffect(() => {
     if (!isEdit || !editingCode) return
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async client fetch in edit mode
     setLoading(true)
     clientService
       .getClient(editingCode)
@@ -586,6 +588,7 @@ export default function ClientEditorPage() {
     if (isEdit) return
     const trimmed = (form.clientCode || '').trim().toUpperCase()
     if (!trimmed || validateClientCode(trimmed) != null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale conflict/spinner when field is empty or shape-invalid; guards debounced network call, not derivable at render
       setCodeConflict(null)
       setCheckingCode(false)
       return
@@ -838,12 +841,10 @@ export default function ClientEditorPage() {
     if (!carriersStepComplete) reasons.push('Add at least one carrier account')
     if (!mappingStepComplete) reasons.push('Add at least one shipping-service mapping')
     return reasons
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stepValid is a plain function (not memoized); it reads form + showAccountForm + accountForm which ARE in the dep list, so it recomputes correctly. Adding stepValid itself would break memoization on every render.
   }, [
     isEdit, allStepsVisited, visitedSteps, selectedShipFromWarehouseId,
     carriersStepComplete, mappingStepComplete,
-    // stepValid is derived from other state; the specific keys it reads are
-    // in the deps via visitedSteps + form (closed over).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     form, showAccountForm, accountForm,
   ])
 
@@ -1102,6 +1103,7 @@ export default function ClientEditorPage() {
     if (!client) return
     const advanceTo = (window.history.state?.usr?.advanceTo as StepKey | undefined)
     if (advanceTo && STEP_DEFS.some((s) => s.key === advanceTo)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot step-jump when nav hint is present in history state; consumed immediately (see replaceState below), can't be derived at render
       setActiveStep(advanceTo)
       // Consume so a subsequent refresh doesn't keep re-triggering it.
       window.history.replaceState({ ...window.history.state, usr: {} }, '')
@@ -1834,6 +1836,7 @@ function CarrierDraftStep({
   useEffect(() => {
     if (!f.clearanceOption) return
     const ok = clearanceOptionsForCarrier(f.carrierCode).some((o) => o.value === f.clearanceOption)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale clearance option on carrier change; guards submit-time invalid combos, cannot be derived at render
     if (!ok) setF((cur) => ({ ...cur, clearanceOption: '' }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [f.carrierCode])
@@ -2810,6 +2813,7 @@ function ImporterBrokerStep({
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client change; refresh() sets loading + profiles state
     void refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientCode])

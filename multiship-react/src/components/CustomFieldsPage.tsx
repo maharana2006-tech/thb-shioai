@@ -48,6 +48,7 @@ export default function CustomFieldsPage() {
   }, [effectiveTenantId])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on tenant change / manual refresh; load() sets loading + list state
     load()
   }, [load, reloadToken])
 

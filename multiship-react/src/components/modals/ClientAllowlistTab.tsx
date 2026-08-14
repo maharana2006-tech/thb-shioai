@@ -102,6 +102,7 @@ export default function ClientAllowlistTab<TAllowed, TCatalog>({
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client change; refresh() sets loading + list state
     void refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientCode])

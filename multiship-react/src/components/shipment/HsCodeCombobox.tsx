@@ -48,6 +48,7 @@ export default function HsCodeCombobox({
   // Keep local query in sync when the parent replaces value externally
   // (e.g. wizard state reset).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync local input to parent-controlled value on external reset; user typing between renders means we can't just render `value` directly (would clobber unsent keystrokes)
     setQuery(value)
   }, [value])
 
@@ -58,6 +59,7 @@ export default function HsCodeCombobox({
   // Debounced fetch — fires only after 200ms of no keystrokes.
   useEffect(() => {
     if (!open || !query || query.trim().length < 2) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear cached matches when the query gets too short or the dropdown closes; results are async, so no render-time derivation possible
       setMatches([])
       return
     }

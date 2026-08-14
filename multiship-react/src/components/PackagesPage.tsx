@@ -155,6 +155,7 @@ export default function PackagesPage() {
   }, [assignments])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount; load() sets loading + list state
     void load()
   }, [load])
 
@@ -259,6 +260,7 @@ export default function PackagesPage() {
   )
   // Snap back to page 1 whenever the filtered set changes (origin/carrier switch, sync…).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- snap paging back to 1 on filter change; user-input-driven, not derivable at render
     setPage(1)
   }, [origin, carrierFilter, visiblePresets.length])
   const originOptions = useMemo(() => {

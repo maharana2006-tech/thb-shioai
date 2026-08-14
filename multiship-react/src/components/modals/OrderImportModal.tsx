@@ -543,6 +543,7 @@ function EditCell({
 }) {
   const [draft, setDraft] = useState(value)
   // Re-sync when a validate response replaces the row object.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- sync local input to parent-controlled value on external replace (validate response); can't render value directly because it would clobber unsent keystrokes
   useEffect(() => { setDraft(value) }, [value])
   return (
     <input

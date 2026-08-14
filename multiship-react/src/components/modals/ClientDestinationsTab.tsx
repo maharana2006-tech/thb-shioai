@@ -37,6 +37,7 @@ export default function ClientDestinationsTab({ clientCode }: { clientCode: stri
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client change; load() sets loading + list state
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientCode])

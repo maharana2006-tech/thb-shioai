@@ -555,12 +555,14 @@ export default function NewShipmentPage() {
   }, [accounts, services])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot default carrier pick when options first populate; deriving at render would fight explicit user picks
     if (!carrier && carrierOptions.length) setCarrier(carrierOptions[0])
   }, [carrierOptions, carrier])
 
   // The selected client's importer/broker profiles (per destination-country set).
   useEffect(() => {
     if (!clientCode) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale profiles when client is cleared; async fetch below repopulates for a non-empty client
       setProfiles([])
       return
     }
@@ -579,6 +581,7 @@ export default function NewShipmentPage() {
   // half-configured client still ships.
   useEffect(() => {
     if (!clientCode) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset client-scoped config when no client is picked; the async fetch below repopulates for a non-empty client
       setClientWarehouses([])
       setWarehouseCode('')
       setAllowedServiceIds(null)
@@ -631,6 +634,7 @@ export default function NewShipmentPage() {
     const cw = clientWarehouses.find((w) => w.warehouse?.code === warehouseCode)
     const a = cw?.warehouse?.address
     if (!a) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- overwrite sender block with warehouse address when picker changes; depends on prior sender state to preserve unfilled fields, not derivable at render
     setSender((cur) => ({
       ...cur,
       ...(a.name ? { name: a.name } : {}),
@@ -798,6 +802,7 @@ export default function NewShipmentPage() {
   }, [destRules, recipient.countryCode])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- re-validate account/service/package selections when carrier/client/route changes; depends on prior state to preserve user picks that are still valid, not derivable at render
     setAccountNumber((cur) =>
       accountsForCarrier.some((a) => (a.accountNumber || '').toLowerCase() === cur.trim().toLowerCase())
         ? cur
@@ -827,7 +832,6 @@ export default function NewShipmentPage() {
         : CUSTOM_PKG
     })
     // Re-validate account/service/package whenever the carrier, client, or route changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [carrier, clientCode, accountsForCarrier, servicesForCarrier, packagesForCarrier, defaultServiceId, defaultPackagePresetId])
 
   /**
@@ -938,7 +942,6 @@ export default function NewShipmentPage() {
         unitValue: it.unitValue,
       })),
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [isInternational, isCustomPkg, carrier, accountNumber, incoterms, reasonForExport,
       currency, sender, recipient, weight, declaredValue, insuredValue, length, width, height, items],
   )
@@ -997,6 +1000,7 @@ export default function NewShipmentPage() {
 
   // A new destination or client re-resolves — drop any override tied to the old one.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale importer/broker override on destination/client change; must fire post-render, not derivable
     setOverride(null)
   }, [clientCode, destCountry])
 
@@ -1006,6 +1010,7 @@ export default function NewShipmentPage() {
 
   // A changed recipient invalidates a previous validation result.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- invalidate stale validation on recipient edit; forces re-validation before submit, cannot be derived at render
     setRecipientCheck(null)
   }, [recipient.addressLine1, recipient.city, recipient.state, recipient.postalCode, recipient.countryCode])
 
@@ -2518,6 +2523,7 @@ export function VirtualizedNewShipmentItems({
   itemErr?: (index: number, field: string) => string | undefined
 }) {
   const parentRef = useRef<HTMLDivElement>(null)
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual's useVirtualizer() returns functions that cannot be memoized safely — library-level incompatibility with react-hooks analyzer, not a code issue
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => parentRef.current,
