@@ -1,0 +1,2746 @@
+{
+  "openapi" : "3.1.0",
+  "info" : {
+    "title" : "Multiship API",
+    "description" : "Multi-tenant shipping label management API.\n\n### Conventions (apply to every endpoint)\n- **Auth**: JWT bearer token from `POST /api/v1/auth/login`. Roles: `ADMIN` (full), `USER` (orders + labels), `TENANT` (own orders, read-only, must pass `tenantId`).\n- **Envelope**: every JSON response is wrapped in `{status, code, message, timestamp, data, errors, errorCode}`.\n- **Errors**: branch on the HTTP status and the machine-readable `errorCode` (stable contract — e.g. `ORDER_NOT_FOUND`, `LABEL_ALREADY_GENERATED`, `NEEDS_CARRIER_DETAILS`, `NO_DEFAULT_ACCOUNT`, `CARRIER_FAILURE`, `USERNAME_TAKEN`, `VALIDATION_ERROR`), never on `message` text.\n- **Carrier codes**: one canonical vocabulary — `UPS`, `FEDEX`, `USPS`. Legacy ship-via codes (P80/F77/L01) are tolerated on input but never emitted.\n- **Idempotency**: label generation is idempotent — see `POST /api/v1/orders/{orderNo}/label`.\n- **Lists**: `GET /api/v1/orders` is the single list endpoint; server-side pagination, sorting, and filtering with `{content, pageNumber, pageSize, totalElements, totalPages}`.\n",
+    "version" : "v1"
+  },
+  "security" : [ {
+    "bearerAuth" : [ ]
+  } ],
+  "tags" : [ {
+    "name" : "Public Shipping API v2",
+    "description" : "Sprint 46 — Idempotent shipment ops + multi-carrier rate-shop + pickup/close-out/landed-cost + DG preview"
+  }, {
+    "name" : "Public Shipping API v2 · Webhooks",
+    "description" : "Sprint 46 — subscribe to LABEL_GENERATED / TRACKING_UPDATED / EXCEPTION / RULE_BLOCKED events"
+  } ],
+  "paths" : {
+    "/api/v2/external/webhooks" : {
+      "get" : {
+        "tags" : [ "Public Shipping API v2 · Webhooks" ],
+        "summary" : "List my subscriptions",
+        "operationId" : "list",
+        "responses" : {
+          "200" : {
+            "description" : "OK",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseListExternalWebhookSubscriptionDTO"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED — missing / invalid API key or Bearer token",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseListExternalWebhookSubscriptionDTO"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "FORBIDDEN — token lacks the required role",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseListExternalWebhookSubscriptionDTO"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "TENANT_RATE_LIMITED — per-API-key or per-tenant quota exceeded",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseListExternalWebhookSubscriptionDTO"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post" : {
+        "tags" : [ "Public Shipping API v2 · Webhooks" ],
+        "summary" : "Create or update a subscription",
+        "description" : "Body: {event, url, secret, active}. Secret is the HMAC-SHA256 key we use to sign delivered payloads.",
+        "operationId" : "save",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ExternalWebhookSubscriptionDTO"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Updated (existing id)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalWebhookSubscriptionDTO"
+                }
+              }
+            }
+          },
+          "201" : {
+            "description" : "Created",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalWebhookSubscriptionDTO"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "VALIDATION_ERROR — missing/blank required field or SSRF-rejected URL",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalWebhookSubscriptionDTO"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalWebhookSubscriptionDTO"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "CROSS_TENANT_ACCESS_DENIED — id refers to another API key's subscription",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalWebhookSubscriptionDTO"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "WEBHOOK_SUBSCRIPTION_NOT_FOUND — update targeted an id that does not exist",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalWebhookSubscriptionDTO"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "TENANT_RATE_LIMITED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalWebhookSubscriptionDTO"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/external/shipments" : {
+      "post" : {
+        "tags" : [ "Public Shipping API v2" ],
+        "summary" : "Create a shipment (idempotent via Idempotency-Key)",
+        "operationId" : "create",
+        "parameters" : [ {
+          "name" : "Idempotency-Key",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ExternalShipmentRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "201" : {
+            "description" : "Shipment created",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalShipmentResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "VALIDATION_ERROR / UNIT_REQUIRED / CURRENCY_REQUIRED / MARKUP_REQUIRED_FOR_CLIENT",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalShipmentResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalShipmentResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "FORBIDDEN — API key lacks the SHIPMENTS scope",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalShipmentResponse"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "IDEMPOTENCY_IN_PROGRESS",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalShipmentResponse"
+                }
+              }
+            }
+          },
+          "422" : {
+            "description" : "SERVICE_NOT_ALLOWED / PACKAGE_NOT_ALLOWED / SHIP_TO_DENIED / CUSTOMS_REQUIRED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalShipmentResponse"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "API_KEY_RATE_LIMITED / TENANT_RATE_LIMITED / CARRIER_RATE_LIMITED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalShipmentResponse"
+                }
+              }
+            }
+          },
+          "502" : {
+            "description" : "CARRIER_FAILURE / CLIENT_CARRIER_AUTH_FAILED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalShipmentResponse"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "IDEMPOTENCY_UNAVAILABLE — Redis outage on a money-touching endpoint (fail-closed)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalShipmentResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/external/shipments/{shipmentId}/void" : {
+      "post" : {
+        "tags" : [ "Public Shipping API v2" ],
+        "summary" : "Void a shipment (idempotent via Idempotency-Key)",
+        "operationId" : "voidShipment",
+        "parameters" : [ {
+          "name" : "shipmentId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int64"
+          }
+        }, {
+          "name" : "Idempotency-Key",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Shipment voided",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "VALIDATION_ERROR",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "FORBIDDEN / CROSS_TENANT_ACCESS_DENIED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "ORDER_NOT_FOUND",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "IDEMPOTENCY_IN_PROGRESS / LABEL_ALREADY_GENERATED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "422" : {
+            "description" : "BUSINESS_RULE_VIOLATION — carrier refuses (past pickup, delivered, ...)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "502" : {
+            "description" : "CARRIER_FAILURE",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "IDEMPOTENCY_UNAVAILABLE — Redis outage (fail-closed)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/external/rates" : {
+      "post" : {
+        "tags" : [ "Public Shipping API v2" ],
+        "summary" : "Rate quote — single carrier (idempotent via Idempotency-Key)",
+        "operationId" : "rates",
+        "parameters" : [ {
+          "name" : "Idempotency-Key",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ExternalRateRequest"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Rates retrieved",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalRateResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "VALIDATION_ERROR / UNIT_REQUIRED / CURRENCY_REQUIRED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalRateResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalRateResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "FORBIDDEN — API key lacks the RATES scope",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalRateResponse"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "IDEMPOTENCY_IN_PROGRESS",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalRateResponse"
+                }
+              }
+            }
+          },
+          "422" : {
+            "description" : "SERVICE_NOT_ALLOWED / PACKAGE_NOT_ALLOWED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalRateResponse"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalRateResponse"
+                }
+              }
+            }
+          },
+          "502" : {
+            "description" : "CARRIER_FAILURE",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalRateResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/external/rate-shop" : {
+      "post" : {
+        "tags" : [ "Public Shipping API v2" ],
+        "summary" : "Multi-carrier rate-shop (idempotent via Idempotency-Key)",
+        "operationId" : "rateShop",
+        "parameters" : [ {
+          "name" : "Idempotency-Key",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/RateShopRequestDTO"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Rate-shop matrix",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseRateShopResponseDTO"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "VALIDATION_ERROR / UNIT_REQUIRED / CURRENCY_REQUIRED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseRateShopResponseDTO"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseRateShopResponseDTO"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "FORBIDDEN — API key lacks the RATES scope",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseRateShopResponseDTO"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "IDEMPOTENCY_IN_PROGRESS",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseRateShopResponseDTO"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseRateShopResponseDTO"
+                }
+              }
+            }
+          },
+          "502" : {
+            "description" : "CARRIER_FAILURE — all carriers failed",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseRateShopResponseDTO"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/external/pickups" : {
+      "post" : {
+        "tags" : [ "Public Shipping API v2" ],
+        "summary" : "Schedule a courier pickup (idempotent via Idempotency-Key)",
+        "operationId" : "schedulePickup",
+        "parameters" : [ {
+          "name" : "Idempotency-Key",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/PickupRequestDTO"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Pickup scheduled",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponsePickupResponseDTO"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "VALIDATION_ERROR",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponsePickupResponseDTO"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponsePickupResponseDTO"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "FORBIDDEN — API key lacks the PICKUPS scope",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponsePickupResponseDTO"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "IDEMPOTENCY_IN_PROGRESS",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponsePickupResponseDTO"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponsePickupResponseDTO"
+                }
+              }
+            }
+          },
+          "502" : {
+            "description" : "CARRIER_FAILURE",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponsePickupResponseDTO"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "IDEMPOTENCY_UNAVAILABLE — Redis outage (fail-closed)",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponsePickupResponseDTO"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/external/landed-cost" : {
+      "post" : {
+        "tags" : [ "Public Shipping API v2" ],
+        "summary" : "Estimate landed cost (freight + duties + taxes + fees)",
+        "operationId" : "landedCost",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/LandedCostRequestDTO"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Estimate returned",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseLandedCostResponseDTO"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "VALIDATION_ERROR / CURRENCY_REQUIRED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseLandedCostResponseDTO"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseLandedCostResponseDTO"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "FORBIDDEN — API key lacks the LANDED_COST scope",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseLandedCostResponseDTO"
+                }
+              }
+            }
+          },
+          "422" : {
+            "description" : "BUSINESS_RULE_VIOLATION — unsupported origin/destination pair",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseLandedCostResponseDTO"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "API_KEY_RATE_LIMITED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseLandedCostResponseDTO"
+                }
+              }
+            }
+          },
+          "502" : {
+            "description" : "CARRIER_FAILURE — upstream duty/tax service failed",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseLandedCostResponseDTO"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/external/dangerous-goods/validate" : {
+      "post" : {
+        "tags" : [ "Public Shipping API v2" ],
+        "summary" : "Dangerous goods declaration preview (validation only)",
+        "description" : "Reuses the DangerousGoodsValidator introduced in Sprint 27. Returns the same shape as the internal shipment validator; a valid response means the payload would pass through createShipment without a DG-related failure.",
+        "operationId" : "validateDg",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "type" : "object",
+                "additionalProperties" : { }
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Preview complete",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "VALIDATION_ERROR",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "FORBIDDEN — API key lacks the SHIPMENTS scope",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "API_KEY_RATE_LIMITED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseMapStringObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/external/close-out" : {
+      "post" : {
+        "tags" : [ "Public Shipping API v2" ],
+        "summary" : "Close out the day's shipments at a carrier (idempotent via Idempotency-Key)",
+        "operationId" : "closeOut",
+        "parameters" : [ {
+          "name" : "Idempotency-Key",
+          "in" : "header",
+          "required" : false,
+          "schema" : {
+            "type" : "string"
+          }
+        } ],
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ManifestRequestDTO"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Close-out completed",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseManifestResponseDTO"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "VALIDATION_ERROR",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseManifestResponseDTO"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseManifestResponseDTO"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "FORBIDDEN — API key lacks the PICKUPS scope",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseManifestResponseDTO"
+                }
+              }
+            }
+          },
+          "409" : {
+            "description" : "IDEMPOTENCY_IN_PROGRESS",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseManifestResponseDTO"
+                }
+              }
+            }
+          },
+          "422" : {
+            "description" : "BUSINESS_RULE_VIOLATION — already closed / empty batch",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseManifestResponseDTO"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseManifestResponseDTO"
+                }
+              }
+            }
+          },
+          "502" : {
+            "description" : "CARRIER_FAILURE",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseManifestResponseDTO"
+                }
+              }
+            }
+          },
+          "503" : {
+            "description" : "IDEMPOTENCY_UNAVAILABLE",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseManifestResponseDTO"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/external/addresses/validate" : {
+      "post" : {
+        "tags" : [ "Public Shipping API v2" ],
+        "summary" : "Validate an address",
+        "operationId" : "validate",
+        "requestBody" : {
+          "content" : {
+            "application/json" : {
+              "schema" : {
+                "$ref" : "#/components/schemas/ExternalAddress"
+              }
+            }
+          },
+          "required" : true
+        },
+        "responses" : {
+          "200" : {
+            "description" : "Validation result",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalAddressValidationResponse"
+                }
+              }
+            }
+          },
+          "400" : {
+            "description" : "VALIDATION_ERROR",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalAddressValidationResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalAddressValidationResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "FORBIDDEN — API key lacks the ADDRESSES scope",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalAddressValidationResponse"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "API_KEY_RATE_LIMITED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalAddressValidationResponse"
+                }
+              }
+            }
+          },
+          "502" : {
+            "description" : "CARRIER_FAILURE",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalAddressValidationResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/external/shipments/{shipmentId}/tracking" : {
+      "get" : {
+        "tags" : [ "Public Shipping API v2" ],
+        "summary" : "Get tracking for a shipment",
+        "operationId" : "tracking",
+        "parameters" : [ {
+          "name" : "shipmentId",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int64"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Tracking retrieved",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalTrackingResponse"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalTrackingResponse"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "FORBIDDEN / CROSS_TENANT_ACCESS_DENIED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalTrackingResponse"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "ORDER_NOT_FOUND",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalTrackingResponse"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalTrackingResponse"
+                }
+              }
+            }
+          },
+          "502" : {
+            "description" : "CARRIER_FAILURE",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseExternalTrackingResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/external/webhooks/{id}" : {
+      "delete" : {
+        "tags" : [ "Public Shipping API v2 · Webhooks" ],
+        "summary" : "Delete a subscription",
+        "operationId" : "delete",
+        "parameters" : [ {
+          "name" : "id",
+          "in" : "path",
+          "required" : true,
+          "schema" : {
+            "type" : "integer",
+            "format" : "int64"
+          }
+        } ],
+        "responses" : {
+          "200" : {
+            "description" : "Deleted",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseVoid"
+                }
+              }
+            }
+          },
+          "401" : {
+            "description" : "UNAUTHORIZED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseVoid"
+                }
+              }
+            }
+          },
+          "403" : {
+            "description" : "CROSS_TENANT_ACCESS_DENIED — id belongs to another API key",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseVoid"
+                }
+              }
+            }
+          },
+          "404" : {
+            "description" : "WEBHOOK_SUBSCRIPTION_NOT_FOUND",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseVoid"
+                }
+              }
+            }
+          },
+          "429" : {
+            "description" : "TENANT_RATE_LIMITED",
+            "content" : {
+              "*/*" : {
+                "schema" : {
+                  "$ref" : "#/components/schemas/ApiResponseVoid"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components" : {
+    "schemas" : {
+      "ExternalWebhookSubscriptionDTO" : {
+        "type" : "object",
+        "properties" : {
+          "id" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "apiKeyId" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "event" : {
+            "type" : "string",
+            "enum" : [ "LABEL_GENERATED", "TRACKING_UPDATED", "EXCEPTION", "RULE_BLOCKED" ]
+          },
+          "url" : {
+            "type" : "string"
+          },
+          "secret" : {
+            "type" : "string"
+          },
+          "active" : {
+            "type" : "boolean"
+          },
+          "createdAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "updatedAt" : {
+            "type" : "string",
+            "format" : "date-time"
+          }
+        }
+      },
+      "ApiResponseExternalWebhookSubscriptionDTO" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "data" : {
+            "$ref" : "#/components/schemas/ExternalWebhookSubscriptionDTO"
+          },
+          "errors" : {
+            "$ref" : "#/components/schemas/ErrorDetails"
+          },
+          "errorCode" : {
+            "type" : "string",
+            "description" : "Stable machine-readable failure code (see ErrorCode enum); null on success. Branch on this, never on message text.",
+            "example" : "NEEDS_CARRIER_DETAILS"
+          }
+        }
+      },
+      "ErrorDetails" : {
+        "type" : "object",
+        "properties" : {
+          "field" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "string"
+          },
+          "message" : {
+            "type" : "string"
+          }
+        }
+      },
+      "ExternalAddress" : {
+        "type" : "object",
+        "properties" : {
+          "name" : {
+            "type" : "string"
+          },
+          "company" : {
+            "type" : "string"
+          },
+          "phone" : {
+            "type" : "string"
+          },
+          "email" : {
+            "type" : "string"
+          },
+          "addressLine1" : {
+            "type" : "string"
+          },
+          "addressLine2" : {
+            "type" : "string"
+          },
+          "city" : {
+            "type" : "string"
+          },
+          "state" : {
+            "type" : "string"
+          },
+          "postalCode" : {
+            "type" : "string"
+          },
+          "countryCode" : {
+            "type" : "string"
+          }
+        }
+      },
+      "ExternalItem" : {
+        "type" : "object",
+        "properties" : {
+          "description" : {
+            "type" : "string"
+          },
+          "sku" : {
+            "type" : "string"
+          },
+          "hsCode" : {
+            "type" : "string"
+          },
+          "countryOfOrigin" : {
+            "type" : "string"
+          },
+          "quantity" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "unitValue" : {
+            "type" : "number"
+          },
+          "weight" : {
+            "type" : "number"
+          }
+        }
+      },
+      "ExternalParcel" : {
+        "type" : "object",
+        "properties" : {
+          "weight" : {
+            "type" : "number"
+          },
+          "weightUnit" : {
+            "type" : "string"
+          },
+          "length" : {
+            "type" : "number"
+          },
+          "width" : {
+            "type" : "number"
+          },
+          "height" : {
+            "type" : "number"
+          },
+          "dimUnit" : {
+            "type" : "string"
+          },
+          "packagingCode" : {
+            "type" : "string"
+          }
+        }
+      },
+      "ExternalShipmentRequest" : {
+        "type" : "object",
+        "properties" : {
+          "reference" : {
+            "type" : "string"
+          },
+          "refOrderNumber" : {
+            "type" : "string"
+          },
+          "clientCode" : {
+            "type" : "string"
+          },
+          "shipMethod" : {
+            "type" : "string"
+          },
+          "carrierCode" : {
+            "type" : "string"
+          },
+          "accountNumber" : {
+            "type" : "string"
+          },
+          "warehouseCode" : {
+            "type" : "string"
+          },
+          "shipFrom" : {
+            "$ref" : "#/components/schemas/ExternalAddress"
+          },
+          "shipTo" : {
+            "$ref" : "#/components/schemas/ExternalAddress"
+          },
+          "parcel" : {
+            "$ref" : "#/components/schemas/ExternalParcel"
+          },
+          "items" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ExternalItem"
+            }
+          },
+          "declaredValue" : {
+            "type" : "number"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "reasonForExport" : {
+            "type" : "string"
+          },
+          "incoterms" : {
+            "type" : "string"
+          },
+          "isReturn" : {
+            "type" : "boolean"
+          }
+        }
+      },
+      "ApiResponseExternalShipmentResponse" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "data" : {
+            "$ref" : "#/components/schemas/ExternalShipmentResponse"
+          },
+          "errors" : {
+            "$ref" : "#/components/schemas/ErrorDetails"
+          },
+          "errorCode" : {
+            "type" : "string",
+            "description" : "Stable machine-readable failure code (see ErrorCode enum); null on success. Branch on this, never on message text.",
+            "example" : "NEEDS_CARRIER_DETAILS"
+          }
+        }
+      },
+      "ExternalShipmentResponse" : {
+        "type" : "object",
+        "properties" : {
+          "shipmentId" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "reference" : {
+            "type" : "string"
+          },
+          "refOrderNumber" : {
+            "type" : "string"
+          },
+          "clientCode" : {
+            "type" : "string"
+          },
+          "carrier" : {
+            "type" : "string"
+          },
+          "service" : {
+            "type" : "string"
+          },
+          "resolvedVia" : {
+            "type" : "string"
+          },
+          "international" : {
+            "type" : "boolean"
+          },
+          "trackingNumber" : {
+            "type" : "string"
+          },
+          "trackingUrl" : {
+            "type" : "string"
+          },
+          "labelUrl" : {
+            "type" : "string"
+          },
+          "labelPdf" : {
+            "type" : "string"
+          },
+          "labelDocumentUrl" : {
+            "type" : "string"
+          },
+          "shippingCost" : {
+            "type" : "number"
+          },
+          "estimatedDelivery" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "carrierAmount" : {
+            "type" : "number"
+          },
+          "billableAmount" : {
+            "type" : "number"
+          },
+          "markupKind" : {
+            "type" : "string"
+          },
+          "markupValue" : {
+            "type" : "number"
+          },
+          "markupCurrency" : {
+            "type" : "string"
+          },
+          "dispatchNextBusinessDay" : {
+            "type" : "boolean"
+          },
+          "warehouseCode" : {
+            "type" : "string"
+          }
+        }
+      },
+      "ApiResponseMapStringObject" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "data" : {
+            "type" : "object",
+            "additionalProperties" : { }
+          },
+          "errors" : {
+            "$ref" : "#/components/schemas/ErrorDetails"
+          },
+          "errorCode" : {
+            "type" : "string",
+            "description" : "Stable machine-readable failure code (see ErrorCode enum); null on success. Branch on this, never on message text.",
+            "example" : "NEEDS_CARRIER_DETAILS"
+          }
+        }
+      },
+      "ExternalRateRequest" : {
+        "type" : "object",
+        "properties" : {
+          "clientCode" : {
+            "type" : "string"
+          },
+          "shipMethod" : {
+            "type" : "string"
+          },
+          "carrierCode" : {
+            "type" : "string"
+          },
+          "warehouseCode" : {
+            "type" : "string"
+          },
+          "shipFrom" : {
+            "$ref" : "#/components/schemas/ExternalAddress"
+          },
+          "shipTo" : {
+            "$ref" : "#/components/schemas/ExternalAddress"
+          },
+          "parcel" : {
+            "$ref" : "#/components/schemas/ExternalParcel"
+          }
+        }
+      },
+      "ApiResponseExternalRateResponse" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "data" : {
+            "$ref" : "#/components/schemas/ExternalRateResponse"
+          },
+          "errors" : {
+            "$ref" : "#/components/schemas/ErrorDetails"
+          },
+          "errorCode" : {
+            "type" : "string",
+            "description" : "Stable machine-readable failure code (see ErrorCode enum); null on success. Branch on this, never on message text.",
+            "example" : "NEEDS_CARRIER_DETAILS"
+          }
+        }
+      },
+      "ExternalRateResponse" : {
+        "type" : "object",
+        "properties" : {
+          "options" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/Option"
+            }
+          },
+          "pricingAvailable" : {
+            "type" : "boolean"
+          },
+          "note" : {
+            "type" : "string"
+          }
+        }
+      },
+      "Option" : {
+        "type" : "object",
+        "properties" : {
+          "carrier" : {
+            "type" : "string"
+          },
+          "serviceCode" : {
+            "type" : "string"
+          },
+          "serviceName" : {
+            "type" : "string"
+          },
+          "scope" : {
+            "type" : "string"
+          },
+          "estimatedAmount" : {
+            "type" : "number"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "allowed" : {
+            "type" : "boolean"
+          }
+        }
+      },
+      "CustomsCommodityDTO" : {
+        "type" : "object",
+        "properties" : {
+          "description" : {
+            "type" : "string"
+          },
+          "hsCode" : {
+            "type" : "string"
+          },
+          "countryOfOrigin" : {
+            "type" : "string"
+          },
+          "quantity" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "unitValue" : {
+            "type" : "number"
+          },
+          "unitWeight" : {
+            "type" : "number"
+          },
+          "sku" : {
+            "type" : "string"
+          },
+          "boxSeq" : {
+            "type" : "integer",
+            "format" : "int32"
+          }
+        }
+      },
+      "DangerousCommodityDTO" : {
+        "type" : "object",
+        "properties" : {
+          "unNumber" : {
+            "type" : "string"
+          },
+          "properShippingName" : {
+            "type" : "string"
+          },
+          "hazardClass" : {
+            "type" : "string"
+          },
+          "packingGroup" : {
+            "type" : "string"
+          },
+          "quantity" : {
+            "type" : "number"
+          },
+          "quantityUnit" : {
+            "type" : "string"
+          },
+          "limitedQuantity" : {
+            "type" : "boolean"
+          },
+          "packageCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          }
+        }
+      },
+      "DangerousGoodsBlockDTO" : {
+        "type" : "object",
+        "properties" : {
+          "regulationSet" : {
+            "type" : "string"
+          },
+          "accessibility" : {
+            "type" : "string"
+          },
+          "cargoAircraftOnly" : {
+            "type" : "boolean"
+          },
+          "emergencyContactName" : {
+            "type" : "string"
+          },
+          "emergencyContactPhone" : {
+            "type" : "string"
+          },
+          "emergencyResponseContract" : {
+            "type" : "string"
+          },
+          "signatoryName" : {
+            "type" : "string"
+          },
+          "signatoryTitle" : {
+            "type" : "string"
+          },
+          "commodities" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/DangerousCommodityDTO"
+            }
+          },
+          "readyForCarrier" : {
+            "type" : "boolean"
+          }
+        }
+      },
+      "IntlShipmentBlockDTO" : {
+        "type" : "object",
+        "properties" : {
+          "international" : {
+            "type" : "boolean"
+          },
+          "incoterms" : {
+            "type" : "string"
+          },
+          "reasonForExport" : {
+            "type" : "string"
+          },
+          "customsCurrency" : {
+            "type" : "string"
+          },
+          "customsTotalValue" : {
+            "type" : "number"
+          },
+          "weightUnit" : {
+            "type" : "string"
+          },
+          "dimUnit" : {
+            "type" : "string"
+          },
+          "importerType" : {
+            "type" : "string"
+          },
+          "importerName" : {
+            "type" : "string"
+          },
+          "importerContact" : {
+            "type" : "string"
+          },
+          "importerCompany" : {
+            "type" : "string"
+          },
+          "importerAddressLine1" : {
+            "type" : "string"
+          },
+          "importerAddressLine2" : {
+            "type" : "string"
+          },
+          "importerCity" : {
+            "type" : "string"
+          },
+          "importerState" : {
+            "type" : "string"
+          },
+          "importerPostcode" : {
+            "type" : "string"
+          },
+          "importerCountry" : {
+            "type" : "string"
+          },
+          "importerPhone" : {
+            "type" : "string"
+          },
+          "importerTaxId" : {
+            "type" : "string"
+          },
+          "importerTaxIdType" : {
+            "type" : "string"
+          },
+          "importerVat" : {
+            "type" : "string"
+          },
+          "importerEori" : {
+            "type" : "string"
+          },
+          "importerIoss" : {
+            "type" : "string"
+          },
+          "importerCompanyReg" : {
+            "type" : "string"
+          },
+          "importerIec" : {
+            "type" : "string"
+          },
+          "importerGstin" : {
+            "type" : "string"
+          },
+          "brokerName" : {
+            "type" : "string"
+          },
+          "brokerCompany" : {
+            "type" : "string"
+          },
+          "brokerAddressLine1" : {
+            "type" : "string"
+          },
+          "brokerAddressLine2" : {
+            "type" : "string"
+          },
+          "brokerCity" : {
+            "type" : "string"
+          },
+          "brokerState" : {
+            "type" : "string"
+          },
+          "brokerPostcode" : {
+            "type" : "string"
+          },
+          "brokerCountry" : {
+            "type" : "string"
+          },
+          "brokerPhone" : {
+            "type" : "string"
+          },
+          "brokerId" : {
+            "type" : "string"
+          },
+          "brokerLicense" : {
+            "type" : "string"
+          },
+          "dutyBillTo" : {
+            "type" : "string"
+          },
+          "dutyAccount" : {
+            "type" : "string"
+          },
+          "commodities" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/CustomsCommodityDTO"
+            }
+          },
+          "readyForCarrier" : {
+            "type" : "boolean"
+          }
+        }
+      },
+      "PackageDetailDTO" : {
+        "type" : "object",
+        "properties" : {
+          "sequenceNumber" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "packageType" : {
+            "type" : "string"
+          },
+          "weight" : {
+            "type" : "number"
+          },
+          "weightUnit" : {
+            "type" : "string"
+          },
+          "length" : {
+            "type" : "number"
+          },
+          "width" : {
+            "type" : "number"
+          },
+          "height" : {
+            "type" : "number"
+          },
+          "dimUnit" : {
+            "type" : "string"
+          },
+          "declaredValue" : {
+            "type" : "number"
+          },
+          "description" : {
+            "type" : "string"
+          },
+          "reference" : {
+            "type" : "string"
+          }
+        }
+      },
+      "RateShopRequestDTO" : {
+        "type" : "object",
+        "properties" : {
+          "shipment" : {
+            "$ref" : "#/components/schemas/ShipmentRequestDTO"
+          },
+          "customerNo" : {
+            "type" : "string"
+          },
+          "carriers" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        },
+        "required" : [ "shipment" ]
+      },
+      "ShipmentRequestDTO" : {
+        "type" : "object",
+        "properties" : {
+          "carrierCode" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "accountNumber" : {
+            "type" : "string"
+          },
+          "serviceType" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "packageType" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "weight" : {
+            "type" : "number"
+          },
+          "length" : {
+            "type" : "number"
+          },
+          "width" : {
+            "type" : "number"
+          },
+          "height" : {
+            "type" : "number"
+          },
+          "shipperName" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "shipperPhone" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "shipperAddressLine1" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "shipperAddressLine2" : {
+            "type" : "string"
+          },
+          "shipperCity" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "shipperState" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "shipperPostalCode" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "shipperCountryCode" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "recipientName" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "recipientPhone" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "recipientAddressLine1" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "recipientAddressLine2" : {
+            "type" : "string"
+          },
+          "recipientAddressLine3" : {
+            "type" : "string"
+          },
+          "recipientCity" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "recipientState" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "recipientPostalCode" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "recipientCountryCode" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "referenceNumber" : {
+            "type" : "string"
+          },
+          "specialInstructions" : {
+            "type" : "string"
+          },
+          "declaredValue" : {
+            "type" : "number"
+          },
+          "declaredValueCurrency" : {
+            "type" : "string"
+          },
+          "weightUnit" : {
+            "type" : "string"
+          },
+          "dimUnit" : {
+            "type" : "string"
+          },
+          "intl" : {
+            "$ref" : "#/components/schemas/IntlShipmentBlockDTO"
+          },
+          "recipientResidential" : {
+            "type" : "boolean"
+          },
+          "recipientPhoneCountryCode" : {
+            "type" : "string"
+          },
+          "isReturn" : {
+            "type" : "boolean"
+          },
+          "dangerousGoods" : {
+            "$ref" : "#/components/schemas/DangerousGoodsBlockDTO"
+          },
+          "packages" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/PackageDetailDTO"
+            }
+          },
+          "signatureOption" : {
+            "type" : "string"
+          },
+          "insuredValue" : {
+            "type" : "number"
+          },
+          "insuredValueCurrency" : {
+            "type" : "string"
+          }
+        },
+        "required" : [ "carrierCode", "packageType", "recipientAddressLine1", "recipientCity", "recipientCountryCode", "recipientName", "recipientPhone", "recipientPostalCode", "recipientState", "serviceType", "shipperAddressLine1", "shipperCity", "shipperCountryCode", "shipperName", "shipperPhone", "shipperPostalCode", "shipperState", "weight" ]
+      },
+      "ApiResponseRateShopResponseDTO" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "data" : {
+            "$ref" : "#/components/schemas/RateShopResponseDTO"
+          },
+          "errors" : {
+            "$ref" : "#/components/schemas/ErrorDetails"
+          },
+          "errorCode" : {
+            "type" : "string",
+            "description" : "Stable machine-readable failure code (see ErrorCode enum); null on success. Branch on this, never on message text.",
+            "example" : "NEEDS_CARRIER_DETAILS"
+          }
+        }
+      },
+      "CarrierRateStatus" : {
+        "type" : "object",
+        "properties" : {
+          "carrierCode" : {
+            "type" : "string"
+          },
+          "optionCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "source" : {
+            "type" : "string"
+          },
+          "message" : {
+            "type" : "string"
+          }
+        }
+      },
+      "RateOptionDTO" : {
+        "type" : "object",
+        "properties" : {
+          "carrierCode" : {
+            "type" : "string"
+          },
+          "serviceCode" : {
+            "type" : "string"
+          },
+          "serviceName" : {
+            "type" : "string"
+          },
+          "totalAmount" : {
+            "type" : "number"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "estimatedDelivery" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "transitDays" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "serviceId" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "routingOutcome" : {
+            "type" : "string"
+          },
+          "routingRuleName" : {
+            "type" : "string"
+          },
+          "routingTargetCarrier" : {
+            "type" : "string"
+          },
+          "routingTargetServiceCode" : {
+            "type" : "string"
+          },
+          "routingTargetWarehouseId" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "routingBlockReason" : {
+            "type" : "string"
+          }
+        }
+      },
+      "RateShopResponseDTO" : {
+        "type" : "object",
+        "properties" : {
+          "options" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/RateOptionDTO"
+            }
+          },
+          "carrierResults" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/CarrierRateStatus"
+            }
+          }
+        }
+      },
+      "PickupRequestDTO" : {
+        "type" : "object",
+        "properties" : {
+          "carrierCode" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "customerNo" : {
+            "type" : "string"
+          },
+          "pickupDate" : {
+            "type" : "string",
+            "format" : "date"
+          },
+          "pickupWindowStart" : {
+            "type" : "string"
+          },
+          "pickupWindowEnd" : {
+            "type" : "string"
+          },
+          "contactName" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "contactPhone" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "addressLine1" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "addressLine2" : {
+            "type" : "string"
+          },
+          "city" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "state" : {
+            "type" : "string"
+          },
+          "postalCode" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "countryCode" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "packageCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "totalWeight" : {
+            "type" : "number"
+          },
+          "weightUnit" : {
+            "type" : "string"
+          },
+          "specialInstructions" : {
+            "type" : "string"
+          }
+        },
+        "required" : [ "addressLine1", "carrierCode", "city", "contactName", "contactPhone", "countryCode", "pickupDate", "postalCode", "totalWeight" ]
+      },
+      "ApiResponsePickupResponseDTO" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "data" : {
+            "$ref" : "#/components/schemas/PickupResponseDTO"
+          },
+          "errors" : {
+            "$ref" : "#/components/schemas/ErrorDetails"
+          },
+          "errorCode" : {
+            "type" : "string",
+            "description" : "Stable machine-readable failure code (see ErrorCode enum); null on success. Branch on this, never on message text.",
+            "example" : "NEEDS_CARRIER_DETAILS"
+          }
+        }
+      },
+      "PickupResponseDTO" : {
+        "type" : "object",
+        "properties" : {
+          "carrierCode" : {
+            "type" : "string"
+          },
+          "confirmationNumber" : {
+            "type" : "string"
+          },
+          "scheduledDate" : {
+            "type" : "string",
+            "format" : "date"
+          },
+          "pickupWindowStart" : {
+            "type" : "string"
+          },
+          "pickupWindowEnd" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "message" : {
+            "type" : "string"
+          }
+        }
+      },
+      "LandedCostRequestDTO" : {
+        "type" : "object",
+        "properties" : {
+          "carrierCode" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "customerNo" : {
+            "type" : "string"
+          },
+          "shipment" : {
+            "$ref" : "#/components/schemas/ShipmentRequestDTO"
+          }
+        },
+        "required" : [ "carrierCode", "shipment" ]
+      },
+      "ApiResponseLandedCostResponseDTO" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "data" : {
+            "$ref" : "#/components/schemas/LandedCostResponseDTO"
+          },
+          "errors" : {
+            "$ref" : "#/components/schemas/ErrorDetails"
+          },
+          "errorCode" : {
+            "type" : "string",
+            "description" : "Stable machine-readable failure code (see ErrorCode enum); null on success. Branch on this, never on message text.",
+            "example" : "NEEDS_CARRIER_DETAILS"
+          }
+        }
+      },
+      "LandedCostLine" : {
+        "type" : "object",
+        "properties" : {
+          "description" : {
+            "type" : "string"
+          },
+          "hsCode" : {
+            "type" : "string"
+          },
+          "quantity" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "declaredValue" : {
+            "type" : "number"
+          },
+          "dutyAmount" : {
+            "type" : "number"
+          },
+          "taxAmount" : {
+            "type" : "number"
+          },
+          "currency" : {
+            "type" : "string"
+          }
+        }
+      },
+      "LandedCostResponseDTO" : {
+        "type" : "object",
+        "properties" : {
+          "carrierCode" : {
+            "type" : "string"
+          },
+          "source" : {
+            "type" : "string"
+          },
+          "freightAmount" : {
+            "type" : "number"
+          },
+          "dutyTotal" : {
+            "type" : "number"
+          },
+          "taxTotal" : {
+            "type" : "number"
+          },
+          "otherTotal" : {
+            "type" : "number"
+          },
+          "grandTotal" : {
+            "type" : "number"
+          },
+          "currency" : {
+            "type" : "string"
+          },
+          "lineItems" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/LandedCostLine"
+            }
+          },
+          "warnings" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          },
+          "message" : {
+            "type" : "string"
+          }
+        }
+      },
+      "ManifestRequestDTO" : {
+        "type" : "object",
+        "properties" : {
+          "carrierCode" : {
+            "type" : "string",
+            "minLength" : 1
+          },
+          "customerNo" : {
+            "type" : "string"
+          },
+          "trackingNumbers" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            },
+            "minItems" : 1
+          },
+          "closeDate" : {
+            "type" : "string",
+            "format" : "date"
+          },
+          "addressName" : {
+            "type" : "string"
+          },
+          "addressLine1" : {
+            "type" : "string"
+          },
+          "addressLine2" : {
+            "type" : "string"
+          },
+          "city" : {
+            "type" : "string"
+          },
+          "state" : {
+            "type" : "string"
+          },
+          "postalCode" : {
+            "type" : "string"
+          },
+          "countryCode" : {
+            "type" : "string"
+          }
+        },
+        "required" : [ "carrierCode", "trackingNumbers" ]
+      },
+      "ApiResponseManifestResponseDTO" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "data" : {
+            "$ref" : "#/components/schemas/ManifestResponseDTO"
+          },
+          "errors" : {
+            "$ref" : "#/components/schemas/ErrorDetails"
+          },
+          "errorCode" : {
+            "type" : "string",
+            "description" : "Stable machine-readable failure code (see ErrorCode enum); null on success. Branch on this, never on message text.",
+            "example" : "NEEDS_CARRIER_DETAILS"
+          }
+        }
+      },
+      "ManifestResponseDTO" : {
+        "type" : "object",
+        "properties" : {
+          "carrierCode" : {
+            "type" : "string"
+          },
+          "manifestId" : {
+            "type" : "string"
+          },
+          "manifestPdfUrl" : {
+            "type" : "string"
+          },
+          "manifestPdfBase64" : {
+            "type" : "string"
+          },
+          "trackingCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "message" : {
+            "type" : "string"
+          }
+        }
+      },
+      "ApiResponseExternalAddressValidationResponse" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "data" : {
+            "$ref" : "#/components/schemas/ExternalAddressValidationResponse"
+          },
+          "errors" : {
+            "$ref" : "#/components/schemas/ErrorDetails"
+          },
+          "errorCode" : {
+            "type" : "string",
+            "description" : "Stable machine-readable failure code (see ErrorCode enum); null on success. Branch on this, never on message text.",
+            "example" : "NEEDS_CARRIER_DETAILS"
+          }
+        }
+      },
+      "ExternalAddressValidationResponse" : {
+        "type" : "object",
+        "properties" : {
+          "valid" : {
+            "type" : "boolean"
+          },
+          "issues" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          },
+          "normalized" : {
+            "$ref" : "#/components/schemas/ExternalAddress"
+          },
+          "carrierValidated" : {
+            "type" : "boolean"
+          }
+        }
+      },
+      "ApiResponseListExternalWebhookSubscriptionDTO" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "data" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ExternalWebhookSubscriptionDTO"
+            }
+          },
+          "errors" : {
+            "$ref" : "#/components/schemas/ErrorDetails"
+          },
+          "errorCode" : {
+            "type" : "string",
+            "description" : "Stable machine-readable failure code (see ErrorCode enum); null on success. Branch on this, never on message text.",
+            "example" : "NEEDS_CARRIER_DETAILS"
+          }
+        }
+      },
+      "ApiResponseExternalTrackingResponse" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "data" : {
+            "$ref" : "#/components/schemas/ExternalTrackingResponse"
+          },
+          "errors" : {
+            "$ref" : "#/components/schemas/ErrorDetails"
+          },
+          "errorCode" : {
+            "type" : "string",
+            "description" : "Stable machine-readable failure code (see ErrorCode enum); null on success. Branch on this, never on message text.",
+            "example" : "NEEDS_CARRIER_DETAILS"
+          }
+        }
+      },
+      "ExternalTrackingResponse" : {
+        "type" : "object",
+        "properties" : {
+          "shipmentId" : {
+            "type" : "integer",
+            "format" : "int64"
+          },
+          "trackingNumber" : {
+            "type" : "string"
+          },
+          "carrier" : {
+            "type" : "string"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "currentLocation" : {
+            "type" : "string"
+          },
+          "estimatedDelivery" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "delivered" : {
+            "type" : "boolean"
+          },
+          "trackingUrl" : {
+            "type" : "string"
+          }
+        }
+      },
+      "ApiResponseVoid" : {
+        "type" : "object",
+        "properties" : {
+          "status" : {
+            "type" : "string"
+          },
+          "code" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "timestamp" : {
+            "type" : "string",
+            "format" : "date-time"
+          },
+          "data" : { },
+          "errors" : {
+            "$ref" : "#/components/schemas/ErrorDetails"
+          },
+          "errorCode" : {
+            "type" : "string",
+            "description" : "Stable machine-readable failure code (see ErrorCode enum); null on success. Branch on this, never on message text.",
+            "example" : "NEEDS_CARRIER_DETAILS"
+          }
+        }
+      }
+    },
+    "securitySchemes" : {
+      "bearerAuth" : {
+        "type" : "http",
+        "description" : "JWT from POST /api/v1/auth/login (24h expiry).",
+        "name" : "bearerAuth",
+        "scheme" : "bearer",
+        "bearerFormat" : "JWT"
+      }
+    }
+  }
+}
