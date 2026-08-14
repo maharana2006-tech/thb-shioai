@@ -188,6 +188,10 @@ public enum ErrorCode {
     /** The idempotency store (Redis) is unavailable; retry after Retry-After header. Only returned on money-touching endpoints where fail-open would risk duplicates. */
     IDEMPOTENCY_UNAVAILABLE,
 
+    // ===== Sprint 51 AC-M3 / AC-L4 — external webhook subscription CRUD =====
+    /** The webhook subscription id in the path or body does not resolve for the caller. */
+    WEBHOOK_SUBSCRIPTION_NOT_FOUND,
+
     // ===== Fallback =====
     INTERNAL_ERROR
 }

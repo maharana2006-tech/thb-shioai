@@ -107,7 +107,9 @@ public class OrderController {
     @GetMapping
     public ResponseEntity<ApiResponse<PageResponseDTO<OrderResponseDTO>>> listOrders(
             @RequestParam(defaultValue = "0") int page,
-            @Parameter(description = "Page size, capped at 100") @RequestParam(defaultValue = "20") int size,
+            // Sprint 51 AC-L1 — align on PaginationDefaults (was 20 here, 25 elsewhere).
+            @Parameter(description = "Page size, capped at " + com.multiship.backend.common.PaginationDefaults.MAX_SIZE)
+            @RequestParam(defaultValue = com.multiship.backend.common.PaginationDefaults.DEFAULT_SIZE_STR) int size,
             @Parameter(description = "orderNo | city | weight | status | createdDate") @RequestParam(defaultValue = "orderNo") String sortBy,
             @RequestParam(defaultValue = "ASC") String sortDirection,
             @Parameter(description = "PENDING | GENERATED | ERROR") @RequestParam(required = false) String status,
@@ -131,7 +133,9 @@ public class OrderController {
 
         PaginationRequestDTO paginationRequest = PaginationRequestDTO.builder()
                 .page(page)
-                .size(size)
+                // Sprint 51 AC-L1 — cap at PaginationDefaults.MAX_SIZE so a
+                // pathological ?size=100000 can't nuke the query.
+                .size(com.multiship.backend.common.PaginationDefaults.clamp(size))
                 .sortBy(sortBy)
                 .sortDirection(sortDirection)
                 .build();

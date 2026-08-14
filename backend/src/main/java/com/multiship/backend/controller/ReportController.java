@@ -33,7 +33,7 @@ public class ReportController {
 
     @Operation(summary = "Orders + labels dataset (CSV stream)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping(value = "/orders", produces = "text/csv")
+    @GetMapping(value = "/orders", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
     public void orders(HttpServletResponse response, ReportFiltersQuery q) throws IOException {
         setCsvHeaders(response, "orders");
         reportService.streamOrdersCsv(q.toFilters(), response.getOutputStream());
@@ -41,7 +41,7 @@ public class ReportController {
 
     @Operation(summary = "Tracking snapshots dataset (CSV stream)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping(value = "/tracking", produces = "text/csv")
+    @GetMapping(value = "/tracking", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
     public void tracking(HttpServletResponse response, ReportFiltersQuery q) throws IOException {
         setCsvHeaders(response, "tracking");
         reportService.streamTrackingCsv(q.toFilters(), response.getOutputStream());
@@ -49,7 +49,7 @@ public class ReportController {
 
     @Operation(summary = "Rate-shop history dataset (CSV stream)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping(value = "/rate-shop", produces = "text/csv")
+    @GetMapping(value = "/rate-shop", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
     public void rateShop(HttpServletResponse response, ReportFiltersQuery q) throws IOException {
         setCsvHeaders(response, "rate-shop");
         reportService.streamRateShopCsv(q.toFilters(), response.getOutputStream());
@@ -57,14 +57,15 @@ public class ReportController {
 
     @Operation(summary = "Client billing rollup dataset (CSV stream)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping(value = "/billing", produces = "text/csv")
+    @GetMapping(value = "/billing", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
     public void billing(HttpServletResponse response, ReportFiltersQuery q) throws IOException {
         setCsvHeaders(response, "billing");
         reportService.streamBillingCsv(q.toFilters(), response.getOutputStream());
     }
 
     private static void setCsvHeaders(HttpServletResponse response, String dataset) {
-        response.setContentType("text/csv");
+        // Sprint 51 AC-L5 — canonical UTF-8 CSV content-type.
+        response.setContentType(com.multiship.backend.common.CsvMediaType.CSV_UTF8);
         response.setCharacterEncoding("UTF-8");
         response.setHeader("Content-Disposition",
                 "attachment; filename=" + dataset + "-" + LocalDate.now() + ".csv");
