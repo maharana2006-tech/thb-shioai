@@ -85,6 +85,14 @@ END $$;
 INTEGRATION_TESTS=1 mvn test -Dtest=MigrationsFreshDbIntegrationTest
 ```
 
+## Reversal reference
+
+If you need to roll back a migration (canary / staging surgical fix), see
+[docs/migration-rollback.md](./migration-rollback.md) — a snippet per
+current migration + the operator SOP. The default preference remains
+roll-forward with a NEW migration that inverts the change; manual
+reversal is only for emergency windows.
+
 ## Long-term direction
 
 The "proper" fix is to make Flyway the sole schema authority — every table gets its `CREATE TABLE ...` inside a Flyway migration, and `spring.jpa.hibernate.ddl-auto` moves to `validate`. That requires either:

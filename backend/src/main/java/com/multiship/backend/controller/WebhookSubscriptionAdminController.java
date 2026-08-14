@@ -1,6 +1,7 @@
 package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.ApiResponse;
+import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.ExternalWebhookSubscriptionDTO;
 import com.multiship.backend.model.ExternalWebhookSubscription;
 import com.multiship.backend.repository.ExternalWebhookSubscriptionRepository;
@@ -68,8 +69,18 @@ public class WebhookSubscriptionAdminController {
 
         ExternalWebhookSubscription entity;
         if (body.getId() != null) {
+            // Sprint 51 AC-L4 — 404 rather than 400 on unknown id so
+            // callers can distinguish "your payload is bad" (400) from
+            // "the row you referenced does not exist" (404). Cross-tenant
+            // mismatch — the update body targets an id owned by a
+            // different api_key — returns 403 CROSS_TENANT_ACCESS_DENIED
+            // so ops sees the wire-crossing signal even at the admin path.
             entity = subscriptionRepo.findById(body.getId()).orElse(null);
-            if (entity == null) return bad("subscription not found");
+            if (entity == null) return notFound();
+            if (entity.getApiKeyId() != null
+                    && !entity.getApiKeyId().equals(body.getApiKeyId())) {
+                return crossTenant();
+            }
         } else {
             entity = new ExternalWebhookSubscription();
             entity.setCreatedAt(LocalDateTime.now());
@@ -103,8 +114,24 @@ public class WebhookSubscriptionAdminController {
     }
 
     private static <T> ResponseEntity<ApiResponse<T>> bad(String message) {
+        // Sprint 51 AC-M2 — was the string literal "VALIDATION_FAILED"
+        // (not in the ErrorCode enum); now the canonical VALIDATION_ERROR.
         return ResponseEntity.badRequest().body(ApiResponse.<T>builder()
                 .status("error").code(HttpStatus.BAD_REQUEST.value())
-                .message(message).errorCode("VALIDATION_FAILED").build());
+                .message(message).errorCode(ErrorCode.VALIDATION_ERROR.name()).build());
+    }
+
+    private static <T> ResponseEntity<ApiResponse<T>> notFound() {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.<T>builder()
+                .status("error").code(HttpStatus.NOT_FOUND.value())
+                .message("subscription not found")
+                .errorCode(ErrorCode.WEBHOOK_SUBSCRIPTION_NOT_FOUND.name()).build());
+    }
+
+    private static <T> ResponseEntity<ApiResponse<T>> crossTenant() {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ApiResponse.<T>builder()
+                .status("error").code(HttpStatus.FORBIDDEN.value())
+                .message("subscription belongs to a different API key")
+                .errorCode(ErrorCode.CROSS_TENANT_ACCESS_DENIED.name()).build());
     }
 }

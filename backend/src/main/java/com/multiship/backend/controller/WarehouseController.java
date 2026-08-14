@@ -49,10 +49,12 @@ public class WarehouseController {
             @RequestParam(defaultValue = "code") String sortBy,
             @RequestParam(defaultValue = "ASC") String sortDirection,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "25") int size) {
+            // Sprint 51 AC-L1 — use PaginationDefaults for consistent size handling.
+            @RequestParam(defaultValue = com.multiship.backend.common.PaginationDefaults.DEFAULT_SIZE_STR) int size) {
         WarehouseListFilters filters = WarehouseListFilters.builder()
                 .search(search).ownerType(ownerType).ownerClientCode(ownerClientCode).active(active)
-                .sortBy(sortBy).sortDirection(sortDirection).page(page).size(size)
+                .sortBy(sortBy).sortDirection(sortDirection).page(page)
+                .size(com.multiship.backend.common.PaginationDefaults.clamp(size))
                 .build();
         ApiResponse<PageResponseDTO<WarehouseDTO>> response = warehouseService.listWarehouses(filters);
         return ResponseEntity.status(response.getCode()).body(response);

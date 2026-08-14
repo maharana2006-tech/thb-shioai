@@ -1,6 +1,8 @@
 package com.multiship.backend.service.external;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.multiship.backend.model.ExternalWebhookDelivery;
 import com.multiship.backend.model.ExternalWebhookDelivery.Status;
 import com.multiship.backend.model.ExternalWebhookSubscription;
@@ -16,7 +18,9 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -69,17 +73,49 @@ public class ExternalWebhookDispatcher {
     private final RestClient sharedRestClient = HttpClients.newBuilder().build();
 
     /**
+     * Sprint 51 BP-M1 — 60s cache on the subscription lookup. Every label
+     * generation on the hot path fires a LABEL_GENERATED event; each event
+     * previously hit the DB with {@code findByEventAndActiveTrue} — a full
+     * table scan on a table that grows with subscription count × tenant
+     * count. Cache keyed on (event, apiKeyId) folds duplicate lookups
+     * inside the 60s window into one query. Subscription add / remove is
+     * infrequent (admin action, rare) so the 60s eviction window is well
+     * inside the operator's tolerance for propagation.
+     */
+    private static final Duration SUBSCRIPTION_CACHE_TTL = Duration.ofSeconds(60);
+    private static final int SUBSCRIPTION_CACHE_MAX_SIZE = 10_000;
+    private final Cache<SubscriptionCacheKey, List<ExternalWebhookSubscription>> subscriptionCache =
+            Caffeine.newBuilder()
+                    .maximumSize(SUBSCRIPTION_CACHE_MAX_SIZE)
+                    .expireAfterWrite(SUBSCRIPTION_CACHE_TTL)
+                    .build();
+
+    private record SubscriptionCacheKey(EventType event, Long apiKeyId) {}
+
+    /**
      * Broadcast an event to every active subscription. When
      * {@code apiKeyIdFilter} is non-null, only subscriptions owned by
      * that API key fire — typically the caller who just generated a
      * label. When null, every active subscription for the event fires.
+     *
+     * <p>Sprint 51 BP-M1 — the api-key-scoped path uses the composite
+     * (event, active, api_key_id) index via
+     * {@link ExternalWebhookSubscriptionRepository#findByEventAndApiKeyIdAndActiveTrue}
+     * instead of full-scanning the table and filtering in-JVM. The unscoped
+     * fan-out (apiKeyIdFilter=null) still falls through to the platform-
+     * wide query — those broadcasts are already rare (ops-triggered) so
+     * they don't warrant the same optimisation.
      */
     @Async
     public void fire(EventType event, Long apiKeyIdFilter, Map<String, Object> payload) {
         try {
             String body = objectMapper.writeValueAsString(payload);
-            for (ExternalWebhookSubscription sub : subscriptionRepo.findByEventAndActiveTrue(event)) {
-                if (apiKeyIdFilter != null && !apiKeyIdFilter.equals(sub.getApiKeyId())) continue;
+            List<ExternalWebhookSubscription> subs = subscriptionCache.get(
+                    new SubscriptionCacheKey(event, apiKeyIdFilter),
+                    k -> k.apiKeyId() == null
+                            ? subscriptionRepo.findByEventAndActiveTrue(k.event())
+                            : subscriptionRepo.findByEventAndApiKeyIdAndActiveTrue(k.event(), k.apiKeyId()));
+            for (ExternalWebhookSubscription sub : subs) {
                 deliverOne(sub, event, body);
             }
         } catch (Exception ex) {

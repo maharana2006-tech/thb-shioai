@@ -15,6 +15,9 @@ const PIN_KEY = 'multiship_nav_pinned'
  */
 export default function WorkspaceLayout() {
   const [pinned, setPinned] = useState(() => localStorage.getItem(PIN_KEY) === '1')
+  // Sprint 51 FE-M5 — mobile drawer open state. Not persisted; the drawer
+  // is a one-off overlay per navigation, not a preference.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   const togglePin = () => {
     setPinned((cur) => {
@@ -29,9 +32,17 @@ export default function WorkspaceLayout() {
       <div className="fixed inset-0 print:hidden">
         <BrandBackdrop variant="light" />
       </div>
-      <Sidebar pinned={pinned} onTogglePin={togglePin} />
-      <div className={`relative transition-[margin] duration-200 ease-out print:ml-0 ${pinned ? 'ml-56' : 'ml-16'}`}>
-        <WorkspaceHeader />
+      <Sidebar
+        pinned={pinned}
+        onTogglePin={togglePin}
+        mobileOpen={mobileNavOpen}
+        onMobileClose={() => setMobileNavOpen(false)}
+      />
+      {/* Sprint 51 FE-M5 — content column starts full-bleed on <md (drawer
+          is an overlay, not a permanent rail) and re-inherits the 56/64
+          margin on md+. */}
+      <div className={`relative transition-[margin] duration-200 ease-out print:ml-0 ml-0 ${pinned ? 'md:ml-56' : 'md:ml-16'}`}>
+        <WorkspaceHeader onOpenMobileNav={() => setMobileNavOpen(true)} />
         <main className="px-4 py-5 sm:px-6 lg:px-8">
           {/* Sprint 49 Tier 4 Fix 1 — route-scoped boundary so a broken
               /orders (or any route) doesn't kill the sidebar + topbar

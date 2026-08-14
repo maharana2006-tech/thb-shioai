@@ -50,6 +50,11 @@ class MigrationsFreshDbIntegrationTest {
             "V6__sprint50_tier1_B_data_model.sql",
             "V7__post_audit_indexes.sql",
             "V8__post_audit_foreign_keys.sql",
+            // Sprint 51: token version + timestamptz + auth-audit FKs + legacy uq cleanup.
+            "V9__sprint51_t2_token_version.sql",
+            "V10__timestamptz.sql",
+            "V11__auth_audit_fks.sql",
+            "V13__cleanup_legacy_unique_constraints.sql",
     };
 
     protected static final PostgreSQLContainer<?> postgres;

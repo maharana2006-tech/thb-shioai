@@ -24,14 +24,17 @@ import CustomsProfileModal from './modals/CustomsProfileModal'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import Select from './workspace/Select'
-
-const isAdmin = () => (localStorage.getItem('multiship_role') || '').toUpperCase() === 'ADMIN'
+import { useAppSession } from '../hooks/useAppSession'
+import { normalizeRole } from '../utils/roles'
 
 const filterLabelClass =
   'mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
 
 export default function ClientsPage() {
-  const admin = isAdmin()
+  // Sprint 51 FE-L1 — read from the session store instead of localStorage
+  // on every render; the store is cached + change-notified.
+  const { role } = useAppSession()
+  const admin = normalizeRole(role) === 'ADMIN'
   const navigate = useNavigate()
 
   const [clients, setClients] = useState<Client[]>([])

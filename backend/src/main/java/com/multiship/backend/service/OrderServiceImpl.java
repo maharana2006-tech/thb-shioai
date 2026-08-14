@@ -18,6 +18,8 @@ import com.multiship.backend.model.OrderLine;
 import com.multiship.backend.repository.OrderRepository;
 import com.multiship.backend.repository.CarrierConfigRepository;
 import com.multiship.backend.repository.OrderRawCodesRepository;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +27,7 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -63,6 +66,26 @@ public class OrderServiceImpl implements OrderService {
 
     private static final Set<String> VALID_STATUSES = Set.of("PENDING", "GENERATED", "ERROR");
     private static final Set<String> VALID_RESOLUTIONS = Set.of("READY", "NEEDS_DETAILS", "CHOOSE_ACCOUNT", "CLIENT_MISSING");
+
+    /**
+     * Sprint 51 BP-M8 — 60s cache on the dashboard aggregation queries.
+     * {@code /orders/queue-stats} and the dashboard {@code /orders/stats}
+     * fire on every page load; when 30 tabs poll every 30s the same
+     * aggregation runs 60×/min per tenant. Cache key is the tenant scope
+     * (empty string for platform operators) so multi-tenant deployments
+     * share nothing. TTL kept short (60s) so a fresh label surfaces on
+     * the next poll — dashboards are eventually-consistent by design.
+     */
+    private static final Duration STATS_CACHE_TTL = Duration.ofSeconds(60);
+    private static final int STATS_CACHE_MAX_SIZE = 10_000;
+    private final Cache<String, List<Object[]>> queueStatsCache = Caffeine.newBuilder()
+            .maximumSize(STATS_CACHE_MAX_SIZE)
+            .expireAfterWrite(STATS_CACHE_TTL)
+            .build();
+    private final Cache<String, List<Object[]>> cityDistCache = Caffeine.newBuilder()
+            .maximumSize(STATS_CACHE_MAX_SIZE)
+            .expireAfterWrite(STATS_CACHE_TTL)
+            .build();
 
     // ===== UNIFIED LIST =====
 
@@ -165,10 +188,12 @@ public class OrderServiceImpl implements OrderService {
     @Transactional(readOnly = true)
     public ApiResponse<Map<String, Long>> getQueueStats() {
         // Sprint 50 Tier 0.5 PR E — scoped caller sees only own tenant's queue.
-        Object[] row = tenantScope.resolveScope()
+        // Sprint 51 BP-M8 — 60s Caffeine cache absorbs dashboard poll spikes.
+        Optional<String> scope = tenantScope.resolveScope();
+        String cacheKey = scope.orElse("");
+        Object[] row = queueStatsCache.get(cacheKey, k -> scope
                 .map(orderRepository::getQueueStatsForTenant)
-                .orElseGet(orderRepository::getQueueStats)
-                .get(0);
+                .orElseGet(orderRepository::getQueueStats)).get(0);
 
         Map<String, Long> stats = new LinkedHashMap<>();
         stats.put("ready", toLong(row[0]));
@@ -399,9 +424,13 @@ public class OrderServiceImpl implements OrderService {
 
         Object[] row = results.get(0);
 
-        List<Object[]> cityData = scope
+        // Sprint 51 BP-M8 — cached city distribution (60s) so dashboards
+        // polling every 30s don't repeatedly re-run a GROUP BY on the
+        // largest table.
+        String cityCacheKey = scope.orElse("");
+        List<Object[]> cityData = cityDistCache.get(cityCacheKey, k -> scope
                 .map(orderRepository::getCityDistributionForTenant)
-                .orElseGet(orderRepository::getCityDistribution);
+                .orElseGet(orderRepository::getCityDistribution));
         List<Map<String, Object>> cityDistribution = cityData.stream()
                 .map(cityRow -> {
                     Map<String, Object> cityMap = new LinkedHashMap<>();

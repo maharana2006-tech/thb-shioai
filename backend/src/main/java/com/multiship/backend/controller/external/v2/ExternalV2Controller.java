@@ -14,6 +14,7 @@ import com.multiship.backend.service.external.ExternalApiException;
 import com.multiship.backend.service.external.ExternalApiService;
 import com.multiship.backend.service.external.IdempotencyService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -40,6 +41,11 @@ import java.util.Map;
  * {@code msk_...} API key) with role {@code API}. Both produce an
  * {@link ApiKeyPrincipal} downstream thanks to the Sprint 46
  * JwtAuthenticationFilter rehydration.
+ *
+ * <p>Sprint 51 AC-M1 — every endpoint carries an {@code @ApiResponses}
+ * block enumerating the concrete HTTP status + errorCode strings it can
+ * return. This is the OpenAPI contract used by generated SDKs and the
+ * /swagger-ui page.
  */
 @Tag(name = "Public Shipping API v2",
         description = "Sprint 46 — Idempotent shipment ops + multi-carrier rate-shop + pickup/close-out/landed-cost + DG preview")
@@ -68,6 +74,16 @@ public class ExternalV2Controller {
     // ================================================================
 
     @Operation(summary = "Rate quote — single carrier (idempotent via Idempotency-Key)")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Rates retrieved"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR / UNIT_REQUIRED / CURRENCY_REQUIRED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "UNAUTHORIZED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "FORBIDDEN — API key lacks the RATES scope"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "IDEMPOTENCY_IN_PROGRESS"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "SERVICE_NOT_ALLOWED / PACKAGE_NOT_ALLOWED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "CARRIER_FAILURE")
+    })
     @PostMapping("/rates")
     @RequiresScope(ApiKeyScope.RATES)
     public ResponseEntity<ApiResponse<ExternalRateResponse>> rates(
@@ -87,6 +103,17 @@ public class ExternalV2Controller {
     }
 
     @Operation(summary = "Create a shipment (idempotent via Idempotency-Key)")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "Shipment created"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR / UNIT_REQUIRED / CURRENCY_REQUIRED / MARKUP_REQUIRED_FOR_CLIENT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "UNAUTHORIZED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "FORBIDDEN — API key lacks the SHIPMENTS scope"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "IDEMPOTENCY_IN_PROGRESS"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "SERVICE_NOT_ALLOWED / PACKAGE_NOT_ALLOWED / SHIP_TO_DENIED / CUSTOMS_REQUIRED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "API_KEY_RATE_LIMITED / TENANT_RATE_LIMITED / CARRIER_RATE_LIMITED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "CARRIER_FAILURE / CLIENT_CARRIER_AUTH_FAILED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503", description = "IDEMPOTENCY_UNAVAILABLE — Redis outage on a money-touching endpoint (fail-closed)")
+    })
     @PostMapping("/shipments")
     @RequiresScope(ApiKeyScope.SHIPMENTS)
     public ResponseEntity<ApiResponse<ExternalShipmentResponse>> create(
@@ -117,6 +144,14 @@ public class ExternalV2Controller {
     }
 
     @Operation(summary = "Get tracking for a shipment")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Tracking retrieved"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "UNAUTHORIZED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "FORBIDDEN / CROSS_TENANT_ACCESS_DENIED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "ORDER_NOT_FOUND"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "CARRIER_FAILURE")
+    })
     @GetMapping("/shipments/{shipmentId}/tracking")
     @RequiresScope(ApiKeyScope.TRACKING)
     public ResponseEntity<ApiResponse<ExternalTrackingResponse>> tracking(
@@ -129,6 +164,18 @@ public class ExternalV2Controller {
     }
 
     @Operation(summary = "Void a shipment (idempotent via Idempotency-Key)")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Shipment voided"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "UNAUTHORIZED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "FORBIDDEN / CROSS_TENANT_ACCESS_DENIED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "ORDER_NOT_FOUND"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "IDEMPOTENCY_IN_PROGRESS / LABEL_ALREADY_GENERATED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "BUSINESS_RULE_VIOLATION — carrier refuses (past pickup, delivered, ...)"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "CARRIER_FAILURE"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503", description = "IDEMPOTENCY_UNAVAILABLE — Redis outage (fail-closed)")
+    })
     @PostMapping("/shipments/{shipmentId}/void")
     @RequiresScope(ApiKeyScope.VOID)
     public ResponseEntity<ApiResponse<Map<String, Object>>> voidShipment(
@@ -150,6 +197,14 @@ public class ExternalV2Controller {
     }
 
     @Operation(summary = "Validate an address")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Validation result"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "UNAUTHORIZED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "FORBIDDEN — API key lacks the ADDRESSES scope"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "API_KEY_RATE_LIMITED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "CARRIER_FAILURE")
+    })
     @PostMapping("/addresses/validate")
     @RequiresScope(ApiKeyScope.ADDRESSES)
     public ResponseEntity<ApiResponse<ExternalAddressValidationResponse>> validate(
@@ -167,6 +222,15 @@ public class ExternalV2Controller {
     // ================================================================
 
     @Operation(summary = "Multi-carrier rate-shop (idempotent via Idempotency-Key)")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Rate-shop matrix"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR / UNIT_REQUIRED / CURRENCY_REQUIRED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "UNAUTHORIZED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "FORBIDDEN — API key lacks the RATES scope"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "IDEMPOTENCY_IN_PROGRESS"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "CARRIER_FAILURE — all carriers failed")
+    })
     @PostMapping("/rate-shop")
     @RequiresScope(ApiKeyScope.RATES)
     public ResponseEntity<ApiResponse<RateShopResponseDTO>> rateShop(
@@ -186,6 +250,16 @@ public class ExternalV2Controller {
     // ================================================================
 
     @Operation(summary = "Schedule a courier pickup (idempotent via Idempotency-Key)")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Pickup scheduled"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "UNAUTHORIZED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "FORBIDDEN — API key lacks the PICKUPS scope"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "IDEMPOTENCY_IN_PROGRESS"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "CARRIER_FAILURE"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503", description = "IDEMPOTENCY_UNAVAILABLE — Redis outage (fail-closed)")
+    })
     @PostMapping("/pickups")
     @RequiresScope(ApiKeyScope.PICKUPS)
     public ResponseEntity<ApiResponse<PickupResponseDTO>> schedulePickup(
@@ -203,6 +277,17 @@ public class ExternalV2Controller {
     }
 
     @Operation(summary = "Close out the day's shipments at a carrier (idempotent via Idempotency-Key)")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Close-out completed"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "UNAUTHORIZED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "FORBIDDEN — API key lacks the PICKUPS scope"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "IDEMPOTENCY_IN_PROGRESS"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "BUSINESS_RULE_VIOLATION — already closed / empty batch"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "API_KEY_RATE_LIMITED / CARRIER_RATE_LIMITED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "CARRIER_FAILURE"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503", description = "IDEMPOTENCY_UNAVAILABLE")
+    })
     @PostMapping("/close-out")
     @RequiresScope(ApiKeyScope.PICKUPS)
     public ResponseEntity<ApiResponse<ManifestResponseDTO>> closeOut(
@@ -224,6 +309,15 @@ public class ExternalV2Controller {
     // ================================================================
 
     @Operation(summary = "Estimate landed cost (freight + duties + taxes + fees)")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Estimate returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR / CURRENCY_REQUIRED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "UNAUTHORIZED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "FORBIDDEN — API key lacks the LANDED_COST scope"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "BUSINESS_RULE_VIOLATION — unsupported origin/destination pair"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "API_KEY_RATE_LIMITED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "CARRIER_FAILURE — upstream duty/tax service failed")
+    })
     @PostMapping("/landed-cost")
     @RequiresScope(ApiKeyScope.LANDED_COST)
     public ResponseEntity<ApiResponse<LandedCostResponseDTO>> landedCost(
@@ -238,6 +332,13 @@ public class ExternalV2Controller {
                     "Returns the same shape as the internal shipment validator; " +
                     "a valid response means the payload would pass through " +
                     "createShipment without a DG-related failure.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Preview complete"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "UNAUTHORIZED"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "FORBIDDEN — API key lacks the SHIPMENTS scope"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "API_KEY_RATE_LIMITED")
+    })
     @PostMapping("/dangerous-goods/validate")
     @RequiresScope(ApiKeyScope.SHIPMENTS)
     public ResponseEntity<ApiResponse<Map<String, Object>>> validateDg(

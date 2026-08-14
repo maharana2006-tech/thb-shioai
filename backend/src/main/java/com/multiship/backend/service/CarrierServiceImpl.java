@@ -33,6 +33,7 @@ import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.service.carriers.exceptions.CarrierRateLimitException;
 import com.multiship.backend.service.resolution.ShipmentResolutionException;
 import com.multiship.backend.service.resolution.ShipmentResolutionService;
+import io.micrometer.core.annotation.Timed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -288,6 +289,7 @@ public class CarrierServiceImpl implements CarrierService {
     // is auto-rolled-back rather than exhausting the pool.
     @Override
     @Transactional
+    @Timed(value = "carrier.generateLabel", description = "Label generation end-to-end (resolve → carrier call → persist).")
     public ApiResponse<LabelGenerationResponse> generateLabel(Long orderNo, UserDetails userDetails, String idempotencyKey, Long accountId) {
         // Back-compat overload — default useHouseAccount=false so callers that
         // don't opt in never silently bill the platform account (Sprint 50
@@ -297,6 +299,8 @@ public class CarrierServiceImpl implements CarrierService {
 
     @Override
     @Transactional
+    @Timed(value = "carrier.generateLabel", description = "Label generation end-to-end (resolve → carrier call → persist).",
+            extraTags = {"variant", "with-house-account"})
     public ApiResponse<LabelGenerationResponse> generateLabel(Long orderNo, UserDetails userDetails,
                                                               String idempotencyKey, Long accountId,
                                                               boolean useHouseAccount) {
@@ -563,6 +567,7 @@ public class CarrierServiceImpl implements CarrierService {
     // application.properties bounds the worst case.
     @Override
     @org.springframework.transaction.annotation.Transactional
+    @Timed(value = "carrier.generateManualLabel", description = "Manual (ad-hoc) label generation.")
     public ApiResponse<LabelGenerationResponse> generateManualLabel(
             com.multiship.backend.dto.ManualShipmentRequest req,
             org.springframework.security.core.userdetails.UserDetails user) {

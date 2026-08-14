@@ -17,6 +17,7 @@ import {
 } from 'react-icons/fi'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { clientService, type Client } from '../api/clientService'
+import { isAbortError } from '../api/apiClient'
 import {
   customsProfileService,
   type CustomsProfile,
@@ -134,7 +135,10 @@ export default function ImporterBrokerPage() {
       .then((r) => {
         if (!cancelled) setClients(r.data?.content ?? [])
       })
-      .catch(() => {})
+      // Sprint 51 FE-L3 — log instead of hiding secondary load failures.
+      .catch((e) => {
+        if (!isAbortError(e)) console.debug('[secondary load] listClients', e)
+      })
     return () => {
       cancelled = true
     }
@@ -197,7 +201,10 @@ export default function ImporterBrokerPage() {
       .then((s) => {
         if (!cancelled) setStats(s)
       })
-      .catch(() => {})
+      // Sprint 51 FE-L3 — log instead of hiding stats-fetch failures.
+      .catch((e) => {
+        if (!isAbortError(e)) console.debug('[secondary load] customsProfile stats', e)
+      })
     return () => {
       cancelled = true
     }

@@ -43,7 +43,9 @@ class ExternalWebhookDispatcherTest {
 
     @Test
     void fire_noSubscriptions_isNoOp() {
-        when(subRepo.findByEventAndActiveTrue(EventType.LABEL_GENERATED))
+        // Sprint 51 BP-M1 — dispatcher now scopes the SELECT by api_key_id
+        // when the caller passes one; empty list still short-circuits.
+        when(subRepo.findByEventAndApiKeyIdAndActiveTrue(EventType.LABEL_GENERATED, 42L))
                 .thenReturn(List.of());
         dispatcher.fire(EventType.LABEL_GENERATED, 42L, Map.of("orderNo", 1));
         verifyNoInteractions(deliveryRepo);
@@ -51,19 +53,16 @@ class ExternalWebhookDispatcherTest {
 
     @Test
     void fire_perApiKeyFiltering_onlyFiresMatchingSubs() {
+        // Sprint 51 BP-M1 — post-fix the DB-side filter is authoritative
+        // (composite index (event, active, api_key_id) via
+        // findByEventAndApiKeyIdAndActiveTrue). Return ONLY the caller's
+        // subscription; the dispatcher no longer needs an in-JVM filter.
         ExternalWebhookSubscription mine = subscription(1L, 42L, "https://mine.example");
-        ExternalWebhookSubscription other = subscription(2L, 99L, "https://other.example");
-        when(subRepo.findByEventAndActiveTrue(EventType.LABEL_GENERATED))
-                .thenReturn(List.of(mine, other));
+        when(subRepo.findByEventAndApiKeyIdAndActiveTrue(EventType.LABEL_GENERATED, 42L))
+                .thenReturn(List.of(mine));
 
-        // Trigger the dispatch. We don't have a real HTTP client wired,
-        // so the delivery loop will bail out inside the retry attempts;
-        // the important assertion is that only mine's dispatch was
-        // attempted (i.e. exactly one delivery row saved for sub 1).
         dispatcher.fire(EventType.LABEL_GENERATED, 42L, Map.of("shipmentId", 1000));
 
-        // Both attempts land in deliveryRepo.save; a save for sub 2 would
-        // be a leak of the per-apiKey filter.
         verify(deliveryRepo, atLeastOnce()).save(argThat(d -> d.getSubscriptionId() == 1L));
         verify(deliveryRepo, never()).save(argThat(d -> d.getSubscriptionId() == 2L));
     }

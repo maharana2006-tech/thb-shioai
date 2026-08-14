@@ -22,14 +22,16 @@ import type { SettingsOutletContext } from './layout/SettingsLayout'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'
-
-const isAdmin = () => (localStorage.getItem('multiship_role') || '').toUpperCase() === 'ADMIN'
+import { useAppSession } from '../hooks/useAppSession'
+import { normalizeRole } from '../utils/roles'
 
 const filterLabelClass =
   'mb-1 flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400'
 
 export default function WarehousesPage() {
-  const admin = isAdmin()
+  // Sprint 51 FE-L1 — replace per-render localStorage read.
+  const { role } = useAppSession()
+  const admin = normalizeRole(role) === 'ADMIN'
 
   const [rows, setRows] = useState<Warehouse[]>([])
   const [loading, setLoading] = useState(true)

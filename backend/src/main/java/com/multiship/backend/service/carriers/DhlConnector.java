@@ -189,7 +189,11 @@ public class DhlConnector implements CarrierConnector {
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             int status = ex.getStatusCode().value();
             if (status == 401 || status == 403) {
-                log.warn("DHL rejected credentials (HTTP {}): {}", status, ex.getResponseBodyAsString());
+                // Sprint 51 BS-L1 — scrub credentials before logging; the DHL
+                // auth-reject body can echo the presented clientId verbatim.
+                String safeBody = LogRedaction.redactSecrets(
+                        ex.getResponseBodyAsString(), clientId, clientSecret);
+                log.warn("DHL rejected credentials (HTTP {}): {}", status, safeBody);
                 return buildFallbackToken(clientId, clientSecret);
             }
             // 4xx-except-auth or 5xx means the auth was accepted; take it.

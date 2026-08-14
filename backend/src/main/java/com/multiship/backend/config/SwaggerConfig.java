@@ -5,11 +5,28 @@ import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
+import org.springdoc.core.models.GroupedOpenApi;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
 public class SwaggerConfig {
+
+    /**
+     * Sprint 51 AC-M7 — dedicated OpenAPI group for the public external v2
+     * surface. Backs the snapshot-diff regression test
+     * ({@code ExternalV2OpenApiSnapshotTest}) that pins the wire contract
+     * against unintended shape changes. Also lets integrators pull just the
+     * v2 surface via {@code /v3/api-docs/external-v2} without the internal
+     * admin endpoints noise.
+     */
+    @Bean
+    public GroupedOpenApi externalV2GroupedOpenApi() {
+        return GroupedOpenApi.builder()
+                .group("external-v2")
+                .pathsToMatch("/api/v2/**")
+                .build();
+    }
 
     private static final String API_DESCRIPTION = """
             Multi-tenant shipping label management API.

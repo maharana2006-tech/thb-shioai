@@ -186,6 +186,12 @@ class AdminUserServiceTest {
 
     @Test
     void list_filtersByRoleClientAndActiveOnly() {
+        // Sprint 51 BP-L4 — filters push to the DB via a Specification +
+        // PageRequest; the service no longer scans in-JVM. This test now
+        // asserts the service *asks* the repo for a paged filtered slice,
+        // and returns whatever the repo hands back. See
+        // AdminUserServicePaginationTest for the size-clamp / paging
+        // semantics coverage.
         User a = User.builder().id(1L).username("admin1").email("a@x").fullName("A")
                 .role("ADMIN").build();
         User b = User.builder().id(2L).username("acmeuser").email("b@acme").fullName("B")
@@ -193,11 +199,32 @@ class AdminUserServiceTest {
         User c = User.builder().id(3L).username("betauser").email("c@beta").fullName("C")
                 .role("USER").clientCode("BETA")
                 .deactivatedAt(LocalDateTime.now()).build();
-        when(userRepo.findAll()).thenReturn(List.of(a, b, c));
+        when(userRepo.findAll(
+                org.mockito.ArgumentMatchers.<org.springframework.data.jpa.domain.Specification<User>>any(),
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(a, b, c)));
 
-        assertEquals(1, service.list("acme", null, null, null).size());
-        assertEquals(2, service.list(null, "USER", null, null).size());
-        assertEquals(1, service.list(null, "USER", "ACME", null).size());
-        assertEquals(2, service.list(null, null, null, true).size()); // c is deactivated
+        assertEquals(3, service.list("acme", null, null, null).size());
+        assertEquals(3, service.list(null, "USER", null, null).size());
+        assertEquals(3, service.list(null, "USER", "ACME", null).size());
+        assertEquals(3, service.list(null, null, null, true).size());
+    }
+
+    @Test
+    void list_clampsSizeToMax() {
+        when(userRepo.findAll(
+                org.mockito.ArgumentMatchers.<org.springframework.data.jpa.domain.Specification<User>>any(),
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of()));
+
+        // Ask for a huge page — the service must clamp to MAX_PAGE_SIZE.
+        service.list(null, null, null, null, 0, 10_000);
+
+        ArgumentCaptor<org.springframework.data.domain.Pageable> cap =
+                ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        verify(userRepo).findAll(
+                org.mockito.ArgumentMatchers.<org.springframework.data.jpa.domain.Specification<User>>any(),
+                cap.capture());
+        assertEquals(AdminUserService.MAX_PAGE_SIZE, cap.getValue().getPageSize());
     }
 }

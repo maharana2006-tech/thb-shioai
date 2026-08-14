@@ -44,12 +44,13 @@ public class CustomsProfilesController {
             @RequestParam(defaultValue = "client") String sortBy,
             @RequestParam(defaultValue = "ASC") String sortDirection,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "25") int size) {
+            // Sprint 51 AC-L1 — use PaginationDefaults for consistent size handling.
+            @RequestParam(defaultValue = com.multiship.backend.common.PaginationDefaults.DEFAULT_SIZE_STR) int size) {
         CustomsProfileFilters filters = CustomsProfileFilters.builder()
                 .search(search).clientCode(clientCode).carrier(carrier).broker(broker)
                 .countries(countries)
                 .sortBy(sortBy).sortDirection(sortDirection)
-                .page(page).size(size)
+                .page(page).size(com.multiship.backend.common.PaginationDefaults.clamp(size))
                 .build();
         ApiResponse<PageResponseDTO<ClientCustomsProfileDTO>> r = service.listPaginated(filters);
         return ResponseEntity.status(r.getCode()).body(r);
@@ -67,7 +68,7 @@ public class CustomsProfilesController {
     @Operation(summary = "Export every filtered profile as CSV",
             description = "Same filters as GET /customs-profiles; ignores page/size and streams the full result.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping(value = "/export.csv", produces = "text/csv;charset=UTF-8")
+    @GetMapping(value = "/export.csv", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
     public ResponseEntity<byte[]> exportCsv(
             @RequestParam(required = false) String search,
             @RequestParam(required = false) String clientCode,
@@ -86,7 +87,7 @@ public class CustomsProfilesController {
         byte[] body = ("﻿" + csv).getBytes(StandardCharsets.UTF_8);
         String filename = "customs-profiles-" + LocalDate.now() + ".csv";
         return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("text/csv;charset=UTF-8"))
+                .contentType(MediaType.parseMediaType(com.multiship.backend.common.CsvMediaType.CSV_UTF8))
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
                 .body(body);
     }

@@ -129,11 +129,18 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
     """, nativeQuery = true)
     List<Object[]> getDashboardStatsForTenant(@Param("tenantId") String tenantId);
 
+    // Sprint 51 BP-M8 — cap the city-distribution result set. Pre-BP-M8
+    // both queries emitted every distinct shipto_city (thousands on a
+    // populated platform), transferred them all to Java, and rendered the
+    // top few in the dashboard chart. LIMIT 25 keeps the "top cities"
+    // chart intact while dropping ~99% of the row transfer + Java-side
+    // aggregation.
     @Query(value = """
         SELECT shipto_city, COUNT(*) as count
         FROM label_batch
         GROUP BY shipto_city
         ORDER BY count DESC
+        LIMIT 25
     """, nativeQuery = true)
     List<Object[]> getCityDistribution();
 
@@ -144,6 +151,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
         WHERE UPPER(COALESCE(tenant_id, cust_no)) = UPPER(:tenantId)
         GROUP BY shipto_city
         ORDER BY count DESC
+        LIMIT 25
     """, nativeQuery = true)
     List<Object[]> getCityDistributionForTenant(@Param("tenantId") String tenantId);
 
