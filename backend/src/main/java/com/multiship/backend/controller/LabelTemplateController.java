@@ -64,12 +64,13 @@ public class LabelTemplateController {
             @RequestParam(defaultValue = "updatedAt") String sortBy,
             @RequestParam(defaultValue = "DESC") String sortDirection,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "25") int size) {
+            // Sprint 51 AC-L1 — use PaginationDefaults for consistent size handling.
+            @RequestParam(defaultValue = com.multiship.backend.common.PaginationDefaults.DEFAULT_SIZE_STR) int size) {
 
         String safeSortBy = SORTABLE.contains(sortBy) ? sortBy : "updatedAt";
         Sort.Direction dir = "ASC".equalsIgnoreCase(sortDirection)
                 ? Sort.Direction.ASC : Sort.Direction.DESC;
-        int safeSize = Math.min(Math.max(size, 1), 100);
+        int safeSize = com.multiship.backend.common.PaginationDefaults.clamp(size);
         int safePage = Math.max(page, 0);
 
         Page<LabelTemplate> result = labelTemplateService.list(

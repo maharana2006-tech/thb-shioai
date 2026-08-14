@@ -152,7 +152,7 @@ public class ScheduledReportController {
 
     @Operation(summary = "Download a generated report's CSV")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping(value = "/generated/{id}/download", produces = "text/csv")
+    @GetMapping(value = "/generated/{id}/download", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
     public void download(@PathVariable Long id, HttpServletResponse response) throws IOException {
         GeneratedReport gr = generatedRepo.findById(id).orElse(null);
         if (gr == null || gr.getCsvBytes() == null) {
@@ -162,7 +162,8 @@ public class ScheduledReportController {
         // Sprint 50 Tier 0.5 PR G — belt guard on loaded report so a
         // scoped USER can't download a foreign tenant's CSV by id.
         tenantScope.requireTenantMatch(gr.getTenantId());
-        response.setContentType("text/csv");
+        // Sprint 51 AC-L5 — canonical UTF-8 CSV content-type.
+        response.setContentType(com.multiship.backend.common.CsvMediaType.CSV_UTF8);
         response.setCharacterEncoding("UTF-8");
         response.setHeader("Content-Disposition", "attachment; filename=" + gr.getFilename());
         response.getOutputStream().write(gr.getCsvBytes());

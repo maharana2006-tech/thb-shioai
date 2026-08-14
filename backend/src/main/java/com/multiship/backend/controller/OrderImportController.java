@@ -208,13 +208,14 @@ public class OrderImportController {
     @Operation(summary = "Download the CSV template",
             description = "Public — the template is static schema (headers + one dummy row) " +
                     "and downloads via a browser <a href> that carries no Authorization header.")
-    @GetMapping(value = "/template.csv", produces = "text/csv")
+    @GetMapping(value = "/template.csv", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
     public ResponseEntity<byte[]> template() {
         byte[] csv = orderImportService.csvTemplate();
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "attachment; filename=\"order-import-template.csv\"")
-                .contentType(MediaType.parseMediaType("text/csv"))
+                // Sprint 51 AC-L5 — canonical UTF-8 CSV media type.
+                .contentType(MediaType.parseMediaType(com.multiship.backend.common.CsvMediaType.CSV_UTF8))
                 .body(csv);
     }
 

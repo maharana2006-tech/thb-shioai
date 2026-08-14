@@ -56,11 +56,13 @@ public class ClientController {
             @RequestParam(defaultValue = "code") String sortBy,
             @RequestParam(defaultValue = "ASC") String sortDirection,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            // Sprint 51 AC-L1 — align on PaginationDefaults (was 20 here).
+            @RequestParam(defaultValue = com.multiship.backend.common.PaginationDefaults.DEFAULT_SIZE_STR) int size) {
         com.multiship.backend.dto.ClientListFilters filters = com.multiship.backend.dto.ClientListFilters.builder()
                 .search(search).status(status).carrier(carrier).hasOrders(hasOrders)
                 .code(code).name(name).city(city)
-                .sortBy(sortBy).sortDirection(sortDirection).page(page).size(size)
+                .sortBy(sortBy).sortDirection(sortDirection).page(page)
+                .size(com.multiship.backend.common.PaginationDefaults.clamp(size))
                 .build();
         ApiResponse<PageResponseDTO<ClientDTO>> response = clientService.listClients(filters);
         return ResponseEntity.status(response.getCode()).body(response);
@@ -138,7 +140,7 @@ public class ClientController {
     @Operation(summary = "Export every filtered client as CSV",
             description = "Same filter/sort parameters as GET /clients; ignores page/size and streams the entire result set.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
-    @GetMapping(value = "/export.csv", produces = "text/csv;charset=UTF-8")
+    @GetMapping(value = "/export.csv", produces = com.multiship.backend.common.CsvMediaType.CSV_UTF8)
     public ResponseEntity<byte[]> exportClientsCsv(
             @RequestParam(required = false) String search,
             @RequestParam(required = false) String status,
@@ -160,7 +162,7 @@ public class ClientController {
         byte[] body = ("﻿" + csv).getBytes(StandardCharsets.UTF_8);
         String filename = "clients-" + LocalDate.now() + ".csv";
         return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("text/csv;charset=UTF-8"))
+                .contentType(MediaType.parseMediaType(com.multiship.backend.common.CsvMediaType.CSV_UTF8))
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
                 .body(body);
     }
