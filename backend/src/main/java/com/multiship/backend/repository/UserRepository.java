@@ -19,6 +19,10 @@ public interface UserRepository extends JpaRepository<User, Long> {
     /** Sprint 50 Tier 0.5 PR D — click-through email verification lookup. */
     Optional<User> findByEmailVerifyToken(String token);
 
+    /** Sprint 51 BS-M4 — forgot-password lookup. Case-insensitive so the
+     *  caller can't be defeated by an email with different casing. */
+    Optional<User> findByEmailIgnoreCase(String email);
+
     @Modifying
     @Query(value = """
         update users
