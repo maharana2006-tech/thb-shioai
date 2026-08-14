@@ -90,8 +90,20 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
 
   // Sprint 51 FE-M5 — on <md the sidebar behaves as an off-canvas
   // drawer: hidden by default, slides in from the left when mobileOpen,
-  // full 224px wide. On md+ it reverts to the desktop 64/224 rail.
-  const desktopWidth = pinned ? 'w-56' : 'w-16 hover:w-56 hover:shadow-[12px_0_40px_rgba(10,22,40,0.25)]'
+  // full 224px wide (the base `w-56` below). On md+ it reverts to the
+  // desktop 64/224 rail.
+  //
+  // These MUST stay `md:`-prefixed. Unprefixed `w-16` and the base
+  // `w-56` have identical specificity, so the winner is decided by
+  // stylesheet order, not by class order in the attribute — `w-56`
+  // always won and the rail stayed 224px wide while the content column
+  // moved to a 64px margin, i.e. the sidebar covered the page and the
+  // pin toggle looked dead. The `md:` variant sits in a media query
+  // that comes after the base utilities, so it wins cleanly; the hover
+  // peek beats it in turn on pseudo-class specificity.
+  const desktopWidth = pinned
+    ? 'md:w-56'
+    : 'md:w-16 md:hover:w-56 md:hover:shadow-[12px_0_40px_rgba(10,22,40,0.25)]'
   const mobileTranslate = mobileOpen ? 'translate-x-0' : '-translate-x-full'
 
   return (

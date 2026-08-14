@@ -17,6 +17,23 @@ export default defineConfig(({ mode }) => {
 
   return {
   plugins: [react()],
+  server: {
+    // FE-M1 dropped the runtime `${hostname}:8080` fallback so prod can't
+    // ship a dev assumption — correct, but it left BASE_URL as a relative
+    // `/api/v1` with nothing serving it in dev, so every call 404'd against
+    // the Vite server. This proxy is the dev half of that change: it
+    // forwards /api to the local backend, matching how prod fronts the API
+    // on the same origin. Bonus: requests become same-origin, so the auth
+    // and XSRF cookies stop being a cross-origin concern locally.
+    // Override the target with VITE_DEV_API_TARGET when the backend runs
+    // on another host or port.
+    proxy: {
+      '/api': {
+        target: process.env.VITE_DEV_API_TARGET || 'http://localhost:8080',
+        changeOrigin: false,
+      },
+    },
+  },
   build: {
     // Sprint 51 T6d (audit finding #15) — pull the biggest vendor libs
     // into their own chunks so:
