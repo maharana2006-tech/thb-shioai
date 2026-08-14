@@ -31,20 +31,51 @@ import java.time.Duration;
 public class TenantRateLimiter {
 
     private final int defaultPerMinute;
-    private final Cache<String, TokenBucket> buckets;
+    /**
+     * Sprint 51 BS-M2 — tighter budget for the AI endpoints. OpenAI-backed
+     * calls cost real dollars per hit, so a runaway loop by a single tenant
+     * has to be capped much lower than the general write budget. Bucket
+     * type is passed through {@link #tryAcquire(String, BucketType)}; the
+     * default bucket is preserved for the label + import paths.
+     */
+    private final int aiPerMinute;
+    private final Cache<String, TokenBucket> defaultBuckets;
+    private final Cache<String, TokenBucket> aiBuckets;
 
+    /**
+     * Test-friendly single-arg ctor — existing tests pass a tiny budget
+     * (e.g. 2) so the drain path is exercised. Uses a large AI budget so
+     * unrelated tests don't accidentally trip the AI limiter.
+     */
+    public TenantRateLimiter(int defaultPerMinute) {
+        this(defaultPerMinute, Integer.MAX_VALUE);
+    }
+
+    /** Spring wiring: budgets are property-driven. Sprint 51 BS-M2 added
+     *  the {@code ai-per-minute} bucket for the OpenAI-backed /api/v1/ai
+     *  endpoints. */
+    @org.springframework.beans.factory.annotation.Autowired
     public TenantRateLimiter(
-            @Value("${tenant.rate-limit.default-per-minute:100}") int defaultPerMinute) {
-        if (defaultPerMinute <= 0) {
+            @Value("${tenant.rate-limit.default-per-minute:100}") int defaultPerMinute,
+            @Value("${tenant.rate-limit.ai-per-minute:10}") int aiPerMinute) {
+        if (defaultPerMinute <= 0 || aiPerMinute <= 0) {
             throw new IllegalArgumentException(
-                    "tenant.rate-limit.default-per-minute must be > 0");
+                    "tenant.rate-limit budgets must be > 0");
         }
         this.defaultPerMinute = defaultPerMinute;
-        this.buckets = Caffeine.newBuilder()
+        this.aiPerMinute = aiPerMinute;
+        this.defaultBuckets = Caffeine.newBuilder()
+                .expireAfterAccess(Duration.ofHours(1))
+                .maximumSize(10_000)
+                .build();
+        this.aiBuckets = Caffeine.newBuilder()
                 .expireAfterAccess(Duration.ofHours(1))
                 .maximumSize(10_000)
                 .build();
     }
+
+    /** Which bucket to charge — general write or AI-assist. */
+    public enum BucketType { DEFAULT, AI }
 
     /** Outcome of one acquire attempt. */
     public record Outcome(boolean allowed, long retryAfterSeconds) {
@@ -53,32 +84,44 @@ public class TenantRateLimiter {
     }
 
     /**
-     * Try to consume one token for the given tenant. Creates the bucket
-     * on first hit; subsequent calls reuse it.
+     * Try to consume one token for the given tenant on the DEFAULT bucket.
+     * Kept for callers that don't care about the AI-vs-write split.
      *
      * @param tenantClientCode caller's tenant (already normalized upper-case).
      */
     public Outcome tryAcquire(String tenantClientCode) {
-        TokenBucket bucket = buckets.get(tenantClientCode,
-                k -> new TokenBucket(defaultPerMinute, defaultPerMinute));
+        return tryAcquire(tenantClientCode, BucketType.DEFAULT);
+    }
+
+    /**
+     * Try to consume one token for the given tenant on the requested bucket.
+     * AI paths get their own bucket (10/min default) so an OpenAI runaway
+     * doesn't consume the general 100/min write budget and vice-versa.
+     */
+    public Outcome tryAcquire(String tenantClientCode, BucketType type) {
+        Cache<String, TokenBucket> bucketCache = type == BucketType.AI ? aiBuckets : defaultBuckets;
+        int budget = type == BucketType.AI ? aiPerMinute : defaultPerMinute;
+        TokenBucket bucket = bucketCache.get(tenantClientCode,
+                k -> new TokenBucket(budget, budget));
         if (bucket.tryAcquire()) return Outcome.ok();
         long waitMs = bucket.retryAfterMs();
         // Round UP so a 500 ms wait reports Retry-After: 1 rather than 0
         // (integrators reading a 0 loop-immediately).
         long seconds = Math.max(1, (waitMs + 999) / 1000);
-        log.warn("Rate limit hit — tenant {} exhausted bucket (retry in {}s)",
-                tenantClientCode, seconds);
+        log.warn("Rate limit hit — tenant {} exhausted {} bucket (retry in {}s)",
+                tenantClientCode, type, seconds);
         return Outcome.denied(seconds);
     }
 
-    /** For tests + admin visibility. */
+    /** For tests + admin visibility — checks the DEFAULT bucket. */
     public long availableTokens(String tenantClientCode) {
-        TokenBucket bucket = buckets.getIfPresent(tenantClientCode);
+        TokenBucket bucket = defaultBuckets.getIfPresent(tenantClientCode);
         return bucket == null ? defaultPerMinute : bucket.availableTokens();
     }
 
     /** For tests — drop cached buckets. */
     public void reset() {
-        buckets.invalidateAll();
+        defaultBuckets.invalidateAll();
+        aiBuckets.invalidateAll();
     }
 }

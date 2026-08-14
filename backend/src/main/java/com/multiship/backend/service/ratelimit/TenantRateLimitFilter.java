@@ -64,6 +64,17 @@ public class TenantRateLimitFilter extends OncePerRequestFilter {
             "/api/v2/external/rates",
             "/api/v1/external/**");
 
+    /**
+     * Sprint 51 BS-M2 — AI-assist endpoints get their own (tighter) bucket.
+     * OpenAI calls cost real money, so a runaway loop from one tenant needs
+     * a lower ceiling than the general write budget. Charged against the
+     * AI-specific bucket in {@link TenantRateLimiter} (10/min default vs.
+     * the general 100/min). TODO Sprint 52: per-tenant token metering
+     * (BP-M4 dependency — Micrometer/Actuator not yet wired).
+     */
+    private static final List<String> DEFAULT_AI_PATHS = List.of(
+            "/api/v1/ai/**");
+
     private final TenantRateLimiter limiter;
     private final AccessScopePolicy accessScope;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
@@ -76,7 +87,12 @@ public class TenantRateLimitFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
-        if (!enabled || !isWatched(request)) {
+        if (!enabled) {
+            chain.doFilter(request, response);
+            return;
+        }
+        TenantRateLimiter.BucketType bucket = bucketFor(request);
+        if (bucket == null) {
             chain.doFilter(request, response);
             return;
         }
@@ -88,7 +104,7 @@ public class TenantRateLimitFilter extends OncePerRequestFilter {
             chain.doFilter(request, response);
             return;
         }
-        TenantRateLimiter.Outcome outcome = limiter.tryAcquire(tenant.get());
+        TenantRateLimiter.Outcome outcome = limiter.tryAcquire(tenant.get(), bucket);
         if (outcome.allowed()) {
             chain.doFilter(request, response);
             return;
@@ -96,18 +112,25 @@ public class TenantRateLimitFilter extends OncePerRequestFilter {
         writeRateLimitedResponse(response, tenant.get(), outcome.retryAfterSeconds());
     }
 
-    private boolean isWatched(HttpServletRequest request) {
-        if (!WATCHED_METHODS.contains(request.getMethod())) return false;
+    /**
+     * Which bucket to charge, or {@code null} when the path is out of scope.
+     * AI paths use POST only (their controller has @PostMapping) so the
+     * watched-methods gate below applies to both bucket types.
+     */
+    private TenantRateLimiter.BucketType bucketFor(HttpServletRequest request) {
+        if (!WATCHED_METHODS.contains(request.getMethod())) return null;
         String path = request.getRequestURI();
-        // Strip context path so patterns match against the application-relative URI.
         String ctx = request.getContextPath();
         if (ctx != null && !ctx.isEmpty() && path.startsWith(ctx)) {
             path = path.substring(ctx.length());
         }
-        for (String pattern : DEFAULT_WATCHED_PATHS) {
-            if (pathMatcher.match(pattern, path)) return true;
+        for (String pattern : DEFAULT_AI_PATHS) {
+            if (pathMatcher.match(pattern, path)) return TenantRateLimiter.BucketType.AI;
         }
-        return false;
+        for (String pattern : DEFAULT_WATCHED_PATHS) {
+            if (pathMatcher.match(pattern, path)) return TenantRateLimiter.BucketType.DEFAULT;
+        }
+        return null;
     }
 
     private void writeRateLimitedResponse(HttpServletResponse response,

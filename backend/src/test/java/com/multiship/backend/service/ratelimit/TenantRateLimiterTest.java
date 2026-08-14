@@ -58,4 +58,25 @@ class TenantRateLimiterTest {
         limiter.reset();
         assertTrue(limiter.tryAcquire("ACME").allowed());
     }
+
+    /* -------- Sprint 51 BS-M2 — AI bucket tests -------- */
+
+    @Test
+    void aiBucket_isIndependentFromDefaultBucket() {
+        // AI budget=2, default budget=10; draining AI must not touch DEFAULT.
+        TenantRateLimiter limiter = new TenantRateLimiter(10, 2);
+        assertTrue(limiter.tryAcquire("ACME", TenantRateLimiter.BucketType.AI).allowed());
+        assertTrue(limiter.tryAcquire("ACME", TenantRateLimiter.BucketType.AI).allowed());
+        assertFalse(limiter.tryAcquire("ACME", TenantRateLimiter.BucketType.AI).allowed(),
+                "AI bucket exhausted after 2 hits");
+        // DEFAULT still has full budget — the AI drain must not have leaked.
+        for (int i = 0; i < 10; i++) {
+            assertTrue(limiter.tryAcquire("ACME", TenantRateLimiter.BucketType.DEFAULT).allowed());
+        }
+    }
+
+    @Test
+    void constructor_rejectsNonPositiveAiBudget() {
+        assertThrows(IllegalArgumentException.class, () -> new TenantRateLimiter(10, 0));
+    }
 }

@@ -10,6 +10,7 @@ import com.multiship.backend.service.ai.AddressAiService;
 import com.multiship.backend.service.ai.ShipmentAiService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -18,14 +19,23 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 
 /**
- * AI-assist endpoints for the manual-shipment operator UI (authenticated users
- * only, per SecurityConfig's anyRequest().authenticated()). Every endpoint is
+ * AI-assist endpoints for the manual-shipment operator UI. Every endpoint is
  * suggestion-only — results are returned for the user to confirm; nothing is
  * persisted here.
+ *
+ * <p>Sprint 51 BS-M2 — role gate via {@link PreAuthorize} at class level.
+ * Previously the class relied only on the global {@code anyRequest().authenticated()}
+ * check, which meant any role (including the API-key {@code ROLE_API}) could
+ * hit these endpoints and spend OpenAI budget. Now restricted to human roles.
+ * The tighter per-tenant rate limit lives in
+ * {@code TenantRateLimitFilter.DEFAULT_AI_PATHS} (10/min/tenant vs. the
+ * general 100/min budget) — deferred per-tenant token metering waits on the
+ * Micrometer/Actuator work in BP-M4.
  */
 @RestController
 @RequestMapping("/api/v1/ai")
 @RequiredArgsConstructor
+@PreAuthorize("hasAnyRole('ADMIN','USER')")
 public class AiController {
 
     private final AddressAiService addressAiService;
