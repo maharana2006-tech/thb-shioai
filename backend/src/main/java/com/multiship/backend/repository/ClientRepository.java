@@ -18,6 +18,19 @@ public interface ClientRepository extends JpaRepository<Client, Long> {
 
     boolean existsByClientCodeIgnoreCase(String clientCode);
 
+    /**
+     * Sprint 51 BP-M6 — batched active-clients lookup used by
+     * {@link com.multiship.backend.service.OrderImportServiceImpl#validateReferences}.
+     * Pre-BP-M6 the validator called {@code findAll()} platform-wide (cross-tenant
+     * leak + full scan). Now it pulls only the codes present in the CSV rows
+     * plus the caller's own scope via a single IN-list query.
+     */
+    @Query("select c from Client c where upper(c.clientCode) in :codes and c.status = 'ACTIVE'")
+    List<Client> findActiveByClientCodeInIgnoreCase(@Param("codes") java.util.Collection<String> codes);
+
+    @Query("select c from Client c where upper(c.clientCode) in :codes")
+    List<Client> findByClientCodeInIgnoreCase(@Param("codes") java.util.Collection<String> codes);
+
     @Query("""
         SELECT c FROM Client c
         WHERE :keyword = ''

@@ -21,6 +21,18 @@ public interface WarehouseRepository extends JpaRepository<Warehouse, Long> {
     List<Warehouse> findByOwnerClientCodeIgnoreCaseOrderByCodeAsc(String ownerClientCode);
 
     /**
+     * Sprint 51 BP-M6 — active-warehouses lookup used by the order-import
+     * validator + xlsx template builder. Pre-BP-M6 both call sites did a
+     * platform-wide {@code findAll()} that leaked warehouses from other
+     * tenants into dropdowns AND scanned inactive rows. Now the validator
+     * asks for the exact ids it needs; the xlsx builder for the caller's
+     * tenant-visible slice.
+     */
+    List<Warehouse> findByActiveTrue();
+
+    List<Warehouse> findByIdInAndActiveTrue(java.util.Collection<Long> ids);
+
+    /**
      * Paginated filtered list. Blank strings ("") act as the "not set" sentinel
      * so we can pass every filter as a String and let the SQL short-circuit.
      * Sort keys handled server-side via a CASE ladder — the sorted set is small
