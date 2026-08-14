@@ -43,14 +43,18 @@ public class AdminUserController {
 
     @Operation(summary = "List users",
             description = "Filterable by search (username/email/fullName), role, clientCode, active-only. "
-                    + "Skinny projection — no password hashes or carrier secrets.")
+                    + "Skinny projection — no password hashes or carrier secrets. "
+                    + "Sprint 51 BP-L4: paginated (default 50 / max 100 per page); pre-BP-L4 the "
+                    + "endpoint fetched every row and filtered in-JVM.")
     @GetMapping
     public ResponseEntity<ApiResponse<List<AdminUserDTO>>> list(
             @RequestParam(required = false) String search,
             @RequestParam(required = false) String role,
             @RequestParam(required = false) String clientCode,
-            @RequestParam(required = false) Boolean activeOnly) {
-        List<AdminUserDTO> data = adminUserService.list(search, role, clientCode, activeOnly);
+            @RequestParam(required = false) Boolean activeOnly,
+            @RequestParam(required = false, defaultValue = "0") int page,
+            @RequestParam(required = false, defaultValue = "50") int size) {
+        List<AdminUserDTO> data = adminUserService.list(search, role, clientCode, activeOnly, page, size);
         return ResponseEntity.ok(ApiResponse.<List<AdminUserDTO>>builder()
                 .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
                 .message(data.size() + " user(s).")
