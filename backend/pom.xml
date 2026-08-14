@@ -27,7 +27,7 @@
 		<url/>
 	</scm>
 	<properties>
-		<java.version>17</java.version>
+		<java.version>21</java.version>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -166,6 +166,31 @@
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>
             <version>3.0.3</version>
+        </dependency>
+
+        <!-- Sprint 51 BP-M4 — Actuator surfaces /actuator/health (K8s
+             liveness+readiness probes) + /actuator/prometheus (metrics
+             scrape). Micrometer Prometheus registry adapts every
+             Micrometer meter (counters, timers, gauges) to the Prometheus
+             text exposition format. Requires no code changes to appear;
+             @Timed / Counter.builder() on hot paths add app-specific
+             visibility on top of the JVM/HTTP defaults. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <!-- @Timed uses Spring AOP (already transitive via
+             spring-boot-starter-web). Pin the AspectJ runtime explicitly
+             so a future starter split doesn't silently stop timing method
+             invocations. Spring Boot 4 dropped the starter-aop shortcut;
+             the plain aspectjrt + spring-aop from the parent BOM suffice. -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-aspects</artifactId>
         </dependency>
 	</dependencies>
 
