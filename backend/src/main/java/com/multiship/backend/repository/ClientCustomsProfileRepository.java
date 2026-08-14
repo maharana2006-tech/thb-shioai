@@ -1,7 +1,9 @@
 package com.multiship.backend.repository;
 
 import com.multiship.backend.model.ClientCustomsProfile;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -10,7 +12,22 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface ClientCustomsProfileRepository extends JpaRepository<ClientCustomsProfile, Long> {
+public interface ClientCustomsProfileRepository
+        extends JpaRepository<ClientCustomsProfile, Long>,
+                JpaSpecificationExecutor<ClientCustomsProfile> {
+
+    /**
+     * Sprint 51 BP-M7 — the JPA metamodel-based EntityGraph fetch every
+     * findAll path used by {@code fetchFiltered}. Pre-BP-M7 the fallback
+     * platform-wide path was {@code repository.findAll()} which lazily
+     * hydrated {@code countryLinks} — N+1 as the filter loop walked each
+     * profile. Overriding {@code findAll()} with {@code @EntityGraph} makes
+     * the base and Specification variants both fetch the collection in one
+     * query.
+     */
+    @Override
+    @EntityGraph(attributePaths = "countryLinks")
+    List<ClientCustomsProfile> findAll();
 
     /**
      * Sprint 48 N+1 fix — JOIN FETCH the country links so bulk listing

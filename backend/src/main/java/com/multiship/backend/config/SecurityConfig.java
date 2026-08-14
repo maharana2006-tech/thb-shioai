@@ -60,13 +60,29 @@ public class SecurityConfig {
         return reg;
     }
 
+    /**
+     * Sprint 51 BP-M5 — same trick for {@link MdcTenantFilter}. It runs
+     * inside the security chain via {@code addFilterAfter(JwtAuthenticationFilter)}
+     * so the SecurityContext is populated by the time it reads. Disable
+     * auto-registration on the servlet container so it doesn't ALSO run
+     * once before the chain (empty MDC values, wasted CPU).
+     */
+    @Bean
+    public org.springframework.boot.web.servlet.FilterRegistrationBean<MdcTenantFilter>
+            mdcTenantFilterRegistration(MdcTenantFilter filter) {
+        var reg = new org.springframework.boot.web.servlet.FilterRegistrationBean<>(filter);
+        reg.setEnabled(false);
+        return reg;
+    }
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtService jwtService,
                                                    com.multiship.backend.service.ApiKeyService apiKeyService,
                                                    com.multiship.backend.repository.ApiKeyRepository apiKeyRepository,
                                                    com.multiship.backend.repository.UserRepository userRepository,
                                                    com.multiship.backend.service.TokenRevocationService revocationService,
-                                                   com.multiship.backend.service.ratelimit.TenantRateLimitFilter tenantRateLimitFilter)
+                                                   com.multiship.backend.service.ratelimit.TenantRateLimitFilter tenantRateLimitFilter,
+                                                   MdcTenantFilter mdcTenantFilter)
             throws Exception {
         // Sprint 50 PR Q2 — CSRF via double-submit cookie. The
         // SPA reads the XSRF-TOKEN cookie (HttpOnly=false so JS can
@@ -156,6 +172,11 @@ public class SecurityConfig {
                 // tv + jti checks so a revoked token can never authenticate.
                 .addFilterBefore(new JwtAuthenticationFilter(jwtService, apiKeyRepository, userRepository, revocationService),
                         UsernamePasswordAuthenticationFilter.class)
+                // Sprint 51 BP-M5 — MDC tenant filter runs AFTER auth so the
+                // SecurityContext already carries the caller. Populates MDC
+                // {tenant, userId, apiKeyId} for the logging pattern +
+                // Prometheus tags before any controller runs.
+                .addFilterAfter(mdcTenantFilter, JwtAuthenticationFilter.class)
                 // Sprint 50 finding #15 (A) — must run AFTER the two auth filters
                 // above so the SecurityContext already carries the caller's
                 // authentication when the rate check reads the tenant.

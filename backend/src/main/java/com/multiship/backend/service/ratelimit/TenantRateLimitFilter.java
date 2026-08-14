@@ -2,6 +2,8 @@ package com.multiship.backend.service.ratelimit;
 
 import com.multiship.backend.config.AccessScopePolicy;
 import com.multiship.backend.dto.ErrorCode;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -9,6 +11,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.util.AntPathMatcher;
@@ -41,7 +44,6 @@ import java.util.Set;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class TenantRateLimitFilter extends OncePerRequestFilter {
 
     /** HTTP methods that consume tokens. Reads are never rate-limited. */
@@ -68,6 +70,29 @@ public class TenantRateLimitFilter extends OncePerRequestFilter {
     private final AccessScopePolicy accessScope;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
 
+    /**
+     * Sprint 51 BP-M4 — Micrometer wiring. Optional so tests that build the
+     * filter directly still compile without a registry; production always
+     * has the actuator's Prometheus meter registry bean.
+     */
+    private final ObjectProvider<MeterRegistry> meterRegistryProvider;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public TenantRateLimitFilter(TenantRateLimiter limiter,
+                                 AccessScopePolicy accessScope,
+                                 ObjectProvider<MeterRegistry> meterRegistryProvider) {
+        this.limiter = limiter;
+        this.accessScope = accessScope;
+        this.meterRegistryProvider = meterRegistryProvider;
+    }
+
+    /** Sprint 51 BP-M4 — back-compat overload for tests written before the
+     *  meter-registry dependency landed. Production always goes through the
+     *  three-arg constructor via Spring wiring. */
+    public TenantRateLimitFilter(TenantRateLimiter limiter, AccessScopePolicy accessScope) {
+        this(limiter, accessScope, null);
+    }
+
     /** Ops kill-switch — set to false to disable entirely (e.g. during incident). */
     @Value("${tenant.rate-limit.enabled:true}")
     private boolean enabled;
@@ -92,6 +117,18 @@ public class TenantRateLimitFilter extends OncePerRequestFilter {
         if (outcome.allowed()) {
             chain.doFilter(request, response);
             return;
+        }
+        // Sprint 51 BP-M4 — count every 429 so ops can alert on a
+        // sustained rate-limit spike. Tenant is a label so alerting can
+        // pinpoint the offending client without shipping a metric explosion
+        // (limiter's own internal cap keeps the cardinality bounded).
+        MeterRegistry registry = meterRegistryProvider == null ? null : meterRegistryProvider.getIfAvailable();
+        if (registry != null) {
+            Counter.builder("tenant.rate_limit.blocked")
+                    .tag("tenant", tenant.get())
+                    .description("Requests rejected with 429 by the per-tenant rate limiter.")
+                    .register(registry)
+                    .increment();
         }
         writeRateLimitedResponse(response, tenant.get(), outcome.retryAfterSeconds());
     }

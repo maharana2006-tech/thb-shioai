@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -69,7 +71,6 @@ import java.util.function.Supplier;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class IdempotencyService {
 
     /** Standard TTL for cached idempotent responses. Matches Stripe-style
@@ -100,6 +101,33 @@ public class IdempotencyService {
     private static final String PENDING_SUFFIX = ":pending";
 
     private final ObjectProvider<StringRedisTemplate> redisProvider;
+    /** Sprint 51 BP-M4 — optional; production always has Actuator's registry. */
+    private final ObjectProvider<MeterRegistry> meterRegistryProvider;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public IdempotencyService(ObjectProvider<StringRedisTemplate> redisProvider,
+                              ObjectProvider<MeterRegistry> meterRegistryProvider) {
+        this.redisProvider = redisProvider;
+        this.meterRegistryProvider = meterRegistryProvider;
+    }
+
+    /** Sprint 51 BP-M4 — back-compat overload for tests. */
+    public IdempotencyService(ObjectProvider<StringRedisTemplate> redisProvider) {
+        this(redisProvider, null);
+    }
+
+    /** Sprint 51 BP-M4 — record a counter increment for one outcome. Silent
+     *  when no registry is wired (unit tests / minimal boot). Kept private
+     *  so the tag vocabulary stays consistent. */
+    private void countOutcome(String outcome) {
+        MeterRegistry registry = meterRegistryProvider == null ? null : meterRegistryProvider.getIfAvailable();
+        if (registry == null) return;
+        Counter.builder("idempotency.request")
+                .tag("outcome", outcome)
+                .description("Idempotency-Key request outcomes: hit (replayed cache), miss (first request), in_progress (pending marker held), disabled (no key / no Redis).")
+                .register(registry)
+                .increment();
+    }
     /** Sprint 50 PR K — private, purpose-built ObjectMapper with the
      *  JavaTimeModule guaranteed registered. Prior code autowired
      *  Spring Boot's shared mapper and tried to register the module on
@@ -217,6 +245,7 @@ public class IdempotencyService {
 
         // No key supplied → not idempotent; pass through unchanged.
         if (idempotencyKey == null || idempotencyKey.isBlank() || callerId == null || callerId.isBlank()) {
+            countOutcome("disabled");
             return handler.get();
         }
 
@@ -226,6 +255,7 @@ public class IdempotencyService {
             // fresh response; the fix's guarantee just doesn't fire.
             // We never fail-closed on "Redis not configured" — that's an
             // env-level decision, not a runtime outage.
+            countOutcome("disabled");
             return handler.get();
         }
 
@@ -254,6 +284,7 @@ public class IdempotencyService {
             try {
                 String cached = redis.opsForValue().get(mainKey);
                 if (cached != null) {
+                    countOutcome("hit");
                     return replay(cached, typeRef, idempotencyKey, callerId);
                 }
             } catch (Exception ex) {
@@ -266,6 +297,7 @@ public class IdempotencyService {
             }
 
             // First-request execution path.
+            countOutcome("miss");
             ResponseEntity<T> fresh = handler.get();
 
             // Best-effort store. Failure to persist doesn't undo the
@@ -314,10 +346,12 @@ public class IdempotencyService {
         }
 
         if (cached != null) {
+            countOutcome("hit");
             return replay(cached, typeRef, idempotencyKey, callerId);
         }
 
         // Still in flight → tell the client to back off.
+        countOutcome("in_progress");
         return (ResponseEntity<T>) inProgressResponse();
     }
 

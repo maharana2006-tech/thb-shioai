@@ -39,4 +39,20 @@ public interface CarrierAccountRefRepository extends JpaRepository<CarrierAccoun
     List<CarrierAccountRef> findByCustomerNoIgnoreCaseAndClientDefaultTrue(String customerNo);
 
     List<CarrierAccountRef> findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(String customerNo);
+
+    /**
+     * Sprint 51 BP-M6 — active-only variants used by
+     * {@link com.multiship.backend.service.OrderImportServiceImpl}. Pre-BP-M6
+     * the validator + xlsxTemplate did a platform-wide {@code findAll()} that
+     * (a) leaked competitor account numbers into the template dropdowns and
+     * (b) scanned inactive rows even though they can never be used for a
+     * fresh label. The scoped variant filters on customerNo IN (:codes) so
+     * a scoped USER sees only their tenant's accounts.
+     */
+    List<CarrierAccountRef> findByActiveTrue();
+
+    @Query("select r from CarrierAccountRef r "
+            + "where r.active = true "
+            + "and (upper(r.customerNo) in :codes or r.customerNo is null or trim(r.customerNo) = '')")
+    List<CarrierAccountRef> findActiveByCustomerNoInOrPlatform(@Param("codes") java.util.Collection<String> codes);
 }

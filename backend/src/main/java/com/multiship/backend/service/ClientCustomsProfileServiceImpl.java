@@ -138,17 +138,20 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
     }
 
     /**
-     * In-memory apply-all-filters over every profile. Small dataset (typically
-     * fewer than a few hundred rows across the whole system), so the simplicity
-     * of a single fetch beats bespoke SQL. Sort + slice happen after.
-     *
-     * <p>TODO(sprint49-tier3-fix5-followup): once the profile count crosses
-     * a few thousand this becomes a scale wall. Migrate to a
-     * {@code JpaSpecificationExecutor<ClientCustomsProfile>} + Specifications
-     * per filter (clientCode, carrier, broker, countries, search) so
-     * pagination is a real DB LIMIT + OFFSET rather than a Java sublist over
-     * a full result set. Frontend already sends the filters in the shape
-     * needed.
+     * Sprint 51 BP-M7 — fetch strategy:
+     * <ul>
+     *   <li>When the caller filters by a single {@code clientCode} (either
+     *       explicit or clamped by the tenant guard), pull that client's
+     *       profiles via the JOIN-FETCH-backed repository call — one query
+     *       returns every profile + every {@code countryLinks} row.</li>
+     *   <li>Otherwise (platform operator, no client filter), the base
+     *       {@code repository.findAll()} is now {@code @EntityGraph}-annotated
+     *       so it also fetches {@code countryLinks} in a single SELECT.
+     *       Pre-BP-M7 that path fired one lazy load per profile (N+1).</li>
+     * </ul>
+     * The in-JVM filter loop below still runs, but every DTO conversion
+     * now hits pre-hydrated collections rather than triggering a fresh
+     * SELECT per row.
      */
     private List<ClientCustomsProfileDTO> fetchFiltered(CustomsProfileFilters filters) {
         Map<String, String> clientNames = clientRepository.findAll().stream()
@@ -167,7 +170,15 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
                     .map(s -> s.toUpperCase(Locale.ROOT))
                     .collect(Collectors.toSet());
 
-        return repository.findAll().stream()
+        // Sprint 51 BP-M7 — narrow the base fetch when we know we only need
+        // one client's profiles (scoped USER path or platform operator with
+        // an explicit clientCode filter). The scoped repo call already uses
+        // JOIN FETCH; the fallback findAll is @EntityGraph-annotated.
+        List<ClientCustomsProfile> base = clientCode.isEmpty()
+                ? repository.findAll()
+                : repository.findByClientCodeIgnoreCase(clientCode);
+
+        return base.stream()
                 .filter(p -> matchesClient(p, clientCode))
                 .filter(p -> matchesCarrier(p, carrier))
                 .filter(p -> matchesBroker(p, broker))

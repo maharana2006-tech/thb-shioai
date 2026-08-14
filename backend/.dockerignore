@@ -1,0 +1,11 @@
+# Sprint 51 BP-M3 — keep the build context lean.
+target/
+*.log
+.git/
+.gitignore
+.idea/
+.vscode/
+*.iml
+node_modules/
+Dockerfile
+.dockerignore

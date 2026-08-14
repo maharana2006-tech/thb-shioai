@@ -17,6 +17,7 @@ import com.multiship.backend.repository.ShippingServiceRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.service.fx.FxRateService;
 import com.multiship.backend.util.UnitConverter;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -149,6 +150,26 @@ public class RateShopServiceImpl implements RateShopService {
         this.fxRateService = fxRateService;
         this.rateCacheService = rateCacheService;
         this.executor = executor;
+    }
+
+    /**
+     * Sprint 51 BP-M2 — drain the fan-out pool on shutdown so an in-flight
+     * rate-shop (four parallel carrier calls) has up to 30s to finish
+     * before the JVM exits.
+     */
+    @PreDestroy
+    void shutdownExecutor() {
+        if (executor == null) return;
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                log.warn("rate-shop-fanout did not drain within 30s — forcing shutdownNow()");
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            executor.shutdownNow();
+        }
     }
 
     @Override

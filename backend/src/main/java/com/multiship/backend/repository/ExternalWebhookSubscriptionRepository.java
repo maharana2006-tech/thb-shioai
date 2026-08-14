@@ -15,4 +15,14 @@ public interface ExternalWebhookSubscriptionRepository
 
     /** All active subscriptions for an event — the dispatcher iterates. */
     List<ExternalWebhookSubscription> findByEventAndActiveTrue(EventType event);
+
+    /**
+     * Sprint 51 BP-M1 — API-key-scoped variant. Pre-BP-M1 the dispatcher
+     * pulled every active subscription for an event and filtered the
+     * caller's api_key_id in Java; with N-of-1 subscriptions per event on
+     * a shared platform, the SELECT scaled linearly with total tenants and
+     * the filter discarded all-but-one. The composite index (event, active,
+     * api_key_id) added in V13 turns this into an index-only scan.
+     */
+    List<ExternalWebhookSubscription> findByEventAndApiKeyIdAndActiveTrue(EventType event, Long apiKeyId);
 }

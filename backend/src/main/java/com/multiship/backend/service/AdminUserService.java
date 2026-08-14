@@ -7,13 +7,17 @@ import com.multiship.backend.model.UserAdminAudit;
 import com.multiship.backend.repository.ClientRepository;
 import com.multiship.backend.repository.UserAdminAuditRepository;
 import com.multiship.backend.repository.UserRepository;
+import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -59,22 +63,68 @@ public class AdminUserService {
 
     public record MutationOutcome(ActionResult result, AdminUserDTO user) {}
 
+    /** Sprint 51 BP-L4 — default page size when the caller doesn't specify one. */
+    static final int DEFAULT_PAGE_SIZE = 50;
+    /** Sprint 51 BP-L4 — hard clamp on page size to bound the DB fetch. */
+    static final int MAX_PAGE_SIZE = 100;
+
+    /**
+     * Sprint 51 BP-L4 — backwards-compat overload retained for existing
+     * unit tests + callers that don't page. Delegates to the paginated
+     * variant with the compile-time default size.
+     */
     @Transactional(readOnly = true)
     public List<AdminUserDTO> list(String search, String role, String clientCode, Boolean activeOnly) {
-        String q = search == null ? null : search.trim().toLowerCase(Locale.ROOT);
+        return list(search, role, clientCode, activeOnly, 0, DEFAULT_PAGE_SIZE);
+    }
+
+    /**
+     * Sprint 51 BP-L4 — paginated list. Pre-BP-L4 the impl called
+     * {@code userRepository.findAll()} platform-wide then filtered in
+     * Java, so a 50k-user table scanned every row for a single admin
+     * page render. Now the filters are pushed to the DB via Specification
+     * and the caller pages a bounded slice (default 50, max
+     * {@value #MAX_PAGE_SIZE}).
+     *
+     * @param page 0-based page index; negative clamps to 0.
+     * @param size requested page size; capped at {@value #MAX_PAGE_SIZE}
+     *             so a caller can never force an unbounded fetch.
+     */
+    @Transactional(readOnly = true)
+    public List<AdminUserDTO> list(String search, String role, String clientCode, Boolean activeOnly,
+                                   int page, int size) {
+        int boundedPage = Math.max(page, 0);
+        int boundedSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        String q = search == null || search.isBlank() ? null : search.trim().toLowerCase(Locale.ROOT);
         String r = role == null || role.isBlank() ? null : role.trim().toUpperCase(Locale.ROOT);
         String cc = clientCode == null || clientCode.isBlank() ? null : clientCode.trim().toUpperCase(Locale.ROOT);
+        Boolean active = activeOnly;
 
-        return userRepository.findAll().stream()
-                .filter(u -> q == null
-                        || (u.getUsername() != null && u.getUsername().toLowerCase(Locale.ROOT).contains(q))
-                        || (u.getEmail() != null && u.getEmail().toLowerCase(Locale.ROOT).contains(q))
-                        || (u.getFullName() != null && u.getFullName().toLowerCase(Locale.ROOT).contains(q)))
-                .filter(u -> r == null || r.equalsIgnoreCase(u.getRole()))
-                .filter(u -> cc == null || (u.getClientCode() != null && cc.equalsIgnoreCase(u.getClientCode())))
-                .filter(u -> !Boolean.TRUE.equals(activeOnly) || u.getDeactivatedAt() == null)
+        Specification<User> spec = (root, query, cb) -> {
+            List<Predicate> preds = new ArrayList<>(4);
+            if (q != null) {
+                String like = "%" + q + "%";
+                preds.add(cb.or(
+                        cb.like(cb.lower(root.get("username")), like),
+                        cb.like(cb.lower(root.get("email")), like),
+                        cb.like(cb.lower(root.get("fullName")), like)));
+            }
+            if (r != null) {
+                preds.add(cb.equal(cb.upper(root.get("role")), r));
+            }
+            if (cc != null) {
+                preds.add(cb.equal(cb.upper(root.get("clientCode")), cc));
+            }
+            if (Boolean.TRUE.equals(active)) {
+                preds.add(cb.isNull(root.get("deactivatedAt")));
+            }
+            return preds.isEmpty() ? cb.conjunction() : cb.and(preds.toArray(new Predicate[0]));
+        };
+
+        return userRepository.findAll(spec,
+                        PageRequest.of(boundedPage, boundedSize, Sort.by("username").ascending()))
                 .map(AdminUserService::toDTO)
-                .toList();
+                .getContent();
     }
 
     /**
