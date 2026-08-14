@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -193,6 +194,31 @@ class AuthServiceImplPRDTest {
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
         MessageResponse body = (MessageResponse) resp.getBody();
         assertEquals(ErrorCode.EMAIL_NOT_VERIFIED.name(), body.getErrorCode());
+    }
+
+    /* -------- Sprint 51 BS-M1 — timing side channel on empty-user branch -------- */
+
+    @Test
+    void loginUnknownUserStillRunsBcryptCompareToPreventTimingLeak() {
+        // Empty user branch previously short-circuited without invoking bcrypt,
+        // letting a scripted attacker distinguish "no such user" (fast) from
+        // "wrong password" (slow) by response latency alone. The fix runs a
+        // dummy compare against a precomputed hash so both branches pay the
+        // same CPU cost.
+        when(userRepository.findByUsername("ghost")).thenReturn(Optional.empty());
+
+        com.multiship.backend.dto.LoginRequest req = new com.multiship.backend.dto.LoginRequest();
+        req.setUsername("ghost");
+        req.setPassword("whatever");
+        ResponseEntity<?> resp = service.loginUser(req, new org.springframework.mock.web.MockHttpServletResponse());
+
+        assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
+        MessageResponse body = (MessageResponse) resp.getBody();
+        assertEquals(ErrorCode.INVALID_CREDENTIALS.name(), body.getErrorCode());
+        // The critical assertion: bcrypt must have been invoked even for the
+        // unknown user so the empty-user branch has the same latency profile
+        // as the wrong-password branch.
+        verify(passwordEncoder).matches(eq("whatever"), anyString());
     }
 
     /* -------- accept-invite flow -------- */

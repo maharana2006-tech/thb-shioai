@@ -26,9 +26,8 @@ import { notify } from '../utils/notify'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import Select from './workspace/Select'
 import PortalMenu from './workspace/PortalMenu'
-
-const isAdmin = () =>
-  (localStorage.getItem('multiship_role') || '').toUpperCase() === 'ADMIN'
+import { useAppSession } from '../hooks/useAppSession'
+import { normalizeRole } from '../utils/roles'
 
 /** Template types the platform models. Per-tenant rows overlay the platform
  *  default per (tenant_id, template_type); at shipment time the render path
@@ -52,7 +51,9 @@ const textInput =
  * The editor lives at /settings/templates/new + /:id.
  */
 export default function LabelTemplatesListPage() {
-  const admin = isAdmin()
+  // Sprint 51 FE-L1 — replace per-render localStorage read.
+  const { role } = useAppSession()
+  const admin = normalizeRole(role) === 'ADMIN'
   const navigate = useNavigate()
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { FiAlertCircle, FiCheckCircle, FiChevronRight } from 'react-icons/fi'
+import { FiAlertCircle, FiCheckCircle, FiChevronRight, FiMenu } from 'react-icons/fi'
 import { useAppSession } from '../../hooks/useAppSession'
 import { accountRefService } from '../../api/accountRefService'
 import { resolveBreadcrumb, settingsPaths } from '../../routes/workspaceRoutes'
@@ -18,7 +18,12 @@ import UniversalSearch from './UniversalSearch'
  *  · user = an ID badge (espresso initials tile + clearance line)
  *  · bottom edge = perforated tear line, not a solid border
  */
-export default function WorkspaceHeader() {
+interface WorkspaceHeaderProps {
+  /** Sprint 51 FE-M5 — open the mobile nav drawer (rendered by Sidebar). */
+  onOpenMobileNav?: () => void
+}
+
+export default function WorkspaceHeader({ onOpenMobileNav }: WorkspaceHeaderProps = {}) {
   const location = useLocation()
   const { username, role } = useAppSession()
   const [now, setNow] = useState(() => new Date())
@@ -62,6 +67,20 @@ export default function WorkspaceHeader() {
   return (
     <header className="sticky top-0 z-30 border-b border-dashed border-slate-300 bg-white/85 backdrop-blur-xl print:hidden">
       <div className="flex h-14 items-center gap-4 px-5">
+        {/* Sprint 51 FE-M5 — hamburger visible only on <md; opens the
+            slide-in sidebar drawer. Above md the sidebar is a permanent
+            rail so this button hides. */}
+        {onOpenMobileNav ? (
+          <button
+            type="button"
+            onClick={onOpenMobileNav}
+            aria-label="Open navigation"
+            title="Open navigation"
+            className="-ml-1 shrink-0 rounded-lg p-2 text-slate-600 transition hover:bg-slate-100 md:hidden"
+          >
+            <FiMenu className="h-5 w-5" />
+          </button>
+        ) : null}
         {/* breadcrumb as a tracking route: origin ─ ─ ▸ current location */}
         <div className="flex min-w-0 items-center gap-2.5">
           {crumb ? (

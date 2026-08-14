@@ -144,6 +144,36 @@ class TenantRateLimitFilterTest {
         verify(chain, times(1)).doFilter(otherReq, otherResp);
     }
 
+    /* -------- Sprint 51 BS-M2 — AI path uses tighter AI bucket -------- */
+
+    @Test
+    void aiPath_isRateLimitedOnItsOwnBucket() throws Exception {
+        // Default budget 100, AI budget 2 — a tenant burning AI must NOT
+        // exhaust the default bucket and vice versa. Third AI hit → 429.
+        limiter = new TenantRateLimiter(100, 2);
+        filter = new TenantRateLimitFilter(limiter, new AccessScopePolicy(true));
+        ReflectionTestUtils.setField(filter, "enabled", true);
+
+        setTenantCaller("acme", "ACME");
+
+        for (int i = 0; i < 2; i++) {
+            MockHttpServletResponse ok = new MockHttpServletResponse();
+            filter.doFilter(new MockHttpServletRequest("POST", "/api/v1/ai/parse-address"),
+                    ok, mock(FilterChain.class));
+            assertEquals(200, ok.getStatus());
+        }
+        MockHttpServletResponse denied = new MockHttpServletResponse();
+        filter.doFilter(new MockHttpServletRequest("POST", "/api/v1/ai/suggest-hs"),
+                denied, mock(FilterChain.class));
+        assertEquals(429, denied.getStatus(), "AI bucket exhausted at 2/min");
+
+        // Default write path still has budget — the AI drain didn't leak.
+        MockHttpServletResponse writeOk = new MockHttpServletResponse();
+        filter.doFilter(new MockHttpServletRequest("POST", "/api/v1/orders/1/label"),
+                writeOk, mock(FilterChain.class));
+        assertEquals(200, writeOk.getStatus());
+    }
+
     @Test
     void killSwitchDisabled_neverGates() throws Exception {
         ReflectionTestUtils.setField(filter, "enabled", false);

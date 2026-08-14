@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { FiGlobe, FiX } from 'react-icons/fi'
 import { customsProfileService, type CustomsProfile } from '../../api/customsProfileService'
 import { orderService, type OrderLine } from '../../api/orderService'
+import { isAbortError } from '../../api/apiClient'
 import { countryName } from '../../utils/countries'
 
 interface CustomsEditorModalProps {
@@ -66,7 +67,10 @@ export default function CustomsEditorModal({ orderNo, onClose }: CustomsEditorMo
           }
         }
       })
-      .catch(() => {})
+      // Sprint 51 FE-L3 — log instead of silently hiding order-load failures.
+      .catch((e) => {
+        if (!isAbortError(e)) console.debug('[secondary load] order/customs prefetch', e)
+      })
       .finally(() => {
         if (!cancelled) setLoading(false)
       })

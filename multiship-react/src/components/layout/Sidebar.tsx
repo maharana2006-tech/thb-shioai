@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { notify } from '../../utils/notify'
 import { FiChevronsLeft, FiChevronsRight, FiLogOut } from 'react-icons/fi'
@@ -13,6 +13,14 @@ import { logout as logoutAction } from '../../store/store'
 interface SidebarProps {
   pinned: boolean
   onTogglePin: () => void
+  /**
+   * Sprint 51 FE-M5 — mobile drawer open state. When true, the sidebar
+   * renders full-width from the left as an overlay on <md screens. Above
+   * md it's ignored; the sidebar is a static rail as before.
+   */
+  mobileOpen?: boolean
+  /** Sprint 51 FE-M5 — close callback for the mobile drawer. */
+  onMobileClose?: () => void
 }
 
 // decorative ladder-barcode bar heights (stub echo of the auth waybill)
@@ -29,9 +37,17 @@ const BARCODE = [3, 1, 2, 4, 1, 2, 1, 3, 1, 2, 4, 1, 1, 3, 2, 1]
  * Behavior is unchanged: 64px rail ↔ 224px pinned, hover-peek, pin state
  * persisted by the parent, print-hidden.
  */
-export default function Sidebar({ pinned, onTogglePin }: SidebarProps) {
+export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMobileClose }: SidebarProps) {
   const location = useLocation()
   const navigate = useNavigate()
+
+  // Sprint 51 FE-M5 — auto-close the mobile drawer on route change so
+  // tapping a nav item doesn't leave the overlay covering the page.
+  const activePath = location.pathname
+  useEffect(() => {
+    if (mobileOpen) onMobileClose?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePath])
   const dispatch = useAppDispatch()
   const { username, role } = useAppSession()
   const [loggingOut, setLoggingOut] = useState(false)
@@ -65,17 +81,34 @@ export default function Sidebar({ pinned, onTogglePin }: SidebarProps) {
     navigate('/login')
   }
 
-  // Labels are visible when pinned, or on hover-peek when collapsed.
-  const labelClass = pinned
+  // Labels are visible when pinned OR when the mobile drawer is open
+  // (the drawer is always the full-width variant on <md), or on
+  // hover-peek when collapsed on desktop.
+  const labelClass = pinned || mobileOpen
     ? 'opacity-100'
     : 'opacity-0 transition-opacity duration-150 group-hover:opacity-100'
 
+  // Sprint 51 FE-M5 — on <md the sidebar behaves as an off-canvas
+  // drawer: hidden by default, slides in from the left when mobileOpen,
+  // full 224px wide. On md+ it reverts to the desktop 64/224 rail.
+  const desktopWidth = pinned ? 'w-56' : 'w-16 hover:w-56 hover:shadow-[12px_0_40px_rgba(10,22,40,0.25)]'
+  const mobileTranslate = mobileOpen ? 'translate-x-0' : '-translate-x-full'
+
   return (
-    <nav
+    <>
+      {/* Sprint 51 FE-M5 — backdrop for the mobile drawer. Click to close.
+          Hidden on md+ where the sidebar is a permanent rail. */}
+      {mobileOpen ? (
+        <div
+          aria-hidden="true"
+          onClick={onMobileClose}
+          className="fixed inset-0 z-30 bg-slate-900/40 backdrop-blur-sm md:hidden print:hidden"
+        />
+      ) : null}
+      <nav
       aria-label="Primary"
-      className={`group fixed inset-y-0 left-0 z-40 flex flex-col overflow-hidden bg-[#1f150c] transition-[width] duration-200 ease-out print:hidden ${
-        pinned ? 'w-56' : 'w-16 hover:w-56 hover:shadow-[12px_0_40px_rgba(10,22,40,0.25)]'
-      }`}
+      className={`group fixed inset-y-0 left-0 z-40 flex w-56 flex-col overflow-hidden bg-[#1f150c] transition-transform duration-200 ease-out print:hidden ${mobileTranslate} md:transition-[width] md:duration-200 ${desktopWidth} md:translate-x-0`}
+      data-mobile-open={mobileOpen ? 'true' : 'false'}
     >
       {/* inner perforation along the right edge — the stub's tear line */}
       <span
@@ -234,5 +267,6 @@ export default function Sidebar({ pinned, onTogglePin }: SidebarProps) {
         </div>
       </div>
     </nav>
+    </>
   )
 }

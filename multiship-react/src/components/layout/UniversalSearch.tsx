@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   FiArrowRight,
@@ -10,9 +10,9 @@ import {
   FiSettings,
   FiUsers,
 } from 'react-icons/fi'
-import { orderService } from '../../api/orderService'
-import { clientService } from '../../api/clientService'
-import { warehouseService } from '../../api/warehouseService'
+import { orderService, type Order } from '../../api/orderService'
+import { clientService, type Client } from '../../api/clientService'
+import { warehouseService, type Warehouse } from '../../api/warehouseService'
 import { settingsNavItems, workspacePaths } from '../../routes/workspaceRoutes'
 import { normalizeRole, type UserRole } from '../../utils/roles'
 
@@ -42,7 +42,7 @@ interface SearchHit {
   to: string
 }
 
-const GROUP_META: Record<ResultKind, { label: string; icon: JSX.Element }> = {
+const GROUP_META: Record<ResultKind, { label: string; icon: ReactNode }> = {
   order: { label: 'Orders', icon: <FiBox className="h-3 w-3" /> },
   client: { label: 'Clients', icon: <FiUsers className="h-3 w-3" /> },
   warehouse: { label: 'Warehouses', icon: <FiHome className="h-3 w-3" /> },
@@ -131,25 +131,16 @@ export default function UniversalSearch() {
       const [orders, clients, warehouses] = await Promise.all([
         orderService
           .listOrders({ page: 0, size: 5, search: q })
-          .then((res) => {
-            const rows = (res?.data?.content ?? res?.data ?? []) as Array<Record<string, unknown>>
-            return Array.isArray(rows) ? rows : []
-          })
-          .catch(() => []),
+          .then((res) => (Array.isArray(res?.data?.content) ? res.data.content : []) as Order[])
+          .catch((): Order[] => []),
         clientService
           .listClients({ page: 0, size: 4, search: q })
-          .then((res) => {
-            const rows = (res?.data?.content ?? res?.data ?? []) as Array<Record<string, unknown>>
-            return Array.isArray(rows) ? rows : []
-          })
-          .catch(() => []),
+          .then((res) => (Array.isArray(res?.data?.content) ? res.data.content : []) as Client[])
+          .catch((): Client[] => []),
         warehouseService
           .listWarehouses({ page: 0, size: 4, search: q })
-          .then((res) => {
-            const rows = (res?.data?.content ?? res?.data ?? []) as Array<Record<string, unknown>>
-            return Array.isArray(rows) ? rows : []
-          })
-          .catch(() => []),
+          .then((res) => (Array.isArray(res?.data?.content) ? res.data.content : []) as Warehouse[])
+          .catch((): Warehouse[] => []),
       ])
 
       if (mySeq !== seq.current) return // superseded by a newer keystroke
@@ -157,39 +148,39 @@ export default function UniversalSearch() {
       const next: SearchHit[] = []
       for (const o of orders) {
         // The list DTO is nested: orderDetails / shippingDetails / labelDetails.
-        const od = (o.orderDetails ?? {}) as Record<string, unknown>
-        const sd = (o.shippingDetails ?? {}) as Record<string, unknown>
-        const ld = (o.labelDetails ?? {}) as Record<string, unknown>
-        const orderNo = od.orderNo ?? o.orderNo
+        const orderNo = o.orderDetails?.orderNo
         if (orderNo == null) continue
-        const tracking = (ld.trackingNumber as string) || null
+        const tracking = o.labelDetails?.trackingNumber || null
+        const client = o.orderDetails?.customerCode
         next.push({
           id: `order-${orderNo}`,
           kind: 'order',
-          title: `#${orderNo}${od.customerCode ? ` · ${od.customerCode}` : ''}`,
+          title: `#${orderNo}${client ? ` · ${client}` : ''}`,
           subtitle:
-            [tracking, sd.city as string, od.status as string].filter(Boolean).join(' · ') ||
+            [tracking, o.shippingDetails?.city, o.orderDetails?.status].filter(Boolean).join(' · ') ||
             undefined,
           to: `${workspacePaths.orders}?q=${encodeURIComponent(String(tracking ?? orderNo))}`,
         })
       }
       for (const c of clients) {
-        const code = (c.clientCode ?? c.code) as string
+        const code = c.clientCode
+        if (!code) continue
         next.push({
           id: `client-${code}`,
           kind: 'client',
           title: `${code}${c.name ? ` — ${c.name}` : ''}`,
-          subtitle: (c.status as string) || undefined,
+          subtitle: c.status || undefined,
           to: `/settings/clients?q=${encodeURIComponent(code)}`,
         })
       }
       for (const w of warehouses) {
-        const code = w.code as string
+        const code = w.code
         next.push({
           id: `warehouse-${code}`,
           kind: 'warehouse',
           title: `${code}${w.name ? ` — ${w.name}` : ''}`,
-          subtitle: [w.city as string, w.country as string].filter(Boolean).join(', ') || undefined,
+          subtitle:
+            [w.address?.city, w.address?.country].filter(Boolean).join(', ') || undefined,
           to: `/settings/warehouses?q=${encodeURIComponent(code)}`,
         })
       }

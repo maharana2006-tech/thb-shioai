@@ -14,10 +14,13 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfFilter;
+import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.time.Instant;
 import java.util.Arrays;
@@ -119,7 +122,11 @@ public class SecurityConfig {
                                 "/api/v1/oauth/token",
                                 "/api/v1/webhooks/carrier/**",
                                 "/api/v1/external/**",
-                                "/api/v2/external/**"
+                                "/api/v2/external/**",
+                                // Sprint 51 FE-M3 — client-side render errors
+                                // are POSTed pre-login too; the endpoint is
+                                // IP-rate-limited in the controller itself.
+                                "/api/v1/client-errors"
                         )
                 )
                 .sessionManagement(session -> session
@@ -161,6 +168,10 @@ public class SecurityConfig {
                         // produce our tokens). Signature verification per carrier via
                         // HMAC-SHA256 in the request header.
                         .requestMatchers(HttpMethod.POST, "/api/v1/webhooks/carrier/**").permitAll()
+                        // Sprint 51 FE-M3 — client-error telemetry: no auth
+                        // (crashes happen on the login page too). IP-rate-
+                        // limited by the controller.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/client-errors").permitAll()
                         // Admin-only credential management, decided before the
                         // request body is even parsed (403 beats 400).
                         .requestMatchers("/api/v1/carriers/connect", "/api/v1/carriers/disconnect").hasRole("ADMIN")

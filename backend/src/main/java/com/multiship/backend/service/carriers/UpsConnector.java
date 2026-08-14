@@ -224,6 +224,14 @@ public class UpsConnector implements CarrierConnector {
      */
     @Override
     public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
+        // Sprint 51 BS-L2 — LAST_AUTH_DETAIL is per-thread state that the
+        // caller consumes AFTER we return. If a prior request on this same
+        // pool-recycled thread set the detail and the caller never
+        // consumed it (e.g., success path took an early branch), the
+        // stale value would leak into the current caller's read. Reset
+        // at entry so each invocation starts clean; the fallback branches
+        // below set fresh values that the current caller then consumes.
+        LAST_AUTH_DETAIL.remove();
         String tokenUrl = isSandbox(environment)
                 ? carrierProperties.getUps().getSandboxAuthUrl()
                 : carrierProperties.getUps().getAuthUrl();
@@ -248,7 +256,10 @@ public class UpsConnector implements CarrierConnector {
             JsonNode jsonNode = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
             String accessToken = jsonNode.path("access_token").asText(null);
             if (!StringUtils.hasText(accessToken)) {
-                log.warn("UPS token endpoint returned no access_token; response: {}", response);
+                // Sprint 51 BS-L1 — redact credentials from the echoed body
+                // before it lands in a persistent log store.
+                String safeBody = LogRedaction.redactSecrets(response, clientId, clientSecret);
+                log.warn("UPS token endpoint returned no access_token; response: {}", safeBody);
                 LAST_AUTH_DETAIL.set("UPS returned no access token.");
                 return buildFallbackToken(clientId, clientSecret);
             }
@@ -258,9 +269,12 @@ public class UpsConnector implements CarrierConnector {
             // UPS puts the reason ({"response":{"errors":[{"code":"...","message":"..."}]}})
             // in the response body. Surface it in the log AND to the operator so
             // verify failures are actionable (invalid ClientId vs env mismatch).
+            // Sprint 51 BS-L1 — scrub credentials before logging; the UPS 401
+            // body sometimes echoes the presented clientId verbatim.
             String body = ex.getResponseBodyAsString();
             int status = ex.getStatusCode().value();
-            log.warn("UPS token request rejected (HTTP {}): {} — using local fallback token.", status, body);
+            String safeBody = LogRedaction.redactSecrets(body, clientId, clientSecret);
+            log.warn("UPS token request rejected (HTTP {}): {} — using local fallback token.", status, safeBody);
             LAST_AUTH_DETAIL.set(describeUpsAuthError(status, body, isSandbox(environment)));
             return buildFallbackToken(clientId, clientSecret);
         } catch (Exception ex) {

@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { reportClientError } from '../../utils/errorReport'
 
 /**
  * Sprint 49 Tier 4 Fix 1 — top-level ErrorBoundary.
@@ -27,9 +28,10 @@ export default class AppErrorBoundary extends Component<AppErrorBoundaryProps, A
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    // Console.error is the ops-visible surface; if we later add a
-    // client-side error reporter (Sentry / Rollbar), wire it here.
     console.error('[AppErrorBoundary] Unhandled render error', error, info)
+    // Sprint 51 FE-M3 — POST to /api/v1/client-errors so ops sees the
+    // crash without relying on the operator to screenshot the console.
+    reportClientError(error, { componentStack: info.componentStack })
   }
 
   private handleReload = () => {

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
+import { clearAppStorage } from '../utils/session'
 
 // Internal types — no external caller needs these.
 type CarrierId = 'fedex' | 'ups' | 'usps' | 'dhl'
@@ -205,9 +206,9 @@ export const useAppSession = () => useSyncExternalStore(subscribe, getSnapshot, 
 export const bootstrapSessionFromCookie = async (): Promise<void> => {
   if (!isBrowser()) return
   try {
+    // Sprint 51 FE-M1 — no dev-hostname:8080 fallback (see apiClient.ts).
     const base =
-      (import.meta.env?.VITE_API_BASE_URL as string | undefined) ||
-      `${window.location.protocol}//${window.location.hostname}:8080/api/v1`
+      (import.meta.env?.VITE_API_BASE_URL as string | undefined) || '/api/v1'
     const res = await fetch(`${base}/auth/session`, {
       method: 'GET',
       credentials: 'include',
@@ -292,11 +293,12 @@ export const clearAuthSession = () => {
 
   window.localStorage.removeItem(STORAGE_KEYS.username)
   window.localStorage.removeItem(STORAGE_KEYS.role)
-  // The carrier mirror is session state too. Leaving it behind meant the
-  // next person to sign in on this machine inherited the previous user's
-  // carrier — and it feeds a routing decision, so a carrier-less admin
-  // could silently skip the carrier-setup redirect.
-  window.localStorage.removeItem(STORAGE_KEYS.carriers)
+  // Sprint 51 FE-M2 — sweep per-user caches too (drafts, table layouts,
+  // connected-carrier snapshot) so a shared machine doesn't hand the
+  // next operator the previous user's in-progress state. Supersedes the
+  // single-key removal: the carrier mirror feeds a routing decision, so
+  // it must not outlive the session, and neither should the rest.
+  clearAppStorage()
   emitSessionChange()
 }
 

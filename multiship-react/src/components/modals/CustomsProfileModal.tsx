@@ -11,6 +11,7 @@ import {
   FiX,
 } from 'react-icons/fi'
 import { customsProfileService, type CustomsProfile } from '../../api/customsProfileService'
+import { isAbortError } from '../../api/apiClient'
 import type { Client } from '../../api/clientService'
 import {
   COUNTRIES,
@@ -260,7 +261,10 @@ export default function CustomsProfileModal({
       .then((list) => {
         if (!cancelled) setFetchedProfiles(list)
       })
-      .catch(() => {})
+      // Sprint 51 FE-L3 — log instead of silently hiding profile-list failure.
+      .catch((e) => {
+        if (!isAbortError(e)) console.debug('[secondary load] customsProfile.list', e)
+      })
     return () => {
       cancelled = true
     }

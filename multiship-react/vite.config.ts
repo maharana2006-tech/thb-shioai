@@ -2,7 +2,20 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  // Sprint 51 FE-M1 — fail the build if a production bundle would otherwise
+  // ship with no VITE_API_BASE_URL. Runtime code used to fall back to
+  // `${hostname}:8080`, which is a dev-only assumption (in prod the API
+  // lives at a proxied /api on the same origin, not on port 8080).
+  if (mode === 'production' && !process.env.VITE_API_BASE_URL) {
+    throw new Error(
+      'VITE_API_BASE_URL is required for production builds. ' +
+        'Set it to the deployed API origin (e.g. https://app.example.com/api/v1) ' +
+        'or leave empty to use a relative /api/v1 by exporting VITE_API_BASE_URL="/api/v1".',
+    )
+  }
+
+  return {
   plugins: [react()],
   build: {
     // Sprint 51 T6d (audit finding #15) — pull the biggest vendor libs
@@ -40,4 +53,5 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
   },
+  }
 })
