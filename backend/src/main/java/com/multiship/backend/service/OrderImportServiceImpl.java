@@ -1983,6 +1983,22 @@ public class OrderImportServiceImpl implements OrderImportService {
             java.util.regex.Pattern.compile("^\\d{4,6}(\\.?\\d{2,4}){0,2}$");
     private static final java.util.Set<String> WEIGHT_UNITS = java.util.Set.of("LB", "KG", "LBS", "KGS", "OZ");
     private static final java.util.Set<String> BILL_TO_VALUES = java.util.Set.of("SENDER", "RECIPIENT", "THIRD_PARTY");
+    /**
+     * Sprint 51 security fix — server-side XSS guard mirroring the SPA's
+     * SAFE_TEXT_RE. The CSV/XLSX import and the public External API both
+     * write recipient names straight to the DB WITHOUT passing through the
+     * React form regex, and those values later render in the operator
+     * dashboard and print on labels/packing slips. React escapes on render,
+     * so this is defense-in-depth, but the check belongs on the server too:
+     * reject angle brackets so no stored markup can reach a non-React
+     * consumer (PDF, CSV export, a future template engine). Null/blank pass.
+     */
+    private static final java.util.regex.Pattern SAFE_TEXT_RE =
+            java.util.regex.Pattern.compile("^[^<>]*$");
+    /** Free-text columns the SAFE_TEXT guard applies to, label → getter. */
+    private static boolean unsafeText(String v) {
+        return v != null && !SAFE_TEXT_RE.matcher(v).matches();
+    }
     /** Sanity cap so a stray grams value doesn't book a 5-ton parcel. */
     private static final BigDecimal MAX_WEIGHT = new BigDecimal("9999");
 
@@ -2075,6 +2091,20 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (row.getItemUnitValue() != null && row.getItemUnitValue().signum() <= 0) {
             errors.add("itemUnitValue must be > 0");
         }
+
+        // Sprint 51 security fix — reject stored markup in free-text fields
+        // (server-side mirror of the SPA guard; also covers non-UI import).
+        // Each message starts with the column name so the review UI renders
+        // it under that field, matching the existing per-field convention.
+        if (unsafeText(row.getRecipientName()))    errors.add("recipientName must not contain < or >");
+        if (unsafeText(row.getRecipientCompany())) errors.add("recipientCompany must not contain < or >");
+        if (unsafeText(row.getAddressLine1()))     errors.add("addressLine1 must not contain < or >");
+        if (unsafeText(row.getAddressLine2()))     errors.add("addressLine2 must not contain < or >");
+        if (unsafeText(row.getCity()))             errors.add("city must not contain < or >");
+        if (unsafeText(row.getState()))            errors.add("state must not contain < or >");
+        if (unsafeText(row.getItemDescription()))  errors.add("itemDescription must not contain < or >");
+        if (unsafeText(row.getReference()))        errors.add("reference must not contain < or >");
+
         return errors;
     }
 

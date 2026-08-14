@@ -89,13 +89,17 @@ public class ClientSecretEncryptionExecutor {
         int carrierConfigCount = encryptPlaintextColumn("carrier_config", "client_secret");
         int accountRefCount = encryptPlaintextColumn("carrier_account_ref", "client_secret");
         int userCount = encryptPlaintextColumn("users", "carrier_client_secret");
-        if (carrierConfigCount == 0 && accountRefCount == 0 && userCount == 0) {
+        // Sprint 51 security fix — access_token became an encrypted column
+        // at the same time; back-fill any plaintext tokens already on disk.
+        int accessTokenCount = encryptPlaintextColumn("carrier_config", "access_token");
+        if (carrierConfigCount == 0 && accountRefCount == 0 && userCount == 0
+                && accessTokenCount == 0) {
             log.info("ClientSecretEncryptionExecutor: nothing to migrate — "
-                    + "all client_secret values already encrypted.");
+                    + "all secret columns already encrypted.");
         } else {
-            log.info("ClientSecretEncryptionExecutor: encrypted {} carrier_config + "
-                    + "{} carrier_account_ref + {} users rows.",
-                    carrierConfigCount, accountRefCount, userCount);
+            log.info("ClientSecretEncryptionExecutor: encrypted {} carrier_config.client_secret + "
+                    + "{} carrier_account_ref + {} users + {} carrier_config.access_token rows.",
+                    carrierConfigCount, accountRefCount, userCount, accessTokenCount);
         }
     }
 
