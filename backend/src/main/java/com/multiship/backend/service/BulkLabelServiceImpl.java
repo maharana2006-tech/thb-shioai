@@ -9,6 +9,7 @@ import com.multiship.backend.model.BulkLabelJob;
 import com.multiship.backend.repository.BulkLabelJobRepository;
 import com.multiship.backend.repository.OrderRepository;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -29,6 +30,7 @@ import java.util.Base64;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -103,6 +105,35 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         ensureExecutors();
         log.info("BulkLabelServiceImpl fan-out ready: workerConcurrency={} maxPerTenant={}",
                 workerConcurrency, maxPerTenant);
+    }
+
+    /**
+     * Sprint 51 BP-M2 — drain the fan-out + dispatch pools on shutdown so
+     * in-flight bulk-label jobs get up to 30s to finish before the JVM
+     * exits. Without this, a K8s rolling deploy (SIGTERM → 30s grace →
+     * SIGKILL) killed workers mid-carrier-call, leaving the job row stuck
+     * in RUNNING and one carrier charge with no local record. Combined
+     * with server.shutdown=graceful + spring.lifecycle.timeout-per-shutdown-
+     * phase=30s the whole stop dance stays inside the K8s grace window.
+     */
+    @PreDestroy
+    void shutdownExecutors() {
+        shutdownGracefully("bulk-label-fanout", fanOutExecutor);
+        shutdownGracefully("bulk-label-dispatch", dispatchExecutor);
+    }
+
+    private static void shutdownGracefully(String name, ExecutorService pool) {
+        if (pool == null) return;
+        pool.shutdown();
+        try {
+            if (!pool.awaitTermination(30, TimeUnit.SECONDS)) {
+                log.warn("{} did not drain within 30s — forcing shutdownNow()", name);
+                pool.shutdownNow();
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            pool.shutdownNow();
+        }
     }
 
     /**

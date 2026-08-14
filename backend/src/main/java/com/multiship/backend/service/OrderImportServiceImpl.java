@@ -25,6 +25,7 @@ import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -45,6 +46,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Sprint 40 impl. Format detection by filename extension:
@@ -184,6 +186,27 @@ public class OrderImportServiceImpl implements OrderImportService {
         ensureExecutors();
         log.info("OrderImportServiceImpl fan-out ready: commitConcurrency={} maxPerTenant={}",
                 importCommitConcurrency, importMaxPerTenant);
+    }
+
+    /**
+     * Sprint 51 BP-M2 — mirror BulkLabelServiceImpl. Give the in-flight
+     * commit workers up to 30s to persist their orders before the JVM
+     * exits so a rolling deploy doesn't strand half a batch with no
+     * order row saved.
+     */
+    @PreDestroy
+    void shutdownExecutors() {
+        if (fanOutExecutor == null) return;
+        fanOutExecutor.shutdown();
+        try {
+            if (!fanOutExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                log.warn("order-import-commit did not drain within 30s — forcing shutdownNow()");
+                fanOutExecutor.shutdownNow();
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            fanOutExecutor.shutdownNow();
+        }
     }
 
     /** Lazy fallback — see the BulkLabelServiceImpl.ensureExecutors javadoc.
@@ -360,41 +383,74 @@ public class OrderImportServiceImpl implements OrderImportService {
     void validateReferences(List<OrderImportRowDTO> rows) {
         if (clientRepository == null || rows.isEmpty()) return;
 
+        // ---- Sprint 51 BP-M6: build the code set from the CSV rows so
+        //      lookups stay bounded even on a mega-tenant install. Plus the
+        //      caller's tenant scope (when scoped) so a partial match to
+        //      the caller's clientCode always resolves.
+        java.util.Set<String> rowClientCodes = new java.util.HashSet<>();
+        for (OrderImportRowDTO row : rows) {
+            if (StringUtils.hasText(row.getClientCode())) {
+                rowClientCodes.add(row.getClientCode().trim().toUpperCase(Locale.ROOT));
+            }
+        }
+        // A scoped USER always sees their own tenant + never sees another's.
+        // Add the caller's own code so a blank clientCode row (already clamped
+        // upstream) still validates against something.
+        if (tenantScope != null) {
+            tenantScope.resolveScope().ifPresent(s -> rowClientCodes.add(s.toUpperCase(Locale.ROOT)));
+        }
+
         // ---- one snapshot per call: batched lookups, no per-row queries ----
         java.util.Set<String> activeClients = new java.util.HashSet<>();
         java.util.Set<String> inactiveClients = new java.util.HashSet<>();
-        for (Client c : clientRepository.findAll()) {
-            String code = c.getClientCode() == null ? null : c.getClientCode().toUpperCase(Locale.ROOT);
-            if (code == null) continue;
-            if (c.isActive()) activeClients.add(code); else inactiveClients.add(code);
-        }
-        Map<Long, String> warehouseCodeById = new LinkedHashMap<>();
-        if (warehouseRepository != null) {
-            for (Warehouse w : warehouseRepository.findAll()) {
-                if (w.getCode() != null) warehouseCodeById.put(w.getId(), w.getCode().toUpperCase(Locale.ROOT));
+        if (!rowClientCodes.isEmpty()) {
+            for (Client c : clientRepository.findByClientCodeInIgnoreCase(rowClientCodes)) {
+                String code = c.getClientCode() == null ? null : c.getClientCode().toUpperCase(Locale.ROOT);
+                if (code == null) continue;
+                if (c.isActive()) activeClients.add(code); else inactiveClients.add(code);
             }
         }
-        // clientCode → set of attached warehouse codes
+        // clientCode → set of attached warehouse codes. Sprint 51 BP-M6 —
+        // resolve only the warehouse ids referenced by the caller's clients
+        // instead of scanning every Warehouse row platform-wide.
         Map<String, java.util.Set<String>> attachedByClient = new LinkedHashMap<>();
-        if (clientWarehouseRepository != null) {
-            for (OrderImportRowDTO row : rows) {
-                String cc = row.getClientCode();
-                if (!StringUtils.hasText(cc)) continue;
-                String key = cc.toUpperCase(Locale.ROOT);
-                if (attachedByClient.containsKey(key)) continue;
+        java.util.Map<Long, String> warehouseCodeById = new java.util.HashMap<>();
+        if (clientWarehouseRepository != null && !rowClientCodes.isEmpty()) {
+            // First pass: collect every warehouseId referenced by any of our
+            // clients' attachments (single N-attachment fetch per client
+            // reused for the per-row check below).
+            java.util.Map<String, java.util.List<ClientWarehouse>> attachmentsByClient = new LinkedHashMap<>();
+            java.util.Set<Long> warehouseIds = new java.util.HashSet<>();
+            for (String key : rowClientCodes) {
+                java.util.List<ClientWarehouse> attached = clientWarehouseRepository
+                        .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(key);
+                attachmentsByClient.put(key, attached);
+                for (ClientWarehouse cw : attached) {
+                    if (cw.getWarehouseId() != null) warehouseIds.add(cw.getWarehouseId());
+                }
+            }
+            if (warehouseRepository != null && !warehouseIds.isEmpty()) {
+                for (Warehouse w : warehouseRepository.findByIdInAndActiveTrue(warehouseIds)) {
+                    if (w.getCode() != null) {
+                        warehouseCodeById.put(w.getId(), w.getCode().toUpperCase(Locale.ROOT));
+                    }
+                }
+            }
+            for (var entry : attachmentsByClient.entrySet()) {
                 java.util.Set<String> codes = new java.util.HashSet<>();
-                for (ClientWarehouse cw : clientWarehouseRepository
-                        .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(key)) {
+                for (ClientWarehouse cw : entry.getValue()) {
                     String code = warehouseCodeById.get(cw.getWarehouseId());
                     if (code != null) codes.add(code);
                 }
-                attachedByClient.put(key, codes);
+                attachedByClient.put(entry.getKey(), codes);
             }
         }
-        // carrier → set of known account numbers (uppercased)
+        // carrier → set of known account numbers (uppercased). Sprint 51
+        // BP-M6 — only the caller's clients' accounts + platform accounts
+        // (customerNo IS NULL / blank), never a competitor's numbers.
         Map<String, java.util.Set<String>> accountsByCarrier = new LinkedHashMap<>();
-        if (accountRefRepository != null) {
-            for (CarrierAccountRef ref : accountRefRepository.findAll()) {
+        if (accountRefRepository != null && !rowClientCodes.isEmpty()) {
+            for (CarrierAccountRef ref : accountRefRepository.findActiveByCustomerNoInOrPlatform(rowClientCodes)) {
                 if (ref.getCarrierCode() == null || ref.getAccountNumber() == null) continue;
                 accountsByCarrier
                         .computeIfAbsent(ref.getCarrierCode().toUpperCase(Locale.ROOT), k -> new java.util.HashSet<>())
@@ -1229,44 +1285,68 @@ public class OrderImportServiceImpl implements OrderImportService {
         // carrier account + every warehouse gets baked into the reference
         // sheet with cascading dropdowns; operators pick per-row inside the
         // workbook.
-        List<Client> clients = clientRepository != null
-                ? clientRepository.findAll()
-                : List.of();
-        List<CarrierAccountRef> accounts = accountRefRepository != null
-                ? accountRefRepository.findAll()
-                : List.of();
+        //
+        // Sprint 51 BP-M6 — scoped USERs get their own tenant's clients +
+        // accounts baked into the dropdowns, never a competitor's. Platform
+        // operators still see everything so they can prep templates for any
+        // client.
+        java.util.Optional<String> scope = tenantScope == null ? java.util.Optional.empty() : tenantScope.resolveScope();
+        List<Client> clients;
+        if (clientRepository == null) {
+            clients = List.of();
+        } else if (scope.isPresent()) {
+            clients = clientRepository.findByClientCodeInIgnoreCase(
+                    java.util.List.of(scope.get().toUpperCase(Locale.ROOT)));
+        } else {
+            clients = clientRepository.findAll();
+        }
+        List<CarrierAccountRef> accounts;
+        if (accountRefRepository == null) {
+            accounts = List.of();
+        } else if (scope.isPresent()) {
+            accounts = accountRefRepository.findActiveByCustomerNoInOrPlatform(
+                    java.util.List.of(scope.get().toUpperCase(Locale.ROOT)));
+        } else {
+            accounts = accountRefRepository.findByActiveTrue();
+        }
         List<com.multiship.backend.model.ShippingService> services = shippingServiceRepository != null
                 ? shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()
                 : List.of();
         List<com.multiship.backend.model.PackagePreset> presets = packagePresetRepository != null
                 ? packagePresetRepository.findAllByOrderByIsDefaultDescNameAsc()
                 : List.of();
-        // Precompute clientCode → List<warehouseCode>. ClientWarehouse only
-        // carries warehouseId; resolve to Warehouse.code once via a single
-        // findAll on WarehouseRepository so the builder doesn't need a repo
-        // dependency (avoids test-constructor fanout).
+        // Precompute clientCode → List<warehouseCode>. Sprint 51 BP-M6 —
+        // resolve only the warehouse ids referenced by the tenant-visible
+        // clients rather than scanning every Warehouse platform-wide.
         java.util.Map<Long, String> warehouseCodeById = new java.util.HashMap<>();
-        if (warehouseRepository != null) {
-            for (Warehouse w : warehouseRepository.findAll()) {
-                if (w.getId() != null && w.getCode() != null
-                        && Boolean.TRUE.equals(w.getActive())) {
-                    warehouseCodeById.put(w.getId(), w.getCode());
-                }
-            }
-        }
         java.util.Map<String, List<String>> clientWarehouseCodes = new java.util.HashMap<>();
-        if (clientWarehouseRepository != null) {
+        if (clientWarehouseRepository != null && !clients.isEmpty()) {
+            java.util.Map<String, List<ClientWarehouse>> attachmentsByClient = new java.util.LinkedHashMap<>();
+            java.util.Set<Long> warehouseIds = new java.util.HashSet<>();
             for (Client c : clients) {
                 String code = c.getClientCode();
                 if (code == null || code.isBlank()) continue;
                 List<ClientWarehouse> attached = clientWarehouseRepository
                         .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(code);
-                List<String> codes = new java.util.ArrayList<>();
+                attachmentsByClient.put(code.toUpperCase(Locale.ROOT), attached);
                 for (ClientWarehouse cw : attached) {
+                    if (cw.getWarehouseId() != null) warehouseIds.add(cw.getWarehouseId());
+                }
+            }
+            if (warehouseRepository != null && !warehouseIds.isEmpty()) {
+                for (Warehouse w : warehouseRepository.findByIdInAndActiveTrue(warehouseIds)) {
+                    if (w.getId() != null && w.getCode() != null) {
+                        warehouseCodeById.put(w.getId(), w.getCode());
+                    }
+                }
+            }
+            for (var entry : attachmentsByClient.entrySet()) {
+                List<String> codes = new java.util.ArrayList<>();
+                for (ClientWarehouse cw : entry.getValue()) {
                     String whCode = warehouseCodeById.get(cw.getWarehouseId());
                     if (whCode != null) codes.add(whCode);
                 }
-                clientWarehouseCodes.put(code.toUpperCase(Locale.ROOT), codes);
+                clientWarehouseCodes.put(entry.getKey(), codes);
             }
         }
         // accountId parameter is ignored — universal template.
