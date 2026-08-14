@@ -41,8 +41,8 @@ export default function WebhookSubscriptionsPage() {
       ])
       setKeys(Array.isArray(ks.data) ? ks.data : [])
       setSubs(ss)
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Failed to load webhook subscriptions.')
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : 'Failed to load webhook subscriptions.')
     } finally {
       setLoading(false)
     }
@@ -65,8 +65,8 @@ export default function WebhookSubscriptionsPage() {
       await webhookSubscriptionService.remove(s.id)
       notify.success('Subscription deleted.')
       refresh()
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Delete failed.')
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : 'Delete failed.')
     }
   }
 

@@ -99,20 +99,22 @@ function DataExplorer({ clients }: { clients: Client[] }) {
   const [filters, setFilters] = useState<ReportFilters>({})
   const [running, setRunning] = useState<Dataset | null>(null)
 
-  const set = <K extends keyof ReportFilters>(k: K, v: ReportFilters[K]) =>
-    setFilters((f) => ({ ...f, [k]: v }))
-  const setStr = (k: keyof ReportFilters) => (v: string) =>
-    set(k, (v === '' ? undefined : v) as any)
-  const setNum = (k: keyof ReportFilters) => (v: string) =>
-    set(k, (v === '' ? undefined : Number(v)) as any)
+  // Split typed helpers keep the k -> v type-flow sound without an `any` cast: the
+  // key literally selects a string-valued (or number-valued) key of ReportFilters.
+  type StringKey = NonNullable<{ [K in keyof ReportFilters]: ReportFilters[K] extends string | undefined ? K : never }[keyof ReportFilters]>
+  type NumberKey = NonNullable<{ [K in keyof ReportFilters]: ReportFilters[K] extends number | undefined ? K : never }[keyof ReportFilters]>
+  const setStr = <K extends StringKey>(k: K) => (v: string) =>
+    setFilters((f) => ({ ...f, [k]: v === '' ? undefined : v }))
+  const setNum = <K extends NumberKey>(k: K) => (v: string) =>
+    setFilters((f) => ({ ...f, [k]: v === '' ? undefined : Number(v) }))
 
   const runDownload = async (dataset: Dataset) => {
     setRunning(dataset)
     try {
       const filename = `${dataset.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`
       await reportService.downloadCsv(dataset, filters, filename)
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Download failed.')
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : 'Download failed.')
     } finally {
       setRunning(null)
     }
@@ -201,8 +203,8 @@ function Schedules({ clients }: { clients: Client[] }) {
       ])
       setSchedules(ss)
       setGenerated(gg)
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Failed to load schedules.')
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : 'Failed to load schedules.')
     } finally {
       setLoading(false)
     }
@@ -220,8 +222,8 @@ function Schedules({ clients }: { clients: Client[] }) {
       await reportService.runNow(s.id)
       notify.success('Run kicked off — check the Generated section shortly.')
       refresh()
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Run failed.')
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : 'Run failed.')
     }
   }
 
@@ -232,8 +234,8 @@ function Schedules({ clients }: { clients: Client[] }) {
       await reportService.deleteSchedule(s.id)
       notify.success('Schedule deleted.')
       refresh()
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Delete failed.')
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : 'Delete failed.')
     }
   }
 

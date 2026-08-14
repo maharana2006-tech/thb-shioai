@@ -394,7 +394,8 @@ export default function CarrierConnections({
     setBusyId(account.id)
     try {
       const response = await accountRefService.verifyAccount(account.id)
-      response.data?.verified ? notify.success(response.message) : notify.error(response.message)
+      if (response.data?.verified) notify.success(response.message)
+      else notify.error(response.message)
       await loadAccounts()
     } catch (error) {
       notify.apiError(error, 'Verification failed.')

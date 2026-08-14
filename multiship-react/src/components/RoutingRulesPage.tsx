@@ -78,8 +78,8 @@ export default function RoutingRulesPage() {
       setRules(rulesRes)
       // Only warehouses where the embedded Warehouse resolved — filter defensively.
       setWarehouses((whRes.data ?? []).filter((cw) => cw.warehouse !== null))
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Failed to load rules.')
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : 'Failed to load rules.')
     } finally {
       setLoading(false)
     }
@@ -100,8 +100,8 @@ export default function RoutingRulesPage() {
     try {
       await routingRuleService.save(clientCode, { ...rule, priority: nextPriority })
       refresh()
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Failed to reorder rule.')
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : 'Failed to reorder rule.')
     }
   }
 
@@ -112,8 +112,8 @@ export default function RoutingRulesPage() {
       await routingRuleService.remove(clientCode, rule.id)
       notify.success('Rule deleted.')
       refresh()
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Failed to delete rule.')
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : 'Failed to delete rule.')
     }
   }
 
@@ -299,8 +299,10 @@ function RuleEditorModal({
 
   const set = <K extends keyof RoutingRule>(k: K, v: RoutingRule[K]) =>
     setDraft((d) => ({ ...d, [k]: v }))
-  const setNum = (k: keyof RoutingRule) => (v: string) => set(k, (v === '' ? null : Number(v)) as any)
-  const setStr = (k: keyof RoutingRule) => (v: string) => set(k, (v === '' ? null : v) as any)
+  const setNum = <K extends keyof RoutingRule>(k: K) => (v: string) =>
+    set(k, (v === '' ? null : Number(v)) as RoutingRule[K])
+  const setStr = <K extends keyof RoutingRule>(k: K) => (v: string) =>
+    set(k, (v === '' ? null : v) as RoutingRule[K])
 
   const save = async () => {
     if (!draft.name.trim()) {
@@ -557,10 +559,10 @@ function DryRunPanel({
 
   const set = <K extends keyof RoutingEvaluationRequest>(k: K, v: RoutingEvaluationRequest[K]) =>
     setReq((r) => ({ ...r, [k]: v }))
-  const setNum = (k: keyof RoutingEvaluationRequest) => (v: string) =>
-    set(k, (v === '' ? null : Number(v)) as any)
-  const setStr = (k: keyof RoutingEvaluationRequest) => (v: string) =>
-    set(k, (v === '' ? null : v) as any)
+  const setNum = <K extends keyof RoutingEvaluationRequest>(k: K) => (v: string) =>
+    set(k, (v === '' ? null : Number(v)) as RoutingEvaluationRequest[K])
+  const setStr = <K extends keyof RoutingEvaluationRequest>(k: K) => (v: string) =>
+    set(k, (v === '' ? null : v) as RoutingEvaluationRequest[K])
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-end">
