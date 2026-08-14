@@ -510,17 +510,23 @@ const FIELD_KEYS = [
   'hsCode', 'countryOfOrigin',
 ] as const
 
-function errorField(message: string): string | null {
+/** `extraKeys` carries the row's tenant custom fields, whose messages are
+ *  keyed by fieldKey exactly like the built-in columns. */
+function errorField(message: string, extraKeys: string[] = []): string | null {
   const first = message.split(/[\s']/, 1)[0]
-  return (FIELD_KEYS as readonly string[]).includes(first) ? first : null
+  if ((FIELD_KEYS as readonly string[]).includes(first)) return first
+  return extraKeys.includes(first) ? first : null
 }
 
 /** Split a row's errors into per-field buckets + row-level leftovers. */
-function bucketErrors(errors: string[]): { byField: Record<string, string[]>; rowLevel: string[] } {
+function bucketErrors(
+  errors: string[],
+  extraKeys: string[] = [],
+): { byField: Record<string, string[]>; rowLevel: string[] } {
   const byField: Record<string, string[]> = {}
   const rowLevel: string[] = []
   for (const msg of errors) {
-    const f = errorField(msg)
+    const f = errorField(msg, extraKeys)
     if (f) (byField[f] ??= []).push(msg)
     else rowLevel.push(msg)
   }
@@ -627,9 +633,14 @@ function PreviewStep({
 
       <div className="space-y-3">
         {preview.rows.map((r) => {
-          const { byField, rowLevel } = bucketErrors(r.errors ?? [])
+          // Tenant custom fields arrive keyed by fieldKey; they get their own
+          // labelled cells so their errors land under the right column too.
+          const customKeys = Object.keys(r.customFields ?? {})
+          const { byField, rowLevel } = bucketErrors(r.errors ?? [], customKeys)
           const ok = (r.errors?.length ?? 0) === 0
           const patch = (p: Partial<OrderImportRow>) => onEdit(r.rowNumber, p)
+          const patchCustom = (key: string, v: string) =>
+            patch({ customFields: { ...(r.customFields ?? {}), [key]: v } })
           return (
             <div
               key={r.rowNumber}
@@ -723,6 +734,16 @@ function PreviewStep({
                               errors={byField.hsCode} onCommit={(v) => patch({ hsCode: v })} />
                 <LabeledField label="countryOfOrigin" mono value={r.countryOfOrigin ?? ''}
                               errors={byField.countryOfOrigin} onCommit={(v) => patch({ countryOfOrigin: v.toUpperCase() })} />
+                {/* Tenant-defined columns, same treatment as the built-ins. */}
+                {customKeys.map((key) => (
+                  <LabeledField
+                    key={key}
+                    label={key}
+                    value={r.customFields?.[key] ?? ''}
+                    errors={byField[key]}
+                    onCommit={(v) => patchCustom(key, v)}
+                  />
+                ))}
               </div>
             </div>
           )

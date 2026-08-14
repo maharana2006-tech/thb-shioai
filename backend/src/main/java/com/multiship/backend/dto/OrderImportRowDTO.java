@@ -133,4 +133,13 @@ public class OrderImportRowDTO {
     private String generatedMessage;
     /** Shared id stamped on every order generated from this same file upload. Null until commit. */
     private Integer batchId;
+
+    /**
+     * Tier 4 — values for tenant-defined custom fields, keyed by fieldKey.
+     * Populated from any spreadsheet column whose header matches an active
+     * {@code CustomFieldDefinition} for the row's client, validated against
+     * the definition (required / SELECT options / NUMBER / DATE), and
+     * persisted onto the order at commit.
+     */
+    private java.util.Map<String, String> customFields;
 }

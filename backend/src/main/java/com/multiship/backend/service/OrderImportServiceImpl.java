@@ -94,6 +94,20 @@ public class OrderImportServiceImpl implements OrderImportService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private AddressValidationService addressValidationService;
 
+    /* --- Tier 3 rule tables. Optional so the existing test constructors
+           (which pass nulls) keep working; each check no-ops when absent. --- */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ServicePackageRepository servicePackageRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CarrierShippingLimitRepository carrierLimitRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ClientAllowedServiceRepository clientAllowedServiceRepository;
+    /* --- Tier 4: tenant-defined custom-field definitions + value store. --- */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CustomFieldDefinitionRepository customFieldDefinitionRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CustomFieldService customFieldService;
+
     /** Saved-import store for "Save to Data History" (commit-without-labels). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
@@ -541,6 +555,334 @@ public class OrderImportServiceImpl implements OrderImportService {
         return StringUtils.hasText(v) ? v.trim().toUpperCase(Locale.ROOT) : null;
     }
 
+    /* ------------- Tier 4: tenant-defined custom-field columns ------------- */
+
+    /**
+     * Validate the non-schema columns against each client's active
+     * {@link com.multiship.backend.model.CustomFieldDefinition}s.
+     *
+     * <p>A definition marked required must have a value on every row for
+     * that client (ERROR — the order can't commit without it). Values that
+     * are present are type-checked: NUMBER must parse, DATE must be
+     * ISO {@code yyyy-MM-dd}, and SELECT must be one of the configured
+     * options. Columns that match no definition are reported as a WARNING
+     * and ignored, so a stray "Notes" column never blocks an import but
+     * also never silently pretends to have been saved.
+     *
+     * <p>Row values are re-keyed to the definition's exact {@code fieldKey}
+     * so the commit step can hand them straight to
+     * {@code CustomFieldService.upsertValues}.
+     */
+    void validateCustomFields(List<OrderImportRowDTO> rows) {
+        if (rows.isEmpty() || customFieldDefinitionRepository == null) return;
+
+        // clientCode ("" = platform) → its applicable definitions
+        Map<String, List<com.multiship.backend.model.CustomFieldDefinition>> defsByClient = new LinkedHashMap<>();
+        for (OrderImportRowDTO row : rows) {
+            String tenant = normalizeOrNull(row.getClientCode());
+            String key = tenant == null ? "" : tenant;
+            defsByClient.computeIfAbsent(key, k ->
+                    customFieldDefinitionRepository.findApplicable(k.isEmpty() ? null : k));
+        }
+
+        for (OrderImportRowDTO row : rows) {
+            String tenant = normalizeOrNull(row.getClientCode());
+            List<com.multiship.backend.model.CustomFieldDefinition> defs =
+                    defsByClient.getOrDefault(tenant == null ? "" : tenant, List.of());
+            Map<String, String> provided = row.getCustomFields() == null
+                    ? new LinkedHashMap<>() : new LinkedHashMap<>(row.getCustomFields());
+            if (defs.isEmpty() && provided.isEmpty()) continue;
+
+            Map<String, String> resolved = new LinkedHashMap<>();
+            for (com.multiship.backend.model.CustomFieldDefinition def : defs) {
+                if (def.getFieldKey() == null) continue;
+                // Accept either the fieldKey or the human label as the header.
+                String value = null;
+                String matchedHeader = null;
+                for (Map.Entry<String, String> e : provided.entrySet()) {
+                    String h = e.getKey().trim();
+                    if (h.equalsIgnoreCase(def.getFieldKey())
+                            || (def.getLabel() != null && h.equalsIgnoreCase(def.getLabel()))) {
+                        value = e.getValue();
+                        matchedHeader = e.getKey();
+                        break;
+                    }
+                }
+                if (matchedHeader != null) provided.remove(matchedHeader);
+
+                if (!StringUtils.hasText(value)) {
+                    if (Boolean.TRUE.equals(def.getRequired())) {
+                        addError(row, def.getFieldKey() + " is required (custom field"
+                                + (def.getLabel() == null ? "" : " — " + def.getLabel()) + ")");
+                    }
+                    continue;
+                }
+
+                String trimmed = value.trim();
+                switch (def.getFieldType()) {
+                    case NUMBER -> {
+                        try {
+                            new BigDecimal(trimmed);
+                        } catch (NumberFormatException ex) {
+                            addError(row, def.getFieldKey() + " '" + trimmed + "' must be a number");
+                        }
+                    }
+                    case DATE -> {
+                        if (!trimmed.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                            addError(row, def.getFieldKey() + " '" + trimmed + "' must be a date (YYYY-MM-DD)");
+                        }
+                    }
+                    case SELECT -> {
+                        java.util.Set<String> options = new java.util.LinkedHashSet<>();
+                        if (StringUtils.hasText(def.getSelectOptions())) {
+                            for (String o : def.getSelectOptions().split(",")) {
+                                if (StringUtils.hasText(o)) options.add(o.trim().toUpperCase(Locale.ROOT));
+                            }
+                        }
+                        if (!options.isEmpty() && !options.contains(trimmed.toUpperCase(Locale.ROOT))) {
+                            addError(row, def.getFieldKey() + " '" + trimmed + "' must be one of: "
+                                    + def.getSelectOptions());
+                        }
+                    }
+                    default -> { /* TEXT — sanitise() already ran at parse time */ }
+                }
+                // Keep the value even when it failed a check: the review UI
+                // renders it under its own header so the operator can SEE and
+                // correct it. The recorded error still blocks the commit.
+                resolved.put(def.getFieldKey(), trimmed);
+            }
+
+            // Anything left over matched no definition for this client.
+            for (String unknown : provided.keySet()) {
+                addWarning(row, "column '" + unknown + "' is not a recognised field for "
+                        + (tenant == null ? "the platform" : tenant) + " — it will be ignored");
+            }
+            row.setCustomFields(resolved.isEmpty() ? null : resolved);
+        }
+    }
+
+    /* ------------- Tier 3: business rules from the rule tables ------------- */
+
+    /** Normalise any accepted weight unit to pounds — every limit is stored in lb. */
+    private static BigDecimal toPounds(BigDecimal weight, String unit) {
+        if (weight == null) return null;
+        String u = unit == null ? "LB" : unit.trim().toUpperCase(Locale.ROOT);
+        return switch (u) {
+            case "KG", "KGS" -> weight.multiply(new BigDecimal("2.20462"));
+            case "OZ" -> weight.divide(new BigDecimal("16"), 4, java.math.RoundingMode.HALF_UP);
+            default -> weight;
+        };
+    }
+
+    /** Group key used for order grouping — mirrors commit()/international rules. */
+    private static String groupKeyOf(OrderImportRowDTO row) {
+        return StringUtils.hasText(row.getOrderRef())
+                ? row.getOrderRef().trim()
+                : "__row_" + row.getRowNumber();
+    }
+
+    private static void addError(OrderImportRowDTO row, String message) {
+        List<String> errs = new ArrayList<>(row.getErrors() == null ? List.of() : row.getErrors());
+        if (!errs.contains(message)) errs.add(message);
+        row.setErrors(errs);
+    }
+
+    private static void addWarning(OrderImportRowDTO row, String message) {
+        List<String> warns = new ArrayList<>(row.getWarnings() == null ? List.of() : row.getWarnings());
+        if (!warns.contains(message)) warns.add(message);
+        row.setWarnings(warns);
+    }
+
+    /**
+     * Validate each row against the configured shipping rules rather than
+     * just its own shape:
+     *
+     * <ul>
+     *   <li><b>Service ↔ package</b> — the package must be one the chosen
+     *       service actually accepts ({@code service_package} links).</li>
+     *   <li><b>Per-service weight cap</b> — {@code ShippingService.maxWeightLb}.</li>
+     *   <li><b>Carrier limits</b> — {@code CarrierShippingLimit} max total
+     *       weight and max pieces per shipment, plus a surcharge warning once
+     *       declared value passes the free allowance.</li>
+     *   <li><b>Client entitlement</b> — a client with an explicit allowed-service
+     *       list may not use a service outside it.</li>
+     *   <li><b>Group consistency</b> — rows sharing an orderRef must agree on
+     *       recipient / carrier, because only the leader's values are used.</li>
+     *   <li><b>Duplicates</b> — two groups shipping the same thing to the same
+     *       address is nearly always a double-paste.</li>
+     * </ul>
+     *
+     * Severity follows the platform convention: something the carrier will
+     * certainly reject is an ERROR; something the resolution cascade can still
+     * handle, or that merely costs money, is a WARNING.
+     */
+    void validateBusinessRules(List<OrderImportRowDTO> rows) {
+        if (rows.isEmpty() || shippingServiceRepository == null) return;
+
+        // --- snapshot the rule tables once ---
+        Map<String, com.multiship.backend.model.ShippingService> serviceByKey = new LinkedHashMap<>();
+        for (com.multiship.backend.model.ShippingService s
+                : shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()) {
+            if (s.getCarrier() == null || s.getServiceCode() == null) continue;
+            serviceByKey.putIfAbsent(
+                    s.getCarrier().toUpperCase(Locale.ROOT) + '|' + s.getServiceCode().toUpperCase(Locale.ROOT), s);
+        }
+        Map<Long, com.multiship.backend.model.PackagePreset> presetById = new LinkedHashMap<>();
+        if (packagePresetRepository != null) {
+            for (com.multiship.backend.model.PackagePreset p
+                    : packagePresetRepository.findAllByOrderByIsDefaultDescNameAsc()) {
+                presetById.put(p.getId(), p);
+            }
+        }
+        // clientCode → allowed serviceIds (empty set = no restriction configured)
+        Map<String, java.util.Set<Long>> allowedByClient = new LinkedHashMap<>();
+        if (clientAllowedServiceRepository != null) {
+            for (OrderImportRowDTO row : rows) {
+                String cc = normalizeOrNull(row.getClientCode());
+                if (cc == null || allowedByClient.containsKey(cc)) continue;
+                java.util.Set<Long> ids = new java.util.HashSet<>();
+                for (com.multiship.backend.model.ClientAllowedService a
+                        : clientAllowedServiceRepository
+                        .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(cc)) {
+                    if (a.getServiceId() != null) ids.add(a.getServiceId());
+                }
+                allowedByClient.put(cc, ids);
+            }
+        }
+
+        // --- per-row checks ---
+        for (OrderImportRowDTO row : rows) {
+            String carrier = normalizeOrNull(row.getCarrierCode());
+            String serviceCode = normalizeOrNull(row.getServiceType());
+            if (carrier == null) continue;
+
+            com.multiship.backend.model.ShippingService service =
+                    serviceCode == null ? null : serviceByKey.get(carrier + '|' + serviceCode);
+            BigDecimal lb = toPounds(row.getWeight(), row.getWeightUnit());
+
+            if (service != null) {
+                // Per-service weight ceiling — the carrier rejects the label outright.
+                if (lb != null && service.getMaxWeightLb() != null
+                        && lb.compareTo(new BigDecimal(service.getMaxWeightLb())) > 0) {
+                    addError(row, "weight " + lb.setScale(1, java.math.RoundingMode.HALF_UP)
+                            + " lb exceeds the " + service.getMaxWeightLb() + " lb limit for " + serviceCode);
+                }
+
+                // Package must be one this service accepts.
+                String pkg = normalizeOrNull(row.getPackageType());
+                if (pkg != null && servicePackageRepository != null) {
+                    java.util.Set<String> allowedPkgs = new java.util.HashSet<>();
+                    for (com.multiship.backend.model.ServicePackage link
+                            : servicePackageRepository.findByServiceId(service.getId())) {
+                        com.multiship.backend.model.PackagePreset p = presetById.get(link.getPresetId());
+                        if (p == null) continue;
+                        if (p.getName() != null) allowedPkgs.add(p.getName().toUpperCase(Locale.ROOT));
+                        if (StringUtils.hasText(p.getCarrierPackageCode())) {
+                            allowedPkgs.add(p.getCarrierPackageCode().toUpperCase(Locale.ROOT));
+                        }
+                    }
+                    if (!allowedPkgs.isEmpty() && !allowedPkgs.contains(pkg)) {
+                        addWarning(row, "packageType '" + pkg + "' is not linked to service "
+                                + serviceCode + "; the package cascade may pick a different one");
+                    }
+                }
+
+                // Client entitlement — only enforced when the client has a list.
+                String cc = normalizeOrNull(row.getClientCode());
+                java.util.Set<Long> allowed = cc == null ? null : allowedByClient.get(cc);
+                if (allowed != null && !allowed.isEmpty() && !allowed.contains(service.getId())) {
+                    addError(row, "serviceType " + serviceCode + " is not in the allowed-service list for client " + cc);
+                }
+            }
+        }
+
+        // --- per-group checks (limits apply to the shipment, not the line) ---
+        Map<String, List<OrderImportRowDTO>> groups = new LinkedHashMap<>();
+        for (OrderImportRowDTO row : rows) {
+            groups.computeIfAbsent(groupKeyOf(row), k -> new ArrayList<>()).add(row);
+        }
+
+        for (List<OrderImportRowDTO> group : groups.values()) {
+            OrderImportRowDTO leader = group.get(0);
+            String carrier = normalizeOrNull(leader.getCarrierCode());
+            if (carrier == null) continue;
+            String serviceCode = normalizeOrNull(leader.getServiceType());
+            String country = normalizeOrNull(leader.getCountryCode());
+            String scope = "US".equals(country) || country == null ? "DOMESTIC" : "INTERNATIONAL";
+
+            // Group consistency — commit() uses ONLY the leader's recipient and
+            // carrier, so a disagreeing row silently ships to the wrong place.
+            for (int i = 1; i < group.size(); i++) {
+                OrderImportRowDTO r = group.get(i);
+                if (StringUtils.hasText(r.getRecipientName())
+                        && !r.getRecipientName().equalsIgnoreCase(leader.getRecipientName())) {
+                    addWarning(r, "recipientName differs from the first row of order " + leader.getOrderRef()
+                            + "; only the first row's recipient is used");
+                }
+                String rc = normalizeOrNull(r.getCarrierCode());
+                if (rc != null && !rc.equals(carrier)) {
+                    addWarning(r, "carrierCode differs from the first row of order " + leader.getOrderRef()
+                            + "; only the first row's carrier is used");
+                }
+            }
+
+            if (carrierLimitRepository == null) continue;
+            var limitOpt = carrierLimitRepository.resolve(carrier, serviceCode, scope);
+            if (limitOpt.isEmpty()) continue;
+            com.multiship.backend.model.CarrierShippingLimit limit = limitOpt.get();
+
+            if (limit.getMaxPackages() != null && group.size() > limit.getMaxPackages()) {
+                addError(leader, "order has " + group.size() + " pieces; " + carrier
+                        + " allows " + limit.getMaxPackages() + " per shipment");
+            }
+
+            if (limit.getMaxTotalWeightLb() != null) {
+                BigDecimal total = BigDecimal.ZERO;
+                for (OrderImportRowDTO r : group) {
+                    BigDecimal w = toPounds(r.getWeight(), r.getWeightUnit());
+                    if (w != null) total = total.add(w);
+                }
+                if (total.compareTo(limit.getMaxTotalWeightLb()) > 0) {
+                    addError(leader, "total weight " + total.setScale(1, java.math.RoundingMode.HALF_UP)
+                            + " lb exceeds the " + limit.getMaxTotalWeightLb() + " lb limit for " + carrier);
+                }
+            }
+
+            if (limit.getFreeDeclaredValue() != null) {
+                BigDecimal declared = BigDecimal.ZERO;
+                for (OrderImportRowDTO r : group) {
+                    if (r.getItemUnitValue() == null) continue;
+                    int qty = r.getItemQuantity() == null ? 1 : r.getItemQuantity();
+                    declared = declared.add(r.getItemUnitValue().multiply(BigDecimal.valueOf(qty)));
+                }
+                if (declared.compareTo(limit.getFreeDeclaredValue()) > 0) {
+                    addWarning(leader, "declared value " + declared.stripTrailingZeros().toPlainString()
+                            + " is over " + carrier + "'s free allowance of "
+                            + limit.getFreeDeclaredValue().stripTrailingZeros().toPlainString()
+                            + "; an insurance surcharge will apply");
+                }
+            }
+        }
+
+        // --- duplicate shipments across groups ---
+        Map<String, Integer> seen = new LinkedHashMap<>();
+        for (Map.Entry<String, List<OrderImportRowDTO>> entry : groups.entrySet()) {
+            OrderImportRowDTO leader = entry.getValue().get(0);
+            if (!StringUtils.hasText(leader.getRecipientName())
+                    || !StringUtils.hasText(leader.getAddressLine1())) continue;
+            String fingerprint = String.join("|",
+                    leader.getRecipientName().trim().toUpperCase(Locale.ROOT),
+                    leader.getAddressLine1().trim().toUpperCase(Locale.ROOT),
+                    leader.getPostalCode() == null ? "" : leader.getPostalCode().trim().toUpperCase(Locale.ROOT),
+                    leader.getReference() == null ? "" : leader.getReference().trim().toUpperCase(Locale.ROOT));
+            Integer firstRow = seen.putIfAbsent(fingerprint, leader.getRowNumber());
+            if (firstRow != null) {
+                addWarning(leader, "same recipient, address and reference as row " + firstRow
+                        + " — check this isn't a duplicate");
+            }
+        }
+    }
+
     /** Heuristic — treat a value as a display name when it contains a
      *  space or a lowercase letter. Wire codes are UPPER + digits by
      *  convention across UPS / FedEx / DHL. */
@@ -591,6 +933,9 @@ public class OrderImportServiceImpl implements OrderImportService {
             // Dynamic rule validation — codes checked against the live
             // client / warehouse / account / catalog tables.
             validateReferences(rows);
+            // Tier 3 — rules from the shipping catalog + limit tables.
+            validateBusinessRules(rows);
+            validateCustomFields(rows);
             // Sprint 48 — international shipments must carry customs
             // commodity data on at least one row in the group.
             validateInternationalItems(rows);
@@ -649,6 +994,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
         resolveNamesToCodes(rows);
         validateReferences(rows);
+        validateBusinessRules(rows);
+        validateCustomFields(rows);
         validateInternationalItems(rows);
         return success(buildPreview(rows), rows.size() + " row(s) validated.");
     }
@@ -758,6 +1105,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         // merge below sees only current failures.
         for (OrderImportRowDTO row : rows) row.setErrors(List.of());
         validateReferences(rows);
+        validateBusinessRules(rows);
+        validateCustomFields(rows);
         // Same for the international-item rule — operator edits could
         // have introduced a new international row without customs data.
         validateInternationalItems(rows);
@@ -1412,7 +1761,10 @@ public class OrderImportServiceImpl implements OrderImportService {
             for (CSVRecord rec : parser) {
                 rowNo++;
                 if (isBlank(rec)) continue;
-                out.add(buildRow(rowNo, name -> get(rec, headerMap, name)));
+                ColumnReader csvReader = name -> get(rec, headerMap, name);
+                OrderImportRowDTO built = buildRow(rowNo, csvReader);
+                captureExtraColumns(built, headerMap, csvReader);
+                out.add(built);
             }
         }
         return out;
@@ -1449,7 +1801,10 @@ public class OrderImportServiceImpl implements OrderImportService {
 
                 Map<String, Integer> capturedHeader = headerMap;
                 int finalI = i;
-                out.add(buildRow(rowNo, name -> readCell(sheet, finalI, capturedHeader, name, fmt)));
+                ColumnReader xlsxReader = name -> readCell(sheet, finalI, capturedHeader, name, fmt);
+                OrderImportRowDTO built = buildRow(rowNo, xlsxReader);
+                captureExtraColumns(built, capturedHeader, xlsxReader);
+                out.add(built);
             }
         }
         return out;
@@ -1460,6 +1815,31 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (StringUtils.hasText(rec.get(i))) return false;
         }
         return true;
+    }
+
+    /** Lower-cased canonical headers, for spotting columns we don't own. */
+    private static final java.util.Set<String> KNOWN_HEADERS_LOWER =
+            HEADERS.stream().map(h -> h.toLowerCase(Locale.ROOT))
+                    .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+
+    /**
+     * Tier 4 — stash every column that isn't part of the canonical schema.
+     * Those are candidate custom-field values; {@link #validateCustomFields}
+     * decides which are real fields for the row's client and which are
+     * unrecognised. Capturing them here (rather than dropping them at parse
+     * time) is what lets a tenant add "PO number" or "Department" to the
+     * sheet and have it validated and stored.
+     */
+    private static void captureExtraColumns(OrderImportRowDTO row,
+                                            Map<String, Integer> headerMap,
+                                            ColumnReader reader) {
+        Map<String, String> extras = new LinkedHashMap<>();
+        for (String header : headerMap.keySet()) {
+            if (header == null || header.isBlank() || KNOWN_HEADERS_LOWER.contains(header)) continue;
+            String value = sanitise(reader.read(header));
+            if (StringUtils.hasText(value)) extras.put(header.trim(), value);
+        }
+        if (!extras.isEmpty()) row.setCustomFields(extras);
     }
 
     private static Map<String, Integer> lowerCasedHeaderMap(Map<String, Integer> raw) {
@@ -1816,6 +2196,19 @@ public class OrderImportServiceImpl implements OrderImportService {
                         order.setBatchId(batchId);
                         orderRepository.save(order);
                     });
+                }
+                // Tier 4 — persist the validated custom-field values onto the
+                // order. Keys were re-mapped to their definition's fieldKey
+                // during validation, so they're already in the shape
+                // upsertValues expects. Non-fatal: the label is bought and a
+                // metadata write must not fail the import.
+                if (orderNo != null && customFieldService != null
+                        && leader.getCustomFields() != null && !leader.getCustomFields().isEmpty()) {
+                    try {
+                        customFieldService.upsertValues(orderNo, leader.getClientCode(), leader.getCustomFields());
+                    } catch (Exception ex) {
+                        log.warn("Custom field write failed for order {}: {}", orderNo, ex.getMessage());
+                    }
                 }
                 return new GroupOutcome(valid, 0, 1);
             } else {

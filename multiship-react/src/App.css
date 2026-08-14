@@ -294,3 +294,14 @@ textarea {
 @media (prefers-reduced-motion: reduce) {
   .data-history-progress-bar { animation: none !important; }
 }
+
+/* Toast lifetime bar — drains left-to-right over the toast's durationMs.
+   Paused inline (animationPlayState) while the pointer rests on a toast. */
+@keyframes notify-countdown {
+  from { transform: scaleX(1); }
+  to   { transform: scaleX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Keep the bar visible but static — the toast still self-dismisses. */
+  [style*="notify-countdown"] { animation: none !important; }
+}

@@ -91,8 +91,11 @@ public class SecurityConfig {
         // cookie Secure/SameSite with the auth-cookie flags so the
         // browser doesn't reject one and accept the other under
         // cross-origin dev.
-        CookieCsrfTokenRepository csrfRepo = CookieCsrfTokenRepository.withHttpOnlyFalse();
-        csrfRepo.setCookieCustomizer(c -> c.secure(cookieSecure).sameSite(cookieSameSite).path("/"));
+        CookieCsrfTokenRepository cookieRepo = CookieCsrfTokenRepository.withHttpOnlyFalse();
+        cookieRepo.setCookieCustomizer(c -> c.secure(cookieSecure).sameSite(cookieSameSite).path("/"));
+        // Wrapped so per-request authentication can't churn the token — see
+        // StableCsrfTokenRepository for the full reasoning.
+        StableCsrfTokenRepository csrfRepo = new StableCsrfTokenRepository(cookieRepo);
 
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
@@ -119,7 +122,19 @@ public class SecurityConfig {
                                 "/api/v2/external/**"
                         )
                 )
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .sessionManagement(session -> session
+                        .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                        // Default strategy bundles CsrfAuthenticationStrategy, which
+                        // rotates the CSRF token every time a request authenticates.
+                        // That's designed for form-login (one authentication per
+                        // session); here the JWT filter authenticates on EVERY
+                        // request, so the token was regenerated per call and the
+                        // SPA's parallel requests raced — a request built with the
+                        // token from one response would 403 because a concurrent
+                        // response had already rotated it. Nothing to protect
+                        // either: STATELESS means there's no session to fixate.
+                        .sessionAuthenticationStrategy(
+                                new org.springframework.security.web.authentication.session.NullAuthenticatedSessionStrategy()))
                 .authorizeHttpRequests(auth -> auth
                         // Open endpoints
                         .requestMatchers("/api/v1/auth/**").permitAll()
@@ -180,7 +195,27 @@ public class SecurityConfig {
                 // Sprint 50 finding #15 (A) — must run AFTER the two auth filters
                 // above so the SecurityContext already carries the caller's
                 // authentication when the rate check reads the tenant.
-                .addFilterAfter(tenantRateLimitFilter, JwtAuthenticationFilter.class);
+                .addFilterAfter(tenantRateLimitFilter, JwtAuthenticationFilter.class)
+                // Spring Security 6 loads the CSRF token LAZILY — the repository
+                // only writes the XSRF-TOKEN cookie once something resolves the
+                // token during a request. A JSON-only SPA never renders a form,
+                // so nothing resolved it: the cookie was never issued, the
+                // browser had no token to echo, and every POST/PUT/DELETE failed
+                // 403 even for a fully authenticated ADMIN.
+                //
+                // Anchor matters. SessionManagementFilter rotates the CSRF token
+                // whenever a request authenticates — it deletes the old cookie
+                // and defers the replacement. Because our JWT filter
+                // authenticates on EVERY request, a resolver placed near the
+                // auth filters runs before that rotation: it resolves the
+                // pre-rotation token, then the rotation's delete lands and the
+                // replacement is never written, so the browser is left with no
+                // cookie at all (the cookie visibly flickered on/off between
+                // requests). AuthorizationFilter is the last filter in the
+                // chain, so sitting just before it puts this after the rotation
+                // and the surviving token actually reaches the browser.
+                .addFilterBefore(new CsrfCookieFilter(),
+                        org.springframework.security.web.access.intercept.AuthorizationFilter.class);
 
         return http.build();
     }

@@ -12,6 +12,8 @@ export interface OrderImportRow {
   clientCode?: string | null
   billTo?: string | null
   warehouseCode?: string | null
+  /** Tier 4 — tenant-defined custom fields, keyed by the definition's fieldKey. */
+  customFields?: Record<string, string> | null
   recipientCompany?: string | null
   recipientPhone?: string | null
   recipientEmail?: string | null

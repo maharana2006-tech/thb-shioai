@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
-import { FiCheckCircle, FiChevronRight } from 'react-icons/fi'
+import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
+import { FiAlertCircle, FiCheckCircle, FiChevronRight } from 'react-icons/fi'
 import { useAppSession } from '../../hooks/useAppSession'
-import { resolveBreadcrumb } from '../../routes/workspaceRoutes'
+import { accountRefService } from '../../api/accountRefService'
+import { resolveBreadcrumb, settingsPaths } from '../../routes/workspaceRoutes'
 import { normalizeRole } from '../../utils/roles'
 import { navIcons } from './navIcons'
+import UniversalSearch from './UniversalSearch'
 
 /**
  * Header v3 — the "manifest strip". The topbar speaks the same shipping-
@@ -18,11 +20,13 @@ import { navIcons } from './navIcons'
  */
 export default function WorkspaceHeader() {
   const location = useLocation()
-  const navigate = useNavigate()
-  const { username, role, hasConnectedCarrier, connectedCarriers } = useAppSession()
-  const [search, setSearch] = useState('')
+  const { username, role } = useAppSession()
   const [now, setNow] = useState(() => new Date())
-  const searchRef = useRef<HTMLInputElement>(null)
+  /** Live carrier roster from the account book. The old chip read a
+   *  localStorage cache that only ever held ONE carrier (whichever synced
+   *  last), so it showed the same name forever regardless of what was
+   *  actually connected. */
+  const [carriers, setCarriers] = useState<string[] | null>(null)
 
   const normalizedRole = normalizeRole(role)
   const crumb = resolveBreadcrumb(location.pathname)
@@ -32,33 +36,28 @@ export default function WorkspaceHeader() {
     return () => clearInterval(tick)
   }, [])
 
-  // "/" focuses the scan bar from anywhere (unless already typing somewhere)
+  // Pull the distinct carriers that have a verified, active account.
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null
-      if (event.key === '/' && target && !/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) {
-        event.preventDefault()
-        searchRef.current?.focus()
-      }
+    if (normalizedRole === 'TENANT') return
+    let cancelled = false
+    accountRefService
+      .listAccounts()
+      .then((accounts) => {
+        if (cancelled) return
+        const live = accounts
+          .filter((a) => a.active && a.verified !== false && a.carrierCode)
+          .map((a) => a.carrierCode.toUpperCase())
+        setCarriers([...new Set(live)].sort())
+      })
+      .catch(() => {
+        if (!cancelled) setCarriers([])
+      })
+    return () => {
+      cancelled = true
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
-
-  const firstCarrier = connectedCarriers?.[0]
-  const carrierLabel = firstCarrier?.name
-    ? firstCarrier.name.toUpperCase()
-    : hasConnectedCarrier
-    ? 'CONNECTED'
-    : null
+  }, [normalizedRole, location.pathname])
 
   const initials = (username || 'MS').slice(0, 2).toUpperCase()
-
-  const submitSearch = () => {
-    const term = search.trim()
-    navigate(term ? `/orders?q=${encodeURIComponent(term)}` : '/orders')
-    setSearch('')
-  }
 
   return (
     <header className="sticky top-0 z-30 border-b border-dashed border-slate-300 bg-white/85 backdrop-blur-xl print:hidden">
@@ -101,41 +100,31 @@ export default function WorkspaceHeader() {
           <span className="text-[8.5px] font-bold uppercase tracking-[0.2em] text-slate-400">local</span>
         </span>
 
-        {/* scan bar */}
-        {normalizedRole !== 'TENANT' ? (
-          <label className="hidden w-64 items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 ring-1 ring-transparent transition focus-within:bg-white focus-within:ring-[#412d15] lg:flex">
-            <svg viewBox="0 0 20 14" className="h-3.5 w-4 shrink-0 text-slate-400" fill="currentColor" aria-hidden="true">
-              <rect x="0" width="1.5" height="14" />
-              <rect x="3" width="1" height="14" />
-              <rect x="5.5" width="2" height="14" />
-              <rect x="9" width="1" height="14" />
-              <rect x="11.5" width="1.5" height="14" />
-              <rect x="14.5" width="1" height="14" />
-              <rect x="17" width="2" height="14" />
-            </svg>
-            <input
-              ref={searchRef}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') submitSearch()
-                if (event.key === 'Escape') searchRef.current?.blur()
-              }}
-              placeholder="Scan / search orders…"
-              className="w-full bg-transparent font-mono text-[12px] text-[#1f150c] outline-none placeholder:font-sans placeholder:text-[12.5px] placeholder:text-slate-400"
-            />
-            <kbd className="rounded border border-slate-300 bg-white px-1.5 font-mono text-[10px] font-semibold text-slate-400">
-              /
-            </kbd>
-          </label>
-        ) : null}
+        {/* universal search — orders, clients, warehouses, and pages */}
+        {normalizedRole !== 'TENANT' ? <UniversalSearch /> : null}
 
-        {/* carrier status */}
-        {normalizedRole !== 'TENANT' && carrierLabel ? (
-          <span className="hidden shrink-0 items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200 sm:inline-flex">
-            <FiCheckCircle className="h-3 w-3" />
-            {carrierLabel}
-          </span>
+        {/* carrier status — every connected carrier, from live account data */}
+        {normalizedRole !== 'TENANT' && carriers !== null ? (
+          carriers.length > 0 ? (
+            <a
+              href={settingsPaths.carriers}
+              title={`Connected carriers: ${carriers.join(', ')}`}
+              className="hidden shrink-0 items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200 transition hover:bg-emerald-100 sm:inline-flex"
+            >
+              <FiCheckCircle className="h-3 w-3" />
+              {carriers.slice(0, 3).join(' · ')}
+              {carriers.length > 3 ? ` +${carriers.length - 3}` : ''}
+            </a>
+          ) : (
+            <a
+              href={settingsPaths.carriers}
+              title="No verified carrier account yet — connect one to generate labels."
+              className="hidden shrink-0 items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200 transition hover:bg-amber-100 sm:inline-flex"
+            >
+              <FiAlertCircle className="h-3 w-3" />
+              No carrier
+            </a>
+          )
         ) : null}
 
         {/* user as ID badge */}

@@ -97,6 +97,9 @@ export default function Dashboard() {
 
   const [data, setData] = useState<DashboardData | null>(null)
   const [updatedAt, setUpdatedAt] = useState<number | null>(null)
+  /** Last load failure. Previously every error was swallowed, so a broken
+   *  /dashboard looked identical to "still loading" — forever. */
+  const [loadError, setLoadError] = useState<string | null>(null)
   const timer = useRef<number | null>(null)
   // Sprint 49 Tier 4 Fix 3 — in-flight guard + AbortController.
   //   inFlightRef skips a new tick when the previous one is still pending
@@ -112,29 +115,42 @@ export default function Dashboard() {
   // the JSX reference threw "load is not defined". Refs are stable, so the
   // callback identity never changes ([] deps).
   const load = useCallback(() => {
-    if (inFlightRef.current) return  // skip — previous tick still pending
+    // Supersede rather than skip. The old code bailed out whenever a
+    // request was in flight, which deadlocked the first paint: React's
+    // dev double-mount aborts the first request, the effect immediately
+    // calls load() again, and the aborted promise's `finally` hasn't run
+    // yet — so the guard was still true and the retry silently did
+    // nothing. The board then sat empty until the 45s poll tick. Same
+    // race hits production any time two loads land close together (a
+    // double-clicked Refresh, or a tick arriving during a manual one).
+    currentAbortRef.current?.abort()  // cancel the straggler
     const controller = new AbortController()
-    currentAbortRef.current?.abort()  // cancel any stragglers
     currentAbortRef.current = controller
     inFlightRef.current = true
 
     dashboardService
       .load(controller.signal)
       .then((d) => {
-        if (!mountedRef.current) return
+        if (!mountedRef.current || controller.signal.aborted) return
         if (d) {
           setData(d)
           setUpdatedAt(Date.now())
+          setLoadError(null)
         }
       })
       .catch((err) => {
         // Aborted requests are expected on cancellation — silence them.
         if (isAbortError(err)) return
-        // Any other error: swallow (mirrors prior behaviour); the stats
-        // stay stale until the next tick succeeds.
+        if (!mountedRef.current) return
+        // Everything else is real and must be visible: swallowing it left
+        // the board showing "Loading…" forever with no way to tell a slow
+        // network from a broken endpoint.
+        setLoadError(err instanceof Error ? err.message : 'Could not load dashboard data.')
       })
       .finally(() => {
-        inFlightRef.current = false
+        // Only the newest request owns the flag — a late straggler
+        // resolving must not clear the guard for a live request.
+        if (currentAbortRef.current === controller) inFlightRef.current = false
       })
   }, [])
 
@@ -142,9 +158,30 @@ export default function Dashboard() {
     mountedRef.current = true
     load()
     timer.current = window.setInterval(load, POLL_MS)
+
+    // A queue board should be current the moment you look at it. Polling a
+    // hidden tab just burns requests, and coming back to one meant staring
+    // at numbers up to a full interval old — so stop the clock while the
+    // tab is hidden and refresh immediately on return.
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        if (timer.current) {
+          window.clearInterval(timer.current)
+          timer.current = null
+        }
+        return
+      }
+      load()
+      if (!timer.current) timer.current = window.setInterval(load, POLL_MS)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('focus', load)
+
     return () => {
       mountedRef.current = false
       if (timer.current) window.clearInterval(timer.current)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', load)
       currentAbortRef.current?.abort()  // don't leak a pending fetch on unmount
     }
   }, [load])
@@ -274,9 +311,19 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[11.5px] text-slate-400">
-            {updatedAt ? `Updated ${relTime(new Date(updatedAt).toISOString())}` : 'Loading…'}
-          </span>
+          {loadError ? (
+            <span
+              title={loadError}
+              className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200"
+            >
+              <FiAlertTriangle className="h-3 w-3" />
+              {updatedAt ? "Couldn't refresh" : "Couldn't load"}
+            </span>
+          ) : (
+            <span className="text-[11.5px] text-slate-400">
+              {updatedAt ? `Updated ${relTime(new Date(updatedAt).toISOString())}` : 'Loading…'}
+            </span>
+          )}
           <button
             type="button"
             onClick={load}

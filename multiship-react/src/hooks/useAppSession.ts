@@ -225,6 +225,45 @@ export const bootstrapSessionFromCookie = async (): Promise<void> => {
       window.localStorage.setItem(STORAGE_KEYS.username, s.username)
       window.localStorage.setItem(STORAGE_KEYS.role, s.role)
       emitSessionChange()
+
+      // Reconcile the carrier mirror too. It drives a routing decision
+      // (getHomePathForRole sends a carrier-less ADMIN to carrier setup),
+      // and it used to be written ONLY at login / connect — so after a
+      // refresh the app routed on a snapshot that could be months old and
+      // survived even a logout. Refresh it from the server on every boot,
+      // exactly like username/role.
+      if (s.role.toUpperCase() !== 'TENANT') {
+        try {
+          const statusRes = await fetch(`${base}/carriers/status`, {
+            method: 'GET',
+            credentials: 'include',
+          })
+          if (statusRes.ok) {
+            const body = await statusRes.json()
+            const status = (body?.data ?? body) as {
+              connected?: boolean
+              carrierCode?: string | null
+              carrierName?: string | null
+              accountNumber?: string | null
+              environment?: string | null
+              connectedAt?: string | null
+            }
+            syncCarrierSession({
+              connected: Boolean(status?.connected),
+              carrierCode: status?.carrierCode ?? null,
+              carrierName: status?.carrierName,
+              accountNumber: status?.accountNumber,
+              environment: status?.environment,
+              connectedAt: status?.connectedAt,
+            })
+          }
+        } catch {
+          // Carrier status is best-effort: a failure here must not block
+          // the session bootstrap. The stale-but-present mirror is no
+          // worse than today's behaviour, and the Carrier Accounts page
+          // reads live data regardless.
+        }
+      }
     }
   } catch {
     // Network error / offline: leave whatever localStorage says. A
@@ -253,6 +292,11 @@ export const clearAuthSession = () => {
 
   window.localStorage.removeItem(STORAGE_KEYS.username)
   window.localStorage.removeItem(STORAGE_KEYS.role)
+  // The carrier mirror is session state too. Leaving it behind meant the
+  // next person to sign in on this machine inherited the previous user's
+  // carrier — and it feeds a routing decision, so a carrier-less admin
+  // could silently skip the carrier-setup redirect.
+  window.localStorage.removeItem(STORAGE_KEYS.carriers)
   emitSessionChange()
 }
 

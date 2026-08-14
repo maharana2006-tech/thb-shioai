@@ -1,7 +1,13 @@
 /**
- * Themed-modal replacement for react-hot-toast + window.confirm/alert.
+ * App-wide notifications. Two delivery modes, chosen by intent:
  *
- * Usage from any component:
+ *   · TOAST  — success / error / info. Non-blocking, stacked bottom-right,
+ *              never steals focus. Success + info self-dismiss; errors stay
+ *              until dismissed so a failure can't scroll past unnoticed.
+ *   · MODAL  — confirm only. A decision gate genuinely has to block.
+ *
+ * Usage is unchanged from the modal-only era — every existing call site
+ * keeps working, it just stops interrupting:
  *
  *   import { notify } from '../utils/notify'
  *   notify.success('Mapping added.')
@@ -10,15 +16,23 @@
  *   if (await notify.confirm('Remove this P80 mapping?')) { ... }
  *   catch (err) { notify.apiError(err) }
  *
- * A single <NotifyHost /> mounted at the app root renders one modal at a time
- * (FIFO queue). Each call returns a Promise that resolves when the user
- * dismisses the modal; `notify.confirm` resolves to true/false, everything
- * else to void.
+ * A single <NotifyHost /> mounted at the app root renders the toast stack
+ * and the confirm modal. `notify.confirm` resolves true/false when the user
+ * answers; toast calls resolve immediately (nothing waits on a toast).
  */
 
 import { getFriendlyError } from './errorMessages'
 
 export type NotifyType = 'success' | 'error' | 'info' | 'confirm'
+
+/** How long a toast lives before self-dismissing. 0 = until dismissed. */
+const AUTO_DISMISS_MS: Record<Exclude<NotifyType, 'confirm'>, number> = {
+  success: 4000,
+  info: 5000,
+  // Errors are sticky on purpose: they're the ones worth reading, and a
+  // non-blocking toast that vanishes is worse than one you close yourself.
+  error: 0,
+}
 
 export interface NotifyMessage {
   id: number
@@ -29,6 +43,8 @@ export interface NotifyMessage {
   cancelLabel?: string
   /** Confirm-only: paints the confirm button red instead of the brand color. */
   danger?: boolean
+  /** Milliseconds until auto-dismiss; 0 (or confirm) means it waits. */
+  durationMs?: number
   /** Internal: resolves the awaiting caller when the modal is dismissed. */
   _resolve?: (value: boolean) => void
 }
@@ -75,16 +91,20 @@ function normalize(opts: OptionsOrString): { title?: string; body: string } {
   return typeof opts === 'string' ? { body: opts } : opts
 }
 
+/** Toasts never block, so the promise settles as soon as it's queued —
+ *  nothing in the app waits on a toast, and returning a promise keeps the
+ *  old signature valid for any `void notify.x()` call sites. */
+function toast(type: Exclude<NotifyType, 'confirm'>, opts: OptionsOrString): Promise<void> {
+  push({ type, ...normalize(opts), durationMs: AUTO_DISMISS_MS[type] })
+  return Promise.resolve()
+}
+
 export const notify = {
   success(opts: OptionsOrString): Promise<void> {
-    return new Promise<void>((resolve) => {
-      push({ type: 'success', ...normalize(opts), _resolve: () => resolve() })
-    })
+    return toast('success', opts)
   },
   error(opts: OptionsOrString): Promise<void> {
-    return new Promise<void>((resolve) => {
-      push({ type: 'error', ...normalize(opts), _resolve: () => resolve() })
-    })
+    return toast('error', opts)
   },
   /**
    * Sprint 50 PR J — one-shot error handler for ApiClient rejections.
@@ -100,19 +120,10 @@ export const notify = {
   apiError(err: unknown, fallback?: string): Promise<void> {
     const anyErr = err as { errorCode?: string | null; message?: string | null }
     const friendly = getFriendlyError(anyErr?.errorCode, anyErr?.message, fallback)
-    return new Promise<void>((resolve) => {
-      push({
-        type: 'error',
-        title: friendly.title,
-        body: friendly.message,
-        _resolve: () => resolve(),
-      })
-    })
+    return toast('error', { title: friendly.title, body: friendly.message })
   },
   info(opts: OptionsOrString): Promise<void> {
-    return new Promise<void>((resolve) => {
-      push({ type: 'info', ...normalize(opts), _resolve: () => resolve() })
-    })
+    return toast('info', opts)
   },
   confirm(
     body: string,
