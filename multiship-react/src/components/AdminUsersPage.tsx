@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import toast from 'react-hot-toast'
 import { notify } from '../utils/notify'
 import { FiActivity, FiCheck, FiClock, FiSlash, FiUsers, FiX } from 'react-icons/fi'
 import {
@@ -77,12 +76,12 @@ export default function AdminUsersPage() {
     try {
       if (user.deactivatedAt) {
         await adminUserService.reactivate(user.id)
-        toast.success(`Reactivated ${user.username}.`)
+        notify.success(`Reactivated ${user.username}.`)
       } else {
         const reason = window.prompt(`Deactivate ${user.username}? Reason (optional):`, '')
         if (reason === null) return
         await adminUserService.deactivate(user.id, reason.trim() || undefined)
-        toast.success(`Deactivated ${user.username}.`)
+        notify.success(`Deactivated ${user.username}.`)
       }
       void load()
     } catch (e) {
@@ -380,7 +379,7 @@ function AssignClientDialog({
         clientCode: clientCode.trim() || null,
         reason: reason.trim() || null,
       })
-      toast.success(`Updated ${user.username}.`)
+      notify.success(`Updated ${user.username}.`)
       onSaved()
     } catch (e) {
       notify.apiError(e, 'Failed to update client assignment.')

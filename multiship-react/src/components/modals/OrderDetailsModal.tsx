@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { FiExternalLink, FiGlobe, FiMapPin, FiPackage, FiPhone, FiTag, FiTruck, FiX } from 'react-icons/fi'
 import {
   orderService,
@@ -49,6 +50,9 @@ const SCENARIO_LABEL: Record<string, string> = {
  * GET /orders/{orderNo}/with-lines plus /orders/{orderNo} for label status.
  */
 export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModalProps) {
+  // Sprint 51 T6b — focus trap.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(true, dialogRef)
   const navigate = useNavigate()
   const [payload, setPayload] = useState<OrderWithLinesPayload | null>(null)
   const [label, setLabel] = useState<LabelDetails | null>(null)
@@ -131,6 +135,7 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
         onClick={(event) => event.stopPropagation()}
       >

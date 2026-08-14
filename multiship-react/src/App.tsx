@@ -16,7 +16,7 @@ export default function App() {
 
   return (
     <>
-      {/* Themed modal host — replaces the react-hot-toast Toaster.
+      {/* Themed modal host — Sprint 51 T6a fully removed react-hot-toast.
           Renders one confirmation / info / success / error modal at a time. */}
       <NotifyHost />
       <AppRoutes />

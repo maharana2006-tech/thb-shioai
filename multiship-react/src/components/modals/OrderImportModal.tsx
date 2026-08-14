@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
 import {
   FiAlertCircle,
   FiArrowRight,
@@ -30,6 +31,9 @@ export interface OrderImportModalProps {
 }
 
 export default function OrderImportModal({ onClose }: OrderImportModalProps) {
+  // Sprint 51 T6b — focus trap.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(true, dialogRef)
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<OrderImportPreview | null>(null)
   const [committedSummary, setCommittedSummary] = useState<OrderImportPreview | null>(null)
@@ -188,6 +192,7 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         className="flex h-[min(780px,92vh)] w-full max-w-[920px] flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-[#fffdf8] shadow-[0_30px_80px_rgba(31,21,12,0.35)]"
         onClick={(e) => e.stopPropagation()}
       >
