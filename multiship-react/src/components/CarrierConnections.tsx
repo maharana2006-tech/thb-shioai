@@ -29,6 +29,7 @@ import {
   type CarrierAccountRef,
 } from '../api/accountRefService'
 import { clientService } from '../api/clientService'
+import { isAbortError } from '../api/apiClient'
 import {
   carrierEnvironmentOptions,
   formatCarrierName,
@@ -294,7 +295,10 @@ export default function CarrierConnections({
           (r.data?.content ?? []).map((c) => ({ code: c.clientCode, name: c.name || '' })),
         ),
       )
-      .catch(() => {})
+      // Sprint 51 FE-L3 — swallowing every failure hides real 5xx here.
+      .catch((e) => {
+        if (!isAbortError(e)) console.debug('[secondary load] listClients', e)
+      })
   }, [loadAccounts])
 
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
@@ -321,7 +325,10 @@ export default function CarrierConnections({
           setDrawer((c) => ({ ...c, clientId: '', clientSecret: '' }))
         }
       })
-      .catch(() => {})
+      // Sprint 51 FE-L3 — log secondary load failures instead of hiding.
+      .catch((e) => {
+        if (!isAbortError(e)) console.debug('[secondary load] getPlatformCredentials', e)
+      })
     return () => {
       cancelled = true
     }
@@ -651,6 +658,7 @@ export default function CarrierConnections({
                   type="button"
                   onClick={(e) => { e.stopPropagation(); void handleMakeClientDefault(account) }}
                   disabled={busyId !== null}
+                  aria-label={`Make this ${account.customerNo}'s default account`}
                   title={`Make this ${account.customerNo}'s default account`}
                   className="shrink-0 text-slate-300 transition hover:text-[#f2c94c] disabled:opacity-50"
                 >
