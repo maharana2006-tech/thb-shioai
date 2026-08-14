@@ -99,7 +99,8 @@ export default function RegionCountryPicker({
   const toggleCountry = (code: string) => {
     if (blockReason(code)) return
     const next = new Set(selected)
-    next.has(code) ? next.delete(code) : next.add(code)
+    if (next.has(code)) next.delete(code)
+    else next.add(code)
     commit(next)
   }
 

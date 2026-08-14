@@ -32,6 +32,7 @@ export default function SystemSettingsPage() {
     }
   }, [])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount; load() sets loading + settings state
   useEffect(() => { void load() }, [load])
 
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()

@@ -66,6 +66,7 @@ export default function ApiKeysPage() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount; load() sets loading + result state
     void load()
   }, [load])
 

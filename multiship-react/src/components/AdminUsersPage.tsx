@@ -48,6 +48,7 @@ export default function AdminUsersPage() {
     }
   }, [search, roleFilter, activeOnly])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount / filter change; load() sets loading + result state
   useEffect(() => { void load() }, [load])
 
   useEffect(() => {

@@ -31,6 +31,7 @@ export default function CustomFieldsSection({
 
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- setLoading(true) is the flip that shows the spinner before the async fetch; the fetched defs cannot be derived at render, and the cancelled flag guards against unmount-time updates
     setLoading(true)
     customFieldService
       .applicable(tenantId ?? undefined)

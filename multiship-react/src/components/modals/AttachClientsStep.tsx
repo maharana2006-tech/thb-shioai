@@ -37,6 +37,7 @@ export default function AttachClientsStep({
 
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async client-list fetch
     setLoading(true)
     clientService
       .listClients({ size: 200, sortBy: 'code', sortDirection: 'ASC' })

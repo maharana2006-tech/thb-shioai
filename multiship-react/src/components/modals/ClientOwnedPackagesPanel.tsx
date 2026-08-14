@@ -38,6 +38,7 @@ export default function ClientOwnedPackagesPanel({ clientCode }: { clientCode: s
   }, [clientCode])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client change; load() sets loading + list state
     void load()
   }, [load])
 

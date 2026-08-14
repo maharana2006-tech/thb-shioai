@@ -384,6 +384,7 @@ export default function ShippingServiceMappingPage() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount; load() sets loading + mapping-catalog state
     void load()
   }, [load])
 

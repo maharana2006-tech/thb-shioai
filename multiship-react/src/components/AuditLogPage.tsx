@@ -46,6 +46,7 @@ export default function AuditLogPage() {
 
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async audit-log fetch
     setLoading(true)
     auditLogService
       .list({
@@ -75,6 +76,7 @@ export default function AuditLogPage() {
   }, [actor, entityType, action, entityKey, pageIndex, pageSize, reloadToken])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset to first page when filters change; must respond to prop-derived filter values, not derivable at render
     setPageIndex(0)
   }, [actor, entityType, action, entityKey, pageSize])
 

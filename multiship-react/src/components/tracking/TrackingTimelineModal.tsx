@@ -78,6 +78,7 @@ export default function TrackingTimelineModal({
   }, [orderNo])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch tracking data on mount / orderNo change; load() populates data + delivered ref that only exist after the async call
     void load()
   }, [load])
 
@@ -102,6 +103,7 @@ export default function TrackingTimelineModal({
    */
   useEffect(() => {
     if (refreshIntervalSeconds <= 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- pause countdown when parent disables polling; interval prop change is the trigger, no render-time equivalent
       setSecondsUntilRefresh(null)
       return
     }

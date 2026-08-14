@@ -224,6 +224,7 @@ export default function MultiWarehouseSplitModal({
   // field instead of the warehouse list.
   useEffect(() => {
     const code = clientCode.trim()
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear not-found flag whenever the operator edits the client code; must happen before the debounced lookup, not derivable at render
     setClientNotFound(null)
     if (!code) {
       setWarehouses([])
@@ -262,6 +263,7 @@ export default function MultiWarehouseSplitModal({
 
   // Any edit invalidates the preview — the operator must re-run before commit.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- invalidate stale preview/result when inputs change; forces the operator to re-run before commit, cannot be derived at render
     setPreview(null)
     setResult(null)
     setCommitError(null)
@@ -287,6 +289,8 @@ export default function MultiWarehouseSplitModal({
         postalCode: recipient.postalCode?.trim() ?? '',
         countryCode: recipient.countryCode?.trim().toUpperCase() ?? '',
       },
+      // Strip the local React `key` field before sending to backend; the rest of the line is the API payload.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- key is deliberately discarded via rest destructure to remove it from the payload
       lines: lines.map(({ key, ...rest }) => rest),
     })
 

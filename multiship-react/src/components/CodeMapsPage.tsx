@@ -116,6 +116,7 @@ export default function CodeMapsPage() {
   }, [selectedClient, tab])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client/tab change; load() sets loading + rows; also resets the inline form which is response-to-input, not derivable
     void load()
     // reset the inline form when either dimension shifts
     setErpCode(''); setTargetId(''); setIso2('')

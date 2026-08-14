@@ -264,6 +264,7 @@ export default function CarrierConnections({
   const [rotatingCredentials, setRotatingCredentials] = useState(false)
   // Clear inline errors the moment the operator edits any validated field.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear inline field errors when the operator edits any validated drawer field; can't be derived at render because we want the errors to disappear on the *next* keystroke, not to be re-shown every render
     setDrawerErrors({})
   }, [
     drawer.carrierCode,
@@ -287,6 +288,7 @@ export default function CarrierConnections({
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- on-mount data fetch; loadAccounts + listClients populate lists that only exist after async calls
     void loadAccounts()
     clientService
       .listClients({ size: 500 })
@@ -332,7 +334,6 @@ export default function CarrierConnections({
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawerOpen, drawer.carrierCode, drawer.editingId])
 
   const readyCount = accounts.filter((a) => a.complete && a.active).length
@@ -394,7 +395,8 @@ export default function CarrierConnections({
     setBusyId(account.id)
     try {
       const response = await accountRefService.verifyAccount(account.id)
-      response.data?.verified ? notify.success(response.message) : notify.error(response.message)
+      if (response.data?.verified) notify.success(response.message)
+      else notify.error(response.message)
       await loadAccounts()
     } catch (error) {
       notify.apiError(error, 'Verification failed.')

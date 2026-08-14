@@ -162,6 +162,7 @@ export default function OrdersWorkspace() {
     const params = new URLSearchParams(location.search)
     const q = params.get('q')
     if (q) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync workspace state from URL query params on nav; user-driven navigation trigger, not derivable at render
       setQuery(q)
       setView('all')
     }
@@ -200,11 +201,13 @@ export default function OrdersWorkspace() {
   }, [showFilters])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- snap paging back to 1 on filter/view change; user-input-driven, not derivable at render
     setPage(1)
   }, [view, debouncedQuery, pageSize, clientFilter, dateFrom, dateTo, sortBy, sortDirection, debouncedFilters])
 
   // Each view has its own natural direction; reset when switching.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset sort defaults when the view changes; each view has its own natural sort, cannot be derived at render (would ignore user re-picks)
     setSortDirection(VIEW_QUERY[view].defaultDirection)
     setSortBy('orderNo')
   }, [view])
@@ -240,6 +243,7 @@ export default function OrdersWorkspace() {
   useEffect(() => {
     let cancelled = false
     const spec = VIEW_QUERY[view]
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async paginated order-list fetch
     setLoading(true)
 
     orderService
@@ -339,6 +343,7 @@ export default function OrdersWorkspace() {
   useEffect(() => {
     if (loading) return
     if (!tabs.some((t) => t.key === view)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- fall back to 'all' when the current tab disappears from the count-driven tab list; depends on async count fetch so not derivable at render
       setView('all')
     }
   }, [view, tabs, loading])

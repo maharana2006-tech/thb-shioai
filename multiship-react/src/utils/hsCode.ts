@@ -16,7 +16,7 @@ export type HsCodeStatus = 'ok' | 'blank' | 'malformed'
 
 export function checkHsCode(value: string | null | undefined): HsCodeStatus {
   if (!value || !value.trim()) return 'blank'
-  const stripped = value.trim().replace(/[.\s\-]/g, '')
+  const stripped = value.trim().replace(/[.\s-]/g, '')
   return HS_CODE_PATTERN.test(stripped) ? 'ok' : 'malformed'
 }
 

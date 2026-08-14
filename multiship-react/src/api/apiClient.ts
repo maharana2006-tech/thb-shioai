@@ -13,10 +13,12 @@ export const BASE_URL =
  */
 export class ApiError extends Error {
   status: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- payload is an untyped server-provided JSON blob consumed by 18+ call sites (`.message`, `.data`, `.errors[]`, ...); forcing `unknown` here would require narrowing at every access with no runtime benefit
   payload: any;
   /** Stable machine-readable code from the backend (e.g. 'NEEDS_CARRIER_DETAILS', 'LABEL_ALREADY_GENERATED'); null if absent. */
   errorCode: string | null;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see field comment above
   constructor(message: string, status: number, payload: any) {
     super(message);
     this.name = 'ApiError';
@@ -27,6 +29,7 @@ export class ApiError extends Error {
 }
 
 interface FetchOptions extends RequestInit {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- caller-provided JSON body; `unknown` would break every apiClient.post/put/patch call chain
   data?: any;
 }
 
@@ -45,16 +48,16 @@ async function apiRequest<T>(endpoint: string, options: FetchOptions = {}): Prom
   const { data, ...customConfig } = options;
   const method = (customConfig.method || 'GET').toUpperCase();
 
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(customConfig.headers || {}),
+    ...(customConfig.headers as Record<string, string> | undefined),
   };
 
   // CSRF echo — Spring compares the cookie value with this header.
   if (CSRF_METHODS.has(method)) {
     const csrf = readCookie('XSRF-TOKEN');
     if (csrf) {
-      (headers as any)['X-XSRF-TOKEN'] = csrf;
+      headers['X-XSRF-TOKEN'] = csrf;
     }
   }
 
@@ -100,7 +103,7 @@ async function apiRequest<T>(endpoint: string, options: FetchOptions = {}): Prom
     if (response.status === 204) return {} as T;
 
     return responseData as T;
-  } catch (error: any) {
+  } catch (error: unknown) {
     // Sprint 51 FE-L2 — a plain console.error for every non-2xx (including
     // the many expected 401/409/422 flows) drowned real 5xx and network
     // failures in log noise. Aborts (component unmount) are silenced,
@@ -110,11 +113,12 @@ async function apiRequest<T>(endpoint: string, options: FetchOptions = {}): Prom
     }
     const status: number | undefined =
       error instanceof ApiError ? error.status : undefined;
+    const message = error instanceof Error ? error.message : String(error);
     const label = `[API Client] ${options.method || 'GET'} to ${endpoint}`;
     if (status && status >= 400 && status < 500) {
-      console.debug(`${label} — ${status}`, error.message);
+      console.debug(`${label} — ${status}`, message);
     } else {
-      console.error(`${label}:`, error.message);
+      console.error(`${label}:`, message);
     }
     throw error;
   }
@@ -205,12 +209,15 @@ export const apiClient = {
   get: <T>(endpoint: string, options?: RequestInit) =>
     apiRequest<T>(endpoint, { method: 'GET', ...options }),
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see FetchOptions.data comment; body payloads are caller-defined
   post: <T>(endpoint: string, data?: any, options?: RequestInit) =>
     apiRequest<T>(endpoint, { method: 'POST', data, ...options }),
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see FetchOptions.data comment; body payloads are caller-defined
   put: <T>(endpoint: string, data: any, options?: RequestInit) =>
     apiRequest<T>(endpoint, { method: 'PUT', data, ...options }),
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see FetchOptions.data comment; body payloads are caller-defined
   patch: <T>(endpoint: string, data: any, options?: RequestInit) =>
     apiRequest<T>(endpoint, { method: 'PATCH', data, ...options }),
 

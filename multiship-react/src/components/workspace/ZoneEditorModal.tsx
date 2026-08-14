@@ -67,6 +67,7 @@ export default function ZoneEditorModal({
   // on the tab that matches its saved data.
   useEffect(() => {
     if (!open) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot tab init when modal opens; deriving from props at render time would flicker
     setTab(isDomesticOnly(codes, effectiveDomestic) ? 'domestic' : 'international')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
