@@ -47,7 +47,7 @@ public class ShipmentAiService {
         }
         String user = "Product: " + req.getDescription().trim()
                 + (StringUtils.hasText(req.getOriginCountry()) ? "\nCountry of origin: " + req.getOriginCountry().trim() : "");
-        JsonNode a = openAi.completeJson(HS_PROMPT, user);
+        JsonNode a = openAi.completeJson(HS_PROMPT, user, "suggest-hs");
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("hsCode", digitsOnly(str(a, "hsCode")));
         out.put("heading", str(a, "heading"));
@@ -84,7 +84,7 @@ public class ShipmentAiService {
         String allowed = (req.getAvailable() == null || req.getAvailable().isEmpty())
                 ? "Allowed package codes: (none — recommend by dimensions only)"
                 : "Allowed package codes (pick one): " + String.join(", ", req.getAvailable());
-        JsonNode a = openAi.completeJson(PKG_PROMPT, "Items:\n" + itemsText + "\n" + allowed);
+        JsonNode a = openAi.completeJson(PKG_PROMPT, "Items:\n" + itemsText + "\n" + allowed, "suggest-packaging");
         Map<String, Object> out = new LinkedHashMap<>();
         String code = str(a, "packageCode");
         // Never invent a code outside the allowed set.
@@ -127,7 +127,7 @@ public class ShipmentAiService {
                 + "\n" + ((req.getAvailable() == null || req.getAvailable().isEmpty())
                     ? "Available service codes: (none listed)"
                     : "Available service codes (pick one): " + String.join(", ", req.getAvailable()));
-        JsonNode a = openAi.completeJson(SVC_PROMPT, user);
+        JsonNode a = openAi.completeJson(SVC_PROMPT, user, "recommend-service");
         Map<String, Object> out = new LinkedHashMap<>();
         String code = str(a, "serviceCode");
         final String candidate = code;
@@ -184,7 +184,7 @@ public class ShipmentAiService {
                         .append(" | value: ").append(orQ(it.getValue())).append('\n');
             }
         }
-        JsonNode a = openAi.completeJson(REVIEW_PROMPT, sb.toString());
+        JsonNode a = openAi.completeJson(REVIEW_PROMPT, sb.toString(), "review-shipment");
         List<Map<String, Object>> warnings = new ArrayList<>();
         for (JsonNode w : a.path("warnings")) {
             Map<String, Object> m = new LinkedHashMap<>();

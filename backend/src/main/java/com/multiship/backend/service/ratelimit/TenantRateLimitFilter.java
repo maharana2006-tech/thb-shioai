@@ -71,8 +71,9 @@ public class TenantRateLimitFilter extends OncePerRequestFilter {
      * OpenAI calls cost real money, so a runaway loop from one tenant needs
      * a lower ceiling than the general write budget. Charged against the
      * AI-specific bucket in {@link TenantRateLimiter} (10/min default vs.
-     * the general 100/min). TODO Sprint 52: per-tenant token metering
-     * (BP-M4 dependency — Micrometer/Actuator not yet wired).
+     * the general 100/min). Per-tenant token metering is emitted from
+     * {@code OpenAiClient} (Sprint 51 follow-up BS-M2) — see the
+     * {@code openai_*} series on {@code /actuator/prometheus}.
      */
     private static final List<String> DEFAULT_AI_PATHS = List.of(
             "/api/v1/ai/**");
