@@ -95,12 +95,14 @@ type StepKey =
   | 'carriers'
   | 'mapping'
   | 'importerBroker'
+  | 'summary'
 
 /** Steps that count as "must complete before Create client fires" in create
  *  mode. importerBroker is intentionally excluded — it's optional per the
- *  onboarding brief. The Create-blockers check reads this list. */
+ *  onboarding brief. summary IS mandatory — the operator must land on it
+ *  to Submit. The Create-blockers check reads this list. */
 const MANDATORY_STEPS: ReadonlySet<StepKey> = new Set([
-  'identity', 'shipFrom', 'return', 'carriers', 'mapping',
+  'identity', 'shipFrom', 'return', 'carriers', 'mapping', 'summary',
 ])
 
 const STEP_DEFS: ReadonlyArray<{ key: StepKey; label: string; short: string; optional?: boolean }> = [
@@ -110,7 +112,72 @@ const STEP_DEFS: ReadonlyArray<{ key: StepKey; label: string; short: string; opt
   { key: 'carriers',       label: 'Carrier accounts',         short: 'Carriers' },
   { key: 'mapping',        label: 'Shipping service mapping', short: 'Mapping' },
   { key: 'importerBroker', label: 'Importer / Broker',        short: 'Importer',   optional: true },
+  { key: 'summary',        label: 'Review & submit',          short: 'Summary' },
 ]
+
+/**
+ * Create-mode-only draft for the Importer / Broker step. Persisted to the
+ * per-user localStorage draft alongside carrierDrafts + mappingDrafts, and
+ * committed via `customsProfileService.save` immediately after the client
+ * is created (mirrors the carrier + mapping post-create fan-out).
+ *
+ * `filled=false` means the operator explicitly skipped this step — the
+ * persist path is a no-op. `filled=true` requires the BUSINESS-importer
+ * identity fields; RECEIVER (DAP consignee-is-IOR) has no identity of
+ * its own, so those fields stay optional.
+ */
+type ImporterBrokerDraft = {
+  filled: boolean
+  countries: string[]  // ISO-3166 alpha-2; empty = catch-all
+  importerType: 'BUSINESS' | 'RECEIVER'
+  importerName: string
+  importerCountry: string
+  importerAddress1: string
+  importerAddress2: string
+  importerCity: string
+  importerState: string
+  importerPostcode: string
+  importerPhone: string
+  importerTaxId: string
+  importerTaxIdType: string
+  brokerName: string
+  brokerPhone: string
+  incoterms: string
+  reasonForExport: string
+}
+
+const emptyImporterBrokerDraft = (): ImporterBrokerDraft => ({
+  filled: false,
+  countries: [],
+  importerType: 'BUSINESS',
+  importerName: '',
+  importerCountry: '',
+  importerAddress1: '',
+  importerAddress2: '',
+  importerCity: '',
+  importerState: '',
+  importerPostcode: '',
+  importerPhone: '',
+  importerTaxId: '',
+  importerTaxIdType: '',
+  brokerName: '',
+  brokerPhone: '',
+  incoterms: '',
+  reasonForExport: '',
+})
+
+/** BUSINESS-importer requires the identity + address block. RECEIVER
+ *  profiles legitimately have no importer identity (DAP terms — the
+ *  receiver is the IOR), so a filled=true RECEIVER always validates. */
+function importerBrokerDraftValid(d: ImporterBrokerDraft): boolean {
+  if (!d.filled) return true
+  if (d.importerType === 'RECEIVER') return true
+  return !!d.importerName.trim()
+    && !!d.importerCountry.trim()
+    && !!d.importerAddress1.trim()
+    && !!d.importerCity.trim()
+    && !!d.importerPostcode.trim()
+}
 
 const stepIndex = (key: StepKey) => STEP_DEFS.findIndex((s) => s.key === key)
 
@@ -166,6 +233,7 @@ type DraftShape = {
   activeStep: StepKey
   carrierDrafts?: CarrierAccountDraft[]
   mappingDrafts?: MappingRuleDraft[]
+  importerBrokerDraft?: ImporterBrokerDraft
 }
 
 const inputBaseClass =
@@ -296,6 +364,11 @@ export default function ClientEditorPage() {
   /** Create-mode mapping rule drafts. Committed after Create client. */
   const [mappingDrafts, setMappingDrafts] = useState<MappingRuleDraft[]>(
     () => draft?.mappingDrafts ?? [],
+  )
+  /** Create-mode importer/broker draft. Committed after Create client if
+   *  `filled=true` (otherwise the step was explicitly skipped). */
+  const [importerBrokerDraft, setImporterBrokerDraft] = useState<ImporterBrokerDraft>(
+    () => draft?.importerBrokerDraft ?? emptyImporterBrokerDraft(),
   )
   const nextDraftId = useRef(
     Math.max(
@@ -559,10 +632,11 @@ export default function ClientEditorPage() {
         activeStep,
         carrierDrafts,
         mappingDrafts,
+        importerBrokerDraft,
       }
       localStorage.setItem(draftStorageKey(), JSON.stringify(snapshot))
     } catch { /* localStorage full / disabled — not fatal */ }
-  }, [isEdit, form, selectedShipFromWarehouseId, visitedSteps, activeStep, carrierDrafts, mappingDrafts])
+  }, [isEdit, form, selectedShipFromWarehouseId, visitedSteps, activeStep, carrierDrafts, mappingDrafts, importerBrokerDraft])
 
   // ===== Live duplicate-code check =====
   // Debounced: fires 500ms after the last keystroke. Skips in edit mode
@@ -721,13 +795,15 @@ export default function ClientEditorPage() {
     && selectedShipFromWarehouseId != null
     && carriersStepComplete
     && mappingStepComplete
+    && importerBrokerDraftValid(importerBrokerDraft)
 
   /**
    * "Has this step's data been provided?" — used for both the step-rail's
    *  accessibility gate and the Next-button's per-step validity check. In
    *  edit mode every step counts as complete (all data comes from the server
    *  and the operator is free-navigating). Importer/Broker is optional so
-   *  it always reports complete — nothing depends on it. */
+   *  it reports complete when either skipped OR filled + valid. Summary is
+   *  complete when every mandatory upstream step is complete. */
   const stepComplete = (key: StepKey): boolean => {
     if (isEdit) return true
     switch (key) {
@@ -736,7 +812,14 @@ export default function ClientEditorPage() {
       case 'return':         return stepValid('return')
       case 'carriers':       return carriersStepComplete
       case 'mapping':        return mappingStepComplete
-      case 'importerBroker': return true
+      case 'importerBroker': return importerBrokerDraftValid(importerBrokerDraft)
+      case 'summary':
+        return stepValid('identity')
+          && stepValid('shipFrom') && selectedShipFromWarehouseId != null
+          && stepValid('return')
+          && carriersStepComplete
+          && mappingStepComplete
+          && importerBrokerDraftValid(importerBrokerDraft)
     }
   }
 
@@ -761,6 +844,19 @@ export default function ClientEditorPage() {
         break
       case 'mapping':
         if (!mappingStepComplete) out.push('Add at least one shipping-service mapping.')
+        break
+      case 'importerBroker':
+        if (!importerBrokerDraftValid(importerBrokerDraft))
+          out.push('BUSINESS importer needs name, country, address, city and postal code — or switch to RECEIVER, or uncheck "Fill importer/broker".')
+        break
+      case 'summary':
+        // Aggregate blockers from every mandatory upstream step so the
+        // Submit tooltip lists exactly what to fix.
+        for (const k of ['identity', 'shipFrom', 'return', 'carriers', 'mapping'] as const) {
+          out.push(...stepBlockers(k))
+        }
+        if (!importerBrokerDraftValid(importerBrokerDraft))
+          out.push('Importer/broker step has an invalid draft — fix it or uncheck "Fill importer/broker".')
         break
     }
     return out
@@ -806,11 +902,13 @@ export default function ClientEditorPage() {
     if (!stepValid('return')) reasons.push('Fix Return address')
     if (!carriersStepComplete) reasons.push('Add at least one carrier account')
     if (!mappingStepComplete) reasons.push('Add at least one shipping-service mapping')
+    if (!importerBrokerDraftValid(importerBrokerDraft))
+      reasons.push('Fix Importer / Broker draft (or uncheck "Fill importer/broker" to skip)')
     return reasons
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stepValid is a plain function (not memoized); it reads form which IS in the dep list, so it recomputes correctly. Adding stepValid itself would break memoization on every render.
   }, [
     isEdit, allStepsVisited, visitedSteps, selectedShipFromWarehouseId,
-    carriersStepComplete, mappingStepComplete,
+    carriersStepComplete, mappingStepComplete, importerBrokerDraft,
     form,
   ])
 
@@ -928,6 +1026,39 @@ export default function ClientEditorPage() {
         notify.success(`${mappingDrafts.length} mapping${mappingDrafts.length === 1 ? '' : 's'} saved.`)
       }
 
+      // Importer / Broker draft — only persist when the operator filled it
+      // (filled=true). Failure is best-effort like carriers + mappings; the
+      // operator can retry from Settings → Importer/Broker.
+      if (importerBrokerDraft.filled) {
+        try {
+          await customsProfileService.save(response.data.clientCode, {
+            countries: importerBrokerDraft.countries,
+            importerType: importerBrokerDraft.importerType,
+            importerName: importerBrokerDraft.importerName.trim() || null,
+            importerCountry: importerBrokerDraft.importerCountry.trim().toUpperCase() || null,
+            importerAddress1: importerBrokerDraft.importerAddress1.trim() || null,
+            importerAddress2: importerBrokerDraft.importerAddress2.trim() || null,
+            importerCity: importerBrokerDraft.importerCity.trim() || null,
+            importerState: importerBrokerDraft.importerState.trim() || null,
+            importerPostcode: importerBrokerDraft.importerPostcode.trim() || null,
+            importerPhone: importerBrokerDraft.importerPhone.trim() || null,
+            importerTaxId: importerBrokerDraft.importerTaxId.trim() || null,
+            importerTaxIdType: importerBrokerDraft.importerTaxIdType.trim() || null,
+            brokerName: importerBrokerDraft.brokerName.trim() || null,
+            brokerPhone: importerBrokerDraft.brokerPhone.trim() || null,
+            incoterms: importerBrokerDraft.incoterms.trim().toUpperCase() || null,
+            reasonForExport: importerBrokerDraft.reasonForExport.trim().toUpperCase() || null,
+          } as CustomsProfile)
+          notify.success('Importer / broker profile saved.')
+        } catch (ibError) {
+          notify.error(
+            `Client created, but the importer/broker profile failed: ${
+              ibError instanceof Error ? ibError.message : 'unknown error'
+            }. Add it from Settings → Importer/Broker.`,
+          )
+        }
+      }
+
       // Attach the picked Ship From warehouse and default it — the picker
       // step is decoupled from the Warehouses step but must guarantee the
       // rule-resolution defaults line up on first shipment.
@@ -955,6 +1086,7 @@ export default function ClientEditorPage() {
       setClient(response.data)
       setCarrierDrafts([])
       setMappingDrafts([])
+      setImporterBrokerDraft(emptyImporterBrokerDraft())
       // Clear the draft — the wizard's committed state is now the source of
       // truth. Any subsequent /clients/new visit starts fresh.
       try { localStorage.removeItem(draftStorageKey()) } catch { /* not fatal */ }
@@ -1309,25 +1441,40 @@ export default function ClientEditorPage() {
           />
         ))}
 
-        {/* Importer / Broker — optional step. Live editor in edit mode via
-            the existing CustomsProfileModal; deferred in create mode since
-            profiles hang off the persisted client row. Skipping is fine — the
-            operator can add profiles from Settings → Importer/Broker later. */}
+        {/* Importer / Broker — optional. Live editor in edit mode via the
+            existing CustomsProfileModal-backed step. Create mode captures a
+            single primary profile as a draft (persisted after Submit via
+            customsProfileService.save); the operator can add more profiles
+            later from Settings → Importer/Broker. */}
         {activeStep === 'importerBroker' && (client ? (
           <ImporterBrokerStep clientCode={client.clientCode} clientName={client.name} />
         ) : (
-          <div className="px-4 py-3">
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 p-5 text-center">
-              <p className="text-[12.5px] font-semibold text-slate-800">Importer / Broker (optional)</p>
-              <p className="mx-auto mt-1 max-w-md text-[11px] leading-4 text-slate-500">
-                Importer + broker profiles for customs are configured against a persisted client.
-                You can safely skip this step — click <span className="font-semibold">Create client</span>
-                {' '}below and add profiles from Settings → Importer/Broker (or come back to this step
-                in edit mode) whenever you're ready.
-              </p>
-            </div>
-          </div>
+          <ImporterBrokerDraftStep
+            draft={importerBrokerDraft}
+            setDraft={setImporterBrokerDraft}
+          />
         ))}
+
+        {/* Summary — final step in create mode. Every section rendered as
+            a card with values + validation status; Submit fires the client
+            creation cascade. */}
+        {!isEdit && activeStep === 'summary' ? (
+          <SummaryStep
+            form={form}
+            selectedShipFromWarehouseId={selectedShipFromWarehouseId}
+            shipFromWarehouseLabel={
+              pickWarehouses.find((w) => w.id === selectedShipFromWarehouseId)
+                ? `${pickWarehouses.find((w) => w.id === selectedShipFromWarehouseId)!.code} — ${pickWarehouses.find((w) => w.id === selectedShipFromWarehouseId)!.name}`
+                : null
+            }
+            carrierDrafts={carrierDrafts}
+            mappingDrafts={mappingDrafts}
+            importerBrokerDraft={importerBrokerDraft}
+            stepComplete={stepComplete}
+            stepBlockers={stepBlockers}
+            jumpTo={(k) => setActiveStep(k)}
+          />
+        ) : null}
       </div>
 
       {/* Wizard footer — Back / Next / Create / Finish. In create mode Next
@@ -1350,7 +1497,7 @@ export default function ClientEditorPage() {
         </p>
 
         <div className="flex items-center gap-2">
-          {!isEdit && (activeStep === 'mapping' || activeStep === 'importerBroker') ? (
+          {!isEdit && activeStep === 'summary' ? (
             <button
               type="button"
               onClick={() => void handleCreate()}
@@ -1359,12 +1506,12 @@ export default function ClientEditorPage() {
                 readyToCreate
                   ? undefined
                   : createBlockers.length
-                    ? `Cannot create client yet:\n  • ${createBlockers.join('\n  • ')}`
-                    : 'Cannot create client yet.'
+                    ? `Cannot submit yet:\n  • ${createBlockers.join('\n  • ')}`
+                    : 'Cannot submit yet.'
               }
               className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              {saving ? 'Creating…' : 'Create client'}
+              {saving ? 'Submitting…' : 'Submit — create client'}
               <FiCheck className="h-3.5 w-3.5" />
             </button>
           ) : isLast ? (
@@ -2841,6 +2988,408 @@ function ImporterBrokerStep({
           }}
         />
       ) : null}
+    </div>
+  )
+}
+
+/* ============================================================================
+ * Importer / Broker draft step (create mode)
+ * A scoped-down subset of ClientCustomsProfile — enough for a first-time
+ * onboarding profile. The full field surface is on the settings page.
+ * ==========================================================================*/
+
+function ImporterBrokerDraftStep({
+  draft,
+  setDraft,
+}: {
+  draft: ImporterBrokerDraft
+  setDraft: React.Dispatch<React.SetStateAction<ImporterBrokerDraft>>
+}) {
+  const update = <K extends keyof ImporterBrokerDraft>(k: K, v: ImporterBrokerDraft[K]) =>
+    setDraft((cur) => ({ ...cur, [k]: v }))
+
+  return (
+    <div className="px-4 py-3 space-y-3">
+      <label className="flex items-start gap-2 rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+        <input
+          type="checkbox"
+          checked={draft.filled}
+          onChange={(e) => update('filled', e.target.checked)}
+          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
+        />
+        <span className="flex-1">
+          <span className="block text-[12.5px] font-semibold text-slate-950">
+            Fill Importer / Broker now
+          </span>
+          <span className="mt-0.5 block text-[11px] leading-4 text-slate-500">
+            Optional. Captures one primary importer profile for customs on international shipments.
+            Unchecked = skip this step; you can add profiles later from Settings → Importer/Broker.
+          </span>
+        </span>
+      </label>
+
+      {draft.filled ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
+          {/* Importer type */}
+          <div>
+            <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+              Importer type
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {(['BUSINESS', 'RECEIVER'] as const).map((v) => (
+                <label
+                  key={v}
+                  className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-semibold transition ${
+                    draft.importerType === v
+                      ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="importerType"
+                    value={v}
+                    checked={draft.importerType === v}
+                    onChange={() => update('importerType', v)}
+                    className="sr-only"
+                  />
+                  {v === 'BUSINESS' ? 'BUSINESS · fixed importer (DDP)' : 'RECEIVER · consignee is IOR (DAP)'}
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-[10.5px] text-slate-500">
+              BUSINESS: this client's own importer identity is on file. RECEIVER: no importer of record — the destination consignee is the IOR (DAP terms).
+            </p>
+          </div>
+
+          {/* Importer identity — only relevant for BUSINESS */}
+          {draft.importerType === 'BUSINESS' ? (
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <Field label="Importer name" required>
+                <input value={draft.importerName} onChange={(e) => update('importerName', e.target.value)} maxLength={200} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Country (ISO-2)" required>
+                <input value={draft.importerCountry} onChange={(e) => update('importerCountry', e.target.value.toUpperCase())} maxLength={2} className={`${inputBaseClass} ${inputOk} uppercase font-semibold`} />
+              </Field>
+              <Field label="Address line 1" required>
+                <input value={draft.importerAddress1} onChange={(e) => update('importerAddress1', e.target.value)} maxLength={255} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Address line 2">
+                <input value={draft.importerAddress2} onChange={(e) => update('importerAddress2', e.target.value)} maxLength={255} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="City" required>
+                <input value={draft.importerCity} onChange={(e) => update('importerCity', e.target.value)} maxLength={120} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="State / region">
+                <input value={draft.importerState} onChange={(e) => update('importerState', e.target.value)} maxLength={120} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Postal code" required>
+                <input value={draft.importerPostcode} onChange={(e) => update('importerPostcode', e.target.value)} maxLength={20} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Phone">
+                <input value={draft.importerPhone} onChange={(e) => update('importerPhone', e.target.value)} type="tel" inputMode="tel" maxLength={50} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Tax ID (EIN / EORI / GSTIN / …)" hint="Optional but usually required by the destination customs authority.">
+                <input value={draft.importerTaxId} onChange={(e) => update('importerTaxId', e.target.value)} maxLength={60} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Tax ID type" hint="EIN, EORI, GSTIN, IEC, IOSS …">
+                <input value={draft.importerTaxIdType} onChange={(e) => update('importerTaxIdType', e.target.value.toUpperCase())} maxLength={20} className={`${inputBaseClass} ${inputOk} uppercase`} />
+              </Field>
+            </div>
+          ) : null}
+
+          {/* Shipment defaults */}
+          <div>
+            <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+              Shipment defaults (optional)
+            </p>
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <Field label="Incoterms" hint="DDP · DAP · DDU · EXW · CIF · FOB">
+                <select value={draft.incoterms} onChange={(e) => update('incoterms', e.target.value)} className={`${inputBaseClass} ${inputOk}`}>
+                  <option value="">— carrier default —</option>
+                  {['DDP', 'DAP', 'DDU', 'EXW', 'CIF', 'FOB', 'DPU', 'CPT', 'CIP', 'FCA', 'FAS', 'CFR'].map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Reason for export">
+                <select value={draft.reasonForExport} onChange={(e) => update('reasonForExport', e.target.value)} className={`${inputBaseClass} ${inputOk}`}>
+                  <option value="">— carrier default —</option>
+                  <option value="SALE">SALE — commercial sale</option>
+                  <option value="GIFT">GIFT</option>
+                  <option value="SAMPLE">SAMPLE</option>
+                  <option value="RETURN">RETURN</option>
+                  <option value="REPAIR">REPAIR</option>
+                  <option value="DOCUMENTS">DOCUMENTS</option>
+                </select>
+              </Field>
+            </div>
+          </div>
+
+          {/* Broker (optional) */}
+          <div>
+            <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+              Broker (optional)
+            </p>
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <Field label="Broker name">
+                <input value={draft.brokerName} onChange={(e) => update('brokerName', e.target.value)} maxLength={200} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Broker phone">
+                <input value={draft.brokerPhone} onChange={(e) => update('brokerPhone', e.target.value)} type="tel" inputMode="tel" maxLength={50} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/* ============================================================================
+ * Summary step (create mode only)
+ * Per-section digest cards with green / amber / red status and a Fix link
+ * that jumps back to the offending step.
+ * ==========================================================================*/
+
+function SummaryStep({
+  form,
+  selectedShipFromWarehouseId,
+  shipFromWarehouseLabel,
+  carrierDrafts,
+  mappingDrafts,
+  importerBrokerDraft,
+  stepComplete,
+  stepBlockers,
+  jumpTo,
+}: {
+  form: ClientUpsertPayload
+  selectedShipFromWarehouseId: number | null
+  shipFromWarehouseLabel: string | null
+  carrierDrafts: CarrierAccountDraft[]
+  mappingDrafts: MappingRuleDraft[]
+  importerBrokerDraft: ImporterBrokerDraft
+  stepComplete: (k: StepKey) => boolean
+  stepBlockers: (k: StepKey) => string[]
+  jumpTo: (k: StepKey) => void
+}) {
+  const identityBody = (
+    <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+      <li><span className="font-mono font-semibold">{form.clientCode || '—'}</span> · {form.name || <em className="text-slate-400">no name</em>}</li>
+      {form.email ? <li>{form.email}</li> : null}
+      {form.phone ? <li>{form.phone}</li> : null}
+      <li className="text-slate-500">
+        Defaults: {[form.defaultCurrency, form.defaultWeightUnit, form.defaultDimUnit, form.defaultOriginCountry, form.timezone]
+          .filter(Boolean).join(' · ') || <em>none set</em>}
+      </li>
+    </ul>
+  )
+
+  const shipFromBody = (
+    <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+      <li className="font-semibold">{shipFromWarehouseLabel || <em className="text-slate-400">no warehouse picked</em>}</li>
+      {form.shipFrom ? (
+        <>
+          {form.shipFrom.name ? <li>{form.shipFrom.name}</li> : null}
+          <li>
+            {form.shipFrom.line1 || <em className="text-slate-400">no street</em>}
+            {form.shipFrom.line2 ? `, ${form.shipFrom.line2}` : ''}
+          </li>
+          <li>
+            {[form.shipFrom.city, form.shipFrom.state, form.shipFrom.zip].filter(Boolean).join(', ') || <em className="text-slate-400">no city / state / zip</em>}
+            {form.shipFrom.country ? ` · ${form.shipFrom.country}` : ''}
+          </li>
+        </>
+      ) : null}
+    </ul>
+  )
+
+  const returnBody = form.returnSameAsShipFrom ? (
+    <p className="text-[11.5px] text-slate-700">Mirrors Ship From address.</p>
+  ) : form.returnAddress ? (
+    <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+      {form.returnAddress.name ? <li>{form.returnAddress.name}</li> : null}
+      <li>{form.returnAddress.line1 || <em className="text-slate-400">no street</em>}{form.returnAddress.line2 ? `, ${form.returnAddress.line2}` : ''}</li>
+      <li>{[form.returnAddress.city, form.returnAddress.state, form.returnAddress.zip].filter(Boolean).join(', ')}{form.returnAddress.country ? ` · ${form.returnAddress.country}` : ''}</li>
+    </ul>
+  ) : (
+    <p className="text-[11.5px] italic text-slate-500">no return address set</p>
+  )
+
+  const carriersBody = carrierDrafts.length ? (
+    <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+      {carrierDrafts.slice(0, 5).map((d) => (
+        <li key={d.id}>
+          {formatCarrierName(d.carrierCode)} · {d.accountNumber}
+          {d.clientDefault ? <span className="ml-1 text-[10px] font-semibold text-[#412d15]">(default)</span> : null}
+        </li>
+      ))}
+      {carrierDrafts.length > 5 ? <li className="italic text-slate-500">+ {carrierDrafts.length - 5} more…</li> : null}
+    </ul>
+  ) : (
+    <p className="text-[11.5px] italic text-slate-500">no carrier accounts staged</p>
+  )
+
+  const mappingBody = mappingDrafts.length ? (
+    <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+      {mappingDrafts.slice(0, 5).map((d) => (
+        <li key={d.id}>
+          <span className="rounded bg-[#1f150c] px-1.5 py-0.5 font-mono text-[10px] text-[#e1dcc9]">{d.shipviaCd}</span>
+          {' → service #'}{d.serviceId}
+        </li>
+      ))}
+      {mappingDrafts.length > 5 ? <li className="italic text-slate-500">+ {mappingDrafts.length - 5} more…</li> : null}
+    </ul>
+  ) : (
+    <p className="text-[11.5px] italic text-slate-500">no mappings staged</p>
+  )
+
+  const importerBody = importerBrokerDraft.filled ? (
+    <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+      <li>
+        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">{importerBrokerDraft.importerType}</span>
+        {' '}{importerBrokerDraft.importerName || <em className="text-slate-400">no importer name</em>}
+      </li>
+      {importerBrokerDraft.importerType === 'BUSINESS' ? (
+        <>
+          <li>{[importerBrokerDraft.importerAddress1, importerBrokerDraft.importerCity, importerBrokerDraft.importerPostcode, importerBrokerDraft.importerCountry].filter(Boolean).join(', ')}</li>
+          {importerBrokerDraft.importerTaxId ? <li>Tax ID: {importerBrokerDraft.importerTaxIdType || '?'}/{importerBrokerDraft.importerTaxId}</li> : null}
+        </>
+      ) : null}
+      {importerBrokerDraft.incoterms || importerBrokerDraft.reasonForExport ? (
+        <li className="text-slate-500">Defaults: {[importerBrokerDraft.incoterms, importerBrokerDraft.reasonForExport].filter(Boolean).join(' · ')}</li>
+      ) : null}
+      {importerBrokerDraft.brokerName ? <li>Broker: {importerBrokerDraft.brokerName}{importerBrokerDraft.brokerPhone ? ` · ${importerBrokerDraft.brokerPhone}` : ''}</li> : null}
+    </ul>
+  ) : (
+    <p className="text-[11.5px] italic text-slate-500">skipped — add profiles later from Settings → Importer/Broker</p>
+  )
+
+  return (
+    <div className="px-4 py-3 space-y-3">
+      <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+        <p className="text-[12.5px] font-semibold text-slate-950">Review & submit</p>
+        <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+          Everything below will be created on Submit. Green sections are ready; red sections must be fixed. Amber sections are optional-and-empty — Submit is still allowed.
+        </p>
+      </div>
+
+      <SummaryCard
+        title="Identity"
+        stepKey="identity"
+        status={stepComplete('identity') ? 'ok' : 'block'}
+        blockers={stepBlockers('identity')}
+        jumpTo={jumpTo}
+      >
+        {identityBody}
+      </SummaryCard>
+
+      <SummaryCard
+        title="Ship From"
+        stepKey="shipFrom"
+        status={(stepComplete('shipFrom') && selectedShipFromWarehouseId != null) ? 'ok' : 'block'}
+        blockers={stepBlockers('shipFrom')}
+        jumpTo={jumpTo}
+      >
+        {shipFromBody}
+      </SummaryCard>
+
+      <SummaryCard
+        title="Return address"
+        stepKey="return"
+        status={stepComplete('return') ? 'ok' : 'block'}
+        blockers={stepBlockers('return')}
+        jumpTo={jumpTo}
+      >
+        {returnBody}
+      </SummaryCard>
+
+      <SummaryCard
+        title={`Carrier accounts (${carrierDrafts.length})`}
+        stepKey="carriers"
+        status={stepComplete('carriers') ? 'ok' : 'block'}
+        blockers={stepBlockers('carriers')}
+        jumpTo={jumpTo}
+      >
+        {carriersBody}
+      </SummaryCard>
+
+      <SummaryCard
+        title={`Shipping mappings (${mappingDrafts.length})`}
+        stepKey="mapping"
+        status={stepComplete('mapping') ? 'ok' : 'block'}
+        blockers={stepBlockers('mapping')}
+        jumpTo={jumpTo}
+      >
+        {mappingBody}
+      </SummaryCard>
+
+      <SummaryCard
+        title="Importer / Broker"
+        stepKey="importerBroker"
+        status={
+          !importerBrokerDraft.filled
+            ? 'warn'  // amber: intentionally skipped (still valid)
+            : stepComplete('importerBroker') ? 'ok' : 'block'
+        }
+        blockers={stepBlockers('importerBroker')}
+        jumpTo={jumpTo}
+      >
+        {importerBody}
+      </SummaryCard>
+    </div>
+  )
+}
+
+function SummaryCard({
+  title,
+  stepKey,
+  status,
+  blockers,
+  jumpTo,
+  children,
+}: {
+  title: string
+  stepKey: StepKey
+  status: 'ok' | 'warn' | 'block'
+  blockers: string[]
+  jumpTo: (k: StepKey) => void
+  children: ReactNode
+}) {
+  const tone =
+    status === 'ok'
+      ? { bar: 'border-emerald-200 bg-emerald-50/40', pill: 'bg-emerald-100 text-emerald-800', label: 'READY' }
+      : status === 'warn'
+        ? { bar: 'border-amber-200 bg-amber-50/40', pill: 'bg-amber-100 text-amber-800', label: 'SKIPPED' }
+        : { bar: 'border-rose-300 bg-rose-50/40', pill: 'bg-rose-100 text-rose-800', label: 'NEEDS FIX' }
+
+  return (
+    <div className={`rounded-2xl border ${tone.bar} p-3`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-[12px] font-semibold text-slate-950">
+            {title}
+            <span className={`rounded-full ${tone.pill} px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide`}>
+              {tone.label}
+            </span>
+          </p>
+          <div className="mt-1.5">
+            {children}
+          </div>
+          {status === 'block' && blockers.length ? (
+            <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[10.5px] font-semibold text-rose-700">
+              {blockers.map((b, i) => <li key={i}>{b}</li>)}
+            </ul>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={() => jumpTo(stepKey)}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-[#412d15] hover:bg-[#faf7f0] hover:text-[#412d15]"
+        >
+          {status === 'block' ? 'Fix' : 'Edit'} <FiChevronRight className="h-3 w-3" />
+        </button>
+      </div>
     </div>
   )
 }
