@@ -62,6 +62,17 @@ public final class OutputConfig {
         private String  privateKeySecretId;
         /** Remote directory to upload into. Absolute or relative to the SSH user's home. */
         private String  remoteDir;
+        /**
+         * Sprint 52 output-polish (follow-up #2) — optional pointer at an
+         * encrypted {@code system_settings} row holding a
+         * {@code known_hosts} file body. When present, the driver runs
+         * with {@code StrictHostKeyChecking=yes} and verifies the server
+         * fingerprint against it — MITM-safe path for customers who can
+         * pre-provision a stable host key. When absent (legacy rows),
+         * behaviour is unchanged: strict checking is off so
+         * self-signed drops keep working.
+         */
+        private String  knownHostsSecretId;
     }
 
     @Data @Builder @NoArgsConstructor @AllArgsConstructor

@@ -51,4 +51,13 @@ public class OutputDestinationUpsertRequest {
 
     /** Only used for SFTP + KEY auth: write-only PEM bytes, encrypted at rest. */
     private String sftpPrivateKeyPlain;
+
+    /**
+     * Sprint 52 output-polish (follow-up #2) — optional known_hosts file
+     * body. When set, the server encrypts + stores it and rewrites the
+     * config JSON with a {@code knownHostsSecretId} pointer, and the
+     * driver enables strict host-key checking against it. Write-only:
+     * GET responses never echo the plaintext or the pointer id.
+     */
+    private String sftpKnownHostsPlain;
 }
