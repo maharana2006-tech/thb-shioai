@@ -105,8 +105,11 @@ public class OutputDestinationAdminController {
                 .message("Destination " + id + " not found.").build());
     }
 
-    @Operation(summary = "Test-dispatch a small payload to the destination",
-            description = "Sends a hard-coded 'hello world' payload through the driver so the operator can verify credentials / connectivity without generating a real label. 502 with `OUTPUT_DELIVERY_FAILED` on driver failure.")
+    @Operation(summary = "Test-dispatch a synthetic payload to the destination",
+            description = "Sends a doc-type-appropriate synthetic payload (ZPL for Zebra RAW / file drops, "
+                    + "1-page PDF for IPP + commercial-invoice destinations) so the operator can verify "
+                    + "credentials / connectivity without generating a real shipment. Every payload embeds "
+                    + "the current UTC timestamp for visual confirmation. 502 with `OUTPUT_DELIVERY_FAILED` on driver failure.")
     @PostMapping("/{id}/test")
     public ResponseEntity<ApiResponse<DispatchResult>> test(@PathVariable Long id) {
         DispatchResult result;

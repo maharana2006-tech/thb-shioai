@@ -44,6 +44,8 @@ public class OutputDestinationAdminService {
     private final CryptoService cryptoService;
     private final ObjectMapper objectMapper;
     private final OutputDestinationService outputDestinationService;
+    /** Sprint 52 output-polish (follow-up #3) — realistic per-type payloads. */
+    private final TestPayloadFactory testPayloadFactory;
 
     /** Sentinel prefix on system_settings.setting_key for SFTP secrets. */
     static final String SFTP_SECRET_PREFIX = "sftp.secret.";
@@ -105,23 +107,42 @@ public class OutputDestinationAdminService {
     }
 
     /**
-     * Admin "test" button — dispatch a small hard-coded payload to the
-     * destination without touching the real shipment flow. Returns the
-     * dispatch outcome (single item) or throws on driver failure.
+     * Admin "test" button — dispatch a doc-type-appropriate synthetic
+     * payload to the destination without touching the real shipment
+     * flow. The payload is built by {@link TestPayloadFactory} so a
+     * Zebra printer gets ZPL, an IPP queue gets a 1-page PDF, and an
+     * SFTP / LOCAL_FS drop gets a ZPL fixture. Every payload embeds
+     * the current UTC timestamp for visual confirmation.
+     *
+     * @throws IllegalArgumentException when the destination id doesn't exist
      */
     public DispatchResult test(Long id) {
         ClientOutputDestination dest = destinationRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("no such destination: " + id));
-        // Small ZPL / text payload — printers and SFTP tolerate both.
-        byte[] payload = ("Sprint 52 test dispatch for destination_id=" + id
-                + " at " + LocalDateTime.now(ZoneOffset.UTC) + "\n")
-                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String protocol = readProtocol(dest);
+        TestPayloadFactory.Payload p = testPayloadFactory.build(
+                dest.getDestinationType(), dest.getDocType(), protocol, dest.getId());
         DispatchContext ctx = new DispatchContext(
-                null, null, dest.getClientCode(), "text/plain",
-                "test_" + id + ".txt");
+                null, null, dest.getClientCode(), p.getContentType(), p.getFileNameHint());
+        log.info("OutputDestinationAdminService.test id={} destType={} docType={} protocol={} "
+                        + "payloadSize={} contentType={}",
+                id, dest.getDestinationType(), dest.getDocType(), protocol,
+                p.getBytes().length, p.getContentType());
         // We intentionally bypass the DB copy here — this is a test ping,
         // not a real shipment document. Call the driver directly.
-        return outputDestinationService.testDispatch(dest, dest.getDocType(), payload, ctx);
+        return outputDestinationService.testDispatch(dest, dest.getDocType(), p.getBytes(), ctx);
+    }
+
+    /** Extract the {@code protocol} field from the PRINTER config JSON;
+     *  {@code null} for other destination types or malformed JSON. */
+    private String readProtocol(ClientOutputDestination dest) {
+        if (dest.getDestinationType() != DestinationType.PRINTER) return null;
+        try {
+            JsonNode node = objectMapper.readTree(dest.getConfig());
+            return str(node, "protocol");
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     /**
@@ -167,6 +188,19 @@ public class OutputDestinationAdminService {
                 config.put("privateKeySecretId", priorCfg.get("privateKeySecretId").asText());
             }
 
+            // Sprint 52 output-polish (follow-up #2): known_hosts is
+            // orthogonal to the auth secret — either auth mode can opt
+            // in to strict host-key checking. Same "swap plaintext for
+            // pointer id" pattern.
+            if (req.getSftpKnownHostsPlain() != null && !req.getSftpKnownHostsPlain().isBlank()) {
+                String id = writeSecret(req.getClientCode(), "known_hosts",
+                        req.getSftpKnownHostsPlain(), actor);
+                config.put("knownHostsSecretId", id);
+            } else if (priorCfg != null && priorCfg.has("knownHostsSecretId")) {
+                // Preserve the existing pointer on update-without-new-material.
+                config.put("knownHostsSecretId", priorCfg.get("knownHostsSecretId").asText());
+            }
+
             return objectMapper.writeValueAsString(config);
         } catch (Exception ex) {
             throw new IllegalArgumentException("invalid config JSON: " + ex.getMessage(), ex);
@@ -194,8 +228,10 @@ public class OutputDestinationAdminService {
             JsonNode config = objectMapper.readTree(row.getConfig());
             String pwdId = str(config, "passwordSecretId");
             String keyId = str(config, "privateKeySecretId");
+            String khId  = str(config, "knownHostsSecretId");
             if (pwdId != null) systemSettingRepository.findByKey(pwdId).ifPresent(systemSettingRepository::delete);
             if (keyId != null) systemSettingRepository.findByKey(keyId).ifPresent(systemSettingRepository::delete);
+            if (khId  != null) systemSettingRepository.findByKey(khId).ifPresent(systemSettingRepository::delete);
         } catch (Exception ex) {
             log.warn("SFTP secret cleanup failed for destination {}: {}", row.getId(), ex.getMessage());
         }
@@ -229,6 +265,9 @@ public class OutputDestinationAdminService {
             }
             if (cfg.has("privateKeySecretId")) {
                 cfg.put("privateKeySecretId", "***set***");
+            }
+            if (cfg.has("knownHostsSecretId")) {
+                cfg.put("knownHostsSecretId", "***set***");
             }
             return objectMapper.writeValueAsString(cfg);
         } catch (Exception ex) {

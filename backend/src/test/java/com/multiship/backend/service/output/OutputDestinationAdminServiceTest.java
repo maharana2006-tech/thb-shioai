@@ -79,7 +79,7 @@ class OutputDestinationAdminServiceTest {
         when(cryptoService.encrypt(anyString())).thenAnswer(inv -> "enc(" + inv.getArgument(0) + ")");
 
         admin = new OutputDestinationAdminService(destinationRepo, systemSettingRepo,
-                cryptoService, mapper, outputService);
+                cryptoService, mapper, outputService, new TestPayloadFactory());
     }
 
     @Test
@@ -165,6 +165,77 @@ class OutputDestinationAdminServiceTest {
         assertFalse(destinations.containsKey(created.getId()));
         // Secret row cleaned up alongside the destination.
         assertEquals(0, secrets.size());
+    }
+
+    @Test
+    void createSftpWithKnownHostsEncryptsAndSanitises() throws Exception {
+        OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
+                .clientCode("ACME").docType(DocType.LABEL)
+                .destinationType(DestinationType.SFTP)
+                .config("{\"host\":\"sftp.example.com\",\"username\":\"acme\",\"authType\":\"PASSWORD\"}")
+                .active(true)
+                .sftpPasswordPlain("s3cret")
+                .sftpKnownHostsPlain("sftp.example.com ssh-rsa AAAAB3...\n")
+                .build();
+
+        OutputDestinationDTO dto = admin.create(req, "alice");
+
+        ClientOutputDestination stored = destinations.get(dto.getId());
+        String storedCfg = stored.getConfig();
+        assertTrue(storedCfg.contains("knownHostsSecretId"),
+                "config should carry a knownHostsSecretId pointer");
+        String khPointer = mapper.readTree(storedCfg).get("knownHostsSecretId").asText();
+        assertTrue(secrets.containsKey(khPointer),
+                "encrypted known_hosts row must exist under the pointer key");
+        assertEquals("enc(sftp.example.com ssh-rsa AAAAB3...\n)",
+                secrets.get(khPointer).getEncryptedValue());
+        // Sanitised DTO must NEVER echo the pointer id — only ***set***.
+        assertFalse(dto.getConfigSafe().contains(khPointer));
+        assertTrue(dto.getConfigSafe().contains("***set***"));
+    }
+
+    @Test
+    void updateKeepsExistingKnownHostsPointerWhenNoNewMaterial() throws Exception {
+        OutputDestinationDTO created = admin.create(OutputDestinationUpsertRequest.builder()
+                .clientCode("ACME").docType(DocType.LABEL)
+                .destinationType(DestinationType.SFTP)
+                .config("{\"host\":\"sftp.example.com\",\"username\":\"acme\",\"authType\":\"PASSWORD\"}")
+                .active(true)
+                .sftpPasswordPlain("s3cret")
+                .sftpKnownHostsPlain("hostkey-body")
+                .build(), "alice");
+        String originalKh = mapper.readTree(destinations.get(created.getId()).getConfig())
+                .get("knownHostsSecretId").asText();
+
+        // Update — no new known_hosts material supplied.
+        admin.update(created.getId(), OutputDestinationUpsertRequest.builder()
+                .clientCode("ACME").docType(DocType.LABEL)
+                .destinationType(DestinationType.SFTP)
+                .config("{\"host\":\"new.example.com\",\"username\":\"acme\",\"authType\":\"PASSWORD\"}")
+                .active(true).build(), "alice");
+
+        String preservedKh = mapper.readTree(destinations.get(created.getId()).getConfig())
+                .get("knownHostsSecretId").asText();
+        assertEquals(originalKh, preservedKh,
+                "known-hosts pointer must be preserved on update without new material");
+    }
+
+    @Test
+    void deleteAlsoCleansUpKnownHostsSecret() {
+        OutputDestinationDTO created = admin.create(OutputDestinationUpsertRequest.builder()
+                .clientCode("ACME").docType(DocType.LABEL)
+                .destinationType(DestinationType.SFTP)
+                .config("{\"host\":\"h\",\"username\":\"u\",\"authType\":\"PASSWORD\"}")
+                .active(true)
+                .sftpPasswordPlain("p")
+                .sftpKnownHostsPlain("kh")
+                .build(), "alice");
+        assertEquals(2, secrets.size(), "one row each for password + known_hosts");
+
+        admin.delete(created.getId());
+
+        assertEquals(0, secrets.size(),
+                "both password AND known_hosts secret rows must be cleaned up");
     }
 
     @Test
