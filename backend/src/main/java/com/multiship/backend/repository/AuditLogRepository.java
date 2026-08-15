@@ -1,6 +1,8 @@
 package com.multiship.backend.repository;
 
 import com.multiship.backend.model.AuditLog;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -16,6 +18,15 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long>, Audit
      */
     Optional<AuditLog> findFirstByEntityTypeAndEntityKeyAndActionOrderByCreatedAtDesc(
             String entityType, String entityKey, String action);
+
+    /**
+     * Sprint 51 follow-up BS-M3 — direct tenant-scoped listing. Complements
+     * the filtered {@link AuditLogRepositoryCustom#search} used by the list
+     * endpoint; kept as a plain derived query so callers that only need a
+     * raw per-tenant page (repository tests, ad-hoc reporting) don't have
+     * to construct the six filter sentinels.
+     */
+    Page<AuditLog> findByClientCode(String clientCode, Pageable pageable);
 
     // search(...) — provided by {@link AuditLogRepositoryCustom} + its
     // fragment impl (AuditLogRepositoryCustomImpl). Split out so the
