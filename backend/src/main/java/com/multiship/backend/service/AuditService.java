@@ -5,9 +5,12 @@ import com.multiship.backend.model.AuditLog;
 import com.multiship.backend.repository.AuditLogRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
+
+import java.util.Optional;
 
 /**
  * Central hook every settings-write endpoint calls to record an
@@ -47,6 +50,12 @@ public class AuditService {
     private final AuditLogRepository repo;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    // Optional so unit tests that instantiate AuditService by hand (no
+    // Spring context) still work. When absent, clientCode falls back to
+    // NULL — same as a system-initiated event, harmless for the write path.
+    @Autowired(required = false)
+    private TenantScopeEnforcer tenantScope;
+
     /**
      * Convenience overload for typical writes: pass an object that
      * will be serialized to JSON in the changes field, plus a
@@ -72,6 +81,7 @@ public class AuditService {
                 .entityKey(truncate(entityKey, 200))
                 .changes(changesJson)
                 .notes(truncate(notes, 500))
+                .clientCode(currentClientCode())
                 .build();
         return repo.save(row);
     }
@@ -88,6 +98,18 @@ public class AuditService {
         if (auth == null || !auth.isAuthenticated()) return null;
         String name = auth.getName();
         return "anonymousUser".equals(name) ? null : name;
+    }
+
+    /**
+     * Tenant scope of the acting user, or NULL when the caller is a
+     * platform operator or the enforcer is not wired (unit test / system
+     * event). NULL rows are only visible to platform operators, which
+     * matches the "ADMIN-only view of system events" semantics.
+     */
+    private String currentClientCode() {
+        if (tenantScope == null) return null;
+        Optional<String> scope = tenantScope.resolveScope();
+        return scope.orElse(null);
     }
 
     private static String truncate(String s, int max) {

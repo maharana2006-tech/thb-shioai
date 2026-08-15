@@ -10,21 +10,20 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * Sprint 50 Tier 0.5 PR H - implementation of {@link AuditLogRepositoryCustom#search}.
+ * Sprint 50 Tier 0.5 PR H + Sprint 51 follow-up BS-M3 — implementation of
+ * {@link AuditLogRepositoryCustom#search}.
  *
- * <p>Adds a tenant-scope predicate so a scoped USER only sees rows whose
- * {@code entityKey} matches their tenant OR whose {@code actor} is themselves
- * (so they can still see their own writes even if the entityKey stored isn't
- * their tenant code). Platform operators (empty scope) see everything —
- * predicate is a no-op.
+ * <p>BS-M3 full fix: scope predicate now filters on the persisted
+ * {@code client_code} column (populated at write time from the actor's
+ * tenant). Rows with {@code client_code IS NULL} are system events and
+ * are only visible to platform operators. A tenant-scoped caller sees
+ * strictly their own tenant's rows.
  *
  * <p>Kept as a Criteria-style JPQL string with a fluent {@code AND} builder so
  * the base query mirrors the shape the previous {@code @Query} annotation had.
@@ -51,7 +50,6 @@ public class AuditLogRepositoryCustomImpl implements AuditLogRepositoryCustom {
                                  LocalDateTime until,
                                  Pageable pageable) {
         Optional<String> scope = tenantScope == null ? Optional.empty() : tenantScope.resolveScope();
-        String self = scope.isPresent() ? currentActor() : null;
 
         // Base predicates — same shape as the previous @Query. Kept as string
         // JPQL rather than Criteria API to preserve the empty-sentinel idiom
@@ -64,13 +62,10 @@ public class AuditLogRepositoryCustomImpl implements AuditLogRepositoryCustom {
                 + "  AND a.createdAt >= :since "
                 + "  AND a.createdAt <= :until";
         if (scope.isPresent()) {
-            // Tenant-scoped caller: rows whose entityKey matches their tenant
-            // OR rows they authored themselves. entityKey typically holds the
-            // client code / warehouse code so an equality check is sufficient
-            // — most writes with a tenant context store the tenant code as
-            // entityKey.
-            where += " AND (UPPER(COALESCE(a.entityKey, '')) = UPPER(:scope) "
-                    + " OR LOWER(COALESCE(a.actor, '')) = LOWER(:self))";
+            // Tenant-scoped caller: strict equality on the persisted
+            // client_code column. NULL client_code rows are system events
+            // and stay invisible to tenants (ADMIN-only by design).
+            where += " AND UPPER(a.clientCode) = UPPER(:scope)";
         }
 
         String orderBy = buildOrderBy(pageable.getSort());
@@ -79,8 +74,8 @@ public class AuditLogRepositoryCustomImpl implements AuditLogRepositoryCustom {
 
         TypedQuery<AuditLog> q = em.createQuery(selectJpql, AuditLog.class);
         TypedQuery<Long> countQ = em.createQuery(countJpql, Long.class);
-        bindCommon(q, actor, entityType, action, entityKey, since, until, scope, self);
-        bindCommon(countQ, actor, entityType, action, entityKey, since, until, scope, self);
+        bindCommon(q, actor, entityType, action, entityKey, since, until, scope);
+        bindCommon(countQ, actor, entityType, action, entityKey, since, until, scope);
 
         q.setFirstResult((int) pageable.getOffset());
         q.setMaxResults(pageable.getPageSize());
@@ -91,7 +86,7 @@ public class AuditLogRepositoryCustomImpl implements AuditLogRepositoryCustom {
 
     private static void bindCommon(TypedQuery<?> q, String actor, String entityType, String action,
                                    String entityKey, LocalDateTime since, LocalDateTime until,
-                                   Optional<String> scope, String self) {
+                                   Optional<String> scope) {
         q.setParameter("actor", actor);
         q.setParameter("entityType", entityType);
         q.setParameter("action", action);
@@ -100,7 +95,6 @@ public class AuditLogRepositoryCustomImpl implements AuditLogRepositoryCustom {
         q.setParameter("until", until);
         if (scope.isPresent()) {
             q.setParameter("scope", scope.get());
-            q.setParameter("self", self == null ? "" : self);
         }
     }
 
@@ -133,10 +127,4 @@ public class AuditLogRepositoryCustomImpl implements AuditLogRepositoryCustom {
         return sb.toString();
     }
 
-    private static String currentActor() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated()) return null;
-        String name = auth.getName();
-        return "anonymousUser".equals(name) ? null : name;
-    }
 }
