@@ -69,6 +69,14 @@ const OutputDestinationsPage = lazy(() => import('../components/OutputDestinatio
 const NewShipmentPage = lazy(() => import('../components/NewShipmentPage'))
 const DataHistoryPage = lazy(() => import('../components/DataHistoryPage'))
 
+// Sprint 51 User↔Client linkage re-audit items #1 + #2 — public
+// invite-accept + email-verify pages. Both live OUTSIDE
+// AnonymousRoute + ProtectedRoute so a logged-in operator can still
+// finish accepting a personal invite / verifying an alt email without
+// getting bounced to /dashboard.
+const AcceptInvitePage = lazy(() => import('../components/AcceptInvitePage'))
+const VerifyEmailPage = lazy(() => import('../components/VerifyEmailPage'))
+
 /** Minimal centered spinner — the async chunk usually lands in
  *  <1s on a warm cache, so anything fancier flashes uselessly. */
 function RouteSuspenseFallback() {
@@ -88,6 +96,14 @@ export default function AppRoutes() {
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
         </Route>
+
+        {/* Sprint 51 User↔Client linkage re-audit items #1 + #2 — public
+            invite-accept + verify-email pages. Mounted OUTSIDE
+            AnonymousRoute so a currently-logged-in operator can still
+            open an invite link for a second account without a redirect
+            loop through /dashboard. */}
+        <Route path="/invite/:token" element={<AcceptInvitePage />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
 
         <Route element={<ProtectedRoute />}>
           <Route element={<WorkspaceLayout />}>
