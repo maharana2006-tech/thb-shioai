@@ -898,8 +898,21 @@ public class CarrierServiceImpl implements CarrierService {
         // fail at the carrier with a 4xx, which the try/catch below surfaces).
         boolean intlForLimit = to.getCountryCode() != null && fromCountry != null
                 && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
+        // Sprint 52 — direction-aware limit resolution. ManualShipmentRequest
+        // carries a Boolean isReturn (frontend / API-caller sets it explicitly
+        // for return labels); null / false means outbound (FORWARD).
+        String directionForLimit = Boolean.TRUE.equals(req.getIsReturn()) ? "RETURN" : "FORWARD";
         com.multiship.backend.model.CarrierShippingLimit limit = carrierLimitService.resolveLimit(
-                carrier, serviceType, intlForLimit);
+                carrier, serviceType, intlForLimit, directionForLimit);
+        // Sprint 52 — commodities pre-flight. Reject before we split, before
+        // we hit the carrier. See ShipmentSplitter.assertCommoditiesFit javadoc.
+        try {
+            shipmentSplitter.assertCommoditiesFit(shipmentRequest, limit);
+        } catch (com.multiship.backend.exception.CommoditiesLimitExceededException cle) {
+            log.warn("Manual shipment rejected: {}", cle.getMessage());
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY,
+                    ErrorCode.COMMODITIES_LIMIT_EXCEEDED, cle.getMessage());
+        }
         java.math.BigDecimal totalWeightLb = shipmentSplitter.totalWeightLb(shipmentRequest);
         boolean overCap = autoSplitEnabled && carrierLimitService.requiresSplit(
                 limit, shipmentRequest.effectivePackages().size(), totalWeightLb);
@@ -1273,6 +1286,17 @@ public class CarrierServiceImpl implements CarrierService {
                     IntlShipmentValidator.toMessage(intlErrors));
         }
 
+        // Sprint 52 — per-carrier commodity-line cap. Resolve the carrier's
+        // limit (direction-aware: shipmentRequest.isReturn distinguishes
+        // return vs forward at all carriers we support) and reject up-front
+        // if the shipment exceeds it. Commodities are NOT split across sub-
+        // shipments — see ShipmentSplitter.assertCommoditiesFit javadoc.
+        String directionForOrder = Boolean.TRUE.equals(shipmentRequest.getIsReturn()) ? "RETURN" : "FORWARD";
+        com.multiship.backend.model.CarrierShippingLimit commodityLimit =
+                carrierLimitService.resolveLimit(connector.getCarrierCode(),
+                        shipmentRequest.getServiceType(), isInternational(order), directionForOrder);
+        shipmentSplitter.assertCommoditiesFit(shipmentRequest, commodityLimit);
+
         // Sprint 48 B5 — packaging pre-flight on the order-cascade hot path.
         // Resolves the same preset buildShipmentRequest picked (extra 1ms
         // repo call in return for a clean separation from the request DTO).
@@ -1302,7 +1326,7 @@ public class CarrierServiceImpl implements CarrierService {
             String svcCode = resolvedService != null ? resolvedService.getServiceCode()
                     : shipmentRequest.getServiceType();
             com.multiship.backend.model.CarrierShippingLimit svcLimit = carrierLimitService.resolveLimit(
-                    connector.getCarrierCode(), svcCode, isInternational(order));
+                    connector.getCarrierCode(), svcCode, isInternational(order), directionForOrder);
             outcome = outcome.merge(com.multiship.backend.util.PackagingValidator.validateParcelLimits(
                     connector.getCarrierCode(), svcCode, shipmentRequest.getPackages(),
                     shipmentRequest.getWeight(), shipmentRequest.getWeightUnit(),
