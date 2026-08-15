@@ -39,6 +39,13 @@ public final class IntlShipmentValidator {
     public static final String CODE_BAD_REASON = "customs.reason.invalid";
     public static final String CODE_DUTY_ACCOUNT_MISSING = "customs.duty.account.missing";
     public static final String CODE_BAD_HS_CODE = "customs.commodity.hscode.invalid";
+    /** Sprint 52 — commodities count exceeds the worst-case carrier ceiling.
+     *  Per-carrier caps are enforced later at CarrierLimitService (which knows
+     *  the resolved carrier); this is the cheap defensive check upstream. */
+    public static final String CODE_TOO_MANY_COMMODITIES = "customs.commodities.tooMany";
+    /** Widest documented carrier commodity ceiling. Cheaper to hard-code
+     *  than to plumb CarrierLimitService this far up the call chain. */
+    static final int MAX_COMMODITIES_HARD_CEILING = 999;
 
     /** Approved incoterms — mirrors the wizard's INCOTERMS constant + CustomsProfile.dutiesBillTo enum. */
     private static final Set<String> VALID_INCOTERMS = Set.of("DDP", "DAP", "DDU");
@@ -77,6 +84,16 @@ public final class IntlShipmentValidator {
         if (commodities == null || commodities.isEmpty()) {
             errors.add(new ValidationError(CODE_NO_COMMODITIES,
                     "At least one commodity line is required for an international shipment."));
+        } else if (commodities.size() > MAX_COMMODITIES_HARD_CEILING) {
+            // Sprint 52 — no single carrier accepts more than 999 commodity
+            // lines per shipment. Fail fast so the operator remodels the
+            // order rather than watching the carrier reject it. The
+            // per-carrier cap (may be < 999) is enforced downstream at
+            // CarrierLimitService once the carrier is resolved.
+            errors.add(new ValidationError(CODE_TOO_MANY_COMMODITIES,
+                    "Too many commodity lines: " + commodities.size()
+                            + " (max " + MAX_COMMODITIES_HARD_CEILING
+                            + "). Split this order into smaller shipments."));
         } else {
             for (int i = 0; i < commodities.size(); i++) {
                 CustomsCommodityDTO c = commodities.get(i);

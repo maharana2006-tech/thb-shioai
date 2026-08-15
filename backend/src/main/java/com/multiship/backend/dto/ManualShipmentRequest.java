@@ -1,5 +1,6 @@
 package com.multiship.backend.dto;
 
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -84,6 +85,9 @@ public class ManualShipmentRequest {
 
     // ── International only: commercial-invoice line items + header ──
     /** Commercial-invoice line items (required for cross-border shipments). */
+    // Sprint 52 — DTO-level worst-case cap (see IntlShipmentBlockDTO for
+    // the same defence rationale). Per-carrier cap still enforced later.
+    @Size(max = 999, message = "items: at most 999 commercial-invoice lines per shipment")
     private List<Item> items;
     /** Incoterms — DAP / DDP (defaults from the client's importer profile). */
     private String incoterms;

@@ -63,6 +63,34 @@ class IntlShipmentValidatorTest {
         assertEquals(IntlShipmentValidator.CODE_NO_COMMODITIES, errors.get(0).code());
     }
 
+    /**
+     * Sprint 52 — no single carrier accepts > 999 commodity lines per
+     * shipment. Fail-fast at the validator with an actionable message
+     * before the carrier RTT so the operator remodels the order.
+     */
+    @Test
+    void tooManyCommoditiesRejected() {
+        java.util.List<CustomsCommodityDTO> huge = new java.util.ArrayList<>();
+        for (int i = 0; i < 1000; i++) huge.add(validCommodity());
+        List<IntlShipmentValidator.ValidationError> errors = IntlShipmentValidator.validate(
+                requestWith(validIntl().commodities(huge).build()));
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_TOO_MANY_COMMODITIES.equals(e.code())),
+                "1000 commodities should raise CODE_TOO_MANY_COMMODITIES");
+    }
+
+    @Test
+    void ninetyNineOneCommoditiesAccepted() {
+        // Boundary — hard ceiling is 999 lines.
+        java.util.List<CustomsCommodityDTO> exactlyMax = new java.util.ArrayList<>();
+        for (int i = 0; i < 999; i++) exactlyMax.add(validCommodity());
+        List<IntlShipmentValidator.ValidationError> errors = IntlShipmentValidator.validate(
+                requestWith(validIntl().commodities(exactlyMax).build()));
+        assertTrue(errors.stream().noneMatch(
+                e -> IntlShipmentValidator.CODE_TOO_MANY_COMMODITIES.equals(e.code())),
+                "999 commodities is at the cap and must pass");
+    }
+
     @Test
     void incompleteCommodityNamesMissingFields() {
         CustomsCommodityDTO bad = CustomsCommodityDTO.builder()

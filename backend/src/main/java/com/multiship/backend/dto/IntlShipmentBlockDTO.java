@@ -1,5 +1,6 @@
 package com.multiship.backend.dto;
 
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -96,6 +97,11 @@ public class IntlShipmentBlockDTO {
     private String dutyAccount;
 
     // ===== Commodity lines =====
+    // Sprint 52 — defense-in-depth cap at the worst-case documented
+    // carrier ceiling (999). CarrierLimitService still enforces the
+    // per-carrier cap; the DTO cap protects unauth'd carriers we haven't
+    // scoped a row for and blocks pathological payloads at the servlet.
+    @Size(max = 999, message = "commodities: at most 999 lines per shipment")
     @Builder.Default
     private List<CustomsCommodityDTO> commodities = new ArrayList<>();
 

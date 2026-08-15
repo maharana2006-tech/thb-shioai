@@ -1414,7 +1414,9 @@
             "type" : "array",
             "items" : {
               "$ref" : "#/components/schemas/ExternalItem"
-            }
+            },
+            "maxItems" : 999,
+            "minItems" : 0
           },
           "declaredValue" : {
             "type" : "number"
@@ -1892,7 +1894,9 @@
             "type" : "array",
             "items" : {
               "$ref" : "#/components/schemas/CustomsCommodityDTO"
-            }
+            },
+            "maxItems" : 999,
+            "minItems" : 0
           },
           "readyForCarrier" : {
             "type" : "boolean"

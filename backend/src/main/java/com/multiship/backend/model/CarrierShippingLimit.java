@@ -47,9 +47,30 @@ public class CarrierShippingLimit {
     @Column(name = "scope", nullable = false, length = 20)
     private String scope;
 
+    /**
+     * Sprint 52 — FORWARD | RETURN | null. Some carriers (notably UPS)
+     * cap return shipments below their forward MPS ceiling. Null = the
+     * row applies to either direction; treated as the least-specific
+     * match in {@code CarrierLimitService.resolveLimit}.
+     */
+    @Column(name = "direction", length = 16)
+    private String direction;
+
     /** Max pieces per carrier shipment call. */
     @Column(name = "max_packages", nullable = false)
     private Integer maxPackages;
+
+    /**
+     * Sprint 52 — max commercial-invoice / customs commodity lines the
+     * carrier accepts in one shipment. Nullable so existing rows keep
+     * working during rollout; the resolver falls back to 999 (documented
+     * carrier ceiling worst-case) when null. Splitting commodities
+     * across sub-shipments is intentionally not supported — a batched
+     * shipment over cap must be rejected up-front so the shipper can
+     * remodel the order.
+     */
+    @Column(name = "max_commodities")
+    private Integer maxCommodities;
 
     /** Max total shipment weight in LB (across all pieces in one call). */
     @Column(name = "max_total_weight_lb", precision = 12, scale = 2)

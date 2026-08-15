@@ -169,10 +169,25 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             .connectTimeout(LABEL_FETCH_TIMEOUT)
             .build();
 
+    /**
+     * Sprint 52 — hard cap on batch size. The DTO's {@code @Size(500)}
+     * catches this at the controller (400 VALIDATION_ERROR) when the
+     * caller sends it via HTTP; the service-level check gives non-HTTP
+     * callers (background jobs, tests) the same guarantee and surfaces
+     * the actionable {@link ErrorCode#BULK_LIMIT_EXCEEDED} code.
+     */
+    static final int MAX_BULK_ORDERS = 500;
+
     @Override
     public ApiResponse<BulkLabelJobDTO> submit(BulkLabelRequestDTO request, String requestedBy) {
         if (request == null || request.getOrderNumbers() == null || request.getOrderNumbers().isEmpty()) {
-            return failure(HttpStatus.BAD_REQUEST, "orderNumbers is required.");
+            return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, "orderNumbers is required.");
+        }
+        if (request.getOrderNumbers().size() > MAX_BULK_ORDERS) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.BULK_LIMIT_EXCEEDED,
+                    "Bulk batch limited to " + MAX_BULK_ORDERS + " orders — this request has "
+                            + request.getOrderNumbers().size()
+                            + ". Split larger batches into multiple submissions.");
         }
         // Sprint 50 Tier 0.5 PR E - tenant guard. Verify EVERY order in
         // the request belongs to the caller's tenant before enqueuing;
@@ -426,7 +441,8 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     public ApiResponse<BulkLabelJobDTO> status(Long jobId) {
         Optional<BulkLabelJob> job = jobRepository.findById(jobId);
         if (job.isEmpty()) {
-            return failure(HttpStatus.NOT_FOUND, "Bulk-label job " + jobId + " not found.");
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.VALIDATION_ERROR,
+                    "Bulk-label job " + jobId + " not found.");
         }
         // Sprint 50 Tier 0.5 PR G — belt guard on jobId enumeration.
         // The submit path clamps every order in the job, so all orders
@@ -474,10 +490,10 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 .status("success").code(200).message(message).data(data).build();
     }
 
-    private static ApiResponse<BulkLabelJobDTO> failure(HttpStatus status, String message) {
+    private static ApiResponse<BulkLabelJobDTO> failure(HttpStatus status, ErrorCode errorCode, String message) {
         return ApiResponse.<BulkLabelJobDTO>builder()
                 .status("error").code(status.value())
-                .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                .errorCode(errorCode.name())
                 .message(message).data(null).build();
     }
 
