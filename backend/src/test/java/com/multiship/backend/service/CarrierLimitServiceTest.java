@@ -209,6 +209,47 @@ class CarrierLimitServiceTest {
         assertEquals(999, got.getMaxCommodities());
     }
 
+    /* ---------------- Sprint 52 follow-up: US <-> PR return override ---------------- */
+
+    @Test
+    void upsUsPrReturnResolvesToOnePkgCap() {
+        // Full seed set as CarrierLimitSeeder produces it, so we exercise the
+        // resolver's actual tiering: RETURN_US_PR row (service-tier 0) beats
+        // the generic 20-pkg (null-service, BOTH, RETURN) row (service-tier 1).
+        row("UPS", null, "BOTH", "FORWARD", 200, 50);
+        row("UPS", null, "BOTH", "RETURN", 20, 50);
+        row("UPS", "RETURN_US_PR", "BOTH", null, 1, 50);
+        CarrierShippingLimit got = service.resolveLimit("UPS", "RETURN_US_PR", false, "RETURN");
+        assertEquals(1, got.getMaxPackages(),
+                "US<->PR return should resolve to the 1-pkg cap, not the 20-pkg generic return row");
+        assertEquals(50, got.getMaxCommodities());
+    }
+
+    @Test
+    void upsGenericReturnStillCapsAt20WhenNoUsPrService() {
+        // Same fixture but caller passes null service (e.g. US->CA return) —
+        // must fall back to the generic RETURN row (20), NOT the narrower
+        // RETURN_US_PR row. This guards against the RETURN_US_PR seed leaking
+        // into unrelated return traffic when callers don't pass the service.
+        row("UPS", null, "BOTH", "FORWARD", 200, 50);
+        row("UPS", null, "BOTH", "RETURN", 20, 50);
+        row("UPS", "RETURN_US_PR", "BOTH", null, 1, 50);
+        CarrierShippingLimit got = service.resolveLimit("UPS", null, false, "RETURN");
+        assertEquals(20, got.getMaxPackages(),
+                "generic return (non US<->PR) must not accidentally match RETURN_US_PR");
+    }
+
+    @Test
+    void upsForwardWithNullServiceIgnoresReturnUsPrRow() {
+        // US -> PR FORWARD (not a return) with null service must resolve to
+        // the generic FORWARD cap, not the RETURN_US_PR row.
+        row("UPS", null, "BOTH", "FORWARD", 200, 50);
+        row("UPS", "RETURN_US_PR", "BOTH", null, 1, 50);
+        CarrierShippingLimit got = service.resolveLimit("UPS", null, false, "FORWARD");
+        assertEquals(200, got.getMaxPackages(),
+                "US->PR forward must resolve to the 200-pkg forward cap");
+    }
+
     /* ---------------- maxCommoditiesOf accessor ---------------- */
 
     @Test
