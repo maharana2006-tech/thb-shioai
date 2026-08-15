@@ -39,6 +39,10 @@ export const settingsPaths = {
    *  clientCode to legacy USER rows, deactivate revoked accounts, audit
    *  the changes. Backing surface for the tenant-scope flag rollout. */
   users: '/settings/users',
+  /** Sprint 52 — admin CRUD for the carrier_shipping_limit catalog
+   *  (per-carrier / per-service MPS + weight + commodity + free-declared
+   *  caps, with direction-awareness). ADMIN role only. */
+  carrierLimits: '/settings/carrier-limits',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -95,6 +99,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN'] },
   { key: 'users', label: 'Users', to: settingsPaths.users, iconKey: 'clients',
     description: 'Assign each USER account to a client, deactivate revoked accounts, and audit the changes. Backfill client_code before flipping the tenant-scope flag.',
+    roles: ['ADMIN'] },
+  { key: 'carrier-limits', label: 'Carrier Limits', to: settingsPaths.carrierLimits, iconKey: 'carrier',
+    description: 'Per-carrier / per-service caps on packages, commodities, weight and free declared value. Direction-aware (FORWARD vs RETURN); edits invalidate the resolver cache immediately.',
     roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep

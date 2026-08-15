@@ -61,6 +61,8 @@ const ApiKeysPage = lazy(() => import('../components/ApiKeysPage'))
 const ApiReferencePage = lazy(() => import('../components/ApiReferencePage'))
 const SystemSettingsPage = lazy(() => import('../components/SystemSettingsPage'))
 const AdminUsersPage = lazy(() => import('../components/AdminUsersPage'))
+// Sprint 52 — admin CRUD for the carrier_shipping_limit catalog.
+const CarrierShippingLimitsPage = lazy(() => import('../components/CarrierShippingLimitsPage'))
 // Lazy — one-shot flows (bulky but not on every page load).
 const NewShipmentPage = lazy(() => import('../components/NewShipmentPage'))
 const DataHistoryPage = lazy(() => import('../components/DataHistoryPage'))
@@ -131,6 +133,7 @@ export default function AppRoutes() {
                   <Route path="api-reference" element={<ApiReferencePage />} />
                   <Route path="system" element={<SystemSettingsPage />} />
                   <Route path="users" element={<AdminUsersPage />} />
+                  <Route path="carrier-limits" element={<CarrierShippingLimitsPage />} />
                 </Route>
               </Route>
             </Route>
