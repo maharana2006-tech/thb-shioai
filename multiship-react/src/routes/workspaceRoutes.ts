@@ -39,6 +39,9 @@ export const settingsPaths = {
    *  clientCode to legacy USER rows, deactivate revoked accounts, audit
    *  the changes. Backing surface for the tenant-scope flag rollout. */
   users: '/settings/users',
+  /** Sprint 52 — per-client output routing (LOCAL_FS / SFTP / PRINTER)
+   *  for generated labels + commercial invoices. ADMIN-only. */
+  outputDestinations: '/settings/output-destinations',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -95,6 +98,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN'] },
   { key: 'users', label: 'Users', to: settingsPaths.users, iconKey: 'clients',
     description: 'Assign each USER account to a client, deactivate revoked accounts, and audit the changes. Backfill client_code before flipping the tenant-scope flag.',
+    roles: ['ADMIN'] },
+  { key: 'output-destinations', label: 'Output Destinations', to: settingsPaths.outputDestinations, iconKey: 'mapping',
+    description: 'Route generated labels + commercial invoices per client — local filesystem, SFTP upload or network printer (RAW_9100 / IPP). Every dispatch is also copied to the database.',
     roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep
