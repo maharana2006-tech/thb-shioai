@@ -1,5 +1,6 @@
 package com.multiship.backend.dto;
 
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -77,6 +78,9 @@ public class MultiWarehouseLabelRequest {
     private String insuredValueCurrency;
 
     /** Lines to split. Empty / null = validation error at the service. */
+    // Sprint 52 — DTO-level worst-case cap on line count. Ties to the
+    // widest carrier commodity ceiling; per-carrier cap enforced downstream.
+    @Size(max = 999, message = "lines: at most 999 line-items per multi-warehouse request")
     private List<LineItem> lines;
 
     @Data

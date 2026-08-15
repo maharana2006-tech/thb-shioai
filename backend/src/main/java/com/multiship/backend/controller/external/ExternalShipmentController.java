@@ -59,7 +59,7 @@ public class ExternalShipmentController {
     @PostMapping("/shipments")
     @RequiresScope(ApiKeyScope.SHIPMENTS)
     public ResponseEntity<ApiResponse<ExternalShipmentResponse>> create(
-            @RequestBody ExternalShipmentRequest req, @AuthenticationPrincipal ApiKeyPrincipal caller,
+            @jakarta.validation.Valid @RequestBody ExternalShipmentRequest req, @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         // Sprint 51 R3 (audit finding #3) — mirror the v2 pattern. Money-touching
         // → failClosedOnRedisError=true so a Redis outage surfaces as 503

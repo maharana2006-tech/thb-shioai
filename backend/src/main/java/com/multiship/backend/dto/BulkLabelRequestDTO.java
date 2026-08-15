@@ -1,6 +1,7 @@
 package com.multiship.backend.dto;
 
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -20,6 +21,11 @@ import java.util.List;
 @AllArgsConstructor
 public class BulkLabelRequestDTO {
 
+    // Sprint 52 — cap the batch size at 500 orders. Streaming-download
+    // and memory pressure scale with batch size; >500 in a single request
+    // pushed the worker executor into pool exhaustion. Operators split
+    // larger batches into multiple submissions.
     @NotEmpty
+    @Size(max = 500, message = "Bulk batch limited to 500 orders — split larger batches into multiple submissions")
     private List<Long> orderNumbers;
 }

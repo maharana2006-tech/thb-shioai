@@ -30,6 +30,9 @@ public class OrderCustomsUpsertRequest {
     @Size(max = 3) private String weightUnit;
     @Size(max = 500) private String notes;
 
+    // Sprint 52 — DTO-level worst-case cap on customs items (999 mirrors
+    // the widest carrier ceiling); per-carrier cap enforced at label time.
     @Valid
+    @Size(max = 999, message = "items: at most 999 customs lines per order")
     private List<OrderCustomsItemDTO> items;
 }
