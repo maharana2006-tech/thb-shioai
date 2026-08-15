@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { notify } from '../../utils/notify'
 import { FiChevronsLeft, FiChevronsRight, FiLogOut } from 'react-icons/fi'
@@ -9,6 +9,12 @@ import { normalizeRole } from '../../utils/roles'
 import { navIcons } from './navIcons'
 import { useAppDispatch } from '../../store/hooks'
 import { logout as logoutAction } from '../../store/store'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
+
+// Sprint 52 a11y — stable id for the drawer's labelling heading so
+// aria-labelledby resolves to a real node. One drawer per app; a
+// module-scoped constant is fine.
+const MOBILE_DRAWER_TITLE_ID = 'sidebar-mobile-drawer-title'
 
 interface SidebarProps {
   pinned: boolean
@@ -51,6 +57,37 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
   const dispatch = useAppDispatch()
   const { username, role } = useAppSession()
   const [loggingOut, setLoggingOut] = useState(false)
+
+  // Sprint 52 a11y — mobile drawer becomes a proper modal dialog:
+  //   · focus trap (Sprint 49 Tier 4 Fix 6 hook, same pattern as
+  //     BulkLabelModal & 6 sibling modals hardened in PR #157)
+  //   · Escape closes the drawer
+  //   · body scroll locked while drawer is open so the underlying page
+  //     doesn't scroll beneath the overlay
+  // All three effects are guarded by `mobileOpen` so desktop rail
+  // behaviour is completely untouched.
+  const drawerRef = useRef<HTMLElement>(null)
+  useFocusTrap(mobileOpen, drawerRef)
+
+  useEffect(() => {
+    if (!mobileOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onMobileClose?.()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [mobileOpen, onMobileClose])
+
+  useEffect(() => {
+    if (!mobileOpen) return
+    // Preserve any inline overflow the page had set (rare but possible
+    // when nested modals also lock) so cleanup restores exactly.
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = previous
+    }
+  }, [mobileOpen])
 
   const normalizedRole = normalizeRole(role)
   const navItems = getNavItemsForRole(normalizedRole)
@@ -106,10 +143,24 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
         />
       ) : null}
       <nav
+      ref={drawerRef}
       aria-label="Primary"
+      // Sprint 52 a11y — when the drawer is open on <md the sidebar
+      // behaves as a modal dialog. `role`/`aria-modal` are only set
+      // in that mode so screen readers don't announce the desktop
+      // rail as a modal.
+      role={mobileOpen ? 'dialog' : undefined}
+      aria-modal={mobileOpen ? true : undefined}
+      aria-labelledby={mobileOpen ? MOBILE_DRAWER_TITLE_ID : undefined}
       className={`group fixed inset-y-0 left-0 z-40 flex w-56 flex-col overflow-hidden bg-[#1f150c] transition-transform duration-200 ease-out print:hidden ${mobileTranslate} md:transition-[width] md:duration-200 ${desktopWidth} md:translate-x-0`}
       data-mobile-open={mobileOpen ? 'true' : 'false'}
     >
+      {/* Sprint 52 a11y — sr-only heading that aria-labelledby resolves
+          to when the drawer opens as a dialog. Visible design is
+          unchanged; screen readers announce "Navigation, dialog". */}
+      <h2 id={MOBILE_DRAWER_TITLE_ID} className="sr-only">
+        Navigation
+      </h2>
       {/* inner perforation along the right edge — the stub's tear line */}
       <span
         aria-hidden="true"
