@@ -110,6 +110,26 @@ public class AuthController {
     }
 
     /**
+     * Sprint 51 User↔Client linkage re-audit item #1 — read-only invite
+     * preview so the SPA can render "You've been invited to {client} as
+     * {role}" before the invitee commits a password. Does NOT consume
+     * the invite; safe to hit on every mount + refresh of the accept
+     * page.
+     *
+     * <p>Status codes: 200 valid; 404 INVITE_NOT_FOUND; 410 INVITE_EXPIRED
+     * (Gone — this token will never be valid again); 409 INVITE_ALREADY_USED.
+     */
+    @Operation(summary = "Preview an invite (read-only)",
+            description = "Returns the invite's clientCode, role, email and expiresAt so the "
+                    + "SPA can render the accept page. Public — no auth required. "
+                    + "404 INVITE_NOT_FOUND / 410 INVITE_EXPIRED / 409 INVITE_ALREADY_USED.")
+    @SecurityRequirements
+    @GetMapping("/invite/{token}")
+    public ResponseEntity<?> previewInvite(@PathVariable("token") String token) {
+        return authService.previewInvite(token);
+    }
+
+    /**
      * Sprint 50 Tier 0.5 PR D — best-effort client IP for the rate limiter.
      * Prefers the standard X-Forwarded-For chain's first hop (the client);
      * falls back to the direct socket peer.

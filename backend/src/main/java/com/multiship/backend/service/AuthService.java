@@ -46,4 +46,13 @@ public interface AuthService {
 
     /** Sprint 50 Tier 0.5 PR D — email-verification click-through. */
     ResponseEntity<MessageResponse> verifyEmail(String token);
+
+    /**
+     * Sprint 51 User↔Client linkage re-audit item #1 — read-only preview
+     * of an invite for the SPA's accept page. Public (no auth), does
+     * NOT consume the invite. Returns 200 + InvitePreviewResponse on
+     * valid, 404 INVITE_NOT_FOUND / 410 INVITE_EXPIRED / 409
+     * INVITE_ALREADY_USED with a MessageResponse otherwise.
+     */
+    ResponseEntity<?> previewInvite(String token);
 }

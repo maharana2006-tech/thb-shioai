@@ -3,6 +3,7 @@ package com.multiship.backend.service;
 import com.multiship.backend.dto.AcceptInviteRequest;
 import com.multiship.backend.dto.AuthResponse;
 import com.multiship.backend.dto.ErrorCode;
+import com.multiship.backend.dto.InvitePreviewResponse;
 import com.multiship.backend.dto.LoginRequest;
 import com.multiship.backend.dto.MessageResponse;
 import com.multiship.backend.dto.SignupRequest;
@@ -94,6 +95,18 @@ public class AuthServiceImpl implements AuthService {
     @Value("${signup.email-verify-ttl-hours:24}")
     private int emailVerifyTtlHours;
 
+    /**
+     * Sprint 51 User↔Client linkage re-audit item #2 — SPA base URL for
+     * the verify-email link the mailer sends. Empty default keeps the
+     * pre-audit behaviour (backend-relative link, only usable when the
+     * SPA is served from the same origin as the API). Set
+     * {@code app.spa-base-url} (or the {@code SPA_BASE_URL} env var) on
+     * deploys where the SPA is on a different host so the invitee can
+     * click the link straight from Gmail.
+     */
+    @Value("${app.spa-base-url:}")
+    private String spaBaseUrl;
+
     @Override
     @Transactional
     public ResponseEntity<MessageResponse> registerUser(SignupRequest signupRequest, String remoteIp) {
@@ -181,10 +194,21 @@ public class AuthServiceImpl implements AuthService {
         userRepository.save(user);
         rateLimiter.record(email, ip, true);
 
+        // Sprint 51 User↔Client linkage re-audit item #2 — build the link
+        // against the SPA route (not the backend endpoint). The SPA's
+        // VerifyEmailPage reads the token from ?token= and POSTs it to
+        // /api/v1/auth/verify-email so the invitee sees a friendly
+        // "Verified — you can now log in" page instead of a raw JSON
+        // response. Base URL is empty by default; deploys with a
+        // cross-origin SPA must set app.spa-base-url.
+        String verifyBase = (spaBaseUrl == null ? "" : spaBaseUrl.trim());
+        if (!verifyBase.isEmpty() && verifyBase.endsWith("/")) {
+            verifyBase = verifyBase.substring(0, verifyBase.length() - 1);
+        }
         mailSender.send(user.getEmail(),
                 "Verify your Multiship account",
                 "Click to verify (expires in " + emailVerifyTtlHours + " hours):\n"
-                        + "/auth/verify-email?token=" + verifyToken);
+                        + verifyBase + "/verify-email?token=" + verifyToken);
 
         String successMsg = messageSource.getMessage("success.user.registered", null, LocaleContextHolder.getLocale());
         return ResponseEntity.status(HttpStatus.CREATED).body(new MessageResponse(
@@ -266,6 +290,50 @@ public class AuthServiceImpl implements AuthService {
         user.setEmailVerifyExpiresAt(null);
         userRepository.save(user);
         return ResponseEntity.ok(new MessageResponse("Email verified. You can now log in."));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ResponseEntity<?> previewInvite(String token) {
+        // Sprint 51 User↔Client linkage re-audit item #1 — read-only
+        // preview. Delegates to UserInviteService#check (same VALID /
+        // EXPIRED / ALREADY_USED / NOT_FOUND branching as
+        // acceptInvite) but never calls consume, so a preview can be
+        // fetched multiple times as the invitee refreshes the SPA.
+        //
+        // Status codes match the SPA's expectations:
+        //   404 INVITE_NOT_FOUND    — unknown token, bad URL
+        //   410 INVITE_EXPIRED      — past expires_at (Gone semantic)
+        //   409 INVITE_ALREADY_USED — consumed_at set, duplicate accept
+        //
+        // acceptInvite returns 400 for EXPIRED; here we prefer 410
+        // (Gone) because the resource legitimately existed and won't
+        // ever come back for this token — the SPA can then show a
+        // "Ask your admin for a new invite" CTA. The Message body
+        // format stays identical to acceptInvite so the SPA's friendly
+        // error map fires the same way.
+        if (token == null || token.isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new MessageResponse("Invite token is required.",
+                            ErrorCode.VALIDATION_ERROR));
+        }
+        UserInviteService.InviteCheckResult check = inviteService.check(token);
+        switch (check.status()) {
+            case NOT_FOUND:
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(new MessageResponse("Invite not found.",
+                                ErrorCode.INVITE_NOT_FOUND));
+            case EXPIRED:
+                return ResponseEntity.status(HttpStatus.GONE)
+                        .body(new MessageResponse("Invite expired. Ask the admin for a new one.",
+                                ErrorCode.INVITE_EXPIRED));
+            case ALREADY_USED:
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(new MessageResponse("Invite already used.",
+                                ErrorCode.INVITE_ALREADY_USED));
+            default:
+                return ResponseEntity.ok(InvitePreviewResponse.of(check.invite()));
+        }
     }
 
     private static String randomToken() {

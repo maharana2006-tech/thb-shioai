@@ -137,4 +137,16 @@ class AuthControllerTest {
 
         assertSame(expected, actual);
     }
+
+    // ===== preview-invite (Sprint 51 User↔Client re-audit item #1) =====
+
+    @Test
+    void previewInvite_delegatesToService() {
+        ResponseEntity<Object> expected = ResponseEntity.ok(new MessageResponse("preview"));
+        when(authService.previewInvite("tok")).thenReturn((ResponseEntity) expected);
+
+        ResponseEntity<?> actual = controller.previewInvite("tok");
+
+        assertSame(expected, actual);
+    }
 }
