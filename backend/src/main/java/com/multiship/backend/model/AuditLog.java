@@ -32,6 +32,7 @@ import java.time.LocalDateTime;
                 @Index(name = "idx_audit_log_entity", columnList = "entity_type, entity_id"),
                 @Index(name = "idx_audit_log_actor", columnList = "actor"),
                 @Index(name = "idx_audit_log_action", columnList = "action"),
+                @Index(name = "idx_audit_log_client_code", columnList = "client_code"),
         })
 @Data
 @Builder
@@ -97,6 +98,15 @@ public class AuditLog {
     /** Short free-text description ("Client ACME deactivated — 3 carrier accounts + 2 warehouses cascaded"). */
     @Column(name = "notes", length = 500)
     private String notes;
+
+    /**
+     * Tenant scope for per-row filtering. NULL = system-initiated event
+     * (background job / migration) — visible only to platform operators.
+     * Set from the acting user's {@code users.client_code} at write time
+     * (see {@link com.multiship.backend.service.AuditService#record}).
+     */
+    @Column(name = "client_code", length = 64)
+    private String clientCode;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

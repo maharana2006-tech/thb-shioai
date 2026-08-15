@@ -55,6 +55,8 @@ class MigrationsFreshDbIntegrationTest {
             "V10__timestamptz.sql",
             "V11__auth_audit_fks.sql",
             "V13__cleanup_legacy_unique_constraints.sql",
+            // Sprint 51 follow-up BS-M3: audit_log per-row scope filter.
+            "V16__auditlog_client_code.sql",
     };
 
     protected static final PostgreSQLContainer<?> postgres;
