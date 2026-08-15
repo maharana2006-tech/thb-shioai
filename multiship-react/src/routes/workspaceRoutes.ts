@@ -43,6 +43,9 @@ export const settingsPaths = {
    *  (per-carrier / per-service MPS + weight + commodity + free-declared
    *  caps, with direction-awareness). ADMIN role only. */
   carrierLimits: '/settings/carrier-limits',
+  /** Sprint 52 — per-client output routing (LOCAL_FS / SFTP / PRINTER)
+   *  for generated labels + commercial invoices. ADMIN-only. */
+  outputDestinations: '/settings/output-destinations',
 } as const
 
 export const workspaceNavItems: Array<{
@@ -102,6 +105,9 @@ export const settingsNavItems: Array<{
     roles: ['ADMIN'] },
   { key: 'carrier-limits', label: 'Carrier Limits', to: settingsPaths.carrierLimits, iconKey: 'carrier',
     description: 'Per-carrier / per-service caps on packages, commodities, weight and free declared value. Direction-aware (FORWARD vs RETURN); edits invalidate the resolver cache immediately.',
+    roles: ['ADMIN'] },
+  { key: 'output-destinations', label: 'Output Destinations', to: settingsPaths.outputDestinations, iconKey: 'mapping',
+    description: 'Route generated labels + commercial invoices per client — local filesystem, SFTP upload or network printer (RAW_9100 / IPP). Every dispatch is also copied to the database.',
     roles: ['ADMIN'] },
   // ===== Hidden from the Settings menu =====
   // Routes below still resolve so direct URLs and any hard-coded links keep
