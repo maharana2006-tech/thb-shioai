@@ -85,6 +85,7 @@ function Toast({ message }: { message: NotifyMessage }) {
   const [paused, setPaused] = useState(false)
   /** Remaining lifetime, so hovering pauses rather than restarts the clock. */
   const remaining = useRef(message.durationMs ?? 0)
+  // eslint-disable-next-line react-hooks/purity -- useRef keeps its first-render value (React docs), so Date.now() runs at most once per Toast; strict-mode double-invoke discards the second call. Behavior is stable.
   const startedAt = useRef(Date.now())
 
   const close = () => {
