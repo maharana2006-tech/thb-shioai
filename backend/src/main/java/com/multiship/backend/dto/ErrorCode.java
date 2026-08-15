@@ -207,6 +207,20 @@ public enum ErrorCode {
      */
     BULK_LIMIT_EXCEEDED,
 
+    // ===== Sprint 52 output routing + network printing =====
+    /**
+     * The referenced {@code client_output_destination} row does not exist
+     * (admin API path variable didn't resolve). Response is HTTP 404.
+     */
+    OUTPUT_DESTINATION_NOT_FOUND,
+    /**
+     * A driver raised a delivery failure (network timeout, printer
+     * offline, SFTP auth). Response is HTTP 502 or 500 depending on
+     * whether the caller invoked the test endpoint or hit an
+     * unexpected internal failure.
+     */
+    OUTPUT_DELIVERY_FAILED,
+
     // ===== Fallback =====
     INTERNAL_ERROR
 }

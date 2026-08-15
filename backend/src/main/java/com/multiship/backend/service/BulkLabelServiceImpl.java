@@ -8,6 +8,10 @@ import com.multiship.backend.dto.LabelGenerationResponse;
 import com.multiship.backend.model.BulkLabelJob;
 import com.multiship.backend.repository.BulkLabelJobRepository;
 import com.multiship.backend.repository.OrderRepository;
+import com.multiship.backend.service.output.DispatchContext;
+import com.multiship.backend.service.output.DispatchResult;
+import com.multiship.backend.service.output.DocType;
+import com.multiship.backend.service.output.OutputDestinationService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -73,6 +77,16 @@ public class BulkLabelServiceImpl implements BulkLabelService {
 
     private final BulkLabelJobRepository jobRepository;
     private final CarrierService carrierService;
+    /**
+     * Sprint 52 output routing — invoked per generated label so every
+     * client that opted into direct delivery gets the bytes without
+     * waiting on the ZIP download. Optional (null in pure-unit tests
+     * constructed via the 4-arg {@code new}), so all invocations null-check
+     * first. Field injection (setter) keeps the pre-Sprint 52 constructor
+     * signature intact for existing tests.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private OutputDestinationService outputDestinationService;
     /**
      * Sprint 50 Tier 0.5 PR E - guard so a scoped USER cannot enqueue a
      * bulk job containing an order from a foreign tenant. We check every
@@ -355,6 +369,14 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     /**
      * Worker body — runs on a fan-out pool thread. Never throws;
      * returns a marker OrderOutcome the caller aggregates.
+     *
+     * <p>Sprint 52 output routing: on a successful label fetch, this
+     * also dispatches through {@link OutputDestinationService} so any
+     * client-configured LOCAL_FS / SFTP / PRINTER destination receives
+     * the bytes. Failures there DO NOT fail the order — the label has
+     * already been generated and paid for; we just log and continue. The
+     * DB copy driver persists the bytes so ops can re-drive delivery
+     * from the admin page.
      */
     private OrderOutcome processOneOrder(long orderNo) {
         try {
@@ -370,12 +392,53 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             if (pdf == null) {
                 return new OrderOutcome(orderNo, null, null, "label URL unreachable");
             }
+            dispatchToConfiguredDestinations(orderNo, pdf);
             return new OrderOutcome(orderNo, pdf, label.getTrackingNumber(), null);
         } catch (Exception ex) {
             log.warn("Bulk-label worker: order {} failed: {}", orderNo, ex.getMessage());
             return new OrderOutcome(orderNo, null, null,
                     ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
         }
+    }
+
+    /**
+     * Sprint 52 output routing wire-in. Feeds the generated label bytes
+     * through the {@link OutputDestinationService} so every client-
+     * configured destination gets the payload (and the always-on DB
+     * copy is persisted regardless).
+     *
+     * <p>Never throws — this is best-effort delivery on top of the
+     * existing ZIP path. If the service is not wired (unit-test bean),
+     * we short-circuit.
+     */
+    private void dispatchToConfiguredDestinations(long orderNo, byte[] labelBytes) {
+        if (outputDestinationService == null) return;
+        if (labelBytes == null || labelBytes.length == 0) return;
+        try {
+            String clientCode = resolveClientCode(orderNo);
+            DispatchContext ctx = new DispatchContext(
+                    null,                  // no shipment row from the bulk path yet
+                    (int) orderNo,
+                    clientCode,
+                    "application/pdf",
+                    null);
+            DispatchResult result = outputDestinationService.dispatch(DocType.LABEL, labelBytes, ctx);
+            if (result.getFailureCount() > 0) {
+                log.warn("Bulk-label output routing: order {} — {}/{} destinations failed",
+                        orderNo, result.getFailureCount(), result.getTotalDestinations());
+            }
+        } catch (Exception ex) {
+            // Never let output-routing failure kill the label path.
+            log.warn("Bulk-label output routing: order {} failed: {}", orderNo, ex.getMessage());
+        }
+    }
+
+    /** Best-effort clientCode lookup for the dispatch context. */
+    private String resolveClientCode(long orderNo) {
+        if (orderRepository == null) return null;
+        return orderRepository.findByOrderNo((int) orderNo)
+                .map(o -> StringUtils.hasText(o.getTenantId()) ? o.getTenantId() : o.getCustNo())
+                .orElse(null);
     }
 
     /**

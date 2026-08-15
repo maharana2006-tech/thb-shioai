@@ -168,6 +168,20 @@
             <version>3.0.3</version>
         </dependency>
 
+        <!-- Sprint 52 output routing — SFTP driver.
+             mwiede/jsch is the actively-maintained fork of the original
+             (abandoned) com.jcraft:jsch. Same package + API, so any
+             existing docs / examples work; adds modern KEX + cipher
+             algorithms that a current OpenSSH-based sftp server needs.
+             Alternatives considered: Apache MINA sshd-sftp is a fuller
+             SSH client but ~10x the dep footprint and we only need
+             single-file upload. -->
+        <dependency>
+            <groupId>com.github.mwiede</groupId>
+            <artifactId>jsch</artifactId>
+            <version>0.2.21</version>
+        </dependency>
+
         <!-- Sprint 51 BP-M4 — Actuator surfaces /actuator/health (K8s
              liveness+readiness probes) + /actuator/prometheus (metrics
              scrape). Micrometer Prometheus registry adapts every
