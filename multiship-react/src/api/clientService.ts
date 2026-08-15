@@ -27,6 +27,13 @@ export interface Client {
   /** Where returns go; null when it mirrors shipFrom. */
   returnAddress: Address | null
   returnSameAsShipFrom: boolean
+  // Sprint 50 Tier 1 finding #4 — per-tenant defaults. Nullable; the label/
+  // rate/customs pipelines consult these before platform hardcodes.
+  defaultCurrency: string | null
+  defaultWeightUnit: string | null
+  defaultDimUnit: string | null
+  timezone: string | null
+  defaultOriginCountry: string | null
   createdAt: string | null
   updatedAt: string | null
   carrierAccounts: CarrierAccountRef[]
@@ -41,6 +48,14 @@ export interface ClientUpsertPayload {
   shipFrom?: Address
   returnAddress?: Address
   returnSameAsShipFrom?: boolean
+  // Sprint 50 Tier 1 finding #4 — per-tenant defaults. All optional; empty
+  // string / undefined leaves the DB column NULL and consumers fall back to
+  // platform hardcodes. Length/format is validated server-side.
+  defaultCurrency?: string
+  defaultWeightUnit?: string
+  defaultDimUnit?: string
+  timezone?: string
+  defaultOriginCountry?: string
 }
 
 /**

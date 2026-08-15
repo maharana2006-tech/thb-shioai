@@ -4,10 +4,10 @@ import { notify } from '../utils/notify'
 import {
   FiAlertCircle,
   FiArrowLeft,
-  FiArrowRight,
   FiCheck,
   FiChevronLeft,
   FiChevronRight,
+  FiEdit2,
   FiHome,
   FiLoader,
   FiPlus,
@@ -15,6 +15,7 @@ import {
 } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import { clientService, type Address, type Client, type ClientUpsertPayload } from '../api/clientService'
+import { TimezoneCombobox } from './TimezoneCombobox'
 import { accountRefService, type CarrierAccountRef } from '../api/accountRefService'
 import {
   clientWarehouseService,
@@ -40,7 +41,6 @@ import {
   type AddressLike,
 } from '../utils/clientValidation'
 import { validateCarrierAccount } from '../validation/carrierAccountValidation'
-import CarrierLogo from './workspace/CarrierLogo'
 import CountrySelect from './workspace/CountrySelect'
 import Select from './workspace/Select'
 // Hidden-step components (kept commented for the day they come back into the wizard):
@@ -161,15 +161,6 @@ type MappingRuleDraft = {
 
 type DraftShape = {
   form: ClientUpsertPayload
-  accountForm: {
-    carrierCode: string
-    accountNumber: string
-    clientId: string
-    clientSecret: string
-    environment: CarrierEnvironment
-    clientDefault: boolean
-  }
-  showAccountForm: boolean
   selectedShipFromWarehouseId: number | null
   visitedSteps: StepKey[]
   activeStep: StepKey
@@ -297,17 +288,6 @@ export default function ClientEditorPage() {
   }
 
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
-  const [showAccountForm, setShowAccountForm] = useState(draft?.showAccountForm ?? false)
-  const [accountForm, setAccountForm] = useState(
-    draft?.accountForm ?? {
-      carrierCode: 'UPS',
-      accountNumber: '',
-      clientId: '',
-      clientSecret: '',
-      environment: 'SANDBOX' as CarrierEnvironment,
-      clientDefault: true,
-    },
-  )
 
   /** Create-mode carrier account drafts. Committed after Create client. */
   const [carrierDrafts, setCarrierDrafts] = useState<CarrierAccountDraft[]>(
@@ -330,7 +310,6 @@ export default function ClientEditorPage() {
    * intersect address caps in the AddressGrid. Sources:
    *   - {@link accounts}       (edit mode: existing rows fetched from server)
    *   - {@link carrierDrafts}  (create mode: staged accounts pending commit)
-   *   - {@link accountForm}    (create mode: Identity-step inline account being typed)
    *
    * Kept as a set of raw carrier code strings — the utility upper-cases and
    * filters to known codes (UPS / FEDEX / USPS / DHL) internally.
@@ -339,12 +318,8 @@ export default function ClientEditorPage() {
     const set = new Set<string>()
     accounts.forEach((a) => { if (a.carrierCode) set.add(a.carrierCode) })
     carrierDrafts.forEach((d) => { if (d.carrierCode) set.add(d.carrierCode) })
-    // Only count the inline form if the operator has actually opened it in
-    // create mode — an empty carrierCode from accountForm's initial state
-    // shouldn't influence caps.
-    if (!isEdit && showAccountForm && accountForm.carrierCode) set.add(accountForm.carrierCode)
     return Array.from(set)
-  }, [accounts, carrierDrafts, showAccountForm, accountForm.carrierCode, isEdit])
+  }, [accounts, carrierDrafts])
 
   /** Intersection of per-carrier address caps — the strictest limit per
    *  field across every enabled carrier. Empty set falls back to the loose
@@ -393,6 +368,10 @@ export default function ClientEditorPage() {
     draft?.selectedShipFromWarehouseId ?? null,
   )
   const [showShipFromAddWarehouse, setShowShipFromAddWarehouse] = useState(false)
+  // null when the modal is opening for create OR closed; a Warehouse when
+  // opening for edit from the Ship From picker's preview card. Cleared when
+  // the modal closes so the next open defaults back to create.
+  const [warehouseBeingEdited, setWarehouseBeingEdited] = useState<Warehouse | null>(null)
   /** Warehouse ids currently attached to this client (edit mode only). The
    *  Ship From picker filters these OUT so the operator only sees warehouses
    *  they could switch TO — with the currently-selected default kept visible
@@ -524,6 +503,13 @@ export default function ClientEditorPage() {
           shipFrom: { ...emptyAddress, ...(c.shipFrom ?? {}) },
           returnAddress: { ...emptyAddress, ...(c.returnAddress ?? {}) },
           returnSameAsShipFrom: c.returnSameAsShipFrom ?? true,
+          // Sprint 50 Tier 1 finding #4 — hydrate per-tenant defaults so
+          // the editor's Defaults panel shows what's currently persisted.
+          defaultCurrency: c.defaultCurrency ?? '',
+          defaultWeightUnit: c.defaultWeightUnit ?? '',
+          defaultDimUnit: c.defaultDimUnit ?? '',
+          timezone: c.timezone ?? '',
+          defaultOriginCountry: c.defaultOriginCountry ?? '',
         })
         setAccounts(c.carrierAccounts ?? [])
       })
@@ -568,8 +554,6 @@ export default function ClientEditorPage() {
     try {
       const snapshot: DraftShape = {
         form,
-        accountForm,
-        showAccountForm,
         selectedShipFromWarehouseId,
         visitedSteps: [...visitedSteps],
         activeStep,
@@ -578,7 +562,7 @@ export default function ClientEditorPage() {
       }
       localStorage.setItem(draftStorageKey(), JSON.stringify(snapshot))
     } catch { /* localStorage full / disabled — not fatal */ }
-  }, [isEdit, form, accountForm, showAccountForm, selectedShipFromWarehouseId, visitedSteps, activeStep, carrierDrafts, mappingDrafts])
+  }, [isEdit, form, selectedShipFromWarehouseId, visitedSteps, activeStep, carrierDrafts, mappingDrafts])
 
   // ===== Live duplicate-code check =====
   // Debounced: fires 500ms after the last keystroke. Skips in edit mode
@@ -633,20 +617,9 @@ export default function ClientEditorPage() {
     return validateAddress(form.returnAddress as AddressLike, { required: true, caps: addressCaps })
   }, [form.returnSameAsShipFrom, form.returnAddress, addressCaps])
 
-  const accountErrors = useMemo(() => {
-    // In create mode when the operator opens the optional carrier form, all
-    // three secrets must be filled. Errors are only shown after touch.
-    if (isEdit || !showAccountForm) return {}
-    const e: Record<string, string | null> = {}
-    if (!accountForm.accountNumber.trim()) e.accountNumber = 'Account number is required.'
-    if (!accountForm.clientId.trim()) e.clientId = 'Client ID is required.'
-    if (!accountForm.clientSecret.trim()) e.clientSecret = 'Client secret is required.'
-    return e
-  }, [isEdit, showAccountForm, accountForm.accountNumber, accountForm.clientId, accountForm.clientSecret])
-
   const stepValid = (key: StepKey): boolean => {
     switch (key) {
-      case 'identity': return !hasErrors(identityErrors) && !hasErrors(accountErrors)
+      case 'identity': return !hasErrors(identityErrors)
       case 'shipFrom': return !hasErrors(shipFromErrors)
       case 'return':   return !hasErrors(returnErrors)
       default:         return true // client-dependent steps aren't gated
@@ -667,7 +640,6 @@ export default function ClientEditorPage() {
     switch (step) {
       case 'identity':
         touchAllIn('identity', ['clientCode', 'name', 'email', 'phone'])
-        if (showAccountForm) touchAllIn('account', ['accountNumber', 'clientId', 'clientSecret'])
         break
       case 'shipFrom':
         touchAllIn('shipFrom', Object.keys(emptyAddress))
@@ -733,16 +705,10 @@ export default function ClientEditorPage() {
 
   /**
    * The Carriers step is "complete" when the operator has staged at least
-   * one draft carrier account OR filled the optional inline account form on
-   * the Identity step — both commit through the same accountRefService call
-   * on Create client, so either one satisfies the "≥1 carrier account" rule.
+   * one draft carrier account. The staged rows commit through
+   * accountRefService on Create client.
    */
-  const carriersStepComplete =
-    carrierDrafts.length > 0
-    || (showAccountForm
-        && !!accountForm.accountNumber.trim()
-        && !!accountForm.clientId.trim()
-        && !!accountForm.clientSecret.trim())
+  const carriersStepComplete = carrierDrafts.length > 0
 
   /** The Mapping step is complete when the operator has staged at least one
    *  draft rule (ship via + carrier service). */
@@ -841,11 +807,11 @@ export default function ClientEditorPage() {
     if (!carriersStepComplete) reasons.push('Add at least one carrier account')
     if (!mappingStepComplete) reasons.push('Add at least one shipping-service mapping')
     return reasons
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- stepValid is a plain function (not memoized); it reads form + showAccountForm + accountForm which ARE in the dep list, so it recomputes correctly. Adding stepValid itself would break memoization on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stepValid is a plain function (not memoized); it reads form which IS in the dep list, so it recomputes correctly. Adding stepValid itself would break memoization on every render.
   }, [
     isEdit, allStepsVisited, visitedSteps, selectedShipFromWarehouseId,
     carriersStepComplete, mappingStepComplete,
-    form, showAccountForm, accountForm,
+    form,
   ])
 
   // ===== Save handlers =====
@@ -888,35 +854,17 @@ export default function ClientEditorPage() {
           ? undefined
           : trimmedAddr(form.returnAddress as Address),
         returnSameAsShipFrom: form.returnSameAsShipFrom,
+        // Sprint 50 Tier 1 finding #4 — per-tenant defaults. Send only when
+        // non-empty; the backend accepts nullable and the DTO's @Size/@Pattern
+        // validators fire an empty-string pass-through, so we omit fully.
+        defaultCurrency: form.defaultCurrency?.trim().toUpperCase() || undefined,
+        defaultWeightUnit: form.defaultWeightUnit?.trim().toUpperCase() || undefined,
+        defaultDimUnit: form.defaultDimUnit?.trim().toUpperCase() || undefined,
+        timezone: form.timezone?.trim() || undefined,
+        defaultOriginCountry: form.defaultOriginCountry?.trim().toUpperCase() || undefined,
       }
       const response = await clientService.createClient(payload)
-      // Optional carrier account attached during create.
-      if (!isEdit && showAccountForm) {
-        try {
-          await accountRefService.upsertAccount({
-            accountNumber: accountForm.accountNumber.trim(),
-            carrierCode: accountForm.carrierCode,
-            clientId: accountForm.clientId.trim(),
-            clientSecret: accountForm.clientSecret.trim(),
-            environment: accountForm.environment,
-            customerNo: response.data.clientCode,
-            clientDefault: accountForm.clientDefault,
-          })
-          notify.success(
-            `Client ${response.data.clientCode} created with its ${formatCarrierName(accountForm.carrierCode)} account${
-              accountForm.clientDefault ? ' (default)' : ''
-            }.`,
-          )
-        } catch (accountError) {
-          notify.error(
-            `Client created, but the carrier account failed: ${
-              accountError instanceof Error ? accountError.message : 'unknown error'
-            }. Add it from the Carriers step.`,
-          )
-        }
-      } else {
-        notify.success(`Client ${response.data.clientCode} created.`)
-      }
+      notify.success(`Client ${response.data.clientCode} created.`)
 
       // ===== Commit draft carrier accounts + mapping rules =====
       // Best-effort per row; a single failure surfaces as a toast but doesn't
@@ -1057,6 +1005,12 @@ export default function ClientEditorPage() {
           ? undefined
           : trimmedAddr(form.returnAddress as Address),
         returnSameAsShipFrom: form.returnSameAsShipFrom,
+        // Sprint 50 Tier 1 finding #4 — per-tenant defaults (same as create).
+        defaultCurrency: form.defaultCurrency?.trim().toUpperCase() || undefined,
+        defaultWeightUnit: form.defaultWeightUnit?.trim().toUpperCase() || undefined,
+        defaultDimUnit: form.defaultDimUnit?.trim().toUpperCase() || undefined,
+        timezone: form.timezone?.trim() || undefined,
+        defaultOriginCountry: form.defaultOriginCountry?.trim().toUpperCase() || undefined,
       }
       const response = await clientService.updateClient(form.clientCode, payload)
       setClient(response.data)
@@ -1258,13 +1212,6 @@ export default function ClientEditorPage() {
             touched={touched}
             markTouched={markTouched}
             set={set}
-            accountForm={accountForm}
-            setAccountForm={setAccountForm}
-            accountErrors={accountErrors}
-            showAccountForm={showAccountForm}
-            setShowAccountForm={setShowAccountForm}
-            accounts={accounts}
-            onManageCarriers={() => setActiveStep('carriers')}
           />
         ) : null}
 
@@ -1274,7 +1221,8 @@ export default function ClientEditorPage() {
             loading={pickWarehousesLoading}
             selectedId={selectedShipFromWarehouseId}
             onPick={pickShipFromWarehouse}
-            onAddWarehouseClick={() => setShowShipFromAddWarehouse(true)}
+            onAddWarehouseClick={() => { setWarehouseBeingEdited(null); setShowShipFromAddWarehouse(true) }}
+            onEditWarehouseClick={(w) => { setWarehouseBeingEdited(w); setShowShipFromAddWarehouse(true) }}
             addressPreview={form.shipFrom as Address}
             errors={shipFromErrors}
             touched={touched}
@@ -1287,13 +1235,20 @@ export default function ClientEditorPage() {
 
         {showShipFromAddWarehouse ? (
           <WarehouseEditorModal
-            warehouse={null}
-            onClose={() => setShowShipFromAddWarehouse(false)}
+            warehouse={warehouseBeingEdited}
+            defaultCarrierCode={
+              accounts.find((a) => a.clientDefault)?.carrierCode
+              || accounts[0]?.carrierCode
+              || undefined
+            }
+            onClose={() => { setShowShipFromAddWarehouse(false); setWarehouseBeingEdited(null) }}
             onSaved={async (saved) => {
               setShowShipFromAddWarehouse(false)
+              setWarehouseBeingEdited(null)
               await loadPickWarehouses()
-              // Auto-select the freshly-created warehouse so the operator
-              // doesn't have to hunt for it in the picker.
+              // Auto-select the saved warehouse — for create it's the newly
+              // added row, for edit it's the same row with updated fields
+              // (address preview refreshes because we re-pick).
               if (saved) pickShipFromWarehouse(saved)
             }}
           />
@@ -1462,13 +1417,6 @@ function IdentityStep({
   touched,
   markTouched,
   set,
-  accountForm,
-  setAccountForm,
-  accountErrors,
-  showAccountForm,
-  setShowAccountForm,
-  accounts,
-  onManageCarriers,
 }: {
   form: ClientUpsertPayload
   isEdit: boolean
@@ -1477,30 +1425,8 @@ function IdentityStep({
   touched: Record<string, boolean>
   markTouched: (key: string) => void
   set: (key: keyof ClientUpsertPayload) => (e: { target: { value: string } }) => void
-  accountForm: {
-    carrierCode: string
-    accountNumber: string
-    clientId: string
-    clientSecret: string
-    environment: CarrierEnvironment
-    clientDefault: boolean
-  }
-  setAccountForm: React.Dispatch<React.SetStateAction<{
-    carrierCode: string
-    accountNumber: string
-    clientId: string
-    clientSecret: string
-    environment: CarrierEnvironment
-    clientDefault: boolean
-  }>>
-  accountErrors: Record<string, string | null>
-  showAccountForm: boolean
-  setShowAccountForm: (v: boolean) => void
-  accounts: CarrierAccountRef[]
-  onManageCarriers: () => void
 }) {
   const err = (k: string) => (touched[`identity.${k}`] ? errors[k] || null : null)
-  const aErr = (k: string) => (touched[`account.${k}`] ? accountErrors[k] || null : null)
   const codeHint = isEdit
     ? 'Immutable after create.'
     : checkingCode
@@ -1565,137 +1491,92 @@ function IdentityStep({
         </Field>
       </div>
 
-      {/* Carrier accounts — shown as chips in edit mode with a link to the
-          Carriers step; in create mode an optional inline account form. */}
-      {isEdit && accounts.length ? (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
-          <div className="flex items-center justify-between">
-            <h4 className="text-[12px] font-semibold text-slate-950">Carrier accounts</h4>
-            <button
-              type="button"
-              onClick={onManageCarriers}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10.5px] font-semibold text-[#412d15] transition hover:bg-slate-50"
+      {/* Sprint 50 Tier 1 finding #4 — per-tenant defaults panel. All fields
+          optional; the label/rate/customs pipelines fall back to platform
+          hardcodes when NULL. Backend enforces ISO 4217 currency,
+          {LB,KG,OZ,G} weight, {IN,CM,MM} dim, ISO-3166-1 alpha-2 country.
+          Empty select value → undefined in the payload → NULL in the DB. */}
+      <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+        <h4 className="text-[12px] font-semibold text-slate-950">Defaults</h4>
+        <p className="text-[10.5px] text-slate-500">
+          Applied when a shipment doesn't override. Leave any blank to use the platform default.
+        </p>
+        <div className="mt-2 grid grid-cols-1 gap-2.5 sm:grid-cols-5">
+          <Field label="Currency">
+            <select
+              value={form.defaultCurrency || ''}
+              onChange={set('defaultCurrency')}
+              className={`${inputBaseClass} ${inputOk}`}
             >
-              Manage in Carriers step
-              <FiArrowRight className="h-3 w-3" />
-            </button>
-          </div>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {accounts.map((account) => (
-              <div key={account.id} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1">
-                <CarrierLogo carrierId={account.carrierCode} size={14} className="rounded-sm" />
-                <span className="text-[11px] font-semibold text-slate-800">
-                  {account.accountName || formatCarrierName(account.carrierCode)} · {account.accountNumber}
-                </span>
-                {account.clientDefault ? <FiStar className="h-3 w-3 text-[#412d15]" /> : null}
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {!isEdit ? (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h4 className="text-[12px] font-semibold text-slate-950">Carrier account</h4>
-              <p className="text-[10.5px] text-slate-500">
-                Optional — add it now and this client's orders ship automatically.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowAccountForm(!showAccountForm)}
-              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10.5px] font-semibold text-slate-700 transition hover:bg-slate-50"
+              <option value="">— none —</option>
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+              <option value="GBP">GBP</option>
+              <option value="CAD">CAD</option>
+              <option value="AUD">AUD</option>
+              <option value="INR">INR</option>
+              <option value="JPY">JPY</option>
+              <option value="CNY">CNY</option>
+              <option value="MXN">MXN</option>
+              <option value="AED">AED</option>
+            </select>
+          </Field>
+          <Field label="Weight unit">
+            <select
+              value={form.defaultWeightUnit || ''}
+              onChange={set('defaultWeightUnit')}
+              className={`${inputBaseClass} ${inputOk}`}
             >
-              <FiPlus className={`h-3 w-3 transition ${showAccountForm ? 'rotate-45' : ''}`} />
-              {showAccountForm ? 'Remove' : 'Add account'}
-            </button>
-          </div>
-
-          {showAccountForm ? (
-            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <Field label="Carrier" required>
-                <Select
-                  value={accountForm.carrierCode}
-                  onChange={(e) => setAccountForm((cur) => ({ ...cur, carrierCode: e.target.value }))}
-                >
-                  {carrierOptions.map((option) => (
-                    <option key={option.code} value={option.code}>{option.label}</option>
-                  ))}
-                </Select>
-              </Field>
-              {(() => {
-                const rule = accountRuleFor(accountForm.carrierCode)
-                return (
-                  <Field
-                    label="Account number"
-                    required
-                    error={aErr('accountNumber')}
-                    hint={rule?.helper}
-                  >
-                    <input
-                      value={accountForm.accountNumber}
-                      onChange={(e) => setAccountForm((cur) => ({ ...cur, accountNumber: e.target.value }))}
-                      onBlur={() => markTouched('account.accountNumber')}
-                      maxLength={rule?.maxLength ?? 100}
-                      pattern={rule?.pattern}
-                      placeholder={rule?.placeholder}
-                      autoComplete="off"
-                      spellCheck={false}
-                      aria-invalid={aErr('accountNumber') ? true : undefined}
-                      className={`${inputBaseClass} ${aErr('accountNumber') ? inputErr : inputOk}`}
-                    />
-                  </Field>
-                )
-              })()}
-              <Field label="Client ID" required error={aErr('clientId')}>
-                <input
-                  value={accountForm.clientId}
-                  onChange={(e) => setAccountForm((cur) => ({ ...cur, clientId: e.target.value }))}
-                  onBlur={() => markTouched('account.clientId')}
-                  maxLength={255}
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-invalid={aErr('clientId') ? true : undefined}
-                  className={`${inputBaseClass} ${aErr('clientId') ? inputErr : inputOk}`}
-                />
-              </Field>
-              <Field label="Client Secret" required error={aErr('clientSecret')}>
-                <input
-                  type="password"
-                  value={accountForm.clientSecret}
-                  onChange={(e) => setAccountForm((cur) => ({ ...cur, clientSecret: e.target.value }))}
-                  onBlur={() => markTouched('account.clientSecret')}
-                  maxLength={255}
-                  autoComplete="new-password"
-                  aria-invalid={aErr('clientSecret') ? true : undefined}
-                  className={`${inputBaseClass} ${aErr('clientSecret') ? inputErr : inputOk}`}
-                />
-              </Field>
-              <Field label="Environment">
-                <Select
-                  value={accountForm.environment}
-                  onChange={(e) => setAccountForm((cur) => ({ ...cur, environment: e.target.value as CarrierEnvironment }))}
-                >
-                  {carrierEnvironmentOptions.map((option) => (
-                    <option key={option} value={option}>{option}</option>
-                  ))}
-                </Select>
-              </Field>
-              <label className="flex items-end gap-2 pb-2 text-[12px] font-semibold text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={accountForm.clientDefault}
-                  onChange={(e) => setAccountForm((cur) => ({ ...cur, clientDefault: e.target.checked }))}
-                  className="h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
-                />
-                Default account
-              </label>
-            </div>
-          ) : null}
+              <option value="">— none —</option>
+              <option value="LB">LB (pounds)</option>
+              <option value="KG">KG (kilograms)</option>
+              <option value="OZ">OZ (ounces)</option>
+              <option value="G">G (grams)</option>
+            </select>
+          </Field>
+          <Field label="Dimension unit">
+            <select
+              value={form.defaultDimUnit || ''}
+              onChange={set('defaultDimUnit')}
+              className={`${inputBaseClass} ${inputOk}`}
+            >
+              <option value="">— none —</option>
+              <option value="IN">IN (inches)</option>
+              <option value="CM">CM (centimeters)</option>
+              <option value="MM">MM (millimeters)</option>
+            </select>
+          </Field>
+          <Field label="Origin country">
+            <select
+              value={form.defaultOriginCountry || ''}
+              onChange={set('defaultOriginCountry')}
+              className={`${inputBaseClass} ${inputOk}`}
+            >
+              <option value="">— none —</option>
+              <option value="US">US — United States</option>
+              <option value="CA">CA — Canada</option>
+              <option value="MX">MX — Mexico</option>
+              <option value="GB">GB — United Kingdom</option>
+              <option value="DE">DE — Germany</option>
+              <option value="FR">FR — France</option>
+              <option value="IN">IN — India</option>
+              <option value="CN">CN — China</option>
+              <option value="AU">AU — Australia</option>
+              <option value="JP">JP — Japan</option>
+              <option value="AE">AE — UAE</option>
+              <option value="SG">SG — Singapore</option>
+            </select>
+          </Field>
+          <Field label="Timezone" hint="IANA (e.g. America/New_York)">
+            <TimezoneCombobox
+              value={form.timezone || ''}
+              onChange={(v) => set('timezone')({ target: { value: v } })}
+              className={`${inputBaseClass} ${inputOk}`}
+            />
+          </Field>
         </div>
-      ) : null}
+      </div>
+
     </div>
   )
 }
@@ -2418,6 +2299,7 @@ function ShipFromStep({
   selectedId,
   onPick,
   onAddWarehouseClick,
+  onEditWarehouseClick,
   addressPreview,
   errors,
   touched,
@@ -2429,6 +2311,10 @@ function ShipFromStep({
   selectedId: number | null
   onPick: (wh: Warehouse | null) => void
   onAddWarehouseClick: () => void
+  /** Fires when the operator taps the Edit button on the picked-preview
+   *  card. Only exposed on CLIENT-owned warehouses (PLATFORM warehouses
+   *  are shared and must be edited from Settings → Warehouses by admin). */
+  onEditWarehouseClick: (wh: Warehouse) => void
   addressPreview: Address
   errors: Partial<Record<keyof AddressLike, string>>
   touched: Record<string, boolean>
@@ -2537,6 +2423,16 @@ function ShipFromStep({
                   {addressPreview.phone ? <><br />{addressPreview.phone}</> : null}
                 </p>
               </div>
+              {(picked.ownerType || '').toUpperCase() === 'CLIENT' ? (
+                <button
+                  type="button"
+                  onClick={() => onEditWarehouseClick(picked)}
+                  title="Edit this warehouse (shared across clients — CLIENT-owned only)"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-[#412d15] hover:bg-[#faf7f0] hover:text-[#412d15]"
+                >
+                  <FiEdit2 className="h-3 w-3" /> Edit
+                </button>
+              ) : null}
             </div>
             {hasAnyErr ? (
               <div className="mt-2 space-y-0.5 rounded-lg bg-rose-50 px-2 py-1.5 text-[10.5px] font-semibold text-rose-700">
