@@ -34,9 +34,12 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>synthesised default (log WARN)</li>
  * </ol>
  *
- * <p>TODO(sprint52): US → PR (Puerto Rico) return caps are direction=RETURN
- * PLUS origin/destination-inspected. Seeding here isn't enough — needs a
- * runtime check when direction=RETURN AND origin=US AND dest=PR.
+ * <p>Sprint 52 follow-up: US &lt;-&gt; PR (Puerto Rico) returns are hard-capped
+ * at 1 pkg (UPS_MPS_US_PR_ORIGIN_RETURN_MAX). Because the cap keys off
+ * origin/destination pair (not just direction), the seed row alone can't
+ * express it — {@link CarrierServiceImpl} swaps the serviceType to
+ * {@code RETURN_US_PR} at request time when the route matches, and the
+ * resolver picks the {@code (UPS, RETURN_US_PR, DOMESTIC, RETURN)} seed row.
  */
 @Slf4j
 @Service
