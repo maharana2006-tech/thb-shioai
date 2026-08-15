@@ -1,0 +1,28 @@
+# hadolint config — Sprint 52 verification hardening.
+#
+# Applied by the `dockerfile-lint` GitHub Actions workflow to
+# backend/Dockerfile. Only rules we've consciously accepted are
+# demoted; everything else runs at hadolint's default severity.
+
+ignored:
+  # DL3007: "Using latest is prone to errors if the image will ever
+  # update. Pin the version explicitly to a release tag."
+  # We pin to a MAJOR.MINOR label (maven:3.9-eclipse-temurin-21 and
+  # eclipse-temurin:21-jre-alpine) rather than a sha256 digest — the
+  # tag pin already gives us Java-21 reproducibility, and digest pins
+  # would force a churn commit on every base-image security update.
+  # Reconsider if we move to reproducible-builds policy.
+  - DL3007
+
+  # DL3018: "Pin versions in apk add. Instead of `apk add <package>`
+  # use `apk add <package>=<version>`."
+  # We install curl for the HEALTHCHECK; alpine's curl minor bumps
+  # frequently and pinning would break the build every ~weeks with
+  # no security benefit. Accept the version drift.
+  - DL3018
+
+# Ensure the failure threshold is meaningful — the action's
+# failure-threshold: error handles this at the workflow level; this
+# section is documentation.
+trustedRegistries:
+  - docker.io
