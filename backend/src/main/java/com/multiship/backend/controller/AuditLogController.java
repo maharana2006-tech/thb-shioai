@@ -37,15 +37,12 @@ public class AuditLogController {
     private final AuditLogRepository repo;
 
     @Operation(summary = "List audit rows",
-            description = "Paginated list of every recorded action. Empty filter fields skip. "
-                    + "Restricted to ADMIN — the payload includes cross-tenant activity and "
-                    + "there is no per-tenant filter yet (see Sprint 51 BS-M3: full fix is a "
-                    + "future client_code column + scope filter).")
-    // Sprint 51 BS-M3 (interim) — was hasAnyRole('ADMIN','USER'). USER-tenants
-    // could enumerate other tenants' audit rows via the actor / entityKey
-    // filters. Full fix (column + scope filter) is deferred to a separate
-    // migration cycle; ADMIN-only closes the leak in the meantime.
-    @PreAuthorize("hasRole('ADMIN')")
+            description = "Paginated list of recorded actions. Empty filter fields skip. "
+                    + "Rows are scope-filtered at the repository layer (Sprint 51 follow-up "
+                    + "BS-M3 full fix): platform operators see every row including system "
+                    + "events (client_code IS NULL); a tenant-scoped USER sees strictly "
+                    + "their own tenant's rows.")
+    @PreAuthorize("hasAnyRole('ADMIN','USER')")
     @GetMapping
     public ResponseEntity<ApiResponse<PageResponseDTO<AuditLogDTO>>> list(
             @Parameter(description = "Case-insensitive substring on actor username")
