@@ -59,6 +59,22 @@ public class CarrierLimitSeeder implements CommandLineRunner {
                 "UPS Ship API forward MPS: 200 pkgs, 30000 lb total, $100 free coverage.", now);
         seed("UPS", null, "BOTH", "RETURN", 20, 50, bd("30000"), bd("100"),
                 "UPS Ship API return MPS: 20 pkgs (returns are capped lower than forward).", now);
+        // Sprint 52 follow-up: UPS treats US <-> PR as domestic but returns
+        // between US and PR (either direction) are hard-capped at 1 pkg per
+        // UPS_MPS_US_PR_ORIGIN_RETURN_MAX. Runtime detection in
+        // CarrierServiceImpl swaps serviceType to RETURN_US_PR when
+        // (carrier=UPS, direction=RETURN, {US<->PR}); this row is what the
+        // resolver returns for that synthetic service code.
+        //
+        // scope=BOTH + direction=null are deliberate: the resolver JPQL's
+        // WHERE (:service IS NULL OR ...) admits every row when the caller
+        // passes a null service, which would otherwise let a scope=DOMESTIC
+        // or direction=RETURN row leak into unrelated US->CA return traffic
+        // via the scope/direction-tier ORDER BY. Keeping the row as broad as
+        // possible on scope/direction means it only wins when the caller
+        // explicitly asks for serviceCode=RETURN_US_PR (service-tier 0).
+        seed("UPS", "RETURN_US_PR", "BOTH", null, 1, 50, bd("30000"), bd("100"),
+                "UPS US<->PR Return: 1 pkg cap (per UPS_MPS_US_PR_ORIGIN_RETURN_MAX).", now);
         seed("UPS", "MAIL_INNOVATIONS", "BOTH", null, 1, 50, bd("70"), bd("100"),
                 "UPS Mail Innovations: single-piece only.", now);
         seed("UPS", "SIMPLE_RATE", "BOTH", null, 1, 50, bd("50"), bd("100"),
