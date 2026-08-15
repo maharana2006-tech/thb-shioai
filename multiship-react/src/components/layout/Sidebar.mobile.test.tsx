@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { Provider } from 'react-redux'
@@ -16,11 +16,14 @@ import Sidebar from './Sidebar'
  *     `onMobileClose`
  *   · the drawer exposes a `data-mobile-open` hook for E2E tests
  *
- * <p>Focus-trap / role="dialog"+aria-modal semantics are intentionally
- * NOT asserted here — the drawer never got wired to `useFocusTrap`
- * (see the verification-hardening PR body for the follow-up bug).
- * These tests describe what production DOES today; changing them is
- * a signal that the drawer contract shifted.
+ * <p>Sprint 52 follow-up (this PR) — closes the four a11y gaps Agent I
+ * flagged:
+ *   · role="dialog" + aria-modal + aria-labelledby only when open
+ *   · Escape closes the drawer
+ *   · body scroll is locked while open, restored on close
+ *   · focus trap: Tab from the last focusable wraps to the first
+ * Pattern lifted from Sprint 49 Tier 4 Fix 6 (useFocusTrap) and
+ * Sprint 51 PR #157 modal a11y hardening (BulkLabelModal et al.).
  */
 
 vi.mock('../../api/authService', () => ({
@@ -77,20 +80,31 @@ describe('Sidebar — FE-M5 mobile drawer', () => {
     vi.clearAllMocks()
   })
 
+  afterEach(() => {
+    // Sprint 52 a11y — the scroll-lock effect sets `body.style.overflow`.
+    // Tests that open the drawer and unmount without closing it leave the
+    // cleanup pending; force-reset here so state doesn't leak.
+    document.body.style.overflow = ''
+  })
+
   it('renders the nav with data-mobile-open="false" when the drawer is closed', () => {
     renderSidebar({ mobileOpen: false })
     const nav = screen.getByRole('navigation', { name: /primary/i })
     expect(nav).toHaveAttribute('data-mobile-open', 'false')
     // -translate-x-full keeps the drawer off-screen on <md when closed.
     expect(nav.className).toMatch(/-translate-x-full/)
+    // Sprint 52 a11y — the desktop rail must NOT announce as a modal.
+    expect(nav).not.toHaveAttribute('role', 'dialog')
+    expect(nav).not.toHaveAttribute('aria-modal')
   })
 
   it('flips data-mobile-open + translate-x-0 when the drawer opens', () => {
     renderSidebar({ mobileOpen: true })
-    const nav = screen.getByRole('navigation', { name: /primary/i })
-    expect(nav).toHaveAttribute('data-mobile-open', 'true')
+    // When open the nav takes on role="dialog" — query by that instead.
+    const dialog = screen.getByRole('dialog', { name: /navigation/i })
+    expect(dialog).toHaveAttribute('data-mobile-open', 'true')
     // translate-x-0 slides the drawer into view on <md.
-    expect(nav.className).toMatch(/translate-x-0/)
+    expect(dialog.className).toMatch(/translate-x-0/)
   })
 
   it('renders the click-to-close backdrop only when the drawer is open', () => {
@@ -155,5 +169,108 @@ describe('Sidebar — FE-M5 mobile drawer', () => {
     // known ADMIN nav item — the "Orders" route — as a probe.
     const ordersButton = screen.getByRole('button', { name: /orders/i })
     expect(ordersButton).toBeInTheDocument()
+  })
+})
+
+describe('Sidebar — FE-M5 mobile drawer a11y (Sprint 52 follow-up)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    document.body.style.overflow = ''
+  })
+
+  it('sets role="dialog", aria-modal, and aria-labelledby to a real heading when open', () => {
+    renderSidebar({ mobileOpen: true })
+    const dialog = screen.getByRole('dialog', { name: /navigation/i })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    const labelledBy = dialog.getAttribute('aria-labelledby')
+    expect(labelledBy).toBeTruthy()
+    // The referenced id MUST resolve to a real node so the accessible
+    // name computation succeeds.
+    const heading = document.getElementById(labelledBy as string)
+    expect(heading).not.toBeNull()
+    expect(heading?.textContent).toMatch(/navigation/i)
+  })
+
+  it('does NOT expose dialog semantics when the drawer is closed (desktop rail)', () => {
+    renderSidebar({ mobileOpen: false })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('moves focus into the drawer when it opens', async () => {
+    renderSidebar({ mobileOpen: true })
+    // useFocusTrap uses requestAnimationFrame to focus the first
+    // focusable; wait one frame.
+    await new Promise((r) => requestAnimationFrame(() => r(null)))
+    const dialog = screen.getByRole('dialog', { name: /navigation/i })
+    // Focus should have landed on some element inside the drawer.
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    // And that focused element should be one of the drawer's own
+    // focusables (a button/link), not the container itself.
+    expect(document.activeElement?.tagName).toBe('BUTTON')
+  })
+
+  it('closes the drawer when Escape is pressed', () => {
+    const { onMobileClose } = renderSidebar({ mobileOpen: true })
+    const baseline = onMobileClose.mock.calls.length
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onMobileClose).toHaveBeenCalledTimes(baseline + 1)
+  })
+
+  it('does NOT bind an Escape listener when the drawer is closed', () => {
+    const { onMobileClose } = renderSidebar({ mobileOpen: false })
+    const baseline = onMobileClose.mock.calls.length
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onMobileClose).toHaveBeenCalledTimes(baseline)
+  })
+
+  it('locks body scroll while the drawer is open and restores on close', () => {
+    document.body.style.overflow = 'auto'
+    const { rerender, onMobileClose } = renderSidebar({ mobileOpen: true })
+    expect(document.body.style.overflow).toBe('hidden')
+
+    // Close the drawer via rerender; cleanup should restore the prior
+    // inline overflow value the app had set.
+    rerender(
+      <Provider store={configureStore({
+        reducer: combineReducers({
+          carriers: carrierReducer,
+          orders: orderReducer,
+        }),
+      })}>
+        <MemoryRouter initialEntries={['/orders']}>
+          <Sidebar
+            pinned={false}
+            onTogglePin={vi.fn()}
+            mobileOpen={false}
+            onMobileClose={onMobileClose}
+          />
+        </MemoryRouter>
+      </Provider>,
+    )
+    expect(document.body.style.overflow).toBe('auto')
+  })
+
+  it('traps Tab focus: Tab from the last focusable wraps to the first', async () => {
+    renderSidebar({ mobileOpen: true })
+    const dialog = screen.getByRole('dialog', { name: /navigation/i })
+
+    const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const focusables = Array.from(
+      dialog.querySelectorAll<HTMLElement>(FOCUSABLE),
+    ).filter((el) => !el.hasAttribute('inert') && !el.hasAttribute('hidden'))
+    expect(focusables.length).toBeGreaterThan(1)
+
+    const first = focusables[0]
+    const last = focusables[focusables.length - 1]
+
+    // Simulate the user Tabbing from the last focusable — the trap
+    // should preventDefault and cycle focus back to the first.
+    last.focus()
+    expect(document.activeElement).toBe(last)
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(document.activeElement).toBe(first)
   })
 })
