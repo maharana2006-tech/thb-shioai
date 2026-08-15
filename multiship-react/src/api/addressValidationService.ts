@@ -51,6 +51,9 @@ export interface AddressValidationResponse {
 }
 
 export const addressValidationService = {
+  // Sprint 51 AC-L2 canonical route. Legacy `/address/validate` still works
+  // (backend logs a WARN and dispatches to the same service) but is removed
+  // in Sprint 53.
   validate: (request: AddressValidationRequest) =>
-    apiClient.post<ApiResponse<AddressValidationResponse>>('/address/validate', request),
+    apiClient.post<ApiResponse<AddressValidationResponse>>('/addresses/validate/carrier', request),
 }

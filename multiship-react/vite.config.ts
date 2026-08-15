@@ -17,6 +17,18 @@ export default defineConfig(({ mode }) => {
 
   return {
   plugins: [react()],
+  // Local dev proxy — routes /api/* to the Spring Boot backend on :8080
+  // so SPA + API share origin. Required for the httpOnly JWT cookie from
+  // Sprint 50 Q1/Q2/Q3 to be sent by the browser (cross-origin cookies on
+  // HTTP localhost need SameSite=None+Secure, which needs HTTPS).
+  server: {
+    proxy: {
+      '/api': {
+        target: process.env.VITE_DEV_BACKEND_URL || 'http://localhost:8080',
+        changeOrigin: false,
+      },
+    },
+  },
   build: {
     // Sprint 51 T6d (audit finding #15) — pull the biggest vendor libs
     // into their own chunks so:

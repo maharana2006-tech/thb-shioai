@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FiHome, FiX } from 'react-icons/fi'
+import { FiCheck, FiCheckCircle, FiHome, FiSearch, FiX } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
 import { ApiError } from '../../api/apiClient'
 import { clientService, type Client } from '../../api/clientService'
@@ -8,6 +8,10 @@ import {
   type Warehouse,
   type WarehouseUpsertPayload,
 } from '../../api/warehouseService'
+import {
+  addressValidationService,
+  type AddressValidationResponse,
+} from '../../api/addressValidationService'
 import Select from '../workspace/Select'
 import AttachClientsStep from './AttachClientsStep'
 import {
@@ -27,11 +31,15 @@ interface Props {
   /** Fires after a successful save / attach step. The created (or updated)
    *  warehouse is passed back so callers can react (e.g. auto-attach). */
   onSaved: (saved?: Warehouse) => void
+  /** Carrier used by the "Verify address" button. Defaults to UPS when the
+   *  caller doesn't know the client's default carrier. */
+  defaultCarrierCode?: string
 }
 
 /** Create / edit a warehouse. Owner type switches the client picker on/off. */
-export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Props) {
+export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defaultCarrierCode }: Props) {
   const isEdit = !!warehouse
+  const verifyCarrier = (defaultCarrierCode || 'UPS').toUpperCase()
 
   const [code, setCode] = useState(warehouse?.code ?? '')
   const [name, setName] = useState(warehouse?.name ?? '')
@@ -50,6 +58,69 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
 
   const [clients, setClients] = useState<Client[]>([])
   const [saving, setSaving] = useState(false)
+
+  // Address verification against the client's default carrier
+  // (POST /api/v1/addresses/validate/carrier — Sprint 51 AC-L2). On-demand
+  // only — no auto-fire. Result panel renders EXACT (green), CORRECTED
+  // (amber + Use suggestion), AMBIGUOUS / NOT_FOUND / NOT_SUPPORTED /
+  // ERROR variants below the Address section.
+  const [verifying, setVerifying] = useState(false)
+  const [verifyResult, setVerifyResult] = useState<AddressValidationResponse | null>(null)
+  const [verifyError, setVerifyError] = useState<string | null>(null)
+
+  const canVerify =
+    !!line1.trim() && !!city.trim() && !!zip.trim() && !!country.trim() && !verifying
+
+  const verifyAddress = async () => {
+    if (!canVerify) return
+    setVerifying(true)
+    setVerifyError(null)
+    try {
+      const resp = await addressValidationService.validate({
+        carrierCode: verifyCarrier,
+        name: name.trim() || undefined,
+        addressLine1: line1.trim(),
+        addressLine2: line2.trim() || undefined,
+        city: city.trim(),
+        state: state.trim() || undefined,
+        postalCode: zip.trim(),
+        countryCode: country.trim().toUpperCase() || 'US',
+      })
+      setVerifyResult(resp.data)
+    } catch (e) {
+      setVerifyResult(null)
+      const msg = e instanceof ApiError
+        ? `${verifyCarrier}: ${e.message}`
+        : e instanceof Error ? e.message : 'Verification failed.'
+      setVerifyError(msg)
+    } finally {
+      setVerifying(false)
+    }
+  }
+
+  const applySuggestion = () => {
+    const s = verifyResult?.suggested
+    if (!s) return
+    if (s.name != null) setName(s.name)
+    if (s.addressLine1 != null) setLine1(s.addressLine1)
+    if (s.addressLine2 != null) setLine2(s.addressLine2 || '')
+    if (s.city != null) setCity(s.city)
+    if (s.state != null) setState(s.state)
+    if (s.postalCode != null) setZip(s.postalCode)
+    if (s.countryCode != null) setCountry(s.countryCode.toUpperCase())
+    setVerifyResult(null)
+    notify.success('Address updated from carrier suggestion.')
+  }
+
+  // Any address-field edit invalidates the previous verify result.
+  useEffect(() => {
+    if (verifyResult || verifyError) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears stale verify badge when the operator edits any address field; derivable at render would require rendering the panel with stale data first.
+      setVerifyResult(null)
+      setVerifyError(null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- verifyResult / verifyError intentionally omitted; this fires when the operator edits any address field, clearing stale badges.
+  }, [line1, line2, city, state, zip, country, name])
 
   // Touched-gating: an error only renders once the operator has left the field
   // (or hit Save, which force-touches all). Same pattern as the client wizard.
@@ -298,9 +369,29 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
 
           {/* Address */}
           <section>
-            <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
-              Address
-            </p>
+            <div className="mb-1.5 flex items-center justify-between gap-3">
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
+                Address
+              </p>
+              <button
+                type="button"
+                onClick={verifyAddress}
+                disabled={!canVerify}
+                title={
+                  canVerify
+                    ? `Validate against ${verifyCarrier} carrier database`
+                    : 'Fill line 1, city, postal code and country to verify.'
+                }
+                className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10.5px] font-semibold transition ${
+                  canVerify
+                    ? 'border-[#412d15] bg-white text-[#412d15] hover:bg-[#faf7f0]'
+                    : 'cursor-not-allowed border-[#e3d9c4] bg-[#faf7f0] text-[#b6a684]'
+                }`}
+              >
+                <FiSearch className="h-3 w-3" />
+                {verifying ? 'Verifying…' : `Verify (${verifyCarrier})`}
+              </button>
+            </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field label="Line 1" required span={2} error={err('line1')}>
                 <input value={line1} onChange={(e) => setLine1(e.target.value)} onBlur={() => markTouched('line1')}
@@ -334,6 +425,13 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
                   aria-invalid={err('phone') ? true : undefined} className={inputCls('phone')} />
               </Field>
             </div>
+            {verifyError ? (
+              <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50/60 px-3 py-2.5 text-[11.5px] text-rose-800">
+                <p className="font-semibold">Verification failed</p>
+                <p className="mt-0.5 leading-4">{verifyError}</p>
+              </div>
+            ) : null}
+            {verifyResult ? <VerifyResultPanel result={verifyResult} onUse={applySuggestion} onDismiss={() => setVerifyResult(null)} /> : null}
           </section>
 
           {/* Active */}
@@ -376,6 +474,87 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved }: Pr
         )}
       </aside>
     </>
+  )
+}
+
+function VerifyResultPanel({
+  result,
+  onUse,
+  onDismiss,
+}: {
+  result: AddressValidationResponse
+  onUse: () => void
+  onDismiss: () => void
+}) {
+  const level = result.matchLevel
+  const tone =
+    level === 'EXACT'
+      ? { bar: 'border-emerald-200 bg-emerald-50/70', pill: 'bg-emerald-100 text-emerald-800', icon: 'text-emerald-700' }
+      : level === 'CORRECTED' || level === 'AMBIGUOUS'
+        ? { bar: 'border-amber-200 bg-amber-50/70', pill: 'bg-amber-100 text-amber-800', icon: 'text-amber-700' }
+        : level === 'NOT_SUPPORTED'
+          ? { bar: 'border-slate-200 bg-slate-50/70', pill: 'bg-slate-100 text-slate-700', icon: 'text-slate-600' }
+          : { bar: 'border-rose-200 bg-rose-50/70', pill: 'bg-rose-100 text-rose-800', icon: 'text-rose-700' }
+
+  return (
+    <div className={`mt-3 rounded-xl border ${tone.bar} px-3 py-2.5`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-800">
+            <FiCheckCircle className={`h-3.5 w-3.5 ${tone.icon}`} />
+            {result.carrierCode} · <span className={`rounded-full ${tone.pill} px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide`}>{level}</span>
+            {result.classification && result.classification !== 'UNKNOWN' ? (
+              <span className="text-[10.5px] font-normal text-slate-500">· {result.classification.toLowerCase()}</span>
+            ) : null}
+          </p>
+          {result.message ? (
+            <p className="mt-0.5 text-[10.5px] leading-4 text-slate-600">{result.message}</p>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss verification result"
+          className="rounded-lg border border-transparent px-2 py-0.5 text-[10.5px] font-semibold text-slate-500 transition hover:border-slate-200 hover:bg-white hover:text-slate-700"
+        >
+          Dismiss
+        </button>
+      </div>
+      {result.suggested && (level === 'CORRECTED' || level === 'AMBIGUOUS') ? (
+        <div className="mt-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">Suggested by {result.carrierCode}</p>
+          <p className="mt-1 text-[11.5px] leading-4 text-slate-800">
+            {result.suggested.name ? <>{result.suggested.name}<br /></> : null}
+            {result.suggested.addressLine1}
+            {result.suggested.addressLine2 ? <>, {result.suggested.addressLine2}</> : ''}
+            <br />
+            {[result.suggested.city, result.suggested.state, result.suggested.postalCode].filter(Boolean).join(', ')}
+            {result.suggested.countryCode ? ` · ${result.suggested.countryCode}` : ''}
+          </p>
+          <div className="mt-2 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50"
+            >
+              Keep mine
+            </button>
+            <button
+              type="button"
+              onClick={onUse}
+              className="inline-flex items-center gap-1 rounded-lg bg-[#412d15] px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-[#1f150c]"
+            >
+              <FiCheck className="h-3 w-3" /> Use suggestion
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {result.warnings && result.warnings.length > 0 ? (
+        <ul className="mt-2 space-y-0.5 text-[10.5px] text-slate-600">
+          {result.warnings.map((w, i) => <li key={i}>• {w}</li>)}
+        </ul>
+      ) : null}
+    </div>
   )
 }
 
