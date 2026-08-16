@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { notify } from '../utils/notify'
 import {
-  FiArrowDown,
-  FiArrowUp,
   FiCheckCircle,
   FiEdit3,
   FiEye,
@@ -13,7 +12,6 @@ import {
   FiRotateCw,
   FiCalendar,
   FiPackage,
-  FiSearch,
   FiUpload,
   FiTruck,
   FiX,
@@ -33,7 +31,7 @@ import { clientService } from '../api/clientService'
 import type { CarrierAccountRef, OrderAccountResolution } from '../api/accountRefService'
 import AccountScenarioBadge from './workspace/AccountScenarioBadge'
 import OrderStatusBadge from './workspace/OrderStatusBadge'
-import TablePagination from './workspace/TablePagination'
+import AdvancedDataTable from './workspace/AdvancedDataTable'
 import FillCarrierDetailsModal from './modals/FillCarrierDetailsModal'
 import AccountPickerModal from './modals/AccountPickerModal'
 import OrderDetailsModal from './modals/OrderDetailsModal'
@@ -109,7 +107,6 @@ export default function OrdersWorkspace() {
 
   const [stats, setStats] = useState<QueueStats | null>(null)
   const [rows, setRows] = useState<Order[]>([])
-  const [totalElements, setTotalElements] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [loading, setLoading] = useState(true)
 
@@ -120,8 +117,11 @@ export default function OrdersWorkspace() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [clientCodes, setClientCodes] = useState<string[]>([])
-  const [sortBy, setSortBy] = useState('orderNo')
-  const [sortDirection, setSortDirection] = useState<'ASC' | 'DESC'>('DESC')
+  // Sprint 51 migration — sort is owned by the shared AdvancedDataTable now.
+  // sortBy / sortDirection remain the fetch-effect inputs (derived below).
+  const [sorting, setSorting] = useState<SortingState>([{ id: 'orderNo', desc: true }])
+  const sortBy = sorting[0]?.id ?? 'orderNo'
+  const sortDirection: 'ASC' | 'DESC' = sorting[0]?.desc ? 'DESC' : 'ASC'
   const [showFilters, setShowFilters] = useState(false)
   const filtersRef = useRef<HTMLDivElement>(null)
   const emptyColumnFilters = { orderNo: '', customer: '', city: '', status: '', tracking: '' }
@@ -220,8 +220,7 @@ export default function OrdersWorkspace() {
   // Each view has its own natural direction; reset when switching.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset sort defaults when the view changes; each view has its own natural sort, cannot be derived at render (would ignore user re-picks)
-    setSortDirection(VIEW_QUERY[view].defaultDirection)
-    setSortBy('orderNo')
+    setSorting([{ id: 'orderNo', desc: VIEW_QUERY[view].defaultDirection === 'DESC' }])
   }, [view])
 
   // Known clients feed the filter dropdown (best effort).
@@ -279,7 +278,6 @@ export default function OrdersWorkspace() {
       .then((response) => {
         if (cancelled) return
         setRows(response.data?.content ?? [])
-        setTotalElements(response.data?.totalElements ?? 0)
         setTotalPages(Math.max(response.data?.totalPages ?? 1, 1))
       })
       .catch((error) => {
@@ -694,15 +692,6 @@ export default function OrdersWorkspace() {
     )
   }
 
-  const handleSort = (key: string) => {
-    if (sortBy === key) {
-      setSortDirection((cur) => (cur === 'ASC' ? 'DESC' : 'ASC'))
-      return
-    }
-    setSortBy(key)
-    setSortDirection('ASC')
-  }
-
   const setColumnFilter = (key: keyof typeof emptyColumnFilters) => (value: string) =>
     setColumnFilters((cur) => ({ ...cur, [key]: value }))
 
@@ -723,29 +712,6 @@ export default function OrdersWorkspace() {
     sky: 'bg-sky-400',
   }
 
-  /** Compact per-column filter input (rendered in the filter row under the header). */
-  const filterInput = (key: 'orderNo' | 'customer' | 'city' | 'tracking', placeholder: string) => (
-    <input
-      value={columnFilters[key]}
-      onChange={(e) => setColumnFilter(key)(e.target.value)}
-      placeholder={placeholder}
-      className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2 py-1.5 text-[11.5px] font-medium normal-case tracking-normal text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f]"
-    />
-  )
-
-  const statusFilterSelect = (
-    <select
-      value={columnFilters.status}
-      onChange={(e) => setColumnFilter('status')(e.target.value)}
-      className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2 py-1.5 text-[11.5px] font-medium normal-case tracking-normal text-[#1f150c] outline-none transition focus:border-[#cdbf9f]"
-    >
-      <option value="">Any status</option>
-      <option value="PENDING">Pending</option>
-      <option value="GENERATED">Generated</option>
-      <option value="ERROR">Error</option>
-    </select>
-  )
-
   // ── Advanced filter panel (shown when the Filters button is toggled) ────────
   const advInputCls =
     'w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[12px] font-medium text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-2 focus:ring-[#f0e9d8]'
@@ -764,211 +730,323 @@ export default function OrdersWorkspace() {
   const showStatusColumn = view === 'all'
   const showTracking = view === 'generated'
 
-  // ── Advanced table column model ────────────────────────────────────────────
-  // Each column declares a fixed pixel width so `table-fixed` + <colgroup>
-  // guarantees cells line up row-to-row. Text truncates (never wraps), numbers
-  // use tabular figures, and the Actions column stays pinned to the right.
-  type OrderColumn = {
-    id: string
-    header: string
-    sortKey?: string
-    width: number
-    /** Exactly one column per view is flexible: it absorbs slack so the table
-     *  fills the container on wide screens (actions flush right, no gap) and only
-     *  scrolls once the container drops below the fixed columns' total. */
-    flex?: boolean
-    align?: 'left' | 'right' | 'center'
-    cell: (order: Order) => ReactNode
-    filter?: ReactNode
-  }
-
   const formatCreated = (value?: string | null) =>
     value
       ? new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       : '—'
 
-  const columns: OrderColumn[] = []
+  // ── Sprint 51 migration — column defs feed into the shared AdvancedDataTable.
+  // Column `id`s that match sortKey names (`orderNo`, `customer`, `city`,
+  // `status`, `createdDate`, `tracking`, `generatedAt`) let TanStack's sorting
+  // state map directly onto the server-side sort params.
+  const columns = useMemo<ColumnDef<Order>[]>(() => {
+    const defs: ColumnDef<Order>[] = []
 
-  if (view === 'ready') {
-    columns.push({
-      id: 'select',
-      header: '',
-      width: 44,
-      align: 'center',
-      cell: (order) => (
-        <input
-          type="checkbox"
-          checked={selectedOrderNos.includes(order.orderDetails.orderNo)}
-          onChange={() => toggleOrder(order.orderDetails.orderNo)}
-          className="h-4 w-4 rounded border-[#cdbf9f] text-[#1f150c] focus:ring-[#e3d9c4]"
-        />
-      ),
-    })
-  }
+    if (view === 'ready') {
+      defs.push({
+        id: 'select',
+        header: () => {
+          const selectable = selectableVisible
+          const allChecked =
+            selectable.length > 0 &&
+            selectable.every((o) => selectedOrderNos.includes(o.orderDetails.orderNo))
+          return (
+            <input
+              type="checkbox"
+              aria-label={allChecked ? 'Clear selection' : 'Select all rows'}
+              checked={allChecked}
+              onChange={() =>
+                setSelectedOrderNos(
+                  allChecked ? [] : selectable.map((o) => o.orderDetails.orderNo),
+                )
+              }
+              className="h-4 w-4 rounded border-[#cdbf9f] text-[#1f150c] focus:ring-[#e3d9c4]"
+            />
+          )
+        },
+        enableSorting: false,
+        cell: ({ row }) => (
+          <input
+            type="checkbox"
+            aria-label={`Select order ${row.original.orderDetails.orderNo}`}
+            checked={selectedOrderNos.includes(row.original.orderDetails.orderNo)}
+            onChange={() => toggleOrder(row.original.orderDetails.orderNo)}
+            className="h-4 w-4 rounded border-[#cdbf9f] text-[#1f150c] focus:ring-[#e3d9c4]"
+          />
+        ),
+        meta: { headerLabel: 'Select', hideable: false, exportable: false },
+      })
+    }
 
-  columns.push({
-    id: 'orderNo',
-    header: 'Order #',
-    sortKey: 'orderNo',
-    width: 100,
-    cell: (order) => (
-      <span className="font-mono text-[12.5px] font-bold tabular-nums text-[#1f150c]">
-        #{order.orderDetails.orderNo}
-      </span>
-    ),
-    filter: filterInput('orderNo', 'e.g. 11153'),
-  })
-
-  columns.push({
-    id: 'client',
-    header: 'Client',
-    sortKey: 'customer',
-    width: 116,
-    cell: (order) => (
-      <span className="block truncate font-mono text-[12px] font-semibold text-[#5a4526]">
-        {order.orderDetails.customerCode}
-      </span>
-    ),
-    filter: filterInput('customer', 'e.g. ARHDEV'),
-  })
-
-  columns.push({
-    id: 'source',
-    header: 'Source',
-    width: 96,
-    cell: (order) => {
-      const s = (order.orderDetails.source || 'ERP').toUpperCase()
-      const tone: Record<string, string> = {
-        MANUAL: 'bg-amber-50 text-amber-700 ring-amber-200',
-        API: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-        WMS: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
-        ERP: 'bg-slate-100 text-slate-600 ring-slate-200',
-        BULK: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
-      }
-      return (
-        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone[s] || tone.ERP}`}>
-          {s}
-        </span>
-      )
-    },
-  })
-
-  columns.push({
-    id: 'refOrderNumber',
-    header: 'Ref Order #',
-    width: 104,
-    cell: (order) => (
-      <span className="block truncate font-mono text-[12px] text-[#5a4526]" title={order.orderDetails.refOrderNumber || undefined}>
-        {order.orderDetails.refOrderNumber || <span className="text-[#b3a583]">—</span>}
-      </span>
-    ),
-  })
-
-  columns.push({
-    id: 'batchId',
-    header: 'Batch',
-    width: 90,
-    cell: (order) => (
-      <span className="block truncate font-mono text-[12px] text-[#5a4526]">
-        {order.orderDetails.batchId ?? <span className="text-[#b3a583]">—</span>}
-      </span>
-    ),
-  })
-
-  columns.push({
-    id: 'destination',
-    header: 'Destination',
-    sortKey: 'city',
-    width: 150,
-    flex: showTracking, // in the Archive/generated view (no carrier column) destination absorbs slack
-    cell: (order) => {
-      const dest = `${order.shippingDetails.city}, ${order.shippingDetails.state}`
-      return (
-        <span className="block truncate text-[12.5px] text-[#3f3527]" title={dest}>
-          {dest}
-        </span>
-      )
-    },
-    filter: filterInput('city', 'city or state'),
-  })
-
-  if (showStatusColumn) {
-    columns.push({
-      id: 'status',
-      header: 'Status',
-      sortKey: 'status',
-      width: 128,
-      cell: (order) => <OrderStatusBadge status={order.labelDetails.status} />,
-      filter: statusFilterSelect,
-    })
-    columns.push({
-      id: 'created',
-      header: 'Created',
-      sortKey: 'createdDate',
-      width: 96,
-      cell: (order) => (
-        <span className="whitespace-nowrap text-[12px] text-[#8a7959]">
-          {formatCreated(order.orderDetails.createdDate)}
+    defs.push({
+      id: 'orderNo',
+      accessorFn: (o) => o.orderDetails.orderNo,
+      header: 'Order #',
+      cell: ({ row }) => (
+        <span className="font-mono text-[12.5px] font-bold tabular-nums text-[#1f150c]">
+          #{row.original.orderDetails.orderNo}
         </span>
       ),
+      meta: {
+        headerLabel: 'Order #',
+        exportValue: (o: Order) => o.orderDetails.orderNo,
+      },
     })
-  }
 
-  if (showTracking) {
-    columns.push({
-      id: 'tracking',
-      header: 'Tracking',
-      sortKey: 'tracking',
-      width: 160,
-      cell: (order) => (
+    defs.push({
+      id: 'customer',
+      accessorFn: (o) => o.orderDetails.customerCode,
+      header: 'Client',
+      cell: ({ row }) => (
+        <span className="block truncate font-mono text-[12px] font-semibold text-[#5a4526]">
+          {row.original.orderDetails.customerCode}
+        </span>
+      ),
+      meta: {
+        headerLabel: 'Client',
+        exportValue: (o: Order) => o.orderDetails.customerCode,
+      },
+    })
+
+    defs.push({
+      id: 'source',
+      accessorFn: (o) => o.orderDetails.source ?? 'ERP',
+      header: 'Source',
+      enableSorting: false,
+      cell: ({ row }) => {
+        const s = (row.original.orderDetails.source || 'ERP').toUpperCase()
+        const tone: Record<string, string> = {
+          MANUAL: 'bg-amber-50 text-amber-700 ring-amber-200',
+          API: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+          WMS: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
+          ERP: 'bg-slate-100 text-slate-600 ring-slate-200',
+          BULK: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
+        }
+        return (
+          <span
+            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone[s] || tone.ERP}`}
+          >
+            {s}
+          </span>
+        )
+      },
+      meta: {
+        headerLabel: 'Source',
+        exportValue: (o: Order) => (o.orderDetails.source ?? 'ERP').toUpperCase(),
+      },
+    })
+
+    defs.push({
+      id: 'refOrderNumber',
+      accessorFn: (o) => o.orderDetails.refOrderNumber ?? '',
+      header: 'Ref Order #',
+      enableSorting: false,
+      cell: ({ row }) => (
         <span
           className="block truncate font-mono text-[12px] text-[#5a4526]"
-          title={order.labelDetails.trackingNumber || undefined}
+          title={row.original.orderDetails.refOrderNumber || undefined}
         >
-          {order.labelDetails.trackingNumber || '—'}
+          {row.original.orderDetails.refOrderNumber || <span className="text-[#b3a583]">—</span>}
         </span>
       ),
-      filter: filterInput('tracking', 'tracking #'),
+      meta: {
+        headerLabel: 'Ref Order #',
+        exportValue: (o: Order) => o.orderDetails.refOrderNumber ?? '',
+      },
     })
-    columns.push({
-      id: 'generatedAt',
-      header: 'Generated',
-      sortKey: 'generatedAt',
-      width: 124,
-      cell: (order) => (
-        <span className="whitespace-nowrap text-[12px] text-[#8a7959]">
-          {relativeTime(order.labelDetails.generatedAt) || '—'}
-        </span>
-      ),
-    })
-  } else {
-    columns.push({
-      id: 'carrierAccount',
-      header: 'Carrier account',
-      width: 190,
-      // Fixed (not flex): on wide screens `table-fixed` + `w-full` spreads the
-      // leftover space evenly across every column, instead of piling it all into
-      // this one column and leaving a big empty gap before Actions.
-      cell: (order) => <AccountScenarioBadge resolution={order.accountResolution ?? undefined} />,
-    })
-  }
 
-  if (view === 'failed') {
-    columns.push({
-      id: 'failure',
-      header: 'Failure reason',
-      width: 240,
-      cell: (order) => (
-        <span className="line-clamp-2 text-[11.5px] leading-4 text-rose-700">
-          {order.errorDetails?.errorMessage || 'Unknown failure'}
+    defs.push({
+      id: 'batchId',
+      accessorFn: (o) => o.orderDetails.batchId ?? '',
+      header: 'Batch',
+      enableSorting: false,
+      cell: ({ row }) => (
+        <span className="block truncate font-mono text-[12px] text-[#5a4526]">
+          {row.original.orderDetails.batchId ?? <span className="text-[#b3a583]">—</span>}
         </span>
       ),
+      meta: {
+        headerLabel: 'Batch',
+        exportValue: (o: Order) => o.orderDetails.batchId ?? '',
+      },
     })
-  }
 
-  const actionsWidth = showTracking ? 248 : 216
-  const alignClass = (align?: 'left' | 'right' | 'center') =>
-    align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
+    defs.push({
+      id: 'city',
+      accessorFn: (o) => `${o.shippingDetails.city}, ${o.shippingDetails.state}`,
+      header: 'Destination',
+      cell: ({ row }) => {
+        const dest = `${row.original.shippingDetails.city}, ${row.original.shippingDetails.state}`
+        return (
+          <span className="block truncate text-[12.5px] text-[#3f3527]" title={dest}>
+            {dest}
+          </span>
+        )
+      },
+      meta: {
+        headerLabel: 'Destination',
+        exportValue: (o: Order) => `${o.shippingDetails.city}, ${o.shippingDetails.state}`,
+      },
+    })
+
+    if (showStatusColumn) {
+      defs.push({
+        id: 'status',
+        accessorFn: (o) => o.labelDetails.status,
+        header: 'Status',
+        cell: ({ row }) => <OrderStatusBadge status={row.original.labelDetails.status} />,
+        meta: {
+          headerLabel: 'Status',
+          exportValue: (o: Order) => o.labelDetails.status,
+        },
+      })
+      defs.push({
+        id: 'createdDate',
+        accessorFn: (o) => o.orderDetails.createdDate ?? '',
+        header: 'Created',
+        cell: ({ row }) => (
+          <span className="whitespace-nowrap text-[12px] text-[#8a7959]">
+            {formatCreated(row.original.orderDetails.createdDate)}
+          </span>
+        ),
+        meta: {
+          headerLabel: 'Created',
+          exportValue: (o: Order) => o.orderDetails.createdDate ?? '',
+        },
+      })
+    }
+
+    if (showTracking) {
+      defs.push({
+        id: 'tracking',
+        accessorFn: (o) => o.labelDetails.trackingNumber ?? '',
+        header: 'Tracking',
+        cell: ({ row }) => (
+          <span
+            className="block truncate font-mono text-[12px] text-[#5a4526]"
+            title={row.original.labelDetails.trackingNumber || undefined}
+          >
+            {row.original.labelDetails.trackingNumber || '—'}
+          </span>
+        ),
+        meta: {
+          headerLabel: 'Tracking',
+          exportValue: (o: Order) => o.labelDetails.trackingNumber ?? '',
+        },
+      })
+      defs.push({
+        id: 'generatedAt',
+        accessorFn: (o) => o.labelDetails.generatedAt ?? '',
+        header: 'Generated',
+        cell: ({ row }) => (
+          <span className="whitespace-nowrap text-[12px] text-[#8a7959]">
+            {relativeTime(row.original.labelDetails.generatedAt) || '—'}
+          </span>
+        ),
+        meta: {
+          headerLabel: 'Generated',
+          exportValue: (o: Order) => o.labelDetails.generatedAt ?? '',
+        },
+      })
+    } else {
+      defs.push({
+        id: 'carrierAccount',
+        header: 'Carrier account',
+        enableSorting: false,
+        cell: ({ row }) => (
+          <AccountScenarioBadge resolution={row.original.accountResolution ?? undefined} />
+        ),
+        meta: {
+          headerLabel: 'Carrier account',
+          exportValue: (o: Order) =>
+            o.accountResolution?.accountNumber ?? o.carrierAccount?.accountCode ?? '',
+        },
+      })
+    }
+
+    if (view === 'failed') {
+      defs.push({
+        id: 'failure',
+        accessorFn: (o) => o.errorDetails?.errorMessage ?? '',
+        header: 'Failure reason',
+        enableSorting: false,
+        cell: ({ row }) => (
+          <span className="line-clamp-2 text-[11.5px] leading-4 text-rose-700">
+            {row.original.errorDetails?.errorMessage || 'Unknown failure'}
+          </span>
+        ),
+        meta: {
+          headerLabel: 'Failure reason',
+          exportValue: (o: Order) => o.errorDetails?.errorMessage ?? '',
+        },
+      })
+    }
+
+    defs.push({
+      id: 'actions',
+      header: () => <span className="block text-right">Actions</span>,
+      enableSorting: false,
+      cell: ({ row }) => {
+        const order = row.original
+        const orderNo = order.orderDetails.orderNo
+        return (
+          <span className="inline-flex w-full items-center justify-end gap-1.5">
+            {order.labelDetails.trackingNumber ? (
+              <button
+                type="button"
+                onClick={() => setTrackingOrderNo(orderNo)}
+                title={`Live tracking for ${order.labelDetails.trackingNumber}`}
+                aria-label={`Track order ${orderNo}`}
+                className="rounded-lg border border-[#e6dcc7] bg-[#faf7f0] p-1.5 text-[#5a4526] transition hover:border-[#dccfb4] hover:bg-[#f2ebda]"
+              >
+                <FiTruck className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+            {order.labelDetails.trackingNumber
+              && (order.labelDetails.status || '').toUpperCase() !== 'VOIDED' ? (
+              <button
+                type="button"
+                disabled={voidingOrderNo === orderNo}
+                onClick={() => void handleVoid(orderNo, order.labelDetails.trackingNumber)}
+                title={`Void ${order.labelDetails.trackingNumber} at the carrier`}
+                aria-label={`Void order ${orderNo}`}
+                className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:opacity-40"
+              >
+                {voidingOrderNo === orderNo ? (
+                  <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300 border-t-rose-700" />
+                ) : (
+                  <FiXCircle className="h-3.5 w-3.5" />
+                )}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setDetailsOrderNo(orderNo)}
+              aria-label={`Details for order ${orderNo}`}
+              className="rounded-lg border border-[#e6dcc7] bg-[#faf7f0] p-1.5 text-[#8a7959] transition hover:border-[#dccfb4] hover:bg-[#f2ebda] hover:text-[#412d15]"
+            >
+              <FiFileText className="h-3.5 w-3.5" />
+            </button>
+            {renderPrimaryAction(order)}
+          </span>
+        )
+      },
+      meta: { headerLabel: 'Actions', hideable: false, exportable: false },
+    })
+
+    return defs
+    // Cells close over selection + generation handlers; re-memo when those
+    // change so the row buttons/checkboxes reflect current state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    view,
+    showStatusColumn,
+    showTracking,
+    selectedOrderNos,
+    selectableVisible,
+    voidingOrderNo,
+    generatingOrderNos,
+  ])
 
   return (
     <div className="pb-24">
@@ -1079,355 +1157,248 @@ export default function OrdersWorkspace() {
           ) : null}
         </div>
 
-        {/* ===== filters row ===== */}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <label className="flex min-w-[210px] flex-1 items-center gap-2 rounded-xl border border-[#e3d9c4] bg-[#faf7f0] px-3 py-2 transition focus-within:border-[#cdbf9f] sm:max-w-xs">
-            <FiSearch className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search order #, client, city, tracking…"
-              className="w-full bg-transparent text-[12.5px] text-[#1f150c] outline-none placeholder:text-[#b6a684]"
-            />
-          </label>
+        {/* ===== data table (shared AdvancedDataTable) ===== */}
+        <div className="mt-3">
+          <AdvancedDataTable<Order>
+            tableKey="orders"
+            columns={columns}
+            data={rows}
+            manualPagination
+            manualSorting
+            sorting={sorting}
+            onSortingChange={setSorting}
+            pageIndex={page - 1}
+            pageSize={pageSize}
+            pageCount={totalPages}
+            onPaginationChange={(next) => {
+              setPage(next.pageIndex + 1)
+              setPageSize(next.pageSize)
+            }}
+            search={{
+              value: query,
+              onChange: setQuery,
+              placeholder: 'Search order #, client, city, tracking…',
+            }}
+            filterToggle={
+              <div ref={filtersRef} className="relative flex flex-wrap items-center gap-2">
+                <select
+                  value={clientFilter}
+                  onChange={(e) => setClientFilter(e.target.value)}
+                  className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] outline-none transition focus:border-[#cdbf9f]"
+                  aria-label="Filter by client"
+                >
+                  <option value="">All clients</option>
+                  {clientCodes.map((code) => (
+                    <option key={code} value={code}>
+                      {code}
+                    </option>
+                  ))}
+                </select>
 
-          <select
-            value={clientFilter}
-            onChange={(e) => setClientFilter(e.target.value)}
-            className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-2 text-[12px] font-semibold text-[#5a4526] outline-none transition focus:border-[#cdbf9f]"
-            aria-label="Filter by client"
-          >
-            <option value="">All clients</option>
-            {clientCodes.map((code) => (
-              <option key={code} value={code}>
-                {code}
-              </option>
-            ))}
-          </select>
+                <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#8a7959]">
+                  From
+                  <input
+                    type="date"
+                    value={dateFrom}
+                    max={dateTo || undefined}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                    className="bg-transparent text-[12px] font-medium text-[#1f150c] outline-none"
+                    aria-label="Created from date"
+                  />
+                </label>
+                <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#8a7959]">
+                  To
+                  <input
+                    type="date"
+                    value={dateTo}
+                    min={dateFrom || undefined}
+                    onChange={(e) => setDateTo(e.target.value)}
+                    className="bg-transparent text-[12px] font-medium text-[#1f150c] outline-none"
+                    aria-label="Created to date"
+                  />
+                </label>
 
-          <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#8a7959]">
-            From
-            <input
-              type="date"
-              value={dateFrom}
-              max={dateTo || undefined}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="bg-transparent text-[12px] font-medium text-[#1f150c] outline-none"
-              aria-label="Created from date"
-            />
-          </label>
-          <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#8a7959]">
-            To
-            <input
-              type="date"
-              value={dateTo}
-              min={dateFrom || undefined}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="bg-transparent text-[12px] font-medium text-[#1f150c] outline-none"
-              aria-label="Created to date"
-            />
-          </label>
+                <button
+                  type="button"
+                  onClick={() => setShowFilters((cur) => !cur)}
+                  aria-pressed={showFilters}
+                  aria-expanded={showFilters}
+                  className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[12px] font-semibold transition ${
+                    showFilters || activeFilterCount
+                      ? 'bg-[#1f150c] text-[#f4eede] shadow-sm'
+                      : 'border border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+                  }`}
+                >
+                  <FiFilter className="h-3.5 w-3.5" />
+                  Filters
+                  {activeFilterCount ? (
+                    <span className="rounded-full bg-white/25 px-1.5 py-0.5 text-[10px] tabular-nums">
+                      {activeFilterCount}
+                    </span>
+                  ) : null}
+                </button>
 
-          <div ref={filtersRef} className="relative">
-            <button
-              type="button"
-              onClick={() => setShowFilters((cur) => !cur)}
-              aria-pressed={showFilters}
-              aria-expanded={showFilters}
-              className={`inline-flex items-center gap-1.5 rounded-xl px-2.5 py-2 text-[12px] font-semibold transition ${
-                showFilters || activeFilterCount
-                  ? 'bg-[#1f150c] text-[#f4eede] shadow-sm'
-                  : 'border border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-              }`}
-            >
-              <FiFilter className="h-3.5 w-3.5" />
-              Filters
-              {activeFilterCount ? (
-                <span className="rounded-full bg-white/25 px-1.5 py-0.5 text-[10px] tabular-nums">{activeFilterCount}</span>
-              ) : null}
-            </button>
-
-            {/* Advanced filter popover */}
-            {showFilters ? (
-              <div
-                role="dialog"
-                aria-label="Advanced filters"
-                className="absolute left-0 top-full z-30 mt-1.5 w-64 rounded-2xl border border-[#e3d9c4] bg-[#faf7f0] p-3.5 shadow-[0_20px_60px_rgba(31,21,12,0.18)]"
-              >
-                <div className="mb-2.5 flex items-center justify-between">
-                  <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
-                    <FiSliders className="h-3 w-3" /> Advanced filters
-                  </span>
+                {activeFilterCount ? (
                   <button
                     type="button"
                     onClick={clearColumnFilters}
-                    disabled={!activeFilterCount}
-                    className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#8a7959] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#e3d9c4] disabled:hover:bg-white disabled:hover:text-[#8a7959]"
+                    className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
                   >
-                    <FiX className="h-3.5 w-3.5" /> Clear all
+                    Clear
                   </button>
-                </div>
-                <div className="flex flex-col gap-2.5">
-                  {advField(
-                    <FiHash className="h-3 w-3" />,
-                    'Order #',
-                    <input
-                      value={columnFilters.orderNo}
-                      onChange={(e) => setColumnFilter('orderNo')(e.target.value)}
-                      placeholder="e.g. 900044"
-                      className={advInputCls}
-                    />,
-                  )}
-                  {advField(
-                    <FiUser className="h-3 w-3" />,
-                    'Client code',
-                    <input
-                      value={columnFilters.customer}
-                      onChange={(e) => setColumnFilter('customer')(e.target.value)}
-                      placeholder="e.g. ARHDEV"
-                      className={advInputCls}
-                    />,
-                  )}
-                  {advField(
-                    <FiMapPin className="h-3 w-3" />,
-                    'Destination',
-                    <input
-                      value={columnFilters.city}
-                      onChange={(e) => setColumnFilter('city')(e.target.value)}
-                      placeholder="City or state"
-                      className={advInputCls}
-                    />,
-                  )}
-                  {advField(
-                    <FiTruck className="h-3 w-3" />,
-                    'Tracking #',
-                    <input
-                      value={columnFilters.tracking}
-                      onChange={(e) => setColumnFilter('tracking')(e.target.value)}
-                      placeholder="Carrier tracking number"
-                      className={advInputCls}
-                    />,
-                  )}
-                  {showStatusColumn
-                    ? advField(
-                        <FiTag className="h-3 w-3" />,
-                        'Status',
-                        <select
-                          value={columnFilters.status}
-                          onChange={(e) => setColumnFilter('status')(e.target.value)}
-                          className={advInputCls}
-                        >
-                          <option value="">Any status</option>
-                          <option value="PENDING">Pending</option>
-                          <option value="GENERATED">Generated</option>
-                          <option value="ERROR">Error</option>
-                        </select>,
-                      )
-                    : null}
-                  {advField(
-                    <FiCalendar className="h-3 w-3" />,
-                    'Created from',
-                    <input
-                      type="date"
-                      value={dateFrom}
-                      max={dateTo || undefined}
-                      onChange={(e) => setDateFrom(e.target.value)}
-                      className={advInputCls}
-                    />,
-                  )}
-                  {advField(
-                    <FiCalendar className="h-3 w-3" />,
-                    'Created to',
-                    <input
-                      type="date"
-                      value={dateTo}
-                      min={dateFrom || undefined}
-                      onChange={(e) => setDateTo(e.target.value)}
-                      className={advInputCls}
-                    />,
-                  )}
-                </div>
+                ) : null}
 
-                <div className="mt-3 flex items-center justify-end gap-2 border-t border-dashed border-[#e3d9c4] pt-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setShowFilters(false)}
-                    className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-[#f4eede] transition hover:bg-[#412d15]"
+                {/* Advanced filter popover — anchored to this container. */}
+                {showFilters ? (
+                  <div
+                    role="dialog"
+                    aria-label="Advanced filters"
+                    className="absolute right-0 top-full z-30 mt-1.5 w-64 rounded-2xl border border-[#e3d9c4] bg-[#faf7f0] p-3.5 shadow-[0_20px_60px_rgba(31,21,12,0.18)]"
                   >
-                    Done
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          {activeFilterCount ? (
-            <button
-              type="button"
-              onClick={clearColumnFilters}
-              className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-2 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-            >
-              Clear
-            </button>
-          ) : null}
-        </div>
-
-        {/* manifest caption strip */}
-        <div className="mt-3.5 flex items-center justify-between border-b border-dashed border-[#e3d9c4] pb-1.5">
-          <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
-            Order manifest
-          </span>
-          <span className="font-mono text-[9px] font-bold uppercase tracking-[0.16em] tabular-nums text-[#b6a684]">
-            {rows.length} {rows.length === 1 ? 'line' : 'lines'}
-          </span>
-        </div>
-
-        <div className="mt-2 overflow-x-auto">
-          <table className="w-full min-w-[1040px] table-fixed border-collapse text-[13px] text-[#3f3527]">
-            <colgroup>
-              {columns.map((col) => (
-                <col key={col.id} style={col.flex ? undefined : { width: `${col.width}px` }} />
-              ))}
-              <col style={{ width: `${actionsWidth}px` }} />
-            </colgroup>
-
-            <thead>
-              <tr className="border-b border-dashed border-[#d8cbb0] font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-[#a1906d]">
-                {columns.map((col) => (
-                  <th key={col.id} className={`px-2.5 py-3 align-middle ${alignClass(col.align)}`}>
-                    {col.sortKey ? (
+                    <div className="mb-2.5 flex items-center justify-between">
+                      <span className="inline-flex items-center gap-1.5 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
+                        <FiSliders className="h-3 w-3" /> Advanced filters
+                      </span>
                       <button
                         type="button"
-                        onClick={() => handleSort(col.sortKey!)}
-                        className={`inline-flex items-center gap-1 uppercase tracking-[0.16em] transition hover:text-[#1f150c] ${
-                          sortBy === col.sortKey ? 'text-[#1f150c]' : ''
-                        }`}
+                        onClick={clearColumnFilters}
+                        disabled={!activeFilterCount}
+                        className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#8a7959] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#e3d9c4] disabled:hover:bg-white disabled:hover:text-[#8a7959]"
                       >
-                        {col.header}
-                        {sortBy === col.sortKey ? (
-                          sortDirection === 'ASC' ? (
-                            <FiArrowUp className="h-3 w-3" />
-                          ) : (
-                            <FiArrowDown className="h-3 w-3" />
-                          )
-                        ) : (
-                          <span className="text-[#cdbf9f]">↕</span>
-                        )}
+                        <FiX className="h-3.5 w-3.5" /> Clear all
                       </button>
-                    ) : (
-                      col.header
-                    )}
-                  </th>
-                ))}
-                <th className="sticky right-0 z-20 bg-white px-2.5 py-3 text-right align-middle shadow-[-10px_0_12px_-10px_rgba(31,21,12,0.14)]">
-                  Actions
-                </th>
-              </tr>
+                    </div>
+                    <div className="flex flex-col gap-2.5">
+                      {advField(
+                        <FiHash className="h-3 w-3" />,
+                        'Order #',
+                        <input
+                          value={columnFilters.orderNo}
+                          onChange={(e) => setColumnFilter('orderNo')(e.target.value)}
+                          placeholder="e.g. 900044"
+                          className={advInputCls}
+                        />,
+                      )}
+                      {advField(
+                        <FiUser className="h-3 w-3" />,
+                        'Client code',
+                        <input
+                          value={columnFilters.customer}
+                          onChange={(e) => setColumnFilter('customer')(e.target.value)}
+                          placeholder="e.g. ARHDEV"
+                          className={advInputCls}
+                        />,
+                      )}
+                      {advField(
+                        <FiMapPin className="h-3 w-3" />,
+                        'Destination',
+                        <input
+                          value={columnFilters.city}
+                          onChange={(e) => setColumnFilter('city')(e.target.value)}
+                          placeholder="City or state"
+                          className={advInputCls}
+                        />,
+                      )}
+                      {advField(
+                        <FiTruck className="h-3 w-3" />,
+                        'Tracking #',
+                        <input
+                          value={columnFilters.tracking}
+                          onChange={(e) => setColumnFilter('tracking')(e.target.value)}
+                          placeholder="Carrier tracking number"
+                          className={advInputCls}
+                        />,
+                      )}
+                      {showStatusColumn
+                        ? advField(
+                            <FiTag className="h-3 w-3" />,
+                            'Status',
+                            <select
+                              value={columnFilters.status}
+                              onChange={(e) => setColumnFilter('status')(e.target.value)}
+                              className={advInputCls}
+                            >
+                              <option value="">Any status</option>
+                              <option value="PENDING">Pending</option>
+                              <option value="GENERATED">Generated</option>
+                              <option value="ERROR">Error</option>
+                            </select>,
+                          )
+                        : null}
+                      {advField(
+                        <FiCalendar className="h-3 w-3" />,
+                        'Created from',
+                        <input
+                          type="date"
+                          value={dateFrom}
+                          max={dateTo || undefined}
+                          onChange={(e) => setDateFrom(e.target.value)}
+                          className={advInputCls}
+                        />,
+                      )}
+                      {advField(
+                        <FiCalendar className="h-3 w-3" />,
+                        'Created to',
+                        <input
+                          type="date"
+                          value={dateTo}
+                          min={dateFrom || undefined}
+                          onChange={(e) => setDateTo(e.target.value)}
+                          className={advInputCls}
+                        />,
+                      )}
+                    </div>
 
-              {/* Per-column filters were replaced by the Advanced filter panel above. */}
-            </thead>
-
-            <tbody className="divide-y divide-dashed divide-[#e6dcc7]">
-              {rows.map((order) => {
-                const orderNo = order.orderDetails.orderNo
-
-                return (
-                  <tr key={orderNo} className="group transition hover:bg-[#faf7f0]">
-                    {columns.map((col) => (
-                      <td key={col.id} className={`px-2.5 py-3 align-middle ${alignClass(col.align)}`}>
-                        {col.cell(order)}
-                      </td>
-                    ))}
-                    <td className="sticky right-0 z-10 bg-white px-2.5 py-3 text-right align-middle shadow-[-10px_0_12px_-10px_rgba(31,21,12,0.14)] transition group-hover:bg-[#faf7f0]">
-                      <span className="inline-flex items-center justify-end gap-1.5">
-                        {order.labelDetails.trackingNumber ? (
-                          <button
-                            type="button"
-                            onClick={() => setTrackingOrderNo(orderNo)}
-                            title={`Live tracking for ${order.labelDetails.trackingNumber}`}
-                            aria-label={`Track order ${orderNo}`}
-                            className="rounded-lg border border-[#e6dcc7] bg-[#faf7f0] p-1.5 text-[#5a4526] transition hover:border-[#dccfb4] hover:bg-[#f2ebda]"
-                          >
-                            <FiTruck className="h-3.5 w-3.5" />
-                          </button>
-                        ) : null}
-                        {order.labelDetails.trackingNumber
-                          && (order.labelDetails.status || '').toUpperCase() !== 'VOIDED' ? (
-                          <button
-                            type="button"
-                            disabled={voidingOrderNo === orderNo}
-                            onClick={() => void handleVoid(orderNo, order.labelDetails.trackingNumber)}
-                            title={`Void ${order.labelDetails.trackingNumber} at the carrier`}
-                            aria-label={`Void order ${orderNo}`}
-                            className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:opacity-40"
-                          >
-                            {voidingOrderNo === orderNo ? (
-                              <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300 border-t-rose-700" />
-                            ) : (
-                              <FiXCircle className="h-3.5 w-3.5" />
-                            )}
-                          </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          onClick={() => setDetailsOrderNo(orderNo)}
-                          aria-label={`Details for order ${orderNo}`}
-                          className="rounded-lg border border-[#e6dcc7] bg-[#faf7f0] p-1.5 text-[#8a7959] transition hover:border-[#dccfb4] hover:bg-[#f2ebda] hover:text-[#412d15]"
-                        >
-                          <FiFileText className="h-3.5 w-3.5" />
-                        </button>
-                        {renderPrimaryAction(order)}
-                      </span>
-                    </td>
-                  </tr>
-                )
-              })}
-
-              {!rows.length ? (
-                <tr>
-                  <td colSpan={columns.length + 1} className="px-2.5 py-14 text-center text-sm text-[#8a7959]">
-                    {loading ? (
-                      'Loading orders…'
-                    ) : debouncedQuery || clientFilter || activeFilterCount ? (
-                      'Nothing matches the current filters.'
-                    ) : view === 'ready' ? (
-                      <span className="inline-flex items-center gap-1.5">
-                        <FiCheckCircle className="h-4 w-4 text-emerald-600" />
-                        The ready queue is clear. 🎉
-                      </span>
-                    ) : view === 'details' ? (
-                      'No orders are waiting on carrier details.'
-                    ) : view === 'choose' ? (
-                      'No orders are waiting on a manual account choice.'
-                    ) : view === 'client' ? (
-                      'Every order belongs to a registered client.'
-                    ) : view === 'failed' ? (
-                      <span className="inline-flex items-center gap-1.5">
-                        <FiCheckCircle className="h-4 w-4 text-emerald-600" />
-                        No failed generations.
-                      </span>
-                    ) : view === 'generated' ? (
-                      'No labels have been generated yet.'
-                    ) : (
-                      'No orders yet.'
-                    )}
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-
-        {totalElements > 0 ? (
-          <TablePagination
-            page={page}
-            pageSize={pageSize}
-            totalPages={totalPages}
-            compact
-            onPageChange={setPage}
-            onPageSizeChange={setPageSize}
+                    <div className="mt-3 flex items-center justify-end gap-2 border-t border-dashed border-[#e3d9c4] pt-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setShowFilters(false)}
+                        className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-[#f4eede] transition hover:bg-[#412d15]"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            }
+            csvFilename="orders"
+            caption={
+              <div className="flex items-center justify-between border-b border-dashed border-[#e3d9c4] pb-1.5">
+                <span className="font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
+                  Order manifest — {rows.length} {rows.length === 1 ? 'line' : 'lines'}
+                </span>
+              </div>
+            }
+            emptyState={
+              loading ? (
+                'Loading orders…'
+              ) : debouncedQuery || clientFilter || activeFilterCount ? (
+                'Nothing matches the current filters.'
+              ) : view === 'ready' ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <FiCheckCircle className="h-4 w-4 text-emerald-600" />
+                  The ready queue is clear. 🎉
+                </span>
+              ) : view === 'details' ? (
+                'No orders are waiting on carrier details.'
+              ) : view === 'choose' ? (
+                'No orders are waiting on a manual account choice.'
+              ) : view === 'client' ? (
+                'Every order belongs to a registered client.'
+              ) : view === 'failed' ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <FiCheckCircle className="h-4 w-4 text-emerald-600" />
+                  No failed generations.
+                </span>
+              ) : view === 'generated' ? (
+                'No labels have been generated yet.'
+              ) : (
+                'No orders yet.'
+              )
+            }
           />
-        ) : null}
+        </div>
       </section>
 
       {/* ===== sticky action bar: live bulk progress OR selection ===== */}
