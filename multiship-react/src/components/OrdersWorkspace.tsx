@@ -205,6 +205,18 @@ export default function OrdersWorkspace() {
     setPage(1)
   }, [view, debouncedQuery, pageSize, clientFilter, dateFrom, dateTo, sortBy, sortDirection, debouncedFilters])
 
+  // Filter / pagination change → clear selection. Previously stale
+  // selectedOrderNos from the OLD visible rows would silently apply to
+  // "Generate selected" against the NEW rows, generating labels for
+  // unintended orders. Tab switch already does this at the onClick site
+  // (line ~1031); the effect handles every other change site uniformly.
+  // Sort direction/by is deliberately excluded — reordering the same
+  // rows doesn't invalidate what's selected.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale selection on any filter or pagination change; user-input-driven, not derivable at render
+    setSelectedOrderNos([])
+  }, [debouncedQuery, clientFilter, dateFrom, dateTo, debouncedFilters, page, pageSize])
+
   // Each view has its own natural direction; reset when switching.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset sort defaults when the view changes; each view has its own natural sort, cannot be derived at render (would ignore user re-picks)
@@ -494,7 +506,12 @@ export default function OrdersWorkspace() {
     )
 
     if (failures.length) {
-      notify.error(`${ok} generated, ${failures.length} failed (${failures[0]}) — see the Failed tab.`)
+      // Show up to 3 failure reasons directly; the remainder is summarised
+      // so the operator sees more than the first row's error without an
+      // overwhelming toast. Full detail still lives in the Failed tab.
+      const shown = failures.slice(0, 3).join('; ')
+      const extra = failures.length > 3 ? ` (+${failures.length - 3} more)` : ''
+      notify.error(`${ok} generated, ${failures.length} failed — ${shown}${extra}. See the Failed tab.`)
     } else if (ok) {
       notify.success(`${ok} label${ok === 1 ? '' : 's'} generated.`)
     }
