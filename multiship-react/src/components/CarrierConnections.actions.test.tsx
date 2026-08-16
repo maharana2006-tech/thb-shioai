@@ -19,7 +19,7 @@ import { MemoryRouter, Outlet, Route, Routes } from 'react-router-dom'
 
 // Anti-fallback: any unmocked network call should crash loudly so we notice
 // a service-mock regression instead of accidentally hitting a real carrier.
-vi.spyOn(global, 'fetch').mockImplementation(() => {
+vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
   throw new Error('un-mocked fetch forbidden')
 })
 
@@ -195,7 +195,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks()
   // Re-install the fetch guard: restoreAllMocks() would clear it too.
-  vi.spyOn(global, 'fetch').mockImplementation(() => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
     throw new Error('un-mocked fetch forbidden')
   })
 })
