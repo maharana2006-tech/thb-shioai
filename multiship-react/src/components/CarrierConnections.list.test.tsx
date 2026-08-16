@@ -177,7 +177,7 @@ beforeEach(() => {
   notifyApiError.mockReset()
 
   // Anti-fallback guard: any un-mocked outbound request fails the test loudly.
-  fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() => {
+  fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
     throw new Error('un-mocked fetch — real carrier IO forbidden in tests')
   })
 })
