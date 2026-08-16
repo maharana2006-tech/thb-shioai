@@ -1,0 +1,365 @@
+package com.multiship.backend.integration;
+
+import com.multiship.backend.controller.CarrierController;
+import com.multiship.backend.controller.CarrierExceptionHandler;
+import com.multiship.backend.dto.ApiResponse;
+import com.multiship.backend.dto.CarrierConnectRequest;
+import com.multiship.backend.dto.CarrierConnectResponse;
+import com.multiship.backend.dto.CarrierStatusResponse;
+import com.multiship.backend.exception.CarrierConnectionException;
+import com.multiship.backend.model.CarrierConfig;
+import com.multiship.backend.model.ShipVia;
+import com.multiship.backend.model.User;
+import com.multiship.backend.repository.CarrierConfigRepository;
+import com.multiship.backend.repository.ShipViaRepository;
+import com.multiship.backend.repository.UserRepository;
+import com.multiship.backend.service.carriers.CarrierConnector;
+import com.multiship.backend.service.carriers.FedExConnector;
+import com.multiship.backend.service.carriers.UpsConnector;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * Sprint 53 /settings/carriers page-tests (slice: BE-integration-connect).
+ *
+ * <p>Supplements {@link CarrierControllerIntegrationTest} (4 happy-path
+ * tests) with connect-flow negative + edge coverage against real
+ * Postgres:
+ *
+ * <ul>
+ *   <li>Connect with an UNKNOWN carrier code — surfaces as a
+ *       {@link CarrierConnectionException} (raw from the service; the
+ *       {@link CarrierExceptionHandler} would translate to 400 in a
+ *       real request cycle).</li>
+ *   <li>Connect with legacy ship-via {@code P80} — must resolve to
+ *       UPS in-flight and still persist as canonical {@code UPS}.</li>
+ *   <li>Connect with tenantId — must clamp / uppercase and persist as
+ *       a tenant-scoped {@link CarrierConfig}.</li>
+ *   <li>Connect + connect (same user + same carrier) — must UPDATE the
+ *       existing row, not INSERT a duplicate.</li>
+ *   <li>Connect where {@code connector.connect(...)} throws — must
+ *       propagate for the exception handler to translate.</li>
+ *   <li>Status with NO CarrierConfig persisted — must still return 200
+ *       with {@code connected=false} (defensive; no crash).</li>
+ *   <li>Disconnect when nothing persisted — must succeed idempotently.</li>
+ * </ul>
+ *
+ * <p>Same anti-fallback design as the primary IT: no real UPS / FedEx
+ * / DHL / Stamps host is EVER contacted. Guarded by
+ * {@code INTEGRATION_TESTS=1} via {@link AbstractIntegrationTest}.
+ */
+@Import({ForbidOutboundHttpTestConfig.class, MockCarrierConnectorsTestConfig.class})
+@TestPropertySource(properties = "spring.main.allow-bean-definition-overriding=true")
+class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
+
+    /** Distinct username per class so tear-down doesn't touch other IT rows. */
+    private static final String USERNAME = "carrier-neg-it-user";
+    /** Distinct tenant id per class — clamped upstream via TenantScopeEnforcer. */
+    private static final String TENANT_ID = "NEGIT";
+
+    @Autowired
+    private CarrierController controller;
+    @Autowired
+    private UserRepository userRepository;
+    @Autowired
+    private ShipViaRepository shipViaRepository;
+    @Autowired
+    private CarrierConfigRepository carrierConfigRepository;
+    @Autowired
+    private PlatformTransactionManager txManager;
+
+    @Autowired
+    private UpsConnector upsMock;
+    @Autowired
+    private FedExConnector fedExMock;
+
+    @BeforeEach
+    void setUp() {
+        cleanup();
+
+        userRepository.save(User.builder()
+                .username(USERNAME)
+                .email(USERNAME + "@local.test")
+                .password("not-used-integration-test")
+                .fullName("Carrier Neg IT User")
+                .role("ADMIN")
+                .emailVerified(true)
+                .carrierConnected(false)
+                .build());
+
+        seedShipVia(9201, "P80", "UPS");
+        seedShipVia(9202, "F77", "FedEx");
+        seedShipVia(9203, "L01", "USPS");
+
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(USERNAME, "",
+                        List.of(new SimpleGrantedAuthority("ROLE_ADMIN"))));
+
+        // Connector mocks are Spring singletons — invocation state accumulates
+        // across tests. Clear so each test's verify(...) counts start at 0.
+        // Stubs from MockCarrierConnectorsTestConfig.prime() survive.
+        clearInvocations(upsMock, fedExMock);
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
+        cleanup();
+    }
+
+    private void cleanup() {
+        TransactionTemplate tx = new TransactionTemplate(txManager);
+        tx.executeWithoutResult(status -> {
+            userRepository.findByUsername(USERNAME).ifPresent(u -> {
+                carrierConfigRepository.findAll().stream()
+                        .filter(c -> c.getUser() != null && c.getUser().getId() != null
+                                && c.getUser().getId().equals(u.getId()))
+                        .map(CarrierConfig::getId)
+                        .toList()
+                        .forEach(carrierConfigRepository::deleteById);
+                userRepository.delete(u);
+            });
+        });
+    }
+
+    // ==================================================================
+    // Unknown / legacy carrier code
+    // ==================================================================
+
+    @Test
+    void connect_withUnknownCarrierCode_throwsCarrierConnectionException() {
+        CarrierConnectRequest req = CarrierConnectRequest.builder()
+                .carrierCode("XYZ_UNKNOWN")
+                .clientId("cid").clientSecret("csec").accountNumber("A")
+                .environment("SANDBOX")
+                .build();
+
+        CarrierConnectionException ex = assertThrows(CarrierConnectionException.class,
+                () -> controller.connectToCarrier(req, principal()));
+        assertTrue(ex.getMessage().contains("Unsupported carrier"),
+                "message must identify the unsupported code path");
+
+        // No CarrierConfig persisted for this user — the failure aborts
+        // before the save() call.
+        assertNull(carrierConfigForUser("XYZ_UNKNOWN"),
+                "unknown-carrier failure must NOT persist a CarrierConfig row");
+    }
+
+    @Test
+    void connect_withLegacyP80Code_resolvesToUpsAndInvokesUpsConnector() {
+        // Layer 2 anti-fallback: mock the connector so no live UPS OAuth fires.
+        when(upsMock.connect(anyString(), anyString(), anyString()))
+                .thenReturn(new CarrierConnector.CarrierConnectionResult(
+                        "UPS", "UPS", true, "P80-1", "SANDBOX",
+                        "tok-legacy-p80", LocalDateTime.now().plusHours(1),
+                        "connected"));
+
+        CarrierConnectRequest req = CarrierConnectRequest.builder()
+                .carrierCode("P80")
+                .clientId("cid").clientSecret("csec").accountNumber("P80-1")
+                .environment("SANDBOX")
+                .build();
+
+        ResponseEntity<ApiResponse<CarrierConnectResponse>> resp = controller.connectToCarrier(req, principal());
+
+        assertEquals(200, resp.getStatusCode().value());
+        // API-facing code is CANONICAL — never emits P80 back to clients.
+        assertEquals("UPS", resp.getBody().getData().getCarrierCode(),
+                "response must emit canonical UPS, never the legacy P80 code");
+        assertEquals("P80-1", resp.getBody().getData().getAccountNumber(),
+                "response must carry the original account number");
+
+        // Anti-fallback proof: the UPS mock (not the FedEx or DHL mock)
+        // was invoked, proving the P80→UPS resolution ran.
+        verify(upsMock, times(1)).connect(anyString(), anyString(), anyString());
+    }
+
+    // ==================================================================
+    // Tenant-scoped connect
+    // ==================================================================
+
+    @Test
+    void connect_withTenantId_persistsUppercasedTenantScopedRow() {
+        when(fedExMock.connect(anyString(), anyString(), anyString()))
+                .thenReturn(new CarrierConnector.CarrierConnectionResult(
+                        "FEDEX", "FedEx", true, "TEN-1", "SANDBOX",
+                        "tok-tenant", LocalDateTime.now().plusHours(1),
+                        "connected"));
+
+        CarrierConnectRequest req = CarrierConnectRequest.builder()
+                .carrierCode("FEDEX")
+                .clientId("cid").clientSecret("csec").accountNumber("TEN-1")
+                .environment("SANDBOX")
+                .tenantId(TENANT_ID.toLowerCase())  // lowercase input — clamped upstream
+                .setAsDefault(true)
+                .build();
+
+        ResponseEntity<ApiResponse<CarrierConnectResponse>> resp = controller.connectToCarrier(req, principal());
+        assertEquals(200, resp.getStatusCode().value());
+
+        // Look up by uppercased tenant id (persisted form).
+        Optional<CarrierConfig> tenantScoped = carrierConfigRepository
+                .findFirstByUserUsernameAndCarrierCodeAndTenantId(USERNAME, "FEDEX", TENANT_ID);
+        assertTrue(tenantScoped.isPresent(),
+                "connect with tenantId must persist a tenant-scoped row");
+        assertEquals(TENANT_ID, tenantScoped.get().getTenantId(),
+                "tenantId must be uppercased in the persisted row");
+
+        // The tenant-agnostic finder must NOT return this row — tenant
+        // scoping must be strict.
+        Optional<CarrierConfig> platformScoped = carrierConfigRepository
+                .findFirstByUserUsernameAndCarrierCodeAndTenantIdIsNull(USERNAME, "FEDEX");
+        assertFalse(platformScoped.isPresent(),
+                "tenant-scoped row must NOT be returned by the null-tenant finder");
+    }
+
+    // ==================================================================
+    // Upsert: connect twice → UPDATE, not INSERT
+    // ==================================================================
+
+    @Test
+    void connect_twiceForSameUserAndCarrier_updatesExistingRow() {
+        when(upsMock.connect(anyString(), anyString(), anyString()))
+                .thenReturn(new CarrierConnector.CarrierConnectionResult(
+                        "UPS", "UPS", true, "UP-1", "SANDBOX",
+                        "tok-1", LocalDateTime.now().plusHours(1),
+                        "connected v1"))
+                .thenReturn(new CarrierConnector.CarrierConnectionResult(
+                        "UPS", "UPS", true, "UP-2", "PRODUCTION",
+                        "tok-2", LocalDateTime.now().plusHours(2),
+                        "connected v2"));
+
+        CarrierConnectRequest first = CarrierConnectRequest.builder()
+                .carrierCode("UPS").clientId("cid1").clientSecret("csec1")
+                .accountNumber("UP-1").environment("SANDBOX").build();
+        CarrierConnectRequest second = CarrierConnectRequest.builder()
+                .carrierCode("UPS").clientId("cid2").clientSecret("csec2")
+                .accountNumber("UP-2").environment("PRODUCTION").build();
+
+        controller.connectToCarrier(first, principal());
+        ResponseEntity<ApiResponse<CarrierConnectResponse>> secondResp =
+                controller.connectToCarrier(second, principal());
+
+        // Both invocations succeed; anti-fallback proof: mock consulted twice.
+        assertEquals(200, secondResp.getStatusCode().value());
+        verify(upsMock, times(2)).connect(anyString(), anyString(), anyString());
+
+        // Verify no duplicate row via user id (avoids lazy user.username
+        // dereference outside a session — filter by id which loads eagerly).
+        Long uid = userRepository.findByUsername(USERNAME).orElseThrow().getId();
+        long count = carrierConfigRepository.findAll().stream()
+                .filter(c -> c.getUser() != null && c.getUser().getId() != null
+                        && c.getUser().getId().equals(uid)
+                        && "UPS".equals(c.getCarrierCode())
+                        && c.getTenantId() == null)
+                .count();
+        assertEquals(1, count,
+                "second connect must UPDATE the existing row, not INSERT a duplicate");
+    }
+
+    // ==================================================================
+    // Connector-thrown failure surfaces
+    // ==================================================================
+
+    @Test
+    void connect_whenConnectorThrows_bubblesRuntimeException() {
+        // The exception is UN-caught by the service — it bubbles to
+        // the CarrierExceptionHandler in a real request; here we just
+        // assert the propagation contract from the controller.
+        when(upsMock.connect(anyString(), anyString(), anyString()))
+                .thenThrow(new CarrierConnectionException("UPS OAuth rejected"));
+
+        CarrierConnectRequest req = CarrierConnectRequest.builder()
+                .carrierCode("UPS").clientId("cid").clientSecret("csec")
+                .accountNumber("A").environment("SANDBOX").build();
+
+        CarrierConnectionException ex = assertThrows(CarrierConnectionException.class,
+                () -> controller.connectToCarrier(req, principal()));
+        assertEquals("UPS OAuth rejected", ex.getMessage());
+
+        // Nothing persisted — the transactional boundary rolls back.
+        assertNull(carrierConfigForUser("UPS"),
+                "failed connect must NOT persist a CarrierConfig row");
+    }
+
+    // ==================================================================
+    // Status + disconnect defensive paths
+    // ==================================================================
+
+    @Test
+    void status_withNoCarrierConfigPersisted_returns200AndConnectedFalse() {
+        // Fresh user seeded in @BeforeEach — no CarrierConfig yet.
+        ResponseEntity<ApiResponse<CarrierStatusResponse>> resp =
+                controller.getCarrierStatus(principal());
+
+        assertEquals(200, resp.getStatusCode().value());
+        CarrierStatusResponse body = resp.getBody().getData();
+        assertNotNull(body);
+        assertFalse(body.getConnected(),
+                "status with no persisted CarrierConfig must be connected=false, not a crash");
+    }
+
+    @Test
+    void disconnect_withNoCarrierConfigPersisted_isIdempotent() {
+        // Fresh user with no CarrierConfig — disconnect must not NPE.
+        ResponseEntity<ApiResponse<CarrierStatusResponse>> resp =
+                controller.disconnectCarrier(principal());
+
+        assertEquals(200, resp.getStatusCode().value(),
+                "disconnect must succeed idempotently even with nothing to disconnect");
+        assertFalse(resp.getBody().getData().getConnected());
+    }
+
+    // ==================================================================
+    // helpers
+    // ==================================================================
+
+    private static UserDetails principal() {
+        return new org.springframework.security.core.userdetails.User(
+                USERNAME, "n/a",
+                List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+    }
+
+    private CarrierConfig carrierConfigForUser(String carrierCode) {
+        return carrierConfigRepository
+                .findFirstByUserUsernameAndCarrierCodeAndTenantIdIsNull(USERNAME, carrierCode)
+                .orElse(null);
+    }
+
+    private void seedShipVia(Integer id, String cd, String desc) {
+        if (shipViaRepository.findById(id).isPresent()) return;
+        ShipVia sv = new ShipVia();
+        sv.setId(id);
+        sv.setShipviaCd(cd);
+        sv.setShipviaDesc(desc);
+        sv.setActive(true);
+        shipViaRepository.save(sv);
+    }
+}
