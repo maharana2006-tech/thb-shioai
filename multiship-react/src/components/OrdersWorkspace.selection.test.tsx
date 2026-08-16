@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { screen, waitFor, within, fireEvent } from '@testing-library/react'
+import { screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../test/renderWithProviders'
 
@@ -133,6 +133,16 @@ const loadPage = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+
+  // AdvancedDataTable persists layout to localStorage; wipe so tests
+  // start with the natural column order + sort. Otherwise a prior test's
+  // sort persists and can flake this suite when run after unrelated
+  // tests that opened OrdersWorkspace.
+  try {
+    localStorage.removeItem('advanced-data-table:orders:v1')
+  } catch {
+    /* jsdom localStorage always available */
+  }
 
   listOrders.mockResolvedValue({
     data: {
