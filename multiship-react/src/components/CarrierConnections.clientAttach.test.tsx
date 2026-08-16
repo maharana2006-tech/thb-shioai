@@ -193,7 +193,7 @@ beforeEach(() => {
   fetchGuard.mockReset().mockImplementation(() => {
     throw new Error('un-mocked fetch forbidden')
   })
-  vi.spyOn(global, 'fetch').mockImplementation(fetchGuard as unknown as typeof fetch)
+  vi.spyOn(globalThis, 'fetch').mockImplementation(fetchGuard as unknown as typeof fetch)
 })
 
 afterEach(() => {
@@ -401,7 +401,7 @@ describe('CarrierConnections · client-attach · cross-cutting', () => {
     // Sanity: the guard we installed in beforeEach is armed. If any of the
     // mocked services above were bypassed the transitive apiClient call
     // would hit `global.fetch` and throw.
-    expect(() => (global.fetch as unknown as () => unknown)()).toThrow(
+    expect(() => (globalThis.fetch as unknown as () => unknown)()).toThrow(
       /un-mocked fetch forbidden/,
     )
   })
