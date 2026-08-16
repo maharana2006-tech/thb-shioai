@@ -422,4 +422,28 @@ describe('ClientsPage · row actions · roles', () => {
     expect(screen.getByRole('menuitem', { name: /importer.*broker/i })).toBeTruthy()
     expect(screen.queryByRole('menuitem', { name: /delete/i })).toBeNull()
   })
+
+  // Sprint 51 FE role-gating — backend @PreAuthorize on
+  // POST /clients/{code}/toggle-active is hasRole('ADMIN'). Row ActiveToggle
+  // now renders disabled for USER with an "Admin only" tooltip, so a
+  // silent 403 → row-snap-back can't happen.
+  it('USER role: row ActiveToggle is rendered but disabled with "Admin only" tooltip', async () => {
+    mockRole = 'USER'
+    const Page = await loadPage()
+    renderList(Page)
+
+    const toggle = await findRowToggle('ACME')
+    expect(toggle).toBeDisabled()
+    expect(toggle.getAttribute('title')).toBe('Admin only')
+  })
+
+  it('ADMIN role: row ActiveToggle is enabled', async () => {
+    mockRole = 'ADMIN'
+    const Page = await loadPage()
+    renderList(Page)
+
+    const toggle = await findRowToggle('ACME')
+    expect(toggle).not.toBeDisabled()
+    expect(toggle.getAttribute('title')).not.toBe('Admin only')
+  })
 })

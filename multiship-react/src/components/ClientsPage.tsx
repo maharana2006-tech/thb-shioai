@@ -360,7 +360,7 @@ export default function ClientsPage() {
               <ActiveToggle
                 active={active}
                 busy={busyId !== null}
-                disabled={false}
+                disabled={!admin}
                 onToggle={(e) => { e.stopPropagation(); void handleToggleActive(client) }}
               />
               <span
