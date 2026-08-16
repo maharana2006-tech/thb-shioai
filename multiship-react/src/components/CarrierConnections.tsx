@@ -51,6 +51,8 @@ import AdvancedDataTable from './workspace/AdvancedDataTable'
 import CarrierLogo from './workspace/CarrierLogo'
 import PortalMenu from './workspace/PortalMenu'
 import Select from './workspace/Select'
+import { useAppSession } from '../hooks/useAppSession'
+import { normalizeRole } from '../utils/roles'
 
 /** Which drawer input receives focus when opened via cell click. */
 type DrawerFocusField = 'accountName' | 'environment' | null
@@ -213,6 +215,12 @@ export default function CarrierConnections({
   initialClientFilter,
   embedded = false,
 }: CarrierConnectionsProps = {}) {
+  // Sprint 51 FE role-gating — carrier connect/disconnect, account
+  // delete/verify and platform-credentials prefill are all `hasRole('ADMIN')`
+  // on the backend. Hide those affordances for USER to avoid the silent
+  // 403 → "row snaps back" papercut.
+  const { role } = useAppSession()
+  const admin = normalizeRole(role) === 'ADMIN'
   const scopedClient = initialClientFilter?.trim() || ''
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
   const [clients, setClients] = useState<ClientOption[]>([])
@@ -311,8 +319,12 @@ export default function CarrierConnections({
 
   // Pre-fill Client ID / Secret from the platform account of the chosen
   // carrier when adding a NEW account. The shipper can override them.
+  // Sprint 51 FE role-gating — GET /platform-credentials/{carrier} is
+  // `hasRole('ADMIN')`; skip the fetch for USER so we don't fire a call
+  // that will 403 and pollute the console.
   useEffect(() => {
     if (!drawerOpen || drawer.editingId !== null) return
+    if (!admin) return
     let cancelled = false
     accountRefService
       .getPlatformCredentials(drawer.carrierCode)
@@ -334,7 +346,7 @@ export default function CarrierConnections({
     return () => {
       cancelled = true
     }
-  }, [drawerOpen, drawer.carrierCode, drawer.editingId])
+  }, [drawerOpen, drawer.carrierCode, drawer.editingId, admin])
 
   const readyCount = accounts.filter((a) => a.complete && a.active).length
   const unverifiedCount = accounts.filter((a) => a.active && a.complete && a.verified !== true).length
@@ -839,6 +851,7 @@ export default function CarrierConnections({
             <RowActionsMenu
               account={row.original}
               busy={busyId !== null}
+              admin={admin}
               onVerify={() => void handleVerify(row.original)}
               onEdit={() => openDrawer(row.original)}
               onDelete={() => void handleDelete(row.original)}
@@ -852,9 +865,9 @@ export default function CarrierConnections({
     // openDrawer) close over the latest state through their function bodies but
     // themselves aren't referentially stable — including them would rebuild the
     // column model every render. busyId is the one value the columns visually
-    // depend on for disabled states.
+    // depend on for disabled states; admin flips row-action visibility.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busyId],
+    [busyId, admin],
   )
 
   return (
@@ -1484,12 +1497,18 @@ export default function CarrierConnections({
                   if (!drawer.clientId.trim()) missing.push(verifyTerms.idLong)
                   if (!drawer.clientSecret.trim()) missing.push(verifyTerms.secretLong)
                   const checking = drawerCheck.state === 'checking'
-                  const disabled = checking || missing.length > 0
-                  const tooltip = missing.length
-                    ? `Fill in ${missing.join(', ')} to run a live check.`
-                    : checking
-                      ? 'Verification in progress…'
-                      : undefined
+                  // Sprint 51 FE role-gating — POST /verify-credentials is
+                  // `hasRole('ADMIN')`; keep the wizard step visible so a
+                  // mid-flow USER isn't confused, but disable + tooltip so
+                  // they get an explanation instead of a silent 403.
+                  const disabled = checking || missing.length > 0 || !admin
+                  const tooltip = !admin
+                    ? 'Admin only — live credential verification'
+                    : missing.length
+                      ? `Fill in ${missing.join(', ')} to run a live check.`
+                      : checking
+                        ? 'Verification in progress…'
+                        : undefined
                   return (
                     <>
                       <div className="flex items-center justify-between gap-2">
@@ -1670,12 +1689,14 @@ function ActiveToggle({
 function RowActionsMenu({
   account,
   busy,
+  admin,
   onVerify,
   onEdit,
   onDelete,
 }: {
   account: CarrierAccountRef
   busy: boolean
+  admin: boolean
   onVerify: () => void
   onEdit: () => void
   onDelete: () => void
@@ -1683,7 +1704,10 @@ function RowActionsMenu({
   const [open, setOpen] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
 
-  const verifiable = account.complete && account.active
+  // Sprint 51 FE role-gating — Verify (POST /accounts/{id}/verify) and
+  // Delete (DELETE /accounts/{id}) are both `hasRole('ADMIN')` on the
+  // backend. Hide both for USER so they don't get a silent 403.
+  const verifiable = admin && account.complete && account.active
   const deletable = (account.labelsGenerated || 0) === 0
 
   return (
@@ -1721,21 +1745,23 @@ function RowActionsMenu({
           <FiEdit2 className="h-3.5 w-3.5 text-[#412d15]" />
           Edit
         </button>
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => { setOpen(false); onDelete() }}
-          disabled={busy || !deletable}
-          title={
-            deletable
-              ? 'Delete this account (never used)'
-              : 'This account has generated labels — deactivate it instead to keep the audit trail.'
-          }
-          className="flex w-full items-center gap-2 border-t border-slate-100 px-3 py-2 text-[12px] font-semibold text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-transparent"
-        >
-          <FiTrash2 className="h-3.5 w-3.5" />
-          Delete
-        </button>
+        {admin ? (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => { setOpen(false); onDelete() }}
+            disabled={busy || !deletable}
+            title={
+              deletable
+                ? 'Delete this account (never used)'
+                : 'This account has generated labels — deactivate it instead to keep the audit trail.'
+            }
+            className="flex w-full items-center gap-2 border-t border-slate-100 px-3 py-2 text-[12px] font-semibold text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:bg-transparent"
+          >
+            <FiTrash2 className="h-3.5 w-3.5" />
+            Delete
+          </button>
+        ) : null}
       </PortalMenu>
     </>
   )

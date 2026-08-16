@@ -412,6 +412,38 @@ describe('WarehousesPage · row actions · negative', () => {
 })
 
 // ============================================================================
+// Row actions — role gating (ActiveToggle)
+// ============================================================================
+//
+// Sprint 51 FE role-gating — POST /warehouses/{code}/toggle-active is
+// currently `hasAnyRole('ADMIN','USER')` on the backend, but the FE has
+// been aligned with ClientsPage for consistency (both settings pages
+// present the same ActiveToggle UX). This is defense-in-depth — the
+// backend still owns authz.
+
+describe('WarehousesPage · row actions · role gating', () => {
+  it('USER role: row ActiveToggle is rendered but disabled with "Admin only" tooltip', async () => {
+    mockRole = 'USER'
+    const Page = await loadPage()
+    renderList(Page)
+
+    const toggle = await findRowToggle('PLAT1')
+    expect(toggle).toBeDisabled()
+    expect(toggle.getAttribute('title')).toBe('Admin only')
+  })
+
+  it('ADMIN role: row ActiveToggle is enabled', async () => {
+    mockRole = 'ADMIN'
+    const Page = await loadPage()
+    renderList(Page)
+
+    const toggle = await findRowToggle('PLAT1')
+    expect(toggle).not.toBeDisabled()
+    expect(toggle.getAttribute('title')).not.toBe('Admin only')
+  })
+})
+
+// ============================================================================
 // WarehouseEditorModal internals — positive
 // ============================================================================
 
