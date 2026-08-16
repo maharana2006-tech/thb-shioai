@@ -19,6 +19,7 @@ import com.multiship.backend.service.carriers.UpsConnector;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.ResponseEntity;
@@ -79,8 +80,10 @@ import static org.mockito.Mockito.when;
 @TestPropertySource(properties = "spring.main.allow-bean-definition-overriding=true")
 class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
 
-    /** Distinct username per class so tear-down doesn't touch other IT rows. */
-    private static final String USERNAME = "carrier-neg-it-user";
+    /** Distinct username PER TEST so cross-test state can never bleed
+     *  (CI's stricter scheduling exposed a leak that didn't repro locally
+     *  when USERNAME was class-static). Assigned in @BeforeEach. */
+    private String USERNAME;
     /** Distinct tenant id per class — clamped upstream via TenantScopeEnforcer. */
     private static final String TENANT_ID = "NEGIT";
 
@@ -101,7 +104,17 @@ class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
     private FedExConnector fedExMock;
 
     @BeforeEach
-    void setUp() {
+    void setUp(TestInfo info) {
+        // Derive a unique username from the test-method name — cross-test
+        // state cannot leak, so a failure never depends on order.
+        USERNAME = "carrier-neg-it-" + info.getTestMethod()
+                .map(m -> m.getName().toLowerCase()
+                        .replaceAll("[^a-z0-9]+", "-")
+                        .replaceAll("(^-|-$)", ""))
+                .orElse("unknown");
+        // Trim to fit VARCHAR(50) on the username column.
+        if (USERNAME.length() > 45) USERNAME = USERNAME.substring(0, 45);
+
         cleanup();
 
         userRepository.save(User.builder()
@@ -341,7 +354,7 @@ class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
     // helpers
     // ==================================================================
 
-    private static UserDetails principal() {
+    private UserDetails principal() {
         return new org.springframework.security.core.userdetails.User(
                 USERNAME, "n/a",
                 List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
