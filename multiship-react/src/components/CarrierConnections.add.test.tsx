@@ -155,7 +155,7 @@ beforeEach(() => {
 
   // Anti-fallback: any un-mocked fetch should blow up the test rather than
   // silently hit the network.
-  vi.spyOn(global, 'fetch').mockImplementation(() => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
     throw new Error('un-mocked fetch forbidden')
   })
 })
