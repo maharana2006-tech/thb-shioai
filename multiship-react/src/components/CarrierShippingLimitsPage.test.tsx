@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { screen, waitFor, within, act } from '@testing-library/react'
+import { screen, waitFor, within, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../test/renderWithProviders'
 
@@ -181,7 +181,7 @@ describe('CarrierShippingLimitsPage — filters', () => {
     await waitFor(() => expect(screen.getByText('FEDEX')).toBeTruthy())
 
     const search = screen.getByPlaceholderText(/Filter by carrier/i)
-    await userEvent.type(search, 'ups')
+    fireEvent.change(search, { target: { value: 'ups' } })
 
     expect(screen.getByText('UPS')).toBeTruthy()
     expect(screen.queryByText('FEDEX')).toBeNull()
@@ -339,10 +339,11 @@ describe('CarrierShippingLimitsPage — editor dialog', () => {
     await userEvent.click(screen.getByRole('button', { name: /New row/i }))
     const dialog = screen.getByRole('dialog')
     const inputs = within(dialog).getAllByRole('textbox') as HTMLInputElement[]
-    await userEvent.type(inputs[0], 'UPS')
+    // fireEvent.change is deterministic in CI where userEvent.type raced.
+    fireEvent.change(inputs[0], { target: { value: 'UPS' } })
     // Number inputs are role='spinbutton' in jsdom; grab them all + set pkgs=0.
     const numbers = within(dialog).getAllByRole('spinbutton') as HTMLInputElement[]
-    await userEvent.type(numbers[0], '0')
+    fireEvent.change(numbers[0], { target: { value: '0' } })
 
     await userEvent.click(screen.getByRole('button', { name: /^Create$/i }))
     expect(screen.getByText(/Max packages must be an integer between 1 and 9999\./i)).toBeTruthy()
@@ -360,9 +361,11 @@ describe('CarrierShippingLimitsPage — editor dialog', () => {
     await userEvent.click(screen.getByRole('button', { name: /New row/i }))
     const dialog = screen.getByRole('dialog')
     const textInputs = within(dialog).getAllByRole('textbox') as HTMLInputElement[]
-    await userEvent.type(textInputs[0], 'DHL')
+    // fireEvent.change avoids the userEvent.type-per-char CI race that
+    // dropped 'HL' and made the payload carrierCode='D'.
+    fireEvent.change(textInputs[0], { target: { value: 'DHL' } })
     const numbers = within(dialog).getAllByRole('spinbutton') as HTMLInputElement[]
-    await userEvent.type(numbers[0], '10')
+    fireEvent.change(numbers[0], { target: { value: '10' } })
 
     await userEvent.click(screen.getByRole('button', { name: /^Create$/i }))
 
