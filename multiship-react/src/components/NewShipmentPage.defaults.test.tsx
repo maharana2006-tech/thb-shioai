@@ -51,6 +51,18 @@ vi.mock('../api/customsProfileService', () => ({
   customsProfileService: { list: vi.fn().mockResolvedValue({ data: [] }) },
 }))
 
+const notifyInfo = vi.fn()
+const notifyApiError = vi.fn()
+vi.mock('../utils/notify', () => ({
+  notify: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: (...a: unknown[]) => notifyInfo(...a),
+    apiError: (...a: unknown[]) => notifyApiError(...a),
+    confirm: vi.fn().mockResolvedValue(true),
+  },
+}))
+
 const catalogMock = vi.fn()
 const listPresetsMock = vi.fn()
 vi.mock('../api/shippingConfigService', () => ({
@@ -410,22 +422,42 @@ describe('NewShipmentPage — carrier account defaults', () => {
     })
   })
 
-  it('client with default account for MISSING carrier leaves carrier at prior/empty (no crash)', async () => {
+  it('client with default account for MISSING carrier warns operator + leaves carrier safe', async () => {
     const Page = await loadPage()
     renderWithProviders(<Page />)
     const clientSel = await waitForClientSelect()
 
     // The MISSING client's only default is DHL — but carrierOptions only
-    // has {UPS, FEDEX}. The page must NOT crash + must NOT set carrier=DHL.
+    // has {UPS, FEDEX}. The page must NOT crash + must NOT set carrier=DHL
+    // + must toast an operator-facing warning so they know to pick manually.
     fireEvent.change(clientSel, { target: { value: 'MISSING' } })
 
     await waitFor(() => {
       const carrierSel = screen.getByLabelText(/^Carrier\s?\*?$/i) as HTMLSelectElement
-      // DHL is NOT in {UPS, FEDEX} → the guard at line 865 skips setCarrier.
+      // DHL is NOT in {UPS, FEDEX} → the guard skips setCarrier.
       expect(carrierSel.value).not.toBe('DHL')
-      // Whatever value it holds (UPS or FEDEX) is a valid option.
       expect(['UPS', 'FEDEX', '']).toContain(carrierSel.value)
+      // Operator MUST see the warning — silent skip was the prior UX bug.
+      expect(notifyInfo).toHaveBeenCalledTimes(1)
+      const msg = notifyInfo.mock.calls[0][0] as string
+      expect(msg).toMatch(/DHL/)
+      expect(msg).toMatch(/isn't connected/i)
     })
+  })
+
+  it('client with default account for AVAILABLE carrier does NOT toast (no false positive)', async () => {
+    const Page = await loadPage()
+    renderWithProviders(<Page />)
+    const clientSel = await waitForClientSelect()
+
+    // ACME's default is UPS, which IS in carrierOptions → no warning fires.
+    fireEvent.change(clientSel, { target: { value: 'ACME' } })
+
+    await waitFor(() => {
+      const carrierSel = screen.getByLabelText(/^Carrier\s?\*?$/i) as HTMLSelectElement
+      expect(carrierSel.value).toBe('UPS')
+    })
+    expect(notifyInfo).not.toHaveBeenCalled()
   })
 })
 
