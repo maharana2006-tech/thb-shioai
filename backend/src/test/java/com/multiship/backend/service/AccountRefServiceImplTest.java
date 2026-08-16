@@ -3,10 +3,14 @@ package com.multiship.backend.service;
 import com.multiship.backend.dto.AccountRefUpsertRequest;
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.CarrierAccountRefDTO;
+import com.multiship.backend.dto.CredentialCheckDTO;
+import com.multiship.backend.dto.PlatformCredentialsDTO;
+import com.multiship.backend.dto.VerifyCredentialsRequest;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
+import com.multiship.backend.service.events.CarrierConfigChangedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -14,17 +18,23 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -265,5 +275,379 @@ class AccountRefServiceImplTest {
         // Clamped customerNo must land on the persisted row, upper-cased.
         assertNotNull(captor.getValue());
         assertEquals("ACME", captor.getValue().getCustomerNo());
+    }
+
+    /* ======================================================================
+     * Gap-fill tests (test/carriers-be-svc-gap): non-tenant branches — the
+     * NOT_FOUND / VALIDATION / audit / event-publish / credential-check /
+     * platform-credentials paths not exercised by the tenant-scope suite.
+     * ==================================================================== */
+
+    /* -------------------------- verifyAccount gaps -------------------------- */
+
+    @Test
+    void verifyAccount_missingId_returnsNotFound_noCarrierCall() {
+        when(accountRepo.findById(404L)).thenReturn(Optional.empty());
+
+        ApiResponse<CarrierAccountRefDTO> resp = service.verifyAccount(404L);
+
+        assertEquals("error", resp.getStatus());
+        assertEquals(404, resp.getCode());
+        assertEquals("ACCOUNT_NOT_FOUND", resp.getErrorCode());
+        // Guard: no downstream call proves no fallback path bypasses the mock.
+        verify(carrierService, never()).getCarrierConnector(anyString());
+        verify(accountRepo, never()).save(any());
+        verify(publisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void verifyAccount_incompleteAccount_returnsBadRequest_noCarrierCall() {
+        CarrierAccountRef incomplete = accountWithTenant(11L, "ACME");
+        incomplete.setClientId(null); // isComplete() requires all three fields.
+        when(accountRepo.findById(11L)).thenReturn(Optional.of(incomplete));
+
+        ApiResponse<CarrierAccountRefDTO> resp = service.verifyAccount(11L);
+
+        assertEquals("error", resp.getStatus());
+        assertEquals(400, resp.getCode());
+        assertEquals("ACCOUNT_INCOMPLETE", resp.getErrorCode());
+        verify(carrierService, never()).getCarrierConnector(anyString());
+        verify(accountRepo, never()).save(any());
+        verify(publisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void verifyAccount_connectorReturnsLocalToken_marksUnverifiedAndPublishesEvent() {
+        CarrierAccountRef own = accountWithTenant(12L, "ACME");
+        when(accountRepo.findById(12L)).thenReturn(Optional.of(own));
+        CarrierConnector connector = mock(CarrierConnector.class);
+        when(connector.getCarrierName()).thenReturn("UPS");
+        // -local- substring signals fallback => verified=false.
+        when(connector.getAccessToken(anyString(), anyString(), any(), any()))
+                .thenReturn("UPS-local-abc");
+        when(connector.consumeAuthFailureDetail()).thenReturn("invalid ClientId");
+        when(carrierService.getCarrierConnector("UPS")).thenReturn(connector);
+
+        ApiResponse<CarrierAccountRefDTO> resp = service.verifyAccount(12L);
+
+        assertEquals("success", resp.getStatus());
+        assertNotNull(resp.getData());
+        assertFalse(Boolean.TRUE.equals(resp.getData().getVerified()));
+        assertTrue(resp.getMessage().contains("invalid ClientId"));
+        // Every credential-check invocation MUST go through the mock connector.
+        verify(connector).validateCredentials("cid", "csec");
+        verify(connector).getAccessToken(eq("cid"), eq("csec"), eq("A12345"), eq("SANDBOX"));
+        verify(connector).consumeAuthFailureDetail();
+        verify(accountRepo).save(own);
+        verify(publisher).publishEvent(any(CarrierConfigChangedEvent.class));
+    }
+
+    @Test
+    void verifyAccount_connectorThrows_returnsVerificationFailedMessage() {
+        CarrierAccountRef own = accountWithTenant(13L, "ACME");
+        when(accountRepo.findById(13L)).thenReturn(Optional.of(own));
+        CarrierConnector connector = mock(CarrierConnector.class);
+        when(connector.getCarrierName()).thenReturn("UPS");
+        when(connector.getAccessToken(anyString(), anyString(), any(), any()))
+                .thenThrow(new RuntimeException("boom"));
+        when(carrierService.getCarrierConnector("UPS")).thenReturn(connector);
+
+        ApiResponse<CarrierAccountRefDTO> resp = service.verifyAccount(13L);
+
+        // runCredentialCheck swallows the exception into a friendly message.
+        assertEquals("success", resp.getStatus());
+        assertFalse(Boolean.TRUE.equals(resp.getData().getVerified()));
+        assertTrue(resp.getMessage().startsWith("Verification failed:"));
+        verify(accountRepo).save(own);
+        verify(publisher).publishEvent(any(CarrierConfigChangedEvent.class));
+    }
+
+    /* -------------------------- verifyCredentials (stateless) -------------- */
+
+    @Test
+    void verifyCredentials_realToken_returnsVerifiedTrue_viaConnectorMock() {
+        VerifyCredentialsRequest req = VerifyCredentialsRequest.builder()
+                .carrierCode("UPS").clientId("cid").clientSecret("csec")
+                .accountNumber("A12345").environment("PRODUCTION").build();
+        CarrierConnector connector = mock(CarrierConnector.class);
+        when(connector.getCarrierName()).thenReturn("UPS");
+        when(connector.getAccessToken(anyString(), anyString(), any(), any()))
+                .thenReturn("real-live-token");
+        when(carrierService.getCarrierConnector("UPS")).thenReturn(connector);
+
+        ApiResponse<CredentialCheckDTO> resp = service.verifyCredentials(req);
+
+        assertEquals("success", resp.getStatus());
+        assertTrue(resp.getData().getVerified());
+        assertTrue(resp.getData().getMessage().contains("issued a live token"));
+        // Mock-only path — no repo interaction should happen.
+        verify(accountRepo, never()).save(any());
+        verify(publisher, never()).publishEvent(any());
+        verify(connector).validateCredentials("cid", "csec");
+    }
+
+    /* -------------------------- setClientDefault gaps ---------------------- */
+
+    @Test
+    void setClientDefault_missingId_returnsNotFound() {
+        when(accountRepo.findById(404L)).thenReturn(Optional.empty());
+
+        ApiResponse<CarrierAccountRefDTO> resp = service.setClientDefault(404L);
+
+        assertEquals("error", resp.getStatus());
+        assertEquals("ACCOUNT_NOT_FOUND", resp.getErrorCode());
+        verify(accountRepo, never()).save(any());
+    }
+
+    @Test
+    void setClientDefault_blankCustomerNo_returnsValidationError() {
+        CarrierAccountRef platform = accountWithTenant(15L, ""); // platform row.
+        when(accountRepo.findById(15L)).thenReturn(Optional.of(platform));
+
+        ApiResponse<CarrierAccountRefDTO> resp = service.setClientDefault(15L);
+
+        assertEquals("error", resp.getStatus());
+        assertEquals(400, resp.getCode());
+        assertEquals("VALIDATION_ERROR", resp.getErrorCode());
+        verify(accountRepo, never()).save(any());
+    }
+
+    @Test
+    void setClientDefault_incompleteCredentials_returnsBadRequest() {
+        CarrierAccountRef own = accountWithTenant(16L, "ACME");
+        own.setClientSecret(null); // isComplete() -> false.
+        when(accountRepo.findById(16L)).thenReturn(Optional.of(own));
+
+        ApiResponse<CarrierAccountRefDTO> resp = service.setClientDefault(16L);
+
+        assertEquals("error", resp.getStatus());
+        assertEquals("ACCOUNT_INCOMPLETE", resp.getErrorCode());
+        verify(accountRepo, never()).save(any());
+    }
+
+    @Test
+    void setClientDefault_demotesSameCarrierPeers_leavesOtherCarrierUntouched() {
+        CarrierAccountRef target = accountWithTenant(20L, "ACME");
+        target.setCarrierCode("UPS");
+        CarrierAccountRef sameCarrierPeer = accountWithTenant(21L, "ACME");
+        sameCarrierPeer.setCarrierCode("UPS");
+        sameCarrierPeer.setClientDefault(true);
+        CarrierAccountRef otherCarrierPeer = accountWithTenant(22L, "ACME");
+        otherCarrierPeer.setCarrierCode("FEDEX");
+        otherCarrierPeer.setClientDefault(true);
+
+        when(accountRepo.findById(20L)).thenReturn(Optional.of(target));
+        when(accountRepo.findByCustomerNoIgnoreCaseAndClientDefaultTrue("ACME"))
+                .thenReturn(List.of(sameCarrierPeer, otherCarrierPeer));
+
+        ApiResponse<CarrierAccountRefDTO> resp = service.setClientDefault(20L);
+
+        assertEquals("success", resp.getStatus());
+        // Peer on the SAME carrier is demoted.
+        assertFalse(Boolean.TRUE.equals(sameCarrierPeer.getClientDefault()));
+        // Peer on a DIFFERENT carrier survives — one default per (client,carrier).
+        assertTrue(Boolean.TRUE.equals(otherCarrierPeer.getClientDefault()));
+        verify(accountRepo).save(sameCarrierPeer);
+        verify(accountRepo, never()).save(otherCarrierPeer);
+        verify(accountRepo).save(target);
+    }
+
+    /* -------------------------- toggleActive gaps -------------------------- */
+
+    @Test
+    void toggleActive_missingId_returnsNotFound() {
+        when(accountRepo.findById(404L)).thenReturn(Optional.empty());
+
+        ApiResponse<CarrierAccountRefDTO> resp = service.toggleActive(404L);
+
+        assertEquals("error", resp.getStatus());
+        assertEquals("ACCOUNT_NOT_FOUND", resp.getErrorCode());
+        verify(accountRepo, never()).save(any());
+        verify(publisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void toggleActive_activeAccount_deactivatesAndPublishesDeactivatedEvent() {
+        CarrierAccountRef own = accountWithTenant(30L, "ACME");
+        own.setActive(true); // currently active -> should flip to false.
+        when(accountRepo.findById(30L)).thenReturn(Optional.of(own));
+
+        ApiResponse<CarrierAccountRefDTO> resp = service.toggleActive(30L);
+
+        assertEquals("success", resp.getStatus());
+        assertFalse(own.getActive());
+        assertTrue(resp.getMessage().contains("deactivated"));
+        // Audit call must fire with TOGGLE_ACTIVE + CARRIER_ACCOUNT.
+        verify(auditService).record(eq(AuditService.TOGGLE_ACTIVE),
+                eq(AuditService.CARRIER_ACCOUNT),
+                eq(30L), anyString(), any(), anyString());
+        // Rate-cache invalidation event must be published.
+        ArgumentCaptor<CarrierConfigChangedEvent> evt =
+                ArgumentCaptor.forClass(CarrierConfigChangedEvent.class);
+        verify(publisher).publishEvent(evt.capture());
+        // Guard: no CarrierConnector call on a pure toggle.
+        verify(carrierService, never()).getCarrierConnector(anyString());
+    }
+
+    /* -------------------------- deleteAccount gaps ------------------------- */
+
+    @Test
+    void deleteAccount_missingId_returnsNotFound() {
+        when(accountRepo.findById(404L)).thenReturn(Optional.empty());
+
+        ApiResponse<Void> resp = service.deleteAccount(404L);
+
+        assertEquals("error", resp.getStatus());
+        assertEquals("ACCOUNT_NOT_FOUND", resp.getErrorCode());
+        verify(accountRepo, never()).delete(any());
+        verify(publisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void deleteAccount_hasLabels_returnsConflict_noDelete() {
+        CarrierAccountRef own = accountWithTenant(40L, "ACME");
+        when(accountRepo.findById(40L)).thenReturn(Optional.of(own));
+        when(trackingRepo.countByAccountNumberIgnoreCaseAndIsLabelGeneratedTrue("A12345"))
+                .thenReturn(3L);
+
+        ApiResponse<Void> resp = service.deleteAccount(40L);
+
+        assertEquals("error", resp.getStatus());
+        assertEquals(409, resp.getCode());
+        assertEquals("ACCOUNT_HAS_LABELS", resp.getErrorCode());
+        verify(accountRepo, never()).delete(any());
+        verify(publisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void deleteAccount_success_publishesDeletedEventAndAudits() {
+        CarrierAccountRef own = accountWithTenant(41L, "ACME");
+        when(accountRepo.findById(41L)).thenReturn(Optional.of(own));
+        when(trackingRepo.countByAccountNumberIgnoreCaseAndIsLabelGeneratedTrue("A12345"))
+                .thenReturn(0L);
+
+        ApiResponse<Void> resp = service.deleteAccount(41L);
+
+        assertEquals("success", resp.getStatus());
+        verify(accountRepo).delete(own);
+        verify(auditService).record(eq(AuditService.DELETE),
+                eq(AuditService.CARRIER_ACCOUNT),
+                eq(41L), anyString(), any(), anyString());
+        verify(publisher).publishEvent(any(CarrierConfigChangedEvent.class));
+    }
+
+    /* -------------------------- upsertAccount gaps ------------------------- */
+
+    @Test
+    void upsertAccount_newAccountMissingCredentials_returnsUnprocessable() {
+        AccountRefUpsertRequest req = AccountRefUpsertRequest.builder()
+                .accountNumber("A-NEW")
+                .carrierCode("UPS")
+                .clientId(null)          // <-- missing
+                .clientSecret(null)      // <-- missing
+                .customerNo("ACME")
+                .build();
+        when(tenantScope.clampClientCode("ACME")).thenReturn("ACME");
+        CarrierConnector connector = mock(CarrierConnector.class);
+        when(connector.getCarrierCode()).thenReturn("UPS");
+        when(carrierService.getCarrierConnector("UPS")).thenReturn(connector);
+        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("A-NEW", "UPS"))
+                .thenReturn(Optional.empty());
+
+        ApiResponse<CarrierAccountRefDTO> resp = service.upsertAccount(req);
+
+        assertEquals("error", resp.getStatus());
+        assertEquals(422, resp.getCode());
+        assertEquals("VALIDATION_ERROR", resp.getErrorCode());
+        verify(accountRepo, never()).save(any());
+        verify(publisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void upsertAccount_credentialsChanged_clearsVerifiedStamps() {
+        AccountRefUpsertRequest req = AccountRefUpsertRequest.builder()
+                .accountNumber("A12345")
+                .carrierCode("UPS")
+                .clientId("new-cid")
+                .clientSecret("new-csec")
+                .customerNo("ACME")
+                .build();
+        when(tenantScope.clampClientCode("ACME")).thenReturn("ACME");
+        CarrierConnector connector = mock(CarrierConnector.class);
+        when(connector.getCarrierCode()).thenReturn("UPS");
+        when(carrierService.getCarrierConnector("UPS")).thenReturn(connector);
+        // Existing row (same tenant) with a stale verified stamp.
+        CarrierAccountRef existing = accountWithTenant(50L, "ACME");
+        existing.setVerified(true);
+        existing.setLastVerifiedAt(LocalDateTime.of(2024, 1, 1, 0, 0));
+        when(accountRepo.findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase("A12345", "UPS"))
+                .thenReturn(Optional.of(existing));
+        when(accountRepo.save(any(CarrierAccountRef.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        ApiResponse<CarrierAccountRefDTO> resp = service.upsertAccount(req);
+
+        assertEquals("success", resp.getStatus());
+        // Fresh credentials MUST invalidate prior verification.
+        assertNull(existing.getVerified());
+        assertNull(existing.getLastVerifiedAt());
+        assertEquals("new-cid", existing.getClientId());
+        assertEquals("new-csec", existing.getClientSecret());
+        verify(auditService).record(eq(AuditService.UPDATE),
+                eq(AuditService.CARRIER_ACCOUNT),
+                any(), anyString(), any(), anyString());
+        verify(publisher).publishEvent(any(CarrierConfigChangedEvent.class));
+    }
+
+    /* -------------------------- getPlatformCredentials --------------------- */
+
+    @Test
+    void getPlatformCredentials_unknownCarrier_returnsFoundFalseWithoutQuery() {
+        when(carrierService.getCarrierConnector("BOGUS"))
+                .thenThrow(new IllegalArgumentException("no such carrier"));
+
+        ApiResponse<PlatformCredentialsDTO> resp = service.getPlatformCredentials("BOGUS");
+
+        assertEquals("success", resp.getStatus());
+        assertFalse(resp.getData().isFound());
+        // No repo hit when the carrier itself is unknown.
+        verify(accountRepo, never()).findPlatformAccountsByCarrier(anyString());
+    }
+
+    @Test
+    void getPlatformCredentials_found_returnsMaskedSecretNeverPlaintext() {
+        CarrierConnector connector = mock(CarrierConnector.class);
+        when(connector.getCarrierCode()).thenReturn("UPS");
+        when(carrierService.getCarrierConnector("UPS")).thenReturn(connector);
+        CarrierAccountRef platform = accountWithTenant(60L, null);
+        platform.setClientId("client-1234567890");
+        platform.setClientSecret("supersecretvalueXYZ9");
+        when(accountRepo.findPlatformAccountsByCarrier("UPS")).thenReturn(List.of(platform));
+
+        ApiResponse<PlatformCredentialsDTO> resp = service.getPlatformCredentials("UPS");
+
+        assertEquals("success", resp.getStatus());
+        assertTrue(resp.getData().isFound());
+        assertTrue(resp.getData().isHasClientSecret());
+        // Contract: never leak the plaintext secret; only masked "****" + last 4.
+        String masked = resp.getData().getClientSecretMasked();
+        assertTrue(masked.startsWith("****"));
+        assertTrue(masked.endsWith("XYZ9"));
+        assertFalse(masked.contains("supersecretvalue"));
+    }
+
+    @Test
+    void getPlatformCredentials_noPlatformAccount_returnsFoundFalse() {
+        CarrierConnector connector = mock(CarrierConnector.class);
+        when(connector.getCarrierCode()).thenReturn("FEDEX");
+        when(carrierService.getCarrierConnector("FEDEX")).thenReturn(connector);
+        when(accountRepo.findPlatformAccountsByCarrier("FEDEX")).thenReturn(List.of());
+
+        ApiResponse<PlatformCredentialsDTO> resp = service.getPlatformCredentials("FEDEX");
+
+        assertEquals("success", resp.getStatus());
+        assertFalse(resp.getData().isFound());
+        assertEquals("FEDEX", resp.getData().getCarrierCode());
+        verify(accountRepo, times(1)).findPlatformAccountsByCarrier("FEDEX");
     }
 }
