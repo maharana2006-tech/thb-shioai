@@ -108,9 +108,9 @@ vi.mock('../api/apiClient', () => ({
 
 // ---------- Fail-loud fetch spy (anti-fallback) ----------
 // Any test that reaches the real network is a bug in mocking.
-const originalFetch = global.fetch
+const originalFetch = globalThis.fetch
 beforeEach(() => {
-  vi.spyOn(global, 'fetch').mockImplementation(() => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
     throw new Error('un-mocked fetch forbidden in unit tests')
   })
 })
@@ -213,7 +213,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
-  global.fetch = originalFetch
+  globalThis.fetch = originalFetch
 })
 
 // ============ Positive cases ============
