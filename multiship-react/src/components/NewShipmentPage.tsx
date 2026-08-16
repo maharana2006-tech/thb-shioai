@@ -867,9 +867,19 @@ export default function NewShipmentPage() {
     else setSender(merged)
     const accts = (client.carrierAccounts || []).filter((a) => a.active)
     const def = accts.find((a) => a.clientDefault) || accts[0]
-    if (def && carrierOptions.includes(canon(def.carrierCode))) {
-      setCarrier(canon(def.carrierCode))
-      setAccountNumber(def.accountNumber || '')
+    if (def) {
+      const canonical = canon(def.carrierCode)
+      if (carrierOptions.includes(canonical)) {
+        setCarrier(canonical)
+        setAccountNumber(def.accountNumber || '')
+      } else {
+        // Client's default account is for a carrier this workspace hasn't
+        // connected. Silently skipping would leave the operator wondering
+        // why the picker didn't pre-fill; toast so it's obvious what to do.
+        notify.info(
+          `${client.name || client.clientCode}'s default carrier ${canonical} isn't connected in this workspace — pick a carrier manually.`,
+        )
+      }
     }
   }
 
