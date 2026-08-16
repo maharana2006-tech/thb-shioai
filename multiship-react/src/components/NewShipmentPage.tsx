@@ -844,22 +844,27 @@ export default function NewShipmentPage() {
     const client = clients.find((c) => c.clientCode === code)
     if (!client) return
     const yourAddr = isReturn ? client.returnAddress ?? client.shipFrom : client.shipFrom
-    if (yourAddr) {
-      const fill = (base: ManualShipmentAddress): ManualShipmentAddress => ({
-        name: client.name || base.name,
-        company: client.name || base.company,
-        phone: client.phone || base.phone,
-        email: client.email || base.email,
-        addressLine1: yourAddr.line1 || base.addressLine1,
-        addressLine2: yourAddr.line2 || '',
-        city: yourAddr.city || base.city,
-        state: yourAddr.state || base.state,
-        postalCode: yourAddr.zip || base.postalCode,
-        countryCode: yourAddr.country || base.countryCode,
-      })
-      if (isReturn) setRecipient((r) => fill(r))
-      else setSender((s) => fill(s))
-    }
+    // Always reset to defaultSender() before overlay — otherwise switching
+    // from Client A (with shipFrom) to Client B (without) would leave A's
+    // address in place. The subsequent warehouse-change effect re-overlays
+    // if the newly-picked client has warehouses attached.
+    const base = defaultSender()
+    const merged: ManualShipmentAddress = yourAddr
+      ? {
+          name: client.name || base.name,
+          company: client.name || base.company,
+          phone: client.phone || base.phone,
+          email: client.email || base.email,
+          addressLine1: yourAddr.line1 || base.addressLine1,
+          addressLine2: yourAddr.line2 || '',
+          city: yourAddr.city || base.city,
+          state: yourAddr.state || base.state,
+          postalCode: yourAddr.zip || base.postalCode,
+          countryCode: yourAddr.country || base.countryCode,
+        }
+      : base
+    if (isReturn) setRecipient(merged)
+    else setSender(merged)
     const accts = (client.carrierAccounts || []).filter((a) => a.active)
     const def = accts.find((a) => a.clientDefault) || accts[0]
     if (def && carrierOptions.includes(canon(def.carrierCode))) {
@@ -1561,13 +1566,15 @@ export default function NewShipmentPage() {
                     ))}
                   </select>
                 </Field>
-                <Field label="Reason of export" error={errAt('reasonForExport')}>
-                  <select className={inputCls} value={reasonForExport} onChange={(e) => setReasonForExport(e.target.value)}>
-                    {EXPORT_REASONS.map((r) => (
-                      <option key={r} value={r}>{r.charAt(0) + r.slice(1).toLowerCase()}</option>
-                    ))}
-                  </select>
-                </Field>
+                {isInternational ? (
+                  <Field label="Reason of export" error={errAt('reasonForExport')}>
+                    <select className={inputCls} value={reasonForExport} onChange={(e) => setReasonForExport(e.target.value)}>
+                      {EXPORT_REASONS.map((r) => (
+                        <option key={r} value={r}>{r.charAt(0) + r.slice(1).toLowerCase()}</option>
+                      ))}
+                    </select>
+                  </Field>
+                ) : null}
                 <Field label="Currency" error={errAt('currency')}>
                   <select className={inputCls} value={currency} onChange={(e) => setCurrency(e.target.value)}>
                     {CURRENCIES.map((c) => (
@@ -1801,12 +1808,14 @@ export default function NewShipmentPage() {
                       </button>
                     ) : null}
                   </Field>
-                  <Field label="Incoterms" error={errAt('incoterms')}>
-                    <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
-                      <option value="DDP">DDP — sender pays duties</option>
-                      <option value="DAP">DAP — receiver pays duties</option>
-                    </select>
-                  </Field>
+                  {isInternational ? (
+                    <Field label="Incoterms" error={errAt('incoterms')}>
+                      <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
+                        <option value="DDP">DDP — sender pays duties</option>
+                        <option value="DAP">DAP — receiver pays duties</option>
+                      </select>
+                    </Field>
+                  ) : null}
                 </div>
               </SectionCard>
 
