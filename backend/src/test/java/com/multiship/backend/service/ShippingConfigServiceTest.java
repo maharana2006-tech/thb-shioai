@@ -4,6 +4,7 @@ import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.PackagePreset;
 import com.multiship.backend.model.ServicePackage;
+import com.multiship.backend.model.ShipMethodRuleWarehouse;
 import com.multiship.backend.model.ShipViaMapping;
 import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
@@ -24,6 +25,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -598,5 +600,294 @@ class ShippingConfigServiceTest {
 
         assertEquals("SUCCESS", r.getStatus());
         verify(presetRepository, times(1)).delete(p);
+    }
+
+    // ==================================================================
+    // resolveRule — used at label time; specificity scoring
+    // (client=8, warehouse=4, dest country=2, dest region=1).
+    // Powers /settings/shipping-service-mapping's semantics.
+    // ==================================================================
+
+    private static ShipViaMapping rule(Long id, String shipviaCd, String clientCode,
+                                       String destType, String destValue, Long serviceId) {
+        return ShipViaMapping.builder()
+                .id(id).shipviaCd(shipviaCd).clientCode(clientCode)
+                .destType(destType).destValue(destValue).serviceId(serviceId).build();
+    }
+
+    @Test
+    void resolveRule_blankShipviaCd_returnsEmpty() {
+        assertTrue(service.resolveRule("C001", "", "US").isEmpty());
+        assertTrue(service.resolveRule("C001", null, "US").isEmpty());
+        // No repo calls made on the short-circuit path.
+        verify(ruleRepository, never()).findByShipviaCdIgnoreCase(any());
+    }
+
+    @Test
+    void resolveRule_noCandidates_returnsEmpty() {
+        when(ruleRepository.findByShipviaCdIgnoreCase("GROUND")).thenReturn(List.of());
+
+        assertTrue(service.resolveRule("C001", "GROUND", "US").isEmpty());
+    }
+
+    @Test
+    void resolveRule_globalAnyAny_matchesAnyOrder() {
+        ShipViaMapping global = rule(1L, "GROUND", null, "ANY", null, 100L);
+        ShippingService svc = svc(100L, "UPS", "GROUND", true);
+        when(ruleRepository.findByShipviaCdIgnoreCase("GROUND")).thenReturn(List.of(global));
+        when(ruleWarehouseRepository.findByRuleIdIn(List.of(1L))).thenReturn(List.of());
+        when(serviceRepository.findById(100L)).thenReturn(Optional.of(svc));
+
+        Optional<ShippingService> resolved = service.resolveRule("ANYONE", "GROUND", "US");
+
+        assertTrue(resolved.isPresent());
+        assertEquals(100L, resolved.get().getId());
+    }
+
+    @Test
+    void resolveRule_clientSpecific_beatsGlobal() {
+        // Client rule (score 8) must win over global rule (score 0) even
+        // when both match — bit-weighted specificity.
+        ShipViaMapping global = rule(1L, "GROUND", null, "ANY", null, 100L);
+        ShipViaMapping clientRule = rule(2L, "GROUND", "C001", "ANY", null, 200L);
+        ShippingService svcGlobal = svc(100L, "UPS", "GROUND", true);
+        ShippingService svcClient = svc(200L, "UPS", "GROUND_CLIENT", true);
+        when(ruleRepository.findByShipviaCdIgnoreCase("GROUND")).thenReturn(List.of(global, clientRule));
+        when(ruleWarehouseRepository.findByRuleIdIn(List.of(1L, 2L))).thenReturn(List.of());
+        when(serviceRepository.findById(200L)).thenReturn(Optional.of(svcClient));
+
+        Optional<ShippingService> resolved = service.resolveRule("C001", "GROUND", "US");
+
+        assertTrue(resolved.isPresent());
+        assertEquals(200L, resolved.get().getId(),
+                "Client-specific rule (score 8) must beat global (score 0).");
+        // The losing rule's service should NOT have been looked up.
+        verify(serviceRepository, never()).findById(100L);
+    }
+
+    @Test
+    void resolveRule_countryPlusClient_beatsClientOnly() {
+        // client+country = 10 > client-only = 8.
+        ShipViaMapping clientOnly = rule(1L, "GROUND", "C001", "ANY", null, 100L);
+        ShipViaMapping clientPlusCountry = rule(2L, "GROUND", "C001", "COUNTRY", "US", 200L);
+        ShippingService svcMore = svc(200L, "UPS", "GROUND_US", true);
+        when(ruleRepository.findByShipviaCdIgnoreCase("GROUND")).thenReturn(List.of(clientOnly, clientPlusCountry));
+        when(ruleWarehouseRepository.findByRuleIdIn(List.of(1L, 2L))).thenReturn(List.of());
+        when(serviceRepository.findById(200L)).thenReturn(Optional.of(svcMore));
+
+        Optional<ShippingService> resolved = service.resolveRule("C001", "GROUND", "US");
+
+        assertEquals(200L, resolved.get().getId(),
+                "client+country (10) must beat client-only (8).");
+    }
+
+    @Test
+    void resolveRule_countriesZone_matchesWhenDestInSpaceSeparatedSet() {
+        ShipViaMapping zone = rule(1L, "EXPRESS", null, "COUNTRIES", "DE FR GB", 100L);
+        ShippingService svcZone = svc(100L, "UPS", "EXPRESS", true);
+        when(ruleRepository.findByShipviaCdIgnoreCase("EXPRESS")).thenReturn(List.of(zone));
+        when(ruleWarehouseRepository.findByRuleIdIn(List.of(1L))).thenReturn(List.of());
+        when(serviceRepository.findById(100L)).thenReturn(Optional.of(svcZone));
+
+        assertTrue(service.resolveRule(null, "EXPRESS", "FR").isPresent());
+        assertTrue(service.resolveRule(null, "EXPRESS", "DE").isPresent());
+        // Country not in the zone → excluded, so nothing matches, empty result.
+        assertTrue(service.resolveRule(null, "EXPRESS", "US").isEmpty());
+    }
+
+    @Test
+    void resolveRule_warehouseRestricted_excludedWhenNoOrderWarehouseGiven() {
+        // Rule restricts to warehouse 10; no orderWarehouseId supplied
+        // (via the 3-arg overload) → rule is excluded (safer).
+        ShipViaMapping whRule = rule(1L, "GROUND", null, "ANY", null, 100L);
+        ShipMethodRuleWarehouse link = ShipMethodRuleWarehouse.builder().ruleId(1L).warehouseId(10L).build();
+        when(ruleRepository.findByShipviaCdIgnoreCase("GROUND")).thenReturn(List.of(whRule));
+        when(ruleWarehouseRepository.findByRuleIdIn(List.of(1L))).thenReturn(List.of(link));
+
+        // 3-arg overload passes null orderWarehouseId — restricted rule with
+        // no known origin is safer to exclude.
+        Optional<ShippingService> resolved = service.resolveRule("C001", "GROUND", "US");
+
+        assertTrue(resolved.isEmpty());
+        // No service lookup — resolution short-circuited before the .flatMap.
+        verify(serviceRepository, never()).findById(any());
+    }
+
+    @Test
+    void resolveRule_warehouseRestricted_matchesWhenOrderWarehouseMatches() {
+        ShipViaMapping whRule = rule(1L, "GROUND", null, "ANY", null, 100L);
+        ShipMethodRuleWarehouse link = ShipMethodRuleWarehouse.builder().ruleId(1L).warehouseId(10L).build();
+        ShippingService svcWH = svc(100L, "UPS", "GROUND", true);
+        when(ruleRepository.findByShipviaCdIgnoreCase("GROUND")).thenReturn(List.of(whRule));
+        when(ruleWarehouseRepository.findByRuleIdIn(List.of(1L))).thenReturn(List.of(link));
+        when(serviceRepository.findById(100L)).thenReturn(Optional.of(svcWH));
+
+        Optional<ShippingService> resolved = service.resolveRule("C001", "GROUND", "US", 10L);
+
+        assertTrue(resolved.isPresent());
+        assertEquals(100L, resolved.get().getId());
+    }
+
+    @Test
+    void resolveRule_legacySingleColumnWarehouse_matchesWhenNoJoinRows() {
+        // Pre-migration rule stored warehouse on ShipViaMapping.warehouseId
+        // directly (no join-table row). The fallback path still matches.
+        ShipViaMapping legacyRule = ShipViaMapping.builder()
+                .id(1L).shipviaCd("GROUND").destType("ANY").serviceId(100L)
+                .warehouseId(10L).build();
+        ShippingService svcLegacy = svc(100L, "UPS", "GROUND", true);
+        when(ruleRepository.findByShipviaCdIgnoreCase("GROUND")).thenReturn(List.of(legacyRule));
+        when(ruleWarehouseRepository.findByRuleIdIn(List.of(1L))).thenReturn(List.of());
+        when(serviceRepository.findById(100L)).thenReturn(Optional.of(svcLegacy));
+
+        Optional<ShippingService> resolved = service.resolveRule(null, "GROUND", "US", 10L);
+
+        assertTrue(resolved.isPresent(),
+                "Legacy single-column warehouse must still resolve when the join table is empty.");
+    }
+
+    @Test
+    void resolveRule_disabledService_returnsEmptyDespiteMatchingRule() {
+        // Rule matches, but its resolved service is disabled → filtered out.
+        ShipViaMapping ruleOk = rule(1L, "GROUND", null, "ANY", null, 100L);
+        ShippingService svcDisabled = svc(100L, "UPS", "GROUND", false);
+        when(ruleRepository.findByShipviaCdIgnoreCase("GROUND")).thenReturn(List.of(ruleOk));
+        when(ruleWarehouseRepository.findByRuleIdIn(List.of(1L))).thenReturn(List.of());
+        when(serviceRepository.findById(100L)).thenReturn(Optional.of(svcDisabled));
+
+        assertTrue(service.resolveRule(null, "GROUND", "US").isEmpty(),
+                "Disabled winning-service must not be returned even if the rule matched.");
+    }
+
+    @Test
+    void resolveRule_regionMatch_scoresBelowCountry() {
+        // Region rule scores 1 (or 5 if warehouse), country rule scores 2 (or 6).
+        // With same client/warehouse, country wins.
+        ShipViaMapping regionRule = rule(1L, "GROUND", null, "REGION", "Europe", 100L);
+        ShipViaMapping countryRule = rule(2L, "GROUND", null, "COUNTRY", "DE", 200L);
+        ShippingService svcCountry = svc(200L, "UPS", "GROUND_DE", true);
+        when(ruleRepository.findByShipviaCdIgnoreCase("GROUND")).thenReturn(List.of(regionRule, countryRule));
+        when(ruleWarehouseRepository.findByRuleIdIn(List.of(1L, 2L))).thenReturn(List.of());
+        when(serviceRepository.findById(200L)).thenReturn(Optional.of(svcCountry));
+
+        Optional<ShippingService> resolved = service.resolveRule(null, "GROUND", "DE");
+
+        assertEquals(200L, resolved.get().getId(),
+                "Country match (score 2) must beat region match (score 1) for the same destination.");
+    }
+
+    @Test
+    void resolveRule_tieBreak_lowerIdWins() {
+        // Two rules at identical specificity (both global/any/any) — the
+        // tie-break is LOWEST id wins. The code uses
+        //   .thenComparing(Comparator.comparing(getId).reversed())
+        // which, feeding into .max(), picks the element with the SMALLEST
+        // natural id (older rules "beat" newer at same specificity).
+        ShipViaMapping older = rule(1L, "GROUND", null, "ANY", null, 100L);
+        ShipViaMapping newer = rule(2L, "GROUND", null, "ANY", null, 200L);
+        ShippingService svcOlder = svc(100L, "UPS", "GROUND_OLDER", true);
+        when(ruleRepository.findByShipviaCdIgnoreCase("GROUND")).thenReturn(List.of(older, newer));
+        when(ruleWarehouseRepository.findByRuleIdIn(List.of(1L, 2L))).thenReturn(List.of());
+        when(serviceRepository.findById(100L)).thenReturn(Optional.of(svcOlder));
+
+        Optional<ShippingService> resolved = service.resolveRule(null, "GROUND", "US");
+
+        assertEquals(100L, resolved.get().getId(),
+                "On score tie, the LOWER-id rule wins (older rule beats newer at same specificity).");
+        // Newer rule's service was never looked up.
+        verify(serviceRepository, never()).findById(200L);
+    }
+
+    // ==================================================================
+    // weightWarnings (private) — surfaced through upsertRule's message.
+    // Exercised by attaching a preset whose max weight exceeds the
+    // service's carrier cap.
+    // ==================================================================
+
+    @Test
+    void upsertRule_presetOverServiceWeightCap_returnsAdvisoryWarning() {
+        // Service caps at 5 lb; preset max is 100 lb → warning should
+        // appear in the success message (advisory, not blocking).
+        ShippingService cappedService = ShippingService.builder()
+                .id(1L).carrier("UPS").serviceCode("PRIORITY").name("UPS Priority")
+                .originCountry("US").enabled(true).maxWeightLb(5).build();
+        PackagePreset heavyPreset = PackagePreset.builder()
+                .id(100L).name("Heavy Crate").kind("CUSTOM").carrier("UPS")
+                .length(java.math.BigDecimal.valueOf(20))
+                .width(java.math.BigDecimal.valueOf(20))
+                .height(java.math.BigDecimal.valueOf(20))
+                .maxWeight(java.math.BigDecimal.valueOf(100))
+                .weightUnit("LB")
+                .build();
+        when(serviceRepository.findById(1L)).thenReturn(Optional.of(cappedService));
+        when(ruleRepository.findByShipviaCdIgnoreCase("HEAVY")).thenReturn(List.of());
+        when(presetRepository.existsById(100L)).thenReturn(true);
+        when(presetRepository.findById(100L)).thenReturn(Optional.of(heavyPreset));
+
+        ApiResponse<ShipViaMapping> resp = service.upsertRule(
+                null, "HEAVY", "C001", "COUNTRY", "US", 1L,
+                List.of(100L), List.of());
+
+        assertEquals("SUCCESS", resp.getStatus(),
+                "Weight advisory is a warning, not a blocker — save still succeeds.");
+        assertTrue(resp.getMessage().contains("Warning"),
+                "Message must include a weight advisory when a preset exceeds the service cap. Got: " + resp.getMessage());
+        assertTrue(resp.getMessage().contains("Heavy Crate"),
+                "Warning must name the offending preset.");
+    }
+
+    @Test
+    void upsertRule_presetUnderServiceWeightCap_noWarning() {
+        ShippingService cappedService = ShippingService.builder()
+                .id(1L).carrier("UPS").serviceCode("PRIORITY").name("UPS Priority")
+                .originCountry("US").enabled(true).maxWeightLb(150).build();
+        PackagePreset lightPreset = PackagePreset.builder()
+                .id(100L).name("Small Box").kind("CUSTOM").carrier("UPS")
+                .length(java.math.BigDecimal.valueOf(10))
+                .width(java.math.BigDecimal.valueOf(10))
+                .height(java.math.BigDecimal.valueOf(10))
+                .maxWeight(java.math.BigDecimal.valueOf(5))
+                .weightUnit("LB")
+                .build();
+        when(serviceRepository.findById(1L)).thenReturn(Optional.of(cappedService));
+        when(ruleRepository.findByShipviaCdIgnoreCase("LIGHT")).thenReturn(List.of());
+        when(presetRepository.existsById(100L)).thenReturn(true);
+        when(presetRepository.findById(100L)).thenReturn(Optional.of(lightPreset));
+
+        ApiResponse<ShipViaMapping> resp = service.upsertRule(
+                null, "LIGHT", "C001", "COUNTRY", "US", 1L,
+                List.of(100L), List.of());
+
+        assertEquals("SUCCESS", resp.getStatus());
+        assertFalse(resp.getMessage().contains("Warning"),
+                "No warning expected when the preset fits within the service cap. Got: " + resp.getMessage());
+    }
+
+    @Test
+    void upsertRule_kilogramPresetConvertedToPoundsForWarning() {
+        // Service caps at 50 lb; preset caps at 30 kg (~66 lb) → warning.
+        ShippingService cappedService = ShippingService.builder()
+                .id(1L).carrier("UPS").serviceCode("PRIORITY").name("UPS Priority")
+                .originCountry("US").enabled(true).maxWeightLb(50).build();
+        PackagePreset kgPreset = PackagePreset.builder()
+                .id(100L).name("30kg Box").kind("CUSTOM").carrier("UPS")
+                .length(java.math.BigDecimal.valueOf(30))
+                .width(java.math.BigDecimal.valueOf(30))
+                .height(java.math.BigDecimal.valueOf(30))
+                .maxWeight(java.math.BigDecimal.valueOf(30))
+                .weightUnit("KG")
+                .build();
+        when(serviceRepository.findById(1L)).thenReturn(Optional.of(cappedService));
+        when(ruleRepository.findByShipviaCdIgnoreCase("KG")).thenReturn(List.of());
+        when(presetRepository.existsById(100L)).thenReturn(true);
+        when(presetRepository.findById(100L)).thenReturn(Optional.of(kgPreset));
+
+        ApiResponse<ShipViaMapping> resp = service.upsertRule(
+                null, "KG", "C001", "COUNTRY", "US", 1L,
+                List.of(100L), List.of());
+
+        assertEquals("SUCCESS", resp.getStatus());
+        assertTrue(resp.getMessage().contains("Warning"),
+                "KG preset must be converted to LB (30kg ≈ 66lb > 50 lb cap) and warn. Got: " + resp.getMessage());
     }
 }
