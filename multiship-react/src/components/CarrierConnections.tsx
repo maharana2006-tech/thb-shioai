@@ -963,6 +963,7 @@ export default function CarrierConnections({
                           <option value="ups">UPS</option>
                           <option value="fedex">FedEx</option>
                           <option value="usps">USPS</option>
+                          <option value="dhl">DHL</option>
                         </Select>
                       </div>
                       <div>
