@@ -245,4 +245,154 @@ class CustomFieldServiceTest {
         v.setFieldValue(value);
         return v;
     }
+
+    /* -------- Sprint 53 gap-fill: list + delete + upsert edge cases -------- */
+
+    @Test
+    void listAllForTenant_delegatesToRepoFindAllForTenant() {
+        // No scope enforcer wired → clamp is identity, normalise passes through.
+        when(defRepo.findAllForTenant("ARHDEV")).thenReturn(List.of(
+                def("notes", FieldType.TEXT, "ARHDEV"),
+                def("priority", FieldType.SELECT, "ARHDEV")));
+
+        List<CustomFieldDefinition> result = service.listAllForTenant("ARHDEV");
+
+        assertEquals(2, result.size());
+        verify(defRepo, times(1)).findAllForTenant("ARHDEV");
+        verify(defRepo, never()).findApplicable(any());
+    }
+
+    @Test
+    void listApplicable_delegatesToRepoFindApplicable() {
+        when(defRepo.findApplicable("ARHDEV")).thenReturn(List.of(
+                def("active-only", FieldType.TEXT, "ARHDEV")));
+
+        List<CustomFieldDefinition> result = service.listApplicable("ARHDEV");
+
+        assertEquals(1, result.size());
+        verify(defRepo, times(1)).findApplicable("ARHDEV");
+        verify(defRepo, never()).findAllForTenant(any());
+    }
+
+    @Test
+    void saveDefinition_updatePath_preservesCreatedAt_advancesUpdatedAt() throws Exception {
+        // Existing id → not a create; createdAt is not touched, only updatedAt.
+        CustomFieldDefinition d = def("notes", FieldType.TEXT, "ARHDEV");
+        d.setId(42L);
+        java.time.LocalDateTime original = java.time.LocalDateTime.of(2026, 1, 1, 0, 0);
+        d.setCreatedAt(original);
+
+        ArgumentCaptor<CustomFieldDefinition> cap = ArgumentCaptor.forClass(CustomFieldDefinition.class);
+        when(defRepo.save(cap.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        // Give updatedAt clock a tick so isAfter is deterministic.
+        Thread.sleep(2);
+        service.saveDefinition(d);
+
+        assertEquals(original, cap.getValue().getCreatedAt(),
+                "Update path must NOT overwrite createdAt.");
+        assertTrue(cap.getValue().getUpdatedAt().isAfter(original),
+                "updatedAt must advance beyond the createdAt baseline.");
+    }
+
+    @Test
+    void deleteDefinition_existingId_delegatesToRepoDelete() {
+        CustomFieldDefinition existing = def("notes", FieldType.TEXT, "ARHDEV");
+        existing.setId(42L);
+        when(defRepo.findById(42L)).thenReturn(Optional.of(existing));
+
+        service.deleteDefinition(42L);
+
+        verify(defRepo, times(1)).delete(existing);
+    }
+
+    @Test
+    void deleteDefinition_unknownId_isNoop() {
+        when(defRepo.findById(9999L)).thenReturn(Optional.empty());
+
+        service.deleteDefinition(9999L);
+
+        verify(defRepo, never()).delete(any(CustomFieldDefinition.class));
+    }
+
+    @Test
+    void deleteDefinition_platformDefinition_isAllowedForScopedUser() throws Exception {
+        // Platform-owned def (tenantId=null) — the filter skips
+        // requireTenantMatch, so a scoped USER can drive the flow. In
+        // production the controller SpEL (hasRole('ADMIN')) prevents this;
+        // here we exercise the service-layer contract.
+        putScopedUserAsInBaseTests();
+        CustomFieldServiceImpl scoped = withEnforcer(true);
+        CustomFieldDefinition platform = new CustomFieldDefinition();
+        platform.setId(99L);
+        platform.setTenantId(null);
+        platform.setFieldKey("k");
+        platform.setLabel("K");
+        platform.setFieldType(FieldType.TEXT);
+        when(defRepo.findById(99L)).thenReturn(Optional.of(platform));
+
+        scoped.deleteDefinition(99L);
+
+        verify(defRepo, times(1)).delete(platform);
+        cleanContext();
+    }
+
+    @Test
+    void deleteDefinition_foreignTenant_throwsAccessDenied_beforeRepoDelete() throws Exception {
+        putScopedUserAsInBaseTests();
+        CustomFieldServiceImpl scoped = withEnforcer(true);
+        CustomFieldDefinition foreign = new CustomFieldDefinition();
+        foreign.setId(99L);
+        foreign.setTenantId("OTHER");
+        foreign.setFieldKey("k");
+        foreign.setLabel("K");
+        foreign.setFieldType(FieldType.TEXT);
+        when(defRepo.findById(99L)).thenReturn(Optional.of(foreign));
+
+        assertThrows(org.springframework.security.access.AccessDeniedException.class,
+                () -> scoped.deleteDefinition(99L));
+
+        verify(defRepo, never()).delete(any(CustomFieldDefinition.class));
+        cleanContext();
+    }
+
+    @Test
+    void upsertValues_emptyMap_returnsLoadValues_withoutTouchingDefinitions() {
+        // Documented short-circuit: empty/null map skips all validation +
+        // definition lookup, just returns whatever's already stored.
+        when(valueRepo.findByOrderNo(100)).thenReturn(List.of(
+                valueRow(100, "existing", "kept")));
+
+        Map<String, String> result = service.upsertValues(100, "ARHDEV", Map.of());
+
+        assertEquals(1, result.size());
+        assertEquals("kept", result.get("existing"));
+        verify(defRepo, never()).findApplicable(any());
+        verify(valueRepo, never()).save(any());
+    }
+
+    /** Helper: put a scoped USER (ACME) into the SecurityContext. */
+    private void putScopedUserAsInBaseTests() {
+        var authorities = List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"));
+        var principal = org.springframework.security.core.userdetails.User
+                .withUsername("acmeuser").password("").authorities(authorities).build();
+        var token = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                principal, null, authorities);
+        token.setDetails(new com.multiship.backend.config.JwtAuthenticationFilter.AuthDetails("ACME"));
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(token);
+    }
+
+    /** Helper: build a service instance with the tenantScope enforcer wired. */
+    private CustomFieldServiceImpl withEnforcer(boolean scopeEnforcementEnabled) throws Exception {
+        CustomFieldServiceImpl scoped = new CustomFieldServiceImpl(defRepo, valueRepo);
+        java.lang.reflect.Field f = CustomFieldServiceImpl.class.getDeclaredField("tenantScope");
+        f.setAccessible(true);
+        f.set(scoped, new TenantScopeEnforcer(
+                new com.multiship.backend.config.AccessScopePolicy(scopeEnforcementEnabled)));
+        return scoped;
+    }
+
+    private void cleanContext() {
+        org.springframework.security.core.context.SecurityContextHolder.clearContext();
+    }
 }
