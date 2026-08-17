@@ -125,10 +125,13 @@ export default function Dashboard() {
    *  spam the backend even if the AbortController cancels the old
    *  request client-side. */
   const [refreshCooldown, setRefreshCooldown] = useState(false)
-  /** Fix F4/F10 — tick every 30s so the derived `isStale` flag re-renders
-   *  even when no fetch has completed. Without this, a background-failing
-   *  poll leaves the "Updated 45s ago" text frozen. */
-  const [staleTick, setStaleTick] = useState(0)
+  /** Fix F4/F10 — `now` is stored in state and re-sampled every 30s by
+   *  the staleTicker effect below. Reading Date.now() during render is
+   *  impure (react-hooks/purity lint rule); reading it inside a
+   *  setInterval that stores into state is fine. isStale becomes a
+   *  pure function of updatedAt + now. */
+  const [now, setNow] = useState<number>(() => Date.now())
+  const isStale = updatedAt != null && now - updatedAt > STALE_THRESHOLD_MS
   const timer = useRef<number | null>(null)
   const staleTicker = useRef<number | null>(null)
   // Sprint 49 Tier 4 Fix 3 — in-flight guard + AbortController.
@@ -188,11 +191,13 @@ export default function Dashboard() {
     mountedRef.current = true
     load()
     timer.current = window.setInterval(load, POLL_MS)
-    // Fix F4/F10 — re-render every 30s so the derived `isStale` flag and
-    // "Updated N ago" badge stay accurate even when no fetch completes.
-    // Without this, a background-failing poll leaves the badge frozen.
+    // Fix F4/F10 — re-sample Date.now() every 30s so the derived `isStale`
+    // flag and "Updated N ago" badge stay accurate even when no fetch
+    // completes. Without this, a background-failing poll leaves the badge
+    // frozen. Reading Date.now() here (side-effect) is lint-safe;
+    // reading during render is not.
     staleTicker.current = window.setInterval(
-      () => { if (mountedRef.current) setStaleTick((n) => n + 1) },
+      () => { if (mountedRef.current) setNow(Date.now()) },
       30_000,
     )
 
@@ -354,9 +359,6 @@ export default function Dashboard() {
               reflected the MOST RECENT attempt; if load-2/3/4 all failed
               after load-1 succeeded, the badge stayed silent. */}
           {(() => {
-            const ageMs = updatedAt ? Date.now() - updatedAt : Infinity
-            const isStale = updatedAt != null && ageMs > STALE_THRESHOLD_MS
-            void staleTick  // re-render dependency (checked every 30s)
             if (loadError) {
               return (
                 <span
@@ -368,14 +370,14 @@ export default function Dashboard() {
                 </span>
               )
             }
-            if (isStale) {
+            if (isStale && updatedAt != null) {
               return (
                 <span
-                  title={`Last successful refresh was ${relTime(new Date(updatedAt!).toISOString())}. Automatic polling may be blocked.`}
+                  title={`Last successful refresh was ${relTime(new Date(updatedAt).toISOString())}. Automatic polling may be blocked.`}
                   className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200"
                 >
                   <FiAlertTriangle className="h-3 w-3" />
-                  Stale · {relTime(new Date(updatedAt!).toISOString())}
+                  Stale · {relTime(new Date(updatedAt).toISOString())}
                 </span>
               )
             }
