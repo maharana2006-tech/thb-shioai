@@ -328,6 +328,54 @@ describe('PackagesPage — delete', () => {
       expect(notifyApiErrorMock).toHaveBeenCalledWith(expect.any(Error), 'Failed to delete the package.'),
     )
   })
+
+  // ===== Fix #298 — in-use check BEFORE the confirm =====
+
+  it('in-use package: delete BLOCKED with notify.error, no confirm, no API call', async () => {
+    listPresetsMock.mockResolvedValue([customPreset(7, 'In Use')])
+    // Seed two client allowlist rows referencing this preset.
+    packagesUsageMock.mockResolvedValue({
+      data: [
+        { presetId: 7, clientCode: 'ACME' },
+        { presetId: 7, clientCode: 'BETA' },
+      ],
+    })
+    const Page = await loadPage()
+    renderPage(Page)
+
+    await waitFor(() => expect(screen.getByText('In Use')).toBeInTheDocument())
+    await act(async () => {
+      await userEvent.click(screen.getByLabelText('Delete In Use'))
+    })
+
+    // notify.error fired with the blocking message + client names.
+    await waitFor(() => expect(notifyErrorMock).toHaveBeenCalled())
+    const msg = String(notifyErrorMock.mock.calls[0]?.[0] ?? '')
+    expect(msg).toMatch(/Cannot delete/)
+    expect(msg).toMatch(/ACME/)
+    expect(msg).toMatch(/BETA/)
+    // Confirm was NOT shown; delete was NOT called.
+    expect(notifyConfirmMock).not.toHaveBeenCalled()
+    expect(deletePresetMock).not.toHaveBeenCalled()
+  })
+
+  it('unused package: delete proceeds via the normal confirm flow', async () => {
+    listPresetsMock.mockResolvedValue([customPreset(7, 'Unused')])
+    packagesUsageMock.mockResolvedValue({ data: [] })  // no assignments
+    notifyConfirmMock.mockResolvedValue(true)
+    deletePresetMock.mockResolvedValue({ data: null })
+    const Page = await loadPage()
+    renderPage(Page)
+
+    await waitFor(() => expect(screen.getByText('Unused')).toBeInTheDocument())
+    await act(async () => {
+      await userEvent.click(screen.getByLabelText('Delete Unused'))
+    })
+
+    // No blocking error; confirm + delete + success fired.
+    expect(notifyErrorMock).not.toHaveBeenCalled()
+    await waitFor(() => expect(deletePresetMock).toHaveBeenCalledWith(7))
+  })
 })
 
 // ===================== syncCarrierPackaging =====================
