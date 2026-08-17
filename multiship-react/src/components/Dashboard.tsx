@@ -211,6 +211,11 @@ export default function Dashboard() {
           window.clearInterval(timer.current)
           timer.current = null
         }
+        // Fix #306 — also cancel any in-flight fetch so it doesn't
+        // resolve while the tab is hidden and burn network. Prior UI
+        // cleared the interval but let the pending request complete,
+        // wasting response bytes + a state update the user won't see.
+        currentAbortRef.current?.abort()
         return
       }
       load()
