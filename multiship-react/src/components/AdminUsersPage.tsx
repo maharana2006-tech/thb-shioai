@@ -28,6 +28,11 @@ export default function AdminUsersPage() {
   const [activeOnly, setActiveOnly] = useState(false)
   const [assignFor, setAssignFor] = useState<AdminUser | null>(null)
   const [auditFor, setAuditFor] = useState<AdminUser | null>(null)
+  // Fix #295 — expose page + size controls. Prior FE used the backend
+  // default (page=0, size=50) implicitly, silently truncating any org
+  // with 51+ users. Now operator can page through OR increase size.
+  const [page, setPage] = useState(0)
+  const [size, setSize] = useState(50)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -37,6 +42,8 @@ export default function AdminUsersPage() {
           search: search || undefined,
           role: roleFilter || undefined,
           activeOnly: activeOnly || undefined,
+          page,
+          size,
         }),
         adminUserService.recentAudit(50),
       ])
@@ -47,7 +54,14 @@ export default function AdminUsersPage() {
     } finally {
       setLoading(false)
     }
-  }, [search, roleFilter, activeOnly])
+  }, [search, roleFilter, activeOnly, page, size])
+
+  // Snap back to page 0 whenever a filter or page-size changes so the
+  // operator doesn't land on an empty page after narrowing the result set.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paging on filter change; user-input-driven, not derivable at render
+    setPage(0)
+  }, [search, roleFilter, activeOnly, size])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount / filter change; load() sets loading + result state
   useEffect(() => { void load() }, [load])
@@ -271,6 +285,48 @@ export default function AdminUsersPage() {
             })}
           </tbody>
         </table>
+        {/* Fix #295 — pagination controls. When the returned row count
+            equals the page size, there may be more; the "next" button
+            is left enabled so operator can try. Empty next page snaps
+            them back via the useEffect above (page 0 on reset). */}
+        <div className="flex items-center justify-between border-t border-slate-100 px-3 py-2 text-[12px] text-slate-600">
+          <span className="tabular-nums">
+            {users.length === 0
+              ? 'No rows'
+              : `Showing ${users.length} row${users.length === 1 ? '' : 's'} · page ${page + 1}${users.length === size ? ' (more may exist)' : ''}`}
+          </span>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5">
+              <span>Page size</span>
+              <select
+                value={size}
+                onChange={(e) => setSize(Number(e.target.value))}
+                className="rounded-md border border-slate-300 px-1.5 py-0.5 text-[12px]"
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={200}>200</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0 || loading}
+              className="rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              onClick={() => setPage((p) => p + 1)}
+              disabled={users.length < size || loading}
+              className="rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white">
