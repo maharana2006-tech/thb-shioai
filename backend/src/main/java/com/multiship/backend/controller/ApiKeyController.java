@@ -91,10 +91,14 @@ public class ApiKeyController {
         if (issued.isEmpty()) {
             ApiKey existing = apiKeyRepository.findById(id).orElse(null);
             int code = existing == null ? 404 : 409;
+            // Audit B5 — canonical error codes; was ORDER_NOT_FOUND (copy-paste
+            // from a sibling controller) + generic VALIDATION_ERROR.
             return ResponseEntity.status(code).body(ApiResponse.<ApiKeyResponse>builder()
                     .status("ERROR").code(code).timestamp(LocalDateTime.now())
                     .message(existing == null ? "API key not found." : "Cannot rotate a revoked key — issue a new one.")
-                    .errorCode(existing == null ? ErrorCode.ORDER_NOT_FOUND.name() : ErrorCode.VALIDATION_ERROR.name())
+                    .errorCode(existing == null
+                            ? ErrorCode.API_KEY_NOT_FOUND.name()
+                            : ErrorCode.API_KEY_ALREADY_REVOKED.name())
                     .build());
         }
         ApiKeyResponse body = ApiKeyResponse.of(issued.get().record(),
@@ -114,10 +118,13 @@ public class ApiKeyController {
         if (!revoked) {
             ApiKey existing = apiKeyRepository.findById(id).orElse(null);
             int code = existing == null ? 404 : 409;
+            // Audit B5 — canonical error codes; see rotate() above.
             return ResponseEntity.status(code).body(ApiResponse.<Void>builder()
                     .status("ERROR").code(code).timestamp(LocalDateTime.now())
                     .message(existing == null ? "API key not found." : "API key is already revoked.")
-                    .errorCode(existing == null ? ErrorCode.ORDER_NOT_FOUND.name() : ErrorCode.VALIDATION_ERROR.name())
+                    .errorCode(existing == null
+                            ? ErrorCode.API_KEY_NOT_FOUND.name()
+                            : ErrorCode.API_KEY_ALREADY_REVOKED.name())
                     .build());
         }
         return ResponseEntity.ok(ApiResponse.<Void>builder()

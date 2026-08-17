@@ -19,6 +19,10 @@ public enum ErrorCode {
     // ===== Sprint 50 Tier 0.5 PR C — API key lifecycle =====
     API_KEY_EXPIRED,
     API_KEY_ROTATED,
+    /** Audit A/B5 — canonical missing-key code (was ORDER_NOT_FOUND copy-paste). */
+    API_KEY_NOT_FOUND,
+    /** Audit A/B5 — rotate/revoke refused on a key that is already revoked. */
+    API_KEY_ALREADY_REVOKED,
 
     // ===== Sprint 50 Tier 0.5 PR D — invite-only signup + rate limit =====
     /** Public signup is disabled — the operator must use an invite. */

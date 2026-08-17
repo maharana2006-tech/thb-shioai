@@ -131,7 +131,8 @@ class ApiKeyControllerTest {
         ResponseEntity<ApiResponse<ApiKeyResponse>> resp = controller.rotate(42L, admin);
 
         assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
-        assertEquals(ErrorCode.ORDER_NOT_FOUND.name(), resp.getBody().getErrorCode());
+        // Audit B5 — canonical missing-key code (was ORDER_NOT_FOUND copy-paste).
+        assertEquals(ErrorCode.API_KEY_NOT_FOUND.name(), resp.getBody().getErrorCode());
     }
 
     @Test
@@ -143,7 +144,9 @@ class ApiKeyControllerTest {
         ResponseEntity<ApiResponse<ApiKeyResponse>> resp = controller.rotate(42L, admin);
 
         assertEquals(HttpStatus.CONFLICT, resp.getStatusCode());
-        assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getBody().getErrorCode());
+        // Audit B5 — dedicated code so callers can differentiate revoked
+        // from generic 409 validation errors.
+        assertEquals(ErrorCode.API_KEY_ALREADY_REVOKED.name(), resp.getBody().getErrorCode());
     }
 
     @Test
@@ -170,7 +173,8 @@ class ApiKeyControllerTest {
         ResponseEntity<ApiResponse<Void>> resp = controller.revoke(42L);
 
         assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
-        assertEquals(ErrorCode.ORDER_NOT_FOUND.name(), resp.getBody().getErrorCode());
+        // Audit B5 — canonical missing-key code.
+        assertEquals(ErrorCode.API_KEY_NOT_FOUND.name(), resp.getBody().getErrorCode());
     }
 
     @Test
@@ -182,7 +186,8 @@ class ApiKeyControllerTest {
         ResponseEntity<ApiResponse<Void>> resp = controller.revoke(42L);
 
         assertEquals(HttpStatus.CONFLICT, resp.getStatusCode());
-        assertEquals(ErrorCode.VALIDATION_ERROR.name(), resp.getBody().getErrorCode());
+        // Audit B5 — dedicated already-revoked code.
+        assertEquals(ErrorCode.API_KEY_ALREADY_REVOKED.name(), resp.getBody().getErrorCode());
     }
 
     @Test
