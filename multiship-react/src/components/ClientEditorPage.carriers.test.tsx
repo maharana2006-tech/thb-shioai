@@ -592,31 +592,38 @@ describe('CarrierDraftStep — positive cases', () => {
     expect(screen.getByText(/Third-party account #/i)).toBeTruthy()
   })
 
-  it('edit mode hydrates existing accounts via clientService.listClientAccounts', async () => {
-    listClientAccounts.mockResolvedValue([
-      {
-        id: 1, accountNumber: 'UPS-EDIT-1', carrierCode: 'UPS',
-        accountName: 'Primary', customerNo: 'ACME', environment: 'PRODUCTION',
-        isDefault: false, clientDefault: true, active: true, complete: true,
-        clientIdPreview: 'ups...', verified: true, lastVerifiedAt: null,
-        labelsGenerated: 12, lastUsedAt: null,
-        createdAt: null, updatedAt: null,
-      },
-    ])
+  it('edit mode hydrates existing accounts from getClient.carrierAccounts (no separate list call)', async () => {
+    // Prior behavior fired both getClient AND listClientAccounts in
+    // parallel; non-deterministic resolution order meant the second-to-
+    // resolve overwrote the first, occasionally shadowing fresh
+    // getClient data with a stale list cache. Fix: rely on getClient
+    // alone in edit mode; listClientAccounts is no longer called.
     getClient.mockResolvedValue({
       data: {
         id: 1, clientCode: 'ACME', name: 'Acme',
         email: null, phone: null,
         shipFrom: null, returnAddress: null, returnSameAsShipFrom: true,
+        carrierAccounts: [
+          {
+            id: 1, accountNumber: 'UPS-EDIT-1', carrierCode: 'UPS',
+            accountName: 'Primary', customerNo: 'ACME', environment: 'PRODUCTION',
+            isDefault: false, clientDefault: true, active: true, complete: true,
+            clientIdPreview: 'ups...', verified: true, lastVerifiedAt: null,
+            labelsGenerated: 12, lastUsedAt: null,
+            createdAt: null, updatedAt: null,
+          },
+        ],
       },
     })
     const Page = await loadPage()
     renderPage(Page, '/settings/clients/ACME')
 
-    // Wait for the client to load; the tab rail will show step pills.
+    // Wait for the client to load; getClient is the single source of truth.
     await waitFor(() => {
-      expect(listClientAccounts).toHaveBeenCalledWith('ACME')
+      expect(getClient).toHaveBeenCalledWith('ACME')
     })
+    // listClientAccounts MUST NOT be called in edit mode any more.
+    expect(listClientAccounts).not.toHaveBeenCalled()
   })
 })
 
