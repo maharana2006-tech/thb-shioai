@@ -339,11 +339,29 @@ export default function ShippingServiceMappingPage() {
    * click-outside or Escape, so opening the Ships-to zone modal doesn't
    * eat the add-row. Also clears the draft so reopening starts blank.
    */
-  const closeAddForm = useCallback(() => {
+  /**
+   * Fix F15 — snapshot the blank-rule state so we can detect dirty
+   * edits to the newRule form and confirm before discarding. Prior
+   * behavior silently discarded a 20-field entry on X / Cancel / popout-close.
+   * useMemo empty deps: blankRule is fixed for the page's lifetime.
+   */
+  const blankRuleSnapshot = useMemo(
+    () => JSON.stringify({ ...blankRule, destCodes: [] }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+  const closeAddForm = useCallback((opts?: { skipGuard?: boolean }) => {
+    if (!opts?.skipGuard) {
+      const currentSnapshot = JSON.stringify(newRule)
+      if (currentSnapshot !== blankRuleSnapshot
+          && !window.confirm('Discard the in-progress new mapping?')) {
+        return
+      }
+    }
     setAdding(false)
     setPopout(false)
     setNewRule({ ...blankRule, destCodes: [] })
-  }, [])
+  }, [newRule, blankRuleSnapshot])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -615,7 +633,8 @@ export default function ShippingServiceMappingPage() {
       })
       notify.success('Mapping added.')
       setNewRule({ ...blankRule, destCodes: [], warehouseIds: [], presetIds: [] })
-      closeAddForm()
+      // skipGuard: post-save clean-up, no need to prompt for discard.
+      closeAddForm({ skipGuard: true })
       void load()
     } catch (e) {
       notify.apiError(e, 'Failed to save the mapping.')
