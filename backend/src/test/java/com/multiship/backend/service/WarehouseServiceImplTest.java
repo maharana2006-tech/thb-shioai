@@ -52,8 +52,16 @@ class WarehouseServiceImplTest {
         auditService = mock(AuditService.class);
         tenantScope = mock(TenantScopeEnforcer.class);
 
+        // Sprint 55 audit #287 — new ShipViaMappingRepository dep for
+        // scalar warehouse_id cleanup on delete. Mocked with empty
+        // findByWarehouseId() so the existing tests (which don't cover
+        // legacy-rule cleanup) still pass.
+        var shipViaMappingRepo = mock(com.multiship.backend.repository.ShipViaMappingRepository.class);
+        org.mockito.Mockito.when(shipViaMappingRepo.findByWarehouseId(org.mockito.ArgumentMatchers.anyLong()))
+                .thenReturn(java.util.Collections.emptyList());
+
         service = new WarehouseServiceImpl(
-                warehouseRepo, clientWarehouseRepo, clientRepo, auditService);
+                warehouseRepo, clientWarehouseRepo, clientRepo, shipViaMappingRepo, auditService);
         ReflectionTestUtils.setField(service, "tenantScope", tenantScope);
     }
 
