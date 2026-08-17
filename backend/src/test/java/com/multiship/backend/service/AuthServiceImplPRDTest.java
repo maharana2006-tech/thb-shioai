@@ -250,6 +250,34 @@ class AuthServiceImplPRDTest {
     }
 
     @Test
+    void acceptInviteReturns400WhenClientDeletedBetweenMintAndAccept() {
+        // Audit B4 — admin minted the invite, then deleted the target client
+        // before invitee got around to accepting. Pre-fix, the user was
+        // created pointing at a phantom clientCode; nothing surfaced the
+        // dangling reference until the user hit a scoped endpoint and got
+        // 404s. Now the accept endpoint surfaces it up-front.
+        UserInvite invite = new UserInvite();
+        invite.setEmail("late@example.com");
+        invite.setClientCode("GHOST");
+        invite.setRole("TENANT");
+        invite.setExpiresAt(LocalDateTime.now().plusDays(1));
+        when(inviteService.check(anyString())).thenReturn(
+                new UserInviteService.InviteCheckResult(UserInviteService.InviteStatus.VALID, invite));
+        // Client deleted between mint and accept.
+        when(clientRepository.existsByClientCodeIgnoreCase("GHOST")).thenReturn(false);
+
+        AcceptInviteRequest req = new AcceptInviteRequest();
+        req.setToken("tok"); req.setUsername("invitee"); req.setPassword("pw123456"); req.setFullName("Invitee");
+        ResponseEntity<MessageResponse> resp = service.acceptInvite(req);
+
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals(ErrorCode.CLIENT_NOT_FOUND.name(), resp.getBody().getErrorCode());
+        verify(userRepository, never()).save(any(User.class));
+        verify(inviteService, never()).consume(any());
+    }
+
+    @Test
     void acceptInviteCreatesUserWithInviteScopeVerified() {
         UserInvite invite = new UserInvite();
         invite.setEmail("inv@example.com");

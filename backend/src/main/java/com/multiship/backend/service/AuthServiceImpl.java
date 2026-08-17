@@ -236,6 +236,20 @@ public class AuthServiceImpl implements AuthService {
         }
 
         UserInvite invite = check.invite();
+        // Audit B4 — verify the invite's client still exists at accept time.
+        // Pre-fix, if admin deleted the client between mint + accept, invite
+        // would create a User pointing at a phantom clientCode. That user
+        // would then log in, TenantScopeEnforcer would honor the phantom
+        // clientCode, and every /clients/{that-code}/* query would 404 —
+        // confusing without any actionable signal from the accept flow.
+        // Now we surface it up front with the CLIENT_NOT_FOUND error the
+        // FE already renders friendly text for.
+        if (!clientRepository.existsByClientCodeIgnoreCase(invite.getClientCode())) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new MessageResponse(
+                    "The client this invite was for (" + invite.getClientCode()
+                            + ") no longer exists. Ask the admin for a new invite.",
+                    ErrorCode.CLIENT_NOT_FOUND));
+        }
         if (userRepository.existsByUsername(request.getUsername())) {
             String errorMsg = messageSource.getMessage("error.username.taken", null, LocaleContextHolder.getLocale());
             return ResponseEntity.status(HttpStatus.CONFLICT).body(new MessageResponse(errorMsg, ErrorCode.USERNAME_TAKEN));

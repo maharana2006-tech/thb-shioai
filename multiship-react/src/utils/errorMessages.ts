@@ -101,6 +101,15 @@ export const errorMessages: Readonly<Record<string, FriendlyError>> = {
   },
 
   // ===== Invites (Sprint 50 Tier 0.5 D) =====
+  /** Audit I7 — distinguish typo / mangled URL (unknown token) from
+   *  expired (410) and consumed (409). Pre-fix, all three fell to the
+   *  generic default so invitees couldn't tell if their URL was broken
+   *  vs. genuinely stale. */
+  INVITE_NOT_FOUND: {
+    title: 'Invite link not recognised',
+    message:
+      'The invite URL looks incomplete or wrong. Check that you pasted the full link from the email — or ask an admin to resend the invite.',
+  },
   INVITE_EXPIRED: {
     title: 'Invite expired',
     message:

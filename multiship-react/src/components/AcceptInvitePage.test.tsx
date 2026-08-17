@@ -123,8 +123,10 @@ describe('AcceptInvitePage', () => {
     renderPage(Page, 'bogus')
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
-    // Falls through to the server message (INVITE_NOT_FOUND has no friendly map entry).
-    expect(screen.getByRole('alert').textContent).toMatch(/Invite not found/i)
+    // Audit I7 — INVITE_NOT_FOUND now has a dedicated friendly-error entry
+    // (was falling through to the generic default which masked typo vs
+    // stale). The banner title should be the mapped copy.
+    expect(screen.getByRole('alert').textContent).toMatch(/Invite link not recognised/i)
     // Back-to-login CTA is present and points at /login.
     expect(screen.getByRole('link', { name: /Back to login/i }).getAttribute('href')).toBe('/login')
     // Form is not rendered.

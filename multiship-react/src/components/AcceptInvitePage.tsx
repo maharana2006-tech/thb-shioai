@@ -76,6 +76,24 @@ function initialLoadState(token: string | undefined): LoadState {
   return { status: 'loading' }
 }
 
+/**
+ * Audit I2 — format the invite's expiresAt into "in Nd Nh" + local
+ * datetime. Falls back to the raw ISO string if parsing fails so the
+ * invitee still sees something rather than "Invalid Date".
+ */
+function formatInviteExpiry(iso: string): string {
+  if (!iso) return 'unknown'
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return iso
+  const localised = at.toLocaleString()
+  const msLeft = at.getTime() - Date.now()
+  if (msLeft <= 0) return `${localised} (expired)`
+  const days = Math.floor(msLeft / 86_400_000)
+  const hours = Math.floor((msLeft % 86_400_000) / 3_600_000)
+  const rel = days >= 1 ? `in ${days}d ${hours}h` : `in ${hours}h`
+  return `${localised} (${rel})`
+}
+
 export default function AcceptInvitePage() {
   const { token } = useParams<{ token: string }>()
   const navigate = useNavigate()
@@ -188,6 +206,15 @@ export default function AcceptInvitePage() {
             </p>
             <p className="mt-1 text-[11px] text-slate-500">
               Invite email: {load.preview.email}
+            </p>
+            {/* Audit I2 — surface expiresAt so the invitee knows how long
+                they have. Pre-fix, the preview response carried expiresAt
+                but the page never rendered it; invitees didn't know if
+                they had 5 minutes or 5 days to act. Formatted per user's
+                locale (no timezone suffix on the backend value → assumed
+                server-local, close enough for a 7-day window). */}
+            <p className="mt-1 text-[11px] text-slate-500">
+              Expires: {formatInviteExpiry(load.preview.expiresAt)}
             </p>
           </div>
 
