@@ -1562,6 +1562,13 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         req.setCarrierCode(leader.getCarrierCode());
         req.setAccountNumber(leader.getAccountNumber());
+        // Sprint 51 fix #2 — carry the row's warehouse so the manual path
+        // resolves that warehouse's address as ship-from (and thus the
+        // origin country that drives the international/customs decision).
+        // When blank, processGroup fills the sender from the client's
+        // configured ship-from instead of letting it fall back to the
+        // platform default shipper country.
+        req.setWarehouseCode(leader.getWarehouseCode());
         req.setWeight(leader.getWeight());
         req.setWeightUnit(leader.getWeightUnit());
         req.setCurrency(leader.getCurrency());
@@ -2207,6 +2214,42 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         try {
             com.multiship.backend.dto.ManualShipmentRequest req = toManualShipmentRequest(group);
+
+            // Sprint 51 fix #2 — establish the ship-from origin from the
+            // client's configured address. Without a sender the manual path
+            // falls back to the PLATFORM default shipper country, which makes
+            // the international/customs decision wrong for every bulk row (a
+            // US client's US-domestic parcel looked international, and a
+            // genuine cross-border shipment looked domestic — so no customs
+            // block was persisted and none was sent to the carrier). A named
+            // warehouse still wins: the manual path overrides `from` with the
+            // warehouse address when warehouseCode is set.
+            applyClientOrigin(req, leader.getClientCode());
+
+            // Sprint 51 fix #1 — when the CSV leaves the bill-to account blank,
+            // resolve it the way the operator-facing flow would instead of
+            // hard-failing. The single-order cascade returns CHOOSE_ACCOUNT and
+            // lets the operator pick; the interactive manual path deliberately
+            // demands an explicit account for that picker. Bulk has no picker,
+            // so we resolve the client's default here — the same account the
+            // picker would pre-select — and fall back to the platform (house)
+            // account when the client has none, mirroring the cascade's
+            // SCENARIO_DEFAULT. Only genuine ambiguity (several client accounts,
+            // none flagged default) still fails, now with an actionable message.
+            if (!StringUtils.hasText(req.getAccountNumber())) {
+                BulkAccountPick pick = resolveBulkAccount(leader.getClientCode(), leader.getCarrierCode());
+                if (pick.error != null) {
+                    List<String> ce = new ArrayList<>(leader.getErrors() == null ? List.of() : leader.getErrors());
+                    ce.add(pick.error);
+                    leader.setErrors(ce);
+                    for (int i = 1; i < group.size(); i++) {
+                        group.get(i).setErrors(List.of("orderRef leader failed validation"));
+                    }
+                    return new GroupOutcome(0, group.size(), 0);
+                }
+                req.setAccountNumber(pick.accountNumber);
+            }
+
             ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
                     carrierService.generateManualLabel(req, null);
             com.multiship.backend.dto.LabelGenerationResponse data =
@@ -2263,6 +2306,98 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     /** Sprint 50 Tier 1 finding #8 — return shape for a per-group commit worker. */
     private record GroupOutcome(int valid, int invalid, int generated) {}
+
+    /**
+     * Sprint 51 fix #2 — set the ship-from origin on a bulk request from the
+     * client's configured ship-from address, so the international/customs
+     * determination runs against the real origin instead of the platform
+     * default shipper country. No-op when a sender is already present, the
+     * client is unknown, or the client has no usable origin country (leaving
+     * the existing platform-default behaviour untouched). A named warehouse
+     * on the row still wins — the manual path resolves and overrides `from`
+     * with the warehouse address downstream.
+     */
+    private void applyClientOrigin(com.multiship.backend.dto.ManualShipmentRequest req, String clientCode) {
+        if (req.getSender() != null || !StringUtils.hasText(clientCode) || clientRepository == null) return;
+        Client client = clientRepository.findByClientCodeIgnoreCase(clientCode.trim()).orElse(null);
+        if (client == null) return;
+        com.multiship.backend.model.Address sf = client.getShipFrom();
+        String country = sf != null && StringUtils.hasText(sf.getCountry())
+                ? sf.getCountry() : client.getDefaultOriginCountry();
+        if (!StringUtils.hasText(country)) return; // nothing better than the platform default
+        com.multiship.backend.dto.ManualShipmentRequest.Address sender =
+                new com.multiship.backend.dto.ManualShipmentRequest.Address();
+        sender.setCountryCode(country.trim());
+        if (sf != null) {
+            sender.setName(sf.getName());
+            sender.setAddressLine1(sf.getLine1());
+            sender.setAddressLine2(sf.getLine2());
+            sender.setCity(sf.getCity());
+            sender.setState(sf.getState());
+            sender.setPostalCode(sf.getZip());
+            sender.setPhone(sf.getPhone());
+        }
+        req.setSender(sender);
+    }
+
+    /**
+     * Sprint 51 fix #1 — result of resolving a bulk row's bill-to account when
+     * the CSV omitted it. Exactly one field is non-null: {@code accountNumber}
+     * (the account to bill, possibly the platform account) or {@code error}
+     * (an actionable per-row validation message).
+     */
+    private record BulkAccountPick(String accountNumber, String error) {
+        static BulkAccountPick of(String accountNumber) { return new BulkAccountPick(accountNumber, null); }
+        static BulkAccountPick fail(String error) { return new BulkAccountPick(null, error); }
+    }
+
+    /**
+     * Resolve the bill-to account for a bulk row that left {@code accountNumber}
+     * blank, mirroring the single-order account cascade's selection order:
+     * <ol>
+     *   <li>The client's own complete, active accounts on this carrier — pick
+     *       the one flagged {@code clientDefault}; if none is flagged but there
+     *       is exactly one, use it (that's what the picker would pre-select).</li>
+     *   <li>No client account on this carrier → the platform (house) account,
+     *       matching the cascade's SCENARIO_DEFAULT auto-ship.</li>
+     * </ol>
+     * Genuine ambiguity (several client accounts, none flagged default) fails
+     * with a message telling the operator how to disambiguate.
+     */
+    private BulkAccountPick resolveBulkAccount(String clientCode, String carrierCode) {
+        String carrier = StringUtils.hasText(carrierCode)
+                ? carrierCode.trim().toUpperCase(Locale.ROOT) : null;
+        if (carrier == null) {
+            return BulkAccountPick.fail("carrierCode is required to resolve a bill-to account");
+        }
+
+        List<CarrierAccountRef> clientAccounts = StringUtils.hasText(clientCode)
+                ? accountRefRepository
+                    .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(clientCode.trim()).stream()
+                    .filter(a -> !Boolean.FALSE.equals(a.getActive()))
+                    .filter(CarrierAccountRef::isComplete)
+                    .filter(a -> carrier.equalsIgnoreCase(
+                            a.getCarrierCode() == null ? "" : a.getCarrierCode().trim()))
+                    .toList()
+                : List.of();
+
+        if (!clientAccounts.isEmpty()) {
+            List<CarrierAccountRef> flagged = clientAccounts.stream()
+                    .filter(a -> Boolean.TRUE.equals(a.getClientDefault()))
+                    .toList();
+            if (!flagged.isEmpty()) return BulkAccountPick.of(flagged.get(0).getAccountNumber());
+            if (clientAccounts.size() == 1) return BulkAccountPick.of(clientAccounts.get(0).getAccountNumber());
+            return BulkAccountPick.fail(clientCode + " has " + clientAccounts.size() + " " + carrier
+                    + " accounts and no default; set a default account or put accountNumber in the row");
+        }
+
+        CarrierAccountRef platform = accountRefRepository
+                .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+        if (platform != null) return BulkAccountPick.of(platform.getAccountNumber());
+
+        return BulkAccountPick.fail("No " + carrier
+                + " account is available to bill; add a client or platform account, or set accountNumber");
+    }
 
     private static OrderImportPreviewDTO buildPreview(List<OrderImportRowDTO> rows) {
         int invalid = (int) rows.stream()
