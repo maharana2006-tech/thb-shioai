@@ -93,6 +93,18 @@ public class ExternalWebhookDispatcher {
     private record SubscriptionCacheKey(EventType event, Long apiKeyId) {}
 
     /**
+     * Audit W2 — public hook so controllers can invalidate the 60s
+     * subscription cache the moment a sub is added / updated / deleted.
+     * Without this, admin adds a sub and the dispatcher can miss up to
+     * 60s of matching events (the cache was populated pre-add). Full
+     * invalidation is cheap: at most a few thousand entries and only
+     * ever touched off the hot path.
+     */
+    public void invalidateSubscriptionCache() {
+        subscriptionCache.invalidateAll();
+    }
+
+    /**
      * Broadcast an event to every active subscription. When
      * {@code apiKeyIdFilter} is non-null, only subscriptions owned by
      * that API key fire — typically the caller who just generated a

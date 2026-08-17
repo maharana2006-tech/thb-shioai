@@ -5,6 +5,7 @@ import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.ExternalWebhookSubscriptionDTO;
 import com.multiship.backend.model.ExternalWebhookSubscription;
 import com.multiship.backend.repository.ExternalWebhookSubscriptionRepository;
+import com.multiship.backend.service.external.ExternalWebhookDispatcher;
 import com.multiship.backend.service.external.WebhookUrlValidator;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -36,6 +37,10 @@ public class WebhookSubscriptionAdminController {
      *  but a compromised admin session should still not be able to point
      *  a subscription at internal infra. */
     private final WebhookUrlValidator urlValidator;
+    /** Audit W2 — invalidate the dispatcher's 60s subscription cache
+     *  the moment a sub is written / removed so the change propagates
+     *  immediately instead of racing the TTL. */
+    private final ExternalWebhookDispatcher dispatcher;
 
     @Operation(summary = "List subscriptions by apiKeyId (or all when omitted)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
@@ -92,6 +97,7 @@ public class WebhookSubscriptionAdminController {
         entity.setActive(body.getActive() == null ? Boolean.TRUE : body.getActive());
         entity.setUpdatedAt(LocalDateTime.now());
         ExternalWebhookSubscription saved = subscriptionRepo.save(entity);
+        dispatcher.invalidateSubscriptionCache();
 
         HttpStatus code = body.getId() == null ? HttpStatus.CREATED : HttpStatus.OK;
         return ResponseEntity.status(code).body(ApiResponse.<ExternalWebhookSubscriptionDTO>builder()
@@ -104,7 +110,13 @@ public class WebhookSubscriptionAdminController {
     @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long id) {
-        subscriptionRepo.deleteById(id);
+        // Audit W3 — return 404 on missing id (v2 controller does the same,
+        // so callers get a consistent errorCode across paths). Old body was
+        // a silent 200 that masked stale-id bugs.
+        ExternalWebhookSubscription entity = subscriptionRepo.findById(id).orElse(null);
+        if (entity == null) return notFound();
+        subscriptionRepo.delete(entity);
+        dispatcher.invalidateSubscriptionCache();
         return ok(null);
     }
 
