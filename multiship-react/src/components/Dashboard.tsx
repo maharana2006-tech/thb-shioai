@@ -8,6 +8,7 @@ import {
   FiCheckCircle,
   FiClock,
   FiChevronRight,
+  FiCopy,
   FiGlobe,
   FiRefreshCw,
   FiSettings,
@@ -695,12 +696,19 @@ export default function Dashboard() {
           <ul className="mt-2.5 divide-y divide-slate-100">
             {(data?.recentLabels ?? []).slice(0, 5).map((l) => {
               const av = CARRIER_AVATAR[l.carrier] ?? { bg: 'bg-slate-600', mono: l.carrier?.slice(0, 3) ?? '?' }
+              // Fix #308 a11y — expressive aria-label + focus-visible outline
+              // so keyboard users see focus + screen readers hear the
+              // structured content instead of just "button".
+              const label = `Open label for order ${l.orderNo}, ${l.client}${
+                l.trackingNumber ? `, tracking ${l.trackingNumber}` : ''
+              }`
               return (
-                <li key={`${l.orderNo}-${l.trackingNumber}`}>
+                <li key={`${l.orderNo}-${l.trackingNumber}`} className="flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => navigate(`/label/${l.orderNo}`)}
-                    className="flex w-full items-center gap-2.5 rounded-lg py-2.5 text-left transition hover:bg-slate-50/70"
+                    aria-label={label}
+                    className="flex flex-1 items-center gap-2.5 rounded-lg py-2.5 text-left transition hover:bg-slate-50/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#412d15]"
                   >
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#412d15]/10 text-[10.5px] font-bold text-[#412d15]">
                       {initials(l.client)}
@@ -718,6 +726,25 @@ export default function Dashboard() {
                       <span className="block text-[10px] text-slate-400">{relTime(l.generatedAt)}</span>
                     </span>
                   </button>
+                  {l.trackingNumber ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        // Fix #308 — separate copy affordance. Prior UX made
+                        // the tracking number un-copyable — clicking anywhere
+                        // in the row navigated away. Now the row still
+                        // navigates, but this small button copies the tracking
+                        // number to the clipboard without navigation.
+                        e.stopPropagation()
+                        void navigator.clipboard.writeText(l.trackingNumber!)
+                      }}
+                      aria-label={`Copy tracking number ${l.trackingNumber}`}
+                      title="Copy tracking number"
+                      className="shrink-0 rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#412d15]"
+                    >
+                      <FiCopy className="h-3 w-3" />
+                    </button>
+                  ) : null}
                 </li>
               )
             })}
