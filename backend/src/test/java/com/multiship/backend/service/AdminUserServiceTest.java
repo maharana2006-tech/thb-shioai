@@ -159,6 +159,104 @@ class AdminUserServiceTest {
         verify(auditRepo).save(any(UserAdminAudit.class));
     }
 
+    /* -------- Sprint 55 audit #293: role transitions -------- */
+
+    @Test
+    void changeRole_userToTenant_isAllowed() {
+        User u = User.builder().id(10L).username("u").email("u@u")
+                .fullName("U").role("USER").emailVerified(true).build();
+        when(userRepo.findById(10L)).thenReturn(Optional.of(u));
+
+        MutationOutcome out = service.changeRole(10L, "TENANT", "reorg", "admin");
+
+        assertEquals(ActionResult.OK, out.result());
+        assertEquals("TENANT", u.getRole());
+    }
+
+    @Test
+    void changeRole_tenantToUser_isAllowed() {
+        User u = User.builder().id(11L).username("t").email("t@t")
+                .fullName("T").role("TENANT").emailVerified(true).build();
+        when(userRepo.findById(11L)).thenReturn(Optional.of(u));
+
+        MutationOutcome out = service.changeRole(11L, "USER", "promoted", "admin");
+
+        assertEquals(ActionResult.OK, out.result());
+        assertEquals("USER", u.getRole());
+    }
+
+    @Test
+    void changeRole_userToAdmin_isAllowed_promotionPath() {
+        User u = User.builder().id(12L).username("promote-me").email("p@p")
+                .fullName("P").role("USER").emailVerified(true).build();
+        when(userRepo.findById(12L)).thenReturn(Optional.of(u));
+
+        MutationOutcome out = service.changeRole(12L, "ADMIN", "promoted", "admin");
+
+        assertEquals(ActionResult.OK, out.result());
+        assertEquals("ADMIN", u.getRole());
+    }
+
+    @Test
+    void changeRole_adminToUser_isBlockedByPolicy() {
+        User admin = User.builder().id(13L).username("adm").email("a@a")
+                .fullName("A").role("ADMIN").emailVerified(true).build();
+        when(userRepo.findById(13L)).thenReturn(Optional.of(admin));
+
+        MutationOutcome out = service.changeRole(13L, "USER", "demote", "admin");
+
+        assertEquals(ActionResult.ROLE_TRANSITION_NOT_ALLOWED, out.result());
+        assertEquals("ADMIN", admin.getRole());  // unchanged
+        verify(auditRepo, never()).save(any());
+    }
+
+    @Test
+    void changeRole_adminToTenant_isBlockedByPolicy() {
+        User admin = User.builder().id(14L).username("adm").email("a@a")
+                .fullName("A").role("ADMIN").emailVerified(true).build();
+        when(userRepo.findById(14L)).thenReturn(Optional.of(admin));
+
+        MutationOutcome out = service.changeRole(14L, "TENANT", "demote", "admin");
+
+        assertEquals(ActionResult.ROLE_TRANSITION_NOT_ALLOWED, out.result());
+    }
+
+    @Test
+    void changeRole_unknownRole_isRejected() {
+        User u = User.builder().id(15L).username("u").email("u@u")
+                .fullName("U").role("USER").emailVerified(true).build();
+        when(userRepo.findById(15L)).thenReturn(Optional.of(u));
+
+        MutationOutcome out = service.changeRole(15L, "SUPERUSER", "typo", "admin");
+
+        assertEquals(ActionResult.UNKNOWN_ROLE, out.result());
+        assertEquals("USER", u.getRole());  // unchanged
+    }
+
+    @Test
+    void changeRole_sameRole_isNoop() {
+        User u = User.builder().id(16L).username("u").email("u@u")
+                .fullName("U").role("USER").emailVerified(true).build();
+        when(userRepo.findById(16L)).thenReturn(Optional.of(u));
+
+        MutationOutcome out = service.changeRole(16L, "USER", "no reason", "admin");
+
+        assertEquals(ActionResult.ALREADY_IN_TARGET_STATE, out.result());
+    }
+
+    @Test
+    void changeRole_normalizesCase() {
+        // Both source and target roles compared uppercase; lowercase input allowed.
+        User u = User.builder().id(17L).username("u").email("u@u")
+                .fullName("U").role("USER").emailVerified(true).build();
+        when(userRepo.findById(17L)).thenReturn(Optional.of(u));
+
+        MutationOutcome out = service.changeRole(17L, "tenant", "reorg", "admin");
+
+        assertEquals(ActionResult.OK, out.result());
+        assertEquals("TENANT", u.getRole());
+    }
+
     /* -------- Sprint 55 audit #292: last-admin protection -------- */
 
     @Test

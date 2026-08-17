@@ -45,6 +45,12 @@ public enum ErrorCode {
     /** Sprint 55 audit #292 — deactivating this ADMIN would leave zero
      *  active admins; blocked to prevent org lockout. */
     LAST_ADMIN_CANNOT_DEACTIVATE,
+    /** Sprint 55 audit #293 — role transition rejected by policy
+     *  (e.g. ADMIN demotion is out-of-band only). */
+    ADMIN_ROLE_TRANSITION_NOT_ALLOWED,
+    /** Sprint 55 audit #293 — requested role isn't in the allowed set
+     *  (USER / TENANT / ADMIN). */
+    ADMIN_UNKNOWN_ROLE,
 
     // ===== Sprint 50 finding #15 — per-tenant rate limit + fair scheduler =====
     /** Tenant exceeded the per-minute request budget on a write endpoint. */

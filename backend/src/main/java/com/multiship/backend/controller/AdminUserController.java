@@ -101,6 +101,29 @@ public class AdminUserController {
         return respond(outcome, "User reactivated.");
     }
 
+    /** Sprint 55 audit #293 — request body for the role-change endpoint. */
+    public static class ChangeRoleRequest {
+        public String role;
+        public String reason;
+    }
+
+    @Operation(summary = "Change a user's role (audit #293)",
+            description = "Allowed transitions: USER ↔ TENANT (free); USER/TENANT → ADMIN "
+                    + "(FE should require 2FA-style confirmation). ADMIN → anything is blocked by "
+                    + "policy (out-of-band audit recovery only). Bumps token_version to invalidate "
+                    + "any outstanding JWT that still carries the old role claim.")
+    @PatchMapping("/{id}/role")
+    public ResponseEntity<ApiResponse<AdminUserDTO>> changeRole(
+            @PathVariable Long id,
+            @RequestBody ChangeRoleRequest body,
+            @AuthenticationPrincipal UserDetails actor) {
+        MutationOutcome outcome = adminUserService.changeRole(id,
+                body == null ? null : body.role,
+                body == null ? null : body.reason,
+                actor != null ? actor.getUsername() : "system");
+        return respond(outcome, "Role updated.");
+    }
+
     @Operation(summary = "Recent admin actions (audit feed)")
     @GetMapping("/audit")
     public ResponseEntity<ApiResponse<List<AdminUserAuditDTO>>> recentAudit(
@@ -142,6 +165,15 @@ public class AdminUserController {
                     "Cannot deactivate the only active admin — org would be locked out. "
                             + "Promote or invite another admin first.",
                     409));
+            // Sprint 55 audit #293 — role-transition rejections.
+            case ROLE_TRANSITION_NOT_ALLOWED -> ResponseEntity.status(409).body(err(
+                    ErrorCode.ADMIN_ROLE_TRANSITION_NOT_ALLOWED,
+                    "That role transition is not allowed by policy (ADMIN demotion is out-of-band only).",
+                    409));
+            case UNKNOWN_ROLE -> ResponseEntity.badRequest().body(err(
+                    ErrorCode.ADMIN_UNKNOWN_ROLE,
+                    "Unknown role — must be USER, TENANT, or ADMIN.",
+                    400));
         };
     }
 
