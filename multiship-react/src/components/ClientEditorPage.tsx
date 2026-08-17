@@ -686,11 +686,24 @@ export default function ClientEditorPage() {
     [form.shipFrom, addressCaps],
   )
 
+  /**
+   * Return-address caps are DIFFERENT from ship-from caps: the return
+   * address is where inbound labels come back to; the enabled carriers'
+   * per-field limits may not apply (an operator may want to accept
+   * returns to a broader address than they ship from). Use the loose
+   * DB-column defaults (empty carrier set) rather than intersecting
+   * enabled-carrier caps.
+   */
+  const returnAddressCaps = useMemo<AddressCaps>(
+    () => intersectionAddressCaps([]),
+    [],
+  )
+
   const returnErrors = useMemo(() => {
     // Toggle on = return is "same as ship from"; no separate validation.
     if (form.returnSameAsShipFrom) return {}
-    return validateAddress(form.returnAddress as AddressLike, { required: true, caps: addressCaps })
-  }, [form.returnSameAsShipFrom, form.returnAddress, addressCaps])
+    return validateAddress(form.returnAddress as AddressLike, { required: true, caps: returnAddressCaps })
+  }, [form.returnSameAsShipFrom, form.returnAddress, returnAddressCaps])
 
   const stepValid = (key: StepKey): boolean => {
     switch (key) {
