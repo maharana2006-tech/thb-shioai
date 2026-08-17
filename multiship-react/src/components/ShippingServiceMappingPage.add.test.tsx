@@ -254,6 +254,14 @@ describe('ShippingServiceMappingPage — Save button gating', () => {
 // ===================== Save happy + payload =====================
 
 describe('ShippingServiceMappingPage — save payload', () => {
+  // Fix #301 (2026-08-17): saveNewRule now prompts window.confirm when
+  // allowedPresetIds is empty ("no restriction applied — accept ANY"). The
+  // save-payload tests below submit with empty presetIds, so stub the
+  // confirm to accept per-test.
+  let confirmSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => { confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true) })
+  afterEach(() => { confirmSpy.mockRestore() })
+
   it('valid save calls saveRule with destType=ANY when no dest codes are picked', async () => {
     saveRuleMock.mockResolvedValue({})
     const Page = await loadPage()
