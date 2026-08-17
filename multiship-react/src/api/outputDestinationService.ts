@@ -43,6 +43,15 @@ export interface OutputDestinationUpsertPayload {
   sftpPasswordPlain?: string | null
   /** SFTP + KEY auth only. Write-only. */
   sftpPrivateKeyPlain?: string | null
+  /**
+   * Audit O2 — optional known_hosts file body. When set, the backend
+   * encrypts + stores it and swaps in a `knownHostsSecretId` pointer,
+   * and the SFTP driver enables strict host-key checking against it.
+   * Recommended for production SFTP destinations — without it, the
+   * driver falls back to TOFU (accept-any-host on first connect) which
+   * is defeated by MITM. Write-only.
+   */
+  sftpKnownHostsPlain?: string | null
 }
 
 export interface DispatchResultItem {

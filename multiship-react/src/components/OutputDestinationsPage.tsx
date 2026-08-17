@@ -34,20 +34,28 @@ export default function OutputDestinationsPage() {
   const [rows, setRows] = useState<OutputDestination[]>([])
   const [loading, setLoading] = useState(true)
   const [clientFilter, setClientFilter] = useState('')
+  /** Audit O3 — 300ms debounce between typing and firing the /list call so
+   *  the admin filter box doesn't send a request per keystroke. */
+  const [debouncedFilter, setDebouncedFilter] = useState('')
   const [editing, setEditing] = useState<OutputDestination | null>(null)
   const [creating, setCreating] = useState(false)
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedFilter(clientFilter.trim()), 300)
+    return () => window.clearTimeout(t)
+  }, [clientFilter])
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await outputDestinationService.list(clientFilter || undefined)
+      const res = await outputDestinationService.list(debouncedFilter || undefined)
       setRows(res.data ?? [])
     } catch (e) {
       notify.apiError(e, 'Failed to load output destinations.')
     } finally {
       setLoading(false)
     }
-  }, [clientFilter])
+  }, [debouncedFilter])
 
   useEffect(() => {
     // Data fetch on mount / filter change. load() sets loading + result state.
@@ -76,6 +84,16 @@ export default function OutputDestinationsPage() {
   }
 
   const onTest = async (row: OutputDestination) => {
+    // Audit O6 — the backend "test" endpoint doesn't dry-run for PRINTER;
+    // it physically prints a real page on the target device (ZPL / IPP PDF).
+    // Confirm first so an admin exploring the ledger doesn't wake up a
+    // Zebra at 2am.
+    if (row.destinationType === 'PRINTER') {
+      const ok = window.confirm(
+        `Send a real test page to the printer at ${summariseConfig(row.destinationType, row.configSafe)}?\n\nThis will physically print a page on the device.`,
+      )
+      if (!ok) return
+    }
     try {
       const res = await outputDestinationService.test(row.id)
       const result = res.data
@@ -269,6 +287,12 @@ function DestinationEditorDialog({
   const [sftpRemoteDir, setSftpRemoteDir] = useState<string>(
     (existingConfig.remoteDir as string) ?? '/upload',
   )
+  /** Audit O2 — surface the sftpKnownHostsPlain field the backend has
+   *  supported since Sprint 52 output-polish follow-up #2. Write-only. */
+  const [sftpKnownHosts, setSftpKnownHosts] = useState<string>('')
+  /** Whether a knownHosts pointer is already stored (masked to "***set***"
+   *  by the DTO). Drives the placeholder hint on the edit form. */
+  const hasKnownHosts = Boolean(existingConfig.knownHostsSecretId)
   const [printerHost, setPrinterHost] = useState<string>((existingConfig.host as string) ?? '')
   const [printerPort, setPrinterPort] = useState<string>(String(existingConfig.port ?? ''))
   const [printerProtocol, setPrinterProtocol] = useState<string>(
@@ -295,6 +319,9 @@ function DestinationEditorDialog({
       }
       if (sftpPassword) extras.sftpPasswordPlain = sftpPassword
       if (sftpPrivateKey) extras.sftpPrivateKeyPlain = sftpPrivateKey
+      // Audit O2 — pin the known_hosts file when the operator paste it
+      // in; leaving blank on edit preserves the existing pointer.
+      if (sftpKnownHosts) extras.sftpKnownHostsPlain = sftpKnownHosts
     } else {
       config = {
         host: printerHost.trim(),
@@ -489,6 +516,26 @@ function DestinationEditorDialog({
                   onChange={(e) => setSftpRemoteDir(e.target.value)}
                   className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-[13px]"
                 />
+              </label>
+              {/* Audit O2 — known_hosts pinning. Backend enables strict
+                  host-key checking when this is set. Highly recommended
+                  for prod SFTP destinations (defeats MITM). Write-only. */}
+              <label className="block text-[12.5px] font-semibold text-slate-700">
+                Known hosts (recommended)
+                <textarea
+                  value={sftpKnownHosts}
+                  onChange={(e) => setSftpKnownHosts(e.target.value)}
+                  placeholder={hasKnownHosts
+                    ? '(pinned — leave blank to keep, or paste new to replace)'
+                    : 'Paste the SSH host-key line from `ssh-keyscan sftp.example.com` (or leave blank for TOFU — accept-any-host on first connect).'}
+                  rows={3}
+                  className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-[11.5px]"
+                />
+                <span className="mt-1 block text-[11.5px] font-normal text-slate-500">
+                  {hasKnownHosts
+                    ? 'A host-key is already pinned for this destination.'
+                    : 'Without a pinned key the driver accepts any host on first connect (MITM-vulnerable).'}
+                </span>
               </label>
             </div>
           )}

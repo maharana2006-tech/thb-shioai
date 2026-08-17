@@ -53,7 +53,9 @@ public class OutputDestinationAdminService {
     public List<OutputDestinationDTO> list(String clientCode) {
         List<ClientOutputDestination> rows = (clientCode == null || clientCode.isBlank())
                 ? destinationRepository.findAllByOrderByClientCodeAscDocTypeAscIdAsc()
-                : destinationRepository.findByClientCodeOrderByDocTypeAscIdAsc(clientCode);
+                // Audit B9 — case-insensitive so the admin filter box works
+                // for lowercase input against uppercase-stored client codes.
+                : destinationRepository.findByClientCodeIgnoreCaseOrderByDocTypeAscIdAsc(clientCode.trim());
         return rows.stream().map(this::toDto).toList();
     }
 
