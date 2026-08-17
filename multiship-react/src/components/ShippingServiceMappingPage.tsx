@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
-import { FiEdit3, FiExternalLink, FiFilter, FiGlobe, FiHome, FiLink, FiPlus, FiTrash2, FiTruck, FiUser, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiEdit3, FiExternalLink, FiFilter, FiGlobe, FiHome, FiLink, FiPlus, FiTrash2, FiTruck, FiUser, FiX } from 'react-icons/fi'
 import type { ColumnDef } from '@tanstack/react-table'
 import {
   shippingConfigService,
@@ -347,7 +347,6 @@ export default function ShippingServiceMappingPage() {
    */
   const blankRuleSnapshot = useMemo(
     () => JSON.stringify({ ...blankRule, destCodes: [] }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   )
   const closeAddForm = useCallback((opts?: { skipGuard?: boolean }) => {
@@ -1032,8 +1031,45 @@ export default function ShippingServiceMappingPage() {
     ],
   )
 
+  // Fix #299 — warn about rules left in a "no packages" state after a
+  // carrier switch. Prior UX: if the operator closed the packages drawer
+  // without picking, the rule persisted empty and there was no visible
+  // indicator on the page that it needed attention (only re-opening the
+  // rule showed the require-pick gate). This banner surfaces the count
+  // + lets the operator click through to fix each one.
+  const openFirstPendingRule = () => {
+    const firstPendingId = Array.from(pendingPackagesForRules)[0]
+    const rule = rules.find((r) => r.id === firstPendingId)
+    if (rule) setPkgFor(rule)
+  }
+
   return (
     <div className="space-y-4 pb-16">
+      {pendingPackagesForRules.size > 0 ? (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3"
+        >
+          <div className="flex items-start gap-2.5">
+            <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <div>
+              <p className="text-[13px] font-semibold text-amber-900">
+                {pendingPackagesForRules.size} rule{pendingPackagesForRules.size === 1 ? '' : 's'} need package selection
+              </p>
+              <p className="mt-0.5 text-[12px] text-amber-800/80">
+                A carrier switch cleared the previous package set. Pick allowed packages so the rule can match shipments.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={openFirstPendingRule}
+            className="shrink-0 rounded-xl bg-amber-700 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-amber-800"
+          >
+            Review
+          </button>
+        </div>
+      ) : null}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         {loading && !rules.length ? (
           <p className="py-10 text-center text-sm text-slate-500">Loading mappings…</p>
