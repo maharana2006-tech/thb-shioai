@@ -19,10 +19,28 @@ import {
 import { dashboardService, type DashboardData } from '../api/dashboardService'
 import { isAbortError } from '../api/apiClient'
 import { useAppSession } from '../hooks/useAppSession'
+import { canManageCarriers, normalizeRole } from '../utils/roles'
 import { countryName } from '../utils/countries'
 
 const CARD = 'rounded-2xl border border-slate-200 bg-white shadow-sm'
 const POLL_MS = 45_000
+/**
+ * A queue board on the operator's second monitor is a common failure mode:
+ * poll fails silently in the background, operator glances at 3-minute-old
+ * data + trusts it. STALE_THRESHOLD triggers a persistent "data is stale"
+ * warning that survives subsequent silent failures (unlike the transient
+ * "Couldn't refresh" badge, which only reflects the MOST RECENT attempt).
+ * 3× POLL = we've missed ~2 refresh cycles.
+ */
+const STALE_THRESHOLD_MS = POLL_MS * 3
+/**
+ * Refresh-button debounce. Prior UI let a rapid double-click fire 3+
+ * requests; the AbortController cancels the older ones but the backend
+ * still processed them. Disable the button for a short cooldown after a
+ * click so operator can't spam. In-flight is separately guarded by
+ * `inFlightRef`.
+ */
+const REFRESH_DEBOUNCE_MS = 1_500
 
 type QueueShape = DashboardData['queue']
 
@@ -93,14 +111,26 @@ function Sparkline({ points }: { points: number[] }) {
 export default function Dashboard() {
   const navigate = useNavigate()
   const { username, role } = useAppSession()
-  const isAdmin = (role || '').toUpperCase() === 'ADMIN'
+  // Fix F3 — use the shared role helper so a future role rename or
+  // multi-tier privilege check (e.g., an OPS role that can also manage
+  // carriers) is applied consistently across the app.
+  const isAdmin = canManageCarriers(normalizeRole(role))
 
   const [data, setData] = useState<DashboardData | null>(null)
   const [updatedAt, setUpdatedAt] = useState<number | null>(null)
   /** Last load failure. Previously every error was swallowed, so a broken
    *  /dashboard looked identical to "still loading" — forever. */
   const [loadError, setLoadError] = useState<string | null>(null)
+  /** Fix F5 — debounce the Refresh button so a rapid double-click can't
+   *  spam the backend even if the AbortController cancels the old
+   *  request client-side. */
+  const [refreshCooldown, setRefreshCooldown] = useState(false)
+  /** Fix F4/F10 — tick every 30s so the derived `isStale` flag re-renders
+   *  even when no fetch has completed. Without this, a background-failing
+   *  poll leaves the "Updated 45s ago" text frozen. */
+  const [staleTick, setStaleTick] = useState(0)
   const timer = useRef<number | null>(null)
+  const staleTicker = useRef<number | null>(null)
   // Sprint 49 Tier 4 Fix 3 — in-flight guard + AbortController.
   //   inFlightRef skips a new tick when the previous one is still pending
   //   (prevents a slow-carrier request from queueing behind another).
@@ -158,6 +188,13 @@ export default function Dashboard() {
     mountedRef.current = true
     load()
     timer.current = window.setInterval(load, POLL_MS)
+    // Fix F4/F10 — re-render every 30s so the derived `isStale` flag and
+    // "Updated N ago" badge stay accurate even when no fetch completes.
+    // Without this, a background-failing poll leaves the badge frozen.
+    staleTicker.current = window.setInterval(
+      () => { if (mountedRef.current) setStaleTick((n) => n + 1) },
+      30_000,
+    )
 
     // A queue board should be current the moment you look at it. Polling a
     // hidden tab just burns requests, and coming back to one meant staring
@@ -180,6 +217,7 @@ export default function Dashboard() {
     return () => {
       mountedRef.current = false
       if (timer.current) window.clearInterval(timer.current)
+      if (staleTicker.current) window.clearInterval(staleTicker.current)
       document.removeEventListener('visibilitychange', onVisibility)
       window.removeEventListener('focus', load)
       currentAbortRef.current?.abort()  // don't leak a pending fetch on unmount
@@ -311,25 +349,58 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {loadError ? (
-            <span
-              title={loadError}
-              className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200"
-            >
-              <FiAlertTriangle className="h-3 w-3" />
-              {updatedAt ? "Couldn't refresh" : "Couldn't load"}
-            </span>
-          ) : (
-            <span className="text-[11.5px] text-slate-400">
-              {updatedAt ? `Updated ${relTime(new Date(updatedAt).toISOString())}` : 'Loading…'}
-            </span>
-          )}
+          {/* Fix F4/F10 — persistent stale-data warning that survives
+              subsequent silent poll failures. Prior "Couldn't refresh" only
+              reflected the MOST RECENT attempt; if load-2/3/4 all failed
+              after load-1 succeeded, the badge stayed silent. */}
+          {(() => {
+            const ageMs = updatedAt ? Date.now() - updatedAt : Infinity
+            const isStale = updatedAt != null && ageMs > STALE_THRESHOLD_MS
+            void staleTick  // re-render dependency (checked every 30s)
+            if (loadError) {
+              return (
+                <span
+                  title={loadError}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200"
+                >
+                  <FiAlertTriangle className="h-3 w-3" />
+                  {updatedAt ? "Couldn't refresh" : "Couldn't load"}
+                </span>
+              )
+            }
+            if (isStale) {
+              return (
+                <span
+                  title={`Last successful refresh was ${relTime(new Date(updatedAt!).toISOString())}. Automatic polling may be blocked.`}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200"
+                >
+                  <FiAlertTriangle className="h-3 w-3" />
+                  Stale · {relTime(new Date(updatedAt!).toISOString())}
+                </span>
+              )
+            }
+            return (
+              <span className="text-[11.5px] text-slate-400">
+                {updatedAt ? `Updated ${relTime(new Date(updatedAt).toISOString())}` : 'Loading…'}
+              </span>
+            )
+          })()}
           <button
             type="button"
-            onClick={load}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+            onClick={() => {
+              // Fix F5 — cooldown so rapid clicks can't spam the backend.
+              // Kicks in AFTER the click so the first press always fires.
+              if (refreshCooldown) return
+              setRefreshCooldown(true)
+              window.setTimeout(() => {
+                if (mountedRef.current) setRefreshCooldown(false)
+              }, REFRESH_DEBOUNCE_MS)
+              load()
+            }}
+            disabled={refreshCooldown}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <FiRefreshCw className="h-3.5 w-3.5" /> Refresh
+            <FiRefreshCw className={`h-3.5 w-3.5 ${refreshCooldown ? 'animate-spin' : ''}`} /> Refresh
           </button>
           <button
             type="button"
