@@ -131,16 +131,28 @@ public class AdminUserController {
                     .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
                     .message("No change — already in target state.").data(outcome.user()).build());
             case USER_NOT_FOUND -> ResponseEntity.status(404).body(err(ErrorCode.ADMIN_TARGET_USER_NOT_FOUND,
-                    "User not found."));
+                    "User not found.", 404));
             case CLIENT_NOT_FOUND -> ResponseEntity.status(404).body(err(ErrorCode.ADMIN_TARGET_CLIENT_NOT_FOUND,
-                    "Target client not found."));
+                    "Target client not found.", 404));
+            // Sprint 55 audit #292 — reject with 409 CONFLICT so FE clients
+            // can distinguish "you tried to deactivate the last admin" from
+            // a plain 404 or 5xx.
+            case LAST_ADMIN_CANNOT_DEACTIVATE -> ResponseEntity.status(409).body(err(
+                    ErrorCode.LAST_ADMIN_CANNOT_DEACTIVATE,
+                    "Cannot deactivate the only active admin — org would be locked out. "
+                            + "Promote or invite another admin first.",
+                    409));
         };
     }
 
     private static ApiResponse<AdminUserDTO> err(ErrorCode code, String msg) {
+        return err(code, msg, 404);
+    }
+
+    private static ApiResponse<AdminUserDTO> err(ErrorCode code, String msg, int status) {
         return ApiResponse.<AdminUserDTO>builder()
                 .status("ERROR")
-                .code(404)
+                .code(status)
                 .timestamp(LocalDateTime.now())
                 .errorCode(code.name())
                 .message(msg)
