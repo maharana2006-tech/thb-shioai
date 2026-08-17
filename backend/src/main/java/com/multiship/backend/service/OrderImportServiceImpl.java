@@ -1343,6 +1343,12 @@ public class OrderImportServiceImpl implements OrderImportService {
      */
     @Override
     public com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(Long id, String requestedBy) {
+        // Preserves original behavior: re-send every row.
+        return generateLabelsForBatch(id, requestedBy, false);
+    }
+
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(Long id, String requestedBy, boolean onlyFailed) {
         if (importBatchRepository == null || id == null) return null;
         com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
         if (batch == null) return null;
@@ -1364,14 +1370,24 @@ public class OrderImportServiceImpl implements OrderImportService {
         // gets 403 here rather than after we've minted N labels.
         requireMatch(firstClientCode(rows));
 
+        // Sprint 55 audit #302 F3.2 — retry-safe filter: skip rows already
+        // GENERATED so we don't re-bill the carrier for successful ones.
+        // Filtered rows keep their existing generatedStatus/tracking on
+        // save; only the not-yet-generated subset is re-processed.
+        List<OrderImportRowDTO> rowsToProcess = onlyFailed
+                ? rows.stream()
+                        .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
+                        .toList()
+                : rows;
+
         // Mark IN_PROGRESS before the (potentially slow) carrier calls.
         batch.setStatus("IN_PROGRESS");
         importBatchRepository.save(batch);
 
         // Reuse the commit path — it generates labels and stamps each row's
         // generatedStatus (GENERATED / FAILED) in place.
-        if (!rows.isEmpty()) {
-            commit(rows, requestedBy);
+        if (!rowsToProcess.isEmpty()) {
+            commit(rowsToProcess, requestedBy);
         }
 
         int total = rows.size();

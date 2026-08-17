@@ -212,12 +212,20 @@ export default function DataHistoryPage() {
   }
 
   /** Kick off label generation for a batch. Optimistically flips the row to
-   *  "In progress" while the carrier calls run, then reflects the result. */
-  const generate = async (id: number) => {
+   *  "In progress" while the carrier calls run, then reflects the result.
+   *
+   *  Fix #302 F2.3 — the button is disabled when generatingId===id already
+   *  (busy check at the call site), so a rapid double-click can't spawn
+   *  parallel requests on the same batch.
+   *
+   *  Fix #302 F3.2 — RETRY (isRetry) uses onlyFailed=true so already-
+   *  generated rows aren't re-sent to the carrier + re-billed. Fresh
+   *  generate (INITIATE) re-processes all rows as before. */
+  const generate = async (id: number, isRetry: boolean) => {
     setGeneratingId(id)
     setBatches((list) => list.map((b) => (b.id === id ? { ...b, status: 'IN_PROGRESS' } : b)))
     try {
-      const res = await orderImportService.generateLabels(id)
+      const res = await orderImportService.generateLabels(id, { onlyFailed: isRetry })
       const updated = res.data
       if (updated) {
         setBatches((list) =>
@@ -595,9 +603,11 @@ export default function DataHistoryPage() {
                   {canGenerate ? (
                     <button
                       type="button"
-                      onClick={() => void generate(b.id)}
+                      onClick={() => void generate(b.id, isRetry)}
                       disabled={busy}
-                      title={isRetry ? 'Retry generating labels for the rows that failed' : 'Generate carrier labels for this saved import'}
+                      title={isRetry
+                        ? 'Retry generating labels — only rows that FAILED or are un-generated will be re-sent'
+                        : 'Generate carrier labels for this saved import'}
                       className="my-2 mr-4 inline-flex shrink-0 items-center gap-1.5 self-center rounded-xl bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
                     >
                       {busy ? (

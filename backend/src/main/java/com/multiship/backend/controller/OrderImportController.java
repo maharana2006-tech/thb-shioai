@@ -126,9 +126,13 @@ public class OrderImportController {
     @PostMapping("/history/{id}/generate")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> generateForBatch(
             @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.RequestParam(name = "onlyFailed", defaultValue = "false") boolean onlyFailed,
             @AuthenticationPrincipal UserDetails userDetails) {
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
-        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.generateLabelsForBatch(id, username);
+        // Sprint 55 audit #302 F3.2 — onlyFailed=true skips rows already
+        // marked GENERATED to prevent duplicate carrier calls + billing
+        // on retry. FE defaults to true when isRetry (see DataHistoryPage).
+        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.generateLabelsForBatch(id, username, onlyFailed);
         if (dto == null) {
             return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                     .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
