@@ -898,8 +898,27 @@ public class CarrierServiceImpl implements CarrierService {
         // fail at the carrier with a 4xx, which the try/catch below surfaces).
         boolean intlForLimit = to.getCountryCode() != null && fromCountry != null
                 && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
+        // Sprint 52 — direction-aware limit resolution. ManualShipmentRequest
+        // carries a Boolean isReturn (frontend / API-caller sets it explicitly
+        // for return labels); null / false means outbound (FORWARD).
+        String directionForLimit = Boolean.TRUE.equals(req.getIsReturn()) ? "RETURN" : "FORWARD";
+        // Sprint 52 follow-up: UPS returns between US and PR (either origin)
+        // are hard-capped at 1 pkg per UPS_MPS_US_PR_ORIGIN_RETURN_MAX. Swap
+        // to the synthetic RETURN_US_PR service so the resolver picks the
+        // 1-pkg seed row instead of the generic 20-pkg RETURN row.
+        String serviceTypeForLimit = maybeUpsUsPrReturnService(
+                carrier, directionForLimit, fromCountry, to.getCountryCode(), serviceType);
         com.multiship.backend.model.CarrierShippingLimit limit = carrierLimitService.resolveLimit(
-                carrier, serviceType, intlForLimit);
+                carrier, serviceTypeForLimit, intlForLimit, directionForLimit);
+        // Sprint 52 — commodities pre-flight. Reject before we split, before
+        // we hit the carrier. See ShipmentSplitter.assertCommoditiesFit javadoc.
+        try {
+            shipmentSplitter.assertCommoditiesFit(shipmentRequest, limit);
+        } catch (com.multiship.backend.exception.CommoditiesLimitExceededException cle) {
+            log.warn("Manual shipment rejected: {}", cle.getMessage());
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY,
+                    ErrorCode.COMMODITIES_LIMIT_EXCEEDED, cle.getMessage());
+        }
         java.math.BigDecimal totalWeightLb = shipmentSplitter.totalWeightLb(shipmentRequest);
         boolean overCap = autoSplitEnabled && carrierLimitService.requiresSplit(
                 limit, shipmentRequest.effectivePackages().size(), totalWeightLb);
@@ -1273,6 +1292,24 @@ public class CarrierServiceImpl implements CarrierService {
                     IntlShipmentValidator.toMessage(intlErrors));
         }
 
+        // Sprint 52 — per-carrier commodity-line cap. Resolve the carrier's
+        // limit (direction-aware: shipmentRequest.isReturn distinguishes
+        // return vs forward at all carriers we support) and reject up-front
+        // if the shipment exceeds it. Commodities are NOT split across sub-
+        // shipments — see ShipmentSplitter.assertCommoditiesFit javadoc.
+        String directionForOrder = Boolean.TRUE.equals(shipmentRequest.getIsReturn()) ? "RETURN" : "FORWARD";
+        // Sprint 52 follow-up: US <-> PR UPS return override (see javadoc on
+        // maybeUpsUsPrReturnService for rationale).
+        String serviceTypeForOrder = maybeUpsUsPrReturnService(
+                connector.getCarrierCode(), directionForOrder,
+                shipmentRequest.getShipperCountryCode(),
+                shipmentRequest.getRecipientCountryCode(),
+                shipmentRequest.getServiceType());
+        com.multiship.backend.model.CarrierShippingLimit commodityLimit =
+                carrierLimitService.resolveLimit(connector.getCarrierCode(),
+                        serviceTypeForOrder, isInternational(order), directionForOrder);
+        shipmentSplitter.assertCommoditiesFit(shipmentRequest, commodityLimit);
+
         // Sprint 48 B5 — packaging pre-flight on the order-cascade hot path.
         // Resolves the same preset buildShipmentRequest picked (extra 1ms
         // repo call in return for a clean separation from the request DTO).
@@ -1301,8 +1338,14 @@ public class CarrierServiceImpl implements CarrierService {
             // Sprint 48 freight/LTL: parcel-eligibility check.
             String svcCode = resolvedService != null ? resolvedService.getServiceCode()
                     : shipmentRequest.getServiceType();
+            // Sprint 52 follow-up: US <-> PR UPS return override.
+            String svcCodeForLimit = maybeUpsUsPrReturnService(
+                    connector.getCarrierCode(), directionForOrder,
+                    shipmentRequest.getShipperCountryCode(),
+                    shipmentRequest.getRecipientCountryCode(),
+                    svcCode);
             com.multiship.backend.model.CarrierShippingLimit svcLimit = carrierLimitService.resolveLimit(
-                    connector.getCarrierCode(), svcCode, isInternational(order));
+                    connector.getCarrierCode(), svcCodeForLimit, isInternational(order), directionForOrder);
             outcome = outcome.merge(com.multiship.backend.util.PackagingValidator.validateParcelLimits(
                     connector.getCarrierCode(), svcCode, shipmentRequest.getPackages(),
                     shipmentRequest.getWeight(), shipmentRequest.getWeightUnit(),
@@ -1332,6 +1375,41 @@ public class CarrierServiceImpl implements CarrierService {
         String dest = order.getShiptoCountryCd();
         return StringUtils.hasText(origin) && StringUtils.hasText(dest)
                 && !origin.trim().equalsIgnoreCase(dest.trim());
+    }
+
+    /**
+     * Sprint 52 follow-up — UPS US &lt;-&gt; PR return override.
+     *
+     * <p>UPS treats US &lt;-&gt; PR as a domestic route, but the returns MPS
+     * ceiling for that pair is 1 pkg (UPS_MPS_US_PR_ORIGIN_RETURN_MAX) — far
+     * below the generic 20-pkg return cap. The seed row alone can't express
+     * this because carrier_shipping_limit has no origin/dest columns, so we
+     * detect the route at request time and swap the resolver's serviceCode
+     * to {@code RETURN_US_PR}, which maps to the 1-pkg seed row.
+     *
+     * <p>Bi-directional: applies to both US -&gt; PR AND PR -&gt; US returns,
+     * matching the "US_PR_ORIGIN_RETURN" spec wording (the origin can be
+     * either endpoint when it's a return between US and PR).
+     *
+     * <p>No-op for non-UPS carriers, non-return direction, and any route that
+     * isn't the US/PR pair. Returns {@code originalService} unchanged in
+     * those cases.
+     */
+    static String maybeUpsUsPrReturnService(String carrierCode, String direction,
+                                            String originCountry, String destCountry,
+                                            String originalService) {
+        if (!"UPS".equalsIgnoreCase(carrierCode)) return originalService;
+        if (!"RETURN".equalsIgnoreCase(direction)) return originalService;
+        if (!isUsPrPair(originCountry, destCountry)) return originalService;
+        return "RETURN_US_PR";
+    }
+
+    /** True when the origin/dest pair is US &lt;-&gt; PR in either direction. */
+    private static boolean isUsPrPair(String a, String b) {
+        if (a == null || b == null) return false;
+        String x = a.trim().toUpperCase(Locale.ROOT);
+        String y = b.trim().toUpperCase(Locale.ROOT);
+        return ("US".equals(x) && "PR".equals(y)) || ("PR".equals(x) && "US".equals(y));
     }
 
     /**

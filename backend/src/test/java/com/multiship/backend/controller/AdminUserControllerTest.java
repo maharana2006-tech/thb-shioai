@@ -52,12 +52,9 @@ class AdminUserControllerTest {
 
     @Test
     void list_returns200WithFilteredData() {
-        // page/size mirror the controller's @RequestParam defaults (#169 added
-        // pagination; this test landed from #172 against the old 4-arg call).
         when(adminUserService.list("q", "USER", "ACME", true, 0, 50)).thenReturn(List.of(dto()));
 
-        ResponseEntity<ApiResponse<List<AdminUserDTO>>> resp =
-                controller.list("q", "USER", "ACME", true, 0, 50);
+        ResponseEntity<ApiResponse<List<AdminUserDTO>>> resp = controller.list("q", "USER", "ACME", true, 0, 50);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertEquals(1, resp.getBody().getData().size());

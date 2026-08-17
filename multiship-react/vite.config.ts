@@ -17,19 +17,14 @@ export default defineConfig(({ mode }) => {
 
   return {
   plugins: [react()],
+  // Local dev proxy — routes /api/* to the Spring Boot backend on :8080
+  // so SPA + API share origin. Required for the httpOnly JWT cookie from
+  // Sprint 50 Q1/Q2/Q3 to be sent by the browser (cross-origin cookies on
+  // HTTP localhost need SameSite=None+Secure, which needs HTTPS).
   server: {
-    // FE-M1 dropped the runtime `${hostname}:8080` fallback so prod can't
-    // ship a dev assumption — correct, but it left BASE_URL as a relative
-    // `/api/v1` with nothing serving it in dev, so every call 404'd against
-    // the Vite server. This proxy is the dev half of that change: it
-    // forwards /api to the local backend, matching how prod fronts the API
-    // on the same origin. Bonus: requests become same-origin, so the auth
-    // and XSRF cookies stop being a cross-origin concern locally.
-    // Override the target with VITE_DEV_API_TARGET when the backend runs
-    // on another host or port.
     proxy: {
       '/api': {
-        target: process.env.VITE_DEV_API_TARGET || 'http://localhost:8080',
+        target: process.env.VITE_DEV_BACKEND_URL || 'http://localhost:8080',
         changeOrigin: false,
       },
     },

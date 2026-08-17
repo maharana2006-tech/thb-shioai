@@ -41,14 +41,15 @@ export default function WebhookSubscriptionsPage() {
       ])
       setKeys(Array.isArray(ks.data) ? ks.data : [])
       setSubs(ss)
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Failed to load webhook subscriptions.')
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : 'Failed to load webhook subscriptions.')
     } finally {
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount / manual refresh; load() sets loading + subs state
     load()
   }, [load, reloadToken])
 
@@ -65,8 +66,8 @@ export default function WebhookSubscriptionsPage() {
       await webhookSubscriptionService.remove(s.id)
       notify.success('Subscription deleted.')
       refresh()
-    } catch (err: any) {
-      notify.error(err?.message ?? 'Delete failed.')
+    } catch (err: unknown) {
+      notify.error(err instanceof Error ? err.message : 'Delete failed.')
     }
   }
 

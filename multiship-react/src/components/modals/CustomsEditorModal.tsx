@@ -47,6 +47,7 @@ export default function CustomsEditorModal({ orderNo, onClose }: CustomsEditorMo
 
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async order+profile fetch
     setLoading(true)
     orderService
       .getOrderWithLines(orderNo)

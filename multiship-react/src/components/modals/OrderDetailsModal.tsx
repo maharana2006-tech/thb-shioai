@@ -63,6 +63,7 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
 
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading + clear stale error before async order-detail fetch
     setLoading(true)
     setError(null)
 
@@ -97,7 +98,8 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
 
   const order = payload?.order
   const account = payload?.carrierAccount
-  const lines = order?.orderLines ?? []
+  // Stable ref for empty-lines case so the totals memo doesn't recompute on every render.
+  const lines = useMemo(() => order?.orderLines ?? [], [order?.orderLines])
 
   const totals = useMemo(
     () => ({

@@ -155,6 +155,7 @@ export default function PackagesPage() {
   }, [assignments])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount; load() sets loading + list state
     void load()
   }, [load])
 
@@ -204,6 +205,21 @@ export default function PackagesPage() {
 
   const remove = async (p: PackagePreset) => {
     if (!p.id) return
+    // Fix #298 — in-use check BEFORE the confirm. assignmentsByPreset
+    // is already populated by the initial load (line 151) so this is a
+    // zero-network client-side lookup. Prior UI let the operator hit
+    // Delete, then relied on the backend FK constraint to reject with a
+    // confusing error toast. Now we tell them up-front what's blocking.
+    const clientAssignments = assignmentsByPreset.get(p.id) ?? []
+    if (clientAssignments.length > 0) {
+      const clientNames = clientAssignments.map((a) => a.clientCode).slice(0, 5).join(', ')
+      const more = clientAssignments.length > 5 ? ` (+${clientAssignments.length - 5} more)` : ''
+      notify.error(
+        `Cannot delete '${p.name}' — used by ${clientAssignments.length} client allowlist(s): ${clientNames}${more}. ` +
+          `Remove the allowlist entries first, or deactivate the package instead.`,
+      )
+      return
+    }
     if (!(await notify.confirm(`Delete package '${p.name}'?`, {
       title: 'Delete package',
       confirmLabel: 'Delete',
@@ -222,7 +238,51 @@ export default function PackagesPage() {
     p.length && p.width && p.height ? `${p.length} × ${p.width} × ${p.height} ${p.dimUnit.toLowerCase()}` : '—'
 
   const set = <K extends keyof PackagePreset>(key: K, value: PackagePreset[K]) =>
-    setEditing((cur) => (cur ? { ...cur, [key]: value } : cur))
+    setEditing((cur) => {
+      if (!cur) return cur
+      const next = { ...cur, [key]: value }
+      // Fix F1 — switching kind CUSTOM ↔ CARRIER should CLEAR the other
+      // branch's fields. Prior behavior left them lingering in state, so
+      // a subsequent toggle back would silently re-show the old values
+      // (dim numbers under a CARRIER row, or vice versa).
+      if (key === 'kind' && value !== cur.kind) {
+        if (value === 'CUSTOM') {
+          return {
+            ...next,
+            carrier: null,
+            carrierPackageCode: null,
+          }
+        }
+        // switching to CARRIER — clear CUSTOM-only dim fields.
+        return {
+          ...next,
+          length: null, width: null, height: null,
+          internalLength: null, internalWidth: null, internalHeight: null,
+        }
+      }
+      return next
+    })
+
+  /**
+   * Fix F3 — snapshot the initial editing state when the modal opens so
+   * we can detect dirty edits and confirm before discarding. Prior UI
+   * silently discarded on X / backdrop / Cancel.
+   *
+   * useMemo keyed on editing.id (or 'new' for create) so the snapshot
+   * refreshes when the operator opens a different row without unmounting.
+   */
+  const editorSnapshot = useMemo(
+    () => (editing ? JSON.stringify(editing) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [editing?.id],
+  )
+  const currentEditingSnapshot = editing ? JSON.stringify(editing) : null
+  const editorIsDirty = editorSnapshot !== null && currentEditingSnapshot !== editorSnapshot
+
+  const closeEditor = () => {
+    if (editorIsDirty && !window.confirm('Discard unsaved changes to this package?')) return
+    setEditing(null)
+  }
 
   const num = (v: string) => (v === '' ? null : Number(v))
 
@@ -259,6 +319,7 @@ export default function PackagesPage() {
   )
   // Snap back to page 1 whenever the filtered set changes (origin/carrier switch, sync…).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- snap paging back to 1 on filter change; user-input-driven, not derivable at render
     setPage(1)
   }, [origin, carrierFilter, visiblePresets.length])
   const originOptions = useMemo(() => {
@@ -568,7 +629,7 @@ export default function PackagesPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
-          onClick={() => setEditing(null)}
+          onClick={closeEditor}
         >
           <div
             className="w-full max-w-xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
@@ -583,7 +644,7 @@ export default function PackagesPage() {
                 </span>
                 <button
                   type="button"
-                  onClick={() => setEditing(null)}
+                  onClick={closeEditor}
                   className="rounded-lg p-1.5 text-[#e1dcc9]/60 transition hover:bg-white/10 hover:text-[#e1dcc9]"
                   aria-label="Close"
                 >
@@ -746,7 +807,7 @@ export default function PackagesPage() {
             <div className="flex items-center justify-end gap-2 border-t border-dashed border-slate-300 px-5 py-4">
               <button
                 type="button"
-                onClick={() => setEditing(null)}
+                onClick={closeEditor}
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
               >
                 Cancel

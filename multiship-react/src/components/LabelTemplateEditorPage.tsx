@@ -114,6 +114,7 @@ export default function LabelTemplateEditorPage() {
   }, [editingId, isEdit, reloadToken])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on edit/reload; loadTemplate() sets loading + template state
     loadTemplate()
   }, [loadTemplate])
 
@@ -122,12 +123,12 @@ export default function LabelTemplateEditorPage() {
   // are disabled so this path doesn't fire.
   useEffect(() => {
     if (isEdit) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- re-scope create-mode template when tenant/type picker changes; depends on prior form state, not derivable at render
     setTemplate((prev) => ({
       ...prev,
       tenantId: effectiveTenantId,
       templateType,
     }))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveTenantId, templateType, isEdit])
 
   const refresh = useCallback(() => setReloadToken((t) => t + 1), [])

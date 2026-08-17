@@ -192,6 +192,35 @@ public enum ErrorCode {
     /** The webhook subscription id in the path or body does not resolve for the caller. */
     WEBHOOK_SUBSCRIPTION_NOT_FOUND,
 
+    // ===== Sprint 52 line-item caps =====
+    /**
+     * Shipment carries more commodity lines than the resolved carrier
+     * cap accepts. Response is HTTP 422 — commodities cannot be split
+     * across sub-shipments (would break shipper invoice intent), so the
+     * operator must remodel the order.
+     */
+    COMMODITIES_LIMIT_EXCEEDED,
+    /**
+     * Bulk-label / bulk-import batch is larger than the platform allows
+     * in one call. Response is HTTP 422 — the operator splits their
+     * batch into multiple submissions.
+     */
+    BULK_LIMIT_EXCEEDED,
+
+    // ===== Sprint 52 output routing + network printing =====
+    /**
+     * The referenced {@code client_output_destination} row does not exist
+     * (admin API path variable didn't resolve). Response is HTTP 404.
+     */
+    OUTPUT_DESTINATION_NOT_FOUND,
+    /**
+     * A driver raised a delivery failure (network timeout, printer
+     * offline, SFTP auth). Response is HTTP 502 or 500 depending on
+     * whether the caller invoked the test endpoint or hit an
+     * unexpected internal failure.
+     */
+    OUTPUT_DELIVERY_FAILED,
+
     // ===== Fallback =====
     INTERNAL_ERROR
 }

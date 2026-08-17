@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { notify } from '../utils/notify'
-import { FiEdit3, FiExternalLink, FiFilter, FiGlobe, FiHome, FiLink, FiPlus, FiTrash2, FiTruck, FiUser, FiX } from 'react-icons/fi'
+import { FiAlertTriangle, FiEdit3, FiExternalLink, FiFilter, FiGlobe, FiHome, FiLink, FiPlus, FiTrash2, FiTruck, FiUser, FiX } from 'react-icons/fi'
 import type { ColumnDef } from '@tanstack/react-table'
 import {
   shippingConfigService,
@@ -339,11 +339,28 @@ export default function ShippingServiceMappingPage() {
    * click-outside or Escape, so opening the Ships-to zone modal doesn't
    * eat the add-row. Also clears the draft so reopening starts blank.
    */
-  const closeAddForm = useCallback(() => {
+  /**
+   * Fix F15 — snapshot the blank-rule state so we can detect dirty
+   * edits to the newRule form and confirm before discarding. Prior
+   * behavior silently discarded a 20-field entry on X / Cancel / popout-close.
+   * useMemo empty deps: blankRule is fixed for the page's lifetime.
+   */
+  const blankRuleSnapshot = useMemo(
+    () => JSON.stringify({ ...blankRule, destCodes: [] }),
+    [],
+  )
+  const closeAddForm = useCallback((opts?: { skipGuard?: boolean }) => {
+    if (!opts?.skipGuard) {
+      const currentSnapshot = JSON.stringify(newRule)
+      if (currentSnapshot !== blankRuleSnapshot
+          && !window.confirm('Discard the in-progress new mapping?')) {
+        return
+      }
+    }
     setAdding(false)
     setPopout(false)
     setNewRule({ ...blankRule, destCodes: [] })
-  }, [])
+  }, [newRule, blankRuleSnapshot])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -384,6 +401,7 @@ export default function ShippingServiceMappingPage() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount; load() sets loading + mapping-catalog state
     void load()
   }, [load])
 
@@ -614,7 +632,8 @@ export default function ShippingServiceMappingPage() {
       })
       notify.success('Mapping added.')
       setNewRule({ ...blankRule, destCodes: [], warehouseIds: [], presetIds: [] })
-      closeAddForm()
+      // skipGuard: post-save clean-up, no need to prompt for discard.
+      closeAddForm({ skipGuard: true })
       void load()
     } catch (e) {
       notify.apiError(e, 'Failed to save the mapping.')
@@ -1012,8 +1031,45 @@ export default function ShippingServiceMappingPage() {
     ],
   )
 
+  // Fix #299 — warn about rules left in a "no packages" state after a
+  // carrier switch. Prior UX: if the operator closed the packages drawer
+  // without picking, the rule persisted empty and there was no visible
+  // indicator on the page that it needed attention (only re-opening the
+  // rule showed the require-pick gate). This banner surfaces the count
+  // + lets the operator click through to fix each one.
+  const openFirstPendingRule = () => {
+    const firstPendingId = Array.from(pendingPackagesForRules)[0]
+    const rule = rules.find((r) => r.id === firstPendingId)
+    if (rule) setPkgFor(rule)
+  }
+
   return (
     <div className="space-y-4 pb-16">
+      {pendingPackagesForRules.size > 0 ? (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3"
+        >
+          <div className="flex items-start gap-2.5">
+            <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <div>
+              <p className="text-[13px] font-semibold text-amber-900">
+                {pendingPackagesForRules.size} rule{pendingPackagesForRules.size === 1 ? '' : 's'} need package selection
+              </p>
+              <p className="mt-0.5 text-[12px] text-amber-800/80">
+                A carrier switch cleared the previous package set. Pick allowed packages so the rule can match shipments.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={openFirstPendingRule}
+            className="shrink-0 rounded-xl bg-amber-700 px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-amber-800"
+          >
+            Review
+          </button>
+        </div>
+      ) : null}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         {loading && !rules.length ? (
           <p className="py-10 text-center text-sm text-slate-500">Loading mappings…</p>
@@ -1248,7 +1304,13 @@ export default function ShippingServiceMappingPage() {
                     disabled={draftWarehouseChoices.length === 0}
                   >
                     {draftWarehouseChoices.length === 0 ? (
-                      <option disabled value="">Warehouse — none avail.</option>
+                      /* Fix #302 F20 — more explanatory text when disabled.
+                         Prior "Warehouse — none avail." gave no clue why. */
+                      <option disabled value="">
+                        {newRule.clientCode
+                          ? `No PLATFORM or ${newRule.clientCode}-owned warehouses`
+                          : 'No PLATFORM warehouses'}
+                      </option>
                     ) : (
                       draftWarehouseChoices.map((w) => (
                         <option key={w.id} value={w.id}>
@@ -1273,6 +1335,12 @@ export default function ShippingServiceMappingPage() {
                         serviceId: e.target.value,
                         // Carrier may have changed; clear stale package picks.
                         presetIds: [],
+                        // Fix #302 F2 — the new service's origin may not
+                        // match the previously-picked warehouses. Reset so
+                        // the operator picks warehouses aligned to the new
+                        // service (prior behavior left stale JPN warehouses
+                        // selected after switching to a US-only service).
+                        warehouseIds: [],
                       }))}
                       aria-label="Carrier Ship Via"
                     >
@@ -1347,7 +1415,7 @@ export default function ShippingServiceMappingPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={closeAddForm}
+                      onClick={() => closeAddForm()}
                       aria-label="Close"
                       className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
                     >
@@ -1457,7 +1525,7 @@ export default function ShippingServiceMappingPage() {
               </div>
               <button
                 type="button"
-                onClick={closeAddForm}
+                onClick={() => closeAddForm()}
                 className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
                 aria-label="Close"
               >
@@ -1680,7 +1748,7 @@ export default function ShippingServiceMappingPage() {
             <div className="mt-5 flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
               <button
                 type="button"
-                onClick={closeAddForm}
+                onClick={() => closeAddForm()}
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
               >
                 Cancel

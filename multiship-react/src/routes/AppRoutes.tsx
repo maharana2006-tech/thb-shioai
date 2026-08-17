@@ -61,9 +61,21 @@ const ApiKeysPage = lazy(() => import('../components/ApiKeysPage'))
 const ApiReferencePage = lazy(() => import('../components/ApiReferencePage'))
 const SystemSettingsPage = lazy(() => import('../components/SystemSettingsPage'))
 const AdminUsersPage = lazy(() => import('../components/AdminUsersPage'))
+// Sprint 52 — admin CRUD for the carrier_shipping_limit catalog.
+const CarrierShippingLimitsPage = lazy(() => import('../components/CarrierShippingLimitsPage'))
+// Sprint 52 — per-client output routing (LOCAL_FS / SFTP / PRINTER).
+const OutputDestinationsPage = lazy(() => import('../components/OutputDestinationsPage'))
 // Lazy — one-shot flows (bulky but not on every page load).
 const NewShipmentPage = lazy(() => import('../components/NewShipmentPage'))
 const DataHistoryPage = lazy(() => import('../components/DataHistoryPage'))
+
+// Sprint 51 User↔Client linkage re-audit items #1 + #2 — public
+// invite-accept + email-verify pages. Both live OUTSIDE
+// AnonymousRoute + ProtectedRoute so a logged-in operator can still
+// finish accepting a personal invite / verifying an alt email without
+// getting bounced to /dashboard.
+const AcceptInvitePage = lazy(() => import('../components/AcceptInvitePage'))
+const VerifyEmailPage = lazy(() => import('../components/VerifyEmailPage'))
 
 /** Minimal centered spinner — the async chunk usually lands in
  *  <1s on a warm cache, so anything fancier flashes uselessly. */
@@ -84,6 +96,14 @@ export default function AppRoutes() {
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
         </Route>
+
+        {/* Sprint 51 User↔Client linkage re-audit items #1 + #2 — public
+            invite-accept + verify-email pages. Mounted OUTSIDE
+            AnonymousRoute so a currently-logged-in operator can still
+            open an invite link for a second account without a redirect
+            loop through /dashboard. */}
+        <Route path="/invite/:token" element={<AcceptInvitePage />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
 
         <Route element={<ProtectedRoute />}>
           <Route element={<WorkspaceLayout />}>
@@ -131,6 +151,8 @@ export default function AppRoutes() {
                   <Route path="api-reference" element={<ApiReferencePage />} />
                   <Route path="system" element={<SystemSettingsPage />} />
                   <Route path="users" element={<AdminUsersPage />} />
+                  <Route path="carrier-limits" element={<CarrierShippingLimitsPage />} />
+                  <Route path="output-destinations" element={<OutputDestinationsPage />} />
                 </Route>
               </Route>
             </Route>

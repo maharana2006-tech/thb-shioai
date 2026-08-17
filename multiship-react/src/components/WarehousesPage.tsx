@@ -59,6 +59,7 @@ export default function WarehousesPage() {
     return () => clearTimeout(t)
   }, [search])
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- snap paging back to 1 on filter change; user-input-driven, not derivable at render
     setPageIndex(0)
   }, [debouncedSearch, ownerFilter, activeFilter, sorting, pageSize])
 
@@ -83,6 +84,7 @@ export default function WarehousesPage() {
 
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async paginated warehouse-list fetch
     setLoading(true)
     warehouseService
       .listWarehouses({
@@ -248,7 +250,7 @@ export default function WarehousesPage() {
               <ActiveToggle
                 active={!!w.active}
                 busy={busyId !== null}
-                disabled={false}
+                disabled={!admin}
                 onToggle={(e) => { e.stopPropagation(); void handleToggleActive(w) }}
               />
               <span

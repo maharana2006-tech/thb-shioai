@@ -54,9 +54,12 @@ export default function PortalMenu({
 
   useLayoutEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset portal coords when parent closes the menu; nothing derivable at render time (pos comes from DOM rect measured after commit)
       setPos(null)
       return
     }
+    // compute() itself calls setPos with measured DOM anchor rect + menu height;
+    // that cannot happen at render because both are only known post-layout.
     compute()
     const raf = requestAnimationFrame(compute)
     return () => cancelAnimationFrame(raf)

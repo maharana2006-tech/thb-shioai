@@ -9,24 +9,24 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
- * Sprint 51 BS-M3 (interim) — verifies the audit-log list endpoint carries the
- * ADMIN-only {@code @PreAuthorize} annotation. Method-level Spring Security
- * expressions are the wire-level gate; enforcing them here keeps the fix from
- * silently regressing to {@code hasAnyRole('ADMIN','USER')} which previously
- * let USER-tenants enumerate cross-tenant audit rows via the actor/entityKey
- * filters. Full fix (per-row client_code column + scope filter) is deferred.
+ * Sprint 51 follow-up BS-M3 (full fix) — verifies the audit-log list endpoint
+ * carries the ADMIN+USER {@code @PreAuthorize}. The interim ADMIN-only gate
+ * (added by Sprint 51 BS-M3) is now redundant: a persisted {@code client_code}
+ * column plus repository-layer scope predicate mean a tenant-scoped USER can
+ * only ever see their own tenant's rows. Enforcing the annotation here keeps
+ * the fix from regressing to a stricter or looser expression.
  */
 class AuditLogControllerAuthTest {
 
     @Test
-    void listEndpoint_isAdminOnly() throws Exception {
+    void listEndpoint_allowsAdminAndUser() throws Exception {
         Method list = AuditLogController.class.getDeclaredMethod("list",
                 String.class, String.class, String.class, String.class,
                 String.class, String.class, int.class, int.class);
         PreAuthorize gate = list.getAnnotation(PreAuthorize.class);
         assertNotNull(gate, "list() must carry @PreAuthorize");
-        assertEquals("hasRole('ADMIN')", gate.value(),
-                "BS-M3 interim fix requires hasRole('ADMIN'); a USER-tenant "
-                        + "must not be able to reach cross-tenant audit rows.");
+        assertEquals("hasAnyRole('ADMIN','USER')", gate.value(),
+                "BS-M3 full fix opens the endpoint to USER; scope filtering happens "
+                        + "at the repository via the persisted client_code column.");
     }
 }

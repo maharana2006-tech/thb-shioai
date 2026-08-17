@@ -673,7 +673,7 @@ public class OrderController {
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/manual-label")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>> generateManualLabel(
-            @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.ManualShipmentRequest request,
+            @jakarta.validation.Valid @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.ManualShipmentRequest request,
             @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         // Sprint 51 R2 (audit finding #2) — money-touching. A double-click,
@@ -707,7 +707,7 @@ public class OrderController {
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/multi-warehouse-label")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.MultiWarehouseLabelResponse>> generateMultiWarehouseLabel(
-            @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.MultiWarehouseLabelRequest request,
+            @jakarta.validation.Valid @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.MultiWarehouseLabelRequest request,
             @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         // Sprint 51 R2 (audit finding #2) — money-touching. Multi-warehouse
@@ -751,7 +751,7 @@ public class OrderController {
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/multi-warehouse-preview")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.MultiWarehousePreviewResponse>> previewMultiWarehouseSplit(
-            @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.MultiWarehouseLabelRequest request) {
+            @jakarta.validation.Valid @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.MultiWarehouseLabelRequest request) {
         ApiResponse<com.multiship.backend.dto.MultiWarehousePreviewResponse> response =
                 multiWarehousePreviewService.preview(request);
         return ResponseEntity.status(response.getCode()).body(response);

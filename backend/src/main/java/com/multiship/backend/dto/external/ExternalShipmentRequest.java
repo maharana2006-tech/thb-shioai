@@ -1,6 +1,7 @@
 package com.multiship.backend.dto.external;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -56,6 +57,8 @@ public class ExternalShipmentRequest {
     private ExternalParcel parcel;
 
     /** Commercial-invoice line items (required for cross-border shipments). */
+    // Sprint 52 — DTO-level worst-case cap; per-carrier cap enforced downstream.
+    @Size(max = 999, message = "items: at most 999 commercial-invoice lines per shipment")
     private List<ExternalItem> items;
 
     private BigDecimal declaredValue;

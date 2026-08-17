@@ -169,6 +169,7 @@ export default function LabelDocumentPage() {
 
   useEffect(() => {
     if (!Number.isFinite(orderNo)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- surface invalid-order state before any async fetch; guard against non-numeric URL segments
       setError('Invalid order number.')
       setLoading(false)
       return

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { notify } from '../../utils/notify'
 import { FiChevronsLeft, FiChevronsRight, FiLogOut } from 'react-icons/fi'
@@ -9,6 +9,12 @@ import { normalizeRole } from '../../utils/roles'
 import { navIcons } from './navIcons'
 import { useAppDispatch } from '../../store/hooks'
 import { logout as logoutAction } from '../../store/store'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
+
+// Sprint 52 a11y — stable id for the drawer's labelling heading so
+// aria-labelledby resolves to a real node. One drawer per app; a
+// module-scoped constant is fine.
+const MOBILE_DRAWER_TITLE_ID = 'sidebar-mobile-drawer-title'
 
 interface SidebarProps {
   pinned: boolean
@@ -52,6 +58,37 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
   const { username, role } = useAppSession()
   const [loggingOut, setLoggingOut] = useState(false)
 
+  // Sprint 52 a11y — mobile drawer becomes a proper modal dialog:
+  //   · focus trap (Sprint 49 Tier 4 Fix 6 hook, same pattern as
+  //     BulkLabelModal & 6 sibling modals hardened in PR #157)
+  //   · Escape closes the drawer
+  //   · body scroll locked while drawer is open so the underlying page
+  //     doesn't scroll beneath the overlay
+  // All three effects are guarded by `mobileOpen` so desktop rail
+  // behaviour is completely untouched.
+  const drawerRef = useRef<HTMLElement>(null)
+  useFocusTrap(mobileOpen, drawerRef)
+
+  useEffect(() => {
+    if (!mobileOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onMobileClose?.()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [mobileOpen, onMobileClose])
+
+  useEffect(() => {
+    if (!mobileOpen) return
+    // Preserve any inline overflow the page had set (rare but possible
+    // when nested modals also lock) so cleanup restores exactly.
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = previous
+    }
+  }, [mobileOpen])
+
   const normalizedRole = normalizeRole(role)
   const navItems = getNavItemsForRole(normalizedRole)
   const activeKey = resolveWorkspaceRouteKey(location.pathname)
@@ -90,17 +127,14 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
 
   // Sprint 51 FE-M5 — on <md the sidebar behaves as an off-canvas
   // drawer: hidden by default, slides in from the left when mobileOpen,
-  // full 224px wide (the base `w-56` below). On md+ it reverts to the
-  // desktop 64/224 rail.
+  // full 224px wide. On md+ it reverts to the desktop 64/224 rail.
   //
-  // These MUST stay `md:`-prefixed. Unprefixed `w-16` and the base
-  // `w-56` have identical specificity, so the winner is decided by
-  // stylesheet order, not by class order in the attribute — `w-56`
-  // always won and the rail stayed 224px wide while the content column
-  // moved to a 64px margin, i.e. the sidebar covered the page and the
-  // pin toggle looked dead. The `md:` variant sits in a media query
-  // that comes after the base utilities, so it wins cleanly; the hover
-  // peek beats it in turn on pseudo-class specificity.
+  // `md:` prefix required — base `w-56` on the outer <nav> would otherwise
+  // win the cascade over an un-prefixed `w-16` (Tailwind emits width
+  // utilities in ascending numeric order, so `.w-56` comes AFTER `.w-16`
+  // in the stylesheet; later wins at equal specificity). Wrapping the
+  // desktop overrides in `md:` moves them to a `@media` block which is
+  // emitted after the base utilities and therefore wins at md+ breakpoint.
   const desktopWidth = pinned
     ? 'md:w-56'
     : 'md:w-16 md:hover:w-56 md:hover:shadow-[12px_0_40px_rgba(10,22,40,0.25)]'
@@ -118,10 +152,24 @@ export default function Sidebar({ pinned, onTogglePin, mobileOpen = false, onMob
         />
       ) : null}
       <nav
+      ref={drawerRef}
       aria-label="Primary"
+      // Sprint 52 a11y — when the drawer is open on <md the sidebar
+      // behaves as a modal dialog. `role`/`aria-modal` are only set
+      // in that mode so screen readers don't announce the desktop
+      // rail as a modal.
+      role={mobileOpen ? 'dialog' : undefined}
+      aria-modal={mobileOpen ? true : undefined}
+      aria-labelledby={mobileOpen ? MOBILE_DRAWER_TITLE_ID : undefined}
       className={`group fixed inset-y-0 left-0 z-40 flex w-56 flex-col overflow-hidden bg-[#1f150c] transition-transform duration-200 ease-out print:hidden ${mobileTranslate} md:transition-[width] md:duration-200 ${desktopWidth} md:translate-x-0`}
       data-mobile-open={mobileOpen ? 'true' : 'false'}
     >
+      {/* Sprint 52 a11y — sr-only heading that aria-labelledby resolves
+          to when the drawer opens as a dialog. Visible design is
+          unchanged; screen readers announce "Navigation, dialog". */}
+      <h2 id={MOBILE_DRAWER_TITLE_ID} className="sr-only">
+        Navigation
+      </h2>
       {/* inner perforation along the right edge — the stub's tear line */}
       <span
         aria-hidden="true"

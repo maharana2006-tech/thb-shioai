@@ -57,7 +57,7 @@ interface UseOrdersReturn {
   clearError: () => void
 }
 
-const normalizeOrder = (order: any): UiOrder => ({
+const normalizeOrder = (order: Order): UiOrder => ({
   id: `${order.orderDetails.orderNo}`,
   customer: order.orderDetails.customerCode,
   sourceAccount: order.shippingDetails.shipViaDescription || order.shippingDetails.shipVia || 'Direct API',
@@ -87,7 +87,7 @@ export const useOrders = (): UseOrdersReturn => {
     error,
   } = useAppSelector((state: RootState) => state.orders)
 
-  const orders = useMemo(() => rawOrders.map((order: any) => normalizeOrder(order)), [rawOrders])
+  const orders = useMemo(() => rawOrders.map((order: Order) => normalizeOrder(order)), [rawOrders])
 
   const loadOrders = useCallback(async () => {
     try {
@@ -110,7 +110,7 @@ export const useOrders = (): UseOrdersReturn => {
   const fetchOrders = useCallback(async () => {
     try {
       await loadOrders()
-    } catch (err: any) {
+    } catch (err: unknown) {
       notify.apiError(err, 'Failed to fetch orders')
     }
   }, [loadOrders])
@@ -119,7 +119,7 @@ export const useOrders = (): UseOrdersReturn => {
     async (status: string) => {
       try {
         dispatch(setStatusFilter(status as 'ALL' | 'PENDING' | 'GENERATED' | 'ERROR'))
-      } catch (err: any) {
+      } catch (err: unknown) {
         notify.apiError(err, `Failed to switch to ${status} orders`)
       }
     },
@@ -130,7 +130,7 @@ export const useOrders = (): UseOrdersReturn => {
     async (keyword: string) => {
       try {
         dispatch(setSearchKeyword(keyword))
-      } catch (err: any) {
+      } catch (err: unknown) {
         notify.apiError(err, 'Failed to search orders')
       }
     },
@@ -140,7 +140,7 @@ export const useOrders = (): UseOrdersReturn => {
   const fetchDashboardStats = useCallback(async () => {
     try {
       await dispatch(fetchDashboardStatsThunk()).unwrap()
-    } catch (err: any) {
+    } catch (err: unknown) {
       notify.apiError(err, 'Failed to fetch dashboard stats')
     }
   }, [dispatch])

@@ -102,11 +102,13 @@ export default function ImporterBrokerPage() {
 
   // Switching region invalidates a country pick from another region.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale country pick when region changes; can't be derived at render (would fight user re-picks)
     if (countryFilter && regionFilter && regionOf(countryFilter) !== regionFilter) setCountryFilter('')
   }, [regionFilter, countryFilter])
 
   // Any filter or sort change snaps back to page 1.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- snap paging back to 1 on filter change; user-input-driven, not derivable at render
     setPageIndex(0)
   }, [debouncedSearch, clientFilter, regionFilter, countryFilter, carrierFilter, brokerFilter, sorting, pageSize])
 
@@ -172,6 +174,7 @@ export default function ImporterBrokerPage() {
 
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async customs-profile list fetch
     setLoading(true)
     customsProfileService
       .listProfiles({ ...listParams, page: pageIndex, size: pageSize })

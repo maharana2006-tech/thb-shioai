@@ -117,6 +117,26 @@ class BulkLabelServiceImplTest {
         assertEquals(400, resp.getCode());
     }
 
+    /**
+     * Sprint 52 — batches over the platform bulk cap (500 orders) get a
+     * 422 with BULK_LIMIT_EXCEEDED so the caller can programmatically
+     * decide to split their batch. Under-cap counts stay on the happy path.
+     */
+    @Test
+    void submitRejectsBatchesOver500OrdersWithBulkLimitExceeded() {
+        java.util.List<Long> tooMany = new java.util.ArrayList<>();
+        for (long i = 1; i <= 501; i++) tooMany.add(i);
+
+        ApiResponse<BulkLabelJobDTO> resp = service.submit(
+                BulkLabelRequestDTO.builder().orderNumbers(tooMany).build(),
+                "alice");
+
+        assertEquals("error", resp.getStatus());
+        assertEquals(422, resp.getCode());
+        assertEquals(com.multiship.backend.dto.ErrorCode.BULK_LIMIT_EXCEEDED.name(),
+                resp.getErrorCode());
+    }
+
     /* -------- Sprint 50 Tier 0.5 PR E: tenant-scope -------- */
 
     @Test

@@ -2,6 +2,7 @@ package com.multiship.backend.service;
 
 import com.multiship.backend.dto.PackageDetailDTO;
 import com.multiship.backend.dto.ShipmentRequestDTO;
+import com.multiship.backend.exception.CommoditiesLimitExceededException;
 import com.multiship.backend.model.CarrierShippingLimit;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -41,6 +42,31 @@ import java.util.List;
 @Slf4j
 @Service
 public class ShipmentSplitter {
+
+    /**
+     * Sprint 52 — pre-flight check that a shipment's commodity count fits
+     * the carrier cap. Commodities are NOT split across sub-shipments
+     * (splitting a commercial invoice across labels breaks shipper intent
+     * and customs reconciliation); over-cap requests throw so the caller
+     * can surface a 422 to the operator instead of quietly generating a
+     * malformed multi-label shipment.
+     *
+     * <p>No-op when {@code request.intl} is null (domestic) or commodities
+     * is empty / below cap.
+     */
+    public void assertCommoditiesFit(ShipmentRequestDTO request, CarrierShippingLimit limit) {
+        if (request == null || request.getIntl() == null) return;
+        List<?> commodities = request.getIntl().getCommodities();
+        if (commodities == null || commodities.isEmpty()) return;
+        int cap = (limit != null && limit.getMaxCommodities() != null)
+                ? limit.getMaxCommodities()
+                : Integer.MAX_VALUE;
+        if (commodities.size() > cap) {
+            String carrier = limit != null && limit.getCarrierCode() != null
+                    ? limit.getCarrierCode() : "carrier";
+            throw new CommoditiesLimitExceededException(carrier, commodities.size(), cap);
+        }
+    }
 
     /**
      * @return N sub-requests where each has ≤ {@code cap} packages. If the

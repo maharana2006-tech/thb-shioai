@@ -76,6 +76,7 @@ export default function ClientPolicyTab({ clientCode }: { clientCode: string }) 
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client change; load() sets loading + policy state
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientCode])

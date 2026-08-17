@@ -29,8 +29,15 @@ import java.util.Map;
  * hit these endpoints and spend OpenAI budget. Now restricted to human roles.
  * The tighter per-tenant rate limit lives in
  * {@code TenantRateLimitFilter.DEFAULT_AI_PATHS} (10/min/tenant vs. the
- * general 100/min budget) — deferred per-tenant token metering waits on the
- * Micrometer/Actuator work in BP-M4.
+ * general 100/min budget).
+ *
+ * <p>Sprint 51 follow-up BS-M2 — per-tenant OpenAI token metering is
+ * now emitted from {@code OpenAiClient} against Micrometer/Actuator
+ * (wired by BP-M4). Scrape at {@code /actuator/prometheus}, series
+ * {@code openai_prompt_tokens_total}, {@code openai_completion_tokens_total},
+ * {@code openai_total_tokens_total}, {@code openai_requests_total} and
+ * {@code openai_request_duration_seconds}, tagged by {@code tenant} +
+ * {@code endpoint} (+ {@code outcome} on requests).
  */
 @RestController
 @RequestMapping("/api/v1/ai")

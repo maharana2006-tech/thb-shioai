@@ -65,20 +65,24 @@ public class ExternalShipmentController {
         // → failClosedOnRedisError=true so a Redis outage surfaces as 503
         // IDEMPOTENCY_UNAVAILABLE instead of executing the handler without
         // the dedup guarantee (which could double-charge).
-        ApiKeyPrincipal api = requireApi(caller);
-        return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
-                new TypeReference<ApiResponse<ExternalShipmentResponse>>() {},
-                () -> {
-                    try {
-                        ExternalShipmentResponse res = externalApiService.createShipment(api, req);
-                        return ResponseEntity.status(201).body(ApiResponse.<ExternalShipmentResponse>builder()
-                                .status("SUCCESS").code(201).timestamp(LocalDateTime.now())
-                                .message("Shipment #" + res.getShipmentId() + " created.")
-                                .data(res).build());
-                    } catch (ExternalApiException e) {
-                        return this.<ExternalShipmentResponse>error(e);
-                    }
-                }, true);
+        try {
+            ApiKeyPrincipal api = requireApi(caller);
+            return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
+                    new TypeReference<ApiResponse<ExternalShipmentResponse>>() {},
+                    () -> {
+                        try {
+                            ExternalShipmentResponse res = externalApiService.createShipment(api, req);
+                            return ResponseEntity.status(201).body(ApiResponse.<ExternalShipmentResponse>builder()
+                                    .status("SUCCESS").code(201).timestamp(LocalDateTime.now())
+                                    .message("Shipment #" + res.getShipmentId() + " created.")
+                                    .data(res).build());
+                        } catch (ExternalApiException e) {
+                            return this.<ExternalShipmentResponse>error(e);
+                        }
+                    }, true);
+        } catch (ExternalApiException e) {
+            return error(e);
+        }
     }
 
     @Operation(summary = "Get the current tracking status for a shipment")
@@ -103,16 +107,20 @@ public class ExternalShipmentController {
         // Sprint 51 R3 (audit finding #3) — money-touching (voids a live label
         // that some carriers refund only on the first void). Fail-closed so
         // a Redis outage can't trigger duplicate voids on retry.
-        ApiKeyPrincipal api = requireApi(caller);
-        return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
-                new TypeReference<ApiResponse<Map<String, Object>>>() {},
-                () -> {
-                    try {
-                        return ok("Shipment voided.", externalApiService.voidShipment(api, shipmentId));
-                    } catch (ExternalApiException e) {
-                        return this.<Map<String, Object>>error(e);
-                    }
-                }, true);
+        try {
+            ApiKeyPrincipal api = requireApi(caller);
+            return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
+                    new TypeReference<ApiResponse<Map<String, Object>>>() {},
+                    () -> {
+                        try {
+                            return ok("Shipment voided.", externalApiService.voidShipment(api, shipmentId));
+                        } catch (ExternalApiException e) {
+                            return this.<Map<String, Object>>error(e);
+                        }
+                    }, true);
+        } catch (ExternalApiException e) {
+            return error(e);
+        }
     }
 
     @Operation(summary = "Validate an address (structural)")

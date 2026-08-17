@@ -555,12 +555,14 @@ export default function NewShipmentPage() {
   }, [accounts, services])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot default carrier pick when options first populate; deriving at render would fight explicit user picks
     if (!carrier && carrierOptions.length) setCarrier(carrierOptions[0])
   }, [carrierOptions, carrier])
 
   // The selected client's importer/broker profiles (per destination-country set).
   useEffect(() => {
     if (!clientCode) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale profiles when client is cleared; async fetch below repopulates for a non-empty client
       setProfiles([])
       return
     }
@@ -579,6 +581,7 @@ export default function NewShipmentPage() {
   // half-configured client still ships.
   useEffect(() => {
     if (!clientCode) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset client-scoped config when no client is picked; the async fetch below repopulates for a non-empty client
       setClientWarehouses([])
       setWarehouseCode('')
       setAllowedServiceIds(null)
@@ -631,6 +634,7 @@ export default function NewShipmentPage() {
     const cw = clientWarehouses.find((w) => w.warehouse?.code === warehouseCode)
     const a = cw?.warehouse?.address
     if (!a) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- overwrite sender block with warehouse address when picker changes; depends on prior sender state to preserve unfilled fields, not derivable at render
     setSender((cur) => ({
       ...cur,
       ...(a.name ? { name: a.name } : {}),
@@ -798,6 +802,7 @@ export default function NewShipmentPage() {
   }, [destRules, recipient.countryCode])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- re-validate account/service/package selections when carrier/client/route changes; depends on prior state to preserve user picks that are still valid, not derivable at render
     setAccountNumber((cur) =>
       accountsForCarrier.some((a) => (a.accountNumber || '').toLowerCase() === cur.trim().toLowerCase())
         ? cur
@@ -827,7 +832,6 @@ export default function NewShipmentPage() {
         : CUSTOM_PKG
     })
     // Re-validate account/service/package whenever the carrier, client, or route changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [carrier, clientCode, accountsForCarrier, servicesForCarrier, packagesForCarrier, defaultServiceId, defaultPackagePresetId])
 
   /**
@@ -840,27 +844,42 @@ export default function NewShipmentPage() {
     const client = clients.find((c) => c.clientCode === code)
     if (!client) return
     const yourAddr = isReturn ? client.returnAddress ?? client.shipFrom : client.shipFrom
-    if (yourAddr) {
-      const fill = (base: ManualShipmentAddress): ManualShipmentAddress => ({
-        name: client.name || base.name,
-        company: client.name || base.company,
-        phone: client.phone || base.phone,
-        email: client.email || base.email,
-        addressLine1: yourAddr.line1 || base.addressLine1,
-        addressLine2: yourAddr.line2 || '',
-        city: yourAddr.city || base.city,
-        state: yourAddr.state || base.state,
-        postalCode: yourAddr.zip || base.postalCode,
-        countryCode: yourAddr.country || base.countryCode,
-      })
-      if (isReturn) setRecipient((r) => fill(r))
-      else setSender((s) => fill(s))
-    }
+    // Always reset to defaultSender() before overlay — otherwise switching
+    // from Client A (with shipFrom) to Client B (without) would leave A's
+    // address in place. The subsequent warehouse-change effect re-overlays
+    // if the newly-picked client has warehouses attached.
+    const base = defaultSender()
+    const merged: ManualShipmentAddress = yourAddr
+      ? {
+          name: client.name || base.name,
+          company: client.name || base.company,
+          phone: client.phone || base.phone,
+          email: client.email || base.email,
+          addressLine1: yourAddr.line1 || base.addressLine1,
+          addressLine2: yourAddr.line2 || '',
+          city: yourAddr.city || base.city,
+          state: yourAddr.state || base.state,
+          postalCode: yourAddr.zip || base.postalCode,
+          countryCode: yourAddr.country || base.countryCode,
+        }
+      : base
+    if (isReturn) setRecipient(merged)
+    else setSender(merged)
     const accts = (client.carrierAccounts || []).filter((a) => a.active)
     const def = accts.find((a) => a.clientDefault) || accts[0]
-    if (def && carrierOptions.includes(canon(def.carrierCode))) {
-      setCarrier(canon(def.carrierCode))
-      setAccountNumber(def.accountNumber || '')
+    if (def) {
+      const canonical = canon(def.carrierCode)
+      if (carrierOptions.includes(canonical)) {
+        setCarrier(canonical)
+        setAccountNumber(def.accountNumber || '')
+      } else {
+        // Client's default account is for a carrier this workspace hasn't
+        // connected. Silently skipping would leave the operator wondering
+        // why the picker didn't pre-fill; toast so it's obvious what to do.
+        notify.info(
+          `${client.name || client.clientCode}'s default carrier ${canonical} isn't connected in this workspace — pick a carrier manually.`,
+        )
+      }
     }
   }
 
@@ -938,7 +957,6 @@ export default function NewShipmentPage() {
         unitValue: it.unitValue,
       })),
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [isInternational, isCustomPkg, carrier, accountNumber, incoterms, reasonForExport,
       currency, sender, recipient, weight, declaredValue, insuredValue, length, width, height, items],
   )
@@ -997,6 +1015,7 @@ export default function NewShipmentPage() {
 
   // A new destination or client re-resolves — drop any override tied to the old one.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale importer/broker override on destination/client change; must fire post-render, not derivable
     setOverride(null)
   }, [clientCode, destCountry])
 
@@ -1006,6 +1025,7 @@ export default function NewShipmentPage() {
 
   // A changed recipient invalidates a previous validation result.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- invalidate stale validation on recipient edit; forces re-validation before submit, cannot be derived at render
     setRecipientCheck(null)
   }, [recipient.addressLine1, recipient.city, recipient.state, recipient.postalCode, recipient.countryCode])
 
@@ -1556,13 +1576,15 @@ export default function NewShipmentPage() {
                     ))}
                   </select>
                 </Field>
-                <Field label="Reason of export" error={errAt('reasonForExport')}>
-                  <select className={inputCls} value={reasonForExport} onChange={(e) => setReasonForExport(e.target.value)}>
-                    {EXPORT_REASONS.map((r) => (
-                      <option key={r} value={r}>{r.charAt(0) + r.slice(1).toLowerCase()}</option>
-                    ))}
-                  </select>
-                </Field>
+                {isInternational ? (
+                  <Field label="Reason of export" error={errAt('reasonForExport')}>
+                    <select className={inputCls} value={reasonForExport} onChange={(e) => setReasonForExport(e.target.value)}>
+                      {EXPORT_REASONS.map((r) => (
+                        <option key={r} value={r}>{r.charAt(0) + r.slice(1).toLowerCase()}</option>
+                      ))}
+                    </select>
+                  </Field>
+                ) : null}
                 <Field label="Currency" error={errAt('currency')}>
                   <select className={inputCls} value={currency} onChange={(e) => setCurrency(e.target.value)}>
                     {CURRENCIES.map((c) => (
@@ -1796,12 +1818,14 @@ export default function NewShipmentPage() {
                       </button>
                     ) : null}
                   </Field>
-                  <Field label="Incoterms" error={errAt('incoterms')}>
-                    <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
-                      <option value="DDP">DDP — sender pays duties</option>
-                      <option value="DAP">DAP — receiver pays duties</option>
-                    </select>
-                  </Field>
+                  {isInternational ? (
+                    <Field label="Incoterms" error={errAt('incoterms')}>
+                      <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
+                        <option value="DDP">DDP — sender pays duties</option>
+                        <option value="DAP">DAP — receiver pays duties</option>
+                      </select>
+                    </Field>
+                  ) : null}
                 </div>
               </SectionCard>
 
@@ -2518,6 +2542,7 @@ export function VirtualizedNewShipmentItems({
   itemErr?: (index: number, field: string) => string | undefined
 }) {
   const parentRef = useRef<HTMLDivElement>(null)
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual's useVirtualizer() returns functions that cannot be memoized safely — library-level incompatibility with react-hooks analyzer, not a code issue
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => parentRef.current,

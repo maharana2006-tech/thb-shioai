@@ -109,12 +109,6 @@ class ExternalShipmentControllerTest {
         verify(idempotency).executeOrReplay(anyLong(), any(), any(TypeReference.class), any(), eq(true));
     }
 
-    @org.junit.jupiter.api.Disabled(
-            "Follow-up finding: ExternalShipmentController.create/voidShipment call " +
-            "requireApi(caller) OUTSIDE the try/catch, so a null principal escapes as " +
-            "an uncaught ExternalApiException (returned as 500 by Spring's default " +
-            "handler) instead of a 401 ApiResponse envelope. Fix belongs to the " +
-            "controller author; this test pins the intended contract for the fix.")
     @Test
     void create_nullCaller_returns401Unauthorized() {
         ResponseEntity<ApiResponse<ExternalShipmentResponse>> resp =
@@ -162,6 +156,15 @@ class ExternalShipmentControllerTest {
 
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, resp.getStatusCode());
         verify(idempotency).executeOrReplay(anyLong(), any(), any(TypeReference.class), any(), eq(true));
+    }
+
+    @Test
+    void voidShipment_nullCaller_returns401Unauthorized() {
+        ResponseEntity<ApiResponse<Map<String, Object>>> resp =
+                controller.voidShipment(9L, null, "req-1");
+
+        assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
+        assertEquals(ErrorCode.UNAUTHORIZED.name(), resp.getBody().getErrorCode());
     }
 
     // ===== validate =====

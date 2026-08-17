@@ -119,6 +119,7 @@ export default function ShippingServicesPage() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount; load() sets loading + catalog state
     void load()
   }, [load])
 

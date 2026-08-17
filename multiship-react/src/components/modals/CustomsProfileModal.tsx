@@ -252,6 +252,7 @@ export default function CustomsProfileModal({
   // client's profiles so we can still block countries owned by other profiles.
   useEffect(() => {
     if (existingProfiles.length || !clientCode) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset fetched profiles when caller supplies its own list; guard prevents redundant network call
       setFetchedProfiles([])
       return
     }
@@ -341,6 +342,7 @@ export default function CustomsProfileModal({
     if (form.currency && form.currency.trim()) return
     const originCountry = client?.shipFrom?.country ?? null
     if (!originCountry) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot currency default when create-mode client's origin country changes; deriving at render would overwrite an explicit user pick
     setForm((cur) => ({ ...cur, currency: defaultCurrencyForCountry(originCountry) }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client?.shipFrom?.country, editing])
@@ -383,6 +385,7 @@ export default function CustomsProfileModal({
   // forwarder can clear India shipments through local partners).
   useEffect(() => {
     if (!activeRegion) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale importer country when destination region/territory changes; derived value depends on prior form state, not derivable at render
     setForm((cur) => {
       if (!cur.importerCountry) return cur
       const stale = activeTerritory

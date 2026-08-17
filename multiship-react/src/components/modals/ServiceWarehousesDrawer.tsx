@@ -66,7 +66,8 @@ export default function ServiceWarehousesDrawer({
   const toggle = (warehouseId: number) =>
     setSelected((cur) => {
       const next = new Set(cur)
-      next.has(warehouseId) ? next.delete(warehouseId) : next.add(warehouseId)
+      if (next.has(warehouseId)) next.delete(warehouseId)
+      else next.add(warehouseId)
       return next
     })
 

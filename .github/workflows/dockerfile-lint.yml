@@ -1,0 +1,55 @@
+name: dockerfile-lint
+
+# Sprint 52 verification hardening — Docker image was added in Sprint 51
+# BP-M3 (PR #169) but has never been linted or built in CI. `docker build`
+# in CI needs a Docker daemon (which the ubuntu-latest runner has, but
+# building the fat-jar image would eat ~5-8 min/PR). Hadolint gives us
+# most of the value — static Dockerfile analysis, pins/user/health/layer
+# hygiene — for ~5 seconds per PR without needing to actually build.
+#
+# Rules are tuned in .hadolint.yaml at the repo root. Currently only
+# demoted DL3007 (pinned digest — nice-to-have, blocking would force
+# a digest update on every base-image bump).
+on:
+  pull_request:
+    paths:
+      - 'backend/Dockerfile'
+      - 'backend/.dockerignore'
+      - '.hadolint.yaml'
+      - '.github/workflows/dockerfile-lint.yml'
+  push:
+    branches: [dev, main]
+    paths:
+      - 'backend/Dockerfile'
+      - 'backend/.dockerignore'
+      - '.hadolint.yaml'
+      - '.github/workflows/dockerfile-lint.yml'
+
+concurrency:
+  group: dockerfile-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hadolint:
+    name: hadolint backend/Dockerfile
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # hadolint-action v3.1.0 is the most recent tag (as of 2026-08).
+      # It shells out to the hadolint binary and honours the repo-root
+      # .hadolint.yaml automatically via the `config` input.
+      - name: Run hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: backend/Dockerfile
+          config: .hadolint.yaml
+          # `error` fails the job on any rule at error severity or above.
+          # `.hadolint.yaml` demotes rules we've consciously accepted.
+          failure-threshold: error
+          # SARIF output would be nicer but requires Advanced Security /
+          # code-scanning setup — stick to plain output for now.
+          format: tty

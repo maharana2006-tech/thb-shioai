@@ -8,6 +8,7 @@ import {
   FiCheckCircle,
   FiClock,
   FiChevronRight,
+  FiCopy,
   FiGlobe,
   FiRefreshCw,
   FiSettings,
@@ -19,10 +20,29 @@ import {
 import { dashboardService, type DashboardData } from '../api/dashboardService'
 import { isAbortError } from '../api/apiClient'
 import { useAppSession } from '../hooks/useAppSession'
+import { canManageCarriers, normalizeRole } from '../utils/roles'
 import { countryName } from '../utils/countries'
+import { settingsPaths } from '../routes/workspaceRoutes'
 
 const CARD = 'rounded-2xl border border-slate-200 bg-white shadow-sm'
 const POLL_MS = 45_000
+/**
+ * A queue board on the operator's second monitor is a common failure mode:
+ * poll fails silently in the background, operator glances at 3-minute-old
+ * data + trusts it. STALE_THRESHOLD triggers a persistent "data is stale"
+ * warning that survives subsequent silent failures (unlike the transient
+ * "Couldn't refresh" badge, which only reflects the MOST RECENT attempt).
+ * 3× POLL = we've missed ~2 refresh cycles.
+ */
+const STALE_THRESHOLD_MS = POLL_MS * 3
+/**
+ * Refresh-button debounce. Prior UI let a rapid double-click fire 3+
+ * requests; the AbortController cancels the older ones but the backend
+ * still processed them. Disable the button for a short cooldown after a
+ * click so operator can't spam. In-flight is separately guarded by
+ * `inFlightRef`.
+ */
+const REFRESH_DEBOUNCE_MS = 1_500
 
 type QueueShape = DashboardData['queue']
 
@@ -93,14 +113,29 @@ function Sparkline({ points }: { points: number[] }) {
 export default function Dashboard() {
   const navigate = useNavigate()
   const { username, role } = useAppSession()
-  const isAdmin = (role || '').toUpperCase() === 'ADMIN'
+  // Fix F3 — use the shared role helper so a future role rename or
+  // multi-tier privilege check (e.g., an OPS role that can also manage
+  // carriers) is applied consistently across the app.
+  const isAdmin = canManageCarriers(normalizeRole(role))
 
   const [data, setData] = useState<DashboardData | null>(null)
   const [updatedAt, setUpdatedAt] = useState<number | null>(null)
   /** Last load failure. Previously every error was swallowed, so a broken
    *  /dashboard looked identical to "still loading" — forever. */
   const [loadError, setLoadError] = useState<string | null>(null)
+  /** Fix F5 — debounce the Refresh button so a rapid double-click can't
+   *  spam the backend even if the AbortController cancels the old
+   *  request client-side. */
+  const [refreshCooldown, setRefreshCooldown] = useState(false)
+  /** Fix F4/F10 — `now` is stored in state and re-sampled every 30s by
+   *  the staleTicker effect below. Reading Date.now() during render is
+   *  impure (react-hooks/purity lint rule); reading it inside a
+   *  setInterval that stores into state is fine. isStale becomes a
+   *  pure function of updatedAt + now. */
+  const [now, setNow] = useState<number>(() => Date.now())
+  const isStale = updatedAt != null && now - updatedAt > STALE_THRESHOLD_MS
   const timer = useRef<number | null>(null)
+  const staleTicker = useRef<number | null>(null)
   // Sprint 49 Tier 4 Fix 3 — in-flight guard + AbortController.
   //   inFlightRef skips a new tick when the previous one is still pending
   //   (prevents a slow-carrier request from queueing behind another).
@@ -158,6 +193,15 @@ export default function Dashboard() {
     mountedRef.current = true
     load()
     timer.current = window.setInterval(load, POLL_MS)
+    // Fix F4/F10 — re-sample Date.now() every 30s so the derived `isStale`
+    // flag and "Updated N ago" badge stay accurate even when no fetch
+    // completes. Without this, a background-failing poll leaves the badge
+    // frozen. Reading Date.now() here (side-effect) is lint-safe;
+    // reading during render is not.
+    staleTicker.current = window.setInterval(
+      () => { if (mountedRef.current) setNow(Date.now()) },
+      30_000,
+    )
 
     // A queue board should be current the moment you look at it. Polling a
     // hidden tab just burns requests, and coming back to one meant staring
@@ -169,6 +213,11 @@ export default function Dashboard() {
           window.clearInterval(timer.current)
           timer.current = null
         }
+        // Fix #306 — also cancel any in-flight fetch so it doesn't
+        // resolve while the tab is hidden and burn network. Prior UI
+        // cleared the interval but let the pending request complete,
+        // wasting response bytes + a state update the user won't see.
+        currentAbortRef.current?.abort()
         return
       }
       load()
@@ -180,6 +229,7 @@ export default function Dashboard() {
     return () => {
       mountedRef.current = false
       if (timer.current) window.clearInterval(timer.current)
+      if (staleTicker.current) window.clearInterval(staleTicker.current)
       document.removeEventListener('visibilitychange', onVisibility)
       window.removeEventListener('focus', load)
       currentAbortRef.current?.abort()  // don't leak a pending fetch on unmount
@@ -213,28 +263,32 @@ export default function Dashboard() {
           .slice(0, 3)
           .map((l) => `${l.client} → ${countryName(l.country)}`)
           .join(' · '),
-        to: '/settings/importer-broker',
+        // Fix #309 — reference the settingsPaths registry so a route
+        // rename lands here automatically. Prior hardcoded strings would
+        // silently break if e.g. shipping-catalog split back into two
+        // routes or importer-broker was renamed.
+        to: settingsPaths.importerBroker,
       },
       {
         ok: health.unverifiedAccounts === 0,
         okText: 'All carrier accounts verified',
         warnText: `${health.unverifiedAccounts} carrier account${health.unverifiedAccounts === 1 ? '' : 's'} unverified`,
         detail: '',
-        to: '/settings/carriers',
+        to: settingsPaths.carriers,
       },
       {
         ok: health.clientsWithoutDefault === 0,
         okText: 'Every client has a default account',
         warnText: `${health.clientsWithoutDefault} client${health.clientsWithoutDefault === 1 ? '' : 's'} without a default account`,
         detail: '',
-        to: '/settings/carriers',
+        to: settingsPaths.carriers,
       },
       {
         ok: health.rulesToDisabledServices === 0,
         okText: 'Every ship-method rule maps to an enabled service',
         warnText: `${health.rulesToDisabledServices} rule${health.rulesToDisabledServices === 1 ? '' : 's'} point at disabled services`,
         detail: '',
-        to: '/settings/shipping-catalog?tab=services',
+        to: `${settingsPaths.shippingCatalog}?tab=services`,
       },
     ]
   }, [health])
@@ -311,25 +365,55 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {loadError ? (
-            <span
-              title={loadError}
-              className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200"
-            >
-              <FiAlertTriangle className="h-3 w-3" />
-              {updatedAt ? "Couldn't refresh" : "Couldn't load"}
-            </span>
-          ) : (
-            <span className="text-[11.5px] text-slate-400">
-              {updatedAt ? `Updated ${relTime(new Date(updatedAt).toISOString())}` : 'Loading…'}
-            </span>
-          )}
+          {/* Fix F4/F10 — persistent stale-data warning that survives
+              subsequent silent poll failures. Prior "Couldn't refresh" only
+              reflected the MOST RECENT attempt; if load-2/3/4 all failed
+              after load-1 succeeded, the badge stayed silent. */}
+          {(() => {
+            if (loadError) {
+              return (
+                <span
+                  title={loadError}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200"
+                >
+                  <FiAlertTriangle className="h-3 w-3" />
+                  {updatedAt ? "Couldn't refresh" : "Couldn't load"}
+                </span>
+              )
+            }
+            if (isStale && updatedAt != null) {
+              return (
+                <span
+                  title={`Last successful refresh was ${relTime(new Date(updatedAt).toISOString())}. Automatic polling may be blocked.`}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200"
+                >
+                  <FiAlertTriangle className="h-3 w-3" />
+                  Stale · {relTime(new Date(updatedAt).toISOString())}
+                </span>
+              )
+            }
+            return (
+              <span className="text-[11.5px] text-slate-400">
+                {updatedAt ? `Updated ${relTime(new Date(updatedAt).toISOString())}` : 'Loading…'}
+              </span>
+            )
+          })()}
           <button
             type="button"
-            onClick={load}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
+            onClick={() => {
+              // Fix F5 — cooldown so rapid clicks can't spam the backend.
+              // Kicks in AFTER the click so the first press always fires.
+              if (refreshCooldown) return
+              setRefreshCooldown(true)
+              window.setTimeout(() => {
+                if (mountedRef.current) setRefreshCooldown(false)
+              }, REFRESH_DEBOUNCE_MS)
+              load()
+            }}
+            disabled={refreshCooldown}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <FiRefreshCw className="h-3.5 w-3.5" /> Refresh
+            <FiRefreshCw className={`h-3.5 w-3.5 ${refreshCooldown ? 'animate-spin' : ''}`} /> Refresh
           </button>
           <button
             type="button"
@@ -612,12 +696,19 @@ export default function Dashboard() {
           <ul className="mt-2.5 divide-y divide-slate-100">
             {(data?.recentLabels ?? []).slice(0, 5).map((l) => {
               const av = CARRIER_AVATAR[l.carrier] ?? { bg: 'bg-slate-600', mono: l.carrier?.slice(0, 3) ?? '?' }
+              // Fix #308 a11y — expressive aria-label + focus-visible outline
+              // so keyboard users see focus + screen readers hear the
+              // structured content instead of just "button".
+              const label = `Open label for order ${l.orderNo}, ${l.client}${
+                l.trackingNumber ? `, tracking ${l.trackingNumber}` : ''
+              }`
               return (
-                <li key={`${l.orderNo}-${l.trackingNumber}`}>
+                <li key={`${l.orderNo}-${l.trackingNumber}`} className="flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => navigate(`/label/${l.orderNo}`)}
-                    className="flex w-full items-center gap-2.5 rounded-lg py-2.5 text-left transition hover:bg-slate-50/70"
+                    aria-label={label}
+                    className="flex flex-1 items-center gap-2.5 rounded-lg py-2.5 text-left transition hover:bg-slate-50/70 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#412d15]"
                   >
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#412d15]/10 text-[10.5px] font-bold text-[#412d15]">
                       {initials(l.client)}
@@ -635,6 +726,25 @@ export default function Dashboard() {
                       <span className="block text-[10px] text-slate-400">{relTime(l.generatedAt)}</span>
                     </span>
                   </button>
+                  {l.trackingNumber ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        // Fix #308 — separate copy affordance. Prior UX made
+                        // the tracking number un-copyable — clicking anywhere
+                        // in the row navigated away. Now the row still
+                        // navigates, but this small button copies the tracking
+                        // number to the clipboard without navigation.
+                        e.stopPropagation()
+                        void navigator.clipboard.writeText(l.trackingNumber!)
+                      }}
+                      aria-label={`Copy tracking number ${l.trackingNumber}`}
+                      title="Copy tracking number"
+                      className="shrink-0 rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#412d15]"
+                    >
+                      <FiCopy className="h-3 w-3" />
+                    </button>
+                  ) : null}
                 </li>
               )
             })}

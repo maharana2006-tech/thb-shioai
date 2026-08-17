@@ -4,10 +4,10 @@ import { notify } from '../utils/notify'
 import {
   FiAlertCircle,
   FiArrowLeft,
-  FiArrowRight,
   FiCheck,
   FiChevronLeft,
   FiChevronRight,
+  FiEdit2,
   FiHome,
   FiLoader,
   FiPlus,
@@ -15,6 +15,7 @@ import {
 } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import { clientService, type Address, type Client, type ClientUpsertPayload } from '../api/clientService'
+import { TimezoneCombobox } from './TimezoneCombobox'
 import { accountRefService, type CarrierAccountRef } from '../api/accountRefService'
 import {
   clientWarehouseService,
@@ -40,7 +41,6 @@ import {
   type AddressLike,
 } from '../utils/clientValidation'
 import { validateCarrierAccount } from '../validation/carrierAccountValidation'
-import CarrierLogo from './workspace/CarrierLogo'
 import CountrySelect from './workspace/CountrySelect'
 import Select from './workspace/Select'
 // Hidden-step components (kept commented for the day they come back into the wizard):
@@ -95,12 +95,14 @@ type StepKey =
   | 'carriers'
   | 'mapping'
   | 'importerBroker'
+  | 'summary'
 
 /** Steps that count as "must complete before Create client fires" in create
  *  mode. importerBroker is intentionally excluded — it's optional per the
- *  onboarding brief. The Create-blockers check reads this list. */
+ *  onboarding brief. summary IS mandatory — the operator must land on it
+ *  to Submit. The Create-blockers check reads this list. */
 const MANDATORY_STEPS: ReadonlySet<StepKey> = new Set([
-  'identity', 'shipFrom', 'return', 'carriers', 'mapping',
+  'identity', 'shipFrom', 'return', 'carriers', 'mapping', 'summary',
 ])
 
 const STEP_DEFS: ReadonlyArray<{ key: StepKey; label: string; short: string; optional?: boolean }> = [
@@ -110,7 +112,72 @@ const STEP_DEFS: ReadonlyArray<{ key: StepKey; label: string; short: string; opt
   { key: 'carriers',       label: 'Carrier accounts',         short: 'Carriers' },
   { key: 'mapping',        label: 'Shipping service mapping', short: 'Mapping' },
   { key: 'importerBroker', label: 'Importer / Broker',        short: 'Importer',   optional: true },
+  { key: 'summary',        label: 'Review & submit',          short: 'Summary' },
 ]
+
+/**
+ * Create-mode-only draft for the Importer / Broker step. Persisted to the
+ * per-user localStorage draft alongside carrierDrafts + mappingDrafts, and
+ * committed via `customsProfileService.save` immediately after the client
+ * is created (mirrors the carrier + mapping post-create fan-out).
+ *
+ * `filled=false` means the operator explicitly skipped this step — the
+ * persist path is a no-op. `filled=true` requires the BUSINESS-importer
+ * identity fields; RECEIVER (DAP consignee-is-IOR) has no identity of
+ * its own, so those fields stay optional.
+ */
+type ImporterBrokerDraft = {
+  filled: boolean
+  countries: string[]  // ISO-3166 alpha-2; empty = catch-all
+  importerType: 'BUSINESS' | 'RECEIVER'
+  importerName: string
+  importerCountry: string
+  importerAddress1: string
+  importerAddress2: string
+  importerCity: string
+  importerState: string
+  importerPostcode: string
+  importerPhone: string
+  importerTaxId: string
+  importerTaxIdType: string
+  brokerName: string
+  brokerPhone: string
+  incoterms: string
+  reasonForExport: string
+}
+
+const emptyImporterBrokerDraft = (): ImporterBrokerDraft => ({
+  filled: false,
+  countries: [],
+  importerType: 'BUSINESS',
+  importerName: '',
+  importerCountry: '',
+  importerAddress1: '',
+  importerAddress2: '',
+  importerCity: '',
+  importerState: '',
+  importerPostcode: '',
+  importerPhone: '',
+  importerTaxId: '',
+  importerTaxIdType: '',
+  brokerName: '',
+  brokerPhone: '',
+  incoterms: '',
+  reasonForExport: '',
+})
+
+/** BUSINESS-importer requires the identity + address block. RECEIVER
+ *  profiles legitimately have no importer identity (DAP terms — the
+ *  receiver is the IOR), so a filled=true RECEIVER always validates. */
+function importerBrokerDraftValid(d: ImporterBrokerDraft): boolean {
+  if (!d.filled) return true
+  if (d.importerType === 'RECEIVER') return true
+  return !!d.importerName.trim()
+    && !!d.importerCountry.trim()
+    && !!d.importerAddress1.trim()
+    && !!d.importerCity.trim()
+    && !!d.importerPostcode.trim()
+}
 
 const stepIndex = (key: StepKey) => STEP_DEFS.findIndex((s) => s.key === key)
 
@@ -161,20 +228,12 @@ type MappingRuleDraft = {
 
 type DraftShape = {
   form: ClientUpsertPayload
-  accountForm: {
-    carrierCode: string
-    accountNumber: string
-    clientId: string
-    clientSecret: string
-    environment: CarrierEnvironment
-    clientDefault: boolean
-  }
-  showAccountForm: boolean
   selectedShipFromWarehouseId: number | null
   visitedSteps: StepKey[]
   activeStep: StepKey
   carrierDrafts?: CarrierAccountDraft[]
   mappingDrafts?: MappingRuleDraft[]
+  importerBrokerDraft?: ImporterBrokerDraft
 }
 
 const inputBaseClass =
@@ -297,17 +356,6 @@ export default function ClientEditorPage() {
   }
 
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
-  const [showAccountForm, setShowAccountForm] = useState(draft?.showAccountForm ?? false)
-  const [accountForm, setAccountForm] = useState(
-    draft?.accountForm ?? {
-      carrierCode: 'UPS',
-      accountNumber: '',
-      clientId: '',
-      clientSecret: '',
-      environment: 'SANDBOX' as CarrierEnvironment,
-      clientDefault: true,
-    },
-  )
 
   /** Create-mode carrier account drafts. Committed after Create client. */
   const [carrierDrafts, setCarrierDrafts] = useState<CarrierAccountDraft[]>(
@@ -316,6 +364,11 @@ export default function ClientEditorPage() {
   /** Create-mode mapping rule drafts. Committed after Create client. */
   const [mappingDrafts, setMappingDrafts] = useState<MappingRuleDraft[]>(
     () => draft?.mappingDrafts ?? [],
+  )
+  /** Create-mode importer/broker draft. Committed after Create client if
+   *  `filled=true` (otherwise the step was explicitly skipped). */
+  const [importerBrokerDraft, setImporterBrokerDraft] = useState<ImporterBrokerDraft>(
+    () => draft?.importerBrokerDraft ?? emptyImporterBrokerDraft(),
   )
   const nextDraftId = useRef(
     Math.max(
@@ -330,7 +383,6 @@ export default function ClientEditorPage() {
    * intersect address caps in the AddressGrid. Sources:
    *   - {@link accounts}       (edit mode: existing rows fetched from server)
    *   - {@link carrierDrafts}  (create mode: staged accounts pending commit)
-   *   - {@link accountForm}    (create mode: Identity-step inline account being typed)
    *
    * Kept as a set of raw carrier code strings — the utility upper-cases and
    * filters to known codes (UPS / FEDEX / USPS / DHL) internally.
@@ -339,12 +391,8 @@ export default function ClientEditorPage() {
     const set = new Set<string>()
     accounts.forEach((a) => { if (a.carrierCode) set.add(a.carrierCode) })
     carrierDrafts.forEach((d) => { if (d.carrierCode) set.add(d.carrierCode) })
-    // Only count the inline form if the operator has actually opened it in
-    // create mode — an empty carrierCode from accountForm's initial state
-    // shouldn't influence caps.
-    if (!isEdit && showAccountForm && accountForm.carrierCode) set.add(accountForm.carrierCode)
     return Array.from(set)
-  }, [accounts, carrierDrafts, showAccountForm, accountForm.carrierCode, isEdit])
+  }, [accounts, carrierDrafts])
 
   /** Intersection of per-carrier address caps — the strictest limit per
    *  field across every enabled carrier. Empty set falls back to the loose
@@ -393,6 +441,10 @@ export default function ClientEditorPage() {
     draft?.selectedShipFromWarehouseId ?? null,
   )
   const [showShipFromAddWarehouse, setShowShipFromAddWarehouse] = useState(false)
+  // null when the modal is opening for create OR closed; a Warehouse when
+  // opening for edit from the Ship From picker's preview card. Cleared when
+  // the modal closes so the next open defaults back to create.
+  const [warehouseBeingEdited, setWarehouseBeingEdited] = useState<Warehouse | null>(null)
   /** Warehouse ids currently attached to this client (edit mode only). The
    *  Ship From picker filters these OUT so the operator only sees warehouses
    *  they could switch TO — with the currently-selected default kept visible
@@ -420,6 +472,7 @@ export default function ClientEditorPage() {
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client change; loadPickWarehouses() sets warehouse list state
     void loadPickWarehouses()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingCode])
@@ -458,10 +511,12 @@ export default function ClientEditorPage() {
 
   const set = (key: keyof ClientUpsertPayload) => (event: { target: { value: string } }) => {
     const raw = event.target.value
-    // Client code is uppercase-normalized on the wire; do it in state too so
-    // the operator sees exactly what's saved (and no case-only collisions
-    // with existing clients slip through the local dup check).
-    const value = key === 'clientCode' ? raw.toUpperCase() : raw
+    // Client code is uppercase + whitespace-stripped on the wire; do it in
+    // state too so the operator sees EXACTLY what's saved (and no case-only
+    // / whitespace-only collisions with existing clients slip through the
+    // local dup check). Prior behavior only uppercased — a pasted "  ma1885 "
+    // would render as "  MA1885 " in the summary but save as "MA1885".
+    const value = key === 'clientCode' ? raw.toUpperCase().replace(/\s+/g, '') : raw
     setForm((cur) => ({ ...cur, [key]: value }))
     if (key === 'clientCode') setCodeConflict(null) // stale check → clear
   }
@@ -506,6 +561,7 @@ export default function ClientEditorPage() {
   useEffect(() => {
     if (!isEdit || !editingCode) return
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async client fetch in edit mode
     setLoading(true)
     clientService
       .getClient(editingCode)
@@ -522,6 +578,13 @@ export default function ClientEditorPage() {
           shipFrom: { ...emptyAddress, ...(c.shipFrom ?? {}) },
           returnAddress: { ...emptyAddress, ...(c.returnAddress ?? {}) },
           returnSameAsShipFrom: c.returnSameAsShipFrom ?? true,
+          // Sprint 50 Tier 1 finding #4 — hydrate per-tenant defaults so
+          // the editor's Defaults panel shows what's currently persisted.
+          defaultCurrency: c.defaultCurrency ?? '',
+          defaultWeightUnit: c.defaultWeightUnit ?? '',
+          defaultDimUnit: c.defaultDimUnit ?? '',
+          timezone: c.timezone ?? '',
+          defaultOriginCountry: c.defaultOriginCountry ?? '',
         })
         setAccounts(c.carrierAccounts ?? [])
       })
@@ -539,21 +602,20 @@ export default function ClientEditorPage() {
   }, [isEdit, editingCode, navigate])
 
   useEffect(() => {
+    // Edit-mode carriers now come exclusively from the getClient response
+    // in the effect above (line ~589 setAccounts(c.carrierAccounts ?? [])).
+    // Prior behavior fired listClientAccounts here too — non-deterministic
+    // resolution order meant the second-to-resolve overwrote the first,
+    // occasionally shadowing fresh getClient data with a stale list cache.
+    //
+    // Create mode still needs the shared platform account book so the
+    // Mapping step's "platform carrier account" picker has options to
+    // source a carrier for a rule.
+    if (editingCode) return
     let cancelled = false
-    if (editingCode) {
-      // Edit mode — this client's own accounts drive the pickers.
-      clientService.listClientAccounts(editingCode)
-        .then((a) => { if (!cancelled) setAccounts(a) })
-        .catch(() => { /* list is cosmetic */ })
-    } else {
-      // Create mode — the client has no persisted accounts yet, but the
-      // Mapping step's "platform carrier account" picker needs the shared
-      // platform account book to source a carrier for a rule. Load it so
-      // that picker isn't stuck on "No platform accounts".
-      accountRefService.listAccounts()
-        .then((a) => { if (!cancelled) setAccounts(a) })
-        .catch(() => { /* picker just stays empty — non-fatal */ })
-    }
+    accountRefService.listAccounts()
+      .then((a) => { if (!cancelled) setAccounts(a) })
+      .catch(() => { /* picker just stays empty — non-fatal */ })
     return () => { cancelled = true }
   }, [editingCode])
 
@@ -566,17 +628,16 @@ export default function ClientEditorPage() {
     try {
       const snapshot: DraftShape = {
         form,
-        accountForm,
-        showAccountForm,
         selectedShipFromWarehouseId,
         visitedSteps: [...visitedSteps],
         activeStep,
         carrierDrafts,
         mappingDrafts,
+        importerBrokerDraft,
       }
       localStorage.setItem(draftStorageKey(), JSON.stringify(snapshot))
     } catch { /* localStorage full / disabled — not fatal */ }
-  }, [isEdit, form, accountForm, showAccountForm, selectedShipFromWarehouseId, visitedSteps, activeStep, carrierDrafts, mappingDrafts])
+  }, [isEdit, form, selectedShipFromWarehouseId, visitedSteps, activeStep, carrierDrafts, mappingDrafts, importerBrokerDraft])
 
   // ===== Live duplicate-code check =====
   // Debounced: fires 500ms after the last keystroke. Skips in edit mode
@@ -586,6 +647,7 @@ export default function ClientEditorPage() {
     if (isEdit) return
     const trimmed = (form.clientCode || '').trim().toUpperCase()
     if (!trimmed || validateClientCode(trimmed) != null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale conflict/spinner when field is empty or shape-invalid; guards debounced network call, not derivable at render
       setCodeConflict(null)
       setCheckingCode(false)
       return
@@ -624,26 +686,28 @@ export default function ClientEditorPage() {
     [form.shipFrom, addressCaps],
   )
 
+  /**
+   * Return-address caps are DIFFERENT from ship-from caps: the return
+   * address is where inbound labels come back to; the enabled carriers'
+   * per-field limits may not apply (an operator may want to accept
+   * returns to a broader address than they ship from). Use the loose
+   * DB-column defaults (empty carrier set) rather than intersecting
+   * enabled-carrier caps.
+   */
+  const returnAddressCaps = useMemo<AddressCaps>(
+    () => intersectionAddressCaps([]),
+    [],
+  )
+
   const returnErrors = useMemo(() => {
     // Toggle on = return is "same as ship from"; no separate validation.
     if (form.returnSameAsShipFrom) return {}
-    return validateAddress(form.returnAddress as AddressLike, { required: true, caps: addressCaps })
-  }, [form.returnSameAsShipFrom, form.returnAddress, addressCaps])
-
-  const accountErrors = useMemo(() => {
-    // In create mode when the operator opens the optional carrier form, all
-    // three secrets must be filled. Errors are only shown after touch.
-    if (isEdit || !showAccountForm) return {}
-    const e: Record<string, string | null> = {}
-    if (!accountForm.accountNumber.trim()) e.accountNumber = 'Account number is required.'
-    if (!accountForm.clientId.trim()) e.clientId = 'Client ID is required.'
-    if (!accountForm.clientSecret.trim()) e.clientSecret = 'Client secret is required.'
-    return e
-  }, [isEdit, showAccountForm, accountForm.accountNumber, accountForm.clientId, accountForm.clientSecret])
+    return validateAddress(form.returnAddress as AddressLike, { required: true, caps: returnAddressCaps })
+  }, [form.returnSameAsShipFrom, form.returnAddress, returnAddressCaps])
 
   const stepValid = (key: StepKey): boolean => {
     switch (key) {
-      case 'identity': return !hasErrors(identityErrors) && !hasErrors(accountErrors)
+      case 'identity': return !hasErrors(identityErrors)
       case 'shipFrom': return !hasErrors(shipFromErrors)
       case 'return':   return !hasErrors(returnErrors)
       default:         return true // client-dependent steps aren't gated
@@ -664,7 +728,6 @@ export default function ClientEditorPage() {
     switch (step) {
       case 'identity':
         touchAllIn('identity', ['clientCode', 'name', 'email', 'phone'])
-        if (showAccountForm) touchAllIn('account', ['accountNumber', 'clientId', 'clientSecret'])
         break
       case 'shipFrom':
         touchAllIn('shipFrom', Object.keys(emptyAddress))
@@ -730,16 +793,10 @@ export default function ClientEditorPage() {
 
   /**
    * The Carriers step is "complete" when the operator has staged at least
-   * one draft carrier account OR filled the optional inline account form on
-   * the Identity step — both commit through the same accountRefService call
-   * on Create client, so either one satisfies the "≥1 carrier account" rule.
+   * one draft carrier account. The staged rows commit through
+   * accountRefService on Create client.
    */
-  const carriersStepComplete =
-    carrierDrafts.length > 0
-    || (showAccountForm
-        && !!accountForm.accountNumber.trim()
-        && !!accountForm.clientId.trim()
-        && !!accountForm.clientSecret.trim())
+  const carriersStepComplete = carrierDrafts.length > 0
 
   /** The Mapping step is complete when the operator has staged at least one
    *  draft rule (ship via + carrier service). */
@@ -752,13 +809,15 @@ export default function ClientEditorPage() {
     && selectedShipFromWarehouseId != null
     && carriersStepComplete
     && mappingStepComplete
+    && importerBrokerDraftValid(importerBrokerDraft)
 
   /**
    * "Has this step's data been provided?" — used for both the step-rail's
    *  accessibility gate and the Next-button's per-step validity check. In
    *  edit mode every step counts as complete (all data comes from the server
    *  and the operator is free-navigating). Importer/Broker is optional so
-   *  it always reports complete — nothing depends on it. */
+   *  it reports complete when either skipped OR filled + valid. Summary is
+   *  complete when every mandatory upstream step is complete. */
   const stepComplete = (key: StepKey): boolean => {
     if (isEdit) return true
     switch (key) {
@@ -767,7 +826,14 @@ export default function ClientEditorPage() {
       case 'return':         return stepValid('return')
       case 'carriers':       return carriersStepComplete
       case 'mapping':        return mappingStepComplete
-      case 'importerBroker': return true
+      case 'importerBroker': return importerBrokerDraftValid(importerBrokerDraft)
+      case 'summary':
+        return stepValid('identity')
+          && stepValid('shipFrom') && selectedShipFromWarehouseId != null
+          && stepValid('return')
+          && carriersStepComplete
+          && mappingStepComplete
+          && importerBrokerDraftValid(importerBrokerDraft)
     }
   }
 
@@ -792,6 +858,19 @@ export default function ClientEditorPage() {
         break
       case 'mapping':
         if (!mappingStepComplete) out.push('Add at least one shipping-service mapping.')
+        break
+      case 'importerBroker':
+        if (!importerBrokerDraftValid(importerBrokerDraft))
+          out.push('BUSINESS importer needs name, country, address, city and postal code — or switch to RECEIVER, or uncheck "Fill importer/broker".')
+        break
+      case 'summary':
+        // Aggregate blockers from every mandatory upstream step so the
+        // Submit tooltip lists exactly what to fix.
+        for (const k of ['identity', 'shipFrom', 'return', 'carriers', 'mapping'] as const) {
+          out.push(...stepBlockers(k))
+        }
+        if (!importerBrokerDraftValid(importerBrokerDraft))
+          out.push('Importer/broker step has an invalid draft — fix it or uncheck "Fill importer/broker".')
         break
     }
     return out
@@ -837,14 +916,14 @@ export default function ClientEditorPage() {
     if (!stepValid('return')) reasons.push('Fix Return address')
     if (!carriersStepComplete) reasons.push('Add at least one carrier account')
     if (!mappingStepComplete) reasons.push('Add at least one shipping-service mapping')
+    if (!importerBrokerDraftValid(importerBrokerDraft))
+      reasons.push('Fix Importer / Broker draft (or uncheck "Fill importer/broker" to skip)')
     return reasons
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stepValid is a plain function (not memoized); it reads form which IS in the dep list, so it recomputes correctly. Adding stepValid itself would break memoization on every render.
   }, [
     isEdit, allStepsVisited, visitedSteps, selectedShipFromWarehouseId,
-    carriersStepComplete, mappingStepComplete,
-    // stepValid is derived from other state; the specific keys it reads are
-    // in the deps via visitedSteps + form (closed over).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    form, showAccountForm, accountForm,
+    carriersStepComplete, mappingStepComplete, importerBrokerDraft,
+    form,
   ])
 
   // ===== Save handlers =====
@@ -887,35 +966,17 @@ export default function ClientEditorPage() {
           ? undefined
           : trimmedAddr(form.returnAddress as Address),
         returnSameAsShipFrom: form.returnSameAsShipFrom,
+        // Sprint 50 Tier 1 finding #4 — per-tenant defaults. Send only when
+        // non-empty; the backend accepts nullable and the DTO's @Size/@Pattern
+        // validators fire an empty-string pass-through, so we omit fully.
+        defaultCurrency: form.defaultCurrency?.trim().toUpperCase() || undefined,
+        defaultWeightUnit: form.defaultWeightUnit?.trim().toUpperCase() || undefined,
+        defaultDimUnit: form.defaultDimUnit?.trim().toUpperCase() || undefined,
+        timezone: form.timezone?.trim() || undefined,
+        defaultOriginCountry: form.defaultOriginCountry?.trim().toUpperCase() || undefined,
       }
       const response = await clientService.createClient(payload)
-      // Optional carrier account attached during create.
-      if (!isEdit && showAccountForm) {
-        try {
-          await accountRefService.upsertAccount({
-            accountNumber: accountForm.accountNumber.trim(),
-            carrierCode: accountForm.carrierCode,
-            clientId: accountForm.clientId.trim(),
-            clientSecret: accountForm.clientSecret.trim(),
-            environment: accountForm.environment,
-            customerNo: response.data.clientCode,
-            clientDefault: accountForm.clientDefault,
-          })
-          notify.success(
-            `Client ${response.data.clientCode} created with its ${formatCarrierName(accountForm.carrierCode)} account${
-              accountForm.clientDefault ? ' (default)' : ''
-            }.`,
-          )
-        } catch (accountError) {
-          notify.error(
-            `Client created, but the carrier account failed: ${
-              accountError instanceof Error ? accountError.message : 'unknown error'
-            }. Add it from the Carriers step.`,
-          )
-        }
-      } else {
-        notify.success(`Client ${response.data.clientCode} created.`)
-      }
+      notify.success(`Client ${response.data.clientCode} created.`)
 
       // ===== Commit draft carrier accounts + mapping rules =====
       // Best-effort per row; a single failure surfaces as a toast but doesn't
@@ -979,6 +1040,39 @@ export default function ClientEditorPage() {
         notify.success(`${mappingDrafts.length} mapping${mappingDrafts.length === 1 ? '' : 's'} saved.`)
       }
 
+      // Importer / Broker draft — only persist when the operator filled it
+      // (filled=true). Failure is best-effort like carriers + mappings; the
+      // operator can retry from Settings → Importer/Broker.
+      if (importerBrokerDraft.filled) {
+        try {
+          await customsProfileService.save(response.data.clientCode, {
+            countries: importerBrokerDraft.countries,
+            importerType: importerBrokerDraft.importerType,
+            importerName: importerBrokerDraft.importerName.trim() || null,
+            importerCountry: importerBrokerDraft.importerCountry.trim().toUpperCase() || null,
+            importerAddress1: importerBrokerDraft.importerAddress1.trim() || null,
+            importerAddress2: importerBrokerDraft.importerAddress2.trim() || null,
+            importerCity: importerBrokerDraft.importerCity.trim() || null,
+            importerState: importerBrokerDraft.importerState.trim() || null,
+            importerPostcode: importerBrokerDraft.importerPostcode.trim() || null,
+            importerPhone: importerBrokerDraft.importerPhone.trim() || null,
+            importerTaxId: importerBrokerDraft.importerTaxId.trim() || null,
+            importerTaxIdType: importerBrokerDraft.importerTaxIdType.trim() || null,
+            brokerName: importerBrokerDraft.brokerName.trim() || null,
+            brokerPhone: importerBrokerDraft.brokerPhone.trim() || null,
+            incoterms: importerBrokerDraft.incoterms.trim().toUpperCase() || null,
+            reasonForExport: importerBrokerDraft.reasonForExport.trim().toUpperCase() || null,
+          } as CustomsProfile)
+          notify.success('Importer / broker profile saved.')
+        } catch (ibError) {
+          notify.error(
+            `Client created, but the importer/broker profile failed: ${
+              ibError instanceof Error ? ibError.message : 'unknown error'
+            }. Add it from Settings → Importer/Broker.`,
+          )
+        }
+      }
+
       // Attach the picked Ship From warehouse and default it — the picker
       // step is decoupled from the Warehouses step but must guarantee the
       // rule-resolution defaults line up on first shipment.
@@ -1006,6 +1100,7 @@ export default function ClientEditorPage() {
       setClient(response.data)
       setCarrierDrafts([])
       setMappingDrafts([])
+      setImporterBrokerDraft(emptyImporterBrokerDraft())
       // Clear the draft — the wizard's committed state is now the source of
       // truth. Any subsequent /clients/new visit starts fresh.
       try { localStorage.removeItem(draftStorageKey()) } catch { /* not fatal */ }
@@ -1056,6 +1151,12 @@ export default function ClientEditorPage() {
           ? undefined
           : trimmedAddr(form.returnAddress as Address),
         returnSameAsShipFrom: form.returnSameAsShipFrom,
+        // Sprint 50 Tier 1 finding #4 — per-tenant defaults (same as create).
+        defaultCurrency: form.defaultCurrency?.trim().toUpperCase() || undefined,
+        defaultWeightUnit: form.defaultWeightUnit?.trim().toUpperCase() || undefined,
+        defaultDimUnit: form.defaultDimUnit?.trim().toUpperCase() || undefined,
+        timezone: form.timezone?.trim() || undefined,
+        defaultOriginCountry: form.defaultOriginCountry?.trim().toUpperCase() || undefined,
       }
       const response = await clientService.updateClient(form.clientCode, payload)
       setClient(response.data)
@@ -1102,6 +1203,7 @@ export default function ClientEditorPage() {
     if (!client) return
     const advanceTo = (window.history.state?.usr?.advanceTo as StepKey | undefined)
     if (advanceTo && STEP_DEFS.some((s) => s.key === advanceTo)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot step-jump when nav hint is present in history state; consumed immediately (see replaceState below), can't be derived at render
       setActiveStep(advanceTo)
       // Consume so a subsequent refresh doesn't keep re-triggering it.
       window.history.replaceState({ ...window.history.state, usr: {} }, '')
@@ -1256,13 +1358,6 @@ export default function ClientEditorPage() {
             touched={touched}
             markTouched={markTouched}
             set={set}
-            accountForm={accountForm}
-            setAccountForm={setAccountForm}
-            accountErrors={accountErrors}
-            showAccountForm={showAccountForm}
-            setShowAccountForm={setShowAccountForm}
-            accounts={accounts}
-            onManageCarriers={() => setActiveStep('carriers')}
           />
         ) : null}
 
@@ -1272,7 +1367,8 @@ export default function ClientEditorPage() {
             loading={pickWarehousesLoading}
             selectedId={selectedShipFromWarehouseId}
             onPick={pickShipFromWarehouse}
-            onAddWarehouseClick={() => setShowShipFromAddWarehouse(true)}
+            onAddWarehouseClick={() => { setWarehouseBeingEdited(null); setShowShipFromAddWarehouse(true) }}
+            onEditWarehouseClick={(w) => { setWarehouseBeingEdited(w); setShowShipFromAddWarehouse(true) }}
             addressPreview={form.shipFrom as Address}
             errors={shipFromErrors}
             touched={touched}
@@ -1285,13 +1381,20 @@ export default function ClientEditorPage() {
 
         {showShipFromAddWarehouse ? (
           <WarehouseEditorModal
-            warehouse={null}
-            onClose={() => setShowShipFromAddWarehouse(false)}
+            warehouse={warehouseBeingEdited}
+            defaultCarrierCode={
+              accounts.find((a) => a.clientDefault)?.carrierCode
+              || accounts[0]?.carrierCode
+              || undefined
+            }
+            onClose={() => { setShowShipFromAddWarehouse(false); setWarehouseBeingEdited(null) }}
             onSaved={async (saved) => {
               setShowShipFromAddWarehouse(false)
+              setWarehouseBeingEdited(null)
               await loadPickWarehouses()
-              // Auto-select the freshly-created warehouse so the operator
-              // doesn't have to hunt for it in the picker.
+              // Auto-select the saved warehouse — for create it's the newly
+              // added row, for edit it's the same row with updated fields
+              // (address preview refreshes because we re-pick).
               if (saved) pickShipFromWarehouse(saved)
             }}
           />
@@ -1352,25 +1455,40 @@ export default function ClientEditorPage() {
           />
         ))}
 
-        {/* Importer / Broker — optional step. Live editor in edit mode via
-            the existing CustomsProfileModal; deferred in create mode since
-            profiles hang off the persisted client row. Skipping is fine — the
-            operator can add profiles from Settings → Importer/Broker later. */}
+        {/* Importer / Broker — optional. Live editor in edit mode via the
+            existing CustomsProfileModal-backed step. Create mode captures a
+            single primary profile as a draft (persisted after Submit via
+            customsProfileService.save); the operator can add more profiles
+            later from Settings → Importer/Broker. */}
         {activeStep === 'importerBroker' && (client ? (
           <ImporterBrokerStep clientCode={client.clientCode} clientName={client.name} />
         ) : (
-          <div className="px-4 py-3">
-            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 p-5 text-center">
-              <p className="text-[12.5px] font-semibold text-slate-800">Importer / Broker (optional)</p>
-              <p className="mx-auto mt-1 max-w-md text-[11px] leading-4 text-slate-500">
-                Importer + broker profiles for customs are configured against a persisted client.
-                You can safely skip this step — click <span className="font-semibold">Create client</span>
-                {' '}below and add profiles from Settings → Importer/Broker (or come back to this step
-                in edit mode) whenever you're ready.
-              </p>
-            </div>
-          </div>
+          <ImporterBrokerDraftStep
+            draft={importerBrokerDraft}
+            setDraft={setImporterBrokerDraft}
+          />
         ))}
+
+        {/* Summary — final step in create mode. Every section rendered as
+            a card with values + validation status; Submit fires the client
+            creation cascade. */}
+        {!isEdit && activeStep === 'summary' ? (
+          <SummaryStep
+            form={form}
+            selectedShipFromWarehouseId={selectedShipFromWarehouseId}
+            shipFromWarehouseLabel={
+              pickWarehouses.find((w) => w.id === selectedShipFromWarehouseId)
+                ? `${pickWarehouses.find((w) => w.id === selectedShipFromWarehouseId)!.code} — ${pickWarehouses.find((w) => w.id === selectedShipFromWarehouseId)!.name}`
+                : null
+            }
+            carrierDrafts={carrierDrafts}
+            mappingDrafts={mappingDrafts}
+            importerBrokerDraft={importerBrokerDraft}
+            stepComplete={stepComplete}
+            stepBlockers={stepBlockers}
+            jumpTo={(k) => setActiveStep(k)}
+          />
+        ) : null}
       </div>
 
       {/* Wizard footer — Back / Next / Create / Finish. In create mode Next
@@ -1393,7 +1511,7 @@ export default function ClientEditorPage() {
         </p>
 
         <div className="flex items-center gap-2">
-          {!isEdit && (activeStep === 'mapping' || activeStep === 'importerBroker') ? (
+          {!isEdit && activeStep === 'summary' ? (
             <button
               type="button"
               onClick={() => void handleCreate()}
@@ -1402,12 +1520,12 @@ export default function ClientEditorPage() {
                 readyToCreate
                   ? undefined
                   : createBlockers.length
-                    ? `Cannot create client yet:\n  • ${createBlockers.join('\n  • ')}`
-                    : 'Cannot create client yet.'
+                    ? `Cannot submit yet:\n  • ${createBlockers.join('\n  • ')}`
+                    : 'Cannot submit yet.'
               }
               className="inline-flex items-center gap-1 rounded-xl bg-[#1f150c] px-4 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-slate-300"
             >
-              {saving ? 'Creating…' : 'Create client'}
+              {saving ? 'Submitting…' : 'Submit — create client'}
               <FiCheck className="h-3.5 w-3.5" />
             </button>
           ) : isLast ? (
@@ -1460,13 +1578,6 @@ function IdentityStep({
   touched,
   markTouched,
   set,
-  accountForm,
-  setAccountForm,
-  accountErrors,
-  showAccountForm,
-  setShowAccountForm,
-  accounts,
-  onManageCarriers,
 }: {
   form: ClientUpsertPayload
   isEdit: boolean
@@ -1475,30 +1586,8 @@ function IdentityStep({
   touched: Record<string, boolean>
   markTouched: (key: string) => void
   set: (key: keyof ClientUpsertPayload) => (e: { target: { value: string } }) => void
-  accountForm: {
-    carrierCode: string
-    accountNumber: string
-    clientId: string
-    clientSecret: string
-    environment: CarrierEnvironment
-    clientDefault: boolean
-  }
-  setAccountForm: React.Dispatch<React.SetStateAction<{
-    carrierCode: string
-    accountNumber: string
-    clientId: string
-    clientSecret: string
-    environment: CarrierEnvironment
-    clientDefault: boolean
-  }>>
-  accountErrors: Record<string, string | null>
-  showAccountForm: boolean
-  setShowAccountForm: (v: boolean) => void
-  accounts: CarrierAccountRef[]
-  onManageCarriers: () => void
 }) {
   const err = (k: string) => (touched[`identity.${k}`] ? errors[k] || null : null)
-  const aErr = (k: string) => (touched[`account.${k}`] ? accountErrors[k] || null : null)
   const codeHint = isEdit
     ? 'Immutable after create.'
     : checkingCode
@@ -1563,137 +1652,92 @@ function IdentityStep({
         </Field>
       </div>
 
-      {/* Carrier accounts — shown as chips in edit mode with a link to the
-          Carriers step; in create mode an optional inline account form. */}
-      {isEdit && accounts.length ? (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
-          <div className="flex items-center justify-between">
-            <h4 className="text-[12px] font-semibold text-slate-950">Carrier accounts</h4>
-            <button
-              type="button"
-              onClick={onManageCarriers}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10.5px] font-semibold text-[#412d15] transition hover:bg-slate-50"
+      {/* Sprint 50 Tier 1 finding #4 — per-tenant defaults panel. All fields
+          optional; the label/rate/customs pipelines fall back to platform
+          hardcodes when NULL. Backend enforces ISO 4217 currency,
+          {LB,KG,OZ,G} weight, {IN,CM,MM} dim, ISO-3166-1 alpha-2 country.
+          Empty select value → undefined in the payload → NULL in the DB. */}
+      <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+        <h4 className="text-[12px] font-semibold text-slate-950">Defaults</h4>
+        <p className="text-[10.5px] text-slate-500">
+          Applied when a shipment doesn't override. Leave any blank to use the platform default.
+        </p>
+        <div className="mt-2 grid grid-cols-1 gap-2.5 sm:grid-cols-5">
+          <Field label="Currency">
+            <select
+              value={form.defaultCurrency || ''}
+              onChange={set('defaultCurrency')}
+              className={`${inputBaseClass} ${inputOk}`}
             >
-              Manage in Carriers step
-              <FiArrowRight className="h-3 w-3" />
-            </button>
-          </div>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {accounts.map((account) => (
-              <div key={account.id} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1">
-                <CarrierLogo carrierId={account.carrierCode} size={14} className="rounded-sm" />
-                <span className="text-[11px] font-semibold text-slate-800">
-                  {account.accountName || formatCarrierName(account.carrierCode)} · {account.accountNumber}
-                </span>
-                {account.clientDefault ? <FiStar className="h-3 w-3 text-[#412d15]" /> : null}
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {!isEdit ? (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h4 className="text-[12px] font-semibold text-slate-950">Carrier account</h4>
-              <p className="text-[10.5px] text-slate-500">
-                Optional — add it now and this client's orders ship automatically.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowAccountForm(!showAccountForm)}
-              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10.5px] font-semibold text-slate-700 transition hover:bg-slate-50"
+              <option value="">— none —</option>
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+              <option value="GBP">GBP</option>
+              <option value="CAD">CAD</option>
+              <option value="AUD">AUD</option>
+              <option value="INR">INR</option>
+              <option value="JPY">JPY</option>
+              <option value="CNY">CNY</option>
+              <option value="MXN">MXN</option>
+              <option value="AED">AED</option>
+            </select>
+          </Field>
+          <Field label="Weight unit">
+            <select
+              value={form.defaultWeightUnit || ''}
+              onChange={set('defaultWeightUnit')}
+              className={`${inputBaseClass} ${inputOk}`}
             >
-              <FiPlus className={`h-3 w-3 transition ${showAccountForm ? 'rotate-45' : ''}`} />
-              {showAccountForm ? 'Remove' : 'Add account'}
-            </button>
-          </div>
-
-          {showAccountForm ? (
-            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <Field label="Carrier" required>
-                <Select
-                  value={accountForm.carrierCode}
-                  onChange={(e) => setAccountForm((cur) => ({ ...cur, carrierCode: e.target.value }))}
-                >
-                  {carrierOptions.map((option) => (
-                    <option key={option.code} value={option.code}>{option.label}</option>
-                  ))}
-                </Select>
-              </Field>
-              {(() => {
-                const rule = accountRuleFor(accountForm.carrierCode)
-                return (
-                  <Field
-                    label="Account number"
-                    required
-                    error={aErr('accountNumber')}
-                    hint={rule?.helper}
-                  >
-                    <input
-                      value={accountForm.accountNumber}
-                      onChange={(e) => setAccountForm((cur) => ({ ...cur, accountNumber: e.target.value }))}
-                      onBlur={() => markTouched('account.accountNumber')}
-                      maxLength={rule?.maxLength ?? 100}
-                      pattern={rule?.pattern}
-                      placeholder={rule?.placeholder}
-                      autoComplete="off"
-                      spellCheck={false}
-                      aria-invalid={aErr('accountNumber') ? true : undefined}
-                      className={`${inputBaseClass} ${aErr('accountNumber') ? inputErr : inputOk}`}
-                    />
-                  </Field>
-                )
-              })()}
-              <Field label="Client ID" required error={aErr('clientId')}>
-                <input
-                  value={accountForm.clientId}
-                  onChange={(e) => setAccountForm((cur) => ({ ...cur, clientId: e.target.value }))}
-                  onBlur={() => markTouched('account.clientId')}
-                  maxLength={255}
-                  autoComplete="off"
-                  spellCheck={false}
-                  aria-invalid={aErr('clientId') ? true : undefined}
-                  className={`${inputBaseClass} ${aErr('clientId') ? inputErr : inputOk}`}
-                />
-              </Field>
-              <Field label="Client Secret" required error={aErr('clientSecret')}>
-                <input
-                  type="password"
-                  value={accountForm.clientSecret}
-                  onChange={(e) => setAccountForm((cur) => ({ ...cur, clientSecret: e.target.value }))}
-                  onBlur={() => markTouched('account.clientSecret')}
-                  maxLength={255}
-                  autoComplete="new-password"
-                  aria-invalid={aErr('clientSecret') ? true : undefined}
-                  className={`${inputBaseClass} ${aErr('clientSecret') ? inputErr : inputOk}`}
-                />
-              </Field>
-              <Field label="Environment">
-                <Select
-                  value={accountForm.environment}
-                  onChange={(e) => setAccountForm((cur) => ({ ...cur, environment: e.target.value as CarrierEnvironment }))}
-                >
-                  {carrierEnvironmentOptions.map((option) => (
-                    <option key={option} value={option}>{option}</option>
-                  ))}
-                </Select>
-              </Field>
-              <label className="flex items-end gap-2 pb-2 text-[12px] font-semibold text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={accountForm.clientDefault}
-                  onChange={(e) => setAccountForm((cur) => ({ ...cur, clientDefault: e.target.checked }))}
-                  className="h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
-                />
-                Default account
-              </label>
-            </div>
-          ) : null}
+              <option value="">— none —</option>
+              <option value="LB">LB (pounds)</option>
+              <option value="KG">KG (kilograms)</option>
+              <option value="OZ">OZ (ounces)</option>
+              <option value="G">G (grams)</option>
+            </select>
+          </Field>
+          <Field label="Dimension unit">
+            <select
+              value={form.defaultDimUnit || ''}
+              onChange={set('defaultDimUnit')}
+              className={`${inputBaseClass} ${inputOk}`}
+            >
+              <option value="">— none —</option>
+              <option value="IN">IN (inches)</option>
+              <option value="CM">CM (centimeters)</option>
+              <option value="MM">MM (millimeters)</option>
+            </select>
+          </Field>
+          <Field label="Origin country">
+            <select
+              value={form.defaultOriginCountry || ''}
+              onChange={set('defaultOriginCountry')}
+              className={`${inputBaseClass} ${inputOk}`}
+            >
+              <option value="">— none —</option>
+              <option value="US">US — United States</option>
+              <option value="CA">CA — Canada</option>
+              <option value="MX">MX — Mexico</option>
+              <option value="GB">GB — United Kingdom</option>
+              <option value="DE">DE — Germany</option>
+              <option value="FR">FR — France</option>
+              <option value="IN">IN — India</option>
+              <option value="CN">CN — China</option>
+              <option value="AU">AU — Australia</option>
+              <option value="JP">JP — Japan</option>
+              <option value="AE">AE — UAE</option>
+              <option value="SG">SG — Singapore</option>
+            </select>
+          </Field>
+          <Field label="Timezone" hint="IANA (e.g. America/New_York)">
+            <TimezoneCombobox
+              value={form.timezone || ''}
+              onChange={(v) => set('timezone')({ target: { value: v } })}
+              className={`${inputBaseClass} ${inputOk}`}
+            />
+          </Field>
         </div>
-      ) : null}
+      </div>
+
     </div>
   )
 }
@@ -1834,6 +1878,7 @@ function CarrierDraftStep({
   useEffect(() => {
     if (!f.clearanceOption) return
     const ok = clearanceOptionsForCarrier(f.carrierCode).some((o) => o.value === f.clearanceOption)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale clearance option on carrier change; guards submit-time invalid combos, cannot be derived at render
     if (!ok) setF((cur) => ({ ...cur, clearanceOption: '' }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [f.carrierCode])
@@ -2415,6 +2460,7 @@ function ShipFromStep({
   selectedId,
   onPick,
   onAddWarehouseClick,
+  onEditWarehouseClick,
   addressPreview,
   errors,
   touched,
@@ -2426,6 +2472,10 @@ function ShipFromStep({
   selectedId: number | null
   onPick: (wh: Warehouse | null) => void
   onAddWarehouseClick: () => void
+  /** Fires when the operator taps the Edit button on the picked-preview
+   *  card. Only exposed on CLIENT-owned warehouses (PLATFORM warehouses
+   *  are shared and must be edited from Settings → Warehouses by admin). */
+  onEditWarehouseClick: (wh: Warehouse) => void
   addressPreview: Address
   errors: Partial<Record<keyof AddressLike, string>>
   touched: Record<string, boolean>
@@ -2534,6 +2584,16 @@ function ShipFromStep({
                   {addressPreview.phone ? <><br />{addressPreview.phone}</> : null}
                 </p>
               </div>
+              {(picked.ownerType || '').toUpperCase() === 'CLIENT' ? (
+                <button
+                  type="button"
+                  onClick={() => onEditWarehouseClick(picked)}
+                  title="Edit this warehouse (shared across clients — CLIENT-owned only)"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-[#412d15] hover:bg-[#faf7f0] hover:text-[#412d15]"
+                >
+                  <FiEdit2 className="h-3 w-3" /> Edit
+                </button>
+              ) : null}
             </div>
             {hasAnyErr ? (
               <div className="mt-2 space-y-0.5 rounded-lg bg-rose-50 px-2 py-1.5 text-[10.5px] font-semibold text-rose-700">
@@ -2810,6 +2870,7 @@ function ImporterBrokerStep({
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client change; refresh() sets loading + profiles state
     void refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientCode])
@@ -2941,6 +3002,408 @@ function ImporterBrokerStep({
           }}
         />
       ) : null}
+    </div>
+  )
+}
+
+/* ============================================================================
+ * Importer / Broker draft step (create mode)
+ * A scoped-down subset of ClientCustomsProfile — enough for a first-time
+ * onboarding profile. The full field surface is on the settings page.
+ * ==========================================================================*/
+
+function ImporterBrokerDraftStep({
+  draft,
+  setDraft,
+}: {
+  draft: ImporterBrokerDraft
+  setDraft: React.Dispatch<React.SetStateAction<ImporterBrokerDraft>>
+}) {
+  const update = <K extends keyof ImporterBrokerDraft>(k: K, v: ImporterBrokerDraft[K]) =>
+    setDraft((cur) => ({ ...cur, [k]: v }))
+
+  return (
+    <div className="px-4 py-3 space-y-3">
+      <label className="flex items-start gap-2 rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+        <input
+          type="checkbox"
+          checked={draft.filled}
+          onChange={(e) => update('filled', e.target.checked)}
+          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
+        />
+        <span className="flex-1">
+          <span className="block text-[12.5px] font-semibold text-slate-950">
+            Fill Importer / Broker now
+          </span>
+          <span className="mt-0.5 block text-[11px] leading-4 text-slate-500">
+            Optional. Captures one primary importer profile for customs on international shipments.
+            Unchecked = skip this step; you can add profiles later from Settings → Importer/Broker.
+          </span>
+        </span>
+      </label>
+
+      {draft.filled ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
+          {/* Importer type */}
+          <div>
+            <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+              Importer type
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {(['BUSINESS', 'RECEIVER'] as const).map((v) => (
+                <label
+                  key={v}
+                  className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-semibold transition ${
+                    draft.importerType === v
+                      ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]'
+                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="importerType"
+                    value={v}
+                    checked={draft.importerType === v}
+                    onChange={() => update('importerType', v)}
+                    className="sr-only"
+                  />
+                  {v === 'BUSINESS' ? 'BUSINESS · fixed importer (DDP)' : 'RECEIVER · consignee is IOR (DAP)'}
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-[10.5px] text-slate-500">
+              BUSINESS: this client's own importer identity is on file. RECEIVER: no importer of record — the destination consignee is the IOR (DAP terms).
+            </p>
+          </div>
+
+          {/* Importer identity — only relevant for BUSINESS */}
+          {draft.importerType === 'BUSINESS' ? (
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <Field label="Importer name" required>
+                <input value={draft.importerName} onChange={(e) => update('importerName', e.target.value)} maxLength={200} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Country (ISO-2)" required>
+                <input value={draft.importerCountry} onChange={(e) => update('importerCountry', e.target.value.toUpperCase())} maxLength={2} className={`${inputBaseClass} ${inputOk} uppercase font-semibold`} />
+              </Field>
+              <Field label="Address line 1" required>
+                <input value={draft.importerAddress1} onChange={(e) => update('importerAddress1', e.target.value)} maxLength={255} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Address line 2">
+                <input value={draft.importerAddress2} onChange={(e) => update('importerAddress2', e.target.value)} maxLength={255} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="City" required>
+                <input value={draft.importerCity} onChange={(e) => update('importerCity', e.target.value)} maxLength={120} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="State / region">
+                <input value={draft.importerState} onChange={(e) => update('importerState', e.target.value)} maxLength={120} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Postal code" required>
+                <input value={draft.importerPostcode} onChange={(e) => update('importerPostcode', e.target.value)} maxLength={20} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Phone">
+                <input value={draft.importerPhone} onChange={(e) => update('importerPhone', e.target.value)} type="tel" inputMode="tel" maxLength={50} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Tax ID (EIN / EORI / GSTIN / …)" hint="Optional but usually required by the destination customs authority.">
+                <input value={draft.importerTaxId} onChange={(e) => update('importerTaxId', e.target.value)} maxLength={60} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Tax ID type" hint="EIN, EORI, GSTIN, IEC, IOSS …">
+                <input value={draft.importerTaxIdType} onChange={(e) => update('importerTaxIdType', e.target.value.toUpperCase())} maxLength={20} className={`${inputBaseClass} ${inputOk} uppercase`} />
+              </Field>
+            </div>
+          ) : null}
+
+          {/* Shipment defaults */}
+          <div>
+            <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+              Shipment defaults (optional)
+            </p>
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <Field label="Incoterms" hint="DDP · DAP · DDU · EXW · CIF · FOB">
+                <select value={draft.incoterms} onChange={(e) => update('incoterms', e.target.value)} className={`${inputBaseClass} ${inputOk}`}>
+                  <option value="">— carrier default —</option>
+                  {['DDP', 'DAP', 'DDU', 'EXW', 'CIF', 'FOB', 'DPU', 'CPT', 'CIP', 'FCA', 'FAS', 'CFR'].map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Reason for export">
+                <select value={draft.reasonForExport} onChange={(e) => update('reasonForExport', e.target.value)} className={`${inputBaseClass} ${inputOk}`}>
+                  <option value="">— carrier default —</option>
+                  <option value="SALE">SALE — commercial sale</option>
+                  <option value="GIFT">GIFT</option>
+                  <option value="SAMPLE">SAMPLE</option>
+                  <option value="RETURN">RETURN</option>
+                  <option value="REPAIR">REPAIR</option>
+                  <option value="DOCUMENTS">DOCUMENTS</option>
+                </select>
+              </Field>
+            </div>
+          </div>
+
+          {/* Broker (optional) */}
+          <div>
+            <p className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+              Broker (optional)
+            </p>
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              <Field label="Broker name">
+                <input value={draft.brokerName} onChange={(e) => update('brokerName', e.target.value)} maxLength={200} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+              <Field label="Broker phone">
+                <input value={draft.brokerPhone} onChange={(e) => update('brokerPhone', e.target.value)} type="tel" inputMode="tel" maxLength={50} className={`${inputBaseClass} ${inputOk}`} />
+              </Field>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/* ============================================================================
+ * Summary step (create mode only)
+ * Per-section digest cards with green / amber / red status and a Fix link
+ * that jumps back to the offending step.
+ * ==========================================================================*/
+
+function SummaryStep({
+  form,
+  selectedShipFromWarehouseId,
+  shipFromWarehouseLabel,
+  carrierDrafts,
+  mappingDrafts,
+  importerBrokerDraft,
+  stepComplete,
+  stepBlockers,
+  jumpTo,
+}: {
+  form: ClientUpsertPayload
+  selectedShipFromWarehouseId: number | null
+  shipFromWarehouseLabel: string | null
+  carrierDrafts: CarrierAccountDraft[]
+  mappingDrafts: MappingRuleDraft[]
+  importerBrokerDraft: ImporterBrokerDraft
+  stepComplete: (k: StepKey) => boolean
+  stepBlockers: (k: StepKey) => string[]
+  jumpTo: (k: StepKey) => void
+}) {
+  const identityBody = (
+    <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+      <li><span className="font-mono font-semibold">{form.clientCode || '—'}</span> · {form.name || <em className="text-slate-400">no name</em>}</li>
+      {form.email ? <li>{form.email}</li> : null}
+      {form.phone ? <li>{form.phone}</li> : null}
+      <li className="text-slate-500">
+        Defaults: {[form.defaultCurrency, form.defaultWeightUnit, form.defaultDimUnit, form.defaultOriginCountry, form.timezone]
+          .filter(Boolean).join(' · ') || <em>none set</em>}
+      </li>
+    </ul>
+  )
+
+  const shipFromBody = (
+    <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+      <li className="font-semibold">{shipFromWarehouseLabel || <em className="text-slate-400">no warehouse picked</em>}</li>
+      {form.shipFrom ? (
+        <>
+          {form.shipFrom.name ? <li>{form.shipFrom.name}</li> : null}
+          <li>
+            {form.shipFrom.line1 || <em className="text-slate-400">no street</em>}
+            {form.shipFrom.line2 ? `, ${form.shipFrom.line2}` : ''}
+          </li>
+          <li>
+            {[form.shipFrom.city, form.shipFrom.state, form.shipFrom.zip].filter(Boolean).join(', ') || <em className="text-slate-400">no city / state / zip</em>}
+            {form.shipFrom.country ? ` · ${form.shipFrom.country}` : ''}
+          </li>
+        </>
+      ) : null}
+    </ul>
+  )
+
+  const returnBody = form.returnSameAsShipFrom ? (
+    <p className="text-[11.5px] text-slate-700">Mirrors Ship From address.</p>
+  ) : form.returnAddress ? (
+    <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+      {form.returnAddress.name ? <li>{form.returnAddress.name}</li> : null}
+      <li>{form.returnAddress.line1 || <em className="text-slate-400">no street</em>}{form.returnAddress.line2 ? `, ${form.returnAddress.line2}` : ''}</li>
+      <li>{[form.returnAddress.city, form.returnAddress.state, form.returnAddress.zip].filter(Boolean).join(', ')}{form.returnAddress.country ? ` · ${form.returnAddress.country}` : ''}</li>
+    </ul>
+  ) : (
+    <p className="text-[11.5px] italic text-slate-500">no return address set</p>
+  )
+
+  const carriersBody = carrierDrafts.length ? (
+    <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+      {carrierDrafts.slice(0, 5).map((d) => (
+        <li key={d.id}>
+          {formatCarrierName(d.carrierCode)} · {d.accountNumber}
+          {d.clientDefault ? <span className="ml-1 text-[10px] font-semibold text-[#412d15]">(default)</span> : null}
+        </li>
+      ))}
+      {carrierDrafts.length > 5 ? <li className="italic text-slate-500">+ {carrierDrafts.length - 5} more…</li> : null}
+    </ul>
+  ) : (
+    <p className="text-[11.5px] italic text-slate-500">no carrier accounts staged</p>
+  )
+
+  const mappingBody = mappingDrafts.length ? (
+    <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+      {mappingDrafts.slice(0, 5).map((d) => (
+        <li key={d.id}>
+          <span className="rounded bg-[#1f150c] px-1.5 py-0.5 font-mono text-[10px] text-[#e1dcc9]">{d.shipviaCd}</span>
+          {' → service #'}{d.serviceId}
+        </li>
+      ))}
+      {mappingDrafts.length > 5 ? <li className="italic text-slate-500">+ {mappingDrafts.length - 5} more…</li> : null}
+    </ul>
+  ) : (
+    <p className="text-[11.5px] italic text-slate-500">no mappings staged</p>
+  )
+
+  const importerBody = importerBrokerDraft.filled ? (
+    <ul className="space-y-0.5 text-[11.5px] leading-4 text-slate-700">
+      <li>
+        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">{importerBrokerDraft.importerType}</span>
+        {' '}{importerBrokerDraft.importerName || <em className="text-slate-400">no importer name</em>}
+      </li>
+      {importerBrokerDraft.importerType === 'BUSINESS' ? (
+        <>
+          <li>{[importerBrokerDraft.importerAddress1, importerBrokerDraft.importerCity, importerBrokerDraft.importerPostcode, importerBrokerDraft.importerCountry].filter(Boolean).join(', ')}</li>
+          {importerBrokerDraft.importerTaxId ? <li>Tax ID: {importerBrokerDraft.importerTaxIdType || '?'}/{importerBrokerDraft.importerTaxId}</li> : null}
+        </>
+      ) : null}
+      {importerBrokerDraft.incoterms || importerBrokerDraft.reasonForExport ? (
+        <li className="text-slate-500">Defaults: {[importerBrokerDraft.incoterms, importerBrokerDraft.reasonForExport].filter(Boolean).join(' · ')}</li>
+      ) : null}
+      {importerBrokerDraft.brokerName ? <li>Broker: {importerBrokerDraft.brokerName}{importerBrokerDraft.brokerPhone ? ` · ${importerBrokerDraft.brokerPhone}` : ''}</li> : null}
+    </ul>
+  ) : (
+    <p className="text-[11.5px] italic text-slate-500">skipped — add profiles later from Settings → Importer/Broker</p>
+  )
+
+  return (
+    <div className="px-4 py-3 space-y-3">
+      <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3">
+        <p className="text-[12.5px] font-semibold text-slate-950">Review & submit</p>
+        <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+          Everything below will be created on Submit. Green sections are ready; red sections must be fixed. Amber sections are optional-and-empty — Submit is still allowed.
+        </p>
+      </div>
+
+      <SummaryCard
+        title="Identity"
+        stepKey="identity"
+        status={stepComplete('identity') ? 'ok' : 'block'}
+        blockers={stepBlockers('identity')}
+        jumpTo={jumpTo}
+      >
+        {identityBody}
+      </SummaryCard>
+
+      <SummaryCard
+        title="Ship From"
+        stepKey="shipFrom"
+        status={(stepComplete('shipFrom') && selectedShipFromWarehouseId != null) ? 'ok' : 'block'}
+        blockers={stepBlockers('shipFrom')}
+        jumpTo={jumpTo}
+      >
+        {shipFromBody}
+      </SummaryCard>
+
+      <SummaryCard
+        title="Return address"
+        stepKey="return"
+        status={stepComplete('return') ? 'ok' : 'block'}
+        blockers={stepBlockers('return')}
+        jumpTo={jumpTo}
+      >
+        {returnBody}
+      </SummaryCard>
+
+      <SummaryCard
+        title={`Carrier accounts (${carrierDrafts.length})`}
+        stepKey="carriers"
+        status={stepComplete('carriers') ? 'ok' : 'block'}
+        blockers={stepBlockers('carriers')}
+        jumpTo={jumpTo}
+      >
+        {carriersBody}
+      </SummaryCard>
+
+      <SummaryCard
+        title={`Shipping mappings (${mappingDrafts.length})`}
+        stepKey="mapping"
+        status={stepComplete('mapping') ? 'ok' : 'block'}
+        blockers={stepBlockers('mapping')}
+        jumpTo={jumpTo}
+      >
+        {mappingBody}
+      </SummaryCard>
+
+      <SummaryCard
+        title="Importer / Broker"
+        stepKey="importerBroker"
+        status={
+          !importerBrokerDraft.filled
+            ? 'warn'  // amber: intentionally skipped (still valid)
+            : stepComplete('importerBroker') ? 'ok' : 'block'
+        }
+        blockers={stepBlockers('importerBroker')}
+        jumpTo={jumpTo}
+      >
+        {importerBody}
+      </SummaryCard>
+    </div>
+  )
+}
+
+function SummaryCard({
+  title,
+  stepKey,
+  status,
+  blockers,
+  jumpTo,
+  children,
+}: {
+  title: string
+  stepKey: StepKey
+  status: 'ok' | 'warn' | 'block'
+  blockers: string[]
+  jumpTo: (k: StepKey) => void
+  children: ReactNode
+}) {
+  const tone =
+    status === 'ok'
+      ? { bar: 'border-emerald-200 bg-emerald-50/40', pill: 'bg-emerald-100 text-emerald-800', label: 'READY' }
+      : status === 'warn'
+        ? { bar: 'border-amber-200 bg-amber-50/40', pill: 'bg-amber-100 text-amber-800', label: 'SKIPPED' }
+        : { bar: 'border-rose-300 bg-rose-50/40', pill: 'bg-rose-100 text-rose-800', label: 'NEEDS FIX' }
+
+  return (
+    <div className={`rounded-2xl border ${tone.bar} p-3`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 text-[12px] font-semibold text-slate-950">
+            {title}
+            <span className={`rounded-full ${tone.pill} px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide`}>
+              {tone.label}
+            </span>
+          </p>
+          <div className="mt-1.5">
+            {children}
+          </div>
+          {status === 'block' && blockers.length ? (
+            <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[10.5px] font-semibold text-rose-700">
+              {blockers.map((b, i) => <li key={i}>{b}</li>)}
+            </ul>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={() => jumpTo(stepKey)}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-[#412d15] hover:bg-[#faf7f0] hover:text-[#412d15]"
+        >
+          {status === 'block' ? 'Fix' : 'Edit'} <FiChevronRight className="h-3 w-3" />
+        </button>
+      </div>
     </div>
   )
 }

@@ -8,6 +8,7 @@ import {
   type AdminUserAudit,
 } from '../api/adminUserService'
 import { clientService } from '../api/clientService'
+import { useAppSession } from '../hooks/useAppSession'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import IconButton from './ui/IconButton'
 
@@ -27,6 +28,11 @@ export default function AdminUsersPage() {
   const [activeOnly, setActiveOnly] = useState(false)
   const [assignFor, setAssignFor] = useState<AdminUser | null>(null)
   const [auditFor, setAuditFor] = useState<AdminUser | null>(null)
+  // Fix #295 — expose page + size controls. Prior FE used the backend
+  // default (page=0, size=50) implicitly, silently truncating any org
+  // with 51+ users. Now operator can page through OR increase size.
+  const [page, setPage] = useState(0)
+  const [size, setSize] = useState(50)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -36,6 +42,8 @@ export default function AdminUsersPage() {
           search: search || undefined,
           role: roleFilter || undefined,
           activeOnly: activeOnly || undefined,
+          page,
+          size,
         }),
         adminUserService.recentAudit(50),
       ])
@@ -46,8 +54,16 @@ export default function AdminUsersPage() {
     } finally {
       setLoading(false)
     }
-  }, [search, roleFilter, activeOnly])
+  }, [search, roleFilter, activeOnly, page, size])
 
+  // Snap back to page 0 whenever a filter or page-size changes so the
+  // operator doesn't land on an empty page after narrowing the result set.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paging on filter change; user-input-driven, not derivable at render
+    setPage(0)
+  }, [search, roleFilter, activeOnly, size])
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount / filter change; load() sets loading + result state
   useEffect(() => { void load() }, [load])
 
   useEffect(() => {
@@ -73,12 +89,50 @@ export default function AdminUsersPage() {
     [users],
   )
 
+  // Current user, so we can flag "This is you" + guard self-deactivation.
+  const { username: currentUsername } = useAppSession()
+
+  /**
+   * Count of active ADMINs — used to block deactivation of the last one
+   * (audit finding 1.3). Recomputed from the currently-loaded user list;
+   * a stale-cache race could still let a click sneak through, but the
+   * backend must remain the authoritative guard (see follow-up issue).
+   */
+  const activeAdminCount = useMemo(
+    () => users.filter((u) => u.role === 'ADMIN' && !u.deactivatedAt).length,
+    [users],
+  )
+
   const toggleActive = async (user: AdminUser) => {
     try {
       if (user.deactivatedAt) {
         await adminUserService.reactivate(user.id)
         notify.success(`Reactivated ${user.username}.`)
       } else {
+        // Guard 1.3 (last-admin protection): if this is the ONLY remaining
+        // active ADMIN, blocking is safer than any confirm. Deactivating
+        // it would lock every operator out of admin functions.
+        const isLastActiveAdmin = user.role === 'ADMIN' && activeAdminCount <= 1
+        if (isLastActiveAdmin) {
+          notify.error(
+            `Cannot deactivate ${user.username} — they are the ONLY active admin. ` +
+              `Promote or invite another admin first.`,
+          )
+          return
+        }
+
+        // Guard 3.1 (self-edit): extra confirmation for self-deactivation
+        // — the operator will be logged out immediately after this call.
+        const isSelf = currentUsername && user.username === currentUsername
+        if (isSelf) {
+          const ok = window.confirm(
+            `⚠️ You are deactivating YOUR OWN account (${user.username}).\n\n` +
+              `You will be logged out immediately and won't be able to reactivate ` +
+              `yourself. Another admin will have to do it.\n\nContinue?`,
+          )
+          if (!ok) return
+        }
+
         const reason = window.prompt(`Deactivate ${user.username}? Reason (optional):`, '')
         if (reason === null) return
         await adminUserService.deactivate(user.id, reason.trim() || undefined)
@@ -158,9 +212,21 @@ export default function AdminUsersPage() {
               <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-500">Loading…</td></tr>
             ) : users.length === 0 ? (
               <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-500">No users.</td></tr>
-            ) : users.map((u) => (
+            ) : users.map((u) => {
+              const isSelf = currentUsername && u.username === currentUsername
+              return (
               <tr key={u.id} className={u.deactivatedAt ? 'bg-slate-50/50 text-slate-400' : ''}>
-                <td className="px-3 py-2 font-mono">{u.username}</td>
+                <td className="px-3 py-2 font-mono">
+                  {u.username}
+                  {isSelf ? (
+                    <span
+                      className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-sky-700"
+                      title="This is your own account — self-edits require extra confirmation."
+                    >
+                      You
+                    </span>
+                  ) : null}
+                </td>
                 <td className="px-3 py-2">{u.email}</td>
                 <td className="px-3 py-2">
                   <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11.5px] font-semibold">
@@ -215,9 +281,52 @@ export default function AdminUsersPage() {
                   </button>
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
+        {/* Fix #295 — pagination controls. When the returned row count
+            equals the page size, there may be more; the "next" button
+            is left enabled so operator can try. Empty next page snaps
+            them back via the useEffect above (page 0 on reset). */}
+        <div className="flex items-center justify-between border-t border-slate-100 px-3 py-2 text-[12px] text-slate-600">
+          <span className="tabular-nums">
+            {users.length === 0
+              ? 'No rows'
+              : `Showing ${users.length} row${users.length === 1 ? '' : 's'} · page ${page + 1}${users.length === size ? ' (more may exist)' : ''}`}
+          </span>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5">
+              <span>Page size</span>
+              <select
+                value={size}
+                onChange={(e) => setSize(Number(e.target.value))}
+                className="rounded-md border border-slate-300 px-1.5 py-0.5 text-[12px]"
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={200}>200</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0 || loading}
+              className="rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              onClick={() => setPage((p) => p + 1)}
+              disabled={users.length < size || loading}
+              className="rounded-md border border-slate-300 px-2 py-1 text-[12px] hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white">
