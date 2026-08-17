@@ -35,6 +35,16 @@ export default function AccountScenarioBadge({
   const named = resolution.accountName || `${carrier} ${resolution.accountNumber}`
 
   switch (resolution.scenario) {
+    case 'GENERATED':
+      // Sprint 51 — order already labelled; show the account it was billed on
+      // (from the tracking row), not the "pick an account" cascade.
+      return (
+        <Chip
+          tone="bg-emerald-100 text-emerald-700"
+          icon={<FiCheckCircle className="h-3 w-3" />}
+          label={`Billed • ${resolution.accountName || `${carrier} ${resolution.accountNumber}`}`}
+        />
+      )
     case 'ORDER':
       return (
         <Chip
