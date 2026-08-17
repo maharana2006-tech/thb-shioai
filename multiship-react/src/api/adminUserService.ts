@@ -51,6 +51,11 @@ export interface AdminUserListParams {
   role?: string
   clientCode?: string
   activeOnly?: boolean
+  /** 0-based page index. Backend default: 0. */
+  page?: number
+  /** Rows per page. Backend default: 50. FE now exposes this so a 50+-user
+   *  org can page through instead of silently truncating (audit #295). */
+  size?: number
 }
 
 export const adminUserService = {
