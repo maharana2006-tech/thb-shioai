@@ -381,3 +381,109 @@ describe('PackagesPage — sync carrier packaging', () => {
     expect(syncPackagesMock).not.toHaveBeenCalledWith('USPS', 'US')
   })
 })
+
+// ===================== Fix F1 — kind switch clears fields =====================
+
+describe('PackagesPage — F1 kind switch clears the other-branch fields', () => {
+  it('CUSTOM → CARRIER clears dim fields (length/width/height + internal*)', async () => {
+    listPresetsMock.mockResolvedValue([customPreset(1, 'Small')])
+    const Page = await loadPage()
+    renderPage(Page)
+
+    await waitFor(() => expect(screen.getByText('Small')).toBeInTheDocument())
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^Edit$/ }))
+    })
+
+    // Confirm CUSTOM dims prefilled with 10.
+    const dimInputs = screen.getAllByRole('spinbutton') as HTMLInputElement[]
+    // First 3 spinbuttons are length/width/height (CUSTOM section).
+    expect(dimInputs[0].value).toBe('10')
+
+    // Switch to CARRIER — CUSTOM dim fields should clear from state.
+    const typeSel = screen.getByRole('combobox', { name: /^Type/i }) as HTMLSelectElement
+    await userEvent.selectOptions(typeSel, 'CARRIER')
+
+    // Toggle back to CUSTOM to see if dims persisted (they should NOT).
+    await userEvent.selectOptions(typeSel, 'CUSTOM')
+    const dimsAfter = screen.getAllByRole('spinbutton') as HTMLInputElement[]
+    // The first 3 fields (length/width/height) must now be empty.
+    expect(dimsAfter[0].value).toBe('')
+    expect(dimsAfter[1].value).toBe('')
+    expect(dimsAfter[2].value).toBe('')
+  })
+})
+
+// ===================== Fix F3 — unsaved-changes prompt on editor close =====================
+
+describe('PackagesPage — F3 editor unsaved-changes prompt', () => {
+  it('clean editor: Cancel closes with NO confirm', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    listPresetsMock.mockResolvedValue([customPreset(1, 'Small')])
+    const Page = await loadPage()
+    renderPage(Page)
+
+    await waitFor(() => expect(screen.getByText('Small')).toBeInTheDocument())
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^Edit$/ }))
+    })
+    // No edits — click Cancel.
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
+    })
+
+    expect(confirmSpy).not.toHaveBeenCalled()
+    confirmSpy.mockRestore()
+  })
+
+  it('dirty editor: Cancel prompts confirm; rejecting keeps modal open', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    listPresetsMock.mockResolvedValue([customPreset(1, 'Small')])
+    const Page = await loadPage()
+    renderPage(Page)
+
+    await waitFor(() => expect(screen.getByText('Small')).toBeInTheDocument())
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^Edit$/ }))
+    })
+
+    // Dirty the name field.
+    const nameInput = screen.getAllByRole('textbox')[0] as HTMLInputElement
+    await userEvent.clear(nameInput)
+    await userEvent.type(nameInput, 'Renamed')
+
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
+    })
+
+    expect(confirmSpy).toHaveBeenCalled()
+    // Modal still open — Register package / Save changes button visible.
+    expect(screen.getByRole('button', { name: /Save changes/i })).toBeInTheDocument()
+    confirmSpy.mockRestore()
+  })
+
+  it('dirty editor: Cancel + accept confirm closes the modal', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    listPresetsMock.mockResolvedValue([customPreset(1, 'Small')])
+    const Page = await loadPage()
+    renderPage(Page)
+
+    await waitFor(() => expect(screen.getByText('Small')).toBeInTheDocument())
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^Edit$/ }))
+    })
+
+    const nameInput = screen.getAllByRole('textbox')[0] as HTMLInputElement
+    await userEvent.clear(nameInput)
+    await userEvent.type(nameInput, 'Renamed')
+
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
+    })
+
+    expect(confirmSpy).toHaveBeenCalled()
+    // Modal closed — no Save changes button visible.
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Save changes/i })).toBeNull())
+    confirmSpy.mockRestore()
+  })
+})

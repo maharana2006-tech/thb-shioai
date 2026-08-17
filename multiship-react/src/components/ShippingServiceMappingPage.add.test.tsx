@@ -177,6 +177,11 @@ describe('ShippingServiceMappingPage — add-strip toggle', () => {
   })
 
   it('clicking Close (X) collapses the strip and clears the draft', async () => {
+    // Fix F15 (2026-08-17) added a dirty-state confirm before discard.
+    // Stub window.confirm to accept — the assertion is that Close COLLAPSES
+    // the strip and clears the draft, not that the confirm doesn't fire.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
     const Page = await loadPage()
     renderPage(Page)
     await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/ })).toBeInTheDocument())
@@ -190,12 +195,17 @@ describe('ShippingServiceMappingPage — add-strip toggle', () => {
       await userEvent.click(screen.getByRole('button', { name: /^Close$/i }))
     })
 
+    // Confirm was prompted (dirty state).
+    expect(confirmSpy).toHaveBeenCalled()
+
     // Strip collapsed → New-mapping badge gone.
     await waitFor(() => expect(screen.queryByText(/New mapping/i)).not.toBeInTheDocument())
 
     // Re-open → draft is blank (reset).
     await openAddStrip()
     expect(screen.getByLabelText(/Order Ship Via/i)).toHaveValue('')
+
+    confirmSpy.mockRestore()
   })
 })
 
@@ -309,5 +319,50 @@ describe('ShippingServiceMappingPage — save payload', () => {
     )
     // Strip stays open (badge still visible).
     expect(screen.getByText(/New mapping/i)).toBeInTheDocument()
+  })
+})
+
+// ===================== Fix F15 — unsaved-changes prompt =====================
+
+describe('ShippingServiceMappingPage — F15 unsaved-changes prompt', () => {
+  it('clean draft: Close skips the confirm entirely', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    const Page = await loadPage()
+    renderPage(Page)
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/ })).toBeInTheDocument())
+    await openAddStrip()
+
+    // No edits — Close should NOT prompt.
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^Close$/i }))
+    })
+    expect(confirmSpy).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.queryByText(/New mapping/i)).not.toBeInTheDocument())
+    confirmSpy.mockRestore()
+  })
+
+  it('dirty draft + reject confirm: strip stays open, draft preserved', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+
+    const Page = await loadPage()
+    renderPage(Page)
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Add$/ })).toBeInTheDocument())
+    await openAddStrip()
+
+    // Dirty the draft.
+    const shipviaInput = screen.getByLabelText(/Order Ship Via/i)
+    await userEvent.type(shipviaInput, 'DRAFT')
+
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^Close$/i }))
+    })
+
+    // Confirm fired but rejected — strip STAYS OPEN with the draft intact.
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(screen.getByText(/New mapping/i)).toBeInTheDocument()
+    expect(shipviaInput).toHaveValue('DRAFT')
+
+    confirmSpy.mockRestore()
   })
 })
