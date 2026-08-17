@@ -34,6 +34,14 @@ export default function AuditLogPage() {
   const [entityType, setEntityType] = useState('')
   const [action, setAction] = useState('')
   const [entityKey, setEntityKey] = useState('')
+  /** Audit A1 — 300ms debounce so the AdvancedDataTable search box
+   *  doesn't fire /audit-log per keystroke while the user is typing. */
+  const [debouncedEntityKey, setDebouncedEntityKey] = useState('')
+  /** Audit A2 — date-range filters (backend already supports since/until
+   *  but the UI had no inputs). ISO local date; empty = unbounded on
+   *  that side. Widened to a full datetime by the browser input picker. */
+  const [since, setSince] = useState('')
+  const [until, setUntil] = useState('')
   const [showFilters, setShowFilters] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
   const [pageSize, setPageSize] = useState(25)
@@ -44,6 +52,20 @@ export default function AuditLogPage() {
     { id: 'createdAt', desc: true },
   ])
 
+  /** Audit A3 — serialise TanStack's sorting state to the backend's
+   *  "property,direction" spec so column-header clicks actually reach
+   *  the query (pre-fix: state changed, API kept returning createdAt DESC). */
+  const sortParam = useMemo(() => {
+    const first = sorting[0]
+    if (!first) return 'createdAt,DESC'
+    return `${first.id},${first.desc ? 'DESC' : 'ASC'}`
+  }, [sorting])
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedEntityKey(entityKey.trim()), 300)
+    return () => window.clearTimeout(t)
+  }, [entityKey])
+
   useEffect(() => {
     let cancelled = false
     // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async audit-log fetch
@@ -53,7 +75,10 @@ export default function AuditLogPage() {
         actor: actor || undefined,
         entityType: entityType || undefined,
         action: action || undefined,
-        entityKey: entityKey || undefined,
+        entityKey: debouncedEntityKey || undefined,
+        since: since || undefined,
+        until: until || undefined,
+        sort: sortParam,
         page: pageIndex,
         size: pageSize,
       })
@@ -73,12 +98,12 @@ export default function AuditLogPage() {
     return () => {
       cancelled = true
     }
-  }, [actor, entityType, action, entityKey, pageIndex, pageSize, reloadToken])
+  }, [actor, entityType, action, debouncedEntityKey, since, until, sortParam, pageIndex, pageSize, reloadToken])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset to first page when filters change; must respond to prop-derived filter values, not derivable at render
     setPageIndex(0)
-  }, [actor, entityType, action, entityKey, pageSize])
+  }, [actor, entityType, action, debouncedEntityKey, since, until, sortParam, pageSize])
 
   const refresh = useCallback(() => setReloadToken((t) => t + 1), [])
   useEffect(() => {
@@ -176,7 +201,7 @@ export default function AuditLogPage() {
     [expanded],
   )
 
-  const filtersActive = !!(actor || entityType || action || entityKey)
+  const filtersActive = !!(actor || entityType || action || entityKey || since || until)
 
   return (
     <div className="space-y-4">
@@ -219,7 +244,7 @@ export default function AuditLogPage() {
                   Filters
                   {filtersActive ? (
                     <span className="rounded-full bg-white/20 px-1.5 text-[10px] font-bold">
-                      {[actor, entityType, action].filter(Boolean).length}
+                      {[actor, entityType, action, since, until].filter(Boolean).length}
                     </span>
                   ) : null}
                 </button>
@@ -261,6 +286,27 @@ export default function AuditLogPage() {
                       <option value="CASCADE_DISABLE">CASCADE_DISABLE</option>
                       <option value="CASCADE_ENABLE">CASCADE_ENABLE</option>
                     </Select>
+                    {/* Audit A2 — date-range filters mirror the backend's
+                        since/until params (already supported, no UI pre-fix).
+                        Empty = unbounded on that side. */}
+                    <label className="mb-1 mt-3 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                      Since
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={since}
+                      onChange={(e) => setSince(e.target.value)}
+                      className="mb-3 w-full rounded-md border border-slate-300 px-2 py-1 text-[12.5px]"
+                    />
+                    <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                      Until
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={until}
+                      onChange={(e) => setUntil(e.target.value)}
+                      className="mb-3 w-full rounded-md border border-slate-300 px-2 py-1 text-[12.5px]"
+                    />
                     {filtersActive ? (
                       <button
                         type="button"
@@ -268,6 +314,8 @@ export default function AuditLogPage() {
                           setActor('')
                           setEntityType('')
                           setAction('')
+                          setSince('')
+                          setUntil('')
                         }}
                         className="mt-3 inline-flex items-center gap-1 text-[11.5px] font-semibold text-slate-600 hover:text-slate-950"
                       >
