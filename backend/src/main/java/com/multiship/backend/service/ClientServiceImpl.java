@@ -445,11 +445,31 @@ public class ClientServiceImpl implements ClientService {
         carrierAccountRefRepository.deleteAll(
                 carrierAccountRefRepository.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(code));
 
+        // Sprint 55 audit #288 — CLIENT-owned warehouses were previously
+        // orphaned on delete. The cascadePreview flow (line 397-422) shows
+        // clientOwnedWarehouseCount, but the delete path didn't act on it.
+        // Now delete them alongside so the count matches reality.
+        List<Warehouse> ownedWarehouses = warehouseRepository
+                .findByOwnerClientCodeIgnoreCaseOrderByCodeAsc(code);
+        int ownedWarehouseCount = ownedWarehouses.size();
+        if (!ownedWarehouses.isEmpty()) {
+            // Detach any client-warehouse links first (client_warehouse rows
+            // are string-linked without FK cascade — same pattern as the
+            // deactivate path at line 275-287).
+            for (Warehouse w : ownedWarehouses) {
+                List<ClientWarehouse> links = clientWarehouseRepository.findByWarehouseId(w.getId());
+                if (!links.isEmpty()) clientWarehouseRepository.deleteAll(links);
+            }
+            warehouseRepository.deleteAll(ownedWarehouses);
+        }
+
         clientRepository.delete(client);
+        String cascadeSummary = "Client " + code + " deleted (including its carrier accounts and customs profiles"
+                + (ownedWarehouseCount > 0 ? " and " + ownedWarehouseCount + " client-owned warehouse(s)" : "")
+                + ").";
         auditService.record(AuditService.DELETE, AuditService.CLIENT,
-                client.getId(), code, null,
-                "Client " + code + " deleted (including its carrier accounts and customs profiles).");
-        return success("Client " + code + " deleted successfully (including its carrier accounts and customs profiles).", null);
+                client.getId(), code, null, cascadeSummary);
+        return success(cascadeSummary, null);
     }
 
     @Override
