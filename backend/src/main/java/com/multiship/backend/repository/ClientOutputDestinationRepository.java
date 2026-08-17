@@ -26,8 +26,16 @@ public interface ClientOutputDestinationRepository
     List<ClientOutputDestination> findByClientCodeAndDocTypeAndActiveTrueOrderById(
             String clientCode, DocType docType);
 
-    /** Admin-page filter: every row for one client (both doc-types, active + inactive). */
-    List<ClientOutputDestination> findByClientCodeOrderByDocTypeAscIdAsc(String clientCode);
+    /**
+     * Admin-page filter: every row for one client (both doc-types, active + inactive).
+     *
+     * <p>Audit B9 — case-insensitive. Client codes on
+     * {@link com.multiship.backend.model.Client} are stored uppercase by
+     * convention but users type "acme" in the admin filter — pre-fix, this
+     * returned zero rows for that query. Uses the {@code IgnoreCase} JPA
+     * derivation which translates to {@code LOWER(client_code) = LOWER(?)}.
+     */
+    List<ClientOutputDestination> findByClientCodeIgnoreCaseOrderByDocTypeAscIdAsc(String clientCode);
 
     /** Admin-page filter: every row across the platform. */
     List<ClientOutputDestination> findAllByOrderByClientCodeAscDocTypeAscIdAsc();
