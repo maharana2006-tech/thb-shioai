@@ -19,8 +19,18 @@
           style-src DOES enforce those, so 'unsafe-inline' stays on
           style-src until we sweep to Tailwind-only styling.
         - connect-src `https:` was a wildcard; tightened to `'self'`
-          (production ships same-origin API behind a reverse proxy).
-          LAN CIDRs kept for local dev + docker-compose.
+          which covers same-origin (both dev via Vite proxy and prod
+          behind a reverse proxy). The Vite dev proxy at :5173 routes
+          /api/* → :8080 so all backend calls are same-origin.
+      Env-agnostic: this CSP works in dev (Vite HMR + proxy), LAN
+      (Vite dev binds to `--host` if invoked; same-origin still), and
+      prod (SPA + API share origin). No CIDR wildcards — CSP host
+      wildcards must be leftmost (`*.example.com`) or a bare `*`;
+      numeric-segment wildcards like `192.168.*` are silently dropped
+      by every browser (that was the source of 9 console errors).
+      `frame-ancestors` is spec-ignored inside <meta>; it lives on the
+      Spring SecurityConfig response headers where it's actually
+      enforceable (default is X-Frame-Options: DENY).
       Loosen only if a specific integration needs it — record why here.
     -->
     <meta http-equiv="Content-Security-Policy"
@@ -29,8 +39,7 @@
                    style-src 'self' 'unsafe-inline';
                    img-src 'self' data: https:;
                    font-src 'self' data:;
-                   connect-src 'self' http://localhost:* http://127.0.0.1:* http://192.168.*:* http://10.*:* http://172.16.*:* http://172.17.*:* http://172.18.*:* http://172.19.*:* http://172.2*.*:* http://172.30.*:* http://172.31.*:*;
-                   frame-ancestors 'none';
+                   connect-src 'self' ws: wss:;
                    base-uri 'self';
                    form-action 'self';" />
     <title>multiship-react</title>

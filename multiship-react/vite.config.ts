@@ -17,6 +17,17 @@ export default defineConfig(({ mode }) => {
 
   return {
   plugins: [react()],
+  // Pre-bundle deps that the router-code-split path pulls in lazily.
+  // Vite's dep-optimizer discovers deps on first import; when a lazy
+  // route hits `zod` (via dashboardService) mid-session, Vite kicks
+  // off a re-optimize and the current tab's already-buffered request
+  // is aborted with `504 Outdated Optimize Dep` — the app then renders
+  // as a white page because dashboardService.ts throws on module load.
+  // Explicitly including it here forces the pre-bundle up front so no
+  // lazy discovery is needed.
+  optimizeDeps: {
+    include: ['zod'],
+  },
   // Local dev proxy — routes /api/* to the Spring Boot backend on :8080
   // so SPA + API share origin. Required for the httpOnly JWT cookie from
   // Sprint 50 Q1/Q2/Q3 to be sent by the browser (cross-origin cookies on
