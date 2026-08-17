@@ -6,6 +6,7 @@ import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.ExternalWebhookSubscriptionDTO;
 import com.multiship.backend.model.ExternalWebhookSubscription;
 import com.multiship.backend.repository.ExternalWebhookSubscriptionRepository;
+import com.multiship.backend.service.external.ExternalWebhookDispatcher;
 import com.multiship.backend.service.external.WebhookUrlValidator;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -37,6 +38,9 @@ public class ExternalWebhookController {
     private final ExternalWebhookSubscriptionRepository subscriptionRepo;
     /** Sprint 51 T3 finding #7 — SSRF guard applied on every save. */
     private final WebhookUrlValidator urlValidator;
+    /** Audit W2 — invalidate the dispatcher's 60s subscription cache
+     *  immediately after any write from the self-serve v2 path too. */
+    private final ExternalWebhookDispatcher dispatcher;
 
     @Operation(summary = "List my subscriptions")
     // Sprint 51 AC-M1 — enumerate the actual response shapes on every v2 endpoint.
@@ -104,6 +108,7 @@ public class ExternalWebhookController {
         entity.setActive(body.getActive() == null ? Boolean.TRUE : body.getActive());
         entity.setUpdatedAt(LocalDateTime.now());
         ExternalWebhookSubscription saved = subscriptionRepo.save(entity);
+        dispatcher.invalidateSubscriptionCache();
 
         HttpStatus code = body.getId() == null ? HttpStatus.CREATED : HttpStatus.OK;
         return ResponseEntity.status(code).body(ApiResponse.<ExternalWebhookSubscriptionDTO>builder()
@@ -131,6 +136,7 @@ public class ExternalWebhookController {
         if (entity == null) return notFound();
         if (!keyId.equals(entity.getApiKeyId())) return crossTenant();
         subscriptionRepo.delete(entity);
+        dispatcher.invalidateSubscriptionCache();
         return ok(null, "Deleted");
     }
 

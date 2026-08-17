@@ -10,6 +10,8 @@ import {
 } from '../api/webhookSubscriptionService'
 import Select from './workspace/Select'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
+import { useAppSession } from '../hooks/useAppSession'
+import { normalizeRole } from '../utils/roles'
 
 const EVENTS: { value: WebhookEventType; label: string; hint: string }[] = [
   { value: 'LABEL_GENERATED',  label: 'LABEL_GENERATED',  hint: 'A shipment label was successfully created.' },
@@ -26,6 +28,12 @@ const EVENTS: { value: WebhookEventType; label: string; hint: string }[] = [
  */
 export default function WebhookSubscriptionsPage() {
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
+  const { role } = useAppSession()
+  // Audit W1 — backend @PreAuthorize on POST + DELETE is ADMIN-only. USER
+  // role can only read the list. Hide write buttons so USERs don't hit a
+  // 403 after clicking (was silently confusing: modal opened, save failed,
+  // no path forward).
+  const canWrite = normalizeRole(role) === 'ADMIN'
   const [keys, setKeys] = useState<ApiKey[]>([])
   const [subs, setSubs] = useState<WebhookSubscription[]>([])
   const [loading, setLoading] = useState(false)
@@ -86,20 +94,22 @@ export default function WebhookSubscriptionsPage() {
             signed and retried on failure.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setEditing({
-            apiKeyId: keys[0]?.id ?? 0,
-            event: 'LABEL_GENERATED',
-            url: '',
-            secret: '',
-            active: true,
-          })}
-          disabled={keys.length === 0}
-          className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50"
-        >
-          <FiPlus /> New subscription
-        </button>
+        {canWrite ? (
+          <button
+            type="button"
+            onClick={() => setEditing({
+              apiKeyId: keys[0]?.id ?? 0,
+              event: 'LABEL_GENERATED',
+              url: '',
+              secret: '',
+              active: true,
+            })}
+            disabled={keys.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-md bg-[#1f150c] px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-black disabled:opacity-50"
+          >
+            <FiPlus /> New subscription
+          </button>
+        ) : null}
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -131,12 +141,16 @@ export default function WebhookSubscriptionsPage() {
                   {s.active ? <span className="text-emerald-700">Active</span> : <span className="text-rose-600">Inactive</span>}
                 </td>
                 <td className="px-4 py-2 text-right">
-                  <div className="inline-flex gap-1">
-                    <button title="Edit" onClick={() => setEditing({ ...s })}
-                      className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"><FiEdit3 /></button>
-                    <button title="Delete" onClick={() => del(s)}
-                      className="rounded p-1 text-rose-500 hover:bg-rose-50"><FiTrash2 /></button>
-                  </div>
+                  {canWrite ? (
+                    <div className="inline-flex gap-1">
+                      <button title="Edit" onClick={() => setEditing({ ...s })}
+                        className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800"><FiEdit3 /></button>
+                      <button title="Delete" onClick={() => del(s)}
+                        className="rounded p-1 text-rose-500 hover:bg-rose-50"><FiTrash2 /></button>
+                    </div>
+                  ) : (
+                    <span className="text-[11px] text-slate-400">read-only</span>
+                  )}
                 </td>
               </tr>
             ))}

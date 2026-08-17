@@ -6,6 +6,7 @@ import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.ExternalWebhookSubscriptionDTO;
 import com.multiship.backend.model.ExternalWebhookSubscription;
 import com.multiship.backend.repository.ExternalWebhookSubscriptionRepository;
+import com.multiship.backend.service.external.ExternalWebhookDispatcher;
 import com.multiship.backend.service.external.WebhookUrlValidator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,6 +34,7 @@ class ExternalWebhookControllerTest {
 
     private ExternalWebhookSubscriptionRepository repo;
     private WebhookUrlValidator urlValidator;
+    private ExternalWebhookDispatcher dispatcher;
     private ExternalWebhookController controller;
 
     private static final Long MY_KEY = 42L;
@@ -42,7 +44,8 @@ class ExternalWebhookControllerTest {
     void setUp() {
         repo = mock(ExternalWebhookSubscriptionRepository.class);
         urlValidator = mock(WebhookUrlValidator.class);
-        controller = new ExternalWebhookController(repo, urlValidator);
+        dispatcher = mock(ExternalWebhookDispatcher.class);
+        controller = new ExternalWebhookController(repo, urlValidator, dispatcher);
     }
 
     // ===== delete =====
