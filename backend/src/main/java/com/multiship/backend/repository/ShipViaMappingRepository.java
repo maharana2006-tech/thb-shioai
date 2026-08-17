@@ -16,4 +16,12 @@ public interface ShipViaMappingRepository extends JpaRepository<ShipViaMapping, 
     List<ShipViaMapping> findAllByOrderByShipviaCdAsc();
 
     List<ShipViaMapping> findByServiceId(Long serviceId);
+
+    /**
+     * Sprint 55 audit #287 — legacy single-column warehouseId cleanup on
+     * warehouse delete. Rules using the phase-6 join table
+     * (ShipMethodRuleWarehouse) are handled by that side's cascade;
+     * pre-phase-6 rules still store a scalar warehouse_id here.
+     */
+    List<ShipViaMapping> findByWarehouseId(Long warehouseId);
 }
