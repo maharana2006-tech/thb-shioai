@@ -81,6 +81,14 @@ public class ShippingConfigController {
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
+    @Operation(summary = "Preview cascade impact of deleting a ship-method rule (audit #297)")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/ship-method-rules/{id}/cascade-preview")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.RuleCascadePreviewDTO>> previewRuleDelete(@PathVariable Long id) {
+        ApiResponse<com.multiship.backend.dto.RuleCascadePreviewDTO> r = service.previewRuleDelete(id);
+        return ResponseEntity.status(r.getCode()).body(r);
+    }
+
     @Operation(summary = "Replace a service's allowed packages (+ discount %)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PutMapping("/shipping-services/{id}/packages")

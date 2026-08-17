@@ -467,6 +467,31 @@ public class ShippingConfigService {
     }
 
     /**
+     * Sprint 55 audit #297 — preview the cascade impact of deleting a
+     * shipping mapping rule. Frontend uses the counts to render a
+     * confirmation dialog before committing (mirrors the /clients
+     * cascade preview pattern).
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<com.multiship.backend.dto.RuleCascadePreviewDTO> previewRuleDelete(Long id) {
+        ShipViaMapping rule = ruleRepository.findById(id).orElse(null);
+        if (rule == null) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.INTERNAL_ERROR,
+                    "Ship-method rule " + id + " not found.");
+        }
+        long packageCount = rulePackageRepository.countByRuleId(id);
+        long warehouseCount = ruleWarehouseRepository.countByRuleId(id);
+        com.multiship.backend.dto.RuleCascadePreviewDTO body =
+                com.multiship.backend.dto.RuleCascadePreviewDTO.builder()
+                        .ruleId(id)
+                        .shipviaCd(rule.getShipviaCd())
+                        .allowedPackageCount(packageCount)
+                        .allowedWarehouseCount(warehouseCount)
+                        .build();
+        return success("Cascade preview computed.", body);
+    }
+
+    /**
      * Compute human-readable warnings for presets whose max weight exceeds
      * the service's carrier cap. Advisory only — the save still persists.
      * Returns an empty list when everything fits or the service has no cap.

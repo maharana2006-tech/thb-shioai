@@ -14,6 +14,9 @@ public interface ShipMethodRuleWarehouseRepository extends JpaRepository<ShipMet
 
     List<ShipMethodRuleWarehouse> findByRuleIdOrderByWarehouseIdAsc(Long ruleId);
 
+    /** Sprint 55 audit #297 — cascade preview support. */
+    long countByRuleId(Long ruleId);
+
     /** Bulk lookup — used by rule resolution to avoid N+1 when scoring
      *  multiple candidate rules for one order ship-method code. */
     List<ShipMethodRuleWarehouse> findByRuleIdIn(java.util.Collection<Long> ruleIds);

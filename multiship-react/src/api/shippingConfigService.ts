@@ -203,6 +203,14 @@ export interface ShippingCatalog {
 }
 
 /** Result of a carrier availability sync. */
+/** Sprint 55 audit #297 — cascade preview shape for the rule-delete flow. */
+export interface RuleCascadePreview {
+  ruleId: number
+  shipviaCd: string
+  allowedPackageCount: number
+  allowedWarehouseCount: number
+}
+
 export interface SyncResult {
   carrier: string
   originCountry: string
@@ -241,6 +249,11 @@ export const shippingConfigService = {
   saveRule: (rule: ShipMethodRule) => apiClient.put<ApiResponse<ShipMethodRule>>('/ship-method-rules', rule),
 
   deleteRule: (id: number) => apiClient.delete<ApiResponse<void>>(`/ship-method-rules/${id}`),
+
+  /** Sprint 55 audit #297 — cascade preview counts (packages + warehouses)
+   *  before the operator confirms a rule delete. */
+  previewRuleDelete: (id: number) =>
+    apiClient.get<ApiResponse<RuleCascadePreview>>(`/ship-method-rules/${id}/cascade-preview`),
 
   setServicePackages: (serviceId: number, links: Array<{ presetId: number }>) =>
     apiClient.put<ApiResponse<ServicePackageLink[]>>(`/shipping-services/${serviceId}/packages`, links),
