@@ -56,6 +56,15 @@ public interface OrderImportService {
      */
     com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(Long id, String requestedBy);
 
+    /**
+     * Sprint 55 audit #302 F3.2 — generate labels for a batch, optionally
+     * filtered to only rows whose current generatedStatus is NOT
+     * {@code GENERATED}. Retry-safe: prevents duplicate carrier calls
+     * (and duplicate billing) on rows that already succeeded.
+     * onlyFailed=false preserves the original re-generate-all behavior.
+     */
+    com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(Long id, String requestedBy, boolean onlyFailed);
+
     /** Generate a label for a single row of a saved batch. Null if not found. */
     com.multiship.backend.dto.ImportBatchDTO generateLabelForRow(Long id, int rowNumber, String requestedBy);
 

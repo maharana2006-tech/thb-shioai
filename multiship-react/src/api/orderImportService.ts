@@ -133,10 +133,20 @@ export const orderImportService = {
   getHistory: (id: number) =>
     apiClient.get<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}`),
 
-  /** Generate carrier labels for a saved batch — advances its status
-   *  INITIATE → IN_PROGRESS → COMPLETE / PARTIAL_COMPLETE. */
-  generateLabels: (id: number) =>
-    apiClient.post<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}/generate`, {}),
+  /**
+   * Generate carrier labels for a saved batch — advances its status
+   * INITIATE → IN_PROGRESS → COMPLETE / PARTIAL_COMPLETE.
+   *
+   * Sprint 55 audit #302 F3.2 — pass onlyFailed=true when RETRYING a
+   * PARTIAL_COMPLETE batch to skip rows already marked GENERATED
+   * (prevents duplicate carrier calls + billing on the already-successful
+   * subset). Defaults to false — fresh generate re-processes all rows.
+   */
+  generateLabels: (id: number, opts?: { onlyFailed?: boolean }) =>
+    apiClient.post<ApiResponse<ImportBatchDetail>>(
+      `/orders/import/history/${id}/generate${opts?.onlyFailed ? '?onlyFailed=true' : ''}`,
+      {},
+    ),
 
   /** Generate a carrier label for a single row of a saved batch. */
   generateRowLabel: (id: number, rowNumber: number) =>
