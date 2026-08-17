@@ -21,6 +21,7 @@ import { isAbortError } from '../api/apiClient'
 import { useAppSession } from '../hooks/useAppSession'
 import { canManageCarriers, normalizeRole } from '../utils/roles'
 import { countryName } from '../utils/countries'
+import { settingsPaths } from '../routes/workspaceRoutes'
 
 const CARD = 'rounded-2xl border border-slate-200 bg-white shadow-sm'
 const POLL_MS = 45_000
@@ -261,28 +262,32 @@ export default function Dashboard() {
           .slice(0, 3)
           .map((l) => `${l.client} → ${countryName(l.country)}`)
           .join(' · '),
-        to: '/settings/importer-broker',
+        // Fix #309 — reference the settingsPaths registry so a route
+        // rename lands here automatically. Prior hardcoded strings would
+        // silently break if e.g. shipping-catalog split back into two
+        // routes or importer-broker was renamed.
+        to: settingsPaths.importerBroker,
       },
       {
         ok: health.unverifiedAccounts === 0,
         okText: 'All carrier accounts verified',
         warnText: `${health.unverifiedAccounts} carrier account${health.unverifiedAccounts === 1 ? '' : 's'} unverified`,
         detail: '',
-        to: '/settings/carriers',
+        to: settingsPaths.carriers,
       },
       {
         ok: health.clientsWithoutDefault === 0,
         okText: 'Every client has a default account',
         warnText: `${health.clientsWithoutDefault} client${health.clientsWithoutDefault === 1 ? '' : 's'} without a default account`,
         detail: '',
-        to: '/settings/carriers',
+        to: settingsPaths.carriers,
       },
       {
         ok: health.rulesToDisabledServices === 0,
         okText: 'Every ship-method rule maps to an enabled service',
         warnText: `${health.rulesToDisabledServices} rule${health.rulesToDisabledServices === 1 ? '' : 's'} point at disabled services`,
         detail: '',
-        to: '/settings/shipping-catalog?tab=services',
+        to: `${settingsPaths.shippingCatalog}?tab=services`,
       },
     ]
   }, [health])
