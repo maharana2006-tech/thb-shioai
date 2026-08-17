@@ -447,3 +447,94 @@ describe('ClientsPage · row actions · roles', () => {
     expect(toggle.getAttribute('title')).not.toBe('Admin only')
   })
 })
+
+// ============================================================================
+// Delete cascade-preview (2026-08-17) — mirror deactivate flow
+// ============================================================================
+
+describe('ClientsPage · row actions · delete cascade preview', () => {
+  it('Delete now calls cascadePreview BEFORE the confirm dialog', async () => {
+    const Page = await loadPage()
+    const user = userEvent.setup()
+    renderList(Page)
+
+    await openRowMenu(user, 'ACME')
+    await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
+
+    // cascadePreview MUST fire first — mirror the deactivate flow.
+    await waitFor(() => expect(cascadePreview).toHaveBeenCalledWith('ACME'))
+    // Then the confirm dialog.
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalled())
+    // Then the delete.
+    await waitFor(() => expect(deleteClient).toHaveBeenCalledWith('ACME'))
+  })
+
+  it('Delete confirm message includes the cascade counts + PERMANENT warning', async () => {
+    cascadePreview.mockResolvedValue({
+      data: {
+        clientCode: 'ACME', pendingOrderCount: 0,
+        activeCarrierAccountCount: 4,
+        clientOwnedWarehouseCount: 2,
+        clientWarehouseLinkCount: 5,
+        clientCurrentlyActive: true,
+      },
+    })
+    const Page = await loadPage()
+    const user = userEvent.setup()
+    renderList(Page)
+
+    await openRowMenu(user, 'ACME')
+    await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
+
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalled())
+    const msg = String(notifyConfirm.mock.calls[0]?.[0] ?? '')
+    // Cascade counts show up in the confirm.
+    expect(msg).toMatch(/4 carrier account/i)
+    expect(msg).toMatch(/2 client-owned warehouse/i)
+    expect(msg).toMatch(/5 warehouse attachment/i)
+    // "PERMANENTLY" wording + "cannot be undone" wording present so
+    // the operator can't confuse delete with the reversible deactivate.
+    expect(msg).toMatch(/PERMANENTLY/i)
+    expect(msg).toMatch(/cannot be undone/i)
+  })
+
+  it('Delete BLOCKS when pendingOrderCount > 0 (no confirm shown, no delete call)', async () => {
+    cascadePreview.mockResolvedValue({
+      data: {
+        clientCode: 'ACME', pendingOrderCount: 3,
+        activeCarrierAccountCount: 1,
+        clientOwnedWarehouseCount: 0,
+        clientWarehouseLinkCount: 0,
+        clientCurrentlyActive: true,
+      },
+    })
+    const Page = await loadPage()
+    const user = userEvent.setup()
+    renderList(Page)
+
+    await openRowMenu(user, 'ACME')
+    await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
+
+    await waitFor(() => expect(cascadePreview).toHaveBeenCalled())
+    await waitFor(() => expect(notifyError).toHaveBeenCalled())
+    const errMsg = String(notifyError.mock.calls[0]?.[0] ?? '')
+    expect(errMsg).toMatch(/3 pending order/i)
+    // NO confirm dialog; NO delete call.
+    expect(notifyConfirm).not.toHaveBeenCalled()
+    expect(deleteClient).not.toHaveBeenCalled()
+  })
+
+  it('cascadePreview call itself failing surfaces via apiError; no delete happens', async () => {
+    cascadePreview.mockRejectedValue(new Error('preview blew up'))
+    const Page = await loadPage()
+    const user = userEvent.setup()
+    renderList(Page)
+
+    await openRowMenu(user, 'ACME')
+    await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
+
+    await waitFor(() => expect(notifyApiError).toHaveBeenCalled())
+    expect(notifyConfirm).not.toHaveBeenCalled()
+    expect(deleteClient).not.toHaveBeenCalled()
+  })
+})

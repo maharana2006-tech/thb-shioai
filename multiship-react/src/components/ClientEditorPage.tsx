@@ -511,10 +511,12 @@ export default function ClientEditorPage() {
 
   const set = (key: keyof ClientUpsertPayload) => (event: { target: { value: string } }) => {
     const raw = event.target.value
-    // Client code is uppercase-normalized on the wire; do it in state too so
-    // the operator sees exactly what's saved (and no case-only collisions
-    // with existing clients slip through the local dup check).
-    const value = key === 'clientCode' ? raw.toUpperCase() : raw
+    // Client code is uppercase + whitespace-stripped on the wire; do it in
+    // state too so the operator sees EXACTLY what's saved (and no case-only
+    // / whitespace-only collisions with existing clients slip through the
+    // local dup check). Prior behavior only uppercased — a pasted "  ma1885 "
+    // would render as "  MA1885 " in the summary but save as "MA1885".
+    const value = key === 'clientCode' ? raw.toUpperCase().replace(/\s+/g, '') : raw
     setForm((cur) => ({ ...cur, [key]: value }))
     if (key === 'clientCode') setCodeConflict(null) // stale check → clear
   }
@@ -600,21 +602,20 @@ export default function ClientEditorPage() {
   }, [isEdit, editingCode, navigate])
 
   useEffect(() => {
+    // Edit-mode carriers now come exclusively from the getClient response
+    // in the effect above (line ~589 setAccounts(c.carrierAccounts ?? [])).
+    // Prior behavior fired listClientAccounts here too — non-deterministic
+    // resolution order meant the second-to-resolve overwrote the first,
+    // occasionally shadowing fresh getClient data with a stale list cache.
+    //
+    // Create mode still needs the shared platform account book so the
+    // Mapping step's "platform carrier account" picker has options to
+    // source a carrier for a rule.
+    if (editingCode) return
     let cancelled = false
-    if (editingCode) {
-      // Edit mode — this client's own accounts drive the pickers.
-      clientService.listClientAccounts(editingCode)
-        .then((a) => { if (!cancelled) setAccounts(a) })
-        .catch(() => { /* list is cosmetic */ })
-    } else {
-      // Create mode — the client has no persisted accounts yet, but the
-      // Mapping step's "platform carrier account" picker needs the shared
-      // platform account book to source a carrier for a rule. Load it so
-      // that picker isn't stuck on "No platform accounts".
-      accountRefService.listAccounts()
-        .then((a) => { if (!cancelled) setAccounts(a) })
-        .catch(() => { /* picker just stays empty — non-fatal */ })
-    }
+    accountRefService.listAccounts()
+      .then((a) => { if (!cancelled) setAccounts(a) })
+      .catch(() => { /* picker just stays empty — non-fatal */ })
     return () => { cancelled = true }
   }, [editingCode])
 

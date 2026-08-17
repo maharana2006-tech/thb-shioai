@@ -198,14 +198,45 @@ export default function ClientsPage() {
     }
   }
   const handleDelete = async (client: Client) => {
-    if (!(await notify.confirm(`Delete client ${client.clientCode}?`, {
-      title: 'Delete client',
-      confirmLabel: 'Delete',
-      danger: true,
-    }))) return
+    // Delete is PERMANENT — mirror the deactivate cascade-preview flow so the
+    // operator sees exactly what will be removed (carriers, warehouses)
+    // before the destructive step. Deactivate had this preview; delete
+    // silently skipped it, letting operators nuke rows without warning.
+    try {
+      const preview = (await clientService.cascadePreview(client.clientCode)).data
+      if (!preview) throw new Error('Preview returned no data.')
+      if (preview.pendingOrderCount > 0) {
+        notify.error(
+          `${client.clientCode} has ${preview.pendingOrderCount} pending order(s). ` +
+            `Complete or void them before deleting.`,
+        )
+        return
+      }
+      const summary =
+        `PERMANENTLY delete ${client.clientCode}? This will also delete:\n` +
+        `• ${preview.activeCarrierAccountCount} carrier account(s)\n` +
+        `• ${preview.clientOwnedWarehouseCount} client-owned warehouse(s)\n` +
+        `• ${preview.clientWarehouseLinkCount} warehouse attachment(s)\n\n` +
+        `This cannot be undone. Use Deactivate instead if you want to keep the record.`
+      const ok = await notify.confirm(summary, {
+        title: `Delete ${client.clientCode}?`,
+        confirmLabel: 'Delete permanently',
+        danger: true,
+      })
+      if (!ok) return
+    } catch (error) {
+      notify.apiError(error, 'Failed to preview the cascade.')
+      return
+    }
     try {
       await clientService.deleteClient(client.clientCode)
       notify.success(`Client ${client.clientCode} deleted.`)
+      // If the delete emptied the current page (not page 0), snap back
+      // to the previous page so the operator doesn't land on an empty
+      // paginated view.
+      if (pageIndex > 0 && clients.length === 1) {
+        setPageIndex((p) => Math.max(0, p - 1))
+      }
       refresh()
     } catch (error) {
       // CLIENT_HAS_ORDERS is handled by the friendly-message map.
