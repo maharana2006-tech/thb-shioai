@@ -24,6 +24,11 @@ export interface AuditLogListParams {
   entityKey?: string
   since?: string
   until?: string
+  /** Audit A3 — "property,direction" (e.g. "actor,ASC"). Backend
+   *  whitelists properties createdAt / actor / action / entityType /
+   *  entityKey; anything else falls back to createdAt. Direction is
+   *  ASC or DESC; missing → DESC. */
+  sort?: string
   page?: number
   size?: number
 }
@@ -48,6 +53,7 @@ export const auditLogService = {
     if (params.entityKey?.trim()) query.set('entityKey', params.entityKey.trim())
     if (params.since?.trim()) query.set('since', params.since.trim())
     if (params.until?.trim()) query.set('until', params.until.trim())
+    if (params.sort?.trim()) query.set('sort', params.sort.trim())
     query.set('page', String(params.page ?? 0))
     query.set('size', String(params.size ?? 25))
     return apiClient.get<ApiResponse<AuditLogPage>>(`/audit-log?${query.toString()}`)

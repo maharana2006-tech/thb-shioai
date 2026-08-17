@@ -2,6 +2,7 @@ package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.AuditLogDTO;
+import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.PageResponseDTO;
 import com.multiship.backend.model.AuditLog;
 import com.multiship.backend.repository.AuditLogRepository;
@@ -57,6 +58,8 @@ public class AuditLogController {
             @RequestParam(required = false) String since,
             @Parameter(description = "ISO-8601 upper bound on createdAt")
             @RequestParam(required = false) String until,
+            @Parameter(description = "Sort key + direction: createdAt|actor|action|entityType|entityKey, ASC|DESC. Defaults to createdAt,DESC.")
+            @RequestParam(defaultValue = "createdAt,DESC") String sort,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size) {
 
@@ -64,16 +67,29 @@ public class AuditLogController {
         String safeEntity = entityType == null ? "" : entityType.trim().toUpperCase();
         String safeAction = action == null ? "" : action.trim().toUpperCase();
         String safeKey = entityKey == null ? "" : entityKey.trim();
-        // Substitute sentinel bounds when the caller doesn't specify
-        // a date filter — Postgres can't infer the type of a null
-        // LocalDateTime bound. Same fix pattern as LabelTemplateRepo.
-        LocalDateTime sinceTs = parseOrDefault(since, LocalDateTime.of(1970, 1, 1, 0, 0));
-        LocalDateTime untilTs = parseOrDefault(until, LocalDateTime.of(9999, 12, 31, 23, 59));
+        // Audit B3 — was `parseOrDefault` which silently fell back to
+        // 1970/9999 on malformed input, so the caller thought their filter
+        // was honoured. Now returns 400 with the actual reason.
+        LocalDateTime sinceTs;
+        LocalDateTime untilTs;
+        try {
+            sinceTs = parseOrDefault(since, LocalDateTime.of(1970, 1, 1, 0, 0), "since");
+            untilTs = parseOrDefault(until, LocalDateTime.of(9999, 12, 31, 23, 59), "until");
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(ApiResponse.<PageResponseDTO<AuditLogDTO>>builder()
+                    .status("error").code(HttpStatus.BAD_REQUEST.value())
+                    .message(ex.getMessage())
+                    .errorCode(ErrorCode.VALIDATION_ERROR.name()).build());
+        }
         int safeSize = Math.min(Math.max(size, 1), 200);
         int safePage = Math.max(page, 0);
 
+        // Audit A3 — parse the client's sort spec (previously ignored;
+        // FE captured column-header clicks into state but never sent
+        // them to the API, so all sorts silently defaulted to createdAt,DESC).
+        Sort sortSpec = parseSort(sort);
         Page<AuditLog> result = repo.search(safeActor, safeEntity, safeAction, safeKey, sinceTs, untilTs,
-                PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt")));
+                PageRequest.of(safePage, safeSize, sortSpec));
 
         List<AuditLogDTO> content = result.getContent().stream().map(AuditLogDTO::from).toList();
         PageResponseDTO<AuditLogDTO> body = PageResponseDTO.of(
@@ -88,12 +104,39 @@ public class AuditLogController {
                 .build());
     }
 
-    private static LocalDateTime parseOrDefault(String s, LocalDateTime fallback) {
+    /**
+     * Audit B3 — parses a caller-supplied ISO-8601 timestamp, returning
+     * {@code fallback} only when the caller omitted the parameter. Any
+     * NON-empty value that fails to parse now throws — the controller
+     * translates that into a 400 with the actual reason instead of
+     * silently coercing to 1970/9999 (which made the filter box lie).
+     */
+    private static LocalDateTime parseOrDefault(String s, LocalDateTime fallback, String paramName) {
         if (s == null || s.isBlank()) return fallback;
         try {
             return LocalDateTime.parse(s.trim());
         } catch (Exception ex) {
-            return fallback;
+            throw new IllegalArgumentException(
+                    "'" + paramName + "' must be an ISO-8601 local timestamp (yyyy-MM-ddTHH:mm:ss)");
         }
+    }
+
+    /**
+     * Audit A3 — parse a "property,direction" spec from the query string
+     * into a Spring {@link Sort}. Whitelists the properties the repo's
+     * buildOrderBy switch also whitelists so an unknown key falls back
+     * to createdAt (rather than reaching the persistence layer with an
+     * unmapped column).
+     */
+    private static Sort parseSort(String raw) {
+        if (raw == null || raw.isBlank()) return Sort.by(Sort.Direction.DESC, "createdAt");
+        String[] parts = raw.split(",");
+        String prop = switch (parts[0].trim()) {
+            case "actor", "action", "entityType", "entityKey", "createdAt" -> parts[0].trim();
+            default -> "createdAt";
+        };
+        Sort.Direction dir = parts.length > 1 && "asc".equalsIgnoreCase(parts[1].trim())
+                ? Sort.Direction.ASC : Sort.Direction.DESC;
+        return Sort.by(dir, prop);
     }
 }
