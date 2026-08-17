@@ -58,7 +58,10 @@ public class AdminUserService {
         OK,
         USER_NOT_FOUND,
         CLIENT_NOT_FOUND,
-        ALREADY_IN_TARGET_STATE
+        ALREADY_IN_TARGET_STATE,
+        /** Sprint 55 audit #292 — rejected because deactivating this user
+         *  would leave zero active admins (org lockout). */
+        LAST_ADMIN_CANNOT_DEACTIVATE
     }
 
     public record MutationOutcome(ActionResult result, AdminUserDTO user) {}
@@ -190,6 +193,20 @@ public class AdminUserService {
         User u = found.get();
         if (u.getDeactivatedAt() != null) {
             return new MutationOutcome(ActionResult.ALREADY_IN_TARGET_STATE, toDTO(u));
+        }
+        // Sprint 55 audit #292 — last-admin protection.
+        // Deactivating the only remaining ADMIN would lock every operator
+        // out of admin functions permanently. The FE PR #291 added a
+        // client-side check but that's bypassable via direct API + a
+        // race window; the backend is the authoritative guard.
+        // Ignores case ('ADMIN' vs 'admin') to match how roles are stored.
+        if ("ADMIN".equalsIgnoreCase(u.getRole())) {
+            long activeAdmins = userRepository.countByRoleIgnoreCaseAndDeactivatedAtIsNull("ADMIN");
+            if (activeAdmins <= 1) {
+                log.warn("[admin-user] {} attempted to deactivate the last active admin {} — rejected",
+                        actorUsername, u.getUsername());
+                return new MutationOutcome(ActionResult.LAST_ADMIN_CANNOT_DEACTIVATE, toDTO(u));
+            }
         }
         u.setDeactivatedAt(LocalDateTime.now());
         u.setDeactivatedBy(actorUsername);

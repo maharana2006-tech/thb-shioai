@@ -159,6 +159,69 @@ class AdminUserServiceTest {
         verify(auditRepo).save(any(UserAdminAudit.class));
     }
 
+    /* -------- Sprint 55 audit #292: last-admin protection -------- */
+
+    @Test
+    void deactivate_lastActiveAdmin_isRejected_orgLockoutGuard() {
+        User admin = User.builder().id(1L).username("only-admin")
+                .email("a@a").fullName("Only Admin").role("ADMIN")
+                .emailVerified(true).build();
+        when(userRepo.findById(1L)).thenReturn(Optional.of(admin));
+        // Only one active admin remains — deactivating them would lock the org out.
+        when(userRepo.countByRoleIgnoreCaseAndDeactivatedAtIsNull("ADMIN")).thenReturn(1L);
+
+        MutationOutcome out = service.deactivate(1L, "self", "only-admin");
+
+        assertEquals(ActionResult.LAST_ADMIN_CANNOT_DEACTIVATE, out.result());
+        // Row must NOT be mutated — timestamps stay null.
+        assertNull(admin.getDeactivatedAt());
+        assertNull(admin.getDeactivatedBy());
+        // No audit row for a rejected op (mutation didn't happen).
+        verify(auditRepo, never()).save(any());
+    }
+
+    @Test
+    void deactivate_secondToLastAdmin_isAllowed_whenOtherActiveAdminExists() {
+        User admin = User.builder().id(2L).username("admin-b")
+                .email("b@a").fullName("Admin B").role("ADMIN")
+                .emailVerified(true).build();
+        when(userRepo.findById(2L)).thenReturn(Optional.of(admin));
+        // Two active admins → deactivating one leaves one; safe.
+        when(userRepo.countByRoleIgnoreCaseAndDeactivatedAtIsNull("ADMIN")).thenReturn(2L);
+
+        MutationOutcome out = service.deactivate(2L, "no longer needed", "admin-a");
+
+        assertEquals(ActionResult.OK, out.result());
+        assertNotNull(admin.getDeactivatedAt());
+    }
+
+    @Test
+    void deactivate_nonAdmin_skipsTheLastAdminCheck() {
+        // A USER row should not query the admin quorum at all.
+        User u = legacyUser();
+        when(userRepo.findById(42L)).thenReturn(Optional.of(u));
+
+        MutationOutcome out = service.deactivate(42L, "gone", "admin");
+
+        assertEquals(ActionResult.OK, out.result());
+        // The countByRole query MUST NOT be called for a non-ADMIN.
+        verify(userRepo, never()).countByRoleIgnoreCaseAndDeactivatedAtIsNull(anyString());
+    }
+
+    @Test
+    void deactivate_admin_isCaseInsensitiveOnRole() {
+        // Some legacy rows may store 'admin' lowercase; the guard must still fire.
+        User admin = User.builder().id(3L).username("mixed-case")
+                .email("c@a").fullName("Mixed").role("admin")  // lowercase
+                .emailVerified(true).build();
+        when(userRepo.findById(3L)).thenReturn(Optional.of(admin));
+        when(userRepo.countByRoleIgnoreCaseAndDeactivatedAtIsNull("ADMIN")).thenReturn(1L);
+
+        MutationOutcome out = service.deactivate(3L, "self", "mixed-case");
+
+        assertEquals(ActionResult.LAST_ADMIN_CANNOT_DEACTIVATE, out.result());
+    }
+
     @Test
     void deactivate_alreadyDeactivated_isNoop() {
         User u = legacyUser();

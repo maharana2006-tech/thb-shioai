@@ -42,6 +42,9 @@ public enum ErrorCode {
     ADMIN_TARGET_CLIENT_NOT_FOUND,
     /** Admin tried to modify or deactivate a user that does not exist. */
     ADMIN_TARGET_USER_NOT_FOUND,
+    /** Sprint 55 audit #292 — deactivating this ADMIN would leave zero
+     *  active admins; blocked to prevent org lockout. */
+    LAST_ADMIN_CANNOT_DEACTIVATE,
 
     // ===== Sprint 50 finding #15 — per-tenant rate limit + fair scheduler =====
     /** Tenant exceeded the per-minute request budget on a write endpoint. */

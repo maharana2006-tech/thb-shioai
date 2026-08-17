@@ -17,6 +17,14 @@ public interface UserRepository extends JpaRepository<User, Long>, JpaSpecificat
     Boolean existsByUsername(String username);
     Boolean existsByEmail(String email);
 
+    /**
+     * Sprint 55 audit #292 — last-admin protection. Count active users of a
+     * given role (typically 'ADMIN') to guard deactivate() against locking
+     * everyone out. Case-insensitive on role to match how the API accepts
+     * both 'ADMIN' and 'admin'.
+     */
+    long countByRoleIgnoreCaseAndDeactivatedAtIsNull(String role);
+
     /** Sprint 50 Tier 0.5 PR D — click-through email verification lookup. */
     Optional<User> findByEmailVerifyToken(String token);
 
