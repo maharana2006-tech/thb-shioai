@@ -205,6 +205,21 @@ export default function PackagesPage() {
 
   const remove = async (p: PackagePreset) => {
     if (!p.id) return
+    // Fix #298 — in-use check BEFORE the confirm. assignmentsByPreset
+    // is already populated by the initial load (line 151) so this is a
+    // zero-network client-side lookup. Prior UI let the operator hit
+    // Delete, then relied on the backend FK constraint to reject with a
+    // confusing error toast. Now we tell them up-front what's blocking.
+    const clientAssignments = assignmentsByPreset.get(p.id) ?? []
+    if (clientAssignments.length > 0) {
+      const clientNames = clientAssignments.map((a) => a.clientCode).slice(0, 5).join(', ')
+      const more = clientAssignments.length > 5 ? ` (+${clientAssignments.length - 5} more)` : ''
+      notify.error(
+        `Cannot delete '${p.name}' — used by ${clientAssignments.length} client allowlist(s): ${clientNames}${more}. ` +
+          `Remove the allowlist entries first, or deactivate the package instead.`,
+      )
+      return
+    }
     if (!(await notify.confirm(`Delete package '${p.name}'?`, {
       title: 'Delete package',
       confirmLabel: 'Delete',
