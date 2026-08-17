@@ -1600,6 +1600,13 @@ public class OrderImportServiceImpl implements OrderImportService {
         // (MANUAL) or an external API call (API), so operators can filter/
         // spot these on the Shipment & Label list.
         req.setSource("BULK");
+        // Sprint 51 — carry the row's client so the persisted order records
+        // its owning client (custNo + tenantId), matching the manual-UI path.
+        // Without this the order fell back to custNo="MANUAL" / tenantId=null,
+        // breaking tenant scoping and forcing client-scoped features (e.g. the
+        // commercial invoice) to reverse-resolve the client from the billing
+        // account. generateManualLabel re-clamps this to the caller's scope.
+        req.setClientCode(leader.getClientCode());
 
         // Customs items: any row (leader OR item rows) that carries
         // item-level data becomes one Item on the invoice. Skip rows
