@@ -1367,7 +1367,7 @@ export default function ShippingServiceMappingPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={closeAddForm}
+                      onClick={() => closeAddForm()}
                       aria-label="Close"
                       className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
                     >
@@ -1477,7 +1477,7 @@ export default function ShippingServiceMappingPage() {
               </div>
               <button
                 type="button"
-                onClick={closeAddForm}
+                onClick={() => closeAddForm()}
                 className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 transition hover:bg-slate-50"
                 aria-label="Close"
               >
@@ -1700,7 +1700,7 @@ export default function ShippingServiceMappingPage() {
             <div className="mt-5 flex items-center justify-end gap-2 border-t border-slate-100 pt-4">
               <button
                 type="button"
-                onClick={closeAddForm}
+                onClick={() => closeAddForm()}
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-600 transition hover:bg-slate-50"
               >
                 Cancel
