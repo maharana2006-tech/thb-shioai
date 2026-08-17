@@ -1304,7 +1304,13 @@ export default function ShippingServiceMappingPage() {
                     disabled={draftWarehouseChoices.length === 0}
                   >
                     {draftWarehouseChoices.length === 0 ? (
-                      <option disabled value="">Warehouse — none avail.</option>
+                      /* Fix #302 F20 — more explanatory text when disabled.
+                         Prior "Warehouse — none avail." gave no clue why. */
+                      <option disabled value="">
+                        {newRule.clientCode
+                          ? `No PLATFORM or ${newRule.clientCode}-owned warehouses`
+                          : 'No PLATFORM warehouses'}
+                      </option>
                     ) : (
                       draftWarehouseChoices.map((w) => (
                         <option key={w.id} value={w.id}>
@@ -1329,6 +1335,12 @@ export default function ShippingServiceMappingPage() {
                         serviceId: e.target.value,
                         // Carrier may have changed; clear stale package picks.
                         presetIds: [],
+                        // Fix #302 F2 — the new service's origin may not
+                        // match the previously-picked warehouses. Reset so
+                        // the operator picks warehouses aligned to the new
+                        // service (prior behavior left stale JPN warehouses
+                        // selected after switching to a US-only service).
+                        warehouseIds: [],
                       }))}
                       aria-label="Carrier Ship Via"
                     >
