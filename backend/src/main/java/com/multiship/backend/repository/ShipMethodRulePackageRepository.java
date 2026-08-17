@@ -14,6 +14,9 @@ public interface ShipMethodRulePackageRepository extends JpaRepository<ShipMetho
 
     List<ShipMethodRulePackage> findByRuleIdOrderByPresetIdAsc(Long ruleId);
 
+    /** Sprint 55 audit #297 — cascade preview support. */
+    long countByRuleId(Long ruleId);
+
     /** Bulk cascade helper — used when a rule is deleted or its package set
      *  is replaced atomically on save. */
     @Modifying

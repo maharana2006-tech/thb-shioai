@@ -790,11 +790,38 @@ export default function ShippingServiceMappingPage() {
 
   const removeRule = async (rule: ShipMethodRule) => {
     if (!rule.id) return
-    if (!(await notify.confirm(`Remove this ${rule.shipviaCd} mapping?`, {
-      title: 'Remove mapping',
-      confirmLabel: 'Remove',
-      danger: true,
-    }))) return
+    // Fix #297 — fetch cascade preview counts BEFORE the confirm so
+    // operator sees how many packages + warehouses will be unlinked.
+    // Failure to fetch the preview (network / auth) falls back to the
+    // generic confirm so the delete path stays usable if the preview
+    // endpoint is temporarily down.
+    let cascadeSummary = ''
+    try {
+      const preview = (await shippingConfigService.previewRuleDelete(rule.id)).data
+      if (preview) {
+        const bullets = [
+          preview.allowedPackageCount > 0
+            ? `• ${preview.allowedPackageCount} allowed-package link(s)`
+            : null,
+          preview.allowedWarehouseCount > 0
+            ? `• ${preview.allowedWarehouseCount} restricted-warehouse link(s)`
+            : null,
+        ].filter(Boolean) as string[]
+        if (bullets.length > 0) {
+          cascadeSummary = `\n\nThis will also unlink:\n${bullets.join('\n')}`
+        }
+      }
+    } catch {
+      // Preview is best-effort; proceed with the generic confirm.
+    }
+    if (!(await notify.confirm(
+      `Remove this ${rule.shipviaCd} mapping?${cascadeSummary}`,
+      {
+        title: 'Remove mapping',
+        confirmLabel: 'Remove',
+        danger: true,
+      },
+    ))) return
     try {
       await shippingConfigService.deleteRule(rule.id)
       void load()
