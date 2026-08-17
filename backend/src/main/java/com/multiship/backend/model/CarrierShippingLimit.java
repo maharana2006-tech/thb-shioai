@@ -22,8 +22,15 @@ import java.time.LocalDateTime;
  */
 @Entity
 @Table(name = "carrier_shipping_limit",
+        // Audit L/B6 — `direction` was added in Sprint 52 (V15) but the
+        // unique key wasn't updated to include it, forcing the V15 seed
+        // to game the effective_from timestamp so FORWARD + RETURN rows
+        // for the same carrier/service/scope could coexist. V18 recreates
+        // this constraint with `direction` included; entity annotation
+        // updated here so a Hibernate schema-validate on next boot sees
+        // the expected shape.
         uniqueConstraints = @UniqueConstraint(name = "uk_carrier_limit_key",
-                columnNames = {"carrier_code", "service_code", "scope", "effective_from"}))
+                columnNames = {"carrier_code", "service_code", "scope", "direction", "effective_from"}))
 @Data
 @Builder
 @NoArgsConstructor
