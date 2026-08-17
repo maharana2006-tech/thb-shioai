@@ -62,7 +62,13 @@ public class RoutingRuleController {
     @DeleteMapping("/{ruleId}")
     public ResponseEntity<ApiResponse<Void>> delete(
             @PathVariable String clientCode, @PathVariable Long ruleId) {
-        service.delete(clientCode, ruleId);
+        try {
+            service.delete(clientCode, ruleId);
+        } catch (IllegalArgumentException crossTenant) {
+            // Audit B5 — cross-tenant delete now surfaces as 400 with the
+            // real reason instead of a silent 200.
+            return badRequest(crossTenant.getMessage(), "VALIDATION_FAILED");
+        }
         return ok(null, "Rule deleted");
     }
 
@@ -82,6 +88,7 @@ public class RoutingRuleController {
                 .message(message).data(data).build());
     }
 
+    @SuppressWarnings("SameParameterValue")
     private static <T> ResponseEntity<ApiResponse<T>> badRequest(String message, String errorCode) {
         return ResponseEntity.badRequest().body(ApiResponse.<T>builder()
                 .status("error").code(HttpStatus.BAD_REQUEST.value())
