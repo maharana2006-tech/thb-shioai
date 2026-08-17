@@ -72,6 +72,45 @@ class RoutingRuleServiceTest {
     }
 
     @Test
+    void save_blockClearsBothTargetServiceIdAndWarehouseId() {
+        // Audit B8 — pre-fix, save() only cleared targetWarehouseId when
+        // switching REROUTE → BLOCK, leaving a stale targetServiceId. Now
+        // both pointer fields are wiped so the DB stays honest.
+        RoutingRule r = base();
+        r.setActionType(ActionType.BLOCK);
+        r.setBlockReason("weight over max");
+        r.setTargetServiceId(42L);
+        r.setTargetWarehouseId(9L);
+        when(ruleRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        RoutingRule saved = service.save(r);
+        assertNull(saved.getTargetServiceId(),  "BLOCK must clear targetServiceId");
+        assertNull(saved.getTargetWarehouseId(), "BLOCK must clear targetWarehouseId");
+    }
+
+    @Test
+    void delete_crossTenantRuleThrows() {
+        // Audit B5 — pre-fix, deleting a rule id belonging to a different
+        // client silently returned success. Now the service throws so the
+        // controller can 400 with the actual reason.
+        RoutingRule other = base();
+        other.setId(77L);
+        other.setClientCode("OTHER");
+        when(ruleRepo.findById(77L)).thenReturn(Optional.of(other));
+
+        assertThrows(IllegalArgumentException.class, () -> service.delete("MINE", 77L));
+        verify(ruleRepo, never()).delete(any());
+    }
+
+    @Test
+    void delete_missingRuleIsIdempotent() {
+        // Audit B5 — a delete of a non-existent id remains idempotent
+        // (200 / no-op), only cross-tenant is a hard reject.
+        when(ruleRepo.findById(999L)).thenReturn(Optional.empty());
+        assertDoesNotThrow(() -> service.delete("MINE", 999L));
+        verify(ruleRepo, never()).delete(any());
+    }
+
+    @Test
     void save_rejectsBlockWithoutReason() {
         RoutingRule r = base();
         r.setActionType(ActionType.BLOCK);

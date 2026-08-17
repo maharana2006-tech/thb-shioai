@@ -77,9 +77,13 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
                 && (rule.getBlockReason() == null || rule.getBlockReason().isBlank())) {
             throw new IllegalArgumentException("BLOCK rules require blockReason");
         }
-        if (rule.getActionType() == ActionType.BLOCK && rule.getTargetWarehouseId() != null) {
-            // G2: BLOCK actions have no target — clear it so the DB stays honest.
+        if (rule.getActionType() == ActionType.BLOCK) {
+            // G2 + Audit B8: BLOCK actions have no target — clear BOTH pointer
+            // fields so the DB stays honest. Pre-fix code only cleared
+            // targetWarehouseId, leaving a stale targetServiceId on any rule
+            // switched REROUTE → BLOCK.
             rule.setTargetWarehouseId(null);
+            rule.setTargetServiceId(null);
         }
         LocalDateTime now = LocalDateTime.now();
         if (rule.getId() == null) rule.setCreatedAt(now);
@@ -94,9 +98,18 @@ public class RoutingRuleServiceImpl implements RoutingRuleService {
         // repository so a scoped USER hitting /clients/OTHER/routing-rules/N
         // gets a 403 rather than a silent 200-and-no-op.
         if (tenantScope != null) tenantScope.requireTenantMatch(safe(clientCode));
-        ruleRepo.findById(ruleId)
-                .filter(r -> safe(clientCode).equalsIgnoreCase(r.getClientCode()))
-                .ifPresent(ruleRepo::delete);
+        RoutingRule rule = ruleRepo.findById(ruleId).orElse(null);
+        if (rule == null) return;  // idempotent: nothing to delete
+        // Audit B5: pre-fix, mismatched client silently returned 200
+        // "Rule deleted" — the caller thought the rule was gone.
+        // Reject so the caller sees the real state; scoped USERs already
+        // 403'd at the tenantScope check above so this only fires for
+        // platform-wide operators pointing at the wrong client path.
+        if (!safe(clientCode).equalsIgnoreCase(rule.getClientCode())) {
+            throw new IllegalArgumentException(
+                    "rule " + ruleId + " does not belong to client " + clientCode);
+        }
+        ruleRepo.delete(rule);
     }
 
     // ===== Evaluation =====

@@ -96,13 +96,36 @@ export default function RoutingRulesPage() {
     return () => registerRefresh(null)
   }, [registerRefresh, refresh])
 
+  /**
+   * Audit R1 — reorder by SWAPPING priorities with the adjacent rule
+   * rather than the pre-fix arithmetic (`priority ± 10`). Old code hit
+   * two cases wrong:
+   *   1. When neighbor.priority == rule.priority ± 10 exactly, the shift
+   *      collided with the neighbor and the sort tiebreak (id) picked
+   *      the older rule first — so the "up-arrow" move visibly did
+   *      nothing to the row order.
+   *   2. When priorities were densely packed (100, 101, 102), the ±10
+   *      shift leap-frogged multiple rules instead of a single-step move.
+   *
+   * Swap is atomic-in-intent: two sequential saves, then refresh. If the
+   * second save fails the refresh will re-sync the display; both rules
+   * end up temporarily at neighbor.priority (collision) which is still
+   * benign — the operator sees a warning and re-attempts.
+   */
   const moveRule = async (rule: RoutingRule, delta: -1 | 1) => {
-    const nextPriority = Math.max(0, rule.priority + delta * 10)
+    const idx = rules.findIndex((r) => r.id === rule.id)
+    if (idx < 0) return
+    const neighborIdx = idx + delta
+    if (neighborIdx < 0 || neighborIdx >= rules.length) return
+    const neighbor = rules[neighborIdx]
     try {
-      await routingRuleService.save(clientCode, { ...rule, priority: nextPriority })
+      await routingRuleService.save(clientCode, { ...rule, priority: neighbor.priority })
+      await routingRuleService.save(clientCode, { ...neighbor, priority: rule.priority })
       refresh()
     } catch (err: unknown) {
       notify.error(err instanceof Error ? err.message : 'Failed to reorder rule.')
+      // Force a resync so a partial-swap state doesn't linger in the UI.
+      refresh()
     }
   }
 
