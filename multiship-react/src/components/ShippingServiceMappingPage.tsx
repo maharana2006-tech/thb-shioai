@@ -620,6 +620,19 @@ export default function ShippingServiceMappingPage() {
       notify.error('Enter the order ship-method code and pick a carrier service.')
       return
     }
+    // Fix #301 — soft warning when saving with no package restrictions.
+    // Investigation confirmed the backend stores + returns allowedPresetIds
+    // but does NOT yet filter shipments by it (phase 6 data-model only,
+    // wiring not landed). Empty presetIds today means "no restriction
+    // applied — every package accepted". Confirm the operator meant that
+    // instead of silently saving a match-anything rule.
+    if (newRule.presetIds.length === 0) {
+      const ok = window.confirm(
+        `No packages selected — this rule will accept ANY package once package-filtering ships. `
+          + `Continue with no restriction, or Cancel to pick specific packages first?`,
+      )
+      if (!ok) return
+    }
     try {
       await shippingConfigService.saveRule({
         shipviaCd: newRule.shipviaCd.trim(),
