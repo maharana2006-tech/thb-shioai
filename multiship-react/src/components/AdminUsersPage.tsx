@@ -8,6 +8,7 @@ import {
   type AdminUserAudit,
 } from '../api/adminUserService'
 import { clientService } from '../api/clientService'
+import { adminInviteService, type InviteMintResponse } from '../api/adminInviteService'
 import { useAppSession } from '../hooks/useAppSession'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import IconButton from './ui/IconButton'
@@ -28,6 +29,8 @@ export default function AdminUsersPage() {
   const [activeOnly, setActiveOnly] = useState(false)
   const [assignFor, setAssignFor] = useState<AdminUser | null>(null)
   const [auditFor, setAuditFor] = useState<AdminUser | null>(null)
+  /** Fix #294 — invite modal state. */
+  const [inviteOpen, setInviteOpen] = useState(false)
   // Fix #295 — expose page + size controls. Prior FE used the backend
   // default (page=0, size=50) implicitly, silently truncating any org
   // with 51+ users. Now operator can page through OR increase size.
@@ -201,6 +204,17 @@ export default function AdminUsersPage() {
             flag is flipped.
           </p>
         </div>
+        {/* Fix #294 — invite modal launcher. Wires the existing
+            /admin/user-invites backend endpoint. Password-reset is
+            deliberately not included here (would need a new backend
+            endpoint); tracked separately. */}
+        <button
+          type="button"
+          onClick={() => setInviteOpen(true)}
+          className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50"
+        >
+          <FiUsers className="h-3.5 w-3.5" /> Invite user
+        </button>
       </header>
 
       {legacyOperatorCount > 0 && (
@@ -435,6 +449,153 @@ export default function AdminUsersPage() {
           onClose={() => setAuditFor(null)}
         />
       )}
+
+      {inviteOpen && (
+        <InviteUserDialog
+          clientOptions={clientOptions}
+          onClose={() => setInviteOpen(false)}
+          onIssued={() => { setInviteOpen(false); void load() }}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Fix #294 — mints a new-user invite via the existing
+ * /admin/user-invites backend. On success, echoes the raw accept link
+ * for copy-fallback (SMTP is log-only in dev). ADMIN role is
+ * deliberately not offered — backend rejects that path anyway.
+ */
+function InviteUserDialog({
+  clientOptions,
+  onClose,
+  onIssued,
+}: {
+  clientOptions: string[]
+  onClose: () => void
+  onIssued: () => void
+}) {
+  const [email, setEmail] = useState('')
+  const [clientCode, setClientCode] = useState('')
+  const [role, setRole] = useState<'USER' | 'TENANT'>('USER')
+  const [minting, setMinting] = useState(false)
+  const [issued, setIssued] = useState<InviteMintResponse | null>(null)
+
+  const submit = async () => {
+    if (!email.trim() || !clientCode.trim()) {
+      notify.error('Email and client are required.')
+      return
+    }
+    setMinting(true)
+    try {
+      const r = await adminInviteService.mint({ email: email.trim(), clientCode, role })
+      setIssued(r.data ?? null)
+      notify.success(`Invite issued to ${email.trim()}.`)
+    } catch (e) {
+      notify.apiError(e, 'Failed to mint the invite.')
+    } finally {
+      setMinting(false)
+    }
+  }
+
+  const copyLink = async () => {
+    if (!issued?.acceptLink) return
+    try {
+      await navigator.clipboard.writeText(issued.acceptLink)
+      notify.success('Accept link copied.')
+    } catch {
+      notify.error('Copy failed — select the link and copy manually.')
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
+         role="dialog" aria-modal="true" aria-label="Invite user dialog">
+      <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-4 shadow-xl space-y-3">
+        <header className="flex items-center justify-between">
+          <h3 className="text-[15px] font-semibold text-slate-950">Invite user</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded p-1 text-slate-500 hover:bg-slate-100"
+          >
+            <FiX className="h-4 w-4" />
+          </button>
+        </header>
+
+        {issued ? (
+          <div className="space-y-2">
+            <p className="text-[13px] text-emerald-700">
+              Invite emailed to <b>{issued.email}</b> (or logged in dev). Copy the raw
+              accept link below as a fallback:
+            </p>
+            <textarea
+              readOnly
+              value={issued.acceptLink}
+              className="w-full rounded-md border border-slate-300 p-2 font-mono text-[11.5px]"
+              rows={2}
+            />
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={copyLink}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50">
+                Copy link
+              </button>
+              <button type="button" onClick={onIssued}
+                      className="rounded-md bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-800">
+                Done
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <label className="block">
+              <span className="mb-1 block text-[12.5px] font-medium text-slate-700">Email *</span>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="jane@acme.com"
+                className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
+                autoComplete="off"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[12.5px] font-medium text-slate-700">Client *</span>
+              <select
+                value={clientCode}
+                onChange={(e) => setClientCode(e.target.value)}
+                className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
+              >
+                <option value="">Select client…</option>
+                {clientOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[12.5px] font-medium text-slate-700">Role *</span>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value as 'USER' | 'TENANT')}
+                className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
+              >
+                <option value="USER">USER — day-to-day operator for the client</option>
+                <option value="TENANT">TENANT — customer-facing read-only</option>
+              </select>
+            </label>
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={onClose} disabled={minting}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50">
+                Cancel
+              </button>
+              <button type="button" onClick={() => void submit()} disabled={minting}
+                      className="rounded-md bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white hover:bg-slate-800 disabled:opacity-60">
+                {minting ? 'Sending…' : 'Send invite'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   )
 }
