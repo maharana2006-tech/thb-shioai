@@ -8,6 +8,7 @@ import {
   type AdminUserAudit,
 } from '../api/adminUserService'
 import { clientService } from '../api/clientService'
+import { useAppSession } from '../hooks/useAppSession'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import IconButton from './ui/IconButton'
 
@@ -74,12 +75,50 @@ export default function AdminUsersPage() {
     [users],
   )
 
+  // Current user, so we can flag "This is you" + guard self-deactivation.
+  const { username: currentUsername } = useAppSession()
+
+  /**
+   * Count of active ADMINs — used to block deactivation of the last one
+   * (audit finding 1.3). Recomputed from the currently-loaded user list;
+   * a stale-cache race could still let a click sneak through, but the
+   * backend must remain the authoritative guard (see follow-up issue).
+   */
+  const activeAdminCount = useMemo(
+    () => users.filter((u) => u.role === 'ADMIN' && !u.deactivatedAt).length,
+    [users],
+  )
+
   const toggleActive = async (user: AdminUser) => {
     try {
       if (user.deactivatedAt) {
         await adminUserService.reactivate(user.id)
         notify.success(`Reactivated ${user.username}.`)
       } else {
+        // Guard 1.3 (last-admin protection): if this is the ONLY remaining
+        // active ADMIN, blocking is safer than any confirm. Deactivating
+        // it would lock every operator out of admin functions.
+        const isLastActiveAdmin = user.role === 'ADMIN' && activeAdminCount <= 1
+        if (isLastActiveAdmin) {
+          notify.error(
+            `Cannot deactivate ${user.username} — they are the ONLY active admin. ` +
+              `Promote or invite another admin first.`,
+          )
+          return
+        }
+
+        // Guard 3.1 (self-edit): extra confirmation for self-deactivation
+        // — the operator will be logged out immediately after this call.
+        const isSelf = currentUsername && user.username === currentUsername
+        if (isSelf) {
+          const ok = window.confirm(
+            `⚠️ You are deactivating YOUR OWN account (${user.username}).\n\n` +
+              `You will be logged out immediately and won't be able to reactivate ` +
+              `yourself. Another admin will have to do it.\n\nContinue?`,
+          )
+          if (!ok) return
+        }
+
         const reason = window.prompt(`Deactivate ${user.username}? Reason (optional):`, '')
         if (reason === null) return
         await adminUserService.deactivate(user.id, reason.trim() || undefined)
@@ -159,9 +198,21 @@ export default function AdminUsersPage() {
               <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-500">Loading…</td></tr>
             ) : users.length === 0 ? (
               <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-500">No users.</td></tr>
-            ) : users.map((u) => (
+            ) : users.map((u) => {
+              const isSelf = currentUsername && u.username === currentUsername
+              return (
               <tr key={u.id} className={u.deactivatedAt ? 'bg-slate-50/50 text-slate-400' : ''}>
-                <td className="px-3 py-2 font-mono">{u.username}</td>
+                <td className="px-3 py-2 font-mono">
+                  {u.username}
+                  {isSelf ? (
+                    <span
+                      className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-sky-700"
+                      title="This is your own account — self-edits require extra confirmation."
+                    >
+                      You
+                    </span>
+                  ) : null}
+                </td>
                 <td className="px-3 py-2">{u.email}</td>
                 <td className="px-3 py-2">
                   <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11.5px] font-semibold">
@@ -216,7 +267,8 @@ export default function AdminUsersPage() {
                   </button>
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </section>
