@@ -71,6 +71,16 @@ export const adminUserService = {
   reactivate: (id: number, reason?: string) =>
     apiClient.post<ApiResponse<AdminUser>>(`/admin/users/${id}/reactivate`, { reason: reason ?? null }),
 
+  /** Sprint 55 audit #293 — change a user's role. Allowed transitions:
+   *  USER ↔ TENANT free; USER/TENANT → ADMIN with a 2FA-style typed-
+   *  username confirm on the FE; ADMIN → anything blocked by backend
+   *  policy. Backend bumps token_version so stale JWTs stop working. */
+  changeRole: (id: number, role: 'USER' | 'TENANT' | 'ADMIN', reason?: string) =>
+    apiClient.patch<ApiResponse<AdminUser>>(`/admin/users/${id}/role`, {
+      role,
+      reason: reason ?? null,
+    }),
+
   recentAudit: (limit = 50) =>
     apiClient.get<ApiResponse<AdminUserAudit[]>>(`/admin/users/audit${toQueryString({ limit })}`),
 

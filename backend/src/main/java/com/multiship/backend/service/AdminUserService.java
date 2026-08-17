@@ -61,7 +61,14 @@ public class AdminUserService {
         ALREADY_IN_TARGET_STATE,
         /** Sprint 55 audit #292 — rejected because deactivating this user
          *  would leave zero active admins (org lockout). */
-        LAST_ADMIN_CANNOT_DEACTIVATE
+        LAST_ADMIN_CANNOT_DEACTIVATE,
+        /** Sprint 55 audit #293 — rejected because the requested role
+         *  transition is not allowed by policy (e.g. ADMIN demotion is
+         *  reserved for out-of-band audit recovery). */
+        ROLE_TRANSITION_NOT_ALLOWED,
+        /** Sprint 55 audit #293 — rejected because the requested role
+         *  value isn't recognized (must be USER, TENANT, or ADMIN). */
+        UNKNOWN_ROLE
     }
 
     public record MutationOutcome(ActionResult result, AdminUserDTO user) {}
@@ -180,6 +187,62 @@ public class AdminUserService {
                 .build());
 
         log.info("[admin-user] {} reassigned user {} from client={} to client={}",
+                actorUsername, u.getUsername(), old, normalized);
+        return new MutationOutcome(ActionResult.OK, toDTO(u));
+    }
+
+    /**
+     * Sprint 55 audit #293 — change a user's role. Allowed transitions per
+     * the audit's Option 1 (restricted): USER ↔ TENANT free; USER/TENANT
+     * → ADMIN allowed (audit-safe with FE 2FA confirm); ADMIN → anything
+     * BLOCKED (out-of-band audit recovery only).
+     *
+     * <p>The backend enforces the same last-admin quorum from
+     * {@link #deactivate} — an ADMIN → USER/TENANT demote would leave
+     * zero admins would be rejected here even if the policy were relaxed,
+     * so callers always see a coherent error.
+     */
+    @Transactional
+    public MutationOutcome changeRole(Long userId, String requestedRole, String reason,
+                                       String actorUsername) {
+        Optional<User> found = userRepository.findById(userId);
+        if (found.isEmpty()) {
+            return new MutationOutcome(ActionResult.USER_NOT_FOUND, null);
+        }
+        String normalized = requestedRole == null ? "" : requestedRole.trim().toUpperCase(Locale.ROOT);
+        if (!java.util.Set.of("USER", "TENANT", "ADMIN").contains(normalized)) {
+            return new MutationOutcome(ActionResult.UNKNOWN_ROLE, null);
+        }
+        User u = found.get();
+        String old = u.getRole() == null ? "" : u.getRole().toUpperCase(Locale.ROOT);
+        if (old.equals(normalized)) {
+            return new MutationOutcome(ActionResult.ALREADY_IN_TARGET_STATE, toDTO(u));
+        }
+        // Policy: ADMIN → USER/TENANT is blocked (out-of-band only).
+        // Every OTHER transition is permitted.
+        if ("ADMIN".equals(old) && !"ADMIN".equals(normalized)) {
+            log.warn("[admin-user] {} attempted ADMIN → {} on {} — blocked by policy",
+                    actorUsername, normalized, u.getUsername());
+            return new MutationOutcome(ActionResult.ROLE_TRANSITION_NOT_ALLOWED, toDTO(u));
+        }
+        u.setRole(normalized);
+        // Bump token_version — role is a JWT claim; stale tokens must not
+        // retain the old role's privileges.
+        tokenRevocationService.bumpTokenVersion(u);
+        userRepository.save(u);
+
+        auditRepository.save(UserAdminAudit.builder()
+                .subjectUserId(u.getId())
+                .subjectUsername(u.getUsername())
+                .action("CHANGE_ROLE")
+                .oldClientCode(old)  // reuse the free-form field to record old→new role
+                .newClientCode(normalized)
+                .actorUsername(actorUsername)
+                .reason(reason)
+                .createdAt(LocalDateTime.now())
+                .build());
+
+        log.warn("[admin-user] {} changed role of {} from {} to {}",
                 actorUsername, u.getUsername(), old, normalized);
         return new MutationOutcome(ActionResult.OK, toDTO(u));
     }

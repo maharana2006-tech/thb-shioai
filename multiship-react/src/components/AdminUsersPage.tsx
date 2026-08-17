@@ -144,6 +144,49 @@ export default function AdminUsersPage() {
     }
   }
 
+  /**
+   * Fix #293 — role transition. Restricted per audit Option 1:
+   * - USER ↔ TENANT free (single confirm)
+   * - USER/TENANT → ADMIN allowed (extra typed-username confirm)
+   * - ADMIN → anything blocked by backend (button hidden)
+   */
+  const changeRole = async (user: AdminUser, next: 'USER' | 'TENANT' | 'ADMIN') => {
+    if (user.role === 'ADMIN') {
+      notify.error(
+        `ADMIN demotion is out-of-band only — contact your platform operator to change ${user.username}'s role.`,
+      )
+      return
+    }
+    if (user.role === next) return
+    // Elevation to ADMIN gets an extra typed-username confirmation
+    // (matches the pattern in AdminUsersPage self-deactivate guard).
+    if (next === 'ADMIN') {
+      const typed = window.prompt(
+        `Promote ${user.username} to ADMIN?\n\n`
+          + `Type "${user.username}" to confirm (ADMIN can manage all users + platform config):`,
+        '',
+      )
+      if (typed === null) return
+      if (typed.trim() !== user.username) {
+        notify.error('Confirmation username did not match. Promotion cancelled.')
+        return
+      }
+    } else {
+      const reason = window.prompt(
+        `Change ${user.username}'s role from ${user.role} to ${next}? Reason (optional):`,
+        '',
+      )
+      if (reason === null) return
+    }
+    try {
+      await adminUserService.changeRole(user.id, next)
+      notify.success(`${user.username} is now ${next}.`)
+      void load()
+    } catch (e) {
+      notify.apiError(e, 'Failed to change role.')
+    }
+  }
+
   return (
     <div className="space-y-6">
       <header className="flex items-start justify-between gap-4">
@@ -269,6 +312,32 @@ export default function AdminUsersPage() {
                   >
                     Assign client
                   </button>
+                  {/* Fix #293 — role transition dropdown. ADMIN row shows
+                      a disabled read-only label because ADMIN demotion is
+                      out-of-band only. Other roles get a select. */}
+                  {u.role === 'ADMIN' ? (
+                    <span
+                      title="ADMIN demotion is out-of-band only"
+                      className="mr-2 inline-block cursor-not-allowed rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[12px] text-slate-400"
+                    >
+                      ADMIN (locked)
+                    </span>
+                  ) : (
+                    <select
+                      value={u.role}
+                      onChange={(e) => {
+                        const next = e.target.value as 'USER' | 'TENANT' | 'ADMIN'
+                        void changeRole(u, next)
+                      }}
+                      aria-label={`Change role for ${u.username}`}
+                      title="Change role"
+                      className="mr-2 rounded-md border border-slate-300 bg-white px-2 py-1 text-[12px] hover:bg-slate-50"
+                    >
+                      <option value="USER">USER</option>
+                      <option value="TENANT">TENANT</option>
+                      <option value="ADMIN">ADMIN (promote)</option>
+                    </select>
+                  )}
                   <button
                     onClick={() => toggleActive(u)}
                     className={`rounded-md px-2 py-1 text-[12px] ${
