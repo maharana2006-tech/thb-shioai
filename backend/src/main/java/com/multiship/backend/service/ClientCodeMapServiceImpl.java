@@ -109,21 +109,46 @@ public class ClientCodeMapServiceImpl implements ClientCodeMapService {
     public ApiResponse<Void> remove(String clientCode, ClientCodeMapDTO.Kind kind, Long id) {
         String code = normalize(clientCode);
         tenantScope.requireTenantMatch(code);
-        switch (kind) {
-            case SHIPVIA -> shipviaRepo.findById(id)
-                    .filter(r -> code.equalsIgnoreCase(r.getClientCode()))
-                    .ifPresent(shipviaRepo::delete);
-            case SERVICE -> serviceRepo.findById(id)
-                    .filter(r -> code.equalsIgnoreCase(r.getClientCode()))
-                    .ifPresent(serviceRepo::delete);
-            case DEST_COUNTRY -> destRepo.findById(id)
-                    .filter(r -> code.equalsIgnoreCase(r.getClientCode()))
-                    .ifPresent(destRepo::delete);
-            case PACKAGE -> packageRepo.findById(id)
-                    .filter(r -> code.equalsIgnoreCase(r.getClientCode()))
-                    .ifPresent(packageRepo::delete);
-        }
-        return success("Code alias removed.", null);
+        // Audit B1 + B5 — pre-fix, all four branches used
+        // `findById(id).filter(sameClient).ifPresent(delete)` which:
+        //   1. B1: silently 200'd on cross-tenant delete (id belonged to
+        //      a different client, filter dropped, delete no-op'd)
+        //   2. B5: silently 200'd on unknown id
+        // Now each branch returns a boolean "did we actually delete?",
+        // and mismatches surface as 400 CROSS_TENANT / 404 NOT_FOUND.
+        // Same class of bug as routing-rules #349.
+        Outcome outcome = switch (kind) {
+            case SHIPVIA -> tryDelete(shipviaRepo.findById(id).orElse(null), code,
+                    r -> r.getClientCode(), shipviaRepo::delete);
+            case SERVICE -> tryDelete(serviceRepo.findById(id).orElse(null), code,
+                    r -> r.getClientCode(), serviceRepo::delete);
+            case DEST_COUNTRY -> tryDelete(destRepo.findById(id).orElse(null), code,
+                    r -> r.getClientCode(), destRepo::delete);
+            case PACKAGE -> tryDelete(packageRepo.findById(id).orElse(null), code,
+                    r -> r.getClientCode(), packageRepo::delete);
+        };
+        return switch (outcome) {
+            case DELETED -> success("Code alias removed.", null);
+            case NOT_FOUND -> failure(HttpStatus.NOT_FOUND, ErrorCode.VALIDATION_ERROR,
+                    "Alias " + id + " not found for " + kind + ".");
+            case CROSS_TENANT -> failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
+                    "Alias " + id + " does not belong to client " + code + ".");
+        };
+    }
+
+    private enum Outcome { DELETED, NOT_FOUND, CROSS_TENANT }
+
+    /**
+     * Audit B1 + B5 helper: encapsulates the three-way outcome so every
+     * per-kind branch shapes the response identically.
+     */
+    private static <T> Outcome tryDelete(T row, String expectedClientCode,
+                                          java.util.function.Function<T, String> clientCodeOf,
+                                          java.util.function.Consumer<T> deleteFn) {
+        if (row == null) return Outcome.NOT_FOUND;
+        if (!expectedClientCode.equalsIgnoreCase(clientCodeOf.apply(row))) return Outcome.CROSS_TENANT;
+        deleteFn.accept(row);
+        return Outcome.DELETED;
     }
 
     // ===== per-kind upsert helpers =====
