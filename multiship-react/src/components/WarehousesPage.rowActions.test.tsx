@@ -712,3 +712,113 @@ describe('WarehouseEditorModal · internals · negative', () => {
     })
   })
 })
+
+// ============================================================================
+// Audit fixes (2026-08-17) — 4.4 clear state, 2.1 disable radios, 4.2 unsaved-changes
+// ============================================================================
+
+describe('WarehouseEditorModal · audit fixes', () => {
+  it('4.4: toggling owner to PLATFORM clears ownerClientCode state', async () => {
+    // Seed the client picker with a real option so we can pick + verify reset.
+    listClients.mockResolvedValueOnce({
+      data: {
+        content: [{ id: 1, clientCode: 'ACME', name: 'ACME Co', status: 'ACTIVE' }],
+        pageNumber: 0, pageSize: 200, totalElements: 1, totalPages: 1,
+      },
+    })
+
+    const Page = await loadPage()
+    const user = userEvent.setup()
+    renderList(Page)
+
+    await screen.findByText('PLAT1')
+    await user.click(screen.getByRole('button', { name: /add warehouse/i }))
+    const dialog = await screen.findByRole('dialog', { name: /add warehouse/i })
+
+    // Switch to CLIENT — client picker appears.
+    const clientRadio = within(dialog).getByLabelText(/Client \(private/i)
+    await user.click(clientRadio)
+    // Wait for the client dropdown to load its option.
+    const clientSel = await waitFor(() => {
+      const sel = within(dialog).getByLabelText(/^Owner client/i) as HTMLSelectElement
+      if (sel.options.length < 2) throw new Error(`only ${sel.options.length} options`)
+      return sel
+    })
+    await user.selectOptions(clientSel, 'ACME')
+    expect(clientSel.value).toBe('ACME')
+
+    // Switch back to PLATFORM — the picker vanishes AND ownerClientCode
+    // is cleared. Toggling to CLIENT again shows an empty picker (no leak).
+    const platformRadio = within(dialog).getByLabelText(/Platform \(attachable/i)
+    await user.click(platformRadio)
+    expect(within(dialog).queryByLabelText(/^Owner client/i)).toBeNull()
+    await user.click(clientRadio)
+    const clientSel2 = await waitFor(() => {
+      const sel = within(dialog).getByLabelText(/^Owner client/i) as HTMLSelectElement
+      return sel
+    })
+    expect(clientSel2.value).toBe('')
+  })
+
+  it('2.1: ownership radios are DISABLED in edit mode (immutable post-create)', async () => {
+    const Page = await loadPage()
+    const user = userEvent.setup()
+    renderList(Page)
+
+    await openRowMenu(user, 'PLAT1')
+    await user.click(await screen.findByRole('menuitem', { name: /edit/i }))
+    const dialog = await screen.findByRole('dialog', { name: /edit warehouse plat1/i })
+
+    // Both radios must be disabled.
+    const platformRadio = within(dialog).getByLabelText(/Platform \(attachable/i) as HTMLInputElement
+    const clientRadio = within(dialog).getByLabelText(/Client \(private/i) as HTMLInputElement
+    expect(platformRadio).toBeDisabled()
+    expect(clientRadio).toBeDisabled()
+  })
+
+  it('4.2: closing with dirty edits prompts for confirmation', async () => {
+    const Page = await loadPage()
+    const user = userEvent.setup()
+    renderList(Page)
+
+    await openRowMenu(user, 'PLAT1')
+    await user.click(await screen.findByRole('menuitem', { name: /edit/i }))
+    const dialog = await screen.findByRole('dialog', { name: /edit warehouse plat1/i })
+
+    // Edit the name field — sets dirty=true.
+    const nameInput = within(dialog).getByPlaceholderText('East Coast fulfilment') as HTMLInputElement
+    await user.clear(nameInput)
+    await user.type(nameInput, 'Changed')
+
+    // Stub confirm to reject; Cancel should NOT close.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }))
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    // Dialog still visible → onClose wasn't called.
+    expect(await screen.findByRole('dialog', { name: /edit warehouse plat1/i })).toBeInTheDocument()
+
+    // Accept the confirm → dialog closes.
+    confirmSpy.mockReturnValue(true)
+    await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /edit warehouse plat1/i })).toBeNull()
+    })
+    confirmSpy.mockRestore()
+  })
+
+  it('4.2: closing WITHOUT dirty edits skips the confirm', async () => {
+    const Page = await loadPage()
+    const user = userEvent.setup()
+    renderList(Page)
+
+    await openRowMenu(user, 'PLAT1')
+    await user.click(await screen.findByRole('menuitem', { name: /edit/i }))
+    const dialog = await screen.findByRole('dialog', { name: /edit warehouse plat1/i })
+
+    // No edits — Cancel closes immediately with no confirm prompt.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    await user.click(within(dialog).getByRole('button', { name: /^cancel$/i }))
+    expect(confirmSpy).not.toHaveBeenCalled()
+    confirmSpy.mockRestore()
+  })
+})

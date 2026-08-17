@@ -50,10 +50,22 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
   const [zip, setZip] = useState(warehouse?.address?.zip ?? '')
   const [country, setCountry] = useState(warehouse?.address?.country ?? 'US')
   const [phone, setPhone] = useState(warehouse?.address?.phone ?? '')
-  const [ownerType, setOwnerType] = useState<'PLATFORM' | 'CLIENT'>(
+  const [ownerType, setOwnerTypeRaw] = useState<'PLATFORM' | 'CLIENT'>(
     (warehouse?.ownerType as 'PLATFORM' | 'CLIENT') || 'PLATFORM',
   )
   const [ownerClientCode, setOwnerClientCode] = useState(warehouse?.ownerClientCode ?? '')
+
+  /**
+   * Wrapping setOwnerType so a toggle back to PLATFORM CLEARS ownerClientCode.
+   * Without this, a stale CLIENT code would persist in state; if the operator
+   * then toggled back to CLIENT, the previous value would silently reappear.
+   * The save payload already omits ownerClientCode for PLATFORM (line ~200)
+   * so the backend was safe, but the UX was misleading (audit 4.4).
+   */
+  const setOwnerType = (next: 'PLATFORM' | 'CLIENT') => {
+    setOwnerTypeRaw(next)
+    if (next === 'PLATFORM') setOwnerClientCode('')
+  }
   const [active, setActive] = useState<boolean>(warehouse?.active ?? true)
 
   const [clients, setClients] = useState<Client[]>([])
@@ -231,7 +243,47 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
     }
   }
 
-  const closeAction = created ? () => onSaved(created) : onClose
+  /**
+   * Snapshot of the initial form state — used to detect dirty edits so
+   * the operator gets a confirm on close (X / backdrop / Cancel) before
+   * silently discarding work. Prior modal closed with no prompt (audit 4.2).
+   * useMemo so a re-render doesn't rebuild every tick; deps intentionally
+   * empty — the initial state is fixed for the modal's lifetime.
+   */
+  const initialSnapshot = useMemo(
+    () => JSON.stringify({
+      code: warehouse?.code ?? '',
+      name: warehouse?.name ?? '',
+      line1: warehouse?.address?.line1 ?? '',
+      line2: warehouse?.address?.line2 ?? '',
+      city: warehouse?.address?.city ?? '',
+      state: warehouse?.address?.state ?? '',
+      zip: warehouse?.address?.zip ?? '',
+      country: warehouse?.address?.country ?? 'US',
+      phone: warehouse?.address?.phone ?? '',
+      ownerType: (warehouse?.ownerType as 'PLATFORM' | 'CLIENT') || 'PLATFORM',
+      ownerClientCode: warehouse?.ownerClientCode ?? '',
+      active: warehouse?.active ?? true,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fixed for the modal's lifetime by design
+    [],
+  )
+  const currentSnapshot = JSON.stringify({
+    code, name, line1, line2, city, state, zip, country, phone, ownerType, ownerClientCode, active,
+  })
+  const isDirty = currentSnapshot !== initialSnapshot
+
+  /**
+   * Wraps onClose with an unsaved-changes confirm. Fires from the X, backdrop,
+   * and Cancel button. When the modal is showing the attach-clients step
+   * (created != null) the semantics differ: no dirty check — the operator
+   * already successfully created a warehouse.
+   */
+  const closeWithGuard = () => {
+    if (isDirty && !window.confirm('Discard unsaved changes to this warehouse?')) return
+    onClose()
+  }
+  const closeAction = created ? () => onSaved(created) : closeWithGuard
 
   /** Error for a field, but only after it's been touched. */
   const err = (k: keyof typeof errors): string | null => (touched[k] ? errors[k] : null)
@@ -328,11 +380,18 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
               {(['PLATFORM', 'CLIENT'] as const).map((v) => (
                 <label
                   key={v}
-                  className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
+                  className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
                     ownerType === v
                       ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]'
                       : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:bg-[#faf7f0]'
+                  } ${
+                    // Ownership is IMMUTABLE post-create — disable the radios
+                    // in edit mode. Prior UI let operators click them, which
+                    // implied editability even though the backend rejects
+                    // ownership changes (audit 2.1).
+                    isEdit ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
                   }`}
+                  title={isEdit ? 'Owner is immutable after create.' : undefined}
                 >
                   <input
                     type="radio"
@@ -340,6 +399,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
                     value={v}
                     checked={ownerType === v}
                     onChange={() => setOwnerType(v)}
+                    disabled={isEdit}
                     className="sr-only"
                   />
                   {v === 'PLATFORM' ? 'Platform (attachable to any client)' : "Client (private to one client)"}
@@ -452,7 +512,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
         <footer className="flex items-center justify-end gap-2 border-t border-[#eee6d6] bg-[#faf7f0]/60 px-5 py-3">
           <button
             type="button"
-            onClick={onClose}
+            onClick={closeWithGuard}
             className="rounded-xl border border-[#e3d9c4] bg-white px-4 py-2 text-[13px] font-semibold text-[#5a4526] transition hover:bg-[#eee6d6]"
           >
             Cancel
