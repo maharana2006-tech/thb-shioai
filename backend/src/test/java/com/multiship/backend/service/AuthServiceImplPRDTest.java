@@ -278,6 +278,36 @@ class AuthServiceImplPRDTest {
     }
 
     @Test
+    void acceptInviteReturns409WhenConsumeRacesAnotherRequest_R2_380() {
+        // Audit R2 #380 — @Version on UserInvite makes consume() throw
+        // OptimisticLockingFailureException when another accept-request
+        // has already consumed the token between check() and consume().
+        // Verify the service catches + surfaces INVITE_ALREADY_USED
+        // (same errorCode the non-race path uses — FE friendly-error
+        // map already covers it from PR #379).
+        UserInvite invite = new UserInvite();
+        invite.setEmail("racer@example.com");
+        invite.setClientCode("ACME");
+        invite.setRole("USER");
+        invite.setExpiresAt(LocalDateTime.now().plusDays(1));
+        when(inviteService.check(anyString())).thenReturn(
+                new UserInviteService.InviteCheckResult(UserInviteService.InviteStatus.VALID, invite));
+        when(userRepository.existsByUsername(anyString())).thenReturn(false);
+        when(userRepository.existsByEmail(anyString())).thenReturn(false);
+        org.mockito.Mockito.doThrow(new org.springframework.orm.ObjectOptimisticLockingFailureException(
+                UserInvite.class, invite.getId()))
+                .when(inviteService).consume(invite);
+
+        AcceptInviteRequest req = new AcceptInviteRequest();
+        req.setToken("tok"); req.setUsername("invitee"); req.setPassword("pw123456"); req.setFullName("Invitee");
+        ResponseEntity<MessageResponse> resp = service.acceptInvite(req);
+
+        assertEquals(HttpStatus.CONFLICT, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals(ErrorCode.INVITE_ALREADY_USED.name(), resp.getBody().getErrorCode());
+    }
+
+    @Test
     void acceptInviteCreatesUserWithInviteScopeVerified() {
         UserInvite invite = new UserInvite();
         invite.setEmail("inv@example.com");
@@ -339,6 +369,36 @@ class AuthServiceImplPRDTest {
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
         // Audit B2 — canonical email-verify code (was INVITE_EXPIRED copy-paste).
         assertEquals(ErrorCode.EMAIL_VERIFY_TOKEN_EXPIRED.name(), resp.getBody().getErrorCode());
+        // Audit R2 #386 — default env has publicSignupEnabled=false → the
+        // hint should route the invitee to their admin, not a dead /signup.
+        assertTrue(resp.getBody().getMessage().contains("Ask an admin"),
+                "expected admin-routing hint when signup is disabled, got: "
+                        + resp.getBody().getMessage());
+    }
+
+    @Test
+    void verifyEmailExpiredTokenMessageWhenPublicSignupEnabled_R2_386() throws Exception {
+        // Flip publicSignupEnabled true → hint should read "sign up again".
+        java.lang.reflect.Field f = AuthServiceImpl.class.getDeclaredField("publicSignupEnabled");
+        f.setAccessible(true);
+        f.set(service, true);
+        try {
+            User u = User.builder()
+                    .username("newuser").email("new@example.com").password("bcrypt-hash")
+                    .fullName("New").role("USER")
+                    .emailVerified(false)
+                    .emailVerifyToken("tok2")
+                    .emailVerifyExpiresAt(LocalDateTime.now().minusHours(1))
+                    .build();
+            when(userRepository.findByEmailVerifyToken("tok2")).thenReturn(Optional.of(u));
+
+            ResponseEntity<MessageResponse> resp = service.verifyEmail("tok2");
+            assertTrue(resp.getBody().getMessage().toLowerCase().contains("sign up again"),
+                    "expected sign-up-again hint when public signup enabled, got: "
+                            + resp.getBody().getMessage());
+        } finally {
+            f.set(service, false);  // reset for downstream tests in the same class
+        }
     }
 
     @Test
