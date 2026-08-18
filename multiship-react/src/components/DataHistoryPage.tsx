@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   FiArrowLeft,
+  FiCheck,
   FiChevronDown,
   FiChevronRight,
   FiDatabase,
+  FiEdit3,
   FiFileText,
   FiFilter,
   FiRefreshCw,
@@ -34,6 +36,17 @@ export default function DataHistoryPage() {
   const [rowsById, setRowsById] = useState<Record<number, OrderImportRow[] | 'loading'>>({})
   const [generatingId, setGeneratingId] = useState<number | null>(null)
   const [genRowKey, setGenRowKey] = useState<string | null>(null)
+  // Inline correction: which row is open for editing + its working copy.
+  const [editKey, setEditKey] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState<OrderImportRow | null>(null)
+  const [savingEdit, setSavingEdit] = useState(false)
+  // Live validation of the draft — debounced round-trip to the same backend
+  // validator the save/generate paths use, so the rules are always correct
+  // and adapt to the data (e.g. hsCode becomes required once countryCode
+  // turns international).
+  const [liveByField, setLiveByField] = useState<Record<string, string[]>>({})
+  const [liveRowLevel, setLiveRowLevel] = useState<string[]>([])
+  const [validatingDraft, setValidatingDraft] = useState(false)
 
   // ── Advanced filter tools ────────────────────────────────────────────────
   type StatusKey = 'ALL' | 'COMPLETE' | 'PARTIAL_COMPLETE' | 'IN_PROGRESS' | 'INITIATE' | 'FAILED'
@@ -272,6 +285,91 @@ export default function DataHistoryPage() {
       notify.apiError(e, 'Label generation failed.')
     } finally {
       setGenRowKey(null)
+    }
+  }
+
+  /** Open the inline editor for one row with a working copy of its data. */
+  const startEdit = (batchId: number, r: OrderImportRow) => {
+    setEditKey(`${batchId}-${r.rowNumber}`)
+    setEditDraft({ ...r })
+    // Seed field markers from the row's last-known errors so the editor
+    // opens already showing what's wrong, before the first live check.
+    const { byField, rowLevel } = bucketRowErrors(r.errors ?? [])
+    setLiveByField(byField)
+    setLiveRowLevel(rowLevel)
+  }
+
+  const cancelEdit = () => {
+    setEditKey(null)
+    setEditDraft(null)
+    setLiveByField({})
+    setLiveRowLevel([])
+    setValidatingDraft(false)
+  }
+
+  // Debounced live validation: whenever the draft changes, re-check it against
+  // the backend validator and repaint field errors. The whole-batch re-check
+  // still runs authoritatively on save.
+  useEffect(() => {
+    if (!editKey || !editDraft) return
+    let ignore = false
+    setValidatingDraft(true)
+    const handle = setTimeout(async () => {
+      try {
+        const res = await orderImportService.validate([editDraft])
+        const row = res.data?.rows?.[0]
+        if (!ignore) {
+          const { byField, rowLevel } = bucketRowErrors(row?.errors ?? [])
+          setLiveByField(byField)
+          setLiveRowLevel(rowLevel)
+        }
+      } catch {
+        // Keep the last markers on a transient failure — don't flash them away.
+      } finally {
+        if (!ignore) setValidatingDraft(false)
+      }
+    }, 350)
+    return () => {
+      ignore = true
+      clearTimeout(handle)
+    }
+  }, [editKey, editDraft])
+
+  const patchDraft = (p: Partial<OrderImportRow>) =>
+    setEditDraft((d) => (d ? { ...d, ...p } : d))
+
+  /** Persist the edited row; the backend re-validates the whole batch and
+   *  returns fresh rows + counts, which we drop straight into local state. */
+  const saveEdit = async (batchId: number, rowNumber: number) => {
+    if (!editDraft) return
+    setSavingEdit(true)
+    try {
+      const res = await orderImportService.updateRow(batchId, rowNumber, editDraft)
+      const updated = res.data
+      if (updated) {
+        if (updated.rows) setRowsById((m) => ({ ...m, [batchId]: updated.rows }))
+        setBatches((list) =>
+          list.map((b) =>
+            b.id === batchId
+              ? { ...b, status: updated.status, savedRows: updated.savedRows, invalidRows: updated.invalidRows }
+              : b,
+          ),
+        )
+        const fixed = updated.rows?.find((r) => r.rowNumber === rowNumber)
+        const stillBad = (fixed?.errors?.length ?? 0) > 0
+        if (stillBad) {
+          notify.info(res.message ?? `Row ${rowNumber} saved — still has errors.`)
+        } else {
+          notify.success(res.message ?? `Row ${rowNumber} fixed — now ready to generate.`)
+        }
+        cancelEdit()
+      } else {
+        notify.error(res.message ?? 'Save failed.')
+      }
+    } catch (e) {
+      notify.apiError(e, 'Save failed.')
+    } finally {
+      setSavingEdit(false)
     }
   }
 
@@ -643,8 +741,12 @@ export default function DataHistoryPage() {
                                 const gen = (r.generatedStatus ?? '').toUpperCase()
                                 const rowKey = `${b.id}-${r.rowNumber}`
                                 const rowBusy = genRowKey === rowKey
+                                const editing = editKey === rowKey
+                                // Any row that hasn't shipped yet can be corrected here.
+                                const editable = gen !== 'GENERATED'
                                 return (
-                                  <tr key={r.rowNumber} className="transition hover:bg-[#faf7f0]/60">
+                                  <Fragment key={r.rowNumber}>
+                                  <tr className="transition hover:bg-[#faf7f0]/60">
                                     <td className="p-2.5 font-mono text-[10.5px] text-[#8a7959]">{r.rowNumber}</td>
                                     <td className="p-2.5">
                                       <p className="font-semibold text-[#1f150c]">{r.recipientName ?? '—'}</p>
@@ -677,34 +779,146 @@ export default function DataHistoryPage() {
                                       )}
                                     </td>
                                     <td className="p-2.5">
-                                      {gen === 'GENERATED' ? (
-                                        <span className="inline-flex flex-col gap-0.5">
-                                          <span className="w-fit rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-emerald-800">
-                                            Generated
+                                      <div className="flex items-center gap-1.5">
+                                        {gen === 'GENERATED' ? (
+                                          <span className="inline-flex flex-col gap-0.5">
+                                            <span className="w-fit rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-emerald-800">
+                                              Generated
+                                            </span>
+                                            {r.generatedTrackingNumber ? (
+                                              <span className="font-mono text-[9.5px] text-[#8a7959]">{r.generatedTrackingNumber}</span>
+                                            ) : null}
                                           </span>
-                                          {r.generatedTrackingNumber ? (
-                                            <span className="font-mono text-[9.5px] text-[#8a7959]">{r.generatedTrackingNumber}</span>
-                                          ) : null}
-                                        </span>
-                                      ) : !ok ? (
-                                        <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
-                                      ) : (
-                                        <button
-                                          type="button"
-                                          onClick={() => void generateRow(b.id, r.rowNumber)}
-                                          disabled={rowBusy}
-                                          className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
-                                        >
-                                          {rowBusy ? (
-                                            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                                          ) : (
-                                            <FiZap className="h-3 w-3" />
-                                          )}
-                                          {rowBusy ? 'Generating…' : 'Generate label'}
-                                        </button>
-                                      )}
+                                        ) : ok ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => void generateRow(b.id, r.rowNumber)}
+                                            disabled={rowBusy || editing}
+                                            className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                                          >
+                                            {rowBusy ? (
+                                              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                                            ) : (
+                                              <FiZap className="h-3 w-3" />
+                                            )}
+                                            {rowBusy ? 'Generating…' : 'Generate label'}
+                                          </button>
+                                        ) : (
+                                          <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
+                                        )}
+                                        {/* Correct any not-yet-shipped row in place. */}
+                                        {editable ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => (editing ? cancelEdit() : startEdit(b.id, r))}
+                                            className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-semibold transition ${
+                                              editing
+                                                ? 'border-[#cdbf9f] bg-[#faf7f0] text-[#5a4526]'
+                                                : 'border-[#e3d9c4] text-[#5a4526] hover:bg-[#faf7f0]'
+                                            }`}
+                                          >
+                                            {editing ? <FiX className="h-3 w-3" /> : <FiEdit3 className="h-3 w-3" />}
+                                            {editing ? 'Close' : 'Edit'}
+                                          </button>
+                                        ) : null}
+                                      </div>
                                     </td>
                                   </tr>
+                                  {editing && editDraft ? (
+                                    <tr className="bg-[#faf7f0]/70">
+                                      <td colSpan={8} className="px-3 py-3">
+                                        <div className="rounded-xl border border-[#cdbf9f] bg-white p-3">
+                                          <p className="mb-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
+                                            Correct row {r.rowNumber}
+                                          </p>
+                                          {/* Fixed small widths that pack with flex-wrap — fields
+                                              stay compact instead of stretching to the table width. */}
+                                          <div className="flex flex-wrap gap-x-2 gap-y-2">
+                                            <EditField w="w-24" label="clientCode" mono value={editDraft.clientCode} errors={liveByField.clientCode} onChange={(v) => patchDraft({ clientCode: v.toUpperCase() })} />
+                                            <EditField w="w-44" label="recipientName" value={editDraft.recipientName} errors={liveByField.recipientName} onChange={(v) => patchDraft({ recipientName: v })} />
+                                            <EditField w="w-36" label="recipientCompany" value={editDraft.recipientCompany} errors={liveByField.recipientCompany} onChange={(v) => patchDraft({ recipientCompany: v })} />
+                                            <EditField w="w-48" label="addressLine1" value={editDraft.addressLine1} errors={liveByField.addressLine1} onChange={(v) => patchDraft({ addressLine1: v })} />
+                                            <EditField w="w-48" label="addressLine2" value={editDraft.addressLine2} errors={liveByField.addressLine2} onChange={(v) => patchDraft({ addressLine2: v })} />
+                                            <EditField w="w-32" label="city" value={editDraft.city} errors={liveByField.city} onChange={(v) => patchDraft({ city: v })} />
+                                            <EditField w="w-16" label="state" mono value={editDraft.state} errors={liveByField.state} onChange={(v) => patchDraft({ state: v })} />
+                                            <EditField w="w-24" label="postalCode" mono value={editDraft.postalCode} errors={liveByField.postalCode} onChange={(v) => patchDraft({ postalCode: v })} />
+                                            <EditField w="w-16" label="countryCode" mono value={editDraft.countryCode} errors={liveByField.countryCode} onChange={(v) => patchDraft({ countryCode: v.toUpperCase() })} />
+                                            <EditField w="w-24" label="carrierCode" mono value={editDraft.carrierCode} errors={liveByField.carrierCode} onChange={(v) => patchDraft({ carrierCode: v.toUpperCase() })} />
+                                            <EditField w="w-16" label="weight" mono value={editDraft.weight != null ? String(editDraft.weight) : ''} errors={liveByField.weight} onChange={(v) => patchDraft({ weight: v === '' ? null : Number(v) })} />
+                                            <EditField w="w-16" label="weightUnit" mono value={editDraft.weightUnit} errors={liveByField.weightUnit} onChange={(v) => patchDraft({ weightUnit: v.toUpperCase() })} />
+                                            <EditField w="w-28" label="hsCode" mono value={editDraft.hsCode} errors={liveByField.hsCode} onChange={(v) => patchDraft({ hsCode: v })} />
+                                            <EditField w="w-16" label="countryOfOrigin" mono value={editDraft.countryOfOrigin} errors={liveByField.countryOfOrigin} onChange={(v) => patchDraft({ countryOfOrigin: v.toUpperCase() })} />
+                                            <EditField w="w-28" label="recipientPhone" value={editDraft.recipientPhone} errors={liveByField.recipientPhone} onChange={(v) => patchDraft({ recipientPhone: v })} />
+                                            <EditField w="w-44" label="recipientEmail" value={editDraft.recipientEmail} errors={liveByField.recipientEmail} onChange={(v) => patchDraft({ recipientEmail: v })} />
+                                            <EditField w="w-16" label="currency" mono value={editDraft.currency} errors={liveByField.currency} onChange={(v) => patchDraft({ currency: v.toUpperCase() })} />
+                                            <EditField w="w-24" label="billTo" mono value={editDraft.billTo} errors={liveByField.billTo} onChange={(v) => patchDraft({ billTo: v.toUpperCase() })} />
+                                            <EditField w="w-32" label="accountNumber" mono value={editDraft.accountNumber} errors={liveByField.accountNumber} onChange={(v) => patchDraft({ accountNumber: v })} />
+                                            <EditField w="w-24" label="warehouseCode" mono value={editDraft.warehouseCode} errors={liveByField.warehouseCode} onChange={(v) => patchDraft({ warehouseCode: v.toUpperCase() })} />
+                                            <EditField w="w-24" label="orderRef" mono value={editDraft.orderRef} errors={liveByField.orderRef} onChange={(v) => patchDraft({ orderRef: v })} />
+                                            <EditField w="w-28" label="serviceType" mono value={editDraft.serviceType} errors={liveByField.serviceType} onChange={(v) => patchDraft({ serviceType: v })} />
+                                            <EditField w="w-24" label="packageType" mono value={editDraft.packageType} errors={liveByField.packageType} onChange={(v) => patchDraft({ packageType: v })} />
+                                            <EditField w="w-48" label="itemDescription" value={editDraft.itemDescription} errors={liveByField.itemDescription} onChange={(v) => patchDraft({ itemDescription: v })} />
+                                            <EditField w="w-24" label="itemSku" mono value={editDraft.itemSku} errors={liveByField.itemSku} onChange={(v) => patchDraft({ itemSku: v })} />
+                                            <EditField w="w-16" label="itemQuantity" value={editDraft.itemQuantity != null ? String(editDraft.itemQuantity) : ''} errors={liveByField.itemQuantity} onChange={(v) => patchDraft({ itemQuantity: v === '' ? null : Number(v) })} />
+                                            <EditField w="w-20" label="itemUnitValue" value={editDraft.itemUnitValue != null ? String(editDraft.itemUnitValue) : ''} errors={liveByField.itemUnitValue} onChange={(v) => patchDraft({ itemUnitValue: v === '' ? null : Number(v) })} />
+                                            <EditField w="w-28" label="reference" mono value={editDraft.reference} errors={liveByField.reference} onChange={(v) => patchDraft({ reference: v })} />
+                                          </div>
+                                          {(() => {
+                                            const fieldIssues = Object.keys(liveByField).length
+                                            const issues = fieldIssues + liveRowLevel.length
+                                            const clean = issues === 0
+                                            return (
+                                              <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                                                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                                  {/* Group-level rules (customs) that have no single field home. */}
+                                                  {liveRowLevel.map((m) => (
+                                                    <p key={m} className="text-[10px] font-semibold text-rose-600">{m}</p>
+                                                  ))}
+                                                  <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold">
+                                                    {validatingDraft ? (
+                                                      <>
+                                                        <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
+                                                        <span className="text-[#8a7959]">Checking…</span>
+                                                      </>
+                                                    ) : clean ? (
+                                                      <span className="text-emerald-700">✓ All fields valid — ready to generate</span>
+                                                    ) : (
+                                                      <span className="text-rose-600">{issues} issue{issues === 1 ? '' : 's'} to fix</span>
+                                                    )}
+                                                  </span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                  <button
+                                                    type="button"
+                                                    onClick={cancelEdit}
+                                                    disabled={savingEdit}
+                                                    className="rounded-lg border border-[#e3d9c4] px-3 py-1.5 text-[11px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0] disabled:opacity-50"
+                                                  >
+                                                    Cancel
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => void saveEdit(b.id, r.rowNumber)}
+                                                    disabled={savingEdit}
+                                                    title={clean ? undefined : 'You can save now — the row is held until its errors are fixed.'}
+                                                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[11px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                                                  >
+                                                    {savingEdit ? (
+                                                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                                                    ) : (
+                                                      <FiCheck className="h-3 w-3" />
+                                                    )}
+                                                    {savingEdit ? 'Saving…' : clean ? 'Save & re-validate' : 'Save anyway'}
+                                                  </button>
+                                                </div>
+                                              </div>
+                                            )
+                                          })()}
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ) : null}
+                                  </Fragment>
                                 )
                               })}
                             </tbody>
@@ -763,5 +977,83 @@ export default function DataHistoryPage() {
         ) : null}
       </section>
     </div>
+  )
+}
+
+// Every backend validation message is prefixed with the column it belongs to
+// ("postalCode is required", "hsCode is required for international shipments…").
+// This maps a message to its field so the offending input can go red; messages
+// with no field prefix (group-level customs rules) stay row-level.
+const EDIT_FIELD_KEYS = [
+  'orderRef', 'clientCode', 'billTo', 'warehouseCode',
+  'recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail',
+  'addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode',
+  'carrierCode', 'accountNumber', 'serviceType', 'packageType',
+  'weight', 'weightUnit', 'currency', 'reference',
+  'itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue',
+  'hsCode', 'countryOfOrigin',
+] as const
+
+/** Split a row's error strings into per-field buckets + row-level leftovers. */
+function bucketRowErrors(errors: string[]): {
+  byField: Record<string, string[]>
+  rowLevel: string[]
+} {
+  const byField: Record<string, string[]> = {}
+  const rowLevel: string[] = []
+  for (const msg of errors) {
+    const first = msg.split(/[\s']/, 1)[0]
+    if ((EDIT_FIELD_KEYS as readonly string[]).includes(first)) {
+      ;(byField[first] ??= []).push(msg)
+    } else {
+      rowLevel.push(msg)
+    }
+  }
+  return { byField, rowLevel }
+}
+
+/** Compact labelled input used by the inline row-correction editor.
+ *  `w` is a fixed Tailwind width class so the field stays small and packs
+ *  with flex-wrap instead of stretching. `errors` (live from the backend
+ *  validator) paint the field red and surface the message under it. Full
+ *  class strings (never interpolated) so Tailwind's JIT keeps them. */
+function EditField({
+  label,
+  value,
+  onChange,
+  mono,
+  w = 'w-24',
+  errors,
+}: {
+  label: string
+  value?: string | number | null
+  onChange: (v: string) => void
+  mono?: boolean
+  w?: string
+  errors?: string[]
+}) {
+  const bad = (errors?.length ?? 0) > 0
+  return (
+    <label className={`flex flex-col gap-0.5 ${w}`}>
+      <span
+        className={`truncate text-[8.5px] font-bold uppercase tracking-[0.1em] ${
+          bad ? 'text-rose-600' : 'text-[#b6a684]'
+        }`}
+      >
+        {label}
+      </span>
+      <input
+        value={value == null ? '' : String(value)}
+        onChange={(e) => onChange(e.target.value)}
+        className={`w-full rounded-md border bg-white px-1.5 py-0.5 text-[10.5px] text-[#1f150c] outline-none transition ${
+          bad ? 'border-rose-400 focus:border-rose-500' : 'border-[#e3d9c4] focus:border-[#cdbf9f]'
+        } ${mono ? 'font-mono' : ''}`}
+      />
+      {bad ? (
+        <span className="text-[8.5px] font-semibold leading-tight text-rose-600" title={errors!.join(' · ')}>
+          {errors![0].replace(new RegExp(`^${label}\\s*`), '')}
+        </span>
+      ) : null}
+    </label>
   )
 }

@@ -146,6 +146,18 @@ export const orderImportService = {
     ),
 
   /**
+   * Sprint 51 — correct one row of a saved import in place. The backend
+   * re-validates the whole batch, re-stamps each ungenerated row
+   * SAVED / NEEDS_FIX, and returns the refreshed batch (counts + status
+   * updated). Rows that already have a label are immutable.
+   */
+  updateRow: (id: number, rowNumber: number, row: OrderImportRow) =>
+    apiClient.put<ApiResponse<ImportBatchDetail>>(
+      `/orders/import/history/${id}/rows/${rowNumber}`,
+      row,
+    ),
+
+  /**
    * Sprint 48 — re-validate rows the operator edited in the preview
    * table without re-uploading the file. Backend re-runs required-field
    * checks, name→code resolution, and the international-item rule.
