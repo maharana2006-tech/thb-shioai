@@ -78,8 +78,44 @@ class OutputDestinationAdminServiceTest {
         when(cryptoService.isAvailable()).thenReturn(true);
         when(cryptoService.encrypt(anyString())).thenAnswer(inv -> "enc(" + inv.getArgument(0) + ")");
 
+        // Audit R2 #344 — new WebhookUrlValidator dep for the SSRF guard.
+        // Use the real class with private-network + http overrides so existing
+        // fixtures using 127.0.0.1 / test hostnames don't need updating.
+        com.multiship.backend.service.external.WebhookUrlValidator urlValidator =
+                new com.multiship.backend.service.external.WebhookUrlValidator();
+        org.springframework.test.util.ReflectionTestUtils.setField(urlValidator, "allowPrivateNetworks", true);
+        org.springframework.test.util.ReflectionTestUtils.setField(urlValidator, "allowHttp", true);
         admin = new OutputDestinationAdminService(destinationRepo, systemSettingRepo,
-                cryptoService, mapper, outputService, new TestPayloadFactory());
+                cryptoService, mapper, outputService, new TestPayloadFactory(), urlValidator);
+    }
+
+    @Test
+    void createSftpToMetadataHostIsRejectedForSsrf() {
+        // Audit R2 #344 — an admin (or compromised admin session) pointing
+        // an SFTP destination at AWS metadata (169.254.169.254) or any
+        // cloud-metadata endpoint gets a 400 IllegalArgumentException.
+        // The METADATA_HOSTS block is enforced even when allowPrivateNetworks
+        // is set (see WebhookUrlValidator inline comment).
+        com.multiship.backend.service.external.WebhookUrlValidator strictValidator =
+                new com.multiship.backend.service.external.WebhookUrlValidator();
+        // leave both env flags off — strict defaults
+        OutputDestinationAdminService strictAdmin = new OutputDestinationAdminService(
+                destinationRepo, systemSettingRepo, cryptoService, mapper, outputService,
+                new TestPayloadFactory(), strictValidator);
+
+        OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
+                .clientCode("ACME").docType(DocType.LABEL)
+                .destinationType(DestinationType.SFTP)
+                .config("{\"host\":\"169.254.169.254\",\"port\":22,"
+                        + "\"username\":\"acme\",\"authType\":\"PASSWORD\","
+                        + "\"remoteDir\":\"/upload\"}")
+                .sftpPasswordPlain("s3cr3t")
+                .active(true).build();
+
+        IllegalArgumentException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class, () -> strictAdmin.create(req, "alice"));
+        assertTrue(ex.getMessage().toLowerCase().contains("metadata"),
+                "expected metadata-host rejection, got: " + ex.getMessage());
     }
 
     @Test

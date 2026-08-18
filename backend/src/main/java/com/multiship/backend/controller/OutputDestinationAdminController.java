@@ -64,30 +64,45 @@ public class OutputDestinationAdminController {
     }
 
     @Operation(summary = "Create an output destination",
-            description = "SFTP password / private-key material must be submitted as `sftpPasswordPlain` / `sftpPrivateKeyPlain`; the server encrypts + stores it and swaps in a pointer id on the saved config.")
+            description = "SFTP password / private-key material must be submitted as `sftpPasswordPlain` / `sftpPrivateKeyPlain`; the server encrypts + stores it and swaps in a pointer id on the saved config. "
+                    + "Audit R2 #344 — SSRF-guarded: SFTP/PRINTER hosts that resolve to private / loopback / link-local ranges or a cloud-metadata endpoint are rejected at 400.")
     @PostMapping
     public ResponseEntity<ApiResponse<OutputDestinationDTO>> create(
             @Valid @RequestBody OutputDestinationUpsertRequest req,
             @AuthenticationPrincipal UserDetails actor) {
-        OutputDestinationDTO dto = adminService.create(req, actor != null ? actor.getUsername() : "system");
-        return ResponseEntity.status(201).body(ApiResponse.<OutputDestinationDTO>builder()
-                .status("SUCCESS").code(201).timestamp(LocalDateTime.now())
-                .message("Destination created.").data(dto).build());
+        try {
+            OutputDestinationDTO dto = adminService.create(req, actor != null ? actor.getUsername() : "system");
+            return ResponseEntity.status(201).body(ApiResponse.<OutputDestinationDTO>builder()
+                    .status("SUCCESS").code(201).timestamp(LocalDateTime.now())
+                    .message("Destination created.").data(dto).build());
+        } catch (IllegalArgumentException ex) {
+            // Audit R2 #344 — SSRF guard + processConfig parse errors both
+            // surface as IllegalArgumentException. 400 with the actual reason
+            // so ops sees the block hint immediately.
+            return ResponseEntity.badRequest().body(
+                    err(ErrorCode.VALIDATION_ERROR, 400, ex.getMessage()));
+        }
     }
 
-    @Operation(summary = "Update an output destination")
+    @Operation(summary = "Update an output destination",
+            description = "Audit R2 #344 — SSRF-guarded on the same rules as create.")
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<OutputDestinationDTO>> update(
             @PathVariable Long id,
             @Valid @RequestBody OutputDestinationUpsertRequest req,
             @AuthenticationPrincipal UserDetails actor) {
-        return adminService.update(id, req, actor != null ? actor.getUsername() : "system")
-                .map(dto -> ResponseEntity.ok(ApiResponse.<OutputDestinationDTO>builder()
-                        .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
-                        .message("Destination updated.").data(dto).build()))
-                .orElseGet(() -> ResponseEntity.status(404).body(
-                        err(ErrorCode.OUTPUT_DESTINATION_NOT_FOUND, 404,
-                                "Destination " + id + " not found.")));
+        try {
+            return adminService.update(id, req, actor != null ? actor.getUsername() : "system")
+                    .map(dto -> ResponseEntity.ok(ApiResponse.<OutputDestinationDTO>builder()
+                            .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
+                            .message("Destination updated.").data(dto).build()))
+                    .orElseGet(() -> ResponseEntity.status(404).body(
+                            err(ErrorCode.OUTPUT_DESTINATION_NOT_FOUND, 404,
+                                    "Destination " + id + " not found.")));
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(
+                    err(ErrorCode.VALIDATION_ERROR, 400, ex.getMessage()));
+        }
     }
 
     @Operation(summary = "Delete an output destination",

@@ -98,19 +98,39 @@ public class WebhookUrlValidator {
                             + (allowHttp ? " or http (dev)." : "."));
         }
 
-        String host = uri.getHost();
+        validateHost(uri.getHost(), "URL host");
+    }
+
+    /**
+     * Audit R2 #344 — public host-only validation reused by non-URL
+     * destinations (SFTP, PRINTER — output-destinations page). Same
+     * classification as {@link #validate(String)}'s host branch:
+     *   - null/blank → rejected;
+     *   - cloud-metadata host → always rejected (no env flag lifts);
+     *   - unresolvable → rejected;
+     *   - resolves to private / loopback / link-local / RFC 6598 /
+     *     IPv6 unique-local → rejected unless
+     *     {@code webhook.url.allow-private-networks=true}.
+     *
+     * @param host  bare hostname (no scheme, no port)
+     * @param label operator-friendly noun for error messages
+     *              (e.g. "SFTP host", "Printer host"). Falls back to
+     *              "Host" when blank.
+     */
+    public void validateHost(String host, String label) {
+        String noun = (label == null || label.isBlank()) ? "Host" : label;
         if (host == null || host.isBlank()) {
-            throw new WebhookUrlRejectedException("URL host is missing.");
+            throw new WebhookUrlRejectedException(noun + " is missing.");
         }
         String lowerHost = host.toLowerCase();
 
         // Cloud metadata hosts are always rejected — no env flag can lift
         // this. Even in dev these routes should never receive outbound
-        // POSTs; the risk of accidentally shipping a dev override to prod
-        // outweighs any conceivable dev use case.
+        // connections; the risk of accidentally shipping a dev override to
+        // prod outweighs any conceivable dev use case.
         if (METADATA_HOSTS.contains(lowerHost)) {
             throw new WebhookUrlRejectedException(
-                    "URL host is a cloud metadata endpoint; refusing to dispatch to " + host + ".");
+                    noun + " is a cloud metadata endpoint; refusing to connect to " + host + ".");
         }
 
         if (allowPrivateNetworks) {
@@ -125,12 +145,12 @@ public class WebhookUrlValidator {
         try {
             addresses = InetAddress.getAllByName(host);
         } catch (UnknownHostException ex) {
-            throw new WebhookUrlRejectedException("URL host does not resolve: " + host);
+            throw new WebhookUrlRejectedException(noun + " does not resolve: " + host);
         }
         for (InetAddress addr : addresses) {
             if (isBlocked(addr)) {
                 throw new WebhookUrlRejectedException(
-                        "URL host " + host + " resolves to a private/loopback/link-local address ("
+                        noun + " " + host + " resolves to a private/loopback/link-local address ("
                                 + addr.getHostAddress() + "); not allowed.");
             }
         }
