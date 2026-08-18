@@ -41,14 +41,42 @@ public interface OrderImportService {
      * Save the previewed rows as a data record in the Data History (does NOT
      * generate labels). Persists an {@link com.multiship.backend.model.ImportBatch}
      * with the full row payload; returns the summary + batch id.
+     *
+     * @param draft when {@code true} the whole batch is parked as a DRAFT even
+     *   if some rows still have errors (they are held NEEDS_FIX). When
+     *   {@code false} this is a final save and is rejected (422) unless every
+     *   row is valid.
      */
-    ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy, String fileName);
+    ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy,
+                                            String fileName, boolean draft);
 
-    /** All saved imports, newest first (row payload omitted from the list). */
+    /** Live (non-deleted) imports, newest first (row payload omitted). */
     java.util.List<com.multiship.backend.dto.ImportBatchDTO> history();
+
+    /** Soft-deleted imports, newest first — the Trash view. */
+    java.util.List<com.multiship.backend.dto.ImportBatchDTO> deletedHistory();
 
     /** One saved import with its full row payload, or null if not found. */
     com.multiship.backend.dto.ImportBatchDTO historyDetail(Long id);
+
+    /**
+     * Soft-delete an import batch — moves it to Trash (sets deletedAt/deletedBy)
+     * instead of removing it. Returns the updated DTO, or null if not found.
+     * Idempotent: deleting an already-deleted batch is a no-op.
+     */
+    com.multiship.backend.dto.ImportBatchDTO softDeleteBatch(Long id, String requestedBy);
+
+    /**
+     * Restore a soft-deleted import batch from Trash (clears deletedAt/deletedBy).
+     * Returns the updated DTO, or null if not found.
+     */
+    com.multiship.backend.dto.ImportBatchDTO restoreBatch(Long id);
+
+    /**
+     * Empty the Trash — PERMANENTLY (hard) delete every soft-deleted batch the
+     * caller's tenant owns. This is irreversible. Returns the number purged.
+     */
+    int purgeTrash(String requestedBy);
 
     /**
      * Generate carrier labels for a saved import batch, advancing its status

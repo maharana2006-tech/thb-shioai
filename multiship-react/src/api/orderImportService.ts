@@ -65,7 +65,7 @@ export interface OrderImportPreview {
 }
 
 /** Lifecycle status of a saved import. */
-export type ImportStatus = 'INITIATE' | 'IN_PROGRESS' | 'PARTIAL_COMPLETE' | 'COMPLETE' | 'FAILED'
+export type ImportStatus = 'DRAFT' | 'INITIATE' | 'IN_PROGRESS' | 'PARTIAL_COMPLETE' | 'COMPLETE' | 'FAILED'
 
 /** A saved import in the Data History list. */
 export interface ImportBatchSummary {
@@ -82,6 +82,10 @@ export interface ImportBatchSummary {
   totalRows: number
   savedRows: number
   invalidRows: number
+  /** Soft-delete timestamp (ISO). Null = live; non-null = in Trash. */
+  deletedAt?: string | null
+  /** User who moved this batch to Trash. */
+  deletedBy?: string | null
 }
 
 /** A saved import with its full rows (detail view). */
@@ -118,20 +122,42 @@ export const orderImportService = {
     apiClient.post<ApiResponse<OrderImportPreview>>('/orders/import/commit', rows),
 
   /** Save the previewed rows to Data History (persists the data, no labels).
-   *  `fileName` is recorded so the history row shows where the data came from. */
-  save: (rows: OrderImportRow[], fileName?: string | null) =>
-    apiClient.post<ApiResponse<OrderImportPreview>>(
-      `/orders/import/save${fileName ? `?fileName=${encodeURIComponent(fileName)}` : ''}`,
+   *  `fileName` is recorded so the history row shows where the data came from.
+   *  `draft` parks the batch even with invalid rows; a final save (draft=false)
+   *  is rejected 422 unless every row is valid. */
+  save: (rows: OrderImportRow[], fileName?: string | null, draft = false) => {
+    const params = new URLSearchParams()
+    if (fileName) params.set('fileName', fileName)
+    if (draft) params.set('draft', 'true')
+    const qs = params.toString()
+    return apiClient.post<ApiResponse<OrderImportPreview>>(
+      `/orders/import/save${qs ? `?${qs}` : ''}`,
       rows,
-    ),
+    )
+  },
 
-  /** List saved imports for the Data History page. */
-  listHistory: () =>
-    apiClient.get<ApiResponse<ImportBatchSummary[]>>('/orders/import/history'),
+  /** List saved imports for the Data History page. Pass `deleted` for Trash. */
+  listHistory: (deleted = false) =>
+    apiClient.get<ApiResponse<ImportBatchSummary[]>>(
+      `/orders/import/history${deleted ? '?deleted=true' : ''}`,
+    ),
 
   /** One saved import with its full rows. */
   getHistory: (id: number) =>
     apiClient.get<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}`),
+
+  /** Soft-delete an import batch — moves it to Trash (recoverable). */
+  deleteBatch: (id: number) =>
+    apiClient.delete<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}`),
+
+  /** Restore a soft-deleted import batch from Trash. */
+  restoreBatch: (id: number) =>
+    apiClient.post<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}/restore`, {}),
+
+  /** Empty the Trash — PERMANENTLY delete every soft-deleted import. Irreversible.
+   *  Resolves with the number of imports purged. */
+  emptyTrash: () =>
+    apiClient.delete<ApiResponse<number>>('/orders/import/history/trash'),
 
   /** Generate carrier labels for a saved batch — advances its status
    *  INITIATE → IN_PROGRESS → COMPLETE / PARTIAL_COMPLETE. */

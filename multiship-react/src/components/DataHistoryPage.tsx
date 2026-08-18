@@ -1,17 +1,17 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   FiArrowLeft,
-  FiCheck,
   FiChevronDown,
   FiChevronRight,
   FiDatabase,
-  FiEdit3,
   FiFileText,
   FiFilter,
   FiRefreshCw,
   FiSearch,
   FiSliders,
+  FiTrash2,
+  FiRotateCcw,
   FiX,
   FiZap,
 } from 'react-icons/fi'
@@ -36,20 +36,17 @@ export default function DataHistoryPage() {
   const [rowsById, setRowsById] = useState<Record<number, OrderImportRow[] | 'loading'>>({})
   const [generatingId, setGeneratingId] = useState<number | null>(null)
   const [genRowKey, setGenRowKey] = useState<string | null>(null)
-  // Inline correction: which row is open for editing + its working copy.
-  const [editKey, setEditKey] = useState<string | null>(null)
-  const [editDraft, setEditDraft] = useState<OrderImportRow | null>(null)
-  const [savingEdit, setSavingEdit] = useState(false)
-  // Live validation of the draft — debounced round-trip to the same backend
-  // validator the save/generate paths use, so the rules are always correct
-  // and adapt to the data (e.g. hsCode becomes required once countryCode
-  // turns international).
-  const [liveByField, setLiveByField] = useState<Record<string, string[]>>({})
-  const [liveRowLevel, setLiveRowLevel] = useState<string[]>([])
-  const [validatingDraft, setValidatingDraft] = useState(false)
+  // Inline correction: the cell being saved (rowKey), for a per-cell spinner.
+  const [savingCell, setSavingCell] = useState<string | null>(null)
+  // Soft delete: whether we're viewing the Trash, and the row being deleted/restored.
+  const [viewTrash, setViewTrash] = useState(false)
+  const [trashBusyId, setTrashBusyId] = useState<number | null>(null)
+  // Empty Trash: two-step confirm before the irreversible purge.
+  const [confirmEmpty, setConfirmEmpty] = useState(false)
+  const [emptying, setEmptying] = useState(false)
 
   // ── Advanced filter tools ────────────────────────────────────────────────
-  type StatusKey = 'ALL' | 'COMPLETE' | 'PARTIAL_COMPLETE' | 'IN_PROGRESS' | 'INITIATE' | 'FAILED'
+  type StatusKey = 'ALL' | 'COMPLETE' | 'PARTIAL_COMPLETE' | 'IN_PROGRESS' | 'INITIATE' | 'DRAFT' | 'FAILED'
   type SortKey = 'created' | 'fileName' | 'savedRows' | 'status' | 'labelBatch'
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusKey>('ALL')
@@ -125,7 +122,7 @@ export default function DataHistoryPage() {
     })
 
     const statusOrder: Record<string, number> = {
-      IN_PROGRESS: 0, INITIATE: 1, PARTIAL_COMPLETE: 2, FAILED: 3, COMPLETE: 4,
+      DRAFT: 0, IN_PROGRESS: 0, INITIATE: 1, PARTIAL_COMPLETE: 2, FAILED: 3, COMPLETE: 4,
     }
     const dir = sortDir === 'ASC' ? 1 : -1
     rows.sort((a, b) => {
@@ -172,10 +169,10 @@ export default function DataHistoryPage() {
   const load = async () => {
     setLoading(true)
     try {
-      const res = await orderImportService.listHistory()
+      const res = await orderImportService.listHistory(viewTrash)
       setBatches(res.data ?? [])
     } catch (e) {
-      notify.apiError(e, 'Could not load import history.')
+      notify.apiError(e, viewTrash ? 'Could not load Trash.' : 'Could not load import history.')
       setBatches([])
     } finally {
       setLoading(false)
@@ -183,9 +180,58 @@ export default function DataHistoryPage() {
   }
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount; load() sets loading + batches state
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount + when switching between live/Trash views
     void load()
-  }, [])
+    setOpenId(null)
+    setConfirmEmpty(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewTrash])
+
+  /** Empty the Trash — PERMANENTLY delete every batch currently in Trash. */
+  const handleEmptyTrash = async () => {
+    setEmptying(true)
+    try {
+      const res = await orderImportService.emptyTrash()
+      setBatches([])
+      setOpenId(null)
+      notify.success(res.message ?? 'Trash emptied.')
+    } catch (e) {
+      notify.apiError(e, 'Could not empty Trash.')
+    } finally {
+      setEmptying(false)
+      setConfirmEmpty(false)
+    }
+  }
+
+  /** Move a batch to Trash (soft delete). It stays recoverable from the Trash view. */
+  const handleDelete = async (id: number, fileName?: string | null) => {
+    setTrashBusyId(id)
+    try {
+      await orderImportService.deleteBatch(id)
+      setBatches((list) => list.filter((b) => b.id !== id))
+      if (openId === id) setOpenId(null)
+      notify.success(`"${fileName || `Import #${id}`}" moved to Trash · restore it from Trash anytime.`)
+    } catch (e) {
+      notify.apiError(e, 'Could not delete import.')
+    } finally {
+      setTrashBusyId(null)
+    }
+  }
+
+  /** Restore a batch from Trash back to the live Data History list. */
+  const handleRestore = async (id: number, fileName?: string | null) => {
+    setTrashBusyId(id)
+    try {
+      await orderImportService.restoreBatch(id)
+      setBatches((list) => list.filter((b) => b.id !== id))
+      if (openId === id) setOpenId(null)
+      notify.success(`"${fileName || `Import #${id}`}" restored.`)
+    } catch (e) {
+      notify.apiError(e, 'Could not restore import.')
+    } finally {
+      setTrashBusyId(null)
+    }
+  }
 
   const toggle = async (id: number) => {
     if (openId === id) {
@@ -288,63 +334,24 @@ export default function DataHistoryPage() {
     }
   }
 
-  /** Open the inline editor for one row with a working copy of its data. */
-  const startEdit = (batchId: number, r: OrderImportRow) => {
-    setEditKey(`${batchId}-${r.rowNumber}`)
-    setEditDraft({ ...r })
-    // Seed field markers from the row's last-known errors so the editor
-    // opens already showing what's wrong, before the first live check.
-    const { byField, rowLevel } = bucketRowErrors(r.errors ?? [])
-    setLiveByField(byField)
-    setLiveRowLevel(rowLevel)
-  }
-
-  const cancelEdit = () => {
-    setEditKey(null)
-    setEditDraft(null)
-    setLiveByField({})
-    setLiveRowLevel([])
-    setValidatingDraft(false)
-  }
-
-  // Debounced live validation: whenever the draft changes, re-check it against
-  // the backend validator and repaint field errors. The whole-batch re-check
-  // still runs authoritatively on save.
-  useEffect(() => {
-    if (!editKey || !editDraft) return
-    let ignore = false
-    setValidatingDraft(true)
-    const handle = setTimeout(async () => {
-      try {
-        const res = await orderImportService.validate([editDraft])
-        const row = res.data?.rows?.[0]
-        if (!ignore) {
-          const { byField, rowLevel } = bucketRowErrors(row?.errors ?? [])
-          setLiveByField(byField)
-          setLiveRowLevel(rowLevel)
-        }
-      } catch {
-        // Keep the last markers on a transient failure — don't flash them away.
-      } finally {
-        if (!ignore) setValidatingDraft(false)
-      }
-    }, 350)
-    return () => {
-      ignore = true
-      clearTimeout(handle)
-    }
-  }, [editKey, editDraft])
-
-  const patchDraft = (p: Partial<OrderImportRow>) =>
-    setEditDraft((d) => (d ? { ...d, ...p } : d))
-
-  /** Persist the edited row; the backend re-validates the whole batch and
-   *  returns fresh rows + counts, which we drop straight into local state. */
-  const saveEdit = async (batchId: number, rowNumber: number) => {
-    if (!editDraft) return
-    setSavingEdit(true)
+  /**
+   * Persist one edited cell in place. Applies the typed value to the row,
+   * PUTs it (updateRow re-validates the whole batch server-side), and drops
+   * the fresh rows + counts back into state so the grid repaints — red cells,
+   * ready/held status, and the batch counters all update. No-op when the value
+   * is unchanged.
+   */
+  const commitCell = async (batchId: number, row: OrderImportRow, col: DhColumn, raw: string) => {
+    let next: unknown = raw
+    if (col.numeric) next = raw === '' ? null : Number(raw)
+    else if (col.upper) next = raw.toUpperCase()
+    const current = (row as unknown as Record<string, unknown>)[col.key]
+    if (String(current ?? '') === String(next ?? '')) return // unchanged
+    const edited = { ...row, [col.key]: next } as OrderImportRow
+    const key = `${batchId}-${row.rowNumber}`
+    setSavingCell(key)
     try {
-      const res = await orderImportService.updateRow(batchId, rowNumber, editDraft)
+      const res = await orderImportService.updateRow(batchId, row.rowNumber, edited)
       const updated = res.data
       if (updated) {
         if (updated.rows) setRowsById((m) => ({ ...m, [batchId]: updated.rows }))
@@ -355,21 +362,13 @@ export default function DataHistoryPage() {
               : b,
           ),
         )
-        const fixed = updated.rows?.find((r) => r.rowNumber === rowNumber)
-        const stillBad = (fixed?.errors?.length ?? 0) > 0
-        if (stillBad) {
-          notify.info(res.message ?? `Row ${rowNumber} saved — still has errors.`)
-        } else {
-          notify.success(res.message ?? `Row ${rowNumber} fixed — now ready to generate.`)
-        }
-        cancelEdit()
       } else {
         notify.error(res.message ?? 'Save failed.')
       }
     } catch (e) {
       notify.apiError(e, 'Save failed.')
     } finally {
-      setSavingEdit(false)
+      setSavingCell(null)
     }
   }
 
@@ -394,6 +393,8 @@ export default function DataHistoryPage() {
         return { label: 'In progress', cls: 'bg-sky-50 text-sky-700 ring-sky-200' }
       case 'INITIATE':
         return { label: 'Initiated', cls: 'bg-slate-100 text-slate-600 ring-slate-200' }
+      case 'DRAFT':
+        return { label: 'Draft', cls: 'bg-orange-50 text-orange-700 ring-orange-200' }
       default:
         return { label: status || '—', cls: 'bg-slate-100 text-slate-500 ring-slate-200' }
     }
@@ -432,6 +433,56 @@ export default function DataHistoryPage() {
               <FiRefreshCw className="h-3.5 w-3.5" />
               Refresh
             </button>
+            {viewTrash && batches.length > 0 ? (
+              confirmEmpty ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void handleEmptyTrash()}
+                    disabled={emptying}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-2 text-[12.5px] font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {emptying ? (
+                      <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                    ) : (
+                      <FiTrash2 className="h-3.5 w-3.5" />
+                    )}
+                    Delete {batches.length} forever
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmEmpty(false)}
+                    disabled={emptying}
+                    className="inline-flex items-center rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmEmpty(true)}
+                  title="Permanently delete everything in Trash"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-rose-600 transition hover:border-rose-300 hover:bg-rose-50"
+                >
+                  <FiTrash2 className="h-3.5 w-3.5" />
+                  Empty Trash
+                </button>
+              )
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setViewTrash((v) => !v)}
+              title={viewTrash ? 'Back to live imports' : 'View deleted imports (Trash)'}
+              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
+                viewTrash
+                  ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
+                  : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+              }`}
+            >
+              {viewTrash ? <FiArrowLeft className="h-3.5 w-3.5" /> : <FiTrash2 className="h-3.5 w-3.5" />}
+              {viewTrash ? 'Back to imports' : 'Trash'}
+            </button>
             <button
               type="button"
               onClick={() => navigate('/orders')}
@@ -452,6 +503,7 @@ export default function DataHistoryPage() {
             <div className="flex flex-wrap gap-1.5">
               {([
                 { key: 'ALL', label: 'All' },
+                { key: 'DRAFT', label: 'Draft' },
                 { key: 'COMPLETE', label: 'Complete' },
                 { key: 'PARTIAL_COMPLETE', label: 'Partial complete' },
                 { key: 'IN_PROGRESS', label: 'In progress' },
@@ -601,7 +653,8 @@ export default function DataHistoryPage() {
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-dashed border-[#e3d9c4] px-5 py-3">
           <span className="inline-flex items-center gap-2 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
-            <FiDatabase className="h-3.5 w-3.5" /> Saved imports
+            {viewTrash ? <FiTrash2 className="h-3.5 w-3.5" /> : <FiDatabase className="h-3.5 w-3.5" />}
+            {viewTrash ? 'Trash — deleted imports' : 'Saved imports'}
           </span>
           <span className="font-mono text-[9px] font-bold uppercase tracking-[0.16em] tabular-nums text-[#b6a684]">
             {filtered.length === 0 ? '0 imports' : `${rangeStart}–${rangeEnd} of ${filtered.length}`}
@@ -612,7 +665,9 @@ export default function DataHistoryPage() {
           <p className="px-5 py-14 text-center text-sm text-[#8a7959]">Loading…</p>
         ) : batches.length === 0 ? (
           <p className="px-5 py-14 text-center text-sm text-[#8a7959]">
-            No saved imports yet. Import a CSV/Excel from Orders → Import CSV/Excel, then click Save.
+            {viewTrash
+              ? 'Trash is empty — no deleted imports.'
+              : 'No saved imports yet. Import a CSV/Excel from Orders → Import CSV/Excel, then click Save.'}
           </p>
         ) : filtered.length === 0 ? (
           <div className="px-5 py-14 text-center">
@@ -690,22 +745,57 @@ export default function DataHistoryPage() {
                       ) : null}
                     </span>
                   </button>
-                  {canGenerate ? (
-                    <button
-                      type="button"
-                      onClick={() => void generate(b.id)}
-                      disabled={busy}
-                      title={isRetry ? 'Retry generating labels for the rows that failed' : 'Generate carrier labels for this saved import'}
-                      className="my-2 mr-4 inline-flex shrink-0 items-center gap-1.5 self-center rounded-xl bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
-                    >
-                      {busy ? (
-                        <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                      ) : (
-                        <FiZap className="h-3.5 w-3.5" />
-                      )}
-                      {busy ? 'Generating…' : isRetry ? 'Retry labels' : 'Generate labels'}
-                    </button>
-                  ) : null}
+                  <div className="my-2 mr-4 flex shrink-0 items-center gap-1.5 self-center">
+                    {viewTrash ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleRestore(b.id, b.fileName)}
+                        disabled={trashBusyId === b.id}
+                        title="Restore this import from Trash"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-[#412d15] bg-white px-3 py-2 text-[12px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {trashBusyId === b.id ? (
+                          <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#412d15]/30 border-t-[#412d15]" />
+                        ) : (
+                          <FiRotateCcw className="h-3.5 w-3.5" />
+                        )}
+                        Restore
+                      </button>
+                    ) : (
+                      <>
+                        {canGenerate ? (
+                          <button
+                            type="button"
+                            onClick={() => void generate(b.id)}
+                            disabled={busy}
+                            title={isRetry ? 'Retry generating labels for the rows that failed' : 'Generate carrier labels for this saved import'}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                          >
+                            {busy ? (
+                              <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                            ) : (
+                              <FiZap className="h-3.5 w-3.5" />
+                            )}
+                            {busy ? 'Generating…' : isRetry ? 'Retry labels' : 'Generate labels'}
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => void handleDelete(b.id, b.fileName)}
+                          disabled={trashBusyId === b.id}
+                          title="Move this import to Trash (recoverable)"
+                          aria-label="Delete import"
+                          className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#8a7959] transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {trashBusyId === b.id ? (
+                            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300/40 border-t-rose-500" />
+                          ) : (
+                            <FiTrash2 className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      </>
+                    )}
+                  </div>
                   </div>
 
                   {busy ? (
@@ -721,209 +811,95 @@ export default function DataHistoryPage() {
                       ) : rows.length === 0 ? (
                         <p className="py-4 text-center text-[12px] text-[#8a7959]">No rows stored for this import.</p>
                       ) : (
-                        <div className="overflow-auto rounded-xl border border-[#e3d9c4] bg-white">
-                          <table className="w-full min-w-[820px] text-left text-[11px] text-[#3f3527]">
-                            <thead className="bg-[#faf7f0] text-[9.5px] uppercase tracking-[0.14em] text-[#8a7959]">
-                              <tr>
-                                <th className="p-2.5">#</th>
-                                <th className="p-2.5">Recipient</th>
-                                <th className="p-2.5">Address</th>
-                                <th className="p-2.5">City / Postal</th>
-                                <th className="p-2.5">Carrier</th>
-                                <th className="p-2.5 text-right">Weight</th>
-                                <th className="p-2.5">Status</th>
-                                <th className="p-2.5">Label</th>
+                        <>
+                        <p className="mb-1.5 text-[10.5px] text-[#b6a684]">
+                          All columns shown — click any cell to edit; it saves and re-validates on blur. Scroll right for more.
+                        </p>
+                        <div className="overflow-x-auto rounded-xl border border-[#e3d9c4] bg-white">
+                          <table className="w-full border-collapse text-[11px] text-[#3f3527]">
+                            <thead>
+                              <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.1em] text-[#8a7959]">
+                                <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
+                                {DH_COLUMNS.map((c) => (
+                                  <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">{c.key}</th>
+                                ))}
+                                <th className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">Label</th>
                               </tr>
                             </thead>
-                            <tbody className="divide-y divide-[#eee6d6]">
+                            <tbody>
                               {rows.map((r) => {
                                 const ok = (r.errors?.length ?? 0) === 0
                                 const gen = (r.generatedStatus ?? '').toUpperCase()
+                                const generated = gen === 'GENERATED'
                                 const rowKey = `${b.id}-${r.rowNumber}`
                                 const rowBusy = genRowKey === rowKey
-                                const editing = editKey === rowKey
-                                // Any row that hasn't shipped yet can be corrected here.
-                                const editable = gen !== 'GENERATED'
+                                const saving = savingCell === rowKey
+                                const { byField } = bucketRowErrors(r.errors ?? [])
+                                const statusTitle = (r.errors ?? []).map((m) => '✗ ' + m).join('\n') || undefined
                                 return (
-                                  <Fragment key={r.rowNumber}>
-                                  <tr className="transition hover:bg-[#faf7f0]/60">
-                                    <td className="p-2.5 font-mono text-[10.5px] text-[#8a7959]">{r.rowNumber}</td>
-                                    <td className="p-2.5">
-                                      <p className="font-semibold text-[#1f150c]">{r.recipientName ?? '—'}</p>
-                                      {r.recipientCompany ? (
-                                        <p className="text-[10px] text-[#8a7959]">{r.recipientCompany}</p>
-                                      ) : null}
-                                    </td>
-                                    <td className="p-2.5">
-                                      <span className="block max-w-[200px] truncate">{r.addressLine1 ?? '—'}</span>
-                                    </td>
-                                    <td className="p-2.5">
-                                      {r.city ?? '—'} · {r.postalCode ?? '—'} {r.countryCode ?? ''}
-                                    </td>
-                                    <td className="p-2.5">
-                                      {r.carrierCode ?? '—'}
-                                      {r.accountNumber ? ` · ${r.accountNumber}` : ''}
-                                    </td>
-                                    <td className="p-2.5 text-right">
-                                      {r.weight ?? '—'} {r.weightUnit ?? ''}
-                                    </td>
-                                    <td className="p-2.5">
-                                      {ok ? (
-                                        <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-emerald-800">
-                                          Saved
-                                        </span>
-                                      ) : (
-                                        <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-rose-800">
-                                          {r.errors.join(', ')}
-                                        </span>
-                                      )}
-                                    </td>
-                                    <td className="p-2.5">
+                                  <tr key={r.rowNumber} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
+                                    <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
                                       <div className="flex items-center gap-1.5">
-                                        {gen === 'GENERATED' ? (
-                                          <span className="inline-flex flex-col gap-0.5">
-                                            <span className="w-fit rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-emerald-800">
-                                              Generated
-                                            </span>
-                                            {r.generatedTrackingNumber ? (
-                                              <span className="font-mono text-[9.5px] text-[#8a7959]">{r.generatedTrackingNumber}</span>
-                                            ) : null}
-                                          </span>
+                                        <span className="font-mono text-[10px] font-bold text-[#8a7959]">{r.rowNumber}</span>
+                                        {generated ? (
+                                          <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Generated</span>
                                         ) : ok ? (
-                                          <button
-                                            type="button"
-                                            onClick={() => void generateRow(b.id, r.rowNumber)}
-                                            disabled={rowBusy || editing}
-                                            className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
-                                          >
-                                            {rowBusy ? (
-                                              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                                            ) : (
-                                              <FiZap className="h-3 w-3" />
-                                            )}
-                                            {rowBusy ? 'Generating…' : 'Generate label'}
-                                          </button>
+                                          <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Ready</span>
                                         ) : (
-                                          <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
+                                          <span title={statusTitle} className="cursor-help rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800">{r.errors.length} err</span>
                                         )}
-                                        {/* Correct any not-yet-shipped row in place. */}
-                                        {editable ? (
-                                          <button
-                                            type="button"
-                                            onClick={() => (editing ? cancelEdit() : startEdit(b.id, r))}
-                                            className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-semibold transition ${
-                                              editing
-                                                ? 'border-[#cdbf9f] bg-[#faf7f0] text-[#5a4526]'
-                                                : 'border-[#e3d9c4] text-[#5a4526] hover:bg-[#faf7f0]'
-                                            }`}
-                                          >
-                                            {editing ? <FiX className="h-3 w-3" /> : <FiEdit3 className="h-3 w-3" />}
-                                            {editing ? 'Close' : 'Edit'}
-                                          </button>
-                                        ) : null}
+                                        {saving ? <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" /> : null}
                                       </div>
                                     </td>
-                                  </tr>
-                                  {editing && editDraft ? (
-                                    <tr className="bg-[#faf7f0]/70">
-                                      <td colSpan={8} className="px-3 py-3">
-                                        <div className="rounded-xl border border-[#cdbf9f] bg-white p-3">
-                                          <p className="mb-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
-                                            Correct row {r.rowNumber}
-                                          </p>
-                                          {/* Fixed small widths that pack with flex-wrap — fields
-                                              stay compact instead of stretching to the table width. */}
-                                          <div className="flex flex-wrap gap-x-2 gap-y-2">
-                                            <EditField w="w-24" label="clientCode" mono value={editDraft.clientCode} errors={liveByField.clientCode} onChange={(v) => patchDraft({ clientCode: v.toUpperCase() })} />
-                                            <EditField w="w-44" label="recipientName" value={editDraft.recipientName} errors={liveByField.recipientName} onChange={(v) => patchDraft({ recipientName: v })} />
-                                            <EditField w="w-36" label="recipientCompany" value={editDraft.recipientCompany} errors={liveByField.recipientCompany} onChange={(v) => patchDraft({ recipientCompany: v })} />
-                                            <EditField w="w-48" label="addressLine1" value={editDraft.addressLine1} errors={liveByField.addressLine1} onChange={(v) => patchDraft({ addressLine1: v })} />
-                                            <EditField w="w-48" label="addressLine2" value={editDraft.addressLine2} errors={liveByField.addressLine2} onChange={(v) => patchDraft({ addressLine2: v })} />
-                                            <EditField w="w-32" label="city" value={editDraft.city} errors={liveByField.city} onChange={(v) => patchDraft({ city: v })} />
-                                            <EditField w="w-16" label="state" mono value={editDraft.state} errors={liveByField.state} onChange={(v) => patchDraft({ state: v })} />
-                                            <EditField w="w-24" label="postalCode" mono value={editDraft.postalCode} errors={liveByField.postalCode} onChange={(v) => patchDraft({ postalCode: v })} />
-                                            <EditField w="w-16" label="countryCode" mono value={editDraft.countryCode} errors={liveByField.countryCode} onChange={(v) => patchDraft({ countryCode: v.toUpperCase() })} />
-                                            <EditField w="w-24" label="carrierCode" mono value={editDraft.carrierCode} errors={liveByField.carrierCode} onChange={(v) => patchDraft({ carrierCode: v.toUpperCase() })} />
-                                            <EditField w="w-16" label="weight" mono value={editDraft.weight != null ? String(editDraft.weight) : ''} errors={liveByField.weight} onChange={(v) => patchDraft({ weight: v === '' ? null : Number(v) })} />
-                                            <EditField w="w-16" label="weightUnit" mono value={editDraft.weightUnit} errors={liveByField.weightUnit} onChange={(v) => patchDraft({ weightUnit: v.toUpperCase() })} />
-                                            <EditField w="w-28" label="hsCode" mono value={editDraft.hsCode} errors={liveByField.hsCode} onChange={(v) => patchDraft({ hsCode: v })} />
-                                            <EditField w="w-16" label="countryOfOrigin" mono value={editDraft.countryOfOrigin} errors={liveByField.countryOfOrigin} onChange={(v) => patchDraft({ countryOfOrigin: v.toUpperCase() })} />
-                                            <EditField w="w-28" label="recipientPhone" value={editDraft.recipientPhone} errors={liveByField.recipientPhone} onChange={(v) => patchDraft({ recipientPhone: v })} />
-                                            <EditField w="w-44" label="recipientEmail" value={editDraft.recipientEmail} errors={liveByField.recipientEmail} onChange={(v) => patchDraft({ recipientEmail: v })} />
-                                            <EditField w="w-16" label="currency" mono value={editDraft.currency} errors={liveByField.currency} onChange={(v) => patchDraft({ currency: v.toUpperCase() })} />
-                                            <EditField w="w-24" label="billTo" mono value={editDraft.billTo} errors={liveByField.billTo} onChange={(v) => patchDraft({ billTo: v.toUpperCase() })} />
-                                            <EditField w="w-32" label="accountNumber" mono value={editDraft.accountNumber} errors={liveByField.accountNumber} onChange={(v) => patchDraft({ accountNumber: v })} />
-                                            <EditField w="w-24" label="warehouseCode" mono value={editDraft.warehouseCode} errors={liveByField.warehouseCode} onChange={(v) => patchDraft({ warehouseCode: v.toUpperCase() })} />
-                                            <EditField w="w-24" label="orderRef" mono value={editDraft.orderRef} errors={liveByField.orderRef} onChange={(v) => patchDraft({ orderRef: v })} />
-                                            <EditField w="w-28" label="serviceType" mono value={editDraft.serviceType} errors={liveByField.serviceType} onChange={(v) => patchDraft({ serviceType: v })} />
-                                            <EditField w="w-24" label="packageType" mono value={editDraft.packageType} errors={liveByField.packageType} onChange={(v) => patchDraft({ packageType: v })} />
-                                            <EditField w="w-48" label="itemDescription" value={editDraft.itemDescription} errors={liveByField.itemDescription} onChange={(v) => patchDraft({ itemDescription: v })} />
-                                            <EditField w="w-24" label="itemSku" mono value={editDraft.itemSku} errors={liveByField.itemSku} onChange={(v) => patchDraft({ itemSku: v })} />
-                                            <EditField w="w-16" label="itemQuantity" value={editDraft.itemQuantity != null ? String(editDraft.itemQuantity) : ''} errors={liveByField.itemQuantity} onChange={(v) => patchDraft({ itemQuantity: v === '' ? null : Number(v) })} />
-                                            <EditField w="w-20" label="itemUnitValue" value={editDraft.itemUnitValue != null ? String(editDraft.itemUnitValue) : ''} errors={liveByField.itemUnitValue} onChange={(v) => patchDraft({ itemUnitValue: v === '' ? null : Number(v) })} />
-                                            <EditField w="w-28" label="reference" mono value={editDraft.reference} errors={liveByField.reference} onChange={(v) => patchDraft({ reference: v })} />
+                                    {DH_COLUMNS.map((c) => {
+                                      const raw = (r as unknown as Record<string, unknown>)[c.key]
+                                      return (
+                                        <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
+                                          <div className={c.w}>
+                                            <GridCell
+                                              value={raw == null ? '' : String(raw)}
+                                              readOnly={generated}
+                                              bad={(byField[c.key]?.length ?? 0) > 0}
+                                              errors={byField[c.key]}
+                                              mono={c.mono}
+                                              onCommit={(v) => void commitCell(b.id, r, c, v)}
+                                            />
                                           </div>
-                                          {(() => {
-                                            const fieldIssues = Object.keys(liveByField).length
-                                            const issues = fieldIssues + liveRowLevel.length
-                                            const clean = issues === 0
-                                            return (
-                                              <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                                                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                                                  {/* Group-level rules (customs) that have no single field home. */}
-                                                  {liveRowLevel.map((m) => (
-                                                    <p key={m} className="text-[10px] font-semibold text-rose-600">{m}</p>
-                                                  ))}
-                                                  <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold">
-                                                    {validatingDraft ? (
-                                                      <>
-                                                        <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" />
-                                                        <span className="text-[#8a7959]">Checking…</span>
-                                                      </>
-                                                    ) : clean ? (
-                                                      <span className="text-emerald-700">✓ All fields valid — ready to generate</span>
-                                                    ) : (
-                                                      <span className="text-rose-600">{issues} issue{issues === 1 ? '' : 's'} to fix</span>
-                                                    )}
-                                                  </span>
-                                                </div>
-                                                <div className="flex items-center gap-2">
-                                                  <button
-                                                    type="button"
-                                                    onClick={cancelEdit}
-                                                    disabled={savingEdit}
-                                                    className="rounded-lg border border-[#e3d9c4] px-3 py-1.5 text-[11px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0] disabled:opacity-50"
-                                                  >
-                                                    Cancel
-                                                  </button>
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => void saveEdit(b.id, r.rowNumber)}
-                                                    disabled={savingEdit}
-                                                    title={clean ? undefined : 'You can save now — the row is held until its errors are fixed.'}
-                                                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[11px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
-                                                  >
-                                                    {savingEdit ? (
-                                                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                                                    ) : (
-                                                      <FiCheck className="h-3 w-3" />
-                                                    )}
-                                                    {savingEdit ? 'Saving…' : clean ? 'Save & re-validate' : 'Save anyway'}
-                                                  </button>
-                                                </div>
-                                              </div>
-                                            )
-                                          })()}
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  ) : null}
-                                  </Fragment>
+                                        </td>
+                                      )
+                                    })}
+                                    <td className="whitespace-nowrap border-b border-[#f2ecdf] px-2 py-1">
+                                      {generated ? (
+                                        <span className="inline-flex flex-col gap-0.5">
+                                          {r.generatedTrackingNumber ? (
+                                            <span className="font-mono text-[9.5px] text-[#8a7959]">{r.generatedTrackingNumber}</span>
+                                          ) : <span className="text-[9.5px] text-[#8a7959]">—</span>}
+                                        </span>
+                                      ) : ok ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => void generateRow(b.id, r.rowNumber)}
+                                          disabled={rowBusy}
+                                          className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                                        >
+                                          {rowBusy ? (
+                                            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                                          ) : (
+                                            <FiZap className="h-3 w-3" />
+                                          )}
+                                          {rowBusy ? 'Generating…' : 'Generate label'}
+                                        </button>
+                                      ) : (
+                                        <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
+                                      )}
+                                    </td>
+                                  </tr>
                                 )
                               })}
                             </tbody>
                           </table>
                         </div>
+                        </>
                       )}
                     </div>
                   ) : null}
@@ -1012,48 +988,99 @@ function bucketRowErrors(errors: string[]): {
   return { byField, rowLevel }
 }
 
-/** Compact labelled input used by the inline row-correction editor.
- *  `w` is a fixed Tailwind width class so the field stays small and packs
- *  with flex-wrap instead of stretching. `errors` (live from the backend
- *  validator) paint the field red and surface the message under it. Full
- *  class strings (never interpolated) so Tailwind's JIT keeps them. */
-function EditField({
-  label,
+/** Column model for the Data-History spreadsheet grid — every import field,
+ *  in template order. `numeric`/`upper` shape how an edited value is written
+ *  back; `w` is the cell input min-width. Mirrors the import modal's grid. */
+type DhColumn = { key: string; mono?: boolean; upper?: boolean; numeric?: boolean; w: string }
+const DH_COLUMNS: DhColumn[] = [
+  { key: 'orderRef', mono: true, w: 'w-24' },
+  { key: 'clientCode', mono: true, upper: true, w: 'w-24' },
+  { key: 'billTo', mono: true, upper: true, w: 'w-24' },
+  { key: 'warehouseCode', mono: true, upper: true, w: 'w-24' },
+  { key: 'recipientName', w: 'w-40' },
+  { key: 'recipientCompany', w: 'w-40' },
+  { key: 'recipientPhone', w: 'w-28' },
+  { key: 'recipientEmail', w: 'w-44' },
+  { key: 'addressLine1', w: 'w-48' },
+  { key: 'addressLine2', w: 'w-40' },
+  { key: 'city', w: 'w-32' },
+  { key: 'state', mono: true, upper: true, w: 'w-16' },
+  { key: 'postalCode', mono: true, w: 'w-24' },
+  { key: 'countryCode', mono: true, upper: true, w: 'w-16' },
+  { key: 'carrierCode', mono: true, upper: true, w: 'w-24' },
+  { key: 'accountNumber', mono: true, w: 'w-32' },
+  { key: 'serviceType', mono: true, w: 'w-28' },
+  { key: 'packageType', mono: true, w: 'w-24' },
+  { key: 'weight', numeric: true, w: 'w-16' },
+  { key: 'weightUnit', mono: true, upper: true, w: 'w-16' },
+  { key: 'currency', mono: true, upper: true, w: 'w-16' },
+  { key: 'reference', mono: true, w: 'w-28' },
+  { key: 'itemDescription', w: 'w-48' },
+  { key: 'itemSku', mono: true, w: 'w-24' },
+  { key: 'itemQuantity', numeric: true, w: 'w-16' },
+  { key: 'itemUnitValue', numeric: true, w: 'w-20' },
+  { key: 'hsCode', mono: true, w: 'w-24' },
+  { key: 'countryOfOrigin', mono: true, upper: true, w: 'w-16' },
+]
+
+/**
+ * A read-only grid cell that becomes an input on click. Shows the value as
+ * plain text (red + tooltip when the field failed validation); clicking opens
+ * an inline editor that commits on blur or Enter, cancels on Escape. Generated
+ * rows are read-only. The commit fires once on exit, not per keystroke.
+ */
+function GridCell({
   value,
-  onChange,
-  mono,
-  w = 'w-24',
+  onCommit,
+  bad = false,
+  mono = false,
   errors,
+  readOnly = false,
 }: {
-  label: string
-  value?: string | number | null
-  onChange: (v: string) => void
+  value: string
+  onCommit: (v: string) => void
+  bad?: boolean
   mono?: boolean
-  w?: string
   errors?: string[]
+  readOnly?: boolean
 }) {
-  const bad = (errors?.length ?? 0) > 0
-  return (
-    <label className={`flex flex-col gap-0.5 ${w}`}>
-      <span
-        className={`truncate text-[8.5px] font-bold uppercase tracking-[0.1em] ${
-          bad ? 'text-rose-600' : 'text-[#b6a684]'
-        }`}
-      >
-        {label}
-      </span>
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value)
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (editing) { inputRef.current?.focus(); inputRef.current?.select() }
+  }, [editing])
+  const begin = () => { if (readOnly) return; setDraft(value); setEditing(true) }
+  const commit = () => { setEditing(false); if (draft !== value) onCommit(draft) }
+  const cancel = () => { setEditing(false); setDraft(value) }
+  if (editing) {
+    return (
       <input
-        value={value == null ? '' : String(value)}
-        onChange={(e) => onChange(e.target.value)}
-        className={`w-full rounded-md border bg-white px-1.5 py-0.5 text-[10.5px] text-[#1f150c] outline-none transition ${
-          bad ? 'border-rose-400 focus:border-rose-500' : 'border-[#e3d9c4] focus:border-[#cdbf9f]'
-        } ${mono ? 'font-mono' : ''}`}
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit() }
+          else if (e.key === 'Escape') { e.preventDefault(); cancel() }
+        }}
+        className={`w-full rounded-[5px] border border-[#412d15] bg-white px-1.5 py-0.5 text-[10.5px] text-[#1f150c] outline-none ring-1 ring-[#412d15] ${mono ? 'font-mono' : ''}`}
       />
-      {bad ? (
-        <span className="text-[8.5px] font-semibold leading-tight text-rose-600" title={errors!.join(' · ')}>
-          {errors![0].replace(new RegExp(`^${label}\\s*`), '')}
-        </span>
-      ) : null}
-    </label>
+    )
+  }
+  const tooltip = bad && errors && errors.length > 0 ? errors.join('\n') : value || undefined
+  return (
+    <button
+      type="button"
+      onClick={begin}
+      title={tooltip}
+      className={`block w-full truncate rounded-[5px] px-1.5 py-0.5 text-left text-[10.5px] transition ${mono ? 'font-mono' : ''} ${
+        readOnly ? 'cursor-default text-[#8a7959]'
+          : bad ? 'cursor-text bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-300 hover:ring-rose-400'
+          : 'cursor-text text-[#3f3527] hover:bg-[#efe7d4]'
+      }`}
+    >
+      {value || <span className="text-[#cdbf9f]">—</span>}
+    </button>
   )
 }

@@ -66,4 +66,21 @@ public class ImportBatch {
     /** Serialized List&lt;OrderImportRowDTO&gt; — the full imported data for the detail view. */
     @Column(name = "rows_json", columnDefinition = "TEXT")
     private String rowsJson;
+
+    /** SHA-256 of the imported row data — used to reject re-uploading the same
+     *  file. Nullable for legacy rows saved before this column existed. */
+    @Column(name = "content_hash", length = 64)
+    private String contentHash;
+
+    /**
+     * Soft-delete marker. Null = live; non-null = the batch was sent to Trash
+     * at this time. Deleted batches are hidden from the normal Data History
+     * list but can be restored. Nothing is ever physically removed.
+     */
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
+    /** User who moved this batch to Trash (null while live). */
+    @Column(name = "deleted_by", length = 120)
+    private String deletedBy;
 }

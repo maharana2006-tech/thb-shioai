@@ -83,21 +83,75 @@ public class OrderImportController {
     public ResponseEntity<ApiResponse<OrderImportPreviewDTO>> save(
             @RequestBody List<OrderImportRowDTO> rows,
             @org.springframework.web.bind.annotation.RequestParam(required = false) String fileName,
+            @org.springframework.web.bind.annotation.RequestParam(required = false, defaultValue = "false") boolean draft,
             @AuthenticationPrincipal UserDetails userDetails) {
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
-        ApiResponse<OrderImportPreviewDTO> response = orderImportService.save(rows, username, fileName);
+        ApiResponse<OrderImportPreviewDTO> response = orderImportService.save(rows, username, fileName, draft);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    @Operation(summary = "List saved imports (Data History)")
+    @Operation(summary = "List saved imports (Data History)",
+            description = "Live imports by default; pass deleted=true for the Trash view.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/history")
-    public ResponseEntity<ApiResponse<java.util.List<com.multiship.backend.dto.ImportBatchDTO>>> history() {
+    public ResponseEntity<ApiResponse<java.util.List<com.multiship.backend.dto.ImportBatchDTO>>> history(
+            @RequestParam(required = false, defaultValue = "false") boolean deleted) {
+        java.util.List<com.multiship.backend.dto.ImportBatchDTO> data =
+                deleted ? orderImportService.deletedHistory() : orderImportService.history();
         return ResponseEntity.ok(ApiResponse.<java.util.List<com.multiship.backend.dto.ImportBatchDTO>>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
-                .message("Import history loaded.")
-                .data(orderImportService.history())
+                .message(deleted ? "Trash loaded." : "Import history loaded.")
+                .data(data)
                 .build());
+    }
+
+    @Operation(summary = "Soft-delete an import batch (move to Trash)")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @org.springframework.web.bind.annotation.DeleteMapping("/history/{id}")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> deleteBatch(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        String username = userDetails == null ? "unknown" : userDetails.getUsername();
+        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.softDeleteBatch(id, username);
+        if (dto == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import not found.").build());
+        }
+        return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message("Import moved to Trash.").data(dto).build());
+    }
+
+    @Operation(summary = "Restore a soft-deleted import batch from Trash")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/history/{id}/restore")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> restoreBatch(
+            @org.springframework.web.bind.annotation.PathVariable Long id) {
+        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.restoreBatch(id);
+        if (dto == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import not found.").build());
+        }
+        return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message("Import restored.").data(dto).build());
+    }
+
+    @Operation(summary = "Empty the Trash — permanently delete all soft-deleted imports",
+            description = "Irreversible. Hard-deletes every batch currently in Trash for the caller's tenant.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @org.springframework.web.bind.annotation.DeleteMapping("/history/trash")
+    public ResponseEntity<ApiResponse<Integer>> emptyTrash(
+            @AuthenticationPrincipal UserDetails userDetails) {
+        String username = userDetails == null ? "unknown" : userDetails.getUsername();
+        int purged = orderImportService.purgeTrash(username);
+        return ResponseEntity.ok(ApiResponse.<Integer>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message(purged == 1 ? "1 import permanently deleted."
+                        : purged + " imports permanently deleted.")
+                .data(purged).build());
     }
 
     @Operation(summary = "One saved import with its rows")

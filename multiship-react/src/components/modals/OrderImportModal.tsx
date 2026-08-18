@@ -9,6 +9,7 @@ import {
   FiFile,
   FiFileText,
   FiLoader,
+  FiSave,
   FiUploadCloud,
   FiX,
 } from 'react-icons/fi'
@@ -41,7 +42,6 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
   const [committing, setCommitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [downloadingXlsx, setDownloadingXlsx] = useState(false)
-  const [validating, setValidating] = useState<'data' | 'addresses' | null>(null)
   /** True while the debounced background re-validation is in flight. */
   const [autoValidating, setAutoValidating] = useState(false)
   /** Debounce timer + request sequence for edit-triggered validation. A
@@ -121,12 +121,14 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
     }
   }
 
-  const submitCommit = async () => {
+  // `draft=true` parks the batch (errors and all) as a work-in-progress; the
+  // default final save is server-rejected unless every row is valid.
+  const submitCommit = async (draft = false) => {
     if (!preview) return
     setCommitting(true)
     try {
       // Save the imported data to Data History — does NOT generate labels.
-      const response = await orderImportService.save(preview.rows, file?.name)
+      const response = await orderImportService.save(preview.rows, file?.name, draft)
       if (response.status === 'success' && response.data) {
         setCommittedSummary(response.data)
         notify.success(response.message ?? 'Saved.')
@@ -137,42 +139,6 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
       notify.apiError(e, 'Save failed.')
     } finally {
       setCommitting(false)
-    }
-  }
-
-  const runReValidate = async () => {
-    if (!preview) return
-    setValidating('data')
-    try {
-      const response = await orderImportService.validate(preview.rows)
-      if (response.status === 'success' && response.data) {
-        setPreview(response.data)
-        notify.success(response.message ?? 'Rows re-validated.')
-      } else {
-        notify.error(response.message ?? 'Validation failed.')
-      }
-    } catch (e) {
-      notify.apiError(e, 'Validation failed.')
-    } finally {
-      setValidating(null)
-    }
-  }
-
-  const runValidateAddresses = async () => {
-    if (!preview) return
-    setValidating('addresses')
-    try {
-      const response = await orderImportService.validateAddresses(preview.rows)
-      if (response.status === 'success' && response.data) {
-        setPreview(response.data)
-        notify.success(response.message ?? 'Addresses checked.')
-      } else {
-        notify.error(response.message ?? 'Address validation failed.')
-      }
-    } catch (e) {
-      notify.apiError(e, 'Address validation failed.')
-    } finally {
-      setValidating(null)
     }
   }
 
@@ -272,39 +238,38 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
               <>
                 <button
                   type="button"
-                  onClick={() => void runReValidate()}
-                  disabled={validating != null || committing}
+                  onClick={() => void submitCommit(true)}
+                  disabled={committing || preview.totalRows === 0 || autoValidating}
                   className={GHOST_BTN}
-                  title="Re-run required-field + name-code + international-item checks on the current row state."
+                  title="Park this import in Data History as a draft — rows with errors are held until you fix them."
                 >
-                  {validating === 'data' ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiCheckCircle className="h-3.5 w-3.5" />}
-                  {validating === 'data' ? 'Validating…' : 'Re-validate'}
+                  {committing ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiSave className="h-3.5 w-3.5" />}
+                  Save as draft
                 </button>
                 <button
                   type="button"
-                  onClick={() => void runValidateAddresses()}
-                  disabled={validating != null || committing}
-                  className={GHOST_BTN}
-                  title="Address-check every row against its picked carrier's own validation API."
-                >
-                  {validating === 'addresses' ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiCheckCircle className="h-3.5 w-3.5" />}
-                  {validating === 'addresses' ? 'Checking…' : 'Validate addresses'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void submitCommit()}
-                  disabled={committing || preview.totalRows === 0 || validating != null || autoValidating}
+                  onClick={() => void submitCommit(false)}
+                  disabled={
+                    committing ||
+                    preview.totalRows === 0 ||
+                    preview.invalidRows > 0 ||
+                    autoValidating
+                  }
                   className={PRIMARY_BTN}
                   title={
                     autoValidating
                       ? 'Waiting for validation of your edits…'
                       : preview.invalidRows > 0
-                        ? `${preview.validRows} ready to generate · ${preview.invalidRows} saved but held until fixed`
+                        ? `Fix ${preview.invalidRows} row(s) with errors, or use "Save as draft".`
                         : undefined
                   }
                 >
                   {committing ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiCheckCircle className="h-3.5 w-3.5" />}
-                  {committing ? 'Saving…' : `Save all ${preview.totalRows} row(s)`}
+                  {committing
+                    ? 'Saving…'
+                    : preview.invalidRows > 0
+                      ? `Fix ${preview.invalidRows} row(s) to save`
+                      : `Save all ${preview.totalRows} row(s)`}
                 </button>
               </>
             ) : null}
@@ -804,15 +769,8 @@ function CommittedStep({ summary }: { summary: OrderImportPreview }) {
         </span>
         <p className="mt-3 text-[14px] font-semibold text-[#1f150c]">{summary.totalRows} row(s) saved to history</p>
         <p className="mt-1 text-[11.5px] text-[#5a4526]">
-          Saved to <span className="font-semibold">Data history</span> — no labels were generated.
-          {summary.invalidRows > 0 ? (
-            <>
-              {' '}
-              <span className="font-semibold text-emerald-700">{summary.validRows} ready to generate</span>
-              {' · '}
-              <span className="font-semibold text-amber-700">{summary.invalidRows} held until fixed</span>.
-            </>
-          ) : null}
+          Saved to <span className="font-semibold">Data history</span> — no labels were generated.{' '}
+          <span className="font-semibold text-emerald-700">All {summary.validRows} rows ready to generate</span>.
         </p>
         {summary.batchId != null ? (
           <p className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-1 text-[10.5px] font-bold uppercase tracking-[0.1em] text-emerald-800">

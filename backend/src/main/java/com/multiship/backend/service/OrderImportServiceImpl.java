@@ -1212,7 +1212,8 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     // ── Save to Data History (persist the imported data, no labels) ──────────
     @Override
-    public ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy, String fileName) {
+    public ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy,
+                                                   String fileName, boolean draft) {
         List<OrderImportRowDTO> safe = rows == null ? java.util.List.of() : rows;
         // Sprint 50 Tier 0.5 PR G — clamp before we persist rowsJson so a
         // scoped USER can't seed the import_batch table with foreign
@@ -1221,24 +1222,61 @@ public class OrderImportServiceImpl implements OrderImportService {
             row.setClientCode(clamp(row.getClientCode()));
         }
         int total = safe.size();
+
+        // Re-run the full validation pipeline server-side (never trust the
+        // client-sent errors) so the persisted per-row state is authoritative.
+        for (OrderImportRowDTO row : safe) {
+            row.setErrors(validateRow(row));
+            row.setWarnings(List.of());
+        }
+        resolveNamesToCodes(safe);
+        validateReferences(safe);
+        validateBusinessRules(safe);
+        validateCustomFields(safe);
+        validateInternationalItems(safe);
+
         int invalid = (int) safe.stream()
                 .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
                 .count();
         int saved = total - invalid;
-        // Freshly saved data has no labels yet → INITIATE. Status advances to
-        // IN_PROGRESS / COMPLETE / PARTIAL_COMPLETE when the operator later
-        // runs "Generate labels" on this batch from Data History.
-        String status = "INITIATE";
-        // Sprint 51 — forgiving save: the *whole* batch is persisted so the
-        // operator never loses their upload. Each row is stamped with its
-        // fate so the history and generate step can act on it:
+
+        // Sprint 51 — two save modes:
+        //   final (draft=false) — REFUSE (422) unless every row is valid.
+        //   draft (draft=true)  — park the whole batch even with bad rows so
+        //                         the operator never loses work-in-progress.
+        if (!draft && invalid > 0) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Can't save — " + invalid + " of " + total
+                    + " row(s) still have errors. Fix every row, or use \"Save as draft\".");
+        }
+
+        // A draft that still has bad rows is parked as DRAFT; a clean batch
+        // (final save, or a draft that happens to be error-free) starts its
+        // label lifecycle at INITIATE. Each row carries its own fate:
         //   SAVED     — clean, ready to generate a label.
-        //   NEEDS_FIX — has errors; held in history until corrected. The
-        //               strict commit()/generate path skips these until the
-        //               operator reopens the batch and clears the errors.
+        //   NEEDS_FIX — has errors; held in a draft until corrected.
+        String status = (draft && invalid > 0) ? "DRAFT" : "INITIATE";
         for (OrderImportRowDTO r : safe) {
             boolean clean = r.getErrors() == null || r.getErrors().isEmpty();
             r.setGeneratedStatus(clean ? "SAVED" : "NEEDS_FIX");
+        }
+
+        // Sprint 51 — reject re-uploading the same file. Hash the row DATA (not
+        // transient validation state), so an identical file is blocked even if
+        // renamed, while a file the operator has actually edited hashes
+        // differently and imports fine.
+        String contentHash = contentHash(safe);
+        if (contentHash != null && importBatchRepository != null) {
+            com.multiship.backend.model.ImportBatch dup = importBatchRepository
+                    .findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(contentHash).orElse(null);
+            if (dup != null) {
+                String dupName = StringUtils.hasText(dup.getFileName()) ? dup.getFileName() : "Untitled";
+                return failure(HttpStatus.CONFLICT,
+                        "This file was already imported as #" + dup.getId()
+                        + " (" + dupName + ")"
+                        + (dup.getCreatedAt() != null ? " on " + dup.getCreatedAt().toLocalDate() : "")
+                        + ". Edit a value or upload a different file to import a changed version.");
+            }
         }
 
         Long batchId = null;
@@ -1251,6 +1289,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             batch.setTotalRows(total);
             batch.setSavedRows(saved);
             batch.setInvalidRows(invalid);
+            batch.setContentHash(contentHash);
             try {
                 batch.setRowsJson(importObjectMapper != null
                         ? importObjectMapper.writeValueAsString(safe) : "[]");
@@ -1261,8 +1300,11 @@ public class OrderImportServiceImpl implements OrderImportService {
             batchId = batch.getId();
         }
 
-        log.info("Order import save ({}): {} saved, {} invalid → batch {}",
-                requestedBy, saved, invalid, batchId);
+        log.info("Order import {} ({}): {} saved, {} invalid → batch {}",
+                draft ? "draft-save" : "save", requestedBy, saved, invalid, batchId);
+        String message = (draft && invalid > 0)
+                ? "Draft saved to history · " + saved + " ready, " + invalid + " still need fixing"
+                : total + " row(s) saved to history · all ready to generate";
         return success(OrderImportPreviewDTO.builder()
                         .totalRows(total)
                         .validRows(saved)
@@ -1270,24 +1312,32 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .batchId(batchId == null ? null : batchId.intValue())
                         .rows(safe)
                         .build(),
-                total + " row(s) saved to history"
-                        + (invalid > 0
-                                ? " · " + saved + " ready, " + invalid + " need fixing"
-                                : ""));
+                message);
     }
 
     @Override
     public java.util.List<com.multiship.backend.dto.ImportBatchDTO> history() {
         if (importBatchRepository == null) return java.util.List.of();
-        // Sprint 50 Tier 0.5 PR G — filter to the caller's tenant when
-        // scoped. ImportBatch has no direct tenant column so we derive
-        // membership from the first non-blank clientCode in the payload
-        // (all rows in one save() call share the same clamped code).
-        // Operators (resolveScope empty) see everything.
+        return summariesFor(importBatchRepository.findAllByDeletedAtIsNullOrderByIdDesc());
+    }
+
+    @Override
+    public java.util.List<com.multiship.backend.dto.ImportBatchDTO> deletedHistory() {
+        if (importBatchRepository == null) return java.util.List.of();
+        return summariesFor(importBatchRepository.findAllByDeletedAtIsNotNullOrderByIdDesc());
+    }
+
+    /** Map batches to summary DTOs, applying the caller's tenant scope.
+     *  Sprint 50 Tier 0.5 PR G — ImportBatch has no direct tenant column so we
+     *  derive membership from the first non-blank clientCode in the payload
+     *  (all rows in one save() call share the same clamped code). Operators
+     *  (resolveScope empty) see everything. */
+    private java.util.List<com.multiship.backend.dto.ImportBatchDTO> summariesFor(
+            java.util.List<com.multiship.backend.model.ImportBatch> batches) {
         java.util.Optional<String> scope = tenantScope == null
                 ? java.util.Optional.empty()
                 : tenantScope.resolveScope();
-        return importBatchRepository.findAllByOrderByIdDesc().stream()
+        return batches.stream()
                 .filter(b -> {
                     if (scope.isEmpty()) return true;
                     String owner = firstClientCode(parseBatchRows(b));
@@ -1303,8 +1353,65 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .totalRows(b.getTotalRows())
                         .savedRows(b.getSavedRows())
                         .invalidRows(b.getInvalidRows())
+                        .deletedAt(b.getDeletedAt() == null ? null : b.getDeletedAt().toString())
+                        .deletedBy(b.getDeletedBy())
                         .build())
                 .toList();
+    }
+
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO softDeleteBatch(Long id, String requestedBy) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
+        if (b == null) return null;
+        // Tenant boundary — a scoped USER may only delete a batch their tenant owns.
+        requireMatch(firstClientCode(parseBatchRows(b)));
+        if (b.getDeletedAt() == null) {              // idempotent: skip if already trashed
+            b.setDeletedAt(java.time.LocalDateTime.now());
+            b.setDeletedBy(requestedBy);
+            b = importBatchRepository.save(b);
+            log.info("Import batch {} soft-deleted by {}", id, requestedBy);
+        }
+        return toBatchDTO(b, parseBatchRows(b));
+    }
+
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO restoreBatch(Long id) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
+        if (b == null) return null;
+        requireMatch(firstClientCode(parseBatchRows(b)));
+        if (b.getDeletedAt() != null) {
+            b.setDeletedAt(null);
+            b.setDeletedBy(null);
+            b = importBatchRepository.save(b);
+            log.info("Import batch {} restored from Trash", id);
+        }
+        return toBatchDTO(b, parseBatchRows(b));
+    }
+
+    @Override
+    public int purgeTrash(String requestedBy) {
+        if (importBatchRepository == null) return 0;
+        // Only purge batches this tenant may see — reuse the same scope filter
+        // as the Trash list so a scoped USER can never wipe another tenant's
+        // deleted imports.
+        java.util.Optional<String> scope = tenantScope == null
+                ? java.util.Optional.empty()
+                : tenantScope.resolveScope();
+        java.util.List<com.multiship.backend.model.ImportBatch> toPurge =
+                importBatchRepository.findAllByDeletedAtIsNotNullOrderByIdDesc().stream()
+                        .filter(b -> {
+                            if (scope.isEmpty()) return true;
+                            String owner = firstClientCode(parseBatchRows(b));
+                            return owner != null && scope.get().equalsIgnoreCase(owner.trim());
+                        })
+                        .toList();
+        if (!toPurge.isEmpty()) {
+            importBatchRepository.deleteAll(toPurge);
+            log.info("Trash emptied by {} — {} batch(es) permanently deleted", requestedBy, toPurge.size());
+        }
+        return toPurge.size();
     }
 
     @Override
@@ -1388,10 +1495,13 @@ public class OrderImportServiceImpl implements OrderImportService {
         int failed = (int) rows.stream()
                 .filter(r -> "FAILED".equalsIgnoreCase(r.getGeneratedStatus()))
                 .count();
+        int invalid = (int) rows.stream()
+                .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
+                .count();
 
         // savedRows/invalidRows keep their data-validity meaning from save();
         // label progress is conveyed by the status + the per-row Label column.
-        batch.setStatus(deriveGenerationStatus(total, generated, failed));
+        batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
         // commit() stamps every generated row with the shared label batchId;
         // lift it onto the import so the file row shows which All-Orders batch
         // its labels belong to. Keep any prior id if this run generated none.
@@ -1465,7 +1575,10 @@ public class OrderImportServiceImpl implements OrderImportService {
         int failed = (int) rows.stream()
                 .filter(r -> "FAILED".equalsIgnoreCase(r.getGeneratedStatus()))
                 .count();
-        batch.setStatus(deriveGenerationStatus(total, generated, failed));
+        int invalid = (int) rows.stream()
+                .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
+                .count();
+        batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
         Integer labelBatchId = firstBatchId(rows);
         if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
         try {
@@ -1565,7 +1678,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         batch.setTotalRows(total);
         batch.setSavedRows(total - invalid);
         batch.setInvalidRows(invalid);
-        batch.setStatus(deriveGenerationStatus(total, generated, failed));
+        batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
         try {
             if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
         } catch (Exception ex) {
@@ -1587,11 +1700,14 @@ public class OrderImportServiceImpl implements OrderImportService {
      *   FAILED           — every row was attempted and all failed
      *   PARTIAL_COMPLETE — some labels made, or some rows still pending
      */
-    private String deriveGenerationStatus(int total, int generated, int failed) {
+    private String deriveGenerationStatus(int total, int generated, int failed, int invalid) {
         if (total == 0) return "INITIATE";
         if (generated == total) return "COMPLETE";
         if (failed == total) return "FAILED";
-        if (generated == 0 && failed == 0) return "INITIATE";
+        // Nothing has generated or failed yet: a batch still carrying bad rows
+        // stays a DRAFT (work-in-progress); an all-clean batch is INITIATE
+        // (ready to generate).
+        if (generated == 0 && failed == 0) return invalid > 0 ? "DRAFT" : "INITIATE";
         return "PARTIAL_COMPLETE";
     }
 
@@ -1619,6 +1735,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .totalRows(batch.getTotalRows())
                 .savedRows(batch.getSavedRows())
                 .invalidRows(batch.getInvalidRows())
+                .deletedAt(batch.getDeletedAt() == null ? null : batch.getDeletedAt().toString())
+                .deletedBy(batch.getDeletedBy())
                 .rows(rows)
                 .build();
     }
@@ -2344,6 +2462,40 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (!StringUtils.hasText(s)) return null;
         try { return new BigDecimal(s.trim().replace(",", "")); }
         catch (NumberFormatException ex) { return null; }
+    }
+
+    /** SHA-256 over the row DATA fields (ignoring errors/warnings/generated
+     *  status), so two uploads of the same file collide even if renamed, while
+     *  an edited file hashes differently. Null when hashing is unavailable —
+     *  callers then skip the duplicate guard rather than block. */
+    private static String contentHash(List<OrderImportRowDTO> rows) {
+        if (rows == null || rows.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder(rows.size() * 64);
+        for (OrderImportRowDTO r : rows) {
+            String[] fields = {
+                r.getOrderRef(), r.getClientCode(), r.getBillTo(), r.getWarehouseCode(),
+                r.getRecipientName(), r.getRecipientCompany(), r.getRecipientPhone(), r.getRecipientEmail(),
+                r.getAddressLine1(), r.getAddressLine2(), r.getCity(), r.getState(),
+                r.getPostalCode(), r.getCountryCode(), r.getCarrierCode(), r.getAccountNumber(),
+                r.getServiceType(), r.getPackageType(), String.valueOf(r.getWeight()), r.getWeightUnit(),
+                r.getCurrency(), r.getReference(), r.getItemDescription(), r.getItemSku(),
+                String.valueOf(r.getItemQuantity()), String.valueOf(r.getItemUnitValue()),
+                r.getHsCode(), r.getCountryOfOrigin(),
+                r.getCustomFields() == null ? "" : new java.util.TreeMap<>(r.getCustomFields()).toString(),
+            };
+            for (String f : fields) sb.append(f == null ? "" : f.trim()).append('');
+            sb.append('');
+        }
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : digest) hex.append(Character.forDigit((b >> 4) & 0xF, 16))
+                                     .append(Character.forDigit(b & 0xF, 16));
+            return hex.toString();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
