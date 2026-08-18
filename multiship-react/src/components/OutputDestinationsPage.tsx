@@ -293,6 +293,14 @@ function DestinationEditorDialog({
   /** Whether a knownHosts pointer is already stored (masked to "***set***"
    *  by the DTO). Drives the placeholder hint on the edit form. */
   const hasKnownHosts = Boolean(existingConfig.knownHostsSecretId)
+  /** Audit R2 #348 — same pattern for password + private key. Pre-fix, the
+   *  edit form had no signal that a secret was already stored, so operators
+   *  editing (e.g., just to toggle Active) could think the destination had
+   *  no credentials and try to Test before entering one. The DTO masks these
+   *  pointers as the literal string "***set***" — non-empty presence tells
+   *  us a secret exists without leaking anything. */
+  const hasPassword = Boolean(existingConfig.passwordSecretId)
+  const hasPrivateKey = Boolean(existingConfig.privateKeySecretId)
   const [printerHost, setPrinterHost] = useState<string>((existingConfig.host as string) ?? '')
   const [printerPort, setPrinterPort] = useState<string>(String(existingConfig.port ?? ''))
   const [printerProtocol, setPrinterProtocol] = useState<string>(
@@ -484,11 +492,21 @@ function DestinationEditorDialog({
               {sftpAuthType === 'PASSWORD' ? (
                 <label className="block text-[12.5px] font-semibold text-slate-700">
                   Password
+                  {/* Audit R2 #348 — hasPassword flag surfaces the stored-
+                      credential state so operators editing (e.g., just to
+                      toggle Active) know they don't have to re-enter. */}
+                  {hasPassword ? (
+                    <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700 ring-1 ring-emerald-100">
+                      stored
+                    </span>
+                  ) : null}
                   <input
                     type="password"
                     value={sftpPassword}
                     onChange={(e) => setSftpPassword(e.target.value)}
-                    placeholder={existing ? '(leave blank to keep existing)' : ''}
+                    placeholder={hasPassword
+                      ? '(a password is stored — leave blank to keep, or paste new to replace)'
+                      : (existing ? '(leave blank to keep existing)' : '')}
                     autoComplete="new-password"
                     className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 text-[13px]"
                   />
@@ -499,10 +517,18 @@ function DestinationEditorDialog({
               ) : (
                 <label className="block text-[12.5px] font-semibold text-slate-700">
                   Private key (PEM)
+                  {/* Audit R2 #348 — mirror the hasPassword indicator for KEY auth. */}
+                  {hasPrivateKey ? (
+                    <span className="ml-2 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700 ring-1 ring-emerald-100">
+                      stored
+                    </span>
+                  ) : null}
                   <textarea
                     value={sftpPrivateKey}
                     onChange={(e) => setSftpPrivateKey(e.target.value)}
-                    placeholder={existing ? '(leave blank to keep existing)' : ''}
+                    placeholder={hasPrivateKey
+                      ? '(a private key is stored — leave blank to keep, or paste new to replace)'
+                      : (existing ? '(leave blank to keep existing)' : '')}
                     rows={4}
                     className="mt-1 block w-full rounded-md border border-slate-300 px-2 py-1.5 font-mono text-[11.5px]"
                   />

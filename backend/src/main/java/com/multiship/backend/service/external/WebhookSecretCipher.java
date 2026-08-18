@@ -58,7 +58,9 @@ public class WebhookSecretCipher {
     public void encryptOnSave(ExternalWebhookSubscription subscription, String plaintext) {
         if (plaintext == null || plaintext.isBlank()) return;
         if (!cryptoService.isAvailable()) {
-            throw new IllegalStateException(
+            // Audit R2 #347 — dedicated exception (shared with SFTP secret
+            // path) so callers can shape a clean 503 CRYPTO_UNAVAILABLE.
+            throw new com.multiship.backend.config.CryptoUnavailableException(
                     "SECRETS_ENCRYPTION_KEY is not configured; refusing to persist a "
                     + "webhook subscription with a plaintext secret. Set the env var "
                     + "to a base64 32-byte AES-256 key and retry.");

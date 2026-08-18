@@ -85,8 +85,88 @@ class OutputDestinationAdminServiceTest {
                 new com.multiship.backend.service.external.WebhookUrlValidator();
         org.springframework.test.util.ReflectionTestUtils.setField(urlValidator, "allowPrivateNetworks", true);
         org.springframework.test.util.ReflectionTestUtils.setField(urlValidator, "allowHttp", true);
+        // Audit R2 #345 — new ClientRepository dep; default mock allows
+        // any clientCode so pre-existing fixtures don't need a seeded
+        // client row. Individual tests can override for negative cases.
+        clientRepo = mock(com.multiship.backend.repository.ClientRepository.class);
+        when(clientRepo.existsByClientCodeIgnoreCase(anyString())).thenReturn(true);
         admin = new OutputDestinationAdminService(destinationRepo, systemSettingRepo,
-                cryptoService, mapper, outputService, new TestPayloadFactory(), urlValidator);
+                cryptoService, mapper, outputService, clientRepo,
+                new TestPayloadFactory(), urlValidator);
+    }
+
+    /** Audit R2 #345 — shared mock so tests can override for the
+     *  unknown-client rejection path. */
+    private com.multiship.backend.repository.ClientRepository clientRepo;
+
+    @Test
+    void createRejectsUnknownClientCode_R2_345() {
+        // Audit R2 #345 — pre-fix, admin typo in clientCode silently created
+        // a dangling destination (dispatch queries by exact code → never
+        // fires). Now the save fails fast with the actual code echoed.
+        when(clientRepo.existsByClientCodeIgnoreCase("GHOST")).thenReturn(false);
+        OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
+                .clientCode("GHOST").docType(DocType.LABEL)
+                .destinationType(DestinationType.LOCAL_FS)
+                .config("{\"path\":\"/tmp/labels\"}")
+                .active(true).build();
+
+        IllegalArgumentException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class, () -> admin.create(req, "alice"));
+        assertTrue(ex.getMessage().contains("GHOST"),
+                "expected error to name the missing client, got: " + ex.getMessage());
+    }
+
+    @Test
+    void updateSftpPasswordToKeyWithoutMaterial_isRejected_R2_346() {
+        // Audit R2 #346 — switching authType from PASSWORD to KEY without
+        // supplying a new private key would leave the config with no auth
+        // pointer at all. Save now fails-fast with actionable text.
+        ClientOutputDestination existing = ClientOutputDestination.builder()
+                .id(7L).clientCode("ACME").docType(DocType.LABEL)
+                .destinationType(DestinationType.SFTP)
+                .config("{\"host\":\"sftp.example.com\",\"authType\":\"PASSWORD\","
+                        + "\"passwordSecretId\":\"sftp.secret.ACME.password.abc\"}")
+                .active(true).build();
+        when(destinationRepo.findById(7L)).thenReturn(Optional.of(existing));
+
+        OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
+                .clientCode("ACME").docType(DocType.LABEL)
+                .destinationType(DestinationType.SFTP)
+                .config("{\"host\":\"sftp.example.com\",\"authType\":\"KEY\"}")
+                // No sftpPrivateKeyPlain → processConfig drops the password
+                // pointer (authType changed) and the key pointer stays null.
+                .active(true).build();
+
+        IllegalArgumentException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class, () -> admin.update(7L, req, "alice"));
+        assertTrue(ex.getMessage().toLowerCase().contains("password or a private key"),
+                "expected auth-material message, got: " + ex.getMessage());
+    }
+
+    @Test
+    void createSftpWithNoCrypto_throwsCryptoUnavailable_R2_347() {
+        // Audit R2 #347 — pre-fix, writeSecret's IllegalStateException
+        // bubbled up as generic 500. Now a dedicated exception the
+        // controller catches + serves as 503 CRYPTO_UNAVAILABLE.
+        when(cryptoService.isAvailable()).thenReturn(false);
+        // Use a literal IP so we don't depend on DNS in the test env; the
+        // setUp flipped allowPrivateNetworks=true so 127.0.0.1 passes the
+        // SSRF guard and we hit the crypto check on writeSecret.
+        OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
+                .clientCode("ACME").docType(DocType.LABEL)
+                .destinationType(DestinationType.SFTP)
+                .config("{\"host\":\"127.0.0.1\",\"authType\":\"PASSWORD\","
+                        + "\"username\":\"acme\"}")
+                .sftpPasswordPlain("s3cr3t")
+                .active(true).build();
+
+        com.multiship.backend.config.CryptoUnavailableException ex =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        com.multiship.backend.config.CryptoUnavailableException.class,
+                        () -> admin.create(req, "alice"));
+        assertTrue(ex.getMessage().contains("SECRETS_ENCRYPTION_KEY"),
+                "expected env-var name in message, got: " + ex.getMessage());
     }
 
     @Test
@@ -99,9 +179,11 @@ class OutputDestinationAdminServiceTest {
         com.multiship.backend.service.external.WebhookUrlValidator strictValidator =
                 new com.multiship.backend.service.external.WebhookUrlValidator();
         // leave both env flags off — strict defaults
+        // Reuse the setUp() clientRepo (all-allow) so the SSRF test isn't
+        // blocked by the client-existence guard.
         OutputDestinationAdminService strictAdmin = new OutputDestinationAdminService(
                 destinationRepo, systemSettingRepo, cryptoService, mapper, outputService,
-                new TestPayloadFactory(), strictValidator);
+                clientRepo, new TestPayloadFactory(), strictValidator);
 
         OutputDestinationUpsertRequest req = OutputDestinationUpsertRequest.builder()
                 .clientCode("ACME").docType(DocType.LABEL)
