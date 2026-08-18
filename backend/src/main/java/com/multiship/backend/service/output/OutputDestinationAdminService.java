@@ -44,6 +44,9 @@ public class OutputDestinationAdminService {
     private final CryptoService cryptoService;
     private final ObjectMapper objectMapper;
     private final OutputDestinationService outputDestinationService;
+    /** Audit R2 #345 — client-existence guard so an admin typo in
+     *  clientCode doesn't silently create a dangling destination. */
+    private final com.multiship.backend.repository.ClientRepository clientRepository;
     /** Sprint 52 output-polish (follow-up #3) — realistic per-type payloads. */
     private final TestPayloadFactory testPayloadFactory;
     /** Audit R2 #344 — SSRF guard. Reuses the same private-network + cloud-
@@ -71,6 +74,7 @@ public class OutputDestinationAdminService {
     @Transactional
     public OutputDestinationDTO create(OutputDestinationUpsertRequest req, String actor) {
         validateHostForSsrf(req);
+        validateClientExists(req);
         ClientOutputDestination entity = ClientOutputDestination.builder()
                 .clientCode(req.getClientCode().trim())
                 .docType(req.getDocType())
@@ -79,6 +83,7 @@ public class OutputDestinationAdminService {
                 .active(req.isActive())
                 .notes(req.getNotes())
                 .build();
+        validateAuthPointersForSftp(entity);
         entity = destinationRepository.save(entity);
         log.info("OutputDestination created id={} client={} docType={} destType={} by={}",
                 entity.getId(), entity.getClientCode(), entity.getDocType(),
@@ -89,6 +94,7 @@ public class OutputDestinationAdminService {
     @Transactional
     public Optional<OutputDestinationDTO> update(Long id, OutputDestinationUpsertRequest req, String actor) {
         validateHostForSsrf(req);
+        validateClientExists(req);
         return destinationRepository.findById(id).map(entity -> {
             entity.setClientCode(req.getClientCode().trim());
             entity.setDocType(req.getDocType());
@@ -97,9 +103,56 @@ public class OutputDestinationAdminService {
             entity.setActive(req.isActive());
             entity.setNotes(req.getNotes());
             entity.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
+            validateAuthPointersForSftp(entity);
             log.info("OutputDestination updated id={} by={}", entity.getId(), actor);
             return toDto(entity);
         });
+    }
+
+    /**
+     * Audit R2 #345 — client-existence guard. Pre-fix, an admin typo in
+     * clientCode created a dangling destination that never fired (dispatch
+     * queries by exact clientCode); the error surfaced months later when
+     * the client asked why SFTP wasn't working. Now the save fails-fast
+     * with the actual client code echoed.
+     */
+    private void validateClientExists(OutputDestinationUpsertRequest req) {
+        String clientCode = req.getClientCode() == null ? "" : req.getClientCode().trim();
+        if (clientCode.isEmpty()) return;  // blank handled elsewhere by @NotBlank
+        if (!clientRepository.existsByClientCodeIgnoreCase(clientCode)) {
+            throw new IllegalArgumentException(
+                    "Client " + clientCode + " was not found. Create the client first, "
+                            + "or fix the code (case-insensitive match).");
+        }
+    }
+
+    /**
+     * Audit R2 #346 — reject SFTP saves that end up with neither a
+     * passwordSecretId nor a privateKeySecretId after processConfig runs.
+     * Pre-fix, the PASSWORD → KEY switch without new key material
+     * silently produced an unusable entity (dispatch would fail with
+     * a generic auth error). Now the save fails at 400 with actionable
+     * text so the operator re-enters the missing material.
+     *
+     * <p>Only applies to SFTP — LOCAL_FS + PRINTER have no auth pointers.
+     */
+    private void validateAuthPointersForSftp(ClientOutputDestination entity) {
+        if (entity.getDestinationType() != DestinationType.SFTP) return;
+        try {
+            JsonNode cfg = objectMapper.readTree(entity.getConfig());
+            String pwdId = str(cfg, "passwordSecretId");
+            String keyId = str(cfg, "privateKeySecretId");
+            if (pwdId == null && keyId == null) {
+                throw new IllegalArgumentException(
+                        "SFTP destinations require either a password or a private key. "
+                                + "Switching auth types without providing the new material "
+                                + "leaves the destination unusable — please enter it now.");
+            }
+        } catch (IllegalArgumentException iae) {
+            throw iae;
+        } catch (Exception parseErr) {
+            // processConfig already surfaces parse errors; don't double-wrap.
+        }
     }
 
     @Transactional
@@ -245,6 +298,12 @@ public class OutputDestinationAdminService {
             }
 
             return objectMapper.writeValueAsString(config);
+        } catch (com.multiship.backend.config.CryptoUnavailableException crypto) {
+            // Audit R2 #347 — let this propagate so the controller can shape
+            // a clean 503 CRYPTO_UNAVAILABLE. Pre-fix it was swallowed by the
+            // Exception catch below and re-thrown as IllegalArgumentException,
+            // masking the real cause behind a generic "invalid config JSON".
+            throw crypto;
         } catch (Exception ex) {
             throw new IllegalArgumentException("invalid config JSON: " + ex.getMessage(), ex);
         }
@@ -252,8 +311,12 @@ public class OutputDestinationAdminService {
 
     private String writeSecret(String clientCode, String kind, String plaintext, String actor) {
         if (!cryptoService.isAvailable()) {
-            throw new IllegalStateException(
-                    "SECRETS_ENCRYPTION_KEY is not configured; refusing to store SFTP secret in plaintext");
+            // Audit R2 #347 — dedicated exception so the controller can
+            // shape a clean 503 CRYPTO_UNAVAILABLE (was IllegalStateException
+            // → generic 500 with no hint about the missing env var).
+            throw new com.multiship.backend.config.CryptoUnavailableException(
+                    "SECRETS_ENCRYPTION_KEY is not configured; refusing to store SFTP secret in plaintext. "
+                            + "Set the env var to a base64-encoded 32-byte value and retry.");
         }
         String key = SFTP_SECRET_PREFIX + clientCode + "." + kind + "." + UUID.randomUUID();
         SystemSetting row = new SystemSetting();

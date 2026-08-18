@@ -18,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -68,8 +69,13 @@ class OutputDestinationAdminServiceTestDispatchTest {
                 new com.multiship.backend.service.external.WebhookUrlValidator();
         org.springframework.test.util.ReflectionTestUtils.setField(urlValidator, "allowPrivateNetworks", true);
         org.springframework.test.util.ReflectionTestUtils.setField(urlValidator, "allowHttp", true);
+        // Audit R2 #345 — new ClientRepository dep; mock allows all.
+        com.multiship.backend.repository.ClientRepository clientRepo =
+                mock(com.multiship.backend.repository.ClientRepository.class);
+        when(clientRepo.existsByClientCodeIgnoreCase(anyString())).thenReturn(true);
         admin = new OutputDestinationAdminService(destinationRepo, systemSettingRepo,
-                cryptoService, mapper, outputService, new TestPayloadFactory(), urlValidator);
+                cryptoService, mapper, outputService, clientRepo,
+                new TestPayloadFactory(), urlValidator);
     }
 
     private ClientOutputDestination stubDest(Long id, DestinationType type, DocType doc, String config) {

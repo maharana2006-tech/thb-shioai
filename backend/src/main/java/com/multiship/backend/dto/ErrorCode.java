@@ -44,6 +44,11 @@ public enum ErrorCode {
      *  endpoint (invite preview / email verify). Response carries
      *  Retry-After seconds. */
     PUBLIC_AUTH_RATE_LIMITED,
+    /** Audit R2 #347 — SECRETS_ENCRYPTION_KEY env var is unset so the
+     *  server cannot encrypt secrets at rest (SFTP passwords, HMAC
+     *  webhook secrets). Returned as 503 with an operator-actionable
+     *  message naming the env var. */
+    CRYPTO_UNAVAILABLE,
     /** Signup / invite payload missing the required clientCode. */
     CLIENT_CODE_REQUIRED,
 

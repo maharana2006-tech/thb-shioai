@@ -65,7 +65,10 @@ public class OutputDestinationAdminController {
 
     @Operation(summary = "Create an output destination",
             description = "SFTP password / private-key material must be submitted as `sftpPasswordPlain` / `sftpPrivateKeyPlain`; the server encrypts + stores it and swaps in a pointer id on the saved config. "
-                    + "Audit R2 #344 — SSRF-guarded: SFTP/PRINTER hosts that resolve to private / loopback / link-local ranges or a cloud-metadata endpoint are rejected at 400.")
+                    + "Audit R2 #344 — SSRF-guarded: SFTP/PRINTER hosts that resolve to private / loopback / link-local ranges or a cloud-metadata endpoint are rejected at 400. "
+                    + "Audit R2 #345 — unknown clientCode rejected at 400. "
+                    + "Audit R2 #346 — SFTP save that leaves no auth pointer rejected at 400. "
+                    + "Audit R2 #347 — missing SECRETS_ENCRYPTION_KEY env var → 503 CRYPTO_UNAVAILABLE.")
     @PostMapping
     public ResponseEntity<ApiResponse<OutputDestinationDTO>> create(
             @Valid @RequestBody OutputDestinationUpsertRequest req,
@@ -75,8 +78,11 @@ public class OutputDestinationAdminController {
             return ResponseEntity.status(201).body(ApiResponse.<OutputDestinationDTO>builder()
                     .status("SUCCESS").code(201).timestamp(LocalDateTime.now())
                     .message("Destination created.").data(dto).build());
+        } catch (com.multiship.backend.config.CryptoUnavailableException crypto) {
+            return cryptoUnavailableResponse(crypto);
         } catch (IllegalArgumentException ex) {
-            // Audit R2 #344 — SSRF guard + processConfig parse errors both
+            // Audit R2 #344/#345/#346 — SSRF guard, client-existence guard,
+            // auth-material guard, and processConfig parse errors all
             // surface as IllegalArgumentException. 400 with the actual reason
             // so ops sees the block hint immediately.
             return ResponseEntity.badRequest().body(
@@ -85,7 +91,7 @@ public class OutputDestinationAdminController {
     }
 
     @Operation(summary = "Update an output destination",
-            description = "Audit R2 #344 — SSRF-guarded on the same rules as create.")
+            description = "Audit R2 #344/#345/#346/#347 — same guards as create.")
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<OutputDestinationDTO>> update(
             @PathVariable Long id,
@@ -99,10 +105,21 @@ public class OutputDestinationAdminController {
                     .orElseGet(() -> ResponseEntity.status(404).body(
                             err(ErrorCode.OUTPUT_DESTINATION_NOT_FOUND, 404,
                                     "Destination " + id + " not found.")));
+        } catch (com.multiship.backend.config.CryptoUnavailableException crypto) {
+            return cryptoUnavailableResponse(crypto);
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(
                     err(ErrorCode.VALIDATION_ERROR, 400, ex.getMessage()));
         }
+    }
+
+    /** Audit R2 #347 — 503 with the actual env-var name so ops can act. */
+    private static ResponseEntity<ApiResponse<OutputDestinationDTO>> cryptoUnavailableResponse(
+            com.multiship.backend.config.CryptoUnavailableException ex) {
+        return ResponseEntity.status(503).body(ApiResponse.<OutputDestinationDTO>builder()
+                .status("ERROR").code(503).timestamp(LocalDateTime.now())
+                .errorCode(ErrorCode.CRYPTO_UNAVAILABLE.name())
+                .message(ex.getMessage()).build());
     }
 
     @Operation(summary = "Delete an output destination",
