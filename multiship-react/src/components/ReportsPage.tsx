@@ -120,10 +120,26 @@ function DataExplorer({ clients }: { clients: Client[] }) {
     }
   }
 
+  // Audit R2 #365 — 8 filter inputs with no reset was tedious to clear.
+  // Only render the button when at least one filter is populated so it
+  // stays a low-noise affordance.
+  const anyFilter = Object.values(filters).some((v) => v !== undefined && v !== null && v !== '')
+
   return (
     <div className="space-y-4">
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="mb-3 text-[13px] font-semibold text-slate-900">Filters</h3>
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-[13px] font-semibold text-slate-900">Filters</h3>
+          {anyFilter ? (
+            <button
+              type="button"
+              onClick={() => setFilters({})}
+              className="text-[11.5px] font-semibold text-slate-500 hover:text-slate-950"
+            >
+              Clear filters
+            </button>
+          ) : null}
+        </div>
         <div className="grid grid-cols-3 gap-3">
           <div><label className={fieldLabel}>From</label>
             <input type="date" value={filters.from ?? ''} onChange={(e) => setStr('from')(e.target.value)} className={inputCls} />

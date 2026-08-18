@@ -6,6 +6,8 @@ import {
   FiChevronDown,
   FiCopy,
   FiExternalLink,
+  FiEye,
+  FiEyeOff,
   FiKey,
   FiPlay,
 } from 'react-icons/fi'
@@ -383,6 +385,9 @@ function TryIt({ ep, apiKey }: { ep: Endpoint; apiKey: string }) {
  */
 export default function ExternalApiReference() {
   const [open, setOpen] = useState<string | null>(null)
+  /** Audit R2 #392 — hidden by default (shoulder-surf / screen-share).
+   *  Toggle re-shows so operators can visually verify a paste. */
+  const [showApiKey, setShowApiKey] = useState(false)
   const [apiKey, setApiKey] = useState(() => {
     try {
       // Sprint 50 PR P post-audit #16 — sessionStorage instead of
@@ -437,14 +442,27 @@ export default function ExternalApiReference() {
           <span className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-slate-400">Your API key · used for “Try it”</span>
           <div className="relative mt-1">
             <FiKey className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-300" />
+            {/* Audit R2 #392 — hidden by default so a screen-share doesn't
+                leak the key. Password type masks the value; eye toggle
+                flips to plain-text for visual paste verification. */}
             <input
+              type={showApiKey ? 'text' : 'password'}
               value={apiKey}
               onChange={(e) => updateKey(e.target.value)}
               placeholder="msk_live_…"
               spellCheck={false}
               autoComplete="off"
-              className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-8 pr-3 font-mono text-[12px] text-slate-800 outline-none focus:border-slate-400"
+              className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-8 pr-9 font-mono text-[12px] text-slate-800 outline-none focus:border-slate-400"
             />
+            <button
+              type="button"
+              onClick={() => setShowApiKey((v) => !v)}
+              aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
+              title={showApiKey ? 'Hide' : 'Show'}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:text-slate-700"
+            >
+              {showApiKey ? <FiEyeOff className="h-3.5 w-3.5" /> : <FiEye className="h-3.5 w-3.5" />}
+            </button>
           </div>
           <span className="mt-1 block text-[10.5px] text-slate-400">
             Stays in your browser; sent only as the <span className="font-mono">X-API-Key</span> header when you press Send.

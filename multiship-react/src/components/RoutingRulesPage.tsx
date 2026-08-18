@@ -223,11 +223,16 @@ export default function RoutingRulesPage() {
                   <tr key={r.id ?? r.name} className="hover:bg-slate-50 align-top">
                     <td className="px-4 py-2">
                       <div className="inline-flex items-center gap-1">
+                        {/* Audit R2 #354 — chevrons had no accessible name;
+                            screen readers announced only "button". Named per
+                            direction so JAWS / VoiceOver say "Move rule up". */}
                         <button type="button" disabled={i === 0} onClick={() => moveRule(r, -1)}
+                          aria-label={`Move rule ${r.name} up`}
                           className="text-slate-400 hover:text-slate-700 disabled:opacity-30">
                           <FiChevronUp />
                         </button>
                         <button type="button" disabled={i === rules.length - 1} onClick={() => moveRule(r, 1)}
+                          aria-label={`Move rule ${r.name} down`}
                           className="text-slate-400 hover:text-slate-700 disabled:opacity-30">
                           <FiChevronDown />
                         </button>
