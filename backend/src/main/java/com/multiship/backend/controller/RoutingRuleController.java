@@ -37,7 +37,9 @@ public class RoutingRuleController {
         return ok(data, "Rules loaded");
     }
 
-    @Operation(summary = "Create or update a routing rule")
+    @Operation(summary = "Create or update a routing rule",
+            description = "Audit R2 #351 — 409 ROUTING_RULE_CONCURRENT_EDIT when another admin "
+                    + "updated the same rule since the caller last read it; refresh + retry.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @PostMapping
     public ResponseEntity<ApiResponse<RoutingRuleDTO>> save(
@@ -54,6 +56,17 @@ public class RoutingRuleController {
                     .build());
         } catch (IllegalArgumentException validation) {
             return badRequest(validation.getMessage(), "VALIDATION_FAILED");
+        } catch (org.springframework.orm.ObjectOptimisticLockingFailureException race) {
+            // Audit R2 #351 — another admin bumped the version between our
+            // read + save. Signal 409 with a dedicated code so the FE can
+            // refresh + prompt retry rather than silently discarding the
+            // caller's edits.
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.<RoutingRuleDTO>builder()
+                    .status("error").code(HttpStatus.CONFLICT.value())
+                    .message("This routing rule was changed by another admin — "
+                            + "refresh the page and re-apply your edits.")
+                    .errorCode(com.multiship.backend.dto.ErrorCode.ROUTING_RULE_CONCURRENT_EDIT.name())
+                    .build());
         }
     }
 

@@ -80,14 +80,28 @@ public class CarrierLimitAdminController {
     }
 
     @Operation(summary = "Update an existing row",
-            description = "Full replace of every mutable field. effectiveFrom stays put — insert a new row to supersede a cap.")
+            description = "Full replace of every mutable field. effectiveFrom stays put — insert a new row to supersede a cap. "
+                    + "Audit R2 #377 — 409 CARRIER_LIMIT_CONCURRENT_EDIT when another admin updated the same row "
+                    + "since the caller last read it; refresh + retry.")
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<CarrierShippingLimitResponse>> update(
             @PathVariable Long id,
             @Valid @RequestBody CarrierShippingLimitRequest body) {
-        return service.update(id, body)
-                .map(dto -> ResponseEntity.ok(ok("Row updated.", dto)))
-                .orElseGet(() -> notFound(id));
+        try {
+            return service.update(id, body)
+                    .map(dto -> ResponseEntity.ok(ok("Row updated.", dto)))
+                    .orElseGet(() -> notFound(id));
+        } catch (org.springframework.orm.ObjectOptimisticLockingFailureException race) {
+            // Audit R2 #377 — another admin bumped the version between our
+            // read + save. 409 with dedicated errorCode so the FE prompts
+            // refresh + retry.
+            return ResponseEntity.status(409).body(ApiResponse.<CarrierShippingLimitResponse>builder()
+                    .status("ERROR").code(409).timestamp(LocalDateTime.now())
+                    .errorCode(com.multiship.backend.dto.ErrorCode.CARRIER_LIMIT_CONCURRENT_EDIT.name())
+                    .message("This carrier limit row was changed by another admin — "
+                            + "refresh the page and re-apply your edits.")
+                    .build());
+        }
     }
 
     @Operation(summary = "Delete a row",

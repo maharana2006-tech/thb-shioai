@@ -45,6 +45,17 @@ public class RoutingRule {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /**
+     * Audit R2 #351 — @Version for optimistic locking. Two admins editing
+     * the same rule simultaneously used to silently overwrite each other;
+     * now the second save throws OptimisticLockingFailureException →
+     * controller 409 ROUTING_RULE_CONCURRENT_EDIT so the FE can prompt
+     * "refresh and retry". Column default 0 on backfilled rows.
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     /** Owning client (per-tenant only in v1 — no platform-wide rules). */
     @Column(name = "client_code", nullable = false, length = 50)
     private String clientCode;
