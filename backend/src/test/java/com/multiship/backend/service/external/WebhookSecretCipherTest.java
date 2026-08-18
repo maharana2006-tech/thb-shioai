@@ -67,7 +67,11 @@ class WebhookSecretCipherTest {
         when(crypto.isAvailable()).thenReturn(false);
         ExternalWebhookSubscription sub = new ExternalWebhookSubscription();
 
-        IllegalStateException ex = assertThrows(IllegalStateException.class,
+        // Audit R2 #347 — dedicated CryptoUnavailableException replaces
+        // the generic IllegalStateException so the controller layer can
+        // shape a 503 with the CRYPTO_UNAVAILABLE error code.
+        com.multiship.backend.config.CryptoUnavailableException ex = assertThrows(
+                com.multiship.backend.config.CryptoUnavailableException.class,
                 () -> cipher.encryptOnSave(sub, "hunter2"));
         // Message should be actionable — mentions the env var + why we refuse.
         org.junit.jupiter.api.Assertions.assertTrue(
