@@ -12,6 +12,7 @@ import {
   addressValidationService,
   type AddressValidationResponse,
 } from '../../api/addressValidationService'
+import { accountRefService } from '../../api/accountRefService'
 import Select from '../workspace/Select'
 import AttachClientsStep from './AttachClientsStep'
 import {
@@ -39,7 +40,33 @@ interface Props {
 /** Create / edit a warehouse. Owner type switches the client picker on/off. */
 export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defaultCarrierCode }: Props) {
   const isEdit = !!warehouse
-  const verifyCarrier = (defaultCarrierCode || 'UPS').toUpperCase()
+  /** Audit R2 #289 — the "Verify" button was hardcoded to `defaultCarrierCode || 'UPS'`,
+   *  so an operator saving a warehouse address that FedEx would reject got a
+   *  green UPS check and no warning. Now stateful + picker-driven; operator
+   *  can (and should) re-verify against each carrier the warehouse ships
+   *  through. Enabled-carriers list is derived from the account book below
+   *  so the dropdown only shows carriers the platform actually integrates. */
+  const [verifyCarrier, setVerifyCarrier] = useState<string>(
+    (defaultCarrierCode || 'UPS').toUpperCase(),
+  )
+  /** Set of carrier codes with at least one active account. Empty until the
+   *  account book loads; UPS/FEDEX/USPS shown as fallback so the operator
+   *  can still verify even if the account fetch fails. */
+  const [enabledCarriers, setEnabledCarriers] = useState<string[]>(['UPS', 'FEDEX', 'USPS'])
+  useEffect(() => {
+    let alive = true
+    accountRefService.listAccounts()
+      .then((accts) => {
+        if (!alive) return
+        const codes = Array.from(new Set(
+          accts.filter((a) => a.active !== false && a.carrierCode)
+            .map((a) => a.carrierCode.toUpperCase()),
+        )).sort()
+        if (codes.length > 0) setEnabledCarriers(codes)
+      })
+      .catch(() => { /* fallback list already set */ })
+    return () => { alive = false }
+  }, [])
 
   const [code, setCode] = useState(warehouse?.code ?? '')
   const [name, setName] = useState(warehouse?.name ?? '')
@@ -433,24 +460,44 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
               <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
                 Address
               </p>
-              <button
-                type="button"
-                onClick={verifyAddress}
-                disabled={!canVerify}
-                title={
-                  canVerify
-                    ? `Validate against ${verifyCarrier} carrier database`
-                    : 'Fill line 1, city, postal code and country to verify.'
-                }
-                className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10.5px] font-semibold transition ${
-                  canVerify
-                    ? 'border-[#412d15] bg-white text-[#412d15] hover:bg-[#faf7f0]'
-                    : 'cursor-not-allowed border-[#e3d9c4] bg-[#faf7f0] text-[#b6a684]'
-                }`}
-              >
-                <FiSearch className="h-3 w-3" />
-                {verifying ? 'Verifying…' : `Verify (${verifyCarrier})`}
-              </button>
+              <div className="inline-flex items-center gap-1.5">
+                {/* Audit R2 #289 — carrier picker so operators can explicitly
+                    verify against every carrier this warehouse ships through.
+                    Pre-fix, hardcoded 'UPS' (or defaultCarrierCode) silently
+                    validated against one carrier — an address that passes
+                    UPS but fails FedEx would go undetected. */}
+                <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#b6a684]">
+                  Carrier
+                  <select
+                    value={verifyCarrier}
+                    onChange={(e) => setVerifyCarrier(e.target.value)}
+                    disabled={verifying}
+                    className="ml-1 rounded border border-[#e3d9c4] bg-white px-1.5 py-0.5 text-[10.5px] font-semibold text-[#412d15] outline-none focus:border-[#412d15] disabled:opacity-50"
+                  >
+                    {enabledCarriers.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={verifyAddress}
+                  disabled={!canVerify}
+                  title={
+                    canVerify
+                      ? `Validate against ${verifyCarrier} carrier database — repeat for each carrier this warehouse ships through`
+                      : 'Fill line 1, city, postal code and country to verify.'
+                  }
+                  className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10.5px] font-semibold transition ${
+                    canVerify
+                      ? 'border-[#412d15] bg-white text-[#412d15] hover:bg-[#faf7f0]'
+                      : 'cursor-not-allowed border-[#e3d9c4] bg-[#faf7f0] text-[#b6a684]'
+                  }`}
+                >
+                  <FiSearch className="h-3 w-3" />
+                  {verifying ? 'Verifying…' : 'Verify'}
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field label="Line 1" required span={2} error={err('line1')}>

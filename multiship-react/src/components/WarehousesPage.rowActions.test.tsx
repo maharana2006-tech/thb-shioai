@@ -573,7 +573,7 @@ describe('WarehouseEditorModal · internals · positive', () => {
     await user.click(await screen.findByRole('menuitem', { name: /edit/i }))
     const dialog = await screen.findByRole('dialog', { name: /edit warehouse plat1/i })
 
-    await user.click(within(dialog).getByRole('button', { name: /^verify \(ups\)$/i }))
+    await user.click(within(dialog).getByRole('button', { name: /^verify$/i }))
 
     await waitFor(() => expect(validateAddress).toHaveBeenCalled())
     const req = validateAddress.mock.calls[0][0]
@@ -614,7 +614,7 @@ describe('WarehouseEditorModal · internals · positive', () => {
     await user.click(await screen.findByRole('menuitem', { name: /edit/i }))
     const dialog = await screen.findByRole('dialog', { name: /edit warehouse plat1/i })
 
-    await user.click(within(dialog).getByRole('button', { name: /^verify \(ups\)$/i }))
+    await user.click(within(dialog).getByRole('button', { name: /^verify$/i }))
     await waitFor(() => expect(validateAddress).toHaveBeenCalled())
 
     // Suggested panel is present with a "Use suggestion" button.
@@ -658,7 +658,7 @@ describe('WarehouseEditorModal · internals · negative', () => {
     await user.click(screen.getByRole('button', { name: /add warehouse/i }))
     const dialog = await screen.findByRole('dialog', { name: /add warehouse/i })
 
-    const verifyBtn = within(dialog).getByRole('button', { name: /^verify \(ups\)$/i })
+    const verifyBtn = within(dialog).getByRole('button', { name: /^verify$/i })
     expect(verifyBtn).toBeDisabled()
 
     // Fill line1 only — still disabled (city / zip missing).
