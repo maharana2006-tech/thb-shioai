@@ -18,8 +18,18 @@ const pathParamsOf = (path: string) => [...path.matchAll(/\{(\w+)\}/g)].map((m) 
 
 /** Base URL of the public shipping API, derived from the app's API client. */
 const EXTERNAL_BASE = `${BASE_URL}/external`
-/** Swagger UI lives on the backend origin. */
-const SWAGGER_URL = `${new URL(BASE_URL).origin}/swagger-ui.html`
+/**
+ * Swagger UI lives on the backend origin.
+ *
+ * Audit A3 — `new URL(BASE_URL)` crashes with TypeError when BASE_URL
+ * is relative ('/api/v1' — the dev default per apiClient.ts). This
+ * module is lazy-loaded so the crash surfaces as a white-screen the
+ * first time an operator navigates to /settings/api-reference. Pass
+ * the current window origin as the base so relative BASE_URLs resolve
+ * against the SPA's origin (which is the same origin the Vite proxy
+ * fronts). Absolute BASE_URLs pass through unchanged.
+ */
+const SWAGGER_URL = `${new URL(BASE_URL, typeof window !== 'undefined' ? window.location.origin : 'http://localhost').origin}/swagger-ui.html`
 
 const METHOD_BADGE: Record<string, string> = {
   GET: 'bg-sky-50 text-sky-700 ring-sky-200',
