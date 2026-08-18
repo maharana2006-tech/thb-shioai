@@ -320,6 +320,8 @@ class AuthServiceImplPRDTest {
         when(userRepository.findByEmailVerifyToken(anyString())).thenReturn(Optional.empty());
         ResponseEntity<MessageResponse> resp = service.verifyEmail("bogus");
         assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        // Audit B2 — canonical email-verify code (was INVITE_NOT_FOUND).
+        assertEquals(ErrorCode.EMAIL_VERIFY_TOKEN_NOT_FOUND.name(), resp.getBody().getErrorCode());
     }
 
     @Test
@@ -335,7 +337,8 @@ class AuthServiceImplPRDTest {
 
         ResponseEntity<MessageResponse> resp = service.verifyEmail("tok");
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
-        assertEquals(ErrorCode.INVITE_EXPIRED.name(), resp.getBody().getErrorCode());
+        // Audit B2 — canonical email-verify code (was INVITE_EXPIRED copy-paste).
+        assertEquals(ErrorCode.EMAIL_VERIFY_TOKEN_EXPIRED.name(), resp.getBody().getErrorCode());
     }
 
     @Test
