@@ -109,12 +109,39 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         Client client = clientCode == null ? null
                 : clientRepository.findByClientCodeIgnoreCase(clientCode).orElse(null);
 
+        // Resolve the client's customs profile for this destination ONCE — it
+        // feeds both the importer-of-record block and the Incoterms fallback.
+        ClientCustomsProfile profile = resolveProfile(clientCode, order.getShiptoCountryCd());
+
         // Importer of record: the order's own customs importer wins; else the
         // client's customs profile for the destination country; else fall back
         // to the consignee (ship-to), which is the DAP default.
-        Party importer = resolveImporter(order, customs, clientCode);
+        Party importer = resolveImporter(order, customs, profile);
 
-        return renderPdf(order, customs, client, importer);
+        // Sprint 51 wiring fix — the real tracking number lives on the
+        // order_label_tracking row, NOT label_batch.track (which stays null for
+        // bulk/manual orders), so the invoice always printed "Tracking: -".
+        String tracking = firstNonBlank(
+                orderTrackingRepository.findByOrderNo(orderNo)
+                        .map(t -> t.getTrackingNumber()).orElse(null),
+                order.getTrack());
+        String carrier = firstNonBlank(order.getShipVia(), order.getShipviaCd(),
+                orderTrackingRepository.findByOrderNo(orderNo)
+                        .map(t -> t.getShipViaCd()).orElse(null));
+        // Incoterms drive who pays duties; fall back to the client's profile,
+        // then DAP (duties payable by the consignee — the B2C default).
+        String incoterms = firstNonBlank(customs.getIncoterms(),
+                profile == null ? null : profile.getIncoterms(), "DAP");
+
+        return renderPdf(order, customs, client, importer, tracking, carrier, incoterms);
+    }
+
+    /** The client's customs profile for a destination country, or null. */
+    private ClientCustomsProfile resolveProfile(String clientCode, String destCountry) {
+        if (customsProfileRepository == null || !hasText(clientCode) || !hasText(destCountry)) {
+            return null;
+        }
+        return customsProfileRepository.findByClientAndCountry(clientCode, destCountry).orElse(null);
     }
 
     // ---- party resolution ------------------------------------------------
@@ -122,7 +149,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     /** A rendered address block: a name/company line plus street lines. */
     private record Party(String title, List<String> lines) {}
 
-    private Party resolveImporter(Order order, OrderCustoms customs, String clientCode) {
+    private Party resolveImporter(Order order, OrderCustoms customs, ClientCustomsProfile profile) {
         // 1) Explicit importer captured on the order's customs record.
         Address ia = customs.getImporterAddress();
         String iaName = ia == null ? null : ia.getName();
@@ -137,21 +164,16 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         }
 
         // 2) Client's customs profile for the destination country.
-        String dest = order.getShiptoCountryCd();
-        if (customsProfileRepository != null && hasText(clientCode) && hasText(dest)) {
-            ClientCustomsProfile p = customsProfileRepository
-                    .findByClientAndCountry(clientCode, dest).orElse(null);
-            if (p != null && (hasText(p.getImporterName()) || hasText(p.getImporterAddress1()))) {
-                String ids = taxLine(
-                        firstNonBlank(p.getImporterGstin(), p.getImporterIec(), p.getImporterTaxId()),
-                        null, p.getImporterEori());
-                return new Party("IMPORTER OF RECORD", List.of(
-                        safe(p.getImporterName()),
-                        safe(p.getImporterAddress1()),
-                        joinCityStateZip(p.getImporterCity(), p.getImporterState(), p.getImporterPostcode()),
-                        safe(p.getImporterCountry()),
-                        ids));
-            }
+        if (profile != null && (hasText(profile.getImporterName()) || hasText(profile.getImporterAddress1()))) {
+            String ids = taxLine(
+                    firstNonBlank(profile.getImporterGstin(), profile.getImporterIec(), profile.getImporterTaxId()),
+                    null, profile.getImporterEori());
+            return new Party("IMPORTER OF RECORD", List.of(
+                    safe(profile.getImporterName()),
+                    safe(profile.getImporterAddress1()),
+                    joinCityStateZip(profile.getImporterCity(), profile.getImporterState(), profile.getImporterPostcode()),
+                    safe(profile.getImporterCountry()),
+                    ids));
         }
 
         // 3) Consignee (ship-to) is the importer of record (DAP default).
@@ -180,7 +202,8 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
 
     // ---- rendering -------------------------------------------------------
 
-    private byte[] renderPdf(Order order, OrderCustoms customs, Client client, Party importer) {
+    private byte[] renderPdf(Order order, OrderCustoms customs, Client client, Party importer,
+                             String tracking, String carrier, String incoterms) {
         try (PDDocument doc = new PDDocument();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
@@ -206,18 +229,19 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                 y -= 40f;
                 rule(cs, margin, pageWidth - margin, y, PRIMARY, 1.2f);
 
-                // Invoice meta (single line of key fields)
+                // Invoice meta (key header fields over two lines)
                 y -= 18f;
                 String meta = "Invoice No: " + order.getOrderNo()
                         + "    Date: " + (order.getCreatedDate() == null ? "-" : DATE_FMT.format(order.getCreatedDate()))
-                        + "    Incoterms: " + firstNonBlank(customs.getIncoterms(), "-")
+                        + "    Incoterms: " + firstNonBlank(incoterms, "DAP")
                         + "    Currency: " + currency
                         + "    Reason: " + firstNonBlank(customs.getReasonForExport(), "SALE");
                 drawText(cs, HELVETICA, 9.5f, meta, margin, y);
-                y -= 8f;
-                String meta2 = "Carrier: " + firstNonBlank(order.getShipVia(), order.getShipviaCd(), "-")
-                        + "    Tracking: " + firstNonBlank(order.getTrack(), "-");
-                drawText(cs, HELVETICA, 9.5f, meta2, margin, y - 4f);
+                y -= 12f;
+                String meta2 = "Carrier: " + firstNonBlank(carrier, "-")
+                        + "    Tracking: " + firstNonBlank(tracking, "-")
+                        + "    " + dutyTerms(incoterms);
+                drawText(cs, HELVETICA, 9.5f, meta2, margin, y);
 
                 // Three party blocks: exporter (left) + importer (right), consignee (left, lower)
                 y -= 26f;
@@ -232,8 +256,30 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                 float tableTop = Math.min(consY, rightY) - 12f;
                 tableTop = drawItemsTable(cs, customs, currency, margin, pageWidth - margin, tableTop);
 
+                // Shipment summary: packages, total item quantity, gross weight —
+                // the customs-relevant totals a broker checks against the parcel.
+                int totalQty = 0;
+                for (OrderCustomsItem it : (customs.getItems() == null ? List.<OrderCustomsItem>of() : customs.getItems())) {
+                    totalQty += it.getQuantity() == null ? 1 : it.getQuantity();
+                }
+                int pkgs = order.getPackageCount() == null ? 1 : order.getPackageCount();
+                String weightUnit = firstNonBlank(customs.getWeightUnit(),
+                        client == null ? null : client.getDefaultWeightUnit(), "KG");
+                StringBuilder summary = new StringBuilder();
+                summary.append("Packages: ").append(pkgs)
+                        .append("    Total quantity: ").append(totalQty);
+                if (order.getWeight() != null) {
+                    summary.append("    Gross weight: ")
+                            .append(order.getWeight().stripTrailingZeros().toPlainString())
+                            .append(' ').append(weightUnit);
+                }
+                float sumY = tableTop - 16f;
+                cs.setNonStrokingColor(new Color(0x5a, 0x45, 0x26));
+                drawText(cs, HELVETICA, 8.5f, summary.toString(), margin, sumY);
+                cs.setNonStrokingColor(Color.BLACK);
+
                 // Declaration + signature
-                float decY = Math.max(tableTop - 20f, margin + 46f);
+                float decY = Math.max(sumY - 18f, margin + 46f);
                 cs.setNonStrokingColor(new Color(0x5a, 0x45, 0x26));
                 drawText(cs, HELVETICA_OBLIQUE, 8.5f,
                         "I declare the information on this invoice to be true and correct to the best of my knowledge.",
@@ -368,6 +414,14 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     private static String money(BigDecimal v) {
         if (v == null) return "0.00";
         return v.setScale(2, RoundingMode.HALF_UP).toPlainString();
+    }
+
+    /** Who settles duties &amp; taxes, derived from the Incoterm. DDP = shipper
+     *  prepays; everything else (DAP/DDU/…) = payable by the consignee. */
+    private static String dutyTerms(String incoterms) {
+        String code = incoterms == null ? "" : incoterms.trim().toUpperCase();
+        if (code.equals("DDP")) return "Duties/Taxes: prepaid by shipper (DDP)";
+        return "Duties/Taxes: payable by consignee (" + (code.isEmpty() ? "DAP" : code) + ")";
     }
 
     private static String taxLine(String taxId, String vat, String eori) {
