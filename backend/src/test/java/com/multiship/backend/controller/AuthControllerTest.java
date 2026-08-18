@@ -42,6 +42,11 @@ class AuthControllerTest {
         // AuthController uses field @Autowired — inject via reflection to
         // stay compatible with the constructor-less style.
         ReflectionTestUtils.setField(controller, "authService", authService);
+        // Audit R2 — new PublicAuthRateLimiter dep; mock to always allow so
+        // existing delegation tests aren't blocked by the rate limiter.
+        var mockLimiter = mock(com.multiship.backend.service.ratelimit.PublicAuthRateLimiter.class);
+        when(mockLimiter.isAllowed(any(), any())).thenReturn(true);
+        ReflectionTestUtils.setField(controller, "publicAuthRateLimiter", mockLimiter);
         request = mock(HttpServletRequest.class);
         response = mock(HttpServletResponse.class);
         when(request.getRemoteAddr()).thenReturn("10.0.0.5");
@@ -133,7 +138,8 @@ class AuthControllerTest {
         ResponseEntity<MessageResponse> expected = ResponseEntity.ok(new MessageResponse("verified"));
         when(authService.verifyEmail("tok")).thenReturn(expected);
 
-        ResponseEntity<MessageResponse> actual = controller.verifyEmail("tok");
+        // Audit R2 — new signature: (token, request) for the IP-based limiter.
+        ResponseEntity<MessageResponse> actual = controller.verifyEmail("tok", request);
 
         assertSame(expected, actual);
     }
@@ -145,8 +151,37 @@ class AuthControllerTest {
         ResponseEntity<Object> expected = ResponseEntity.ok(new MessageResponse("preview"));
         when(authService.previewInvite("tok")).thenReturn((ResponseEntity) expected);
 
-        ResponseEntity<?> actual = controller.previewInvite("tok");
+        // Audit R2 — new signature: (token, request) for the IP-based limiter.
+        ResponseEntity<?> actual = controller.previewInvite("tok", request);
 
         assertSame(expected, actual);
+    }
+
+    // ===== R2 (#381 + #384) — public-endpoint rate limiter =====
+
+    @Test
+    void previewInvite_returns429WhenRateLimited() {
+        var limiter = mock(com.multiship.backend.service.ratelimit.PublicAuthRateLimiter.class);
+        when(limiter.isAllowed(eq("invite"), any())).thenReturn(false);
+        ReflectionTestUtils.setField(controller, "publicAuthRateLimiter", limiter);
+
+        ResponseEntity<?> resp = controller.previewInvite("tok", request);
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, resp.getStatusCode());
+        assertEquals("3600", resp.getHeaders().getFirst("Retry-After"));
+        // Service is never touched when the limiter rejects.
+        verify(authService, org.mockito.Mockito.never()).previewInvite(any());
+    }
+
+    @Test
+    void verifyEmail_returns429WhenRateLimited() {
+        var limiter = mock(com.multiship.backend.service.ratelimit.PublicAuthRateLimiter.class);
+        when(limiter.isAllowed(eq("verify-email"), any())).thenReturn(false);
+        ReflectionTestUtils.setField(controller, "publicAuthRateLimiter", limiter);
+
+        ResponseEntity<MessageResponse> resp = controller.verifyEmail("tok", request);
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, resp.getStatusCode());
+        verify(authService, org.mockito.Mockito.never()).verifyEmail(any());
     }
 }

@@ -1,10 +1,13 @@
 package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.AcceptInviteRequest;
+import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.LoginRequest;
 import com.multiship.backend.dto.MessageResponse;
 import com.multiship.backend.dto.SignupRequest;
 import com.multiship.backend.service.AuthService;
+import com.multiship.backend.service.ratelimit.PublicAuthRateLimiter;
+import org.springframework.http.HttpStatus;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -28,6 +31,12 @@ public class AuthController {
 
     @Autowired
     private AuthService authService; // Pure business layer abstraction contract
+
+    /** Audit R2 (#381 + #384) — throttles the two public token endpoints
+     *  (invite preview + verify-email) so unauthenticated callers can't
+     *  hammer them. Independent per-endpoint buckets. */
+    @Autowired
+    private PublicAuthRateLimiter publicAuthRateLimiter;
 
     /**
      * Sprint 50 Tier 0.5 PR D — public signup gated behind
@@ -102,10 +111,15 @@ public class AuthController {
      * Sprint 50 Tier 0.5 PR D — email verification click-through. Called
      * by the frontend when the user opens the verify link.
      */
-    @Operation(summary = "Verify email address")
+    @Operation(summary = "Verify email address",
+            description = "429 PUBLIC_AUTH_RATE_LIMITED when the per-IP hour budget is exhausted (default 60/hr).")
     @SecurityRequirements
     @PostMapping("/verify-email")
-    public ResponseEntity<MessageResponse> verifyEmail(@RequestParam("token") String token) {
+    public ResponseEntity<MessageResponse> verifyEmail(@RequestParam("token") String token,
+                                                        HttpServletRequest request) {
+        if (!publicAuthRateLimiter.isAllowed("verify-email", resolveClientIp(request))) {
+            return rateLimitedResponse();
+        }
         return authService.verifyEmail(token);
     }
 
@@ -122,11 +136,26 @@ public class AuthController {
     @Operation(summary = "Preview an invite (read-only)",
             description = "Returns the invite's clientCode, role, email and expiresAt so the "
                     + "SPA can render the accept page. Public — no auth required. "
-                    + "404 INVITE_NOT_FOUND / 410 INVITE_EXPIRED / 409 INVITE_ALREADY_USED.")
+                    + "404 INVITE_NOT_FOUND / 410 INVITE_EXPIRED / 409 INVITE_ALREADY_USED / "
+                    + "429 PUBLIC_AUTH_RATE_LIMITED when the per-IP hour budget is exhausted.")
     @SecurityRequirements
     @GetMapping("/invite/{token}")
-    public ResponseEntity<?> previewInvite(@PathVariable("token") String token) {
+    public ResponseEntity<?> previewInvite(@PathVariable("token") String token,
+                                            HttpServletRequest request) {
+        if (!publicAuthRateLimiter.isAllowed("invite", resolveClientIp(request))) {
+            return rateLimitedResponse();
+        }
         return authService.previewInvite(token);
+    }
+
+    /** Audit R2 — shared 429 body for the two public token endpoints so
+     *  the SPA + external monitoring get a consistent errorCode + hint. */
+    private static ResponseEntity<MessageResponse> rateLimitedResponse() {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", "3600")
+                .body(new MessageResponse(
+                        "Too many attempts on this endpoint from your IP — try again in an hour.",
+                        ErrorCode.PUBLIC_AUTH_RATE_LIMITED));
     }
 
     /**

@@ -40,6 +40,10 @@ public enum ErrorCode {
      *  logs + client-side branching. */
     EMAIL_VERIFY_TOKEN_NOT_FOUND,
     EMAIL_VERIFY_TOKEN_EXPIRED,
+    /** Audit R2 #381/#384 — per-IP throttle exceeded on a public token
+     *  endpoint (invite preview / email verify). Response carries
+     *  Retry-After seconds. */
+    PUBLIC_AUTH_RATE_LIMITED,
     /** Signup / invite payload missing the required clientCode. */
     CLIENT_CODE_REQUIRED,
 
