@@ -38,7 +38,20 @@ class ExternalWebhookDispatcherTest {
         // behaviour directly.
         WebhookUrlValidator urlValidator = mock(WebhookUrlValidator.class);
         when(urlValidator.isBlocked(anyString())).thenReturn(false);
-        dispatcher = new ExternalWebhookDispatcher(subRepo, deliveryRepo, new ObjectMapper(), urlValidator);
+        // Audit R2 #336 — new secretCipher dep. Real class wired to a
+        // stub CryptoService that identity-encrypts / identity-decrypts
+        // so the dispatcher can round-trip test fixtures without a real
+        // key. Existing fixtures set only `secret` (plaintext) so the
+        // cipher's fallback path returns it unchanged.
+        com.multiship.backend.config.CryptoService crypto =
+                mock(com.multiship.backend.config.CryptoService.class);
+        when(crypto.isAvailable()).thenReturn(true);
+        when(crypto.encrypt(anyString())).thenAnswer(inv -> inv.getArgument(0));
+        when(crypto.decrypt(anyString())).thenAnswer(inv -> inv.getArgument(0));
+        com.multiship.backend.service.external.WebhookSecretCipher secretCipher =
+                new com.multiship.backend.service.external.WebhookSecretCipher(crypto);
+        dispatcher = new ExternalWebhookDispatcher(subRepo, deliveryRepo, new ObjectMapper(),
+                urlValidator, secretCipher);
     }
 
     @Test

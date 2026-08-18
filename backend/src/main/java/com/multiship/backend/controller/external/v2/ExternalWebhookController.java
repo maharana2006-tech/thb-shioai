@@ -41,6 +41,9 @@ public class ExternalWebhookController {
     /** Audit W2 — invalidate the dispatcher's 60s subscription cache
      *  immediately after any write from the self-serve v2 path too. */
     private final ExternalWebhookDispatcher dispatcher;
+    /** Audit R2 #336 — same at-rest envelope encryption as the admin
+     *  path so self-serve v2 saves land as ciphertext too. */
+    private final com.multiship.backend.service.external.WebhookSecretCipher secretCipher;
 
     @Operation(summary = "List my subscriptions")
     // Sprint 51 AC-M1 — enumerate the actual response shapes on every v2 endpoint.
@@ -104,7 +107,12 @@ public class ExternalWebhookController {
         }
         entity.setEvent(body.getEvent());
         entity.setUrl(body.getUrl().trim());
-        entity.setSecret(body.getSecret());
+        // Audit R2 #336 — envelope AES-GCM (see admin controller equivalent).
+        try {
+            secretCipher.encryptOnSave(entity, body.getSecret());
+        } catch (IllegalStateException cryptoUnavailable) {
+            return bad(cryptoUnavailable.getMessage());
+        }
         entity.setActive(body.getActive() == null ? Boolean.TRUE : body.getActive());
         entity.setUpdatedAt(LocalDateTime.now());
         ExternalWebhookSubscription saved = subscriptionRepo.save(entity);

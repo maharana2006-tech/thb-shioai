@@ -41,6 +41,9 @@ public class WebhookSubscriptionAdminController {
      *  the moment a sub is written / removed so the change propagates
      *  immediately instead of racing the TTL. */
     private final ExternalWebhookDispatcher dispatcher;
+    /** Audit R2 #336 — envelope-encrypt the HMAC secret on save so DB
+     *  dumps don't leak every tenant's signing key. */
+    private final com.multiship.backend.service.external.WebhookSecretCipher secretCipher;
 
     @Operation(summary = "List subscriptions by apiKeyId (or all when omitted)")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
@@ -93,7 +96,14 @@ public class WebhookSubscriptionAdminController {
         entity.setApiKeyId(body.getApiKeyId());
         entity.setEvent(body.getEvent());
         entity.setUrl(body.getUrl().trim());
-        entity.setSecret(body.getSecret());
+        // Audit R2 #336 — encrypt-at-rest via envelope AES-GCM. Pre-fix
+        // this was setSecret(plaintext); now the plaintext column is
+        // nulled at the same time so a DB dump doesn't leak the key.
+        try {
+            secretCipher.encryptOnSave(entity, body.getSecret());
+        } catch (IllegalStateException cryptoUnavailable) {
+            return bad(cryptoUnavailable.getMessage());
+        }
         entity.setActive(body.getActive() == null ? Boolean.TRUE : body.getActive());
         entity.setUpdatedAt(LocalDateTime.now());
         ExternalWebhookSubscription saved = subscriptionRepo.save(entity);
