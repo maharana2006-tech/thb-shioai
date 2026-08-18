@@ -85,7 +85,8 @@ public class SecurityConfig {
                                                    com.multiship.backend.repository.UserRepository userRepository,
                                                    com.multiship.backend.service.TokenRevocationService revocationService,
                                                    com.multiship.backend.service.ratelimit.TenantRateLimitFilter tenantRateLimitFilter,
-                                                   MdcTenantFilter mdcTenantFilter)
+                                                   MdcTenantFilter mdcTenantFilter,
+                                                   com.multiship.backend.service.ratelimit.PublicAuthRateLimiter publicAuthRateLimiter)
             throws Exception {
         // Sprint 50 PR Q2 — CSRF via double-submit cookie. The
         // SPA reads the XSRF-TOKEN cookie (HttpOnly=false so JS can
@@ -191,7 +192,13 @@ public class SecurityConfig {
                                 writeJsonError(response, HttpServletResponse.SC_FORBIDDEN,
                                         "FORBIDDEN", "You do not have permission to perform this action."))
                 )
-                .addFilterBefore(new ApiKeyAuthenticationFilter(apiKeyService), UsernamePasswordAuthenticationFilter.class)
+                // Audit R2 #340 — inject the shared rate limiter so the
+                // filter can 429 unauth attempts BEFORE the CPU-expensive
+                // bcrypt-matches call. Fail-open in dev / no-Redis.
+                .addFilterBefore(new ApiKeyAuthenticationFilter(apiKeyService,
+                                new com.fasterxml.jackson.databind.ObjectMapper(),
+                                publicAuthRateLimiter),
+                        UsernamePasswordAuthenticationFilter.class)
                 // Sprint 50 Tier 0.5 PR A — UserRepository injected for the
                 // pre-migration-token clientCode fallback lookup (cached 5m).
                 // Sprint 51 T2 — TokenRevocationService drives per-request
