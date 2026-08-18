@@ -29,6 +29,19 @@ public class UserInvite {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /**
+     * Audit R2 #380 — @Version for optimistic locking. Two concurrent
+     * accepts on the same VALID token used to both attempt user creation
+     * (first won, second failed with confusing USERNAME_TAKEN / EMAIL_TAKEN
+     * that didn't name the race). Now the second consume() throws
+     * OptimisticLockingFailureException → controller shapes as 409
+     * INVITE_ALREADY_USED (same errorCode the non-race path uses, so
+     * FE friendly-error mapping already exists).
+     */
+    @jakarta.persistence.Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     /** Opaque high-entropy token issued to the invitee via email or admin copy. */
     @Column(nullable = false, unique = true, length = 100)
     private String token;

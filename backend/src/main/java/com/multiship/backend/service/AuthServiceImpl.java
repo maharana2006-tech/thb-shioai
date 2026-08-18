@@ -269,7 +269,24 @@ public class AuthServiceImpl implements AuthService {
                 .emailVerified(true)             // invite acceptance IS verification
                 .build();
         userRepository.save(user);
-        inviteService.consume(invite);
+        // Audit R2 #380 — @Version on UserInvite makes consume() throw
+        // OptimisticLockingFailureException when another accept-request
+        // has already consumed the token. Catch here + surface the same
+        // INVITE_ALREADY_USED body the non-race path uses (FE friendly-
+        // error map already covers this code from PR #379).
+        //
+        // The user we just saved is a phantom in the race case — the OS
+        // transaction rolls it back because we throw before commit. Both
+        // save + consume run inside the outer @Transactional(acceptInvite)
+        // so the rollback is atomic.
+        try {
+            inviteService.consume(invite);
+        } catch (org.springframework.orm.ObjectOptimisticLockingFailureException race) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(new MessageResponse(
+                    "Invite was accepted by another request just now. "
+                            + "Sign in with that account or ask the admin for a new invite.",
+                    ErrorCode.INVITE_ALREADY_USED));
+        }
 
         String successMsg = messageSource.getMessage("success.user.registered", null, LocaleContextHolder.getLocale());
         return ResponseEntity.status(HttpStatus.CREATED).body(new MessageResponse(successMsg));
@@ -298,8 +315,16 @@ public class AuthServiceImpl implements AuthService {
         }
         if (user.getEmailVerifyExpiresAt() != null
                 && LocalDateTime.now().isAfter(user.getEmailVerifyExpiresAt())) {
+            // Audit R2 #386 — env-conditional advice. Pre-fix, the message
+            // told the user to "sign up again" even when signup.public-enabled
+            // is false (the common prod default), so the user hit /signup +
+            // got a 403 SIGNUP_DISABLED — pointless round-trip. Now the
+            // message routes to the actionable path for the current env.
+            String hint = publicSignupEnabled
+                    ? "Sign up again to get a new one."
+                    : "Ask an admin to re-issue your invite.";
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(new MessageResponse("Verification link expired. Sign up again to get a new one.",
+                    .body(new MessageResponse("Verification link expired. " + hint,
                             ErrorCode.EMAIL_VERIFY_TOKEN_EXPIRED));
         }
         user.setEmailVerified(true);

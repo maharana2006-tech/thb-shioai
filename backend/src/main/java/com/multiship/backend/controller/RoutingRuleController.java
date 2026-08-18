@@ -70,8 +70,11 @@ public class RoutingRuleController {
         }
     }
 
-    @Operation(summary = "Delete a routing rule")
-    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Delete a routing rule",
+            description = "Audit R2 #350 — matches save's role gate + tenant guard so a USER "
+                    + "who can create a rule for their own tenant can also delete one. Was "
+                    + "ADMIN-only pre-fix, forcing operators to editing active=false as a workaround.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #clientCode)")
     @DeleteMapping("/{ruleId}")
     public ResponseEntity<ApiResponse<Void>> delete(
             @PathVariable String clientCode, @PathVariable Long ruleId) {
