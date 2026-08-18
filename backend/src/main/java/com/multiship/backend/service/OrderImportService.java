@@ -60,6 +60,17 @@ public interface OrderImportService {
     com.multiship.backend.dto.ImportBatchDTO generateLabelForRow(Long id, int rowNumber, String requestedBy);
 
     /**
+     * Sprint 51 — correct one row of a saved import in place (Data History
+     * inline edit). Applies the edited row, re-runs the full validation
+     * pipeline over the whole batch, re-stamps each ungenerated row as
+     * SAVED / NEEDS_FIX, and recomputes the batch's saved / invalid counts
+     * and status. A row that already has a label (GENERATED) is not edited.
+     * Null if the batch is not found.
+     */
+    com.multiship.backend.dto.ImportBatchDTO updateBatchRow(
+            Long id, int rowNumber, OrderImportRowDTO edited, String requestedBy);
+
+    /**
      * Sprint 48 — dry-run validation on rows the operator may have edited
      * post-preview. Runs the same pipeline as {@link #preview(String, InputStream)}
      * (sanitize → resolveNamesToCodes → validateRow → validateInternationalItems)

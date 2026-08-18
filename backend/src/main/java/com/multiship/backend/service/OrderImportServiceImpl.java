@@ -1229,11 +1229,16 @@ public class OrderImportServiceImpl implements OrderImportService {
         // IN_PROGRESS / COMPLETE / PARTIAL_COMPLETE when the operator later
         // runs "Generate labels" on this batch from Data History.
         String status = "INITIATE";
-        // Mark the valid rows SAVED so the summary UI can badge them.
+        // Sprint 51 — forgiving save: the *whole* batch is persisted so the
+        // operator never loses their upload. Each row is stamped with its
+        // fate so the history and generate step can act on it:
+        //   SAVED     — clean, ready to generate a label.
+        //   NEEDS_FIX — has errors; held in history until corrected. The
+        //               strict commit()/generate path skips these until the
+        //               operator reopens the batch and clears the errors.
         for (OrderImportRowDTO r : safe) {
-            if (r.getErrors() == null || r.getErrors().isEmpty()) {
-                r.setGeneratedStatus("SAVED");
-            }
+            boolean clean = r.getErrors() == null || r.getErrors().isEmpty();
+            r.setGeneratedStatus(clean ? "SAVED" : "NEEDS_FIX");
         }
 
         Long batchId = null;
@@ -1265,8 +1270,10 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .batchId(batchId == null ? null : batchId.intValue())
                         .rows(safe)
                         .build(),
-                saved + " order(s) saved to history"
-                        + (invalid > 0 ? " · " + invalid + " row(s) skipped" : ""));
+                total + " row(s) saved to history"
+                        + (invalid > 0
+                                ? " · " + saved + " ready, " + invalid + " need fixing"
+                                : ""));
     }
 
     @Override
@@ -1475,6 +1482,101 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         log.info("Import batch {} row {} label ({}): {} → batch {} (labelBatch {})",
                 id, rowNumber, requestedBy, target.getGeneratedStatus(), batch.getStatus(), batch.getLabelBatchId());
+        return toBatchDTO(batch, rows);
+    }
+
+    /**
+     * Sprint 51 — inline correction of one saved row from Data History.
+     * Replaces the target row with the operator's edit, re-validates the
+     * whole batch (so cross-row + international + reference rules stay
+     * consistent), re-stamps each still-ungenerated row SAVED / NEEDS_FIX,
+     * and recomputes the batch counts + status. Rows already carrying a
+     * label (GENERATED) are immutable — the edit is ignored for them.
+     */
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO updateBatchRow(
+            Long id, int rowNumber, OrderImportRowDTO edited, String requestedBy) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
+        if (batch == null) return null;
+
+        List<OrderImportRowDTO> rows = new ArrayList<>();
+        if (importObjectMapper != null && batch.getRowsJson() != null) {
+            try {
+                rows = importObjectMapper.readValue(
+                        batch.getRowsJson(),
+                        new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
+            } catch (Exception e) {
+                log.warn("Import batch {} rowsJson parse failed on edit — treating as empty: {}",
+                        id, e.getMessage());
+                rows = new ArrayList<>();
+            }
+        }
+        // Same tenant boundary as read / generate: a scoped USER may only
+        // edit a batch their own tenant owns.
+        requireMatch(firstClientCode(rows));
+
+        int index = -1;
+        for (int i = 0; i < rows.size(); i++) {
+            if (rows.get(i).getRowNumber() == rowNumber) { index = i; break; }
+        }
+        if (index < 0) return toBatchDTO(batch, rows);
+
+        OrderImportRowDTO current = rows.get(index);
+        // A generated row is already a live shipment — never mutate it here.
+        if ("GENERATED".equalsIgnoreCase(current.getGeneratedStatus())) {
+            return toBatchDTO(batch, rows);
+        }
+
+        // Apply the edit. Force the row number so the client can't renumber
+        // a row by editing, and drop any stale generation outcome so a
+        // previously-FAILED row re-enters the SAVED / NEEDS_FIX lifecycle.
+        if (edited == null) edited = new OrderImportRowDTO();
+        edited.setRowNumber(rowNumber);
+        edited.setGeneratedStatus(null);
+        edited.setBatchId(null);
+        rows.set(index, edited);
+
+        // Re-validate the whole batch — mutates each row's errors/warnings
+        // in place through the same pipeline preview/commit use.
+        validate(rows);
+
+        // Re-stamp lifecycle status for every row that hasn't shipped.
+        for (OrderImportRowDTO r : rows) {
+            if ("GENERATED".equalsIgnoreCase(r.getGeneratedStatus())
+                    || "FAILED".equalsIgnoreCase(r.getGeneratedStatus())) {
+                continue;
+            }
+            boolean clean = r.getErrors() == null || r.getErrors().isEmpty();
+            r.setGeneratedStatus(clean ? "SAVED" : "NEEDS_FIX");
+        }
+
+        int total = rows.size();
+        int invalid = (int) rows.stream()
+                .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
+                .count();
+        int generated = (int) rows.stream()
+                .filter(r -> "GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
+                .count();
+        int failed = (int) rows.stream()
+                .filter(r -> "FAILED".equalsIgnoreCase(r.getGeneratedStatus()))
+                .count();
+
+        batch.setTotalRows(total);
+        batch.setSavedRows(total - invalid);
+        batch.setInvalidRows(invalid);
+        batch.setStatus(deriveGenerationStatus(total, generated, failed));
+        try {
+            if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
+        } catch (Exception ex) {
+            log.warn("Import batch {} rowsJson serialisation failed on edit — keeping prior payload: {}",
+                    id, ex.getMessage());
+        }
+        batch = importBatchRepository.save(batch);
+
+        log.info("Import batch {} row {} edited ({}): {} → {} valid / {} held → status {}",
+                id, rowNumber, requestedBy, rows.get(index).getGeneratedStatus(),
+                total - invalid, invalid, batch.getStatus());
         return toBatchDTO(batch, rows);
     }
 
@@ -1998,6 +2100,54 @@ public class OrderImportServiceImpl implements OrderImportService {
     private static final java.util.Set<String> WEIGHT_UNITS = java.util.Set.of("LB", "KG", "LBS", "KGS", "OZ");
     private static final java.util.Set<String> BILL_TO_VALUES = java.util.Set.of("SENDER", "RECIPIENT", "THIRD_PARTY");
     /**
+     * Sprint 51 — destinations where the carriers (FedEx/UPS/USPS) require a
+     * state / province code and reject the shipment without one. Import
+     * validation makes {@code state} mandatory for these countries so a bad
+     * row is caught in review instead of failing at label generation.
+     */
+    private static final java.util.Set<String> STATE_REQUIRED_COUNTRIES =
+            java.util.Set.of("US", "CA", "AU", "IN", "BR", "MX");
+    /** Every valid ISO-3166 alpha-2 country code — rejects shape-valid but
+     *  bogus codes like "ZZ" that the ISO2 regex alone lets through. */
+    private static final java.util.Set<String> VALID_ISO_COUNTRIES =
+            java.util.Set.of(java.util.Locale.getISOCountries());
+    /** Valid state/province codes for the countries where we require state,
+     *  so a bad code ("XX") is caught, not just a blank one. */
+    private static final java.util.Set<String> US_STATES = java.util.Set.of(
+            "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA",
+            "ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK",
+            "OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY",
+            "DC","PR","VI","GU","AS","MP");
+    private static final java.util.Set<String> CA_PROVINCES = java.util.Set.of(
+            "AB","BC","MB","NB","NL","NS","NT","NU","ON","PE","QC","SK","YT");
+    private static final java.util.Set<String> AU_STATES = java.util.Set.of(
+            "ACT","NSW","NT","QLD","SA","TAS","VIC","WA");
+    private static final Map<String, java.util.Set<String>> STATE_CODES = Map.of(
+            "US", US_STATES, "CA", CA_PROVINCES, "AU", AU_STATES);
+    /** Generic postal fallback for countries not in ZIP_PATTERNS — alphanumeric,
+     *  spaces/dashes, 2–12 chars — so unmodelled destinations aren't a free pass. */
+    private static final java.util.regex.Pattern GENERIC_ZIP =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9][A-Za-z0-9 -]{1,11}$");
+    /** SKU / reference — alphanumeric plus - _ . / and spaces. */
+    private static final java.util.regex.Pattern SKU_RE =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,39}$");
+    private static final java.util.regex.Pattern REFERENCE_RE =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9 ._/#-]{0,40}$");
+    /** Per-carrier account-number format (mirrors the SPA add-account drawer,
+     *  carrierAccountValidation.ts). Applied to THIRD_PARTY account numbers. */
+    private static final Map<String, java.util.regex.Pattern> ACCOUNT_FORMATS = Map.of(
+            "UPS",   java.util.regex.Pattern.compile("^[A-Za-z0-9]{6,10}$"),
+            "FEDEX", java.util.regex.Pattern.compile("^\\d{9}$"),
+            "DHL",   java.util.regex.Pattern.compile("^\\d{9,12}$"),
+            "USPS",  java.util.regex.Pattern.compile("^[A-Za-z0-9._@-]{3,50}$"));
+    /** Human hint for the account-format error message per carrier. */
+    private static final Map<String, String> ACCOUNT_FORMAT_HINT = Map.of(
+            "UPS", "6-10 letters/digits", "FEDEX", "9 digits",
+            "DHL", "9-12 digits", "USPS", "3-50 chars");
+    /** Length caps so a 10,000-char city can't slip through the import. */
+    private static final int MAX_TEXT_LEN = 60;
+    private static final int MAX_NAME_LEN = 50;
+    /**
      * Sprint 51 security fix — server-side XSS guard mirroring the SPA's
      * SAFE_TEXT_RE. The CSV/XLSX import and the public External API both
      * write recipient names straight to the DB WITHOUT passing through the
@@ -2037,29 +2187,58 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     static List<String> validateRow(OrderImportRowDTO row) {
         List<String> errors = new ArrayList<>();
+        // Sprint 51 — clientCode is the owning-client identifier; a blank one
+        // was silently accepted (validateReferences only checks it when
+        // present) and produced an orphaned custNo="MANUAL" order with no
+        // client, markup, or customs profile. Require it. Tenant-scoped users
+        // never hit this — their blank code is clamped to their own tenant
+        // before validation runs; only platform operators can leave it blank.
+        if (!StringUtils.hasText(row.getClientCode())) errors.add("clientCode is required");
         if (!StringUtils.hasText(row.getRecipientName())) errors.add("recipientName is required");
         if (!StringUtils.hasText(row.getAddressLine1())) errors.add("addressLine1 is required");
         if (!StringUtils.hasText(row.getCity())) errors.add("city is required");
         if (!StringUtils.hasText(row.getPostalCode())) errors.add("postalCode is required");
         if (!StringUtils.hasText(row.getCountryCode())) errors.add("countryCode is required");
+        // State/province is mandatory for destinations whose carriers demand it
+        // (US, CA, AU, IN, BR, MX). Applies to domestic and international alike.
+        String stateCountry = row.getCountryCode();
+        if (StringUtils.hasText(stateCountry)
+                && STATE_REQUIRED_COUNTRIES.contains(stateCountry.trim().toUpperCase(Locale.ROOT))
+                && !StringUtils.hasText(row.getState())) {
+            errors.add("state is required for " + stateCountry.trim().toUpperCase(Locale.ROOT) + " shipments");
+        }
         if (row.getWeight() == null || row.getWeight().signum() <= 0) {
             errors.add("weight must be > 0");
         } else if (row.getWeight().compareTo(MAX_WEIGHT) > 0) {
             errors.add("weight must be " + MAX_WEIGHT + " or less");
         }
+        // A weight without a unit is ambiguous — require it alongside weight.
+        if (!StringUtils.hasText(row.getWeightUnit())) {
+            errors.add("weightUnit is required (LB or KG)");
+        }
 
         // --- shape checks: only fire when the value is present ---
         String country = row.getCountryCode();
-        if (StringUtils.hasText(country) && !ISO2_RE.matcher(country.trim()).matches()) {
+        String countryUp = StringUtils.hasText(country) ? country.trim().toUpperCase(Locale.ROOT) : null;
+        boolean countryShapeOk = countryUp != null && ISO2_RE.matcher(country.trim()).matches();
+        if (countryUp != null && !countryShapeOk) {
             errors.add("countryCode '" + country + "' must be a 2-letter ISO code");
+        } else if (countryUp != null && !VALID_ISO_COUNTRIES.contains(countryUp)) {
+            errors.add("countryCode '" + country + "' is not a recognized country");
+        }
+        // State/province must be a real code for countries we validate.
+        if (countryShapeOk && STATE_CODES.containsKey(countryUp) && StringUtils.hasText(row.getState())
+                && !STATE_CODES.get(countryUp).contains(row.getState().trim().toUpperCase(Locale.ROOT))) {
+            errors.add("state '" + row.getState() + "' is not a valid " + countryUp + " state/province code");
         }
         String zip = row.getPostalCode();
-        if (StringUtils.hasText(zip) && StringUtils.hasText(country)
-                && ISO2_RE.matcher(country.trim()).matches()) {
-            java.util.regex.Pattern p = ZIP_PATTERNS.get(country.trim().toUpperCase(Locale.ROOT));
+        if (StringUtils.hasText(zip) && countryShapeOk) {
+            java.util.regex.Pattern p = ZIP_PATTERNS.get(countryUp);
             if (p != null && !p.matcher(zip.trim()).matches()) {
-                errors.add("postalCode '" + zip + "' doesn't match the "
-                        + country.trim().toUpperCase(Locale.ROOT) + " format");
+                errors.add("postalCode '" + zip + "' doesn't match the " + countryUp + " format");
+            } else if (p == null && !GENERIC_ZIP.matcher(zip.trim()).matches()) {
+                // Unmodelled country — still enforce a sane postal shape.
+                errors.add("postalCode '" + zip + "' is not a valid postal code");
             }
         }
         String email = row.getRecipientEmail();
@@ -2096,15 +2275,50 @@ public class OrderImportServiceImpl implements OrderImportService {
             errors.add("hsCode '" + hs + "' must be 6-10 digits (dots allowed)");
         }
         String origin = row.getCountryOfOrigin();
-        if (StringUtils.hasText(origin) && !ISO2_RE.matcher(origin.trim()).matches()) {
-            errors.add("countryOfOrigin '" + origin + "' must be a 2-letter ISO code");
+        if (StringUtils.hasText(origin)) {
+            if (!ISO2_RE.matcher(origin.trim()).matches()) {
+                errors.add("countryOfOrigin '" + origin + "' must be a 2-letter ISO code");
+            } else if (!VALID_ISO_COUNTRIES.contains(origin.trim().toUpperCase(Locale.ROOT))) {
+                errors.add("countryOfOrigin '" + origin + "' is not a recognized country");
+            }
         }
         if (row.getItemQuantity() != null && row.getItemQuantity() < 1) {
             errors.add("itemQuantity must be 1 or more");
         }
         if (row.getItemUnitValue() != null && row.getItemUnitValue().signum() <= 0) {
             errors.add("itemUnitValue must be > 0");
+        } else if (row.getItemUnitValue() != null && row.getItemUnitValue().scale() > 2) {
+            errors.add("itemUnitValue must have at most 2 decimal places");
         }
+        // SKU / reference — keep them to a safe alphanumeric shape.
+        if (StringUtils.hasText(row.getItemSku()) && !SKU_RE.matcher(row.getItemSku().trim()).matches()) {
+            errors.add("itemSku '" + row.getItemSku() + "' has invalid characters (letters, digits, -_./ only)");
+        }
+        if (StringUtils.hasText(row.getReference()) && !REFERENCE_RE.matcher(row.getReference().trim()).matches()) {
+            errors.add("reference '" + row.getReference() + "' has invalid characters");
+        }
+        // THIRD_PARTY account numbers must match the carrier's account format.
+        if ("THIRD_PARTY".equalsIgnoreCase(billTo == null ? "" : billTo.trim())
+                && StringUtils.hasText(row.getAccountNumber())
+                && StringUtils.hasText(row.getCarrierCode())) {
+            String cc = row.getCarrierCode().trim().toUpperCase(Locale.ROOT);
+            java.util.regex.Pattern fmt = ACCOUNT_FORMATS.get(cc);
+            if (fmt != null && !fmt.matcher(row.getAccountNumber().trim()).matches()) {
+                errors.add("accountNumber '" + row.getAccountNumber() + "' is not a valid " + cc
+                        + " account (" + ACCOUNT_FORMAT_HINT.getOrDefault(cc, "check the format") + ")");
+            }
+        }
+        // Length caps so oversized free-text can't slip through the import.
+        if (row.getCity() != null && row.getCity().length() > MAX_TEXT_LEN)
+            errors.add("city must be " + MAX_TEXT_LEN + " characters or fewer");
+        if (row.getAddressLine1() != null && row.getAddressLine1().length() > MAX_TEXT_LEN)
+            errors.add("addressLine1 must be " + MAX_TEXT_LEN + " characters or fewer");
+        if (row.getAddressLine2() != null && row.getAddressLine2().length() > MAX_TEXT_LEN)
+            errors.add("addressLine2 must be " + MAX_TEXT_LEN + " characters or fewer");
+        if (row.getRecipientName() != null && row.getRecipientName().length() > MAX_NAME_LEN)
+            errors.add("recipientName must be " + MAX_NAME_LEN + " characters or fewer");
+        if (row.getRecipientCompany() != null && row.getRecipientCompany().length() > MAX_NAME_LEN)
+            errors.add("recipientCompany must be " + MAX_NAME_LEN + " characters or fewer");
 
         // Sprint 51 security fix — reject stored markup in free-text fields
         // (server-side mirror of the SPA guard; also covers non-UI import).
@@ -2140,13 +2354,33 @@ public class OrderImportServiceImpl implements OrderImportService {
      * itemUnitValue). Without those, every int'l carrier connector
      * fails at the customs block.
      *
-     * <p>We heuristic "domestic" as {@code countryCode == "US"} for now.
-     * When ship-from resolution lands the shipper origin will drive this
-     * per row; today the "was your destination equal to the shipper's
-     * home country" check is a US-centric approximation but the vast
-     * majority of tenants ship US-domestic.
+     * <p>Sprint 51 — "international" is now decided per row against the
+     * OWNING CLIENT'S ship-from country (Client.shipFrom.country →
+     * defaultOriginCountry), matching label-time resolution, instead of a
+     * hardcoded US assumption. A client that ships from India treats an
+     * India destination as domestic; a US-origin client shipping to India
+     * is international. When the client's origin is unknown we keep the
+     * legacy US baseline so behaviour never silently loosens.
      */
-    private static void validateInternationalItems(List<OrderImportRowDTO> rows) {
+    private void validateInternationalItems(List<OrderImportRowDTO> rows) {
+        // Resolve each client's ship-from country once (upper-cased).
+        Map<String, String> originByClient = new java.util.HashMap<>();
+        if (clientRepository != null) {
+            java.util.Set<String> codes = new java.util.LinkedHashSet<>();
+            for (OrderImportRowDTO r : rows) {
+                if (StringUtils.hasText(r.getClientCode())) codes.add(r.getClientCode().trim());
+            }
+            if (!codes.isEmpty()) {
+                for (Client c : clientRepository.findByClientCodeInIgnoreCase(new ArrayList<>(codes))) {
+                    String origin = c.getShipFrom() != null && StringUtils.hasText(c.getShipFrom().getCountry())
+                            ? c.getShipFrom().getCountry() : c.getDefaultOriginCountry();
+                    if (StringUtils.hasText(origin) && StringUtils.hasText(c.getClientCode())) {
+                        originByClient.put(c.getClientCode().trim().toUpperCase(Locale.ROOT),
+                                origin.trim().toUpperCase(Locale.ROOT));
+                    }
+                }
+            }
+        }
         Map<String, List<OrderImportRowDTO>> groups = new LinkedHashMap<>();
         for (OrderImportRowDTO row : rows) {
             String key = StringUtils.hasText(row.getOrderRef())
@@ -2158,9 +2392,29 @@ public class OrderImportServiceImpl implements OrderImportService {
             OrderImportRowDTO leader = group.get(0);
             String country = leader.getCountryCode();
             if (!StringUtils.hasText(country)) continue; // country-required error fires elsewhere
-            if ("US".equalsIgnoreCase(country.trim())) continue; // domestic heuristic
-            // International — need at least one row with full customs
-            // commodity data.
+            // Domestic when the destination equals the owning client's ship-from
+            // country; unknown origin falls back to the legacy US baseline.
+            String origin = StringUtils.hasText(leader.getClientCode())
+                    ? originByClient.getOrDefault(leader.getClientCode().trim().toUpperCase(Locale.ROOT), "US")
+                    : "US";
+            if (country.trim().equalsIgnoreCase(origin)) continue; // domestic
+
+            // Accumulate every international-only requirement on the leader.
+            // Each message starts with the column name so the review UI paints
+            // it on that field's cell (and tooltip) instead of one long
+            // row-level sentence.
+            List<String> errs = new ArrayList<>(
+                    leader.getErrors() == null ? List.of() : leader.getErrors());
+            String suffix = " is required for international shipments (countryCode=" + country + ")";
+
+            // (a) Shipment-level customs essentials the carrier rejects without.
+            //     Phone is a hard carrier requirement for international delivery
+            //     + customs contact; currency denominates the declared value.
+            if (!StringUtils.hasText(leader.getRecipientPhone())) errs.add("recipientPhone" + suffix);
+            if (!StringUtils.hasText(leader.getCurrency()))       errs.add("currency" + suffix);
+
+            // (b) Full customs commodity line — at least one row in the group
+            //     must carry description + HS + origin + qty + unit value.
             boolean hasFullItem = false;
             for (OrderImportRowDTO row : group) {
                 if (StringUtils.hasText(row.getItemDescription())
@@ -2173,20 +2427,13 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
             }
             if (!hasFullItem) {
-                // Emit one short error PER missing customs field on the
-                // leader row — each message starts with the column name so
-                // the review UI renders it directly under that field's
-                // input instead of as one long row-level sentence.
-                List<String> errs = new ArrayList<>(
-                        leader.getErrors() == null ? List.of() : leader.getErrors());
-                String suffix = " is required for international shipments (countryCode=" + country + ")";
                 if (!StringUtils.hasText(leader.getItemDescription())) errs.add("itemDescription" + suffix);
                 if (!StringUtils.hasText(leader.getHsCode()))           errs.add("hsCode" + suffix);
                 if (!StringUtils.hasText(leader.getCountryOfOrigin()))  errs.add("countryOfOrigin" + suffix);
                 if (leader.getItemQuantity() == null)                   errs.add("itemQuantity" + suffix);
                 if (leader.getItemUnitValue() == null)                  errs.add("itemUnitValue" + suffix);
-                leader.setErrors(errs);
             }
+            leader.setErrors(errs);
         }
     }
 

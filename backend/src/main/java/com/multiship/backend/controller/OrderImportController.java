@@ -180,6 +180,35 @@ public class OrderImportController {
                 .build());
     }
 
+    @Operation(summary = "Correct one row of a saved import (Data History inline edit)",
+            description = "Sprint 51 — replaces the row with the operator's edit, re-validates the " +
+                    "whole batch, re-stamps each ungenerated row SAVED / NEEDS_FIX, and recomputes " +
+                    "the batch counts + status. Rows that already have a label are immutable.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @org.springframework.web.bind.annotation.PutMapping("/history/{id}/rows/{rowNumber}")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> updateRow(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.PathVariable int rowNumber,
+            @RequestBody OrderImportRowDTO edited,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        String username = userDetails == null ? "unknown" : userDetails.getUsername();
+        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.updateBatchRow(id, rowNumber, edited, username);
+        if (dto == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import not found.")
+                    .build());
+        }
+        long held = dto.getRows() == null ? 0 : dto.getRows().stream()
+                .filter(r -> "NEEDS_FIX".equalsIgnoreCase(r.getGeneratedStatus())).count();
+        return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message(held == 0 ? "Row " + rowNumber + " saved · all rows ready"
+                        : "Row " + rowNumber + " saved · " + held + " row(s) still need fixing")
+                .data(dto)
+                .build());
+    }
+
     @Operation(summary = "Re-validate rows (dry-run, JSON in / JSON out)",
             description = "Sprint 48 — same pipeline as /preview (required fields, name→code " +
                     "resolution, international-item rule) but takes JSON rows directly so the " +
