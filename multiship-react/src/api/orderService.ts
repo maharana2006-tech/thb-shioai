@@ -589,10 +589,16 @@ export const orderService = {
   /**
    * Raw ZPL for the order's 4x6 thermal label (text/plain, not ApiResponse-wrapped) —
    * ready to send to a Zebra printer or preview on labelary.com.
+   *
+   * Audit L1 — accepts `pkgIndex` for multi-package shipments; backend
+   * already supports `?pkg=N` and returns the per-package ZPL. Pre-fix,
+   * an operator viewing pkg 3 of 5 in the label doc UI would still
+   * download pkg 1's ZPL silently.
    */
-  getLabelZpl: async (orderNo: number): Promise<string> => {
+  getLabelZpl: async (orderNo: number, pkgIndex?: number): Promise<string> => {
+    const qs = pkgIndex && pkgIndex > 1 ? `?pkg=${pkgIndex}` : ''
     // Sprint 50 PR Q3 — cookie-mode auth.
-    const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/zpl`, {
+    const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/zpl${qs}`, {
       credentials: 'include',
     })
 
