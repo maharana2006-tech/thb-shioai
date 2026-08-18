@@ -41,6 +41,17 @@ public class CarrierShippingLimit {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /**
+     * Audit R2 #377 — @Version for optimistic locking. Concurrent admin
+     * quarterly-cap updates used to silently overwrite each other; now
+     * the second save throws OptimisticLockingFailureException →
+     * controller 409 CARRIER_LIMIT_CONCURRENT_EDIT so the FE can prompt
+     * "refresh and retry". Default 0 on backfilled rows.
+     */
+    @jakarta.persistence.Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     /** UPS | FEDEX | DHL | STAMPS (canonical carrier code). */
     @Column(name = "carrier_code", nullable = false, length = 20)
     private String carrierCode;

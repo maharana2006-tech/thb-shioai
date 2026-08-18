@@ -49,6 +49,13 @@ public enum ErrorCode {
      *  webhook secrets). Returned as 503 with an operator-actionable
      *  message naming the env var. */
     CRYPTO_UNAVAILABLE,
+    /** Audit R2 #351 — optimistic-lock conflict on routing_rule save.
+     *  Another admin updated the same rule since the caller last read
+     *  it. FE should refresh + retry. */
+    ROUTING_RULE_CONCURRENT_EDIT,
+    /** Audit R2 #377 — optimistic-lock conflict on carrier_shipping_limit
+     *  save. Same class as ROUTING_RULE_CONCURRENT_EDIT. */
+    CARRIER_LIMIT_CONCURRENT_EDIT,
     /** Signup / invite payload missing the required clientCode. */
     CLIENT_CODE_REQUIRED,
 
