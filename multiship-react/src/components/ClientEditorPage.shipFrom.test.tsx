@@ -444,7 +444,7 @@ describe('ClientEditorPage · ShipFrom · positive', () => {
     await user.type(state, 'CO')
     await user.type(zip, '80202')
 
-    const verifyBtn = within(dialog).getByRole('button', { name: /Verify \(UPS\)/i })
+    const verifyBtn = within(dialog).getByRole('button', { name: /^Verify$/i })
     await waitFor(() => expect((verifyBtn as HTMLButtonElement).disabled).toBe(false))
     await user.click(verifyBtn)
 
@@ -490,7 +490,7 @@ describe('ClientEditorPage · ShipFrom · positive', () => {
     await user.type(state, 'CO')
     await user.type(zip, '80202')
 
-    await user.click(within(dialog).getByRole('button', { name: /Verify \(UPS\)/i }))
+    await user.click(within(dialog).getByRole('button', { name: /^Verify$/i }))
 
     // Panel + Use suggestion button appear.
     await waitFor(() => expect(within(dialog).getByText(/Suggested by UPS/i)).toBeTruthy())
@@ -533,7 +533,7 @@ describe('ClientEditorPage · ShipFrom · positive', () => {
     await user.type(state as HTMLInputElement, 'CO')
     await user.type(zip as HTMLInputElement, '80202')
 
-    await user.click(within(dialog).getByRole('button', { name: /Verify \(UPS\)/i }))
+    await user.click(within(dialog).getByRole('button', { name: /^Verify$/i }))
     const useBtn = await within(dialog).findByRole('button', { name: /Use suggestion/i })
     await user.click(useBtn)
 
@@ -569,7 +569,7 @@ describe('ClientEditorPage · ShipFrom · positive', () => {
     await user.type(state as HTMLInputElement, 'CO')
     await user.type(zip as HTMLInputElement, '80202')
 
-    await user.click(within(dialog).getByRole('button', { name: /Verify \(UPS\)/i }))
+    await user.click(within(dialog).getByRole('button', { name: /^Verify$/i }))
     // Wait for the EXACT badge (matchLevel pill) to render.
     await waitFor(() => expect(within(dialog).getByText('EXACT')).toBeTruthy())
 
@@ -614,7 +614,7 @@ describe('ClientEditorPage · ShipFrom · negative', () => {
     await user.click(screen.getByRole('button', { name: /Add warehouse/i }))
     const dialog = await screen.findByRole('dialog')
 
-    const verifyBtn = within(dialog).getByRole('button', { name: /Verify \(UPS\)/i }) as HTMLButtonElement
+    const verifyBtn = within(dialog).getByRole('button', { name: /^Verify$/i }) as HTMLButtonElement
     // Fresh modal: line1 / city / zip are blank → disabled.
     expect(verifyBtn.disabled).toBe(true)
 
@@ -655,7 +655,7 @@ describe('ClientEditorPage · ShipFrom · negative', () => {
     await user.type(state as HTMLInputElement, 'ZZ')
     await user.type(zip as HTMLInputElement, '99999')
 
-    await user.click(within(dialog).getByRole('button', { name: /Verify \(UPS\)/i }))
+    await user.click(within(dialog).getByRole('button', { name: /^Verify$/i }))
 
     // NOT_FOUND matchLevel pill (rose-toned) + carrier message both appear.
     await waitFor(() => expect(within(dialog).getByText('NOT_FOUND')).toBeTruthy())
