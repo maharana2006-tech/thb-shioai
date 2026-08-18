@@ -1,5 +1,7 @@
 package com.multiship.backend.service;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.multiship.backend.model.ApiKey;
 import com.multiship.backend.repository.ApiKeyRepository;
 import lombok.RequiredArgsConstructor;
@@ -48,6 +50,32 @@ public class ApiKeyService {
      * loud, machine-readable cue to swap in the new token.
      */
     static final Duration ROTATION_GRACE = Duration.ofHours(24);
+
+    /**
+     * Audit R2 #341 — coalesce lastUsedAt writes. Pre-fix, every AUTHORIZED
+     * request UPDATE'd the api_key row (100 rps sustained = 100 UPDATEs/sec
+     * per key = row-lock contention + WAL bloat on a very small table).
+     *
+     * <p>In-JVM Caffeine cache maps keyId → last-persisted timestamp;
+     * subsequent auths within the {@link #LAST_USED_WRITE_INTERVAL} window
+     * skip the UPDATE. DB gets at most one write per key per minute per node.
+     * The displayed "Last used" column loses second-precision but keeps
+     * minute-precision — plenty for the operator ledger use case.
+     *
+     * <p>Multi-node consistency is intentionally best-effort: each node
+     * has its own cache, so N nodes = N writes/min at most. Still 3+
+     * orders of magnitude fewer writes than the pre-fix path.
+     */
+    static final Duration LAST_USED_WRITE_INTERVAL = Duration.ofMinutes(1);
+    /** Cache size sized for reasonable tenant scale — 10k active keys is
+     *  more than any single tenant would use; entries beyond that get
+     *  evicted LRU-style, degrading to the pre-fix behaviour for the
+     *  evicted key (one write) rather than a lookup miss on the auth path. */
+    private final Cache<Long, LocalDateTime> lastUsedWriteCache =
+            Caffeine.newBuilder()
+                    .maximumSize(10_000)
+                    .expireAfterWrite(LAST_USED_WRITE_INTERVAL)
+                    .build();
 
     private final ApiKeyRepository apiKeyRepository;
     private final PasswordEncoder passwordEncoder;
@@ -210,8 +238,23 @@ public class ApiKeyService {
             deprecated = true;
         }
 
+        // Audit R2 #341 — coalesce lastUsedAt writes. Only touch the DB
+        // if it's been at least LAST_USED_WRITE_INTERVAL since the last
+        // persisted timestamp for this key on this node. In-memory
+        // update to key.lastUsedAt is still applied so subsequent code
+        // in the same request sees the fresh value.
+        //
+        // Test fixtures sometimes build an ApiKey with a null id (unit
+        // tests that never persist); Caffeine rejects null keys, so we
+        // fall back to a always-write path in that case. Production
+        // rows always have an id after the initial save.
         key.setLastUsedAt(now);
-        apiKeyRepository.save(key);
+        Long keyId = key.getId();
+        LocalDateTime lastWritten = keyId == null ? null : lastUsedWriteCache.getIfPresent(keyId);
+        if (lastWritten == null || now.isAfter(lastWritten.plus(LAST_USED_WRITE_INTERVAL))) {
+            apiKeyRepository.save(key);
+            if (keyId != null) lastUsedWriteCache.put(keyId, now);
+        }
         return new AuthResult(AuthResult.Kind.AUTHORIZED, key, deprecated, sunset);
     }
 

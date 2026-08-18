@@ -212,6 +212,45 @@ class ApiKeyExpiryAndRotationTest {
         assertTrue(service.rotate(99L, "admin").isEmpty());
     }
 
+    /* -------- Audit R2 #341: lastUsedAt write coalesce -------- */
+
+    @Test
+    void authorizedAuth_persistsLastUsedOnlyOncePerWindow() {
+        // Rapid succession of auths for the same key id → the pre-fix
+        // path saved on every one; now the cache keeps the second call
+        // from touching the DB while the write is still fresh.
+        ApiKey k = keyFixture(LocalDateTime.now().plusDays(30), null);
+        k.setId(777L);  // non-null id enables the coalesce cache
+        when(repo.findByKeyPrefixAndActiveTrue(anyString())).thenReturn(Optional.of(k));
+        when(encoder.matches(anyString(), anyString())).thenReturn(true);
+
+        // First auth: must save. Second immediate auth: must NOT save.
+        AuthResult first = service.authenticateDetailed("msk_live_deadbeef_secret");
+        AuthResult second = service.authenticateDetailed("msk_live_deadbeef_secret");
+
+        assertEquals(AuthResult.Kind.AUTHORIZED, first.kind());
+        assertEquals(AuthResult.Kind.AUTHORIZED, second.kind());
+        // Exactly one persistence — the coalesce blocks the second call.
+        verify(repo, org.mockito.Mockito.times(1)).save(k);
+    }
+
+    @Test
+    void authorizedAuth_nullIdSkipsCoalesceAndAlwaysSaves() {
+        // Test fixtures without persisted id: fallback path always
+        // writes (production keys are always persisted before this
+        // code runs, so this path is only ever hit in tests).
+        ApiKey k = keyFixture(LocalDateTime.now().plusDays(30), null);
+        assertNull(k.getId(), "test fixture must start with null id");
+        when(repo.findByKeyPrefixAndActiveTrue(anyString())).thenReturn(Optional.of(k));
+        when(encoder.matches(anyString(), anyString())).thenReturn(true);
+
+        service.authenticateDetailed("msk_live_deadbeef_secret");
+        service.authenticateDetailed("msk_live_deadbeef_secret");
+
+        // Both auths persist — no coalesce because keyId is null.
+        verify(repo, org.mockito.Mockito.times(2)).save(k);
+    }
+
     /* -------- fixture -------- */
 
     private ApiKey keyFixture(LocalDateTime expiresAt, LocalDateTime lastRotatedAt) {
