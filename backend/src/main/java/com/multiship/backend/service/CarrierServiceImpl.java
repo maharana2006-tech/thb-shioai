@@ -1212,14 +1212,19 @@ public class CarrierServiceImpl implements CarrierService {
         // is 0% PERCENT, cutoff is false, warehouseCode is null.
         com.multiship.backend.service.resolution.MarkupApplied markup;
         try {
-            // Sprint 50 Tier 1 finding #4 — request > Client.defaultCurrency > USD.
+            // Sprint 51 — markup is a fee on the CARRIER RATE, which is billed in
+            // the client's billing currency, NOT the parcel's customs/declared-
+            // value currency. Passing req.getCurrency() (the CSV `currency`
+            // column, e.g. INR for an India-bound parcel) mislabeled a USD
+            // carrier rate as INR and tripped applyMarkup's currency-match guard
+            // against the client's USD markup — failing every international row
+            // whose customs currency differed from the billing currency. Use the
+            // client billing currency (Client.defaultCurrency) → USD; the customs
+            // currency stays on the commercial invoice where it belongs.
             markup = resolutionService.applyMarkup(
                     hasClient ? resolvedClient : "",
                     result.shippingCost(),
-                    firstNonBlank(
-                            req.getCurrency(),
-                            tenantDefaultCurrency,
-                            "USD"));
+                    firstNonBlank(tenantDefaultCurrency, "USD"));
         } catch (ShipmentResolutionException e) {
             return toResolutionFailure(e);
         }
