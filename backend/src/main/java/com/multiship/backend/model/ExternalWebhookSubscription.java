@@ -38,9 +38,35 @@ public class ExternalWebhookSubscription {
     @Column(nullable = false, length = 500)
     private String url;
 
-    /** HMAC-SHA256 secret. Never returned in list responses; masked in the DTO. */
-    @Column(nullable = false, length = 200)
+    /**
+     * HMAC-SHA256 secret — plaintext. Legacy column. Never returned in
+     * list responses (DTO masks). Kept nullable for the R2 #336 transition:
+     * new rows write the encrypted form below and NULL this out; the
+     * dispatcher's {@link #resolveSecret} helper reads the encrypted form
+     * first and falls back to this only for pre-#336 rows.
+     */
+    @Column(length = 200)
     private String secret;
+
+    /**
+     * Audit R2 #336 — envelope-encrypted secret. AES-GCM via
+     * {@code CryptoService}: base64(12-byte nonce || ciphertext || 128-bit
+     * tag). Always populated on new saves after #336; the plaintext
+     * {@link #secret} column is NULLed at the same time. Nullable during
+     * the transition so pre-migration rows with only plaintext still
+     * authenticate.
+     */
+    @Column(name = "secret_encrypted", length = 1024)
+    private String secretEncrypted;
+
+    /**
+     * Audit R2 #336 — encryption key generation id. Always 1 today;
+     * future rotation adds 2/3/... and a background job re-encrypts old
+     * rows so the plaintext column can be dropped without a big-bang
+     * migration. Null on pre-#336 rows.
+     */
+    @Column(name = "secret_key_id")
+    private Short secretKeyId;
 
     @Column(nullable = false)
     private Boolean active = true;

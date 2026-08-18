@@ -40,7 +40,16 @@ class WebhookSubscriptionAdminControllerTest {
         repo = mock(ExternalWebhookSubscriptionRepository.class);
         urlValidator = mock(WebhookUrlValidator.class);
         dispatcher = mock(ExternalWebhookDispatcher.class);
-        controller = new WebhookSubscriptionAdminController(repo, urlValidator, dispatcher);
+        // Audit R2 #336 — new secretCipher dep. Real class wired to a mock
+        // CryptoService that always returns "enc(<plaintext>)".
+        com.multiship.backend.config.CryptoService crypto =
+                mock(com.multiship.backend.config.CryptoService.class);
+        when(crypto.isAvailable()).thenReturn(true);
+        when(crypto.encrypt(org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(inv -> "enc(" + inv.getArgument(0) + ")");
+        com.multiship.backend.service.external.WebhookSecretCipher secretCipher =
+                new com.multiship.backend.service.external.WebhookSecretCipher(crypto);
+        controller = new WebhookSubscriptionAdminController(repo, urlValidator, dispatcher, secretCipher);
     }
 
     @Test

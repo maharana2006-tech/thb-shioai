@@ -51,6 +51,10 @@ public class ExternalWebhookDispatcher {
      *  validator (or slipped in via a bypass) still get dropped here
      *  before we POST to them. */
     private final WebhookUrlValidator urlValidator;
+    /** Audit R2 #336 — resolves the HMAC secret from either the
+     *  encrypted form (post-#336) or the legacy plaintext column
+     *  (pre-#336 rows still in transition). */
+    private final WebhookSecretCipher secretCipher;
 
     /** Package-private RestClient injection point for tests. */
     @Autowired(required = false)
@@ -159,7 +163,12 @@ public class ExternalWebhookDispatcher {
         delivery.setPayloadJson(body);
         delivery.setAttemptedAt(LocalDateTime.now());
 
-        String signature = WebhookHmacUtil.hmacSha256Hex(body, sub.getSecret());
+        // Audit R2 #336 — decrypt on the wire path; falls back to
+        // sub.getSecret() for pre-#336 legacy rows. Returns null when the
+        // row is in a broken state (no ciphertext + no plaintext, or key
+        // rotated without a re-encrypt); WebhookHmacUtil emits null on
+        // null secret so the header ends up empty and the receiver rejects.
+        String signature = WebhookHmacUtil.hmacSha256Hex(body, secretCipher.resolveForDispatch(sub));
         RestClient client = testRestClient != null ? testRestClient : sharedRestClient;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
