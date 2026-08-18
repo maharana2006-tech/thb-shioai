@@ -81,6 +81,59 @@ public class PublicAuthRateLimiter {
         }
     }
 
+    /**
+     * Audit R2 #340 — post-hoc counter for the ApiKey auth path.
+     * bcrypt-matches is CPU-expensive (~100 ms) and cannot be cheaply
+     * short-circuited before we know the outcome. Split model:
+     *   1. {@link #isOverFailureCap(String, String)} — pre-flight check
+     *      before bcrypt. Returns true when the IP has racked up too
+     *      many INVALID attempts recently → filter shortcuts to 429.
+     *   2. {@link #recordFailure(String, String)} — invoked AFTER
+     *      seeing INVALID. Increments the counter + stamps the TTL
+     *      on the first hit.
+     *
+     * <p>Legitimate callers with a valid key never touch either method,
+     * so a high-RPS well-behaved integration is unaffected.
+     */
+    public boolean isOverFailureCap(String endpointTag, String ip) {
+        StringRedisTemplate redis = redisProvider.getIfAvailable();
+        if (redis == null) return false;  // fail open
+        try {
+            String key = KEY_PREFIX + safe(endpointTag) + ":" + safe(ip);
+            String raw = redis.opsForValue().get(key);
+            if (raw == null) return false;
+            long count = Long.parseLong(raw);
+            return count > perHour;
+        } catch (Exception ex) {
+            log.warn("PublicAuthRateLimiter check failed; failing open: {}", ex.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Audit R2 #340 — increment the failure counter for (endpointTag, ip)
+     * after an INVALID auth attempt. First-hit-only TTL stamp mirrors
+     * {@link #isAllowed} so the window rolls forward from the first
+     * failure in the bucket.
+     */
+    public void recordFailure(String endpointTag, String ip) {
+        StringRedisTemplate redis = redisProvider.getIfAvailable();
+        if (redis == null) return;
+        try {
+            String key = KEY_PREFIX + safe(endpointTag) + ":" + safe(ip);
+            Long count = redis.opsForValue().increment(key);
+            if (count != null && count == 1L) {
+                redis.expire(key, Duration.ofHours(1));
+            }
+            if (count != null && count > perHour) {
+                log.warn("PublicAuthRateLimiter: {} from {} hit cap ({}/{}) — subsequent requests will 429",
+                        endpointTag, ip, count, perHour);
+            }
+        } catch (Exception ex) {
+            log.warn("PublicAuthRateLimiter recordFailure failed: {}", ex.getMessage());
+        }
+    }
+
     private static String safe(String s) {
         return s == null || s.isBlank() ? "unknown" : s.trim().toLowerCase(java.util.Locale.ROOT);
     }

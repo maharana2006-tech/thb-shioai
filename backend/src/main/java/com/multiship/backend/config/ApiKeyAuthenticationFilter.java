@@ -3,6 +3,7 @@ package com.multiship.backend.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.multiship.backend.model.ApiKey;
 import com.multiship.backend.service.ApiKeyService;
+import com.multiship.backend.service.ratelimit.PublicAuthRateLimiter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -39,16 +40,34 @@ import java.util.stream.Collectors;
  */
 public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
+    /** Audit R2 #340 — endpoint tag used with {@link PublicAuthRateLimiter}
+     *  for per-IP throttling of failed API-key auth attempts. Separate
+     *  bucket from the invite / verify-email tags so a legitimate SDK
+     *  client hammering with a stale token doesn't block invitees. */
+    private static final String LIMITER_TAG = "api-key-auth";
+
     private final ApiKeyService apiKeyService;
     private final ObjectMapper objectMapper;
+    /** Audit R2 #340 — nullable so unit tests that pass the legacy
+     *  2-arg / 1-arg ctors don't need to build a Redis stub. When null
+     *  the limiter path is skipped (fail-open, same posture as
+     *  PublicAuthRateLimiter's no-Redis path). */
+    private final PublicAuthRateLimiter rateLimiter;
 
     public ApiKeyAuthenticationFilter(ApiKeyService apiKeyService) {
-        this(apiKeyService, new ObjectMapper());
+        this(apiKeyService, new ObjectMapper(), null);
     }
 
     public ApiKeyAuthenticationFilter(ApiKeyService apiKeyService, ObjectMapper objectMapper) {
+        this(apiKeyService, objectMapper, null);
+    }
+
+    public ApiKeyAuthenticationFilter(ApiKeyService apiKeyService,
+                                       ObjectMapper objectMapper,
+                                       PublicAuthRateLimiter rateLimiter) {
         this.apiKeyService = apiKeyService;
         this.objectMapper = objectMapper;
+        this.rateLimiter = rateLimiter;
     }
 
     @Override
@@ -57,6 +76,17 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
         String token = resolveToken(request);
         if (token != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+            // Audit R2 #340 — DoS guard on the bcrypt-verify path. When
+            // this IP has already racked up too many INVALID attempts,
+            // 429 immediately without running bcrypt. Legitimate callers
+            // with a valid key are unaffected (only INVALID increments
+            // the counter). Fail-open when limiter is null (unit tests)
+            // or Redis is down.
+            String clientIp = resolveClientIp(request);
+            if (rateLimiter != null && rateLimiter.isOverFailureCap(LIMITER_TAG, clientIp)) {
+                writeRateLimited(response);
+                return;
+            }
             ApiKeyService.AuthResult result = apiKeyService.authenticateDetailed(token);
             switch (result.kind()) {
                 case AUTHORIZED -> {
@@ -85,12 +115,53 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
                     return;
                 }
                 case INVALID -> {
+                    // Audit R2 #340 — increment the per-IP failure counter
+                    // so a repeat attacker eventually hits the isOverFailureCap
+                    // shortcut above. Legitimate INVALID attempts (typo in
+                    // the token, expired-and-replaced) are rare + won't
+                    // exhaust a 100/hr budget.
+                    if (rateLimiter != null) rateLimiter.recordFailure(LIMITER_TAG, clientIp);
                     // Fall through — Spring Security's entry point issues the generic 401.
                 }
             }
         }
 
         chain.doFilter(request, response);
+    }
+
+    /**
+     * Audit R2 #340 — 429 body served when an IP has burned through the
+     * unauth failure budget. Same shape as the {@code writeError} 401 so
+     * clients parse it identically.
+     */
+    private void writeRateLimited(HttpServletResponse response) throws IOException {
+        response.setStatus(429);
+        response.setContentType("application/json");
+        response.setHeader("Retry-After", "3600");
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", "error");
+        body.put("code", 429);
+        body.put("errorCode", "PUBLIC_AUTH_RATE_LIMITED");
+        body.put("message", "Too many failed API-key attempts from your IP — try again in an hour.");
+        body.put("timestamp", Instant.now().toString());
+        body.put("data", null);
+        body.put("errors", null);
+        response.getWriter().write(objectMapper.writeValueAsString(body));
+    }
+
+    /**
+     * Audit R2 #340 — XFF-aware client IP resolver mirroring
+     * {@code AuthController.resolveClientIp}. First hop of X-Forwarded-For
+     * wins; falls back to the direct socket peer. Same-shape helper so
+     * both auth paths bucket the same IPs.
+     */
+    private static String resolveClientIp(HttpServletRequest request) {
+        String xff = request.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) {
+            int comma = xff.indexOf(',');
+            return (comma > 0 ? xff.substring(0, comma) : xff).trim();
+        }
+        return request.getRemoteAddr();
     }
 
     /** X-API-Key wins; otherwise an Authorization bearer token that looks like an API key. */
