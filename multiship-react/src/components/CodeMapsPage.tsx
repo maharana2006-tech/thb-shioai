@@ -75,28 +75,61 @@ export default function CodeMapsPage() {
   const [erpCode, setErpCode] = useState('')
   const [targetId, setTargetId] = useState<string>('')
   const [iso2, setIso2] = useState<string>('')
+  /** Audit R2 #368 — optional per-alias destination scoping.
+   *  Backend has always supported destCountry (ISO-2) + destRegion CSV
+   *  on the SHIPVIA / SERVICE / PACKAGE tabs (DEST_COUNTRY tab has no
+   *  scoping — the alias IS the mapping). Pre-fix, the add form never
+   *  exposed either, so the "any destination" alias was the only
+   *  reachable kind via UI. Now advanced-mode: hidden behind a
+   *  disclosure so the common case stays simple. */
+  const [destCountry, setDestCountry] = useState<string>('')
+  const [destRegion, setDestRegion] = useState<string>('')
+  const [showDestScope, setShowDestScope] = useState<boolean>(false)
   const [saving, setSaving] = useState(false)
+  /** Audit R2 #369 — show-inactive toggle for the client picker.
+   *  Pre-fix, aliases for deactivated clients became invisible in the
+   *  admin UI (list filtered ACTIVE only). Toggle flips the filter so
+   *  ops can still edit/remove aliases on paused clients. */
+  const [showInactiveClients, setShowInactiveClients] = useState<boolean>(false)
+  /** Audit R2 #373 — client-side substring filter on the row list.
+   *  A client with 100+ aliases becomes tedious to scroll; filter
+   *  narrows by erpCode OR targetLabel. Client-side so no round-trip. */
+  const [rowFilter, setRowFilter] = useState<string>('')
 
-  // Bootstrap the client picker + catalogs once.
+  // Bootstrap the catalogs once.
   useEffect(() => {
     let alive = true
     Promise.all([
-      clientService.listClients({ status: 'ACTIVE', size: 200 }),
       shippingConfigService.catalog(),
       shippingConfigService.listPresets(),
     ])
-      .then(([clientPage, catalog, presetList]) => {
+      .then(([catalog, presetList]) => {
+        if (!alive) return
+        setServices((catalog.services ?? []).filter((s) => s.enabled))
+        setPresets(presetList)
+      })
+      .catch(() => { /* covered by page-level loading */ })
+    return () => { alive = false }
+  }, [])
+
+  // Audit R2 #369 — reload the client picker whenever the include-inactive
+  // toggle flips. Separate effect so the initial mount + toggle share
+  // exactly the same fetch path.
+  useEffect(() => {
+    let alive = true
+    const params: { status?: 'ACTIVE'; size: number } = { size: 200 }
+    if (!showInactiveClients) params.status = 'ACTIVE'
+    clientService.listClients(params)
+      .then((clientPage) => {
         if (!alive) return
         const list = clientPage.data?.content ?? []
         setClients(list)
-        setServices((catalog.services ?? []).filter((s) => s.enabled))
-        setPresets(presetList)
         if (list.length && !selectedClient) setSelectedClient(list[0].clientCode)
       })
       .catch(() => { /* covered by page-level loading */ })
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [showInactiveClients])
 
   // Reload rows when either the tab or the client changes.
   const load = useCallback(async () => {
@@ -118,8 +151,14 @@ export default function CodeMapsPage() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on client/tab change; load() sets loading + rows; also resets the inline form which is response-to-input, not derivable
     void load()
-    // reset the inline form when either dimension shifts
+    // reset the inline form + row filter when either dimension shifts
     setErpCode(''); setTargetId(''); setIso2('')
+    // Audit R2 #368 — reset dest scoping fields too so a switched tab
+    // doesn't carry over a stale destCountry from the previous kind.
+    setDestCountry(''); setDestRegion(''); setShowDestScope(false)
+    // Audit R2 #373 — clear the row filter so switching client/tab
+    // shows the fresh row set unfiltered.
+    setRowFilter('')
   }, [load])
 
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
@@ -132,13 +171,23 @@ export default function CodeMapsPage() {
     if (!selectedClient || !erpCode.trim()) return
     setSaving(true)
     try {
+      // Audit R2 #368 — thread destCountry / destRegion through when the
+      // operator opened the advanced-scope panel. Backend already accepts
+      // them on SHIPVIA / SERVICE / PACKAGE payloads; DEST_COUNTRY tab
+      // has its own iso2 field and no per-destination scoping.
       const payload =
         tab === 'DEST_COUNTRY'
           ? { erpCode: erpCode.trim(), iso2: iso2.trim().toUpperCase() }
-          : { erpCode: erpCode.trim(), targetId: Number(targetId) }
+          : {
+              erpCode: erpCode.trim(),
+              targetId: Number(targetId),
+              destCountry: destCountry.trim() ? destCountry.trim().toUpperCase() : null,
+              destRegion: destRegion.trim() || null,
+            }
       await clientCodeMapService.upsert(selectedClient, tab, payload)
       notify.success(`${TAB_META[tab].label} alias saved.`)
       setErpCode(''); setTargetId(''); setIso2('')
+      setDestCountry(''); setDestRegion('')
       await load()
     } catch (error) {
       notify.apiError(error, 'Failed to save alias.')
@@ -161,6 +210,16 @@ export default function CodeMapsPage() {
   }
 
   const meta = TAB_META[tab]
+  /** Audit R2 #373 — client-side substring filter. Matches on erpCode
+   *  OR targetLabel (whichever column the operator recognises). */
+  const filteredRows = useMemo(() => {
+    if (!rowFilter.trim()) return rows
+    const needle = rowFilter.trim().toLowerCase()
+    return rows.filter((r) =>
+      (r.erpCode ?? '').toLowerCase().includes(needle)
+      || (r.targetLabel ?? '').toLowerCase().includes(needle),
+    )
+  }, [rows, rowFilter])
   const canSubmit =
     !!selectedClient &&
     erpCode.trim().length > 0 &&
@@ -188,6 +247,17 @@ export default function CodeMapsPage() {
                 </option>
               ))}
             </Select>
+            {/* Audit R2 #369 — include-inactive toggle so aliases on
+                deactivated clients aren't hidden forever. */}
+            <label className="mt-1.5 flex cursor-pointer items-center gap-1.5 text-[11px] text-slate-500">
+              <input
+                type="checkbox"
+                checked={showInactiveClients}
+                onChange={(e) => setShowInactiveClients(e.target.checked)}
+                className="h-3 w-3 accent-[#1f150c]"
+              />
+              Include deactivated clients
+            </label>
           </div>
         </div>
 
@@ -252,6 +322,65 @@ export default function CodeMapsPage() {
                 {saving ? 'Saving…' : 'Add alias'}
               </button>
             </div>
+            {/* Audit R2 #368 — advanced-scope disclosure. Hidden by default
+                so the common case stays a two-field form; expand to add
+                per-destination scoping (SHIPVIA / SERVICE / PACKAGE tabs
+                only — DEST_COUNTRY tab is the mapping itself, no scope). */}
+            {tab !== 'DEST_COUNTRY' ? (
+              <div className="sm:col-span-3">
+                <button
+                  type="button"
+                  onClick={() => setShowDestScope((v) => !v)}
+                  className="text-[10.5px] font-semibold text-slate-500 hover:text-slate-950"
+                >
+                  {showDestScope ? '− Hide destination scope' : '+ Add destination scope (advanced)'}
+                </button>
+                {showDestScope ? (
+                  <div className="mt-1.5 grid grid-cols-1 gap-2 rounded-lg border border-dashed border-slate-200 bg-white p-2 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-0.5 block text-[9.5px] font-bold uppercase tracking-wide text-slate-400">
+                        Dest country (ISO-2, optional)
+                      </label>
+                      <input
+                        value={destCountry}
+                        onChange={(e) => setDestCountry(e.target.value.toUpperCase())}
+                        placeholder="US"
+                        maxLength={2}
+                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-[12px] outline-none focus:border-[#412d15]"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-0.5 block text-[9.5px] font-bold uppercase tracking-wide text-slate-400">
+                        Dest region (optional; e.g. Europe)
+                      </label>
+                      <input
+                        value={destRegion}
+                        onChange={(e) => setDestRegion(e.target.value)}
+                        placeholder="Europe"
+                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-[12px] outline-none focus:border-[#412d15]"
+                      />
+                    </div>
+                    <p className="col-span-full text-[10.5px] text-slate-400">
+                      Leave both blank for an &quot;any destination&quot; alias (matches everywhere).
+                      Country wins over region when both are set.
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Audit R2 #373 — client-side row filter for clients with many aliases. */}
+        {selectedClient && rows.length > 0 ? (
+          <div className="mt-3">
+            <input
+              type="search"
+              value={rowFilter}
+              onChange={(e) => setRowFilter(e.target.value)}
+              placeholder="Filter by ERP code or target…"
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] outline-none focus:border-[#412d15]"
+            />
           </div>
         ) : null}
 
@@ -269,8 +398,14 @@ export default function CodeMapsPage() {
             <p className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-3 text-center text-[11.5px] text-slate-500">
               No {meta.label.toLowerCase()} aliases yet — add the first one above.
             </p>
+          ) : filteredRows.length === 0 ? (
+            /* Audit R2 #373 — non-empty rows but the filter matched nothing.
+               Distinct message so operator knows to clear the filter. */
+            <p className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-3 text-center text-[11.5px] text-slate-500">
+              No aliases match &quot;{rowFilter}&quot;.
+            </p>
           ) : (
-            rows.map((row) => (
+            filteredRows.map((row) => (
               <div
                 key={row.id}
                 className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2"
