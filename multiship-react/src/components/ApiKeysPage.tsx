@@ -40,6 +40,30 @@ const expiryTone = (iso: string | null | undefined): { text: string; cls: string
 /** clientCode "*" mints a platform-wide (WMS) key that ships for any client. */
 const ALL_CLIENTS = '*'
 
+/**
+ * Audit R2 #338 — scope catalog for the mint-key modal. Names + tokens
+ * mirror {@link ApiKeyScope} on the backend so a checkbox check-state
+ * maps 1:1 to a persisted scope. Pre-fix, the modal shipped every key
+ * with the DEFAULT_SCOPES full set (least-privilege violation).
+ *
+ * <p>Order: the golden path (SHIPMENTS + TRACKING + RATES) at the top;
+ * post-shipment ops (VOID + PICKUPS) next; utility scopes (ADDRESSES +
+ * LANDED_COST) at the bottom.
+ */
+const AVAILABLE_SCOPES: { token: string; label: string; hint: string }[] = [
+  { token: 'shipments',    label: 'Shipments',    hint: 'POST /shipments + POST /rate-shop (create labels).' },
+  { token: 'tracking',     label: 'Tracking',     hint: 'GET /shipments/{id}/tracking (live status).' },
+  { token: 'rates',        label: 'Rates',        hint: 'POST /rates (quote-only, no shipment).' },
+  { token: 'void',         label: 'Void',         hint: 'POST /shipments/{id}/void (cancel a shipment).' },
+  { token: 'pickups',      label: 'Pickups',      hint: 'POST /pickups, POST /close-out (post-shipment ops).' },
+  { token: 'addresses',    label: 'Addresses',    hint: 'POST /addresses/validate (address structural check).' },
+  { token: 'landed-cost',  label: 'Landed cost',  hint: 'POST /landed-cost (duty + tax + fees estimate).' },
+]
+
+/** Default = all scopes on, matching the pre-fix behavior. Golden path
+ *  stays fast; operators wanting to narrow uncheck what they don't need. */
+const DEFAULT_SCOPE_SET = new Set(AVAILABLE_SCOPES.map((s) => s.token))
+
 const emptyForm = { name: '', environment: 'live' }
 
 /**
@@ -56,6 +80,10 @@ export default function ApiKeysPage() {
   const [issueOpen, setIssueOpen] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [issuing, setIssuing] = useState(false)
+  /** Audit R2 #338 — per-scope check-state. Initialised to all-on so the
+   *  golden path stays "issue = full key"; operators wanting least-privilege
+   *  uncheck specific tokens. */
+  const [scopes, setScopes] = useState<Set<string>>(() => new Set(DEFAULT_SCOPE_SET))
 
   /** The freshly issued key — its `token` is shown once in the reveal modal. */
   const [issued, setIssued] = useState<ApiKey | null>(null)
@@ -96,6 +124,9 @@ export default function ApiKeysPage() {
 
   const openIssue = () => {
     setForm(emptyForm)
+    // Audit R2 #338 — reset scope-set to all-on when the modal reopens
+    // so a prior narrow selection doesn't carry over silently.
+    setScopes(new Set(DEFAULT_SCOPE_SET))
     setIssueOpen(true)
   }
 
@@ -104,12 +135,26 @@ export default function ApiKeysPage() {
       notify.error('A key name is required.')
       return
     }
+    // Audit R2 #338 — require at least one scope; a zero-scope key
+    // would authenticate but reject every real call, which is a footgun
+    // rather than a useful state.
+    if (scopes.size === 0) {
+      notify.error('Pick at least one scope — a key with no scopes can’t call anything.')
+      return
+    }
     setIssuing(true)
     try {
       const res = await apiKeyService.issue({
         name: form.name.trim(),
         clientCode: ALL_CLIENTS,
         environment: form.environment,
+        // Audit R2 #338 — space-separated token list, matches the backend's
+        // ApiKeyService.issue signature (splits on whitespace at persist time).
+        // Only send when the operator narrowed; empty string = "use backend
+        // defaults" which happens to be the same all-on set right now, but
+        // sending the explicit set makes the key immutable against a future
+        // DEFAULT_SCOPES change on the server.
+        scopes: Array.from(scopes).sort().join(' '),
       })
       setIssueOpen(false)
       setCopied(false)
@@ -433,6 +478,61 @@ export default function ApiKeysPage() {
                       {env}
                     </button>
                   ))}
+                </div>
+              </div>
+
+              {/* Audit R2 #338 — per-scope checkboxes so operators can narrow
+                  from the default-all set. Pre-fix, every key was minted with
+                  the full DEFAULT_SCOPES; ops had no UI to enforce least
+                  privilege. "Recommended defaults" one-click restores all
+                  scopes for the golden-path issue flow. */}
+              <div>
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                    Scopes ({scopes.size}/{AVAILABLE_SCOPES.length} selected)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setScopes(new Set(DEFAULT_SCOPE_SET))}
+                    disabled={scopes.size === DEFAULT_SCOPE_SET.size}
+                    className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Recommended defaults
+                  </button>
+                </div>
+                <div className="space-y-1.5 rounded-xl border border-slate-200 bg-white p-2">
+                  {AVAILABLE_SCOPES.map((s) => {
+                    const checked = scopes.has(s.token)
+                    return (
+                      <label
+                        key={s.token}
+                        className="flex cursor-pointer items-start gap-2 rounded-lg px-1.5 py-1 hover:bg-slate-50"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            setScopes((prev) => {
+                              const next = new Set(prev)
+                              if (e.target.checked) next.add(s.token)
+                              else next.delete(s.token)
+                              return next
+                            })
+                          }}
+                          className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[#1f150c]"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[12px] font-semibold text-slate-800">
+                            {s.label}{' '}
+                            <span className="font-mono text-[10.5px] font-normal text-slate-400">
+                              {s.token}
+                            </span>
+                          </p>
+                          <p className="text-[11px] text-slate-500">{s.hint}</p>
+                        </div>
+                      </label>
+                    )
+                  })}
                 </div>
               </div>
             </div>
