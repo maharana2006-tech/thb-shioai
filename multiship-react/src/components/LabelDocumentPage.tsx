@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import { FiActivity, FiArrowLeft, FiCopy, FiDownload, FiExternalLink, FiFileText, FiPrinter, FiTag } from 'react-icons/fi'
@@ -128,8 +128,16 @@ export default function LabelDocumentPage() {
   const [tab, setTab] = useState<DocumentTab>('label')
   const [trackingOpen, setTrackingOpen] = useState(false)
   const [zplBusy, setZplBusy] = useState(false)
+  /** Audit R2 #390 — re-entrancy guard. The disabled={zplBusy} attribute
+   *  on the two buttons stops a click after React commits the state update,
+   *  but a fast double-click can fire twice before the first setZplBusy(true)
+   *  renders. Ref checked synchronously inside fetchZpl short-circuits the
+   *  second call so we never send two network requests for the same ZPL. */
+  const zplInFlightRef = useRef(false)
 
   const fetchZpl = async (): Promise<string | null> => {
+    if (zplInFlightRef.current) return null
+    zplInFlightRef.current = true
     setZplBusy(true)
     try {
       // Audit L1 — pass pkgIndex through so the ZPL matches the on-screen
@@ -140,6 +148,7 @@ export default function LabelDocumentPage() {
       notify.apiError(err, 'Failed to fetch the ZPL label.')
       return null
     } finally {
+      zplInFlightRef.current = false
       setZplBusy(false)
     }
   }
@@ -290,7 +299,16 @@ export default function LabelDocumentPage() {
   const isUsExport = isInternational && originCountry === 'US'
   // Multi-package: total M comes from the order's package_count column;
   // current N comes from the ?pkg= query param (default 1). Clamped.
-  const pkgCount = Math.max(1, Number(order?.packageCount) || 1)
+  //
+  // Audit R2 #388 — clamp against BOTH packageCount AND packages.length
+  // when the array is present. Pre-fix, packageCount could disagree with
+  // the actual persisted packages (e.g., order.packageCount=5 but only 3
+  // label_package rows), so pkgIndex=5 → perPkg falls back to shipment
+  // level silently. Now we cap to whichever is smaller so the picker
+  // never lands on a "phantom" package.
+  const packagesArrayLen = Array.isArray(order?.packages) ? order.packages.length : 0
+  const pkgCount = Math.max(1,
+    packagesArrayLen > 0 ? packagesArrayLen : (Number(order?.packageCount) || 1))
   const rawPkg = Number(searchParams.get('pkg')) || 1
   const pkgIndex = Math.min(Math.max(1, rawPkg), pkgCount)
   // Per-package row for the currently-selected box (drives per-pkg tracking,
