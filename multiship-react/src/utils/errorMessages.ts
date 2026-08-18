@@ -121,6 +121,22 @@ export const errorMessages: Readonly<Record<string, FriendlyError>> = {
       'This invite was already accepted. Sign in with the account it created — or ask an admin for a new invite if you need a different account.',
   },
 
+  // ===== Email verification (Sprint 50 D + audit B2) =====
+  /** Audit B2 (verify-email) — canonical codes for the click-through
+   *  email-verify flow. Pre-fix, verifyEmail reused INVITE_NOT_FOUND /
+   *  INVITE_EXPIRED — semantically wrong; API clients + logs couldn't
+   *  distinguish invite-accept failure from email-verify failure. */
+  EMAIL_VERIFY_TOKEN_NOT_FOUND: {
+    title: 'Verification link not recognised',
+    message:
+      'This verification URL looks incomplete or wrong. Open the link straight from the verification email — copy/paste sometimes drops the token.',
+  },
+  EMAIL_VERIFY_TOKEN_EXPIRED: {
+    title: 'Verification link expired',
+    message:
+      'The 24-hour window on this verification link has passed. Ask an admin to resend, or sign up again if public signup is enabled for your environment.',
+  },
+
   // ===== Admin surface (Sprint 50 Tier 0.5 E) =====
   ADMIN_TARGET_USER_NOT_FOUND: {
     title: 'User not found',

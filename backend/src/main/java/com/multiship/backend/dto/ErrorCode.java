@@ -34,6 +34,12 @@ public enum ErrorCode {
     INVITE_NOT_FOUND,
     INVITE_EXPIRED,
     INVITE_ALREADY_USED,
+    /** Audit B2 (verify-email) — canonical codes for the click-through
+     *  email-verify endpoint. Pre-fix, verifyEmail reused INVITE_NOT_FOUND
+     *  / INVITE_EXPIRED which conflated the two distinct flows in API
+     *  logs + client-side branching. */
+    EMAIL_VERIFY_TOKEN_NOT_FOUND,
+    EMAIL_VERIFY_TOKEN_EXPIRED,
     /** Signup / invite payload missing the required clientCode. */
     CLIENT_CODE_REQUIRED,
 

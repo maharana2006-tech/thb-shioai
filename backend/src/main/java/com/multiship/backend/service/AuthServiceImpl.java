@@ -285,9 +285,12 @@ public class AuthServiceImpl implements AuthService {
         }
         Optional<User> found = userRepository.findByEmailVerifyToken(token);
         if (found.isEmpty()) {
+            // Audit B2 — canonical code (was INVITE_NOT_FOUND — same 404 shape,
+            // wrong semantic; API clients branching on errorCode couldn't
+            // distinguish invite-accept failure from email-verify failure).
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(new MessageResponse("Verification link is invalid.",
-                            ErrorCode.INVITE_NOT_FOUND));
+                            ErrorCode.EMAIL_VERIFY_TOKEN_NOT_FOUND));
         }
         User user = found.get();
         if (Boolean.TRUE.equals(user.getEmailVerified())) {
@@ -297,7 +300,7 @@ public class AuthServiceImpl implements AuthService {
                 && LocalDateTime.now().isAfter(user.getEmailVerifyExpiresAt())) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(new MessageResponse("Verification link expired. Sign up again to get a new one.",
-                            ErrorCode.INVITE_EXPIRED));
+                            ErrorCode.EMAIL_VERIFY_TOKEN_EXPIRED));
         }
         user.setEmailVerified(true);
         user.setEmailVerifyToken(null);
