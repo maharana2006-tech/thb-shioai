@@ -63,8 +63,13 @@ class OutputDestinationAdminServiceTestDispatchTest {
                 List.of(localDriver, printerDriver, sftpDriver),
                 new SimpleMeterRegistry());
 
+        // Audit R2 #344 — new WebhookUrlValidator dep for the SSRF guard.
+        com.multiship.backend.service.external.WebhookUrlValidator urlValidator =
+                new com.multiship.backend.service.external.WebhookUrlValidator();
+        org.springframework.test.util.ReflectionTestUtils.setField(urlValidator, "allowPrivateNetworks", true);
+        org.springframework.test.util.ReflectionTestUtils.setField(urlValidator, "allowHttp", true);
         admin = new OutputDestinationAdminService(destinationRepo, systemSettingRepo,
-                cryptoService, mapper, outputService, new TestPayloadFactory());
+                cryptoService, mapper, outputService, new TestPayloadFactory(), urlValidator);
     }
 
     private ClientOutputDestination stubDest(Long id, DestinationType type, DocType doc, String config) {

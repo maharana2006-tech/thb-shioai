@@ -46,6 +46,11 @@ public class OutputDestinationAdminService {
     private final OutputDestinationService outputDestinationService;
     /** Sprint 52 output-polish (follow-up #3) — realistic per-type payloads. */
     private final TestPayloadFactory testPayloadFactory;
+    /** Audit R2 #344 — SSRF guard. Reuses the same private-network + cloud-
+     *  metadata blocklist that guards webhook subscriptions. Blocks admins
+     *  (or a compromised admin session) from pointing SFTP / PRINTER
+     *  destinations at internal infra + AWS/GCP/Azure metadata endpoints. */
+    private final com.multiship.backend.service.external.WebhookUrlValidator webhookUrlValidator;
 
     /** Sentinel prefix on system_settings.setting_key for SFTP secrets. */
     static final String SFTP_SECRET_PREFIX = "sftp.secret.";
@@ -65,6 +70,7 @@ public class OutputDestinationAdminService {
 
     @Transactional
     public OutputDestinationDTO create(OutputDestinationUpsertRequest req, String actor) {
+        validateHostForSsrf(req);
         ClientOutputDestination entity = ClientOutputDestination.builder()
                 .clientCode(req.getClientCode().trim())
                 .docType(req.getDocType())
@@ -82,6 +88,7 @@ public class OutputDestinationAdminService {
 
     @Transactional
     public Optional<OutputDestinationDTO> update(Long id, OutputDestinationUpsertRequest req, String actor) {
+        validateHostForSsrf(req);
         return destinationRepository.findById(id).map(entity -> {
             entity.setClientCode(req.getClientCode().trim());
             entity.setDocType(req.getDocType());
@@ -133,6 +140,40 @@ public class OutputDestinationAdminService {
         // We intentionally bypass the DB copy here — this is a test ping,
         // not a real shipment document. Call the driver directly.
         return outputDestinationService.testDispatch(dest, dest.getDocType(), p.getBytes(), ctx);
+    }
+
+    /**
+     * Audit R2 #344 — SSRF guard on SFTP + PRINTER destinations. LOCAL_FS
+     * has no host, skipped. Both destination types put the host inside
+     * {@code config.host}; parse-and-validate against the shared
+     * WebhookUrlValidator so private IPs, cloud-metadata endpoints, and
+     * unresolvable hostnames are rejected at 400 with the actual reason
+     * (translated to IllegalArgumentException here → controller shapes
+     * the response).
+     */
+    private void validateHostForSsrf(OutputDestinationUpsertRequest req) {
+        DestinationType type = req.getDestinationType();
+        if (type == DestinationType.LOCAL_FS) return;
+        String host;
+        try {
+            JsonNode cfg = objectMapper.readTree(req.getConfig());
+            host = str(cfg, "host");
+        } catch (Exception parseErr) {
+            // If the config isn't JSON we let processConfig surface the
+            // parse error with its own detailed message — no point
+            // duplicating it here.
+            return;
+        }
+        if (host == null || host.isBlank()) return;
+        String label = type == DestinationType.SFTP ? "SFTP host" : "Printer host";
+        try {
+            webhookUrlValidator.validateHost(host, label);
+        } catch (com.multiship.backend.service.external.WebhookUrlValidator.WebhookUrlRejectedException ex) {
+            // Re-raise as IllegalArgumentException so the controller layer
+            // (which already catches IAE for the processConfig path) shapes
+            // it as a clean 400.
+            throw new IllegalArgumentException(ex.getMessage(), ex);
+        }
     }
 
     /** Extract the {@code protocol} field from the PRINTER config JSON;
