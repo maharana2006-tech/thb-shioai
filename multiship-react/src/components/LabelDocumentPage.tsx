@@ -132,7 +132,10 @@ export default function LabelDocumentPage() {
   const fetchZpl = async (): Promise<string | null> => {
     setZplBusy(true)
     try {
-      return await orderService.getLabelZpl(orderNo)
+      // Audit L1 — pass pkgIndex through so the ZPL matches the on-screen
+      // package view. Pre-fix, all downloads returned pkg-1 ZPL regardless
+      // of the multi-package picker selection.
+      return await orderService.getLabelZpl(orderNo, pkgIndex)
     } catch (err) {
       notify.apiError(err, 'Failed to fetch the ZPL label.')
       return null
@@ -149,10 +152,15 @@ export default function LabelDocumentPage() {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `label-${orderNo}.zpl`
+    // Audit L1 — filename encodes pkg N of M for multi-package shipments
+    // so operators can tell downloads apart when they save several to
+    // disk before printing.
+    link.download = pkgCount > 1
+      ? `label-${orderNo}-pkg${pkgIndex}of${pkgCount}.zpl`
+      : `label-${orderNo}.zpl`
     link.click()
     URL.revokeObjectURL(url)
-    notify.success(`label-${orderNo}.zpl downloaded — send it straight to a Zebra printer.`)
+    notify.success(`${link.download} downloaded — send it straight to a Zebra printer.`)
   }
 
   const copyZpl = async () => {
