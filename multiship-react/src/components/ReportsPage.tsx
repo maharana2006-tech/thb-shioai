@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   FiCalendar,
@@ -98,6 +98,12 @@ function TabButton({
 function DataExplorer({ clients }: { clients: Client[] }) {
   const [filters, setFilters] = useState<ReportFilters>({})
   const [running, setRunning] = useState<Dataset | null>(null)
+  // A11y audit A1 — unique ID prefix so labels can bind to their inputs via
+  // htmlFor. useId() gives us one stable base per component instance; the
+  // idFor helper suffixes it per field so screen readers announce the label
+  // when the input is focused.
+  const idPrefix = useId()
+  const idFor = useCallback((k: string) => `${idPrefix}-${k}`, [idPrefix])
 
   // Split typed helpers keep the k -> v type-flow sound without an `any` cast: the
   // key literally selects a string-valued (or number-valued) key of ReportFilters.
@@ -141,47 +147,50 @@ function DataExplorer({ clients }: { clients: Client[] }) {
           ) : null}
         </div>
         <div className="grid grid-cols-3 gap-3">
-          <div><label className={fieldLabel}>From</label>
-            <input type="date" value={filters.from ?? ''} onChange={(e) => setStr('from')(e.target.value)} className={inputCls} />
+          <div><label htmlFor={idFor('from')} className={fieldLabel}>From</label>
+            <input id={idFor('from')} type="date" value={filters.from ?? ''} onChange={(e) => setStr('from')(e.target.value)} className={inputCls} />
           </div>
-          <div><label className={fieldLabel}>To</label>
-            <input type="date" value={filters.to ?? ''} onChange={(e) => setStr('to')(e.target.value)} className={inputCls} />
+          <div><label htmlFor={idFor('to')} className={fieldLabel}>To</label>
+            <input id={idFor('to')} type="date" value={filters.to ?? ''} onChange={(e) => setStr('to')(e.target.value)} className={inputCls} />
           </div>
-          <div><label className={fieldLabel}>Client</label>
-            <Select value={filters.customerNo ?? ''} onChange={(e) => setStr('customerNo')(e.target.value)}>
+          <div><label htmlFor={idFor('client')} className={fieldLabel}>Client</label>
+            <Select id={idFor('client')} value={filters.customerNo ?? ''} onChange={(e) => setStr('customerNo')(e.target.value)}>
               <option value="">Any</option>
               {clients.map((c) => <option key={c.clientCode} value={c.clientCode}>{c.clientCode} — {c.name}</option>)}
             </Select>
           </div>
-          <div><label className={fieldLabel}>Carrier</label>
-            <input type="text" value={filters.carrier ?? ''} onChange={(e) => setStr('carrier')(e.target.value)} placeholder="UPS / FEDEX / …" className={inputCls} />
+          <div><label htmlFor={idFor('carrier')} className={fieldLabel}>Carrier</label>
+            <input id={idFor('carrier')} type="text" value={filters.carrier ?? ''} onChange={(e) => setStr('carrier')(e.target.value)} placeholder="UPS / FEDEX / …" className={inputCls} />
           </div>
-          <div><label className={fieldLabel}>Status</label>
-            <input type="text" value={filters.status ?? ''} onChange={(e) => setStr('status')(e.target.value)} placeholder="GENERATED / PENDING / ERROR" className={inputCls} />
+          <div><label htmlFor={idFor('status')} className={fieldLabel}>Status</label>
+            <input id={idFor('status')} type="text" value={filters.status ?? ''} onChange={(e) => setStr('status')(e.target.value)} placeholder="GENERATED / PENDING / ERROR" className={inputCls} />
           </div>
-          <div><label className={fieldLabel}>Dest country (ISO-2)</label>
-            <input type="text" value={filters.destCountry ?? ''} onChange={(e) => setStr('destCountry')(e.target.value.toUpperCase())} className={inputCls} />
+          <div><label htmlFor={idFor('destCountry')} className={fieldLabel}>Dest country (ISO-2)</label>
+            <input id={idFor('destCountry')} type="text" value={filters.destCountry ?? ''} onChange={(e) => setStr('destCountry')(e.target.value.toUpperCase())} className={inputCls} />
           </div>
           {/* Audit R2 #363 — service + originCountry existed in ReportFilters
               interface + backend ReportFiltersQuery, but the UI never
               exposed them. Operators wanting to filter by carrier service
               or origin had to hit the REST endpoint directly. */}
-          <div><label className={fieldLabel}>Service</label>
-            <input type="text" value={filters.service ?? ''} onChange={(e) => setStr('service')(e.target.value)} placeholder="FEDEX_GROUND / UPS_NEXT_DAY_AIR / …" className={inputCls} />
+          <div><label htmlFor={idFor('service')} className={fieldLabel}>Service</label>
+            <input id={idFor('service')} type="text" value={filters.service ?? ''} onChange={(e) => setStr('service')(e.target.value)} placeholder="FEDEX_GROUND / UPS_NEXT_DAY_AIR / …" className={inputCls} />
           </div>
-          <div><label className={fieldLabel}>Origin country (ISO-2)</label>
-            <input type="text" value={filters.originCountry ?? ''} onChange={(e) => setStr('originCountry')(e.target.value.toUpperCase())} className={inputCls} />
+          <div><label htmlFor={idFor('originCountry')} className={fieldLabel}>Origin country (ISO-2)</label>
+            <input id={idFor('originCountry')} type="text" value={filters.originCountry ?? ''} onChange={(e) => setStr('originCountry')(e.target.value.toUpperCase())} className={inputCls} />
           </div>
-          <div><label className={fieldLabel}>Weight range (LB)</label>
+          {/* Range groups: 2 inputs share 1 visual label. Screen readers
+              announce each via its own aria-label ("min"/"max" scoped to
+              the range name). */}
+          <div><span className={fieldLabel}>Weight range (LB)</span>
             <div className="flex gap-2">
-              <input type="number" step="0.1" placeholder="min" value={filters.minWeightLb ?? ''} onChange={(e) => setNum('minWeightLb')(e.target.value)} className={inputCls} />
-              <input type="number" step="0.1" placeholder="max" value={filters.maxWeightLb ?? ''} onChange={(e) => setNum('maxWeightLb')(e.target.value)} className={inputCls} />
+              <input type="number" step="0.1" placeholder="min" aria-label="Weight range min (LB)" value={filters.minWeightLb ?? ''} onChange={(e) => setNum('minWeightLb')(e.target.value)} className={inputCls} />
+              <input type="number" step="0.1" placeholder="max" aria-label="Weight range max (LB)" value={filters.maxWeightLb ?? ''} onChange={(e) => setNum('maxWeightLb')(e.target.value)} className={inputCls} />
             </div>
           </div>
-          <div><label className={fieldLabel}>Declared value range</label>
+          <div><span className={fieldLabel}>Declared value range</span>
             <div className="flex gap-2">
-              <input type="number" step="0.01" placeholder="min" value={filters.minDeclaredValue ?? ''} onChange={(e) => setNum('minDeclaredValue')(e.target.value)} className={inputCls} />
-              <input type="number" step="0.01" placeholder="max" value={filters.maxDeclaredValue ?? ''} onChange={(e) => setNum('maxDeclaredValue')(e.target.value)} className={inputCls} />
+              <input type="number" step="0.01" placeholder="min" aria-label="Declared value range min" value={filters.minDeclaredValue ?? ''} onChange={(e) => setNum('minDeclaredValue')(e.target.value)} className={inputCls} />
+              <input type="number" step="0.01" placeholder="max" aria-label="Declared value range max" value={filters.maxDeclaredValue ?? ''} onChange={(e) => setNum('maxDeclaredValue')(e.target.value)} className={inputCls} />
             </div>
           </div>
         </div>
@@ -395,6 +404,9 @@ function ScheduleEditor({
 }) {
   const [draft, setDraft] = useState<ScheduledReport>({ ...schedule })
   const [saving, setSaving] = useState(false)
+  // A11y audit A1 — see DataExplorer for the idPrefix pattern.
+  const idPrefix = useId()
+  const idFor = useCallback((k: string) => `${idPrefix}-${k}`, [idPrefix])
 
   const set = <K extends keyof ScheduledReport>(k: K, v: ScheduledReport[K]) =>
     setDraft((d) => ({ ...d, [k]: v }))
@@ -440,34 +452,35 @@ function ScheduleEditor({
 
         <div className="max-h-[70vh] space-y-4 overflow-y-auto px-6 py-5">
           <div className="grid grid-cols-2 gap-3">
-            <div><label className={fieldLabel}>Name</label>
-              <input value={draft.name} onChange={(e) => set('name', e.target.value)} className={inputCls} placeholder="Weekly EU orders" />
+            <div><label htmlFor={idFor('name')} className={fieldLabel}>Name</label>
+              <input id={idFor('name')} value={draft.name} onChange={(e) => set('name', e.target.value)} className={inputCls} placeholder="Weekly EU orders" />
             </div>
-            <div><label className={fieldLabel}>Tenant</label>
-              <Select value={draft.tenantId ?? ''} onChange={(e) => set('tenantId', e.target.value || null)}>
+            <div><label htmlFor={idFor('tenant')} className={fieldLabel}>Tenant</label>
+              <Select id={idFor('tenant')} value={draft.tenantId ?? ''} onChange={(e) => set('tenantId', e.target.value || null)}>
                 {tenantOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </Select>
             </div>
-            <div><label className={fieldLabel}>Dataset</label>
-              <Select value={draft.dataset} onChange={(e) => set('dataset', e.target.value as Dataset)}>
+            <div><label htmlFor={idFor('dataset')} className={fieldLabel}>Dataset</label>
+              <Select id={idFor('dataset')} value={draft.dataset} onChange={(e) => set('dataset', e.target.value as Dataset)}>
                 {DATASETS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
               </Select>
             </div>
-            <div><label className={fieldLabel}>Frequency</label>
-              <Select value={draft.frequency} onChange={(e) => set('frequency', e.target.value as Frequency)}>
+            <div><label htmlFor={idFor('frequency')} className={fieldLabel}>Frequency</label>
+              <Select id={idFor('frequency')} value={draft.frequency} onChange={(e) => set('frequency', e.target.value as Frequency)}>
                 <option value="DAILY">Daily</option>
                 <option value="WEEKLY">Weekly</option>
                 <option value="MONTHLY">Monthly</option>
               </Select>
             </div>
             <div className="col-span-2">
-              <label className={fieldLabel}>Filters (JSON — leave empty for the whole dataset)</label>
-              <textarea value={draft.filtersJson ?? ''} onChange={(e) => set('filtersJson', e.target.value || null)}
+              <label htmlFor={idFor('filtersJson')} className={fieldLabel}>Filters (JSON — leave empty for the whole dataset)</label>
+              <textarea id={idFor('filtersJson')} value={draft.filtersJson ?? ''} onChange={(e) => set('filtersJson', e.target.value || null)}
                 placeholder='{"customerNo":"ARHDEV","destCountry":"US"}'
                 className={`${inputCls} font-mono`} rows={3} />
             </div>
-            <div><label className={fieldLabel}>Delivery</label>
+            <div><label htmlFor={idFor('delivery')} className={fieldLabel}>Delivery</label>
               <Select
+                id={idFor('delivery')}
                 value={draft.deliveryType === 'EMAIL' ? 'DASHBOARD' : draft.deliveryType}
                 onChange={(e) => set('deliveryType', e.target.value as DeliveryType)}
               >
@@ -496,8 +509,8 @@ function ScheduleEditor({
             {/* G7 — EMAIL recipients block hidden along with the option. */}
             {draft.deliveryType === 'WEBHOOK' ? (
               <div className="col-span-2">
-                <label className={fieldLabel}>Webhook URL</label>
-                <input value={draft.deliveryWebhookUrl ?? ''} onChange={(e) => set('deliveryWebhookUrl', e.target.value)} className={inputCls} placeholder="https://api.acme.example/webhooks/reports" />
+                <label htmlFor={idFor('webhookUrl')} className={fieldLabel}>Webhook URL</label>
+                <input id={idFor('webhookUrl')} value={draft.deliveryWebhookUrl ?? ''} onChange={(e) => set('deliveryWebhookUrl', e.target.value)} className={inputCls} placeholder="https://api.acme.example/webhooks/reports" />
               </div>
             ) : null}
           </div>
