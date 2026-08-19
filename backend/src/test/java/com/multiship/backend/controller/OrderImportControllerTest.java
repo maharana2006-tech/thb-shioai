@@ -132,22 +132,22 @@ class OrderImportControllerTest {
         List<OrderImportRowDTO> rows = Collections.singletonList(new OrderImportRowDTO());
         ApiResponse<OrderImportPreviewDTO> serviceResp = ApiResponse.<OrderImportPreviewDTO>builder()
                 .status("success").code(200).build();
-        when(orderImportService.save(any(), anyString(), any())).thenReturn(serviceResp);
+        when(orderImportService.save(any(), anyString(), any(), any(Boolean.class))).thenReturn(serviceResp);
 
-        controller.save(rows, "batch-1.xlsx", alice);
+        controller.save(rows, "batch-1.xlsx", false, alice);
 
-        verify(orderImportService).save(eq(rows), eq("alice"), eq("batch-1.xlsx"));
+        verify(orderImportService).save(eq(rows), eq("alice"), eq("batch-1.xlsx"), eq(false));
     }
 
     @Test
     void save_worksWithNullPrincipalAndNullFileName() {
         ApiResponse<OrderImportPreviewDTO> serviceResp = ApiResponse.<OrderImportPreviewDTO>builder()
                 .status("success").code(200).build();
-        when(orderImportService.save(any(), anyString(), any())).thenReturn(serviceResp);
+        when(orderImportService.save(any(), anyString(), any(), any(Boolean.class))).thenReturn(serviceResp);
 
-        controller.save(Collections.emptyList(), null, null);
+        controller.save(Collections.emptyList(), null, false, null);
 
-        verify(orderImportService).save(any(), eq("unknown"), eq(null));
+        verify(orderImportService).save(any(), eq("unknown"), eq(null), eq(false));
     }
 
     // ─── history: controller wraps service result as 200 ───────────────────
@@ -158,7 +158,7 @@ class OrderImportControllerTest {
         batches.add(ImportBatchDTO.builder().id(1L).build());
         when(orderImportService.history()).thenReturn(batches);
 
-        ResponseEntity<ApiResponse<List<ImportBatchDTO>>> resp = controller.history();
+        ResponseEntity<ApiResponse<List<ImportBatchDTO>>> resp = controller.history(false);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertSame(batches, resp.getBody().getData());
@@ -193,11 +193,11 @@ class OrderImportControllerTest {
 
     @Test
     void generateForBatch_returns404_whenServiceReturnsNull() {
-        when(orderImportService.generateLabelsForBatch(anyLong(), anyString(), any(Boolean.class)))
+        when(orderImportService.generateLabelsForBatch(anyLong(), anyString(), any(Boolean.class), any(Boolean.class)))
                 .thenReturn(null);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForBatch(999L, false, alice);
+                controller.generateForBatch(999L, false, false, alice);
 
         assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
         assertEquals("Import not found.", resp.getBody().getMessage());
@@ -218,11 +218,11 @@ class OrderImportControllerTest {
         rows.add(r3);
         ImportBatchDTO dto = ImportBatchDTO.builder()
                 .status("PARTIAL_COMPLETE").rows(rows).build();
-        when(orderImportService.generateLabelsForBatch(anyLong(), anyString(), any(Boolean.class)))
+        when(orderImportService.generateLabelsForBatch(anyLong(), anyString(), any(Boolean.class), any(Boolean.class)))
                 .thenReturn(dto);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForBatch(7L, true, alice);
+                controller.generateForBatch(7L, true, false, alice);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertNotNull(resp.getBody().getMessage());
@@ -239,14 +239,17 @@ class OrderImportControllerTest {
         // forward the flag as-is, or every retry re-bills already-GENERATED
         // rows.
         ImportBatchDTO dto = ImportBatchDTO.builder().status("COMPLETE").build();
-        when(orderImportService.generateLabelsForBatch(anyLong(), anyString(), any(Boolean.class)))
+        when(orderImportService.generateLabelsForBatch(anyLong(), anyString(), any(Boolean.class), any(Boolean.class)))
                 .thenReturn(dto);
 
-        controller.generateForBatch(7L, true, alice);
+        controller.generateForBatch(7L, true, false, alice);
 
-        ArgumentCaptor<Boolean> flag = ArgumentCaptor.forClass(Boolean.class);
-        verify(orderImportService).generateLabelsForBatch(eq(7L), eq("alice"), flag.capture());
-        assertEquals(Boolean.TRUE, flag.getValue());
+        ArgumentCaptor<Boolean> onlyFailedFlag = ArgumentCaptor.forClass(Boolean.class);
+        ArgumentCaptor<Boolean> usePlatformFlag = ArgumentCaptor.forClass(Boolean.class);
+        verify(orderImportService).generateLabelsForBatch(
+                eq(7L), eq("alice"), onlyFailedFlag.capture(), usePlatformFlag.capture());
+        assertEquals(Boolean.TRUE, onlyFailedFlag.getValue());
+        assertEquals(Boolean.FALSE, usePlatformFlag.getValue());
     }
 
     @Test
@@ -254,11 +257,11 @@ class OrderImportControllerTest {
         // dto with a status but no rows list — controller's count logic must
         // not NPE (rows == null → gen=0, totalRows=0).
         ImportBatchDTO dto = ImportBatchDTO.builder().status("INITIATE").rows(null).build();
-        when(orderImportService.generateLabelsForBatch(anyLong(), anyString(), any(Boolean.class)))
+        when(orderImportService.generateLabelsForBatch(anyLong(), anyString(), any(Boolean.class), any(Boolean.class)))
                 .thenReturn(dto);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForBatch(7L, false, alice);
+                controller.generateForBatch(7L, false, false, alice);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("0 of 0 label(s) generated"),
