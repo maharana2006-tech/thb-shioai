@@ -57,6 +57,14 @@ backend/backend-dev.log
 *.log
 # Per-user Claude Code settings (permissions, hooks, etc.).
 .claude/settings.local.json
+# Sub-agent temp worktrees — auto-created when a subagent uses
+# isolation:"worktree"; occasionally orphaned on disk after the
+# git worktree metadata is cleaned up. Never useful in git.
+.claude/worktrees/
+# Root-level node_modules — the npm project lives in multiship-react/,
+# so a root node_modules/ only appears when a tool (e.g. vite) is run
+# from the wrong cwd. Belt-and-braces since there is no root package.json.
+/node_modules/
 # Excel owner-lock files — created transparently while a workbook is
 # open; never useful in git.
 ~$*.xls*
