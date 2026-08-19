@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { FiEdit3, FiPlus, FiTrash2, FiX, FiZap } from 'react-icons/fi'
 import { notify } from '../utils/notify'
@@ -180,6 +180,9 @@ function SubscriptionEditor({
 }) {
   const [draft, setDraft] = useState<WebhookSubscription>({ ...sub })
   const [saving, setSaving] = useState(false)
+  // A11y audit A1 — see idPrefix pattern in ReportsPage / RoutingRulesPage.
+  const idPrefix = useId()
+  const idFor = useCallback((k: string) => `${idPrefix}-${k}`, [idPrefix])
 
   const set = <K extends keyof WebhookSubscription>(k: K, v: WebhookSubscription[K]) =>
     setDraft((d) => ({ ...d, [k]: v }))
@@ -218,27 +221,27 @@ function SubscriptionEditor({
 
         <div className="max-h-[70vh] space-y-3 overflow-y-auto px-6 py-5">
           <div>
-            <label className={fieldLabel}>API key</label>
-            <Select value={String(draft.apiKeyId)} onChange={(e) => set('apiKeyId', Number(e.target.value))}>
+            <label htmlFor={idFor('apiKey')} className={fieldLabel}>API key</label>
+            <Select id={idFor('apiKey')} value={String(draft.apiKeyId)} onChange={(e) => set('apiKeyId', Number(e.target.value))}>
               <option value="0">— pick an API key —</option>
               {keys.map((k) => <option key={k.id} value={k.id}>{k.name} ({k.clientCode})</option>)}
             </Select>
           </div>
           <div>
-            <label className={fieldLabel}>Event</label>
-            <Select value={draft.event} onChange={(e) => set('event', e.target.value as WebhookEventType)}>
+            <label htmlFor={idFor('event')} className={fieldLabel}>Event</label>
+            <Select id={idFor('event')} value={draft.event} onChange={(e) => set('event', e.target.value as WebhookEventType)}>
               {EVENTS.map((e) => <option key={e.value} value={e.value}>{e.label}</option>)}
             </Select>
             {eventDetail ? <p className="mt-1 text-[11px] text-slate-500">{eventDetail.hint}</p> : null}
           </div>
           <div>
-            <label className={fieldLabel}>URL</label>
-            <input value={draft.url} onChange={(e) => set('url', e.target.value)} className={inputCls}
+            <label htmlFor={idFor('url')} className={fieldLabel}>URL</label>
+            <input id={idFor('url')} value={draft.url} onChange={(e) => set('url', e.target.value)} className={inputCls}
               placeholder="https://api.partner.example/multiship-webhooks" />
           </div>
           <div>
-            <label className={fieldLabel}>HMAC secret</label>
-            <input value={draft.secret.startsWith('•') ? '' : draft.secret}
+            <label htmlFor={idFor('secret')} className={fieldLabel}>HMAC secret</label>
+            <input id={idFor('secret')} value={draft.secret.startsWith('•') ? '' : draft.secret}
               onChange={(e) => set('secret', e.target.value)}
               placeholder={draft.secret.startsWith('•') ? 'Enter a NEW secret to rotate' : 'shared with the receiver'}
               className={`${inputCls} font-mono`} />

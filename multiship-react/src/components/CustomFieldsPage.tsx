@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { FiChevronDown, FiChevronUp, FiEdit3, FiPlus, FiSave, FiTrash2, FiX } from 'react-icons/fi'
 import { notify } from '../utils/notify'
@@ -236,6 +236,9 @@ function CustomFieldEditorModal({
   const [draft, setDraft] = useState<CustomFieldDefinition>(def)
   const [saving, setSaving] = useState(false)
   const firstInputRef = useRef<HTMLInputElement>(null)
+  // A11y audit A1 — see idPrefix pattern in ReportsPage / RoutingRulesPage.
+  const idPrefix = useId()
+  const idFor = useCallback((k: string) => `${idPrefix}-${k}`, [idPrefix])
 
   useEffect(() => {
     firstInputRef.current?.focus()
@@ -279,8 +282,9 @@ function CustomFieldEditorModal({
 
         <div className="mb-3 grid grid-cols-2 gap-3">
           <div>
-            <label className={label}>Key</label>
+            <label htmlFor={idFor('fieldKey')} className={label}>Key</label>
             <input
+              id={idFor('fieldKey')}
               ref={firstInputRef}
               type="text"
               value={draft.fieldKey}
@@ -291,8 +295,9 @@ function CustomFieldEditorModal({
             <p className="mt-1 text-[11px] text-slate-400">snake_case. Immutable once orders reference it.</p>
           </div>
           <div>
-            <label className={label}>Label</label>
+            <label htmlFor={idFor('label')} className={label}>Label</label>
             <input
+              id={idFor('label')}
               type="text"
               value={draft.label}
               onChange={(e) => update('label', e.target.value)}
@@ -304,8 +309,9 @@ function CustomFieldEditorModal({
 
         <div className="mb-3 grid grid-cols-2 gap-3">
           <div>
-            <label className={label}>Type</label>
+            <label htmlFor={idFor('fieldType')} className={label}>Type</label>
             <Select
+              id={idFor('fieldType')}
               value={draft.fieldType}
               onChange={(e) => update('fieldType', e.target.value as CustomFieldType)}
             >
@@ -316,8 +322,9 @@ function CustomFieldEditorModal({
             </Select>
           </div>
           <div>
-            <label className={label}>Position</label>
+            <label htmlFor={idFor('position')} className={label}>Position</label>
             <input
+              id={idFor('position')}
               type="number"
               min={0}
               value={draft.position ?? 100}
@@ -329,8 +336,9 @@ function CustomFieldEditorModal({
 
         {draft.fieldType === 'SELECT' ? (
           <div className="mb-3">
-            <label className={label}>Options (comma-separated)</label>
+            <label htmlFor={idFor('selectOptions')} className={label}>Options (comma-separated)</label>
             <input
+              id={idFor('selectOptions')}
               type="text"
               value={draft.selectOptions ?? ''}
               onChange={(e) => update('selectOptions', e.target.value)}
