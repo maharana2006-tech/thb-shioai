@@ -224,6 +224,10 @@ export interface SyncResult {
 }
 
 export const shippingConfigService = {
+  /** Audited 2026-08-19 (silent-fallback batch 5) — the 6 `?? []` defaults
+   *  normalise a partially-populated 200 response to empty arrays per field
+   *  (BE returns a nullable-fielded aggregate DTO). Real HTTP failures throw
+   *  from apiClient. */
   catalog: async (): Promise<ShippingCatalog> => {
     const r = await apiClient.get<ApiResponse<ShippingCatalog>>('/shipping-services')
     return {
