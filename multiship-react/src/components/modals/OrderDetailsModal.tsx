@@ -7,6 +7,7 @@ import {
   type LabelDetails,
   type OrderWithLinesPayload,
 } from '../../api/orderService'
+import { notify } from '../../utils/notify'
 import { formatCarrierName } from '../../utils/carrierUtils'
 import CarrierLogo from '../workspace/CarrierLogo'
 import OrderStatusBadge from '../workspace/OrderStatusBadge'
@@ -68,7 +69,10 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
 
     Promise.all([
       orderService.getOrderWithLines(orderNo),
-      orderService.getOrderById(orderNo).catch(() => null),
+      orderService.getOrderById(orderNo).catch((e: unknown) => {
+        notify.apiError(e, 'Order loaded, but the label details fetch failed. Label / tracking info may be missing below.')
+        return null
+      }),
     ])
       .then(([withLines, byId]) => {
         if (cancelled) return

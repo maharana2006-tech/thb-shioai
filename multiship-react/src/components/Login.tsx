@@ -62,7 +62,10 @@ export default function Login() {
           let carrierConnected = false
 
           if (role !== 'TENANT') {
-            const status = await carrierService.getCarrierStatus().catch(() => null)
+            const status = await carrierService.getCarrierStatus().catch((e: unknown) => {
+              notify.apiError(e, 'Signed in, but the live carrier status check failed. Reconnect from the carriers page if needed.')
+              return null
+            })
             carrierConnected = Boolean(status?.connected)
             syncCarrierSession({
               connected: carrierConnected,
