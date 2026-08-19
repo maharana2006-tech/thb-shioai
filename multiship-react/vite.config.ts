@@ -1,13 +1,22 @@
 import { defineConfig } from 'vitest/config'
+import { loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
+  // Load .env, .env.local, .env.<mode>, .env.<mode>.local — the standard
+  // Vite override chain. Prior to this, vite.config.ts read the proxy target
+  // from `process.env.VITE_DEV_BACKEND_URL`, which only picks up OS-level
+  // env vars set BEFORE `npm run dev` — a `.env.local` file was silently
+  // ignored. loadEnv() bridges the config layer to the same file-based
+  // overrides used by client code via import.meta.env.
+  const env = loadEnv(mode, process.cwd(), '')
+
   // Sprint 51 FE-M1 — fail the build if a production bundle would otherwise
   // ship with no VITE_API_BASE_URL. Runtime code used to fall back to
   // `${hostname}:8080`, which is a dev-only assumption (in prod the API
   // lives at a proxied /api on the same origin, not on port 8080).
-  if (mode === 'production' && !process.env.VITE_API_BASE_URL) {
+  if (mode === 'production' && !env.VITE_API_BASE_URL) {
     throw new Error(
       'VITE_API_BASE_URL is required for production builds. ' +
         'Set it to the deployed API origin (e.g. https://app.example.com/api/v1) ' +
@@ -28,14 +37,21 @@ export default defineConfig(({ mode }) => {
   optimizeDeps: {
     include: ['zod'],
   },
-  // Local dev proxy — routes /api/* to the Spring Boot backend on :8080
-  // so SPA + API share origin. Required for the httpOnly JWT cookie from
-  // Sprint 50 Q1/Q2/Q3 to be sent by the browser (cross-origin cookies on
-  // HTTP localhost need SameSite=None+Secure, which needs HTTPS).
+  // Local dev proxy — routes /api/* to the Spring Boot backend so the SPA
+  // + API share origin. Required for the httpOnly JWT cookie from Sprint 50
+  // Q1/Q2/Q3 to be sent by the browser (cross-origin cookies on HTTP
+  // localhost need SameSite=None+Secure, which needs HTTPS).
+  //
+  // Default target is :8081 to match backend/src/main/resources/
+  // application.properties (server.port=8081). If your local backend runs
+  // on a different port (Spring Boot's own default is 8080, or you launched
+  // it with SERVER_PORT=nnnn), override without touching this file by
+  // creating multiship-react/.env.local with:
+  //     VITE_DEV_BACKEND_URL=http://localhost:8080
   server: {
     proxy: {
       '/api': {
-        target: process.env.VITE_DEV_BACKEND_URL || 'http://localhost:8081',
+        target: env.VITE_DEV_BACKEND_URL || 'http://localhost:8081',
         changeOrigin: false,
       },
     },
