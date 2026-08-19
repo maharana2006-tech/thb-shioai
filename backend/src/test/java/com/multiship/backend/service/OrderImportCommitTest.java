@@ -284,7 +284,7 @@ class OrderImportCommitTest {
                 scoped, "tenantScope", rejectingEnforcer());
 
         assertThrows(org.springframework.security.access.AccessDeniedException.class,
-                () -> scoped.save(List.of(foreignRow(1)), "alice", "orders.xlsx"));
+                () -> scoped.save(List.of(foreignRow(1)), "alice", "orders.xlsx", false));
     }
 
     @Test
