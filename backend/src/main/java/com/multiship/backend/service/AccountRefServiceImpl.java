@@ -220,7 +220,7 @@ public class AccountRefServiceImpl implements AccountRefService {
         boolean clientIdProvided = StringUtils.hasText(rawClientId);
         boolean clientSecretProvided = StringUtils.hasText(rawClientSecret);
         if (isNewAccount && (!clientIdProvided || !clientSecretProvided)) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "Client ID and Client Secret are required when creating a new carrier account.");
         }
         boolean credentialsChanged = false;

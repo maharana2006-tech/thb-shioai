@@ -58,7 +58,7 @@ public class ManifestServiceImpl implements ManifestService {
         try {
             connector = carrierService.getCarrierConnector(carrier);
         } catch (Exception ex) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT,
                     "Carrier " + carrier + " isn't configured on this instance.");
         }
 

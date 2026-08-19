@@ -10,6 +10,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.URI;
 import java.net.URL;
 
 /**
@@ -116,7 +117,8 @@ public class PrinterDriver implements OutputDriver {
 
         HttpURLConnection conn = null;
         try {
-            URL url = new URL(urlStr);
+            // JDK 20+ deprecates new URL(String) in favour of URI.create(str).toURL().
+            URL url = URI.create(urlStr).toURL();
             conn = (HttpURLConnection) url.openConnection();
             conn.setConnectTimeout(NETWORK_TIMEOUT_MS);
             conn.setReadTimeout(NETWORK_TIMEOUT_MS);

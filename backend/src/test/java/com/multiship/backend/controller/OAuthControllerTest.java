@@ -94,13 +94,13 @@ class OAuthControllerTest {
         Map<?, ?> body = (Map<?, ?>) resp.getBody();
         assertEquals("rate_limited", body.get("error"));
         // Verify the verifier was NOT invoked (fast fail before bcrypt).
-        verify(apiKeyService, org.mockito.Mockito.never()).authenticate(anyString());
+        verify(apiKeyService, org.mockito.Mockito.never()).authenticateDetailed(anyString());
     }
 
     @Test
     void token_badSecret_returns401InvalidClientAndRecordsFailure() {
         when(authFailureLimiter.isLocked(anyString(), anyString())).thenReturn(false);
-        when(apiKeyService.authenticate(anyString())).thenReturn(Optional.empty());
+        when(apiKeyService.authenticateDetailed(anyString())).thenReturn(ApiKeyService.AuthResult.invalid());
 
         ResponseEntity<?> resp = controller.token(
                 form("client_credentials", "cid", "wrong"), null, request);
@@ -115,8 +115,9 @@ class OAuthControllerTest {
         when(authFailureLimiter.isLocked(anyString(), anyString())).thenReturn(false);
         ApiKey key = ApiKey.builder().id(7L).name("k").clientCode("ACME")
                 .environment("live").keyPrefix("aaaa").scopes("shipments rates").active(true).build();
-        // First env attempt is "live"; return present so the loop stops there.
-        when(apiKeyService.authenticate(anyString())).thenReturn(Optional.of(key));
+        // First env attempt is "live"; return AUTHORIZED so the loop stops there.
+        when(apiKeyService.authenticateDetailed(anyString())).thenReturn(
+                new ApiKeyService.AuthResult(ApiKeyService.AuthResult.Kind.AUTHORIZED, key, false, null));
         when(jwtService.generateToken(eq("apikey:7"), eq("API"), eq("ACME"))).thenReturn("jwt-abc");
 
         ResponseEntity<?> resp = controller.token(
@@ -138,7 +139,7 @@ class OAuthControllerTest {
         OAuthController.TokenRequest body = OAuthController.TokenRequest.builder()
                 .grantType("client_credentials").clientId("cid").clientSecret("csec").build();
         when(authFailureLimiter.isLocked(anyString(), anyString())).thenReturn(false);
-        when(apiKeyService.authenticate(anyString())).thenReturn(Optional.empty());
+        when(apiKeyService.authenticateDetailed(anyString())).thenReturn(ApiKeyService.AuthResult.invalid());
 
         ResponseEntity<?> resp = controller.token(new LinkedMultiValueMap<>(), body, request);
 

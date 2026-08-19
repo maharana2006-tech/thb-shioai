@@ -43,7 +43,7 @@ public class ShipmentAiService {
 
     public Map<String, Object> suggestHs(HsSuggestRequest req) {
         if (req == null || !StringUtils.hasText(req.getDescription())) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "An item description is required.");
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT, "An item description is required.");
         }
         String user = "Product: " + req.getDescription().trim()
                 + (StringUtils.hasText(req.getOriginCountry()) ? "\nCountry of origin: " + req.getOriginCountry().trim() : "");
@@ -70,7 +70,7 @@ public class ShipmentAiService {
 
     public Map<String, Object> suggestPackaging(PackagingSuggestRequest req) {
         if (req == null || req.getItems() == null || req.getItems().isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "Add at least one item before suggesting packaging.");
         }
         String itemsText = req.getItems().stream()
@@ -78,7 +78,7 @@ public class ShipmentAiService {
                 .map(i -> "- " + (i.getQuantity() == null ? 1 : i.getQuantity()) + "× " + i.getDescription().trim())
                 .collect(Collectors.joining("\n"));
         if (!StringUtils.hasText(itemsText)) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "Item descriptions are required to suggest packaging.");
         }
         String allowed = (req.getAvailable() == null || req.getAvailable().isEmpty())
@@ -117,7 +117,7 @@ public class ShipmentAiService {
 
     public Map<String, Object> recommendService(ServiceRecommendRequest req) {
         if (req == null || !StringUtils.hasText(req.getToCountry())) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "A destination country is required to recommend a service.");
         }
         String user = "Origin: " + Optional.ofNullable(req.getFromCountry()).orElse("?")
@@ -160,7 +160,7 @@ public class ShipmentAiService {
 
     public Map<String, Object> reviewShipment(ReviewShipmentRequest req) {
         if (req == null) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "No shipment data to review.");
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT, "No shipment data to review.");
         }
         StringBuilder sb = new StringBuilder();
         sb.append("From country: ").append(orQ(req.getFromCountry())).append('\n');

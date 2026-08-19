@@ -360,7 +360,7 @@ public class CarrierServiceImpl implements CarrierService {
                         "Carrier account " + accountId + " was not found.");
             }
             if (Boolean.FALSE.equals(picked.getActive()) || !picked.isComplete()) {
-                return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.ACCOUNT_INCOMPLETE,
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.ACCOUNT_INCOMPLETE,
                         "Account " + picked.getAccountNumber() + " is inactive or missing credentials.");
             }
 
@@ -386,7 +386,7 @@ public class CarrierServiceImpl implements CarrierService {
                     .prefillAccountNumber(resolution.accountNumber())
                     .message("Choose which " + resolution.carrierCode() + " account to ship this order with.")
                     .build();
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.ACCOUNT_SELECTION_REQUIRED,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.ACCOUNT_SELECTION_REQUIRED,
                     "Order " + orderNo + " needs a manually selected carrier account.", chooseAccount);
         }
 
@@ -406,7 +406,7 @@ public class CarrierServiceImpl implements CarrierService {
                     .prefillEnvironment(resolution.environment())
                     .message("This order has partial carrier details. Fill in the missing fields to generate the label.")
                     .build();
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.NEEDS_CARRIER_DETAILS,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.NEEDS_CARRIER_DETAILS,
                     "Carrier details are required before generating this label.", needsDetails);
         }
 
@@ -419,14 +419,14 @@ public class CarrierServiceImpl implements CarrierService {
                     .clientCode(tenantId)
                     .message("Client " + tenantId + " is not registered. Add the client, then generate again.")
                     .build();
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.CLIENT_NOT_FOUND,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.CLIENT_NOT_FOUND,
                     "Client " + tenantId + " is not registered — add the client before generating labels.",
                     clientMissing);
         }
 
         // 422: the client is suspended.
         if (AccountResolution.SCENARIO_CLIENT_INACTIVE.equals(resolution.scenario())) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.CLIENT_INACTIVE,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.CLIENT_INACTIVE,
                     "Client " + tenantId + " is inactive — reactivate the client before generating labels.");
         }
 
@@ -436,7 +436,7 @@ public class CarrierServiceImpl implements CarrierService {
             String message = "Order " + orderNo + " has no carrier details and no default account is configured. "
                     + "Ask an admin to set a default account on the Carrier page.";
             markTrackingError(order, message);
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.NO_DEFAULT_ACCOUNT, message);
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.NO_DEFAULT_ACCOUNT, message);
         }
 
         // 422: an INTERNATIONAL shipment (destination country differs from the
@@ -451,7 +451,7 @@ public class CarrierServiceImpl implements CarrierService {
                     .clientCode(tenantId)
                     .message(customsGate)
                     .build();
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.CUSTOMS_REQUIRED, customsGate, needsCustoms);
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.CUSTOMS_REQUIRED, customsGate, needsCustoms);
         }
 
         CarrierConnector connector;
@@ -573,7 +573,7 @@ public class CarrierServiceImpl implements CarrierService {
             org.springframework.security.core.userdetails.UserDetails user) {
 
         if (req == null || req.getRecipient() == null) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "Recipient details are required.");
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "Recipient details are required.");
         }
         // Sprint 50 Tier 0.5 PR G — clamp so a scoped USER can't submit a
         // manual shipment against a foreign clientCode. Null/blank input
@@ -585,16 +585,16 @@ public class CarrierServiceImpl implements CarrierService {
         if (!StringUtils.hasText(to.getName()) || !StringUtils.hasText(to.getAddressLine1())
                 || !StringUtils.hasText(to.getCity()) || !StringUtils.hasText(to.getPostalCode())
                 || !StringUtils.hasText(to.getCountryCode())) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "Recipient name, address, city, postal code and country are required.");
         }
         if (req.getWeight() == null || req.getWeight().signum() <= 0) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "A shipment weight greater than zero is required.");
         }
         String typedNumber = StringUtils.hasText(req.getAccountNumber()) ? req.getAccountNumber().trim() : null;
         if (req.getAccountId() == null && typedNumber == null) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "Enter the bill-to account number for the shipment.");
         }
 
@@ -652,7 +652,7 @@ public class CarrierServiceImpl implements CarrierService {
             account = carrierAccountRefRepository.findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
         }
         if (account == null) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "No verified " + carrier + " credentials are available to ship. Add or verify a "
                     + carrier + " account first.");
         }
@@ -702,7 +702,7 @@ public class CarrierServiceImpl implements CarrierService {
                     req.getLength(), req.getWidth(), req.getHeight(), req.getDimUnit(),
                     svcLimit == null ? null : svcLimit.getMaxTotalWeightLb()));
             if (outcome.hardBlock()) {
-                return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                         outcome.combinedMessage()
                                 + " Pick a larger packaging, reduce the weight/dimensions, "
                                 + "or set the preset's enforcement to SOFT to override.");
@@ -741,7 +741,7 @@ public class CarrierServiceImpl implements CarrierService {
                     routingRuleService.evaluate(resolvedClient, evalReq);
             if ("MATCH".equals(routingResult.getStatus())) {
                 if (routingResult.getActionType() == com.multiship.backend.model.RoutingRule.ActionType.BLOCK) {
-                    return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                    return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                             "Blocked by routing rule '" + routingResult.getMatchedRuleName()
                             + "': " + routingResult.getBlockReason());
                 }
@@ -757,7 +757,7 @@ public class CarrierServiceImpl implements CarrierService {
                         // the code silently continued with the ORIGINAL service —
                         // the rule's intent was lost with no visible signal. Fail
                         // loudly so the operator can fix the rule.
-                        return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                        return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                                 "Routing rule '" + routingResult.getMatchedRuleName()
                                 + "' targets service #" + routingResult.getTargetServiceId()
                                 + " which no longer exists. Fix the rule to point at a live service.");
@@ -772,7 +772,7 @@ public class CarrierServiceImpl implements CarrierService {
                         CarrierAccountRef reroutedAccount = carrierAccountRefRepository
                                 .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
                         if (reroutedAccount == null) {
-                            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                                     "Routing rule '" + routingResult.getMatchedRuleName()
                                     + "' rerouted to " + carrier + " but no verified " + carrier
                                     + " credentials are available.");
@@ -798,7 +798,7 @@ public class CarrierServiceImpl implements CarrierService {
                         log.info("Routing rule '{}' rerouted client={} to warehouse={}",
                                 routingResult.getMatchedRuleName(), resolvedClient, rerouteWh.getCode());
                     } catch (ShipmentResolutionException e) {
-                        return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+                        return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                                 "Routing rule '" + routingResult.getMatchedRuleName()
                                 + "' targets warehouse #" + routingResult.getTargetWarehouseId()
                                 + " which " + (e.getErrorCode() == ErrorCode.WAREHOUSE_NOT_FOUND
@@ -916,7 +916,7 @@ public class CarrierServiceImpl implements CarrierService {
             shipmentSplitter.assertCommoditiesFit(shipmentRequest, limit);
         } catch (com.multiship.backend.exception.CommoditiesLimitExceededException cle) {
             log.warn("Manual shipment rejected: {}", cle.getMessage());
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT,
                     ErrorCode.COMMODITIES_LIMIT_EXCEEDED, cle.getMessage());
         }
         java.math.BigDecimal totalWeightLb = shipmentSplitter.totalWeightLb(shipmentRequest);
@@ -2223,7 +2223,7 @@ public class CarrierServiceImpl implements CarrierService {
     private <T> ApiResponse<T> toResolutionFailure(ShipmentResolutionException e) {
         HttpStatus status = e.getErrorCode() == ErrorCode.WAREHOUSE_ATTACH_FORBIDDEN
                 ? HttpStatus.FORBIDDEN
-                : HttpStatus.UNPROCESSABLE_ENTITY;
+                : HttpStatus.UNPROCESSABLE_CONTENT;
         return failure(status, e.getErrorCode(), e.getMessage());
     }
 

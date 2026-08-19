@@ -198,7 +198,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, "orderNumbers is required.");
         }
         if (request.getOrderNumbers().size() > MAX_BULK_ORDERS) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.BULK_LIMIT_EXCEEDED,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.BULK_LIMIT_EXCEEDED,
                     "Bulk batch limited to " + MAX_BULK_ORDERS + " orders — this request has "
                             + request.getOrderNumbers().size()
                             + ". Split larger batches into multiple submissions.");
