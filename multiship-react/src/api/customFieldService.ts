@@ -21,7 +21,9 @@ export interface CustomFieldDefinition {
 const BASE = '/custom-fields'
 
 export const customFieldService = {
-  /** Every definition for a tenant (active + inactive) — settings view. */
+  /** Every definition for a tenant (active + inactive) — settings view.
+   *  Audited 2026-08-19 (silent-fallback batch 5): `?? []` normalises a
+   *  200-with-null-body to empty; real HTTP failures throw from apiClient. */
   list: async (tenantId?: string | null): Promise<CustomFieldDefinition[]> => {
     const params = new URLSearchParams()
     if (tenantId) params.set('tenantId', tenantId)
@@ -31,7 +33,8 @@ export const customFieldService = {
     return resp.data ?? []
   },
 
-  /** Only active fields that should appear on the order form. */
+  /** Only active fields that should appear on the order form.
+   *  Audited 2026-08-19 (silent-fallback batch 5) — see list() above. */
   applicable: async (tenantId?: string | null): Promise<CustomFieldDefinition[]> => {
     const params = new URLSearchParams()
     if (tenantId) params.set('tenantId', tenantId)
@@ -46,6 +49,8 @@ export const customFieldService = {
 
   remove: (id: number) => apiClient.delete<ApiResponse<void>>(`${BASE}/${id}`),
 
+  /** Audited 2026-08-19 (silent-fallback batch 5) — `?? {}` normalises a
+   *  200-with-null-body to empty dict; real HTTP failures throw. */
   values: async (orderNo: number | string): Promise<Record<string, string>> => {
     const resp = await apiClient.get<ApiResponse<Record<string, string>>>(
       `/orders/${orderNo}/custom-fields`,

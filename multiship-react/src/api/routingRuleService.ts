@@ -73,6 +73,8 @@ const base = (clientCode: string) =>
   `/clients/${encodeURIComponent(clientCode)}/routing-rules`
 
 export const routingRuleService = {
+  /** Audited 2026-08-19 (silent-fallback batch 5) — `?? []` normalises a
+   *  200-with-null-body to empty; real HTTP failures throw from apiClient. */
   list: async (clientCode: string): Promise<RoutingRule[]> => {
     const resp = await apiClient.get<ApiResponse<RoutingRule[]>>(base(clientCode))
     return resp.data ?? []

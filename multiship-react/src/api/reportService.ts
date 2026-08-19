@@ -87,6 +87,8 @@ async function downloadCsv(dataset: Dataset, filters: ReportFilters, filename: s
 export const reportService = {
   downloadCsv,
 
+  /** Audited 2026-08-19 (silent-fallback batch 5) — `?? []` normalises a
+   *  200-with-null-body to empty; real HTTP failures throw from apiClient. */
   listSchedules: async (tenantId?: string): Promise<ScheduledReport[]> => {
     const qs = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ''
     const resp = await apiClient.get<ApiResponse<ScheduledReport[]>>(`/scheduled-reports${qs}`)
@@ -102,6 +104,7 @@ export const reportService = {
   runNow: (id: number) =>
     apiClient.post<ApiResponse<number>>(`/scheduled-reports/${id}/run-now`, {}),
 
+  /** Audited 2026-08-19 (silent-fallback batch 5) — see listSchedules() above. */
   listGenerated: async (tenantId?: string): Promise<GeneratedReport[]> => {
     const qs = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : ''
     const resp = await apiClient.get<ApiResponse<GeneratedReport[]>>(`/scheduled-reports/generated${qs}`)

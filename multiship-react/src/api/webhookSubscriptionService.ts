@@ -21,6 +21,8 @@ export interface WebhookSubscription {
 }
 
 export const webhookSubscriptionService = {
+  /** Audited 2026-08-19 (silent-fallback batch 5) — `?? []` normalises a
+   *  200-with-null-body to empty; real HTTP failures throw from apiClient. */
   list: async (apiKeyId?: number): Promise<WebhookSubscription[]> => {
     const qs = apiKeyId ? `?apiKeyId=${apiKeyId}` : ''
     const resp = await apiClient.get<ApiResponse<WebhookSubscription[]>>(
