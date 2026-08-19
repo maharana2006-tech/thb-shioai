@@ -1979,7 +1979,10 @@ public class OrderImportServiceImpl implements OrderImportService {
     private static Integer parseInt(String s) {
         if (!StringUtils.hasText(s)) return null;
         try { return Integer.parseInt(s.trim().replace(",", "")); }
-        catch (NumberFormatException ex) { return null; }
+        catch (NumberFormatException ex) {
+            log.debug("OrderImport parseInt: non-numeric input '{}'", s);
+            return null;
+        }
     }
 
     /* ------------------- Tier 1: field-shape validation ------------------- */
@@ -2101,7 +2104,10 @@ public class OrderImportServiceImpl implements OrderImportService {
     private static BigDecimal parseDecimal(String s) {
         if (!StringUtils.hasText(s)) return null;
         try { return new BigDecimal(s.trim().replace(",", "")); }
-        catch (NumberFormatException ex) { return null; }
+        catch (NumberFormatException ex) {
+            log.debug("OrderImport parseDecimal: non-numeric input '{}'", s);
+            return null;
+        }
     }
 
     /**

@@ -453,7 +453,10 @@ public class FedExConnector implements CarrierConnector {
         JsonNode nested = entry.at("/shipmentRateDetail/totalNetCharge/amount");
         if (nested.isNumber()) return nested.decimalValue();
         if (nested.isTextual()) {
-            try { return new BigDecimal(nested.asText()); } catch (NumberFormatException ignored) {}
+            try { return new BigDecimal(nested.asText()); }
+            catch (NumberFormatException ex) {
+                log.debug("FedEx readFedExAmount: non-numeric shipmentRateDetail.totalNetCharge.amount '{}'", nested.asText());
+            }
         }
         return null;
     }
@@ -1078,7 +1081,9 @@ public class FedExConnector implements CarrierConnector {
         if (amount.isNumber()) return amount.decimalValue();
         if (amount.isTextual()) {
             try { return new java.math.BigDecimal(amount.asText()); }
-            catch (NumberFormatException ignored) {}
+            catch (NumberFormatException ex) {
+                log.debug("FedEx readFedExAncillaryAmount: non-numeric fee.amount '{}'", amount.asText());
+            }
         }
         return null;
     }

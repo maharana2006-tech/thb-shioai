@@ -718,7 +718,9 @@ public class DhlConnector implements CarrierConnector {
         if (node.isNumber()) return node.decimalValue();
         if (node.isTextual()) {
             try { return new java.math.BigDecimal(node.asText()); }
-            catch (NumberFormatException ignored) {}
+            catch (NumberFormatException ex) {
+                log.debug("DHL readDhlDecimal: non-numeric text '{}'", node.asText());
+            }
         }
         return null;
     }
@@ -910,7 +912,9 @@ public class DhlConnector implements CarrierConnector {
             String rawTs = root.path("eventTimestamp").asText(null);
             if (StringUtils.hasText(rawTs)) {
                 try { occurred = LocalDateTime.parse(rawTs.replace("Z", "")); }
-                catch (Exception ignored) {}
+                catch (Exception ex) {
+                    log.debug("DHL trackShipment: unparseable eventTimestamp '{}'", rawTs);
+                }
             }
             com.fasterxml.jackson.databind.JsonNode loc = root.path("location");
             String city = loc.path("cityName").asText("");
@@ -1448,7 +1452,9 @@ public class DhlConnector implements CarrierConnector {
                 if (transit.isNumber()) transitDays = transit.asInt();
                 else if (transit.isTextual()) {
                     try { transitDays = Integer.parseInt(transit.asText().trim()); }
-                    catch (NumberFormatException ignored) {}
+                    catch (NumberFormatException ex) {
+                        log.debug("DHL rate: non-numeric transitDays '{}'", transit.asText());
+                    }
                 }
 
                 LocalDateTime estimatedDelivery = parseDhlEstimated(
@@ -1502,7 +1508,9 @@ public class DhlConnector implements CarrierConnector {
         if (price.isNumber()) return price.decimalValue();
         if (price.isTextual()) {
             try { return new BigDecimal(price.asText()); }
-            catch (NumberFormatException ignored) {}
+            catch (NumberFormatException ex) {
+                log.debug("DHL readDhlAmount: non-numeric price '{}'", price.asText());
+            }
         }
         return null;
     }
