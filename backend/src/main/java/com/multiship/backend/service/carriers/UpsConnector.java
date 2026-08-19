@@ -967,7 +967,9 @@ public class UpsConnector implements CarrierConnector {
         if (node.isNumber()) return node.decimalValue();
         if (node.isTextual()) {
             try { return new java.math.BigDecimal(node.asText()); }
-            catch (NumberFormatException ignored) {}
+            catch (NumberFormatException ex) {
+                log.debug("UPS readUpsMoney: non-numeric text '{}'", node.asText());
+            }
         }
         return null;
     }
@@ -1894,7 +1896,12 @@ public class UpsConnector implements CarrierConnector {
         if (node.isNumber()) return node.decimalValue();
         String text = node.asText(null);
         if (text == null || text.isBlank()) return null;
-        try { return new BigDecimal(text); } catch (NumberFormatException ignored) { return null; }
+        try {
+            return new BigDecimal(text);
+        } catch (NumberFormatException ex) {
+            log.debug("UPS parseUpsMonetary: non-numeric text '{}'", text);
+            return null;
+        }
     }
 
     private ShipmentResult buildFallbackShipmentResult(ShipmentRequestDTO request) {
@@ -2052,7 +2059,9 @@ public class UpsConnector implements CarrierConnector {
                 String txt = entry.at("/GuaranteedDelivery/BusinessDaysInTransit").asText(null);
                 if (StringUtils.hasText(txt)) {
                     try { transitDays = Integer.parseInt(txt.trim()); }
-                    catch (NumberFormatException ignored) {}
+                    catch (NumberFormatException ex) {
+                        log.debug("UPS rate: non-numeric BusinessDaysInTransit '{}'", txt);
+                    }
                 }
                 LocalDateTime estimatedDelivery = parseDateTime(
                         entry.at("/GuaranteedDelivery/DeliveryByTime").asText(null));
@@ -2074,12 +2083,18 @@ public class UpsConnector implements CarrierConnector {
     private static BigDecimal readUpsAmount(JsonNode entry) {
         JsonNode negotiated = entry.at("/NegotiatedRateCharges/TotalCharge/MonetaryValue");
         if (negotiated.isTextual()) {
-            try { return new BigDecimal(negotiated.asText()); } catch (NumberFormatException ignored) {}
+            try { return new BigDecimal(negotiated.asText()); }
+            catch (NumberFormatException ex) {
+                log.debug("UPS readUpsAmount: non-numeric NegotiatedRateCharges.TotalCharge '{}'", negotiated.asText());
+            }
         }
         if (negotiated.isNumber()) return negotiated.decimalValue();
         JsonNode total = entry.at("/TotalCharges/MonetaryValue");
         if (total.isTextual()) {
-            try { return new BigDecimal(total.asText()); } catch (NumberFormatException ignored) {}
+            try { return new BigDecimal(total.asText()); }
+            catch (NumberFormatException ex) {
+                log.debug("UPS readUpsAmount: non-numeric TotalCharges '{}'", total.asText());
+            }
         }
         if (total.isNumber()) return total.decimalValue();
         return null;
