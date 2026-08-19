@@ -16,6 +16,7 @@ import com.multiship.backend.service.carriers.CarrierConnector;
 import com.multiship.backend.service.events.CarrierConfigChangedEvent;
 import com.multiship.backend.util.CountryRegions;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -42,6 +43,7 @@ import java.util.Optional;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ShippingConfigService {
 
     private final ShippingServiceRepository serviceRepository;
@@ -327,6 +329,12 @@ public class ShippingConfigService {
                     account.getAccountNumber());
             return new TokenAndEnv(token, account.getEnvironment());
         } catch (Exception ex) {
+            // Null return is the caller contract (STUB architecture — see
+            // TrackingServiceImpl / RateShopServiceImpl). Log at WARN so
+            // operators can distinguish "no platform account configured"
+            // (early return above) from "OAuth call failed" (this branch).
+            log.warn("Platform OAuth token fetch failed for carrier={} env={}: {}",
+                    canonicalCarrier, account.getEnvironment(), ex.toString());
             return null;
         }
     }

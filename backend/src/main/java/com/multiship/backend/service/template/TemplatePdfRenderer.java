@@ -2,6 +2,7 @@ package com.multiship.backend.service.template;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -38,6 +39,7 @@ import java.util.Map;
  * prefer a blank cell over a failed render because these documents ship
  * to carriers who reject retries.
  */
+@Slf4j
 public final class TemplatePdfRenderer {
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -662,6 +664,12 @@ public final class TemplatePdfRenderer {
         try {
             return Base64.getDecoder().decode(data);
         } catch (IllegalArgumentException e) {
+            // Null return preserves the "never throw during render" contract
+            // (see class doc). DEBUG because it fires per-render and points
+            // to a user-owned template asset, not an ops issue.
+            String prefix = src == null ? "<null>"
+                    : src.substring(0, Math.min(40, src.length()));
+            log.debug("Template data-URL Base64 decode failed (prefix='{}'): {}", prefix, e.toString());
             return null;
         }
     }

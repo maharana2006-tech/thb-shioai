@@ -18,6 +18,7 @@ import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
 
 import java.awt.Color;
 import java.io.ByteArrayOutputStream;
@@ -52,6 +53,7 @@ import java.util.Optional;
  * fall back to sensible defaults so we always ship something usable.
  */
 @Service
+@Slf4j
 public class PackingSlipServiceImpl implements PackingSlipService {
 
     private static final Color DEFAULT_PRIMARY = new Color(0x1f, 0x15, 0x0c);
@@ -417,6 +419,11 @@ public class PackingSlipServiceImpl implements PackingSlipService {
         try {
             return Base64.getDecoder().decode(data);
         } catch (IllegalArgumentException e) {
+            // Null return keeps the packing slip renderable (logo omitted)
+            // per the class-doc contract. DEBUG (not WARN) because this
+            // fires per-render and is user-actionable, not ops-actionable.
+            log.debug("Packing-slip logo Base64 decode failed for templateId={}: {}",
+                    template.getId(), e.toString());
             return null;
         }
     }
