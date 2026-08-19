@@ -230,13 +230,18 @@ public class OutputDestinationAdminService {
     }
 
     /** Extract the {@code protocol} field from the PRINTER config JSON;
-     *  {@code null} for other destination types or malformed JSON. */
+     *  {@code null} for other destination types or malformed JSON.
+     *  Malformed JSON is logged at WARN so operators can find the corrupt
+     *  row — pre-audit this failure was swallowed and the destination
+     *  appeared to have no protocol configured. */
     private String readProtocol(ClientOutputDestination dest) {
         if (dest.getDestinationType() != DestinationType.PRINTER) return null;
         try {
             JsonNode node = objectMapper.readTree(dest.getConfig());
             return str(node, "protocol");
         } catch (Exception ex) {
+            log.warn("Failed to parse PRINTER destination config JSON for id={} client={}: {}",
+                    dest.getId(), dest.getClientCode(), ex.toString());
             return null;
         }
     }
