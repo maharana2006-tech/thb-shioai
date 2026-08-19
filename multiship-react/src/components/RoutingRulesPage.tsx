@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   FiChevronDown,
@@ -44,6 +44,9 @@ export default function RoutingRulesPage() {
   const { registerRefresh } = useOutletContext<SettingsOutletContext>()
   const [clients, setClients] = useState<Client[]>([])
   const [clientCode, setClientCode] = useState('')
+  // A11y audit A1 — see idPrefix pattern in ReportsPage (a11y batch 2/5).
+  const idPrefix = useId()
+  const clientScopeId = `${idPrefix}-clientScope`
   const [rules, setRules] = useState<RoutingRule[]>([])
   const [services, setServices] = useState<ShippingServiceItem[]>([])
   const [warehouses, setWarehouses] = useState<ClientWarehouse[]>([])
@@ -165,8 +168,8 @@ export default function RoutingRulesPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-[300px]">
-          <label className={fieldLabel}>Client scope</label>
-          <Select value={clientCode} onChange={(e) => setClientCode(e.target.value)}>
+          <label htmlFor={clientScopeId} className={fieldLabel}>Client scope</label>
+          <Select id={clientScopeId} value={clientCode} onChange={(e) => setClientCode(e.target.value)}>
             {clientOptions.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
@@ -325,6 +328,9 @@ function RuleEditorModal({
 }) {
   const [draft, setDraft] = useState<RoutingRule>({ ...rule })
   const [saving, setSaving] = useState(false)
+  // A11y audit A1 — see idPrefix pattern in ReportsPage.
+  const idPrefix = useId()
+  const idFor = useCallback((k: string) => `${idPrefix}-${k}`, [idPrefix])
 
   const set = <K extends keyof RoutingRule>(k: K, v: RoutingRule[K]) =>
     setDraft((d) => ({ ...d, [k]: v }))
@@ -373,13 +379,13 @@ function RuleEditorModal({
           {/* Basics */}
           <div className="grid grid-cols-4 gap-3">
             <div className="col-span-2">
-              <label className={fieldLabel}>Name</label>
-              <input type="text" value={draft.name} onChange={(e) => set('name', e.target.value)}
+              <label htmlFor={idFor('name')} className={fieldLabel}>Name</label>
+              <input id={idFor('name')} type="text" value={draft.name} onChange={(e) => set('name', e.target.value)}
                 placeholder="EU over 5kg — DHL" className={inputCls} />
             </div>
             <div>
-              <label className={fieldLabel}>Priority</label>
-              <input type="number" min={0} value={draft.priority}
+              <label htmlFor={idFor('priority')} className={fieldLabel}>Priority</label>
+              <input id={idFor('priority')} type="number" min={0} value={draft.priority}
                 onChange={(e) => set('priority', Number(e.target.value))} className={inputCls} />
               <p className="mt-1 text-[10.5px] text-slate-400">Lower = earlier</p>
             </div>
@@ -397,46 +403,46 @@ function RuleEditorModal({
             <h4 className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-slate-500">Conditions (all optional — leave blank to match anything)</h4>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className={fieldLabel}>Weight range (LB)</label>
+                <span className={fieldLabel}>Weight range (LB)</span>
                 <div className="flex gap-2">
-                  <input type="number" step="0.1" placeholder="min" value={draft.minWeightLb ?? ''}
+                  <input type="number" step="0.1" placeholder="min" aria-label="Weight range min (LB)" value={draft.minWeightLb ?? ''}
                     onChange={(e) => setNum('minWeightLb')(e.target.value)} className={inputCls} />
-                  <input type="number" step="0.1" placeholder="max" value={draft.maxWeightLb ?? ''}
+                  <input type="number" step="0.1" placeholder="max" aria-label="Weight range max (LB)" value={draft.maxWeightLb ?? ''}
                     onChange={(e) => setNum('maxWeightLb')(e.target.value)} className={inputCls} />
                 </div>
               </div>
               <div>
-                <label className={fieldLabel}>Declared value range</label>
+                <span className={fieldLabel}>Declared value range</span>
                 <div className="flex gap-2">
-                  <input type="number" step="0.01" placeholder="min" value={draft.minDeclaredValue ?? ''}
+                  <input type="number" step="0.01" placeholder="min" aria-label="Declared value range min" value={draft.minDeclaredValue ?? ''}
                     onChange={(e) => setNum('minDeclaredValue')(e.target.value)} className={inputCls} />
-                  <input type="number" step="0.01" placeholder="max" value={draft.maxDeclaredValue ?? ''}
+                  <input type="number" step="0.01" placeholder="max" aria-label="Declared value range max" value={draft.maxDeclaredValue ?? ''}
                     onChange={(e) => setNum('maxDeclaredValue')(e.target.value)} className={inputCls} />
                 </div>
               </div>
               <div>
-                <label className={fieldLabel}>Destination countries (CSV of ISO-2)</label>
-                <input type="text" placeholder="DE, FR, IT" value={draft.destCountries ?? ''}
+                <label htmlFor={idFor('destCountries')} className={fieldLabel}>Destination countries (CSV of ISO-2)</label>
+                <input id={idFor('destCountries')} type="text" placeholder="DE, FR, IT" value={draft.destCountries ?? ''}
                   onChange={(e) => setStr('destCountries')(e.target.value.toUpperCase())} className={inputCls} />
               </div>
               <div>
-                <label className={fieldLabel}>Destination regions (CSV)</label>
-                <input type="text" placeholder="Europe, Asia" value={draft.destRegions ?? ''}
+                <label htmlFor={idFor('destRegions')} className={fieldLabel}>Destination regions (CSV)</label>
+                <input id={idFor('destRegions')} type="text" placeholder="Europe, Asia" value={draft.destRegions ?? ''}
                   onChange={(e) => setStr('destRegions')(e.target.value)} className={inputCls} />
                 <p className="mt-1 text-[10.5px] text-slate-400">
                   Available: {REGIONS.join(', ')}
                 </p>
               </div>
               <div>
-                <label className={fieldLabel}>Current carrier</label>
-                <Select value={draft.matchCarrier ?? ''} onChange={(e) => setStr('matchCarrier')(e.target.value)}>
+                <label htmlFor={idFor('matchCarrier')} className={fieldLabel}>Current carrier</label>
+                <Select id={idFor('matchCarrier')} value={draft.matchCarrier ?? ''} onChange={(e) => setStr('matchCarrier')(e.target.value)}>
                   <option value="">Any carrier</option>
                   {CARRIER_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
                 </Select>
               </div>
               <div>
-                <label className={fieldLabel}>Current service</label>
-                <Select value={draft.matchServiceId?.toString() ?? ''}
+                <label htmlFor={idFor('matchServiceId')} className={fieldLabel}>Current service</label>
+                <Select id={idFor('matchServiceId')} value={draft.matchServiceId?.toString() ?? ''}
                   onChange={(e) => setNum('matchServiceId')(e.target.value)}>
                   <option value="">Any service</option>
                   {services.filter((s) => s.enabled).map((s) => (
@@ -447,15 +453,15 @@ function RuleEditorModal({
                 </Select>
               </div>
               <div>
-                <label className={fieldLabel}>Order source</label>
-                <Select value={draft.matchOrderSource ?? ''} onChange={(e) => setStr('matchOrderSource')(e.target.value)}>
+                <label htmlFor={idFor('matchOrderSource')} className={fieldLabel}>Order source</label>
+                <Select id={idFor('matchOrderSource')} value={draft.matchOrderSource ?? ''} onChange={(e) => setStr('matchOrderSource')(e.target.value)}>
                   <option value="">Any source</option>
                   {SOURCE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                 </Select>
               </div>
               <div>
-                <label className={fieldLabel}>Current warehouse</label>
-                <Select value={draft.matchWarehouseId?.toString() ?? ''}
+                <label htmlFor={idFor('matchWarehouseId')} className={fieldLabel}>Current warehouse</label>
+                <Select id={idFor('matchWarehouseId')} value={draft.matchWarehouseId?.toString() ?? ''}
                   onChange={(e) => setNum('matchWarehouseId')(e.target.value)}>
                   <option value="">Any warehouse</option>
                   {warehouses.map((cw) => (
@@ -487,8 +493,8 @@ function RuleEditorModal({
             {draft.actionType === 'REROUTE' ? (
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className={fieldLabel}>Target service</label>
-                  <Select value={draft.targetServiceId?.toString() ?? ''}
+                  <label htmlFor={idFor('targetServiceId')} className={fieldLabel}>Target service</label>
+                  <Select id={idFor('targetServiceId')} value={draft.targetServiceId?.toString() ?? ''}
                     onChange={(e) => setNum('targetServiceId')(e.target.value)}>
                     <option value="">Keep current service</option>
                     {services.filter((s) => s.enabled).map((s) => (
@@ -499,8 +505,8 @@ function RuleEditorModal({
                   </Select>
                 </div>
                 <div>
-                  <label className={fieldLabel}>Target warehouse</label>
-                  <Select value={draft.targetWarehouseId?.toString() ?? ''}
+                  <label htmlFor={idFor('targetWarehouseId')} className={fieldLabel}>Target warehouse</label>
+                  <Select id={idFor('targetWarehouseId')} value={draft.targetWarehouseId?.toString() ?? ''}
                     onChange={(e) => setNum('targetWarehouseId')(e.target.value)}>
                     <option value="">Keep current warehouse</option>
                     {warehouses.map((cw) => (
@@ -517,8 +523,8 @@ function RuleEditorModal({
               </div>
             ) : (
               <div>
-                <label className={fieldLabel}>Block reason (shown to operator)</label>
-                <input type="text" value={draft.blockReason ?? ''}
+                <label htmlFor={idFor('blockReason')} className={fieldLabel}>Block reason (shown to operator)</label>
+                <input id={idFor('blockReason')} type="text" value={draft.blockReason ?? ''}
                   onChange={(e) => set('blockReason', e.target.value)}
                   placeholder="e.g. Weight over carrier maximum" className={inputCls} />
               </div>
@@ -554,6 +560,9 @@ function DryRunPanel({
   onClose: () => void
 }) {
   const [req, setReq] = useState<RoutingEvaluationRequest>({})
+  // A11y audit A1 — see idPrefix pattern in ReportsPage.
+  const idPrefix = useId()
+  const idFor = useCallback((k: string) => `${idPrefix}-${k}`, [idPrefix])
   const [result, setResult] = useState<RoutingEvaluationResult | null>(null)
   const [running, setRunning] = useState(false)
   // G3 — separate state for the "which warehouse would be picked" preview.
@@ -610,37 +619,37 @@ function DryRunPanel({
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={fieldLabel}>Weight (LB)</label>
-              <input type="number" step="0.1" value={req.weightLb ?? ''}
+              <label htmlFor={idFor('weightLb')} className={fieldLabel}>Weight (LB)</label>
+              <input id={idFor('weightLb')} type="number" step="0.1" value={req.weightLb ?? ''}
                 onChange={(e) => setNum('weightLb')(e.target.value)} className={inputCls} />
             </div>
             <div>
-              <label className={fieldLabel}>Declared value</label>
-              <input type="number" step="0.01" value={req.declaredValue ?? ''}
+              <label htmlFor={idFor('declaredValue')} className={fieldLabel}>Declared value</label>
+              <input id={idFor('declaredValue')} type="number" step="0.01" value={req.declaredValue ?? ''}
                 onChange={(e) => setNum('declaredValue')(e.target.value)} className={inputCls} />
             </div>
             <div>
-              <label className={fieldLabel}>Destination country (ISO-2)</label>
-              <input type="text" value={req.destCountry ?? ''}
+              <label htmlFor={idFor('destCountry')} className={fieldLabel}>Destination country (ISO-2)</label>
+              <input id={idFor('destCountry')} type="text" value={req.destCountry ?? ''}
                 onChange={(e) => setStr('destCountry')(e.target.value.toUpperCase())} className={inputCls} />
             </div>
             <div>
-              <label className={fieldLabel}>Destination region</label>
-              <Select value={req.destRegion ?? ''} onChange={(e) => setStr('destRegion')(e.target.value)}>
+              <label htmlFor={idFor('destRegion')} className={fieldLabel}>Destination region</label>
+              <Select id={idFor('destRegion')} value={req.destRegion ?? ''} onChange={(e) => setStr('destRegion')(e.target.value)}>
                 <option value="">Any</option>
                 {REGIONS.map((r) => <option key={r} value={r}>{r}</option>)}
               </Select>
             </div>
             <div>
-              <label className={fieldLabel}>Current carrier</label>
-              <Select value={req.currentCarrier ?? ''} onChange={(e) => setStr('currentCarrier')(e.target.value)}>
+              <label htmlFor={idFor('currentCarrier')} className={fieldLabel}>Current carrier</label>
+              <Select id={idFor('currentCarrier')} value={req.currentCarrier ?? ''} onChange={(e) => setStr('currentCarrier')(e.target.value)}>
                 <option value="">Any</option>
                 {CARRIER_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
               </Select>
             </div>
             <div>
-              <label className={fieldLabel}>Current service</label>
-              <Select value={req.currentServiceId?.toString() ?? ''}
+              <label htmlFor={idFor('currentServiceId')} className={fieldLabel}>Current service</label>
+              <Select id={idFor('currentServiceId')} value={req.currentServiceId?.toString() ?? ''}
                 onChange={(e) => setNum('currentServiceId')(e.target.value)}>
                 <option value="">Any</option>
                 {services.filter((s) => s.enabled).map((s) => (
@@ -651,15 +660,15 @@ function DryRunPanel({
               </Select>
             </div>
             <div>
-              <label className={fieldLabel}>Order source</label>
-              <Select value={req.orderSource ?? ''} onChange={(e) => setStr('orderSource')(e.target.value)}>
+              <label htmlFor={idFor('orderSource')} className={fieldLabel}>Order source</label>
+              <Select id={idFor('orderSource')} value={req.orderSource ?? ''} onChange={(e) => setStr('orderSource')(e.target.value)}>
                 <option value="">Any</option>
                 {SOURCE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
               </Select>
             </div>
             <div>
-              <label className={fieldLabel}>Current warehouse</label>
-              <Select value={req.currentWarehouseId?.toString() ?? ''}
+              <label htmlFor={idFor('currentWarehouseId')} className={fieldLabel}>Current warehouse</label>
+              <Select id={idFor('currentWarehouseId')} value={req.currentWarehouseId?.toString() ?? ''}
                 onChange={(e) => setNum('currentWarehouseId')(e.target.value)}>
                 <option value="">Any</option>
                 {warehouses.map((cw) => (
@@ -726,8 +735,8 @@ function DryRunPanel({
               then postal-prefix within country, then any attached (default first).
             </p>
             <div className="mb-2">
-              <label className={fieldLabel}>Destination postal</label>
-              <input type="text" value={destPostal}
+              <label htmlFor={idFor('destPostal')} className={fieldLabel}>Destination postal</label>
+              <input id={idFor('destPostal')} type="text" value={destPostal}
                 onChange={(e) => setDestPostal(e.target.value)}
                 placeholder="e.g. 10001 or SW1A 1AA" className={inputCls} />
             </div>
