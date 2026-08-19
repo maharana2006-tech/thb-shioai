@@ -8,7 +8,6 @@ import {
   type LabelDetails,
   type OrderWithLinesPayload,
 } from '../../api/orderService'
-import { notify } from '../../utils/notify'
 import { formatCarrierName } from '../../utils/carrierUtils'
 import CarrierLogo from '../workspace/CarrierLogo'
 import OrderStatusBadge from '../workspace/OrderStatusBadge'
