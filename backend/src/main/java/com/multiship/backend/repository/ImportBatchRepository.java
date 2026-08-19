@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long> {
@@ -34,4 +35,15 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long> 
     @Modifying
     @Query("DELETE FROM ImportBatch b WHERE b.createdAt < :cutoff")
     int deleteRowsOlderThan(@Param("cutoff") LocalDateTime cutoff);
+
+    /** Live (non-deleted) imports, newest first — the normal Data History list. */
+    List<ImportBatch> findAllByDeletedAtIsNullOrderByIdDesc();
+
+    /** Soft-deleted imports, newest first — the Trash view. */
+    List<ImportBatch> findAllByDeletedAtIsNotNullOrderByIdDesc();
+
+    /** Most recent LIVE batch that carries an identical content hash — used to
+     *  reject re-uploading the same file. A soft-deleted batch does not block a
+     *  re-upload, so the operator can delete and re-import a corrected file. */
+    Optional<ImportBatch> findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(String contentHash);
 }

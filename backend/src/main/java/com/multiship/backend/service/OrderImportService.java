@@ -41,14 +41,49 @@ public interface OrderImportService {
      * Save the previewed rows as a data record in the Data History (does NOT
      * generate labels). Persists an {@link com.multiship.backend.model.ImportBatch}
      * with the full row payload; returns the summary + batch id.
+     *
+     * @param draft when {@code true} the whole batch is parked as a DRAFT even
+     *   if some rows still have errors (they are held NEEDS_FIX). When
+     *   {@code false} this is a final save and is rejected (422) unless every
+     *   row is valid.
      */
-    ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy, String fileName);
+    ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy,
+                                            String fileName, boolean draft);
 
-    /** All saved imports, newest first (row payload omitted from the list). */
+    /** Live (non-deleted) imports, newest first (row payload omitted). */
     java.util.List<com.multiship.backend.dto.ImportBatchDTO> history();
+
+    /** Soft-deleted imports, newest first — the Trash view. */
+    java.util.List<com.multiship.backend.dto.ImportBatchDTO> deletedHistory();
 
     /** One saved import with its full row payload, or null if not found. */
     com.multiship.backend.dto.ImportBatchDTO historyDetail(Long id);
+
+    /**
+     * Soft-delete an import batch — moves it to Trash (sets deletedAt/deletedBy)
+     * instead of removing it. Returns the updated DTO, or null if not found.
+     * Idempotent: deleting an already-deleted batch is a no-op.
+     */
+    com.multiship.backend.dto.ImportBatchDTO softDeleteBatch(Long id, String requestedBy);
+
+    /**
+     * Restore a soft-deleted import batch from Trash (clears deletedAt/deletedBy).
+     * Returns the updated DTO, or null if not found.
+     */
+    com.multiship.backend.dto.ImportBatchDTO restoreBatch(Long id);
+
+    /**
+     * Empty the Trash — PERMANENTLY (hard) delete every soft-deleted batch the
+     * caller's tenant owns. This is irreversible. Returns the number purged.
+     */
+    int purgeTrash(String requestedBy);
+
+    /**
+     * Set a batch's bill-to account mode: "AUTO" (cascade) or "PLATFORM"
+     * (house account). Persisted so the choice survives reloads. Returns the
+     * updated DTO, or null if not found.
+     */
+    com.multiship.backend.dto.ImportBatchDTO setBillingMode(Long id, String mode, String requestedBy);
 
     /**
      * Generate carrier labels for a saved import batch, advancing its status
@@ -57,16 +92,29 @@ public interface OrderImportService {
     com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(Long id, String requestedBy);
 
     /**
-     * Sprint 55 audit #302 F3.2 — generate labels for a batch, optionally
-     * filtered to only rows whose current generatedStatus is NOT
-     * {@code GENERATED}. Retry-safe: prevents duplicate carrier calls
-     * (and duplicate billing) on rows that already succeeded.
-     * onlyFailed=false preserves the original re-generate-all behavior.
+     * Generate labels for a batch, with two independent options:
+     *  - Sprint 55 audit #302 F3.2 — {@code onlyFailed}=true filters to rows
+     *    whose current generatedStatus is NOT {@code GENERATED} (retry-safe:
+     *    prevents duplicate carrier calls + billing on already-succeeded rows).
+     *  - {@code usePlatformAccount}=true forces the platform (house) account for
+     *    every row (Data History "Use platform account" option).
      */
-    com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(Long id, String requestedBy, boolean onlyFailed);
+    com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(
+            Long id, String requestedBy, boolean onlyFailed, boolean usePlatformAccount);
 
     /** Generate a label for a single row of a saved batch. Null if not found. */
     com.multiship.backend.dto.ImportBatchDTO generateLabelForRow(Long id, int rowNumber, String requestedBy);
+
+    /**
+     * Sprint 51 — correct one row of a saved import in place (Data History
+     * inline edit). Applies the edited row, re-runs the full validation
+     * pipeline over the whole batch, re-stamps each ungenerated row as
+     * SAVED / NEEDS_FIX, and recomputes the batch's saved / invalid counts
+     * and status. A row that already has a label (GENERATED) is not edited.
+     * Null if the batch is not found.
+     */
+    com.multiship.backend.dto.ImportBatchDTO updateBatchRow(
+            Long id, int rowNumber, OrderImportRowDTO edited, String requestedBy);
 
     /**
      * Sprint 48 — dry-run validation on rows the operator may have edited

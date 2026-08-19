@@ -62,6 +62,11 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.PackingSlipService packingSlipService;
 
+    // Sprint 51 — the platform's own commercial-invoice PDF: an
+    // always-available operator document for international orders.
+    @Autowired
+    private com.multiship.backend.service.CommercialInvoiceService commercialInvoiceService;
+
     @Autowired
     private com.multiship.backend.service.shipment.MultiWarehouseLabelService multiWarehouseLabelService;
 
@@ -594,6 +599,34 @@ public class OrderController {
                     .body(pdf);
         } catch (IllegalArgumentException notFound) {
             return ResponseEntity.status(org.springframework.http.HttpStatus.NOT_FOUND).build();
+        }
+    }
+
+    @Operation(
+            summary = "Download the order's commercial invoice (PDF)",
+            description = "The platform's own commercial invoice for an international order, "
+                    + "rendered from the persisted customs data and available on demand. "
+                    + "404 when the order doesn't exist; 422 when the order has no customs "
+                    + "data (domestic / not international). application/pdf inline.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Commercial invoice PDF")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Order not found")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "Order has no customs data")
+    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
+    @GetMapping(value = "/{orderNo}/commercial-invoice",
+            produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> getCommercialInvoice(@PathVariable Integer orderNo) {
+        try {
+            byte[] pdf = commercialInvoiceService.render(orderNo);
+            return ResponseEntity.ok()
+                    .header("Content-Disposition",
+                            "inline; filename=commercial-invoice-" + orderNo + ".pdf")
+                    .header("Content-Type",
+                            org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+                    .body(pdf);
+        } catch (IllegalArgumentException notFound) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.NOT_FOUND).build();
+        } catch (IllegalStateException noCustoms) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY).build();
         }
     }
 

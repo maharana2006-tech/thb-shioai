@@ -1,5 +1,6 @@
 package com.multiship.backend.dto.external;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -45,9 +46,11 @@ public class ExternalShipmentRequest {
     private String warehouseCode;
 
     /** Ship-from override — see {@link #warehouseCode} for the resolution order. */
+    @Valid
     private ExternalAddress shipFrom;
 
     /** Ship-to. Required. */
+    @Valid
     private ExternalAddress shipTo;
 
     /** Parcel weight + dimensions. Weight required. */

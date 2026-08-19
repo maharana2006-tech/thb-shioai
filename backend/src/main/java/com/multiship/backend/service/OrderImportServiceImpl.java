@@ -527,8 +527,14 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (account != null && carrier != null && KNOWN_CARRIERS.contains(carrier) && !thirdParty) {
                 java.util.Set<String> known = accountsByCarrier.getOrDefault(carrier, java.util.Set.of());
                 if (!known.contains(account)) {
-                    warnings.add("accountNumber " + account + " is not a registered "
-                            + carrier + " account; the default account cascade may override it");
+                    // A shipper's own account number, if provided, MUST be one
+                    // registered in the platform (this client's accounts +
+                    // platform accounts). Not found → hard error. THIRD_PARTY
+                    // (external bill-to) accounts are exempt — they live on the
+                    // recipient's carrier account, not ours, and are only
+                    // format-checked in validateRow.
+                    errors.add("accountNumber " + account + " is not a registered "
+                            + carrier + " account in the platform");
                 }
             }
 
@@ -543,7 +549,7 @@ public class OrderImportServiceImpl implements OrderImportService {
 
             String pkg = normalizeOrNull(row.getPackageType());
             if (pkg != null && !knownPackages.isEmpty() && !knownPackages.contains(pkg)) {
-                warnings.add("packageType '" + pkg + "' is not a registered package preset");
+                errors.add("packageType '" + pkg + "' is not a registered package preset");
             }
 
             row.setErrors(errors);
@@ -1073,6 +1079,16 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     @Override
     public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy) {
+        return commit(rows, requestedBy, false);
+    }
+
+    /**
+     * @param usePlatformAccount when true, every group bills to the platform
+     *   (house) account for its carrier, overriding any row/client account.
+     *   Used by the Data History "Use platform account" generate option.
+     */
+    public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy,
+                                                     boolean usePlatformAccount) {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
         }
@@ -1143,7 +1159,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         List<Callable<GroupOutcome>> tasks = new ArrayList<>(groupCount);
         for (Map.Entry<String, List<OrderImportRowDTO>> entry : groups.entrySet()) {
             List<OrderImportRowDTO> group = entry.getValue();
-            tasks.add(() -> processGroup(group, batchId));
+            tasks.add(() -> processGroup(group, batchId, usePlatformAccount));
         }
 
         // Sprint 50 Tier 1 finding #15 — tenant key for fair-share. Groups
@@ -1212,7 +1228,8 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     // ── Save to Data History (persist the imported data, no labels) ──────────
     @Override
-    public ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy, String fileName) {
+    public ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy,
+                                                   String fileName, boolean draft) {
         List<OrderImportRowDTO> safe = rows == null ? java.util.List.of() : rows;
         // Sprint 50 Tier 0.5 PR G — clamp before we persist rowsJson so a
         // scoped USER can't seed the import_batch table with foreign
@@ -1221,18 +1238,60 @@ public class OrderImportServiceImpl implements OrderImportService {
             row.setClientCode(clamp(row.getClientCode()));
         }
         int total = safe.size();
+
+        // Re-run the full validation pipeline server-side (never trust the
+        // client-sent errors) so the persisted per-row state is authoritative.
+        for (OrderImportRowDTO row : safe) {
+            row.setErrors(validateRow(row));
+            row.setWarnings(List.of());
+        }
+        resolveNamesToCodes(safe);
+        validateReferences(safe);
+        validateBusinessRules(safe);
+        validateCustomFields(safe);
+        validateInternationalItems(safe);
+
         int invalid = (int) safe.stream()
                 .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
                 .count();
         int saved = total - invalid;
-        // Freshly saved data has no labels yet → INITIATE. Status advances to
-        // IN_PROGRESS / COMPLETE / PARTIAL_COMPLETE when the operator later
-        // runs "Generate labels" on this batch from Data History.
-        String status = "INITIATE";
-        // Mark the valid rows SAVED so the summary UI can badge them.
+
+        // Sprint 51 — two save modes:
+        //   final (draft=false) — REFUSE (422) unless every row is valid.
+        //   draft (draft=true)  — park the whole batch even with bad rows so
+        //                         the operator never loses work-in-progress.
+        if (!draft && invalid > 0) {
+            return failure(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Can't save — " + invalid + " of " + total
+                    + " row(s) still have errors. Fix every row, or use \"Save as draft\".");
+        }
+
+        // A draft that still has bad rows is parked as DRAFT; a clean batch
+        // (final save, or a draft that happens to be error-free) starts its
+        // label lifecycle at INITIATE. Each row carries its own fate:
+        //   SAVED     — clean, ready to generate a label.
+        //   NEEDS_FIX — has errors; held in a draft until corrected.
+        String status = (draft && invalid > 0) ? "DRAFT" : "INITIATE";
         for (OrderImportRowDTO r : safe) {
-            if (r.getErrors() == null || r.getErrors().isEmpty()) {
-                r.setGeneratedStatus("SAVED");
+            boolean clean = r.getErrors() == null || r.getErrors().isEmpty();
+            r.setGeneratedStatus(clean ? "SAVED" : "NEEDS_FIX");
+        }
+
+        // Sprint 51 — reject re-uploading the same file. Hash the row DATA (not
+        // transient validation state), so an identical file is blocked even if
+        // renamed, while a file the operator has actually edited hashes
+        // differently and imports fine.
+        String contentHash = contentHash(safe);
+        if (contentHash != null && importBatchRepository != null) {
+            com.multiship.backend.model.ImportBatch dup = importBatchRepository
+                    .findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(contentHash).orElse(null);
+            if (dup != null) {
+                String dupName = StringUtils.hasText(dup.getFileName()) ? dup.getFileName() : "Untitled";
+                return failure(HttpStatus.CONFLICT,
+                        "This file was already imported as #" + dup.getId()
+                        + " (" + dupName + ")"
+                        + (dup.getCreatedAt() != null ? " on " + dup.getCreatedAt().toLocalDate() : "")
+                        + ". Edit a value or upload a different file to import a changed version.");
             }
         }
 
@@ -1246,6 +1305,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             batch.setTotalRows(total);
             batch.setSavedRows(saved);
             batch.setInvalidRows(invalid);
+            batch.setContentHash(contentHash);
             try {
                 batch.setRowsJson(importObjectMapper != null
                         ? importObjectMapper.writeValueAsString(safe) : "[]");
@@ -1256,8 +1316,11 @@ public class OrderImportServiceImpl implements OrderImportService {
             batchId = batch.getId();
         }
 
-        log.info("Order import save ({}): {} saved, {} invalid → batch {}",
-                requestedBy, saved, invalid, batchId);
+        log.info("Order import {} ({}): {} saved, {} invalid → batch {}",
+                draft ? "draft-save" : "save", requestedBy, saved, invalid, batchId);
+        String message = (draft && invalid > 0)
+                ? "Draft saved to history · " + saved + " ready, " + invalid + " still need fixing"
+                : total + " row(s) saved to history · all ready to generate";
         return success(OrderImportPreviewDTO.builder()
                         .totalRows(total)
                         .validRows(saved)
@@ -1265,22 +1328,32 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .batchId(batchId == null ? null : batchId.intValue())
                         .rows(safe)
                         .build(),
-                saved + " order(s) saved to history"
-                        + (invalid > 0 ? " · " + invalid + " row(s) skipped" : ""));
+                message);
     }
 
     @Override
     public java.util.List<com.multiship.backend.dto.ImportBatchDTO> history() {
         if (importBatchRepository == null) return java.util.List.of();
-        // Sprint 50 Tier 0.5 PR G — filter to the caller's tenant when
-        // scoped. ImportBatch has no direct tenant column so we derive
-        // membership from the first non-blank clientCode in the payload
-        // (all rows in one save() call share the same clamped code).
-        // Operators (resolveScope empty) see everything.
+        return summariesFor(importBatchRepository.findAllByDeletedAtIsNullOrderByIdDesc());
+    }
+
+    @Override
+    public java.util.List<com.multiship.backend.dto.ImportBatchDTO> deletedHistory() {
+        if (importBatchRepository == null) return java.util.List.of();
+        return summariesFor(importBatchRepository.findAllByDeletedAtIsNotNullOrderByIdDesc());
+    }
+
+    /** Map batches to summary DTOs, applying the caller's tenant scope.
+     *  Sprint 50 Tier 0.5 PR G — ImportBatch has no direct tenant column so we
+     *  derive membership from the first non-blank clientCode in the payload
+     *  (all rows in one save() call share the same clamped code). Operators
+     *  (resolveScope empty) see everything. */
+    private java.util.List<com.multiship.backend.dto.ImportBatchDTO> summariesFor(
+            java.util.List<com.multiship.backend.model.ImportBatch> batches) {
         java.util.Optional<String> scope = tenantScope == null
                 ? java.util.Optional.empty()
                 : tenantScope.resolveScope();
-        return importBatchRepository.findAllByOrderByIdDesc().stream()
+        return batches.stream()
                 .filter(b -> {
                     if (scope.isEmpty()) return true;
                     String owner = firstClientCode(parseBatchRows(b));
@@ -1296,8 +1369,79 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .totalRows(b.getTotalRows())
                         .savedRows(b.getSavedRows())
                         .invalidRows(b.getInvalidRows())
+                        .deletedAt(b.getDeletedAt() == null ? null : b.getDeletedAt().toString())
+                        .deletedBy(b.getDeletedBy())
+                        .billingMode(StringUtils.hasText(b.getBillingMode()) ? b.getBillingMode() : "AUTO")
                         .build())
                 .toList();
+    }
+
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO setBillingMode(Long id, String mode, String requestedBy) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
+        if (b == null) return null;
+        requireMatch(firstClientCode(parseBatchRows(b)));
+        String m = "PLATFORM".equalsIgnoreCase(mode == null ? "" : mode.trim()) ? "PLATFORM" : "AUTO";
+        b.setBillingMode(m);
+        b = importBatchRepository.save(b);
+        log.info("Import batch {} billing mode set to {} by {}", id, m, requestedBy);
+        return toBatchDTO(b, parseBatchRows(b));
+    }
+
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO softDeleteBatch(Long id, String requestedBy) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
+        if (b == null) return null;
+        // Tenant boundary — a scoped USER may only delete a batch their tenant owns.
+        requireMatch(firstClientCode(parseBatchRows(b)));
+        if (b.getDeletedAt() == null) {              // idempotent: skip if already trashed
+            b.setDeletedAt(java.time.LocalDateTime.now());
+            b.setDeletedBy(requestedBy);
+            b = importBatchRepository.save(b);
+            log.info("Import batch {} soft-deleted by {}", id, requestedBy);
+        }
+        return toBatchDTO(b, parseBatchRows(b));
+    }
+
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO restoreBatch(Long id) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
+        if (b == null) return null;
+        requireMatch(firstClientCode(parseBatchRows(b)));
+        if (b.getDeletedAt() != null) {
+            b.setDeletedAt(null);
+            b.setDeletedBy(null);
+            b = importBatchRepository.save(b);
+            log.info("Import batch {} restored from Trash", id);
+        }
+        return toBatchDTO(b, parseBatchRows(b));
+    }
+
+    @Override
+    public int purgeTrash(String requestedBy) {
+        if (importBatchRepository == null) return 0;
+        // Only purge batches this tenant may see — reuse the same scope filter
+        // as the Trash list so a scoped USER can never wipe another tenant's
+        // deleted imports.
+        java.util.Optional<String> scope = tenantScope == null
+                ? java.util.Optional.empty()
+                : tenantScope.resolveScope();
+        java.util.List<com.multiship.backend.model.ImportBatch> toPurge =
+                importBatchRepository.findAllByDeletedAtIsNotNullOrderByIdDesc().stream()
+                        .filter(b -> {
+                            if (scope.isEmpty()) return true;
+                            String owner = firstClientCode(parseBatchRows(b));
+                            return owner != null && scope.get().equalsIgnoreCase(owner.trim());
+                        })
+                        .toList();
+        if (!toPurge.isEmpty()) {
+            importBatchRepository.deleteAll(toPurge);
+            log.info("Trash emptied by {} — {} batch(es) permanently deleted", requestedBy, toPurge.size());
+        }
+        return toPurge.size();
     }
 
     @Override
@@ -1343,12 +1487,13 @@ public class OrderImportServiceImpl implements OrderImportService {
      */
     @Override
     public com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(Long id, String requestedBy) {
-        // Preserves original behavior: re-send every row.
-        return generateLabelsForBatch(id, requestedBy, false);
+        // Preserves original behavior: re-send every row, client/row account.
+        return generateLabelsForBatch(id, requestedBy, false, false);
     }
 
     @Override
-    public com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(Long id, String requestedBy, boolean onlyFailed) {
+    public com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(
+            Long id, String requestedBy, boolean onlyFailed, boolean usePlatformAccount) {
         if (importBatchRepository == null || id == null) return null;
         com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
         if (batch == null) return null;
@@ -1379,15 +1524,20 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
                         .toList()
                 : rows;
+        // Honor the persisted billing mode too, so the platform-account choice
+        // survives reloads/retries even when the caller omits the flag.
+        boolean platform = usePlatformAccount || "PLATFORM".equalsIgnoreCase(
+                batch.getBillingMode() == null ? "" : batch.getBillingMode());
 
         // Mark IN_PROGRESS before the (potentially slow) carrier calls.
         batch.setStatus("IN_PROGRESS");
         importBatchRepository.save(batch);
 
         // Reuse the commit path — it generates labels and stamps each row's
-        // generatedStatus (GENERATED / FAILED) in place.
+        // generatedStatus (GENERATED / FAILED) in place. platform forces the
+        // house account for every row; onlyFailed limits to the not-yet-done subset.
         if (!rowsToProcess.isEmpty()) {
-            commit(rowsToProcess, requestedBy);
+            commit(rowsToProcess, requestedBy, platform);
         }
 
         int total = rows.size();
@@ -1397,10 +1547,13 @@ public class OrderImportServiceImpl implements OrderImportService {
         int failed = (int) rows.stream()
                 .filter(r -> "FAILED".equalsIgnoreCase(r.getGeneratedStatus()))
                 .count();
+        int invalid = (int) rows.stream()
+                .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
+                .count();
 
         // savedRows/invalidRows keep their data-validity meaning from save();
         // label progress is conveyed by the status + the per-row Label column.
-        batch.setStatus(deriveGenerationStatus(total, generated, failed));
+        batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
         // commit() stamps every generated row with the shared label batchId;
         // lift it onto the import so the file row shows which All-Orders batch
         // its labels belong to. Keep any prior id if this run generated none.
@@ -1474,7 +1627,10 @@ public class OrderImportServiceImpl implements OrderImportService {
         int failed = (int) rows.stream()
                 .filter(r -> "FAILED".equalsIgnoreCase(r.getGeneratedStatus()))
                 .count();
-        batch.setStatus(deriveGenerationStatus(total, generated, failed));
+        int invalid = (int) rows.stream()
+                .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
+                .count();
+        batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
         Integer labelBatchId = firstBatchId(rows);
         if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
         try {
@@ -1495,17 +1651,115 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /**
+     * Sprint 51 — inline correction of one saved row from Data History.
+     * Replaces the target row with the operator's edit, re-validates the
+     * whole batch (so cross-row + international + reference rules stay
+     * consistent), re-stamps each still-ungenerated row SAVED / NEEDS_FIX,
+     * and recomputes the batch counts + status. Rows already carrying a
+     * label (GENERATED) are immutable — the edit is ignored for them.
+     */
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO updateBatchRow(
+            Long id, int rowNumber, OrderImportRowDTO edited, String requestedBy) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
+        if (batch == null) return null;
+
+        List<OrderImportRowDTO> rows = new ArrayList<>();
+        if (importObjectMapper != null && batch.getRowsJson() != null) {
+            try {
+                rows = importObjectMapper.readValue(
+                        batch.getRowsJson(),
+                        new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
+            } catch (Exception e) {
+                log.warn("Import batch {} rowsJson parse failed on edit — treating as empty: {}",
+                        id, e.getMessage());
+                rows = new ArrayList<>();
+            }
+        }
+        // Same tenant boundary as read / generate: a scoped USER may only
+        // edit a batch their own tenant owns.
+        requireMatch(firstClientCode(rows));
+
+        int index = -1;
+        for (int i = 0; i < rows.size(); i++) {
+            if (rows.get(i).getRowNumber() == rowNumber) { index = i; break; }
+        }
+        if (index < 0) return toBatchDTO(batch, rows);
+
+        OrderImportRowDTO current = rows.get(index);
+        // A generated row is already a live shipment — never mutate it here.
+        if ("GENERATED".equalsIgnoreCase(current.getGeneratedStatus())) {
+            return toBatchDTO(batch, rows);
+        }
+
+        // Apply the edit. Force the row number so the client can't renumber
+        // a row by editing, and drop any stale generation outcome so a
+        // previously-FAILED row re-enters the SAVED / NEEDS_FIX lifecycle.
+        if (edited == null) edited = new OrderImportRowDTO();
+        edited.setRowNumber(rowNumber);
+        edited.setGeneratedStatus(null);
+        edited.setBatchId(null);
+        rows.set(index, edited);
+
+        // Re-validate the whole batch — mutates each row's errors/warnings
+        // in place through the same pipeline preview/commit use.
+        validate(rows);
+
+        // Re-stamp lifecycle status for every row that hasn't shipped.
+        for (OrderImportRowDTO r : rows) {
+            if ("GENERATED".equalsIgnoreCase(r.getGeneratedStatus())
+                    || "FAILED".equalsIgnoreCase(r.getGeneratedStatus())) {
+                continue;
+            }
+            boolean clean = r.getErrors() == null || r.getErrors().isEmpty();
+            r.setGeneratedStatus(clean ? "SAVED" : "NEEDS_FIX");
+        }
+
+        int total = rows.size();
+        int invalid = (int) rows.stream()
+                .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
+                .count();
+        int generated = (int) rows.stream()
+                .filter(r -> "GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
+                .count();
+        int failed = (int) rows.stream()
+                .filter(r -> "FAILED".equalsIgnoreCase(r.getGeneratedStatus()))
+                .count();
+
+        batch.setTotalRows(total);
+        batch.setSavedRows(total - invalid);
+        batch.setInvalidRows(invalid);
+        batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
+        try {
+            if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
+        } catch (Exception ex) {
+            log.warn("Import batch {} rowsJson serialisation failed on edit — keeping prior payload: {}",
+                    id, ex.getMessage());
+        }
+        batch = importBatchRepository.save(batch);
+
+        log.info("Import batch {} row {} edited ({}): {} → {} valid / {} held → status {}",
+                id, rowNumber, requestedBy, rows.get(index).getGeneratedStatus(),
+                total - invalid, invalid, batch.getStatus());
+        return toBatchDTO(batch, rows);
+    }
+
+    /**
      * Batch status from label-generation outcomes:
      *   INITIATE         — no row attempted yet (fresh save, nothing generated/failed)
      *   COMPLETE         — every row got a label
      *   FAILED           — every row was attempted and all failed
      *   PARTIAL_COMPLETE — some labels made, or some rows still pending
      */
-    private String deriveGenerationStatus(int total, int generated, int failed) {
+    private String deriveGenerationStatus(int total, int generated, int failed, int invalid) {
         if (total == 0) return "INITIATE";
         if (generated == total) return "COMPLETE";
         if (failed == total) return "FAILED";
-        if (generated == 0 && failed == 0) return "INITIATE";
+        // Nothing has generated or failed yet: a batch still carrying bad rows
+        // stays a DRAFT (work-in-progress); an all-clean batch is INITIATE
+        // (ready to generate).
+        if (generated == 0 && failed == 0) return invalid > 0 ? "DRAFT" : "INITIATE";
         return "PARTIAL_COMPLETE";
     }
 
@@ -1533,6 +1787,9 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .totalRows(batch.getTotalRows())
                 .savedRows(batch.getSavedRows())
                 .invalidRows(batch.getInvalidRows())
+                .deletedAt(batch.getDeletedAt() == null ? null : batch.getDeletedAt().toString())
+                .deletedBy(batch.getDeletedBy())
+                .billingMode(StringUtils.hasText(batch.getBillingMode()) ? batch.getBillingMode() : "AUTO")
                 .rows(rows)
                 .build();
     }
@@ -1578,6 +1835,13 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         req.setCarrierCode(leader.getCarrierCode());
         req.setAccountNumber(leader.getAccountNumber());
+        // Sprint 51 fix #2 — carry the row's warehouse so the manual path
+        // resolves that warehouse's address as ship-from (and thus the
+        // origin country that drives the international/customs decision).
+        // When blank, processGroup fills the sender from the client's
+        // configured ship-from instead of letting it fall back to the
+        // platform default shipper country.
+        req.setWarehouseCode(leader.getWarehouseCode());
         req.setWeight(leader.getWeight());
         req.setWeightUnit(leader.getWeightUnit());
         req.setCurrency(leader.getCurrency());
@@ -1609,6 +1873,13 @@ public class OrderImportServiceImpl implements OrderImportService {
         // (MANUAL) or an external API call (API), so operators can filter/
         // spot these on the Shipment & Label list.
         req.setSource("BULK");
+        // Sprint 51 — carry the row's client so the persisted order records
+        // its owning client (custNo + tenantId), matching the manual-UI path.
+        // Without this the order fell back to custNo="MANUAL" / tenantId=null,
+        // breaking tenant scoping and forcing client-scoped features (e.g. the
+        // commercial invoice) to reverse-resolve the client from the billing
+        // account. generateManualLabel re-clamps this to the caller's scope.
+        req.setClientCode(leader.getClientCode());
 
         // Customs items: any row (leader OR item rows) that carries
         // item-level data becomes one Item on the invoice. Skip rows
@@ -2002,6 +2273,70 @@ public class OrderImportServiceImpl implements OrderImportService {
             java.util.regex.Pattern.compile("^\\d{4,6}(\\.?\\d{2,4}){0,2}$");
     private static final java.util.Set<String> WEIGHT_UNITS = java.util.Set.of("LB", "KG", "LBS", "KGS", "OZ");
     private static final java.util.Set<String> BILL_TO_VALUES = java.util.Set.of("SENDER", "RECIPIENT", "THIRD_PARTY");
+    /**
+     * Sprint 51 — destinations where the carriers (FedEx/UPS/USPS) require a
+     * state / province code and reject the shipment without one. Import
+     * validation makes {@code state} mandatory for these countries so a bad
+     * row is caught in review instead of failing at label generation.
+     */
+    private static final java.util.Set<String> STATE_REQUIRED_COUNTRIES =
+            java.util.Set.of("US", "CA", "AU", "IN", "BR", "MX");
+    /** Every valid ISO-3166 alpha-2 country code — rejects shape-valid but
+     *  bogus codes like "ZZ" that the ISO2 regex alone lets through. */
+    private static final java.util.Set<String> VALID_ISO_COUNTRIES =
+            java.util.Set.of(java.util.Locale.getISOCountries());
+    /** Valid state/province codes for the countries where we require state,
+     *  so a bad code ("XX") is caught, not just a blank one. */
+    private static final java.util.Set<String> US_STATES = java.util.Set.of(
+            "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA",
+            "ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK",
+            "OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY",
+            "DC","PR","VI","GU","AS","MP");
+    private static final java.util.Set<String> CA_PROVINCES = java.util.Set.of(
+            "AB","BC","MB","NB","NL","NS","NT","NU","ON","PE","QC","SK","YT");
+    private static final java.util.Set<String> AU_STATES = java.util.Set.of(
+            "ACT","NSW","NT","QLD","SA","TAS","VIC","WA");
+    private static final Map<String, java.util.Set<String>> STATE_CODES = Map.of(
+            "US", US_STATES, "CA", CA_PROVINCES, "AU", AU_STATES);
+    /** Generic postal fallback for countries not in ZIP_PATTERNS — alphanumeric,
+     *  spaces/dashes, 2–12 chars — so unmodelled destinations aren't a free pass. */
+    private static final java.util.regex.Pattern GENERIC_ZIP =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9][A-Za-z0-9 -]{1,11}$");
+    /** SKU / reference — alphanumeric plus - _ . / and spaces. */
+    private static final java.util.regex.Pattern SKU_RE =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,39}$");
+    private static final java.util.regex.Pattern REFERENCE_RE =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9 ._/#-]{0,40}$");
+    /** Per-carrier account-number format (mirrors the SPA add-account drawer,
+     *  carrierAccountValidation.ts). Applied to THIRD_PARTY account numbers. */
+    private static final Map<String, java.util.regex.Pattern> ACCOUNT_FORMATS = Map.of(
+            "UPS",   java.util.regex.Pattern.compile("^[A-Za-z0-9]{6,10}$"),
+            "FEDEX", java.util.regex.Pattern.compile("^\\d{9}$"),
+            "DHL",   java.util.regex.Pattern.compile("^\\d{9,12}$"),
+            "USPS",  java.util.regex.Pattern.compile("^[A-Za-z0-9._@-]{3,50}$"));
+    /** Human hint for the account-format error message per carrier. */
+    private static final Map<String, String> ACCOUNT_FORMAT_HINT = Map.of(
+            "UPS", "6-10 letters/digits", "FEDEX", "9 digits",
+            "DHL", "9-12 digits", "USPS", "3-50 chars");
+    /** Length caps so a 10,000-char city can't slip through the import. */
+    private static final int MAX_TEXT_LEN = 60;
+    private static final int MAX_NAME_LEN = 50;
+    /**
+     * Sprint 51 security fix — server-side XSS guard mirroring the SPA's
+     * SAFE_TEXT_RE. The CSV/XLSX import and the public External API both
+     * write recipient names straight to the DB WITHOUT passing through the
+     * React form regex, and those values later render in the operator
+     * dashboard and print on labels/packing slips. React escapes on render,
+     * so this is defense-in-depth, but the check belongs on the server too:
+     * reject angle brackets so no stored markup can reach a non-React
+     * consumer (PDF, CSV export, a future template engine). Null/blank pass.
+     */
+    private static final java.util.regex.Pattern SAFE_TEXT_RE =
+            java.util.regex.Pattern.compile("^[^<>]*$");
+    /** Free-text columns the SAFE_TEXT guard applies to, label → getter. */
+    private static boolean unsafeText(String v) {
+        return v != null && !SAFE_TEXT_RE.matcher(v).matches();
+    }
     /** Sanity cap so a stray grams value doesn't book a 5-ton parcel. */
     private static final BigDecimal MAX_WEIGHT = new BigDecimal("9999");
 
@@ -2026,29 +2361,58 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     static List<String> validateRow(OrderImportRowDTO row) {
         List<String> errors = new ArrayList<>();
+        // Sprint 51 — clientCode is the owning-client identifier; a blank one
+        // was silently accepted (validateReferences only checks it when
+        // present) and produced an orphaned custNo="MANUAL" order with no
+        // client, markup, or customs profile. Require it. Tenant-scoped users
+        // never hit this — their blank code is clamped to their own tenant
+        // before validation runs; only platform operators can leave it blank.
+        if (!StringUtils.hasText(row.getClientCode())) errors.add("clientCode is required");
         if (!StringUtils.hasText(row.getRecipientName())) errors.add("recipientName is required");
         if (!StringUtils.hasText(row.getAddressLine1())) errors.add("addressLine1 is required");
         if (!StringUtils.hasText(row.getCity())) errors.add("city is required");
         if (!StringUtils.hasText(row.getPostalCode())) errors.add("postalCode is required");
         if (!StringUtils.hasText(row.getCountryCode())) errors.add("countryCode is required");
+        // State/province is mandatory for destinations whose carriers demand it
+        // (US, CA, AU, IN, BR, MX). Applies to domestic and international alike.
+        String stateCountry = row.getCountryCode();
+        if (StringUtils.hasText(stateCountry)
+                && STATE_REQUIRED_COUNTRIES.contains(stateCountry.trim().toUpperCase(Locale.ROOT))
+                && !StringUtils.hasText(row.getState())) {
+            errors.add("state is required for " + stateCountry.trim().toUpperCase(Locale.ROOT) + " shipments");
+        }
         if (row.getWeight() == null || row.getWeight().signum() <= 0) {
             errors.add("weight must be > 0");
         } else if (row.getWeight().compareTo(MAX_WEIGHT) > 0) {
             errors.add("weight must be " + MAX_WEIGHT + " or less");
         }
+        // A weight without a unit is ambiguous — require it alongside weight.
+        if (!StringUtils.hasText(row.getWeightUnit())) {
+            errors.add("weightUnit is required (LB or KG)");
+        }
 
         // --- shape checks: only fire when the value is present ---
         String country = row.getCountryCode();
-        if (StringUtils.hasText(country) && !ISO2_RE.matcher(country.trim()).matches()) {
+        String countryUp = StringUtils.hasText(country) ? country.trim().toUpperCase(Locale.ROOT) : null;
+        boolean countryShapeOk = countryUp != null && ISO2_RE.matcher(country.trim()).matches();
+        if (countryUp != null && !countryShapeOk) {
             errors.add("countryCode '" + country + "' must be a 2-letter ISO code");
+        } else if (countryUp != null && !VALID_ISO_COUNTRIES.contains(countryUp)) {
+            errors.add("countryCode '" + country + "' is not a recognized country");
+        }
+        // State/province must be a real code for countries we validate.
+        if (countryShapeOk && STATE_CODES.containsKey(countryUp) && StringUtils.hasText(row.getState())
+                && !STATE_CODES.get(countryUp).contains(row.getState().trim().toUpperCase(Locale.ROOT))) {
+            errors.add("state '" + row.getState() + "' is not a valid " + countryUp + " state/province code");
         }
         String zip = row.getPostalCode();
-        if (StringUtils.hasText(zip) && StringUtils.hasText(country)
-                && ISO2_RE.matcher(country.trim()).matches()) {
-            java.util.regex.Pattern p = ZIP_PATTERNS.get(country.trim().toUpperCase(Locale.ROOT));
+        if (StringUtils.hasText(zip) && countryShapeOk) {
+            java.util.regex.Pattern p = ZIP_PATTERNS.get(countryUp);
             if (p != null && !p.matcher(zip.trim()).matches()) {
-                errors.add("postalCode '" + zip + "' doesn't match the "
-                        + country.trim().toUpperCase(Locale.ROOT) + " format");
+                errors.add("postalCode '" + zip + "' doesn't match the " + countryUp + " format");
+            } else if (p == null && !GENERIC_ZIP.matcher(zip.trim()).matches()) {
+                // Unmodelled country — still enforce a sane postal shape.
+                errors.add("postalCode '" + zip + "' is not a valid postal code");
             }
         }
         String email = row.getRecipientEmail();
@@ -2085,15 +2449,64 @@ public class OrderImportServiceImpl implements OrderImportService {
             errors.add("hsCode '" + hs + "' must be 6-10 digits (dots allowed)");
         }
         String origin = row.getCountryOfOrigin();
-        if (StringUtils.hasText(origin) && !ISO2_RE.matcher(origin.trim()).matches()) {
-            errors.add("countryOfOrigin '" + origin + "' must be a 2-letter ISO code");
+        if (StringUtils.hasText(origin)) {
+            if (!ISO2_RE.matcher(origin.trim()).matches()) {
+                errors.add("countryOfOrigin '" + origin + "' must be a 2-letter ISO code");
+            } else if (!VALID_ISO_COUNTRIES.contains(origin.trim().toUpperCase(Locale.ROOT))) {
+                errors.add("countryOfOrigin '" + origin + "' is not a recognized country");
+            }
         }
         if (row.getItemQuantity() != null && row.getItemQuantity() < 1) {
             errors.add("itemQuantity must be 1 or more");
         }
         if (row.getItemUnitValue() != null && row.getItemUnitValue().signum() <= 0) {
             errors.add("itemUnitValue must be > 0");
+        } else if (row.getItemUnitValue() != null && row.getItemUnitValue().scale() > 2) {
+            errors.add("itemUnitValue must have at most 2 decimal places");
         }
+        // SKU / reference — keep them to a safe alphanumeric shape.
+        if (StringUtils.hasText(row.getItemSku()) && !SKU_RE.matcher(row.getItemSku().trim()).matches()) {
+            errors.add("itemSku '" + row.getItemSku() + "' has invalid characters (letters, digits, -_./ only)");
+        }
+        if (StringUtils.hasText(row.getReference()) && !REFERENCE_RE.matcher(row.getReference().trim()).matches()) {
+            errors.add("reference '" + row.getReference() + "' has invalid characters");
+        }
+        // THIRD_PARTY account numbers must match the carrier's account format.
+        if ("THIRD_PARTY".equalsIgnoreCase(billTo == null ? "" : billTo.trim())
+                && StringUtils.hasText(row.getAccountNumber())
+                && StringUtils.hasText(row.getCarrierCode())) {
+            String cc = row.getCarrierCode().trim().toUpperCase(Locale.ROOT);
+            java.util.regex.Pattern fmt = ACCOUNT_FORMATS.get(cc);
+            if (fmt != null && !fmt.matcher(row.getAccountNumber().trim()).matches()) {
+                errors.add("accountNumber '" + row.getAccountNumber() + "' is not a valid " + cc
+                        + " account (" + ACCOUNT_FORMAT_HINT.getOrDefault(cc, "check the format") + ")");
+            }
+        }
+        // Length caps so oversized free-text can't slip through the import.
+        if (row.getCity() != null && row.getCity().length() > MAX_TEXT_LEN)
+            errors.add("city must be " + MAX_TEXT_LEN + " characters or fewer");
+        if (row.getAddressLine1() != null && row.getAddressLine1().length() > MAX_TEXT_LEN)
+            errors.add("addressLine1 must be " + MAX_TEXT_LEN + " characters or fewer");
+        if (row.getAddressLine2() != null && row.getAddressLine2().length() > MAX_TEXT_LEN)
+            errors.add("addressLine2 must be " + MAX_TEXT_LEN + " characters or fewer");
+        if (row.getRecipientName() != null && row.getRecipientName().length() > MAX_NAME_LEN)
+            errors.add("recipientName must be " + MAX_NAME_LEN + " characters or fewer");
+        if (row.getRecipientCompany() != null && row.getRecipientCompany().length() > MAX_NAME_LEN)
+            errors.add("recipientCompany must be " + MAX_NAME_LEN + " characters or fewer");
+
+        // Sprint 51 security fix — reject stored markup in free-text fields
+        // (server-side mirror of the SPA guard; also covers non-UI import).
+        // Each message starts with the column name so the review UI renders
+        // it under that field, matching the existing per-field convention.
+        if (unsafeText(row.getRecipientName()))    errors.add("recipientName must not contain < or >");
+        if (unsafeText(row.getRecipientCompany())) errors.add("recipientCompany must not contain < or >");
+        if (unsafeText(row.getAddressLine1()))     errors.add("addressLine1 must not contain < or >");
+        if (unsafeText(row.getAddressLine2()))     errors.add("addressLine2 must not contain < or >");
+        if (unsafeText(row.getCity()))             errors.add("city must not contain < or >");
+        if (unsafeText(row.getState()))            errors.add("state must not contain < or >");
+        if (unsafeText(row.getItemDescription()))  errors.add("itemDescription must not contain < or >");
+        if (unsafeText(row.getReference()))        errors.add("reference must not contain < or >");
+
         return errors;
     }
 
@@ -2110,6 +2523,40 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
     }
 
+    /** SHA-256 over the row DATA fields (ignoring errors/warnings/generated
+     *  status), so two uploads of the same file collide even if renamed, while
+     *  an edited file hashes differently. Null when hashing is unavailable —
+     *  callers then skip the duplicate guard rather than block. */
+    private static String contentHash(List<OrderImportRowDTO> rows) {
+        if (rows == null || rows.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder(rows.size() * 64);
+        for (OrderImportRowDTO r : rows) {
+            String[] fields = {
+                r.getOrderRef(), r.getClientCode(), r.getBillTo(), r.getWarehouseCode(),
+                r.getRecipientName(), r.getRecipientCompany(), r.getRecipientPhone(), r.getRecipientEmail(),
+                r.getAddressLine1(), r.getAddressLine2(), r.getCity(), r.getState(),
+                r.getPostalCode(), r.getCountryCode(), r.getCarrierCode(), r.getAccountNumber(),
+                r.getServiceType(), r.getPackageType(), String.valueOf(r.getWeight()), r.getWeightUnit(),
+                r.getCurrency(), r.getReference(), r.getItemDescription(), r.getItemSku(),
+                String.valueOf(r.getItemQuantity()), String.valueOf(r.getItemUnitValue()),
+                r.getHsCode(), r.getCountryOfOrigin(),
+                r.getCustomFields() == null ? "" : new java.util.TreeMap<>(r.getCustomFields()).toString(),
+            };
+            for (String f : fields) sb.append(f == null ? "" : f.trim()).append('');
+            sb.append('');
+        }
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : digest) hex.append(Character.forDigit((b >> 4) & 0xF, 16))
+                                     .append(Character.forDigit(b & 0xF, 16));
+            return hex.toString();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /**
      * Sprint 48 revision — international-shipment rule: when a group
      * ships to a country other than the shipper's origin, the group MUST
@@ -2118,13 +2565,33 @@ public class OrderImportServiceImpl implements OrderImportService {
      * itemUnitValue). Without those, every int'l carrier connector
      * fails at the customs block.
      *
-     * <p>We heuristic "domestic" as {@code countryCode == "US"} for now.
-     * When ship-from resolution lands the shipper origin will drive this
-     * per row; today the "was your destination equal to the shipper's
-     * home country" check is a US-centric approximation but the vast
-     * majority of tenants ship US-domestic.
+     * <p>Sprint 51 — "international" is now decided per row against the
+     * OWNING CLIENT'S ship-from country (Client.shipFrom.country →
+     * defaultOriginCountry), matching label-time resolution, instead of a
+     * hardcoded US assumption. A client that ships from India treats an
+     * India destination as domestic; a US-origin client shipping to India
+     * is international. When the client's origin is unknown we keep the
+     * legacy US baseline so behaviour never silently loosens.
      */
-    private static void validateInternationalItems(List<OrderImportRowDTO> rows) {
+    private void validateInternationalItems(List<OrderImportRowDTO> rows) {
+        // Resolve each client's ship-from country once (upper-cased).
+        Map<String, String> originByClient = new java.util.HashMap<>();
+        if (clientRepository != null) {
+            java.util.Set<String> codes = new java.util.LinkedHashSet<>();
+            for (OrderImportRowDTO r : rows) {
+                if (StringUtils.hasText(r.getClientCode())) codes.add(r.getClientCode().trim());
+            }
+            if (!codes.isEmpty()) {
+                for (Client c : clientRepository.findByClientCodeInIgnoreCase(new ArrayList<>(codes))) {
+                    String origin = c.getShipFrom() != null && StringUtils.hasText(c.getShipFrom().getCountry())
+                            ? c.getShipFrom().getCountry() : c.getDefaultOriginCountry();
+                    if (StringUtils.hasText(origin) && StringUtils.hasText(c.getClientCode())) {
+                        originByClient.put(c.getClientCode().trim().toUpperCase(Locale.ROOT),
+                                origin.trim().toUpperCase(Locale.ROOT));
+                    }
+                }
+            }
+        }
         Map<String, List<OrderImportRowDTO>> groups = new LinkedHashMap<>();
         for (OrderImportRowDTO row : rows) {
             String key = StringUtils.hasText(row.getOrderRef())
@@ -2136,9 +2603,29 @@ public class OrderImportServiceImpl implements OrderImportService {
             OrderImportRowDTO leader = group.get(0);
             String country = leader.getCountryCode();
             if (!StringUtils.hasText(country)) continue; // country-required error fires elsewhere
-            if ("US".equalsIgnoreCase(country.trim())) continue; // domestic heuristic
-            // International — need at least one row with full customs
-            // commodity data.
+            // Domestic when the destination equals the owning client's ship-from
+            // country; unknown origin falls back to the legacy US baseline.
+            String origin = StringUtils.hasText(leader.getClientCode())
+                    ? originByClient.getOrDefault(leader.getClientCode().trim().toUpperCase(Locale.ROOT), "US")
+                    : "US";
+            if (country.trim().equalsIgnoreCase(origin)) continue; // domestic
+
+            // Accumulate every international-only requirement on the leader.
+            // Each message starts with the column name so the review UI paints
+            // it on that field's cell (and tooltip) instead of one long
+            // row-level sentence.
+            List<String> errs = new ArrayList<>(
+                    leader.getErrors() == null ? List.of() : leader.getErrors());
+            String suffix = " is required for international shipments (countryCode=" + country + ")";
+
+            // (a) Shipment-level customs essentials the carrier rejects without.
+            //     Phone is a hard carrier requirement for international delivery
+            //     + customs contact; currency denominates the declared value.
+            if (!StringUtils.hasText(leader.getRecipientPhone())) errs.add("recipientPhone" + suffix);
+            if (!StringUtils.hasText(leader.getCurrency()))       errs.add("currency" + suffix);
+
+            // (b) Full customs commodity line — at least one row in the group
+            //     must carry description + HS + origin + qty + unit value.
             boolean hasFullItem = false;
             for (OrderImportRowDTO row : group) {
                 if (StringUtils.hasText(row.getItemDescription())
@@ -2151,20 +2638,13 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
             }
             if (!hasFullItem) {
-                // Emit one short error PER missing customs field on the
-                // leader row — each message starts with the column name so
-                // the review UI renders it directly under that field's
-                // input instead of as one long row-level sentence.
-                List<String> errs = new ArrayList<>(
-                        leader.getErrors() == null ? List.of() : leader.getErrors());
-                String suffix = " is required for international shipments (countryCode=" + country + ")";
                 if (!StringUtils.hasText(leader.getItemDescription())) errs.add("itemDescription" + suffix);
                 if (!StringUtils.hasText(leader.getHsCode()))           errs.add("hsCode" + suffix);
                 if (!StringUtils.hasText(leader.getCountryOfOrigin()))  errs.add("countryOfOrigin" + suffix);
                 if (leader.getItemQuantity() == null)                   errs.add("itemQuantity" + suffix);
                 if (leader.getItemUnitValue() == null)                  errs.add("itemUnitValue" + suffix);
-                leader.setErrors(errs);
             }
+            leader.setErrors(errs);
         }
     }
 
@@ -2176,7 +2656,7 @@ public class OrderImportServiceImpl implements OrderImportService {
      * invocation). Catches every failure per-group so one bad row can't
      * take down the whole batch.
      */
-    private GroupOutcome processGroup(List<OrderImportRowDTO> group, Integer batchId) {
+    private GroupOutcome processGroup(List<OrderImportRowDTO> group, Integer batchId, boolean usePlatformAccount) {
         OrderImportRowDTO leader = group.get(0);
         // Merge shape errors with the reference/international errors already
         // stamped on the row by the pre-loop validators (commit() runs
@@ -2199,6 +2679,58 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         try {
             com.multiship.backend.dto.ManualShipmentRequest req = toManualShipmentRequest(group);
+
+            // Sprint 51 fix #2 — establish the ship-from origin from the
+            // client's configured address. Without a sender the manual path
+            // falls back to the PLATFORM default shipper country, which makes
+            // the international/customs decision wrong for every bulk row (a
+            // US client's US-domestic parcel looked international, and a
+            // genuine cross-border shipment looked domestic — so no customs
+            // block was persisted and none was sent to the carrier). A named
+            // warehouse still wins: the manual path overrides `from` with the
+            // warehouse address when warehouseCode is set.
+            applyClientOrigin(req, leader.getClientCode());
+
+            // Sprint 51 fix #1 — when the CSV leaves the bill-to account blank,
+            // resolve it the way the operator-facing flow would instead of
+            // hard-failing. The single-order cascade returns CHOOSE_ACCOUNT and
+            // lets the operator pick; the interactive manual path deliberately
+            // demands an explicit account for that picker. Bulk has no picker,
+            // so we resolve the client's default here — the same account the
+            // picker would pre-select — and fall back to the platform (house)
+            // account when the client has none, mirroring the cascade's
+            // SCENARIO_DEFAULT. Only genuine ambiguity (several client accounts,
+            // none flagged default) still fails, now with an actionable message.
+            // Sprint 51 — "Use platform account" (Data History generate option):
+            // force the platform (house) account for this carrier, overriding
+            // whatever the row/client resolution would pick. Otherwise fall back
+            // to the normal cascade only when the bill-to account is blank.
+            if (usePlatformAccount) {
+                BulkAccountPick pick = resolvePlatformAccount(leader.getCarrierCode());
+                if (pick.error != null) {
+                    List<String> ce = new ArrayList<>(leader.getErrors() == null ? List.of() : leader.getErrors());
+                    ce.add(pick.error);
+                    leader.setErrors(ce);
+                    for (int i = 1; i < group.size(); i++) {
+                        group.get(i).setErrors(List.of("orderRef leader failed validation"));
+                    }
+                    return new GroupOutcome(0, group.size(), 0);
+                }
+                req.setAccountNumber(pick.accountNumber);
+            } else if (!StringUtils.hasText(req.getAccountNumber())) {
+                BulkAccountPick pick = resolveBulkAccount(leader.getClientCode(), leader.getCarrierCode());
+                if (pick.error != null) {
+                    List<String> ce = new ArrayList<>(leader.getErrors() == null ? List.of() : leader.getErrors());
+                    ce.add(pick.error);
+                    leader.setErrors(ce);
+                    for (int i = 1; i < group.size(); i++) {
+                        group.get(i).setErrors(List.of("orderRef leader failed validation"));
+                    }
+                    return new GroupOutcome(0, group.size(), 0);
+                }
+                req.setAccountNumber(pick.accountNumber);
+            }
+
             ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
                     carrierService.generateManualLabel(req, null);
             com.multiship.backend.dto.LabelGenerationResponse data =
@@ -2255,6 +2787,113 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     /** Sprint 50 Tier 1 finding #8 — return shape for a per-group commit worker. */
     private record GroupOutcome(int valid, int invalid, int generated) {}
+
+    /**
+     * Sprint 51 fix #2 — set the ship-from origin on a bulk request from the
+     * client's configured ship-from address, so the international/customs
+     * determination runs against the real origin instead of the platform
+     * default shipper country. No-op when a sender is already present, the
+     * client is unknown, or the client has no usable origin country (leaving
+     * the existing platform-default behaviour untouched). A named warehouse
+     * on the row still wins — the manual path resolves and overrides `from`
+     * with the warehouse address downstream.
+     */
+    private void applyClientOrigin(com.multiship.backend.dto.ManualShipmentRequest req, String clientCode) {
+        if (req.getSender() != null || !StringUtils.hasText(clientCode) || clientRepository == null) return;
+        Client client = clientRepository.findByClientCodeIgnoreCase(clientCode.trim()).orElse(null);
+        if (client == null) return;
+        com.multiship.backend.model.Address sf = client.getShipFrom();
+        String country = sf != null && StringUtils.hasText(sf.getCountry())
+                ? sf.getCountry() : client.getDefaultOriginCountry();
+        if (!StringUtils.hasText(country)) return; // nothing better than the platform default
+        com.multiship.backend.dto.ManualShipmentRequest.Address sender =
+                new com.multiship.backend.dto.ManualShipmentRequest.Address();
+        sender.setCountryCode(country.trim());
+        if (sf != null) {
+            sender.setName(sf.getName());
+            sender.setAddressLine1(sf.getLine1());
+            sender.setAddressLine2(sf.getLine2());
+            sender.setCity(sf.getCity());
+            sender.setState(sf.getState());
+            sender.setPostalCode(sf.getZip());
+            sender.setPhone(sf.getPhone());
+        }
+        req.setSender(sender);
+    }
+
+    /**
+     * Sprint 51 fix #1 — result of resolving a bulk row's bill-to account when
+     * the CSV omitted it. Exactly one field is non-null: {@code accountNumber}
+     * (the account to bill, possibly the platform account) or {@code error}
+     * (an actionable per-row validation message).
+     */
+    private record BulkAccountPick(String accountNumber, String error) {
+        static BulkAccountPick of(String accountNumber) { return new BulkAccountPick(accountNumber, null); }
+        static BulkAccountPick fail(String error) { return new BulkAccountPick(null, error); }
+    }
+
+    /**
+     * Resolve the bill-to account for a bulk row that left {@code accountNumber}
+     * blank, mirroring the single-order account cascade's selection order:
+     * <ol>
+     *   <li>The client's own complete, active accounts on this carrier — pick
+     *       the one flagged {@code clientDefault}; if none is flagged but there
+     *       is exactly one, use it (that's what the picker would pre-select).</li>
+     *   <li>No client account on this carrier → the platform (house) account,
+     *       matching the cascade's SCENARIO_DEFAULT auto-ship.</li>
+     * </ol>
+     * Genuine ambiguity (several client accounts, none flagged default) fails
+     * with a message telling the operator how to disambiguate.
+     */
+    /** Pick the platform (house) account for a carrier, ignoring client/row
+     *  accounts entirely — backs the "Use platform account" generate option. */
+    private BulkAccountPick resolvePlatformAccount(String carrierCode) {
+        String carrier = StringUtils.hasText(carrierCode)
+                ? carrierCode.trim().toUpperCase(Locale.ROOT) : null;
+        if (carrier == null) {
+            return BulkAccountPick.fail("carrierCode is required to resolve a bill-to account");
+        }
+        CarrierAccountRef platform = accountRefRepository
+                .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+        if (platform != null) return BulkAccountPick.of(platform.getAccountNumber());
+        return BulkAccountPick.fail("No platform " + carrier
+                + " account is configured; add one under Carriers before using the platform account");
+    }
+
+    private BulkAccountPick resolveBulkAccount(String clientCode, String carrierCode) {
+        String carrier = StringUtils.hasText(carrierCode)
+                ? carrierCode.trim().toUpperCase(Locale.ROOT) : null;
+        if (carrier == null) {
+            return BulkAccountPick.fail("carrierCode is required to resolve a bill-to account");
+        }
+
+        List<CarrierAccountRef> clientAccounts = StringUtils.hasText(clientCode)
+                ? accountRefRepository
+                    .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(clientCode.trim()).stream()
+                    .filter(a -> !Boolean.FALSE.equals(a.getActive()))
+                    .filter(CarrierAccountRef::isComplete)
+                    .filter(a -> carrier.equalsIgnoreCase(
+                            a.getCarrierCode() == null ? "" : a.getCarrierCode().trim()))
+                    .toList()
+                : List.of();
+
+        if (!clientAccounts.isEmpty()) {
+            List<CarrierAccountRef> flagged = clientAccounts.stream()
+                    .filter(a -> Boolean.TRUE.equals(a.getClientDefault()))
+                    .toList();
+            if (!flagged.isEmpty()) return BulkAccountPick.of(flagged.get(0).getAccountNumber());
+            if (clientAccounts.size() == 1) return BulkAccountPick.of(clientAccounts.get(0).getAccountNumber());
+            return BulkAccountPick.fail(clientCode + " has " + clientAccounts.size() + " " + carrier
+                    + " accounts and no default; set a default account or put accountNumber in the row");
+        }
+
+        CarrierAccountRef platform = accountRefRepository
+                .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+        if (platform != null) return BulkAccountPick.of(platform.getAccountNumber());
+
+        return BulkAccountPick.fail("No " + carrier
+                + " account is available to bill; add a client or platform account, or set accountNumber");
+    }
 
     private static OrderImportPreviewDTO buildPreview(List<OrderImportRowDTO> rows) {
         int invalid = (int) rows.stream()

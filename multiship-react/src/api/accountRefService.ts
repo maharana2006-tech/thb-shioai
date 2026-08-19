@@ -85,6 +85,7 @@ export interface AccountRefUpsertPayload {
 export type ResolutionScenario =
   | 'ORDER'
   | 'REFERENCE'
+  | 'GENERATED'
   | 'NEEDS_DETAILS'
   | 'CLIENT_DEFAULT'
   | 'MANUAL'

@@ -9,6 +9,7 @@ import {
   FiFile,
   FiFileText,
   FiLoader,
+  FiSave,
   FiUploadCloud,
   FiX,
 } from 'react-icons/fi'
@@ -41,7 +42,6 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
   const [committing, setCommitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [downloadingXlsx, setDownloadingXlsx] = useState(false)
-  const [validating, setValidating] = useState<'data' | 'addresses' | null>(null)
   /** True while the debounced background re-validation is in flight. */
   const [autoValidating, setAutoValidating] = useState(false)
   /** Debounce timer + request sequence for edit-triggered validation. A
@@ -121,12 +121,14 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
     }
   }
 
-  const submitCommit = async () => {
+  // `draft=true` parks the batch (errors and all) as a work-in-progress; the
+  // default final save is server-rejected unless every row is valid.
+  const submitCommit = async (draft = false) => {
     if (!preview) return
     setCommitting(true)
     try {
       // Save the imported data to Data History — does NOT generate labels.
-      const response = await orderImportService.save(preview.rows, file?.name)
+      const response = await orderImportService.save(preview.rows, file?.name, draft)
       if (response.status === 'success' && response.data) {
         setCommittedSummary(response.data)
         notify.success(response.message ?? 'Saved.')
@@ -137,42 +139,6 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
       notify.apiError(e, 'Save failed.')
     } finally {
       setCommitting(false)
-    }
-  }
-
-  const runReValidate = async () => {
-    if (!preview) return
-    setValidating('data')
-    try {
-      const response = await orderImportService.validate(preview.rows)
-      if (response.status === 'success' && response.data) {
-        setPreview(response.data)
-        notify.success(response.message ?? 'Rows re-validated.')
-      } else {
-        notify.error(response.message ?? 'Validation failed.')
-      }
-    } catch (e) {
-      notify.apiError(e, 'Validation failed.')
-    } finally {
-      setValidating(null)
-    }
-  }
-
-  const runValidateAddresses = async () => {
-    if (!preview) return
-    setValidating('addresses')
-    try {
-      const response = await orderImportService.validateAddresses(preview.rows)
-      if (response.status === 'success' && response.data) {
-        setPreview(response.data)
-        notify.success(response.message ?? 'Addresses checked.')
-      } else {
-        notify.error(response.message ?? 'Address validation failed.')
-      }
-    } catch (e) {
-      notify.apiError(e, 'Address validation failed.')
-    } finally {
-      setValidating(null)
     }
   }
 
@@ -272,33 +238,38 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
               <>
                 <button
                   type="button"
-                  onClick={() => void runReValidate()}
-                  disabled={validating != null || committing}
+                  onClick={() => void submitCommit(true)}
+                  disabled={committing || preview.totalRows === 0 || autoValidating}
                   className={GHOST_BTN}
-                  title="Re-run required-field + name-code + international-item checks on the current row state."
+                  title="Park this import in Data History as a draft — rows with errors are held until you fix them."
                 >
-                  {validating === 'data' ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiCheckCircle className="h-3.5 w-3.5" />}
-                  {validating === 'data' ? 'Validating…' : 'Re-validate'}
+                  {committing ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiSave className="h-3.5 w-3.5" />}
+                  Save as draft
                 </button>
                 <button
                   type="button"
-                  onClick={() => void runValidateAddresses()}
-                  disabled={validating != null || committing}
-                  className={GHOST_BTN}
-                  title="Address-check every row against its picked carrier's own validation API."
-                >
-                  {validating === 'addresses' ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiCheckCircle className="h-3.5 w-3.5" />}
-                  {validating === 'addresses' ? 'Checking…' : 'Validate addresses'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void submitCommit()}
-                  disabled={committing || preview.validRows === 0 || validating != null || autoValidating}
+                  onClick={() => void submitCommit(false)}
+                  disabled={
+                    committing ||
+                    preview.totalRows === 0 ||
+                    preview.invalidRows > 0 ||
+                    autoValidating
+                  }
                   className={PRIMARY_BTN}
-                  title={autoValidating ? 'Waiting for validation of your edits…' : undefined}
+                  title={
+                    autoValidating
+                      ? 'Waiting for validation of your edits…'
+                      : preview.invalidRows > 0
+                        ? `Fix ${preview.invalidRows} row(s) with errors, or use "Save as draft".`
+                        : undefined
+                  }
                 >
                   {committing ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiCheckCircle className="h-3.5 w-3.5" />}
-                  {committing ? 'Saving…' : `Save ${preview.validRows} row(s)`}
+                  {committing
+                    ? 'Saving…'
+                    : preview.invalidRows > 0
+                      ? `Fix ${preview.invalidRows} row(s) to save`
+                      : `Save all ${preview.totalRows} row(s)`}
                 </button>
               </>
             ) : null}
@@ -468,7 +439,7 @@ function UploadStep({
             <FiFileText className="h-3.5 w-3.5" /> Required columns
           </p>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {['recipientName', 'addressLine1', 'city', 'postalCode', 'countryCode', 'weight'].map((c) => (
+            {['clientCode', 'recipientName', 'addressLine1', 'city', 'postalCode', 'countryCode', 'weight', 'weightUnit'].map((c) => (
               <span
                 key={c}
                 className="rounded-md bg-[#faf7f0] px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-[#5a4526] ring-1 ring-[#eee6d6]"
@@ -533,78 +504,123 @@ function bucketErrors(
   return { byField, rowLevel }
 }
 
-/** Compact inline-editable cell — red ring when its field errors. */
+/**
+ * A read-only table cell that becomes an input on click. Shows the value as
+ * plain text (red when its field failed validation); clicking it opens an
+ * inline editor that commits on blur or Enter and cancels on Escape. The
+ * commit fires once on exit — not per keystroke — so a row only re-validates
+ * after the operator finishes the cell.
+ */
 function EditCell({
   value,
   onCommit,
   bad = false,
   mono = false,
-  placeholder,
+  errors,
 }: {
   value: string
   onCommit: (v: string) => void
   bad?: boolean
   mono?: boolean
-  placeholder?: string
+  /** When present, shown as the cell's hover tooltip so the error text isn't
+   *  printed inline — the cell just turns red and explains itself on hover. */
+  errors?: string[]
 }) {
+  const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
-  // Re-sync when a validate response replaces the row object.
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- sync local input to parent-controlled value on external replace (validate response); can't render value directly because it would clobber unsent keystrokes
-  useEffect(() => { setDraft(value) }, [value])
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
+  }, [editing])
+
+  const begin = () => {
+    setDraft(value)
+    setEditing(true)
+  }
+  const commit = () => {
+    setEditing(false)
+    if (draft !== value) onCommit(draft)
+  }
+  const cancel = () => {
+    setEditing(false)
+    setDraft(value)
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit() }
+          else if (e.key === 'Escape') { e.preventDefault(); cancel() }
+        }}
+        className={`w-full rounded-[5px] border border-[#412d15] bg-white px-1.5 py-0.5 text-[11px] text-[#1f150c] outline-none ring-1 ring-[#412d15] ${mono ? 'font-mono' : ''}`}
+      />
+    )
+  }
+  const tooltip = bad && errors && errors.length > 0 ? errors.join('\n') : value || undefined
   return (
-    <input
-      value={draft}
-      placeholder={placeholder}
-      onChange={(e) => {
-        setDraft(e.target.value)
-        onCommit(e.target.value)
-      }}
-      className={`w-full rounded-md border bg-white px-1.5 py-1 text-[11px] outline-none transition ${mono ? 'font-mono' : ''} ${
+    <button
+      type="button"
+      onClick={begin}
+      title={tooltip}
+      className={`block w-full cursor-text truncate rounded-[5px] px-1.5 py-0.5 text-left text-[11px] transition ${mono ? 'font-mono' : ''} ${
         bad
-          ? 'border-rose-400 bg-rose-50/60 text-rose-900 focus:border-rose-500 focus:ring-1 focus:ring-rose-400'
-          : 'border-[#eee6d6] text-[#3f3527] hover:border-[#cdbf9f] focus:border-[#412d15] focus:ring-1 focus:ring-[#412d15]'
+          ? 'bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-300 hover:ring-rose-400'
+          : 'text-[#3f3527] hover:bg-[#efe7d4]'
       }`}
-    />
+    >
+      {value || <span className="text-[#cdbf9f]">—</span>}
+    </button>
   )
 }
 
-/**
- * One labeled field in a row card: tiny caps header (the CSV column name),
- * the editable value, and — when validation flags this exact field — the
- * error message(s) rendered directly under the input.
- */
-function LabeledField({
-  label,
-  value,
-  onCommit,
-  errors,
-  mono,
-  placeholder,
-  span = 1,
-}: {
-  label: string
-  value: string
-  onCommit: (v: string) => void
-  errors?: string[]
+/** Column model for the review grid. `numeric`/`upper` shape how an edit is
+ *  written back; `w` is the input min-width so codes stay tight and names get
+ *  room. Order mirrors the CSV/template. */
+type PreviewColumn = {
+  key: string
   mono?: boolean
-  placeholder?: string
-  span?: 1 | 2
-}) {
-  const bad = (errors?.length ?? 0) > 0
-  return (
-    <div className={`min-w-0 ${span === 2 ? 'col-span-2' : ''}`}>
-      <p className={`mb-0.5 truncate font-mono text-[8.5px] font-bold uppercase tracking-[0.08em] ${bad ? 'text-rose-600' : 'text-[#b6a684]'}`}>
-        {label}
-      </p>
-      <EditCell value={value} onCommit={onCommit} bad={bad} mono={mono} placeholder={placeholder} />
-      {bad
-        ? errors!.map((m) => (
-            <p key={m} className="mt-0.5 text-[9.5px] font-semibold leading-snug text-rose-600">{m}</p>
-          ))
-        : null}
-    </div>
-  )
+  upper?: boolean
+  numeric?: boolean
+  w?: string
 }
+const PREVIEW_COLUMNS: PreviewColumn[] = [
+  { key: 'orderRef', mono: true, w: 'w-24' },
+  { key: 'clientCode', mono: true, upper: true, w: 'w-24' },
+  { key: 'billTo', mono: true, upper: true, w: 'w-24' },
+  { key: 'warehouseCode', mono: true, upper: true, w: 'w-24' },
+  { key: 'recipientName', w: 'w-40' },
+  { key: 'recipientCompany', w: 'w-40' },
+  { key: 'recipientPhone', w: 'w-28' },
+  { key: 'recipientEmail', w: 'w-44' },
+  { key: 'addressLine1', w: 'w-48' },
+  { key: 'addressLine2', w: 'w-40' },
+  { key: 'city', w: 'w-32' },
+  { key: 'state', mono: true, upper: true, w: 'w-16' },
+  { key: 'postalCode', mono: true, w: 'w-24' },
+  { key: 'countryCode', mono: true, upper: true, w: 'w-16' },
+  { key: 'carrierCode', mono: true, upper: true, w: 'w-24' },
+  { key: 'accountNumber', mono: true, w: 'w-32' },
+  { key: 'serviceType', mono: true, w: 'w-28' },
+  { key: 'packageType', mono: true, w: 'w-24' },
+  { key: 'weight', numeric: true, w: 'w-16' },
+  { key: 'weightUnit', mono: true, upper: true, w: 'w-16' },
+  { key: 'currency', mono: true, upper: true, w: 'w-16' },
+  { key: 'reference', mono: true, w: 'w-28' },
+  { key: 'itemDescription', w: 'w-48' },
+  { key: 'itemSku', mono: true, w: 'w-24' },
+  { key: 'itemQuantity', numeric: true, w: 'w-16' },
+  { key: 'itemUnitValue', numeric: true, w: 'w-20' },
+  { key: 'hsCode', mono: true, w: 'w-24' },
+  { key: 'countryOfOrigin', mono: true, upper: true, w: 'w-16' },
+]
 
 function PreviewStep({
   preview,
@@ -616,6 +632,23 @@ function PreviewStep({
   autoValidating: boolean
 }) {
   const warned = preview.rows.filter((r) => (r.warnings?.length ?? 0) > 0).length
+  // Union of tenant custom-field keys across the batch → stable extra columns.
+  const customCols = Array.from(
+    new Set(preview.rows.flatMap((r) => Object.keys(r.customFields ?? {}))),
+  )
+
+  const cellFor = (r: OrderImportRow, col: PreviewColumn, errs?: string[]) => {
+    const raw = (r as unknown as Record<string, unknown>)[col.key]
+    const value = raw == null ? '' : String(raw)
+    const commit = (v: string) => {
+      let next: unknown = v
+      if (col.numeric) next = v === '' ? null : Number(v)
+      else if (col.upper) next = v.toUpperCase()
+      onEdit(r.rowNumber, { [col.key]: next } as Partial<OrderImportRow>)
+    }
+    return <EditCell value={value} onCommit={commit} bad={(errs?.length ?? 0) > 0} mono={col.mono} errors={errs} />
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -623,132 +656,103 @@ function PreviewStep({
         <StatPill tone="valid" label={`✓ ${preview.validRows} valid`} />
         {preview.invalidRows > 0 ? <StatPill tone="error" label={`✗ ${preview.invalidRows} with errors`} /> : null}
         {warned > 0 ? <StatPill tone="warn" label={`⚠ ${warned} with warnings`} /> : null}
-        {autoValidating ? (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#efe7d4] px-2.5 py-0.5 text-[11px] font-semibold text-[#5a4526]">
-            <FiLoader className="h-3 w-3 animate-spin" /> Validating edits…
-          </span>
-        ) : (
-          <span className="text-[10.5px] text-[#b6a684]">Click a cell to edit — rows re-validate automatically.</span>
-        )}
+        <span className="ml-auto inline-flex items-center gap-1.5 text-[10.5px] text-[#b6a684]">
+          {autoValidating ? (
+            <>
+              <FiLoader className="h-3 w-3 animate-spin text-[#5a4526]" />
+              <span className="font-semibold text-[#5a4526]">Validating edits…</span>
+            </>
+          ) : (
+            'Click any cell to edit — rows re-validate automatically. Scroll right for more columns.'
+          )}
+        </span>
       </div>
 
-      <div className="space-y-3">
-        {preview.rows.map((r) => {
-          // Tenant custom fields arrive keyed by fieldKey; they get their own
-          // labelled cells so their errors land under the right column too.
-          const customKeys = Object.keys(r.customFields ?? {})
-          const { byField, rowLevel } = bucketErrors(r.errors ?? [], customKeys)
-          const ok = (r.errors?.length ?? 0) === 0
-          const patch = (p: Partial<OrderImportRow>) => onEdit(r.rowNumber, p)
-          const patchCustom = (key: string, v: string) =>
-            patch({ customFields: { ...(r.customFields ?? {}), [key]: v } })
-          return (
-            <div
-              key={r.rowNumber}
-              className={`rounded-xl border bg-white ${ok ? 'border-[#e3d9c4]' : 'border-rose-300'}`}
-            >
-              {/* Row header: number + status + row-level rules + warnings */}
-              <div className={`flex flex-wrap items-start justify-between gap-2 rounded-t-xl border-b px-3 py-2 ${
-                ok ? 'border-[#eee6d6] bg-[#faf7f0]/70' : 'border-rose-200 bg-rose-50/60'
-              }`}>
-                <span className="font-mono text-[10.5px] font-bold text-[#5a4526]">Row {r.rowNumber}</span>
-                <div className="flex flex-col items-end gap-0.5">
-                  {ok ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[9.5px] font-semibold text-emerald-800">
-                      <FiCheckCircle className="h-2.5 w-2.5" /> Ready
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[9.5px] font-semibold text-rose-800">
-                      <FiAlertCircle className="h-2.5 w-2.5" /> {r.errors.length} error{r.errors.length === 1 ? '' : 's'}
-                    </span>
-                  )}
-                  {/* Group-level rules (international customs) have no single home field. */}
-                  {rowLevel.map((m) => (
-                    <p key={m} className="max-w-[520px] text-right text-[9.5px] font-semibold leading-snug text-rose-700">{m}</p>
+      {/* Spreadsheet-style review grid: one row per order, one column per CSV
+          field. Cells edit in place; a cell that fails validation goes red and
+          the row's messages are listed on a detail line beneath it. */}
+      <div className="overflow-x-auto rounded-xl border border-[#e3d9c4]">
+        <table className="w-full border-collapse text-[11px]">
+          <thead>
+            <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.08em] text-[#8a7959]">
+              <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
+              {PREVIEW_COLUMNS.map((c) => (
+                <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">
+                  {c.key}
+                </th>
+              ))}
+              {customCols.map((k) => (
+                <th key={k} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">{k}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {preview.rows.map((r) => {
+              const customKeys = Object.keys(r.customFields ?? {})
+              const { byField } = bucketErrors(r.errors ?? [], customKeys)
+              const ok = (r.errors?.length ?? 0) === 0
+              const warnCount = r.warnings?.length ?? 0
+              // Full-row summary tooltip: every error + warning on the row —
+              // including the group-level customs rules that belong to no single
+              // field — so hovering the status chip explains the whole row.
+              const statusTitle = [
+                ...(r.errors ?? []).map((m) => '✗ ' + m),
+                ...(r.warnings ?? []).map((w) => '⚠ ' + w),
+              ].join('\n') || undefined
+              return (
+                <tr key={r.rowNumber} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
+                  {/* Single frozen column: row number + status, so nothing can
+                      bleed through a gap between two separate sticky columns. */}
+                  <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono text-[10px] font-bold text-[#8a7959]">{r.rowNumber}</span>
+                      {ok ? (
+                        <span
+                          title={warnCount > 0 ? statusTitle : 'Ready to generate'}
+                          className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800"
+                        >
+                          <FiCheckCircle className="h-2.5 w-2.5" /> Ready
+                        </span>
+                      ) : (
+                        <span
+                          title={statusTitle}
+                          className="inline-flex cursor-help items-center gap-1 rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800"
+                        >
+                          <FiAlertCircle className="h-2.5 w-2.5" /> {r.errors.length} error{r.errors.length === 1 ? '' : 's'}
+                        </span>
+                      )}
+                      {warnCount > 0 ? (
+                        <span
+                          title={statusTitle}
+                          className="inline-flex cursor-help items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                        >
+                          ⚠ {warnCount}
+                        </span>
+                      ) : null}
+                    </div>
+                  </td>
+                  {PREVIEW_COLUMNS.map((c) => (
+                    <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
+                      <div className={c.w}>{cellFor(r, c, byField[c.key])}</div>
+                    </td>
                   ))}
-                  {r.warnings && r.warnings.length > 0
-                    ? r.warnings.map((w) => (
-                        <p key={w} className="max-w-[520px] text-right text-[9.5px] font-semibold leading-snug text-amber-700">⚠ {w}</p>
-                      ))
-                    : null}
-                </div>
-              </div>
-
-              {/* Every CSV column, in file order, each under its own header. */}
-              <div className="grid grid-cols-3 gap-x-2.5 gap-y-2 p-3 sm:grid-cols-4 lg:grid-cols-6">
-                <LabeledField label="orderRef" mono value={r.orderRef ?? ''}
-                              errors={byField.orderRef} onCommit={(v) => patch({ orderRef: v })} />
-                <LabeledField label="clientCode" mono value={r.clientCode ?? ''}
-                              errors={byField.clientCode} onCommit={(v) => patch({ clientCode: v.toUpperCase() })} />
-                <LabeledField label="billTo" mono value={r.billTo ?? ''}
-                              errors={byField.billTo} onCommit={(v) => patch({ billTo: v.toUpperCase() })} />
-                <LabeledField label="warehouseCode" mono value={r.warehouseCode ?? ''}
-                              errors={byField.warehouseCode} onCommit={(v) => patch({ warehouseCode: v.toUpperCase() })} />
-                <LabeledField label="recipientName" span={2} value={r.recipientName ?? ''}
-                              errors={byField.recipientName} onCommit={(v) => patch({ recipientName: v })} />
-                <LabeledField label="recipientCompany" span={2} value={r.recipientCompany ?? ''}
-                              errors={byField.recipientCompany} onCommit={(v) => patch({ recipientCompany: v })} />
-                <LabeledField label="recipientPhone" value={r.recipientPhone ?? ''}
-                              errors={byField.recipientPhone} onCommit={(v) => patch({ recipientPhone: v })} />
-                <LabeledField label="recipientEmail" value={r.recipientEmail ?? ''}
-                              errors={byField.recipientEmail} onCommit={(v) => patch({ recipientEmail: v })} />
-                <LabeledField label="addressLine1" span={2} value={r.addressLine1 ?? ''}
-                              errors={byField.addressLine1} onCommit={(v) => patch({ addressLine1: v })} />
-                <LabeledField label="addressLine2" span={2} value={r.addressLine2 ?? ''}
-                              errors={byField.addressLine2} onCommit={(v) => patch({ addressLine2: v })} />
-                <LabeledField label="city" value={r.city ?? ''}
-                              errors={byField.city} onCommit={(v) => patch({ city: v })} />
-                <LabeledField label="state" value={r.state ?? ''}
-                              errors={byField.state} onCommit={(v) => patch({ state: v })} />
-                <LabeledField label="postalCode" mono value={r.postalCode ?? ''}
-                              errors={byField.postalCode} onCommit={(v) => patch({ postalCode: v })} />
-                <LabeledField label="countryCode" mono value={r.countryCode ?? ''}
-                              errors={byField.countryCode} onCommit={(v) => patch({ countryCode: v.toUpperCase() })} />
-                <LabeledField label="carrierCode" mono value={r.carrierCode ?? ''}
-                              errors={byField.carrierCode} onCommit={(v) => patch({ carrierCode: v.toUpperCase() })} />
-                <LabeledField label="accountNumber" mono value={r.accountNumber ?? ''}
-                              errors={byField.accountNumber} onCommit={(v) => patch({ accountNumber: v })} />
-                <LabeledField label="serviceType" mono value={r.serviceType ?? ''}
-                              errors={byField.serviceType} onCommit={(v) => patch({ serviceType: v })} />
-                <LabeledField label="packageType" mono value={r.packageType ?? ''}
-                              errors={byField.packageType} onCommit={(v) => patch({ packageType: v })} />
-                <LabeledField label="weight" value={r.weight != null ? String(r.weight) : ''}
-                              errors={byField.weight}
-                              onCommit={(v) => patch({ weight: v === '' ? null : Number(v) })} />
-                <LabeledField label="weightUnit" mono value={r.weightUnit ?? ''}
-                              errors={byField.weightUnit} onCommit={(v) => patch({ weightUnit: v.toUpperCase() })} />
-                <LabeledField label="currency" mono value={r.currency ?? ''}
-                              errors={byField.currency} onCommit={(v) => patch({ currency: v.toUpperCase() })} />
-                <LabeledField label="reference" mono value={r.reference ?? ''}
-                              errors={byField.reference} onCommit={(v) => patch({ reference: v })} />
-                <LabeledField label="itemDescription" span={2} value={r.itemDescription ?? ''}
-                              errors={byField.itemDescription} onCommit={(v) => patch({ itemDescription: v })} />
-                <LabeledField label="itemSku" mono value={r.itemSku ?? ''}
-                              errors={byField.itemSku} onCommit={(v) => patch({ itemSku: v })} />
-                <LabeledField label="itemQuantity" value={r.itemQuantity != null ? String(r.itemQuantity) : ''}
-                              errors={byField.itemQuantity}
-                              onCommit={(v) => patch({ itemQuantity: v === '' ? null : Number(v) })} />
-                <LabeledField label="itemUnitValue" value={r.itemUnitValue != null ? String(r.itemUnitValue) : ''}
-                              errors={byField.itemUnitValue}
-                              onCommit={(v) => patch({ itemUnitValue: v === '' ? null : Number(v) })} />
-                <LabeledField label="hsCode" mono value={r.hsCode ?? ''}
-                              errors={byField.hsCode} onCommit={(v) => patch({ hsCode: v })} />
-                <LabeledField label="countryOfOrigin" mono value={r.countryOfOrigin ?? ''}
-                              errors={byField.countryOfOrigin} onCommit={(v) => patch({ countryOfOrigin: v.toUpperCase() })} />
-                {/* Tenant-defined columns, same treatment as the built-ins. */}
-                {customKeys.map((key) => (
-                  <LabeledField
-                    key={key}
-                    label={key}
-                    value={r.customFields?.[key] ?? ''}
-                    errors={byField[key]}
-                    onCommit={(v) => patchCustom(key, v)}
-                  />
-                ))}
-              </div>
-            </div>
-          )
-        })}
+                  {customCols.map((k) => (
+                    <td key={k} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
+                      <div className="w-32">
+                        <EditCell
+                          value={r.customFields?.[k] ?? ''}
+                          bad={(byField[k]?.length ?? 0) > 0}
+                          errors={byField[k]}
+                          onCommit={(v) => onEdit(r.rowNumber, { customFields: { ...(r.customFields ?? {}), [k]: v } })}
+                        />
+                      </div>
+                    </td>
+                  ))}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   )
@@ -756,16 +760,17 @@ function PreviewStep({
 
 function CommittedStep({ summary }: { summary: OrderImportPreview }) {
   const saved = summary.rows.filter((r) => (r.errors?.length ?? 0) === 0)
+  const held = summary.rows.filter((r) => (r.errors?.length ?? 0) > 0)
   return (
     <div className="space-y-3">
       <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-6 text-center">
         <span className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-600 text-white">
           <FiCheck className="h-6 w-6" />
         </span>
-        <p className="mt-3 text-[14px] font-semibold text-[#1f150c]">{summary.validRows} order(s) saved</p>
+        <p className="mt-3 text-[14px] font-semibold text-[#1f150c]">{summary.totalRows} row(s) saved to history</p>
         <p className="mt-1 text-[11.5px] text-[#5a4526]">
-          Saved to <span className="font-semibold">Data history</span> — no labels were generated.
-          {summary.invalidRows > 0 ? ` ${summary.invalidRows} row(s) with errors were skipped.` : ''}
+          Saved to <span className="font-semibold">Data history</span> — no labels were generated.{' '}
+          <span className="font-semibold text-emerald-700">All {summary.validRows} rows ready to generate</span>.
         </p>
         {summary.batchId != null ? (
           <p className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-1 text-[10.5px] font-bold uppercase tracking-[0.1em] text-emerald-800">
@@ -774,10 +779,40 @@ function CommittedStep({ summary }: { summary: OrderImportPreview }) {
         ) : null}
       </div>
 
+      {held.length > 0 ? (
+        <div className="overflow-hidden rounded-xl border border-amber-300">
+          <p className="bg-amber-50 px-3 py-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-amber-800">
+            Held — reopen from Data history to fix ({held.length})
+          </p>
+          <table className="w-full text-left text-[11.5px] text-[#3f3527]">
+            <thead className="border-t border-amber-100 bg-amber-50/60 text-[9.5px] uppercase tracking-[0.14em] text-amber-700">
+              <tr>
+                <th className="p-2.5">#</th>
+                <th className="p-2.5">Recipient</th>
+                <th className="p-2.5">Destination</th>
+                <th className="p-2.5">What needs fixing</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-amber-100">
+              {held.map((r) => (
+                <tr key={r.rowNumber}>
+                  <td className="p-2.5 font-mono text-[10.5px] text-amber-700">{r.rowNumber}</td>
+                  <td className="p-2.5 font-semibold text-[#1f150c]">{r.recipientName ?? '—'}</td>
+                  <td className="p-2.5">
+                    {r.city ?? '—'} {r.countryCode ? `· ${r.countryCode}` : ''}
+                  </td>
+                  <td className="p-2.5 text-amber-700">{r.errors.length} error{r.errors.length === 1 ? '' : 's'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
       {saved.length > 0 ? (
         <div className="overflow-hidden rounded-xl border border-[#e3d9c4]">
           <p className="bg-[#faf7f0] px-3 py-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
-            Saved rows
+            Ready to generate
           </p>
           <table className="w-full text-left text-[11.5px] text-[#3f3527]">
             <thead className="border-t border-[#eee6d6] bg-[#faf7f0]/60 text-[9.5px] uppercase tracking-[0.14em] text-[#8a7959]">

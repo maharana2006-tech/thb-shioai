@@ -21,5 +21,11 @@ public class ImportBatchDTO {
     private int totalRows;
     private int savedRows;
     private int invalidRows;
+    /** Soft-delete timestamp (ISO string). Null = live; non-null = in Trash. */
+    private String deletedAt;
+    /** User who moved this batch to Trash (null while live). */
+    private String deletedBy;
+    /** Bill-to account mode: AUTO (cascade) or PLATFORM (house account). */
+    private String billingMode;
     private List<OrderImportRowDTO> rows;
 }

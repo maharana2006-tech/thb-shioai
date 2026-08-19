@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
-import { FiExternalLink, FiGlobe, FiMapPin, FiPackage, FiPhone, FiTag, FiTruck, FiX } from 'react-icons/fi'
+import { FiExternalLink, FiFileText, FiGlobe, FiMapPin, FiPackage, FiPhone, FiTag, FiTruck, FiX } from 'react-icons/fi'
+import { notify } from '../../utils/notify'
 import {
   orderService,
   type LabelDetails,
@@ -132,6 +133,26 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
     navigate(`/label/${orderNo}`)
   }
 
+  // Sprint 51 fix #3 — open the platform's own commercial-invoice PDF in a
+  // new tab. Fetched as a blob (same-origin, auth cookie) rather than a raw
+  // link so a 422 (no customs data) surfaces as a toast, not a broken tab.
+  const [invoiceBusy, setInvoiceBusy] = useState(false)
+  const openCommercialInvoice = async () => {
+    if (invoiceBusy) return
+    setInvoiceBusy(true)
+    try {
+      const blob = await orderService.getCommercialInvoicePdf(orderNo)
+      const url = URL.createObjectURL(blob)
+      window.open(url, '_blank', 'noopener')
+      // Revoke after a beat so the new tab has time to load it.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch (err) {
+      notify.error(err instanceof Error ? err.message : 'Could not open the commercial invoice.')
+    } finally {
+      setInvoiceBusy(false)
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
@@ -168,6 +189,17 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
               >
                 <FiGlobe className="h-3.5 w-3.5" />
                 Customs
+              </button>
+            ) : null}
+            {isInternational ? (
+              <button
+                type="button"
+                onClick={openCommercialInvoice}
+                disabled={invoiceBusy}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                <FiFileText className="h-3.5 w-3.5" />
+                {invoiceBusy ? 'Opening…' : 'Commercial invoice'}
               </button>
             ) : null}
             <button

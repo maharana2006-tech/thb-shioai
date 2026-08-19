@@ -127,7 +127,7 @@ public class ExternalShipmentController {
     @PostMapping("/addresses/validate")
     @RequiresScope(ApiKeyScope.ADDRESSES)
     public ResponseEntity<ApiResponse<ExternalAddressValidationResponse>> validate(
-            @RequestBody ExternalAddress address, @AuthenticationPrincipal ApiKeyPrincipal caller) {
+            @jakarta.validation.Valid @RequestBody ExternalAddress address, @AuthenticationPrincipal ApiKeyPrincipal caller) {
         try {
             requireApi(caller);
             return ok("Address validated.", externalApiService.validateAddress(address));

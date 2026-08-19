@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import WorkspaceHeader from './WorkspaceHeader'
@@ -14,17 +14,23 @@ const PIN_KEY = 'multiship_nav_pinned'
  * stay full-bleed.
  */
 export default function WorkspaceLayout() {
-  const [pinned, setPinned] = useState(() => localStorage.getItem(PIN_KEY) === '1')
+  // Default to open: an operator who has never touched the pin gets the
+  // full labelled rail, not the icon-only stub. Only an explicit '0'
+  // (they pressed Collapse) keeps it collapsed across reloads.
+  const [pinned, setPinned] = useState(() => localStorage.getItem(PIN_KEY) !== '0')
   // Sprint 51 FE-M5 — mobile drawer open state. Not persisted; the drawer
   // is a one-off overlay per navigation, not a preference.
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
-  const togglePin = () => {
-    setPinned((cur) => {
-      localStorage.setItem(PIN_KEY, cur ? '0' : '1')
-      return !cur
-    })
-  }
+  // Persist in an effect, not inside the updater. A setState updater must
+  // be pure — StrictMode invokes it twice in dev and React may replay it,
+  // so a localStorage write in there fires more than once per click and
+  // can persist a value the state never settled on.
+  useEffect(() => {
+    localStorage.setItem(PIN_KEY, pinned ? '1' : '0')
+  }, [pinned])
+
+  const togglePin = () => setPinned((cur) => !cur)
 
   return (
     <div className="relative min-h-screen bg-[var(--color-background)] text-[var(--color-text)]">

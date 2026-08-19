@@ -27,6 +27,9 @@ public interface OrderTrackingRepository extends JpaRepository<OrderTracking, Lo
 
     Optional<OrderTracking> findByOrderNo(Integer orderNo);
 
+    /** Sprint 51 — batch load for the order-list account column (billed account on generated orders). */
+    java.util.List<OrderTracking> findByOrderNoIn(java.util.Collection<Integer> orderNos);
+
     /**
      * Sprint 51 R1 (audit finding #1) — pessimistic-write lookup used by
      * {@code VoidServiceImpl.voidLabel} so two concurrent void requests on

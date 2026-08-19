@@ -74,7 +74,12 @@ public class CarrierConfig {
     @Default
     private Boolean isDefault = false;
 
+    // Sprint 51 security fix — the carrier OAuth access token is a live
+    // bearer credential (prints labels billed to the account) just like
+    // client_secret, so it gets the same at-rest AES-GCM encryption. TEXT
+    // column already fits the base64 nonce||ciphertext||tag wire format.
     @Column(name = "access_token", columnDefinition = "TEXT")
+    @jakarta.persistence.Convert(converter = com.multiship.backend.config.EncryptedStringConverter.class)
     private String accessToken;
 
     @Column(name = "token_expires_at")

@@ -610,6 +610,25 @@ export const orderService = {
   },
 
   /**
+   * The order's commercial invoice as a PDF blob (Sprint 51). The platform's
+   * own copy, rendered from the persisted customs data and available on
+   * demand for any international order. 422 means the order has no customs
+   * data (domestic / not international).
+   */
+  getCommercialInvoicePdf: async (orderNo: number): Promise<Blob> => {
+    const response = await fetch(`${BASE_URL}/orders/${orderNo}/commercial-invoice`, {
+      credentials: 'include',
+    })
+    if (response.status === 422) {
+      throw new Error('This order has no customs data — a commercial invoice only applies to international shipments.')
+    }
+    if (!response.ok) {
+      throw new Error(`Commercial invoice is unavailable (HTTP ${response.status}).`)
+    }
+    return response.blob()
+  },
+
+  /**
    * Get an order with its line items plus the tenant's carrier account
    * (backend resolves the account from the order's tenant).
    */

@@ -1212,14 +1212,19 @@ public class CarrierServiceImpl implements CarrierService {
         // is 0% PERCENT, cutoff is false, warehouseCode is null.
         com.multiship.backend.service.resolution.MarkupApplied markup;
         try {
-            // Sprint 50 Tier 1 finding #4 — request > Client.defaultCurrency > USD.
+            // Sprint 51 — markup is a fee on the CARRIER RATE, which is billed in
+            // the client's billing currency, NOT the parcel's customs/declared-
+            // value currency. Passing req.getCurrency() (the CSV `currency`
+            // column, e.g. INR for an India-bound parcel) mislabeled a USD
+            // carrier rate as INR and tripped applyMarkup's currency-match guard
+            // against the client's USD markup — failing every international row
+            // whose customs currency differed from the billing currency. Use the
+            // client billing currency (Client.defaultCurrency) → USD; the customs
+            // currency stays on the commercial invoice where it belongs.
             markup = resolutionService.applyMarkup(
                     hasClient ? resolvedClient : "",
                     result.shippingCost(),
-                    firstNonBlank(
-                            req.getCurrency(),
-                            tenantDefaultCurrency,
-                            "USD"));
+                    firstNonBlank(tenantDefaultCurrency, "USD"));
         } catch (ShipmentResolutionException e) {
             return toResolutionFailure(e);
         }
@@ -1610,6 +1615,12 @@ public class CarrierServiceImpl implements CarrierService {
                 orderCarrierDetailsRepository.findByOrderNoIn(distinctNos).stream()
                         .collect(java.util.stream.Collectors.toMap(
                                 OrderCarrierDetails::getOrderNo, d -> d, (a, b) -> a));
+        // Sprint 51 — batch-load tracking so a labelled order shows the
+        // account it was billed on, not the "pick an account" cascade.
+        java.util.Map<Integer, OrderTracking> trackingByOrder =
+                orderTrackingRepository.findByOrderNoIn(distinctNos).stream()
+                        .collect(java.util.stream.Collectors.toMap(
+                                OrderTracking::getOrderNo, t -> t, (a, b) -> a));
 
         List<OrderAccountResolutionDTO> resolutions = new java.util.ArrayList<>(distinctNos.size());
         for (Integer orderNo : distinctNos) {
@@ -1620,6 +1631,29 @@ public class CarrierServiceImpl implements CarrierService {
             // resolve (fail-fast). Operators pass through unchanged.
             tenantScope.requireTenantMatch(
                     StringUtils.hasText(order.getTenantId()) ? order.getTenantId() : order.getCustNo());
+
+            // Sprint 51 — a generated order was already billed; surface the
+            // account from its tracking row (terminal GENERATED scenario)
+            // rather than re-computing a choice that no longer applies.
+            OrderTracking tr = trackingByOrder.get(orderNo);
+            if (tr != null && Boolean.TRUE.equals(tr.getIsLabelGenerated())
+                    && StringUtils.hasText(tr.getAccountNumber())) {
+                CarrierAccountRef billed = carrierAccountRefRepository
+                        .findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(tr.getAccountNumber().trim())
+                        .orElse(null);
+                String billedCarrier = billed != null
+                        ? resolveCanonicalCarrierCode(billed.getCarrierCode())
+                        : resolveCanonicalCarrierCode(firstNonBlank(order.getShipVia(), order.getShipviaCd()));
+                resolutions.add(OrderAccountResolutionDTO.builder()
+                        .orderNo(orderNo)
+                        .scenario(AccountResolution.SCENARIO_GENERATED)
+                        .carrierCode(billedCarrier)
+                        .accountNumber(tr.getAccountNumber())
+                        .accountName(billed != null ? billed.getAccountName() : null)
+                        .build());
+                continue;
+            }
+
             AccountResolution resolution = resolveAccountForOrderWithDetails(
                     order, detailsByOrder.get(orderNo));
             resolutions.add(OrderAccountResolutionDTO.builder()
@@ -1650,6 +1684,13 @@ public class CarrierServiceImpl implements CarrierService {
     ) {
         static final String SCENARIO_ORDER = "ORDER";
         static final String SCENARIO_REFERENCE = "REFERENCE";
+        /**
+         * Sprint 51 — terminal state for the order-list account column. A
+         * labelled order isn't awaiting an account choice, so the list shows
+         * the account it was actually billed on (from order_label_tracking)
+         * instead of re-running the "pick an account" cascade.
+         */
+        static final String SCENARIO_GENERATED = "GENERATED";
         /**
          * Retained for wire-format compatibility with older clients that
          * may still branch on the string. Sprint 50 Tier 1 (finding #19)
