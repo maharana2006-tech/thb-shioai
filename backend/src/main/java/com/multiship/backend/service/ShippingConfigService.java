@@ -140,7 +140,7 @@ public class ShippingConfigService {
     public ApiResponse<Map<String, Object>> syncFromCarrier(String carrier, String originCountry) {
         String canonical = canonicalCarrierFor(carrier);
         if (!StringUtils.hasText(canonical)) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "A carrier is required.");
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "A carrier is required.");
         }
         String origin = StringUtils.hasText(originCountry)
                 ? originCountry.trim().toUpperCase(Locale.ROOT) : "US";
@@ -148,7 +148,7 @@ public class ShippingConfigService {
                 .filter(c -> c.getCarrierCode().equalsIgnoreCase(canonical))
                 .findFirst().orElse(null);
         if (connector == null) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "Unknown carrier: " + carrier + ".");
         }
 
@@ -163,7 +163,7 @@ public class ShippingConfigService {
         // credentials, carrier unreachable), refuse rather than importing the
         // built-in fallback list — nothing is written.
         if (!availability.live()) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     canonical + " is not verified live (" + availability.via() + "). "
                     + "Connect and verify a live " + canonical + " account before syncing services — "
                     + "no services were added.");
@@ -239,13 +239,13 @@ public class ShippingConfigService {
     public ApiResponse<Map<String, Object>> syncPackagesFromCarrier(String carrier, String originCountry) {
         String canonical = canonicalCarrierFor(carrier);
         if (!StringUtils.hasText(canonical)) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "A carrier is required.");
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "A carrier is required.");
         }
         String origin = StringUtils.hasText(originCountry) ? originCountry.trim().toUpperCase(Locale.ROOT) : "US";
         CarrierConnector connector = carrierConnectors.stream()
                 .filter(c -> c.getCarrierCode().equalsIgnoreCase(canonical)).findFirst().orElse(null);
         if (connector == null) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "Unknown carrier: " + carrier + ".");
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "Unknown carrier: " + carrier + ".");
         }
 
         TokenAndEnv tokenAndEnv = platformAccessToken(connector, canonical);
@@ -257,7 +257,7 @@ public class ShippingConfigService {
         // genuinely verified, live carrier account. If the connection didn't
         // authenticate live, refuse rather than importing built-in packaging.
         if (!availability.live()) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     canonical + " is not verified live (" + availability.via() + "). "
                     + "Connect and verify a live " + canonical + " account before syncing packaging — "
                     + "no packages were added.");
@@ -366,17 +366,17 @@ public class ShippingConfigService {
                                                   List<Long> allowedPresetIds, List<Long> warehouseIds) {
         String code = norm(shipviaCd);
         if (code.isEmpty()) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "An order ship-method code is required.");
         }
         ShippingService svc = serviceId != null ? serviceRepository.findById(serviceId).orElse(null) : null;
         if (svc == null) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "Pick a valid carrier service.");
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "Pick a valid carrier service.");
         }
         String client = StringUtils.hasText(clientCode) ? clientCode.trim().toUpperCase(Locale.ROOT) : null;
         String type = StringUtils.hasText(destType) ? destType.trim().toUpperCase(Locale.ROOT) : "ANY";
         if (!List.of("ANY", "COUNTRIES", "REGION", "COUNTRY").contains(type)) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "Destination type must be ANY or COUNTRIES.");
         }
         String value;
@@ -394,7 +394,7 @@ public class ShippingConfigService {
                     : null;
         }
         if (!"ANY".equals(type) && value == null) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "Pick at least one destination country for this rule.");
         }
 
@@ -554,15 +554,15 @@ public class ShippingConfigService {
     @Transactional
     public ApiResponse<PackagePreset> savePreset(Long id, PackagePreset request) {
         if (!StringUtils.hasText(request.getName())) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR, "A package name is required.");
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "A package name is required.");
         }
         boolean carrierKind = "CARRIER".equalsIgnoreCase(request.getKind());
         if (carrierKind && !StringUtils.hasText(request.getCarrierPackageCode())) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "Carrier packaging needs the carrier's package code.");
         }
         if (!carrierKind && (request.getLength() == null || request.getWidth() == null || request.getHeight() == null)) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "A custom box needs length, width and height.");
         }
         Optional<PackagePreset> clash = presetRepository.findByNameIgnoreCase(request.getName().trim());

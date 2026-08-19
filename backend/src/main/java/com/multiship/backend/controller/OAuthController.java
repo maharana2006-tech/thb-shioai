@@ -117,10 +117,16 @@ public class OAuthController {
         // The ApiKeyService verifier takes the full msk_ token; the environment
         // portion is stored on the key. Try 'live' first (most common) then
         // 'test' — verifier ignores unknown envs cleanly.
+        // Uses authenticateDetailed (the deprecated `authenticate()` wrapper's
+        // usable-or-empty semantics inlined here). Non-AUTHORIZED kinds
+        // (EXPIRED / ROTATED_EXPIRED / INVALID) are all treated as "keep
+        // trying the next env" for this OAuth token-exchange path.
         for (String env : new String[]{"live", "test"}) {
             String synthesised = "msk_" + env + "_" + prefix + "_" + secret;
-            Optional<ApiKey> maybe = apiKeyService.authenticate(synthesised);
-            if (maybe.isPresent()) return maybe;
+            ApiKeyService.AuthResult result = apiKeyService.authenticateDetailed(synthesised);
+            if (result.kind() == ApiKeyService.AuthResult.Kind.AUTHORIZED) {
+                return Optional.of(result.key());
+            }
         }
         return Optional.empty();
     }

@@ -140,7 +140,7 @@ public class AuthServiceImpl implements AuthService {
         String clientCode = signupRequest.getClientCode();
         if (clientCode == null || clientCode.isBlank()) {
             rateLimiter.record(email, ip, false);
-            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_CONTENT)
                     .body(new MessageResponse(
                             "clientCode is required for public signup.",
                             ErrorCode.CLIENT_CODE_REQUIRED));

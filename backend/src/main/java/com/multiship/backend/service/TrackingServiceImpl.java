@@ -92,7 +92,7 @@ public class TrackingServiceImpl implements TrackingService {
         String trackingNumber = tracking.getTrackingNumber();
         String canonicalCarrier = canonicalizeCarrierCode(tracking.getShipViaCd());
         if (!StringUtils.hasText(canonicalCarrier)) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT,
                     "Order " + orderNo + " has no carrier code; can't resolve credentials.");
         }
 
@@ -108,7 +108,7 @@ public class TrackingServiceImpl implements TrackingService {
         try {
             connector = carrierService.getCarrierConnector(canonicalCarrier);
         } catch (Exception ex) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT,
                     "Carrier " + canonicalCarrier + " isn't configured on this instance.");
         }
 

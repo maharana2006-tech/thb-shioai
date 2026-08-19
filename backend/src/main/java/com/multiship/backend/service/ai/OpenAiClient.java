@@ -141,7 +141,7 @@ public class OpenAiClient {
                     "AI assist is not configured. Set OPENAI_API_KEY or store the key via the admin Settings page.");
         }
         if (!StringUtils.hasText(userContent)) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Nothing to send to the AI service.");
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT, "Nothing to send to the AI service.");
         }
 
         Map<String, Object> body = Map.of(

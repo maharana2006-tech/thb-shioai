@@ -696,10 +696,10 @@ public class OrderController {
                         // rolls back everything. Map to a 422 with the offending
                         // warehouse + detail so the operator can see exactly which
                         // one aborted.
-                        return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY).body(
+                        return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_CONTENT).body(
                                 ApiResponse.<com.multiship.backend.dto.MultiWarehouseLabelResponse>builder()
                                         .status("error")
-                                        .code(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY.value())
+                                        .code(org.springframework.http.HttpStatus.UNPROCESSABLE_CONTENT.value())
                                         .errorCode(com.multiship.backend.dto.ErrorCode.CARRIER_FAILURE.name())
                                         .message("Split aborted at warehouse " + ex.getWarehouseCode()
                                                 + ": " + ex.getDetail() + ". No labels were bought.")

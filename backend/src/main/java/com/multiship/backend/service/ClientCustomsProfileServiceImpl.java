@@ -322,7 +322,7 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
             }
         }
         if (countries.isEmpty()) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "Select at least one destination country.");
         }
 
@@ -362,7 +362,7 @@ public class ClientCustomsProfileServiceImpl implements ClientCustomsProfileServ
                 && (!StringUtils.hasText(r.getImporterName())
                         || !StringUtils.hasText(r.getImporterAddress1())
                         || !StringUtils.hasText(r.getImporterCity()))) {
-            return failure(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION_ERROR,
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "A business importer needs a name, address line 1 and city — "
                             + "or switch the profile to 'Receiver is importer (DAP)'.");
         }

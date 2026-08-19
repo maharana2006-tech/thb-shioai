@@ -39,7 +39,7 @@ public class AddressAiService {
 
     public ExternalAddress parse(String text) {
         if (!StringUtils.hasText(text)) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "No text supplied to parse.");
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT, "No text supplied to parse.");
         }
         JsonNode a = openAi.completeJson(SYSTEM_PROMPT, text.trim(), "parse-address");
         ExternalAddress out = new ExternalAddress();
