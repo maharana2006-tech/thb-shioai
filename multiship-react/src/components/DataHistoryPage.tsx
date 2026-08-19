@@ -20,6 +20,8 @@ import {
   type ImportBatchSummary,
   type OrderImportRow,
 } from '../api/orderImportService'
+import { useAppSession } from '../hooks/useAppSession'
+import { normalizeRole } from '../utils/roles'
 
 /**
  * Data History — every saved CSV/XLSX import. "Commit" in the import modal
@@ -28,6 +30,14 @@ import {
  */
 export default function DataHistoryPage() {
   const navigate = useNavigate()
+  /** Audit R2 #329 — TENANT role should see the page read-only.
+   *  Backend already 403s on cross-tenant access (OrderImportServiceImpl
+   *  history() / historyDetail() / generateLabelsForBatch enforce
+   *  clientCode filtering + tenantScope), but the FE was showing the
+   *  Generate/Retry buttons anyway → click → silent 403 → confusion.
+   *  Now hidden for TENANT so the read-only intent is visible upfront. */
+  const { role } = useAppSession()
+  const canWrite = normalizeRole(role) !== 'TENANT'
   const [batches, setBatches] = useState<ImportBatchSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [openId, setOpenId] = useState<number | null>(null)
@@ -541,7 +551,9 @@ export default function DataHistoryPage() {
               const open = openId === b.id
               const rows = rowsById[b.id]
               const st = (b.status || '').toUpperCase()
-              const canGenerate = st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED'
+              // Audit R2 #329 — combine backend-eligible status with FE role
+              // check so TENANT never sees a button that would 403 on click.
+              const canGenerate = canWrite && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED')
               const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED'
               const busy = generatingId === b.id
               return (
@@ -698,6 +710,9 @@ export default function DataHistoryPage() {
                                         </span>
                                       ) : !ok ? (
                                         <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
+                                      ) : !canWrite ? (
+                                        /* Audit R2 #329 — TENANT read-only. */
+                                        <span className="text-[9.5px] text-[#b6a684]">Read-only view</span>
                                       ) : (
                                         <button
                                           type="button"
