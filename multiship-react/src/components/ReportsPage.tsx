@@ -162,6 +162,16 @@ function DataExplorer({ clients }: { clients: Client[] }) {
           <div><label className={fieldLabel}>Dest country (ISO-2)</label>
             <input type="text" value={filters.destCountry ?? ''} onChange={(e) => setStr('destCountry')(e.target.value.toUpperCase())} className={inputCls} />
           </div>
+          {/* Audit R2 #363 — service + originCountry existed in ReportFilters
+              interface + backend ReportFiltersQuery, but the UI never
+              exposed them. Operators wanting to filter by carrier service
+              or origin had to hit the REST endpoint directly. */}
+          <div><label className={fieldLabel}>Service</label>
+            <input type="text" value={filters.service ?? ''} onChange={(e) => setStr('service')(e.target.value)} placeholder="FEDEX_GROUND / UPS_NEXT_DAY_AIR / …" className={inputCls} />
+          </div>
+          <div><label className={fieldLabel}>Origin country (ISO-2)</label>
+            <input type="text" value={filters.originCountry ?? ''} onChange={(e) => setStr('originCountry')(e.target.value.toUpperCase())} className={inputCls} />
+          </div>
           <div><label className={fieldLabel}>Weight range (LB)</label>
             <div className="flex gap-2">
               <input type="number" step="0.1" placeholder="min" value={filters.minWeightLb ?? ''} onChange={(e) => setNum('minWeightLb')(e.target.value)} className={inputCls} />

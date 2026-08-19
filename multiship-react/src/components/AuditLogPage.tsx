@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   FiChevronDown,
@@ -43,6 +43,28 @@ export default function AuditLogPage() {
   const [since, setSince] = useState('')
   const [until, setUntil] = useState('')
   const [showFilters, setShowFilters] = useState(false)
+  /** Audit R2 #359 — dropdown-panel ref for outside-click + ESC-to-close.
+   *  Pre-fix, the panel stayed open until the operator clicked Filters
+   *  again; no ARIA linkage so screen readers didn't know a disclosure
+   *  had opened. */
+  const filterPanelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!showFilters) return
+    const onClickOutside = (e: MouseEvent) => {
+      if (filterPanelRef.current && !filterPanelRef.current.contains(e.target as Node)) {
+        setShowFilters(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowFilters(false)
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onClickOutside)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [showFilters])
   const [pageIndex, setPageIndex] = useState(0)
   const [pageSize, setPageSize] = useState(25)
   const [reloadToken, setReloadToken] = useState(0)
@@ -230,10 +252,16 @@ export default function AuditLogPage() {
               placeholder: 'Search entity key (client code, warehouse code, …)',
             }}
             filterToggle={
-              <div className="relative">
+              /* Audit R2 #359 — outer wrapper is the ref target so a click
+                  on either the toggle button or the dropdown counts as
+                  "inside" and doesn't close the panel. */
+              <div className="relative" ref={filterPanelRef}>
                 <button
                   type="button"
                   onClick={() => setShowFilters((v) => !v)}
+                  aria-haspopup="true"
+                  aria-expanded={showFilters}
+                  aria-controls="audit-log-filter-panel"
                   className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12.5px] font-semibold transition ${
                     filtersActive
                       ? 'border-[#1f150c] bg-[#1f150c] text-white'
@@ -249,7 +277,12 @@ export default function AuditLogPage() {
                   ) : null}
                 </button>
                 {showFilters ? (
-                  <div className="absolute right-0 z-30 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-3 shadow-lg">
+                  <div
+                    id="audit-log-filter-panel"
+                    role="region"
+                    aria-label="Audit log filters"
+                    className="absolute right-0 z-30 mt-1 w-80 rounded-lg border border-slate-200 bg-white p-3 shadow-lg"
+                  >
                     <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                       Actor (username)
                     </label>
