@@ -32,8 +32,12 @@ public class OrderCustomsItem {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** Owning declaration. Excluded from equals/hashCode/toString to avoid cycles. */
-    @ManyToOne
+    /** Owning declaration. Excluded from equals/hashCode/toString to avoid cycles.
+     *  Explicit LAZY (perf audit): JPA defaults @ManyToOne to EAGER, which
+     *  combined with OrderCustoms.items EAGER would cascade-load the parent
+     *  and its full items list on every item query. Items are only ever
+     *  accessed via the parent's fetched collection, so LAZY is safe. */
+    @ManyToOne(fetch = jakarta.persistence.FetchType.LAZY)
     @JoinColumn(name = "order_customs_id", nullable = false)
     @ToString.Exclude
     @lombok.EqualsAndHashCode.Exclude

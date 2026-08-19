@@ -231,13 +231,14 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
                         .map(c -> c.trim().toUpperCase(Locale.ROOT))
                         .filter(c -> c.length() == 2)
                         .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        for (String country : deduped) {
-            destinationRepository.save(ClientAllowedServiceDestination.builder()
-                    .allowedServiceId(allow.getId())
-                    .clientCode(code)
-                    .country(country)
-                    .build());
-        }
+        // Batched insert (perf audit): single saveAll instead of N loop-saves.
+        destinationRepository.saveAll(deduped.stream()
+                .map(country -> ClientAllowedServiceDestination.builder()
+                        .allowedServiceId(allow.getId())
+                        .clientCode(code)
+                        .country(country)
+                        .build())
+                .toList());
         return success("Service destinations updated successfully.",
                 ClientAllowedServiceDestinationsDTO.builder()
                         .clientCode(code).serviceId(serviceId)
@@ -308,13 +309,14 @@ public class ClientAllowedServiceServiceImpl implements ClientAllowedServiceServ
                 : request.getWarehouseIds().stream()
                         .filter(id -> id != null && clientAttached.contains(id))
                         .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-        for (Long warehouseId : deduped) {
-            warehouseGateRepository.save(ClientAllowedServiceWarehouse.builder()
-                    .allowedServiceId(allow.getId())
-                    .clientCode(code)
-                    .warehouseId(warehouseId)
-                    .build());
-        }
+        // Batched insert (perf audit): single saveAll instead of N loop-saves.
+        warehouseGateRepository.saveAll(deduped.stream()
+                .map(warehouseId -> ClientAllowedServiceWarehouse.builder()
+                        .allowedServiceId(allow.getId())
+                        .clientCode(code)
+                        .warehouseId(warehouseId)
+                        .build())
+                .toList());
         return success("Service warehouses updated successfully.",
                 ClientAllowedServiceWarehousesDTO.builder()
                         .clientCode(code).serviceId(serviceId)

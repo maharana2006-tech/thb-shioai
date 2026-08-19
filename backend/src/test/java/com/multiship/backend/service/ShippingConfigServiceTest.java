@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyIterable;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -822,7 +823,8 @@ class ShippingConfigServiceTest {
         when(serviceRepository.findById(1L)).thenReturn(Optional.of(cappedService));
         when(ruleRepository.findByShipviaCdIgnoreCase("HEAVY")).thenReturn(List.of());
         when(presetRepository.existsById(100L)).thenReturn(true);
-        when(presetRepository.findById(100L)).thenReturn(Optional.of(heavyPreset));
+        // N+1 fix (perf audit): weightWarnings now batches via findAllById.
+        when(presetRepository.findAllById(anyIterable())).thenReturn(List.of(heavyPreset));
 
         ApiResponse<ShipViaMapping> resp = service.upsertRule(
                 null, "HEAVY", "C001", "COUNTRY", "US", 1L,
@@ -852,7 +854,8 @@ class ShippingConfigServiceTest {
         when(serviceRepository.findById(1L)).thenReturn(Optional.of(cappedService));
         when(ruleRepository.findByShipviaCdIgnoreCase("LIGHT")).thenReturn(List.of());
         when(presetRepository.existsById(100L)).thenReturn(true);
-        when(presetRepository.findById(100L)).thenReturn(Optional.of(lightPreset));
+        // N+1 fix (perf audit): weightWarnings now batches via findAllById.
+        when(presetRepository.findAllById(anyIterable())).thenReturn(List.of(lightPreset));
 
         ApiResponse<ShipViaMapping> resp = service.upsertRule(
                 null, "LIGHT", "C001", "COUNTRY", "US", 1L,
@@ -880,7 +883,8 @@ class ShippingConfigServiceTest {
         when(serviceRepository.findById(1L)).thenReturn(Optional.of(cappedService));
         when(ruleRepository.findByShipviaCdIgnoreCase("KG")).thenReturn(List.of());
         when(presetRepository.existsById(100L)).thenReturn(true);
-        when(presetRepository.findById(100L)).thenReturn(Optional.of(kgPreset));
+        // N+1 fix (perf audit): weightWarnings now batches via findAllById.
+        when(presetRepository.findAllById(anyIterable())).thenReturn(List.of(kgPreset));
 
         ApiResponse<ShipViaMapping> resp = service.upsertRule(
                 null, "KG", "C001", "COUNTRY", "US", 1L,

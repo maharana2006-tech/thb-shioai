@@ -15,6 +15,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyIterable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -134,8 +135,7 @@ class WarehouseSelectorImplTest {
                 .thenReturn(List.of(
                         cw(a.getId(), true),   // default
                         cw(b.getId(), false)));
-        when(warehouseRepository.findById(1L)).thenReturn(Optional.of(a));
-        when(warehouseRepository.findById(2L)).thenReturn(Optional.of(b));
+        when(warehouseRepository.findAllById(anyIterable())).thenReturn(List.of(a, b));
 
         WarehouseSelectionResult r = selector.selectNearest("ACME", "US", null);
         assertEquals(1L, r.getSelectedWarehouseId());
@@ -147,8 +147,8 @@ class WarehouseSelectorImplTest {
     private void stubTwoAttached(Warehouse a, Warehouse b) {
         when(clientWarehouseRepository.findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc("ACME"))
                 .thenReturn(List.of(cw(a.getId(), true), cw(b.getId(), false)));
-        when(warehouseRepository.findById(a.getId())).thenReturn(Optional.of(a));
-        when(warehouseRepository.findById(b.getId())).thenReturn(Optional.of(b));
+        // N+1 fix (perf audit): impl now uses findAllById batch, not per-id findById.
+        when(warehouseRepository.findAllById(anyIterable())).thenReturn(List.of(a, b));
     }
 
     private static Warehouse warehouse(Long id, String code, String name, String country, String postal) {

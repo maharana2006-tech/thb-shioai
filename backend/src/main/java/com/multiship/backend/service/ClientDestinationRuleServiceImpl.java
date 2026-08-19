@@ -77,10 +77,11 @@ public class ClientDestinationRuleServiceImpl implements ClientDestinationRuleSe
                 .filter(c -> c.length() == 2)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
 
-        for (String country : uniqueCountries) {
-            repo.save(ClientDestinationRule.builder()
-                    .clientCode(code).mode(mode).country(country).build());
-        }
+        // Batched insert (perf audit): single saveAll instead of N loop-saves.
+        repo.saveAll(uniqueCountries.stream()
+                .map(country -> ClientDestinationRule.builder()
+                        .clientCode(code).mode(mode).country(country).build())
+                .toList());
         return success("Destination rules updated successfully.",
                 ClientDestinationRulesDTO.builder()
                         .clientCode(code).mode(mode).countries(uniqueCountries.stream().sorted().toList())
