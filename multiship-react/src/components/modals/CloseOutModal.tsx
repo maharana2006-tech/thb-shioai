@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   FiAlertCircle,
   FiCheckCircle,
@@ -8,6 +8,7 @@ import {
 } from 'react-icons/fi'
 import { manifestService, type ManifestRequest, type ManifestResponse } from '../../api/manifestService'
 import { notify } from '../../utils/notify'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 
 /**
  * Sprint 34 — end-of-day close-out modal. Operator picks a carrier,
@@ -35,6 +36,9 @@ const inputCls =
   'w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[12.5px] text-slate-950 outline-none focus:border-slate-950 focus:ring-1 focus:ring-slate-950'
 
 export default function CloseOutModal({ onClose, trackingNumbers, defaults }: CloseOutModalProps) {
+  // A11y audit — focus trap + Escape-to-close + focus restoration.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalDismiss(true, dialogRef, onClose)
   const today = new Date().toISOString().slice(0, 10)
   const [form, setForm] = useState<ManifestRequest>({
     carrierCode: defaults?.carrierCode ?? 'UPS',
@@ -90,6 +94,7 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         className="flex h-[min(720px,92vh)] w-full max-w-[640px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
         onClick={(e) => e.stopPropagation()}
       >

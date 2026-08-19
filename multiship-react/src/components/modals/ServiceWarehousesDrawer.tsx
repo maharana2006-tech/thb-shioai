@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { FiCheck, FiHome, FiSearch, FiX } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
 import { clientAllowedServiceWarehousesService } from '../../api/clientAllowedServiceWarehousesService'
 import { clientWarehouseService, type ClientWarehouse } from '../../api/warehouseService'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 
 /**
  * Modal-drawer for the warehouse gate on a single client-allowed-service
@@ -27,6 +28,9 @@ export default function ServiceWarehousesDrawer({
   onClose: () => void
   onSaved: () => void
 }) {
+  // A11y audit — focus trap + Escape-to-close + focus restoration.
+  const dialogRef = useRef<HTMLElement>(null)
+  useModalDismiss(true, dialogRef, onClose)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [attached, setAttached] = useState<ClientWarehouse[]>([])
@@ -95,6 +99,7 @@ export default function ServiceWarehousesDrawer({
     <>
       <div className="fixed inset-0 z-[55] bg-slate-950/50 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
       <aside
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="svc-wh-title"

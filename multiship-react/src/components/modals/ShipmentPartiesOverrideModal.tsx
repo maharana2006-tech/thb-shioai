@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { FiX, FiGlobe } from 'react-icons/fi'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 
 export type Party = Record<string, string>
 
@@ -36,16 +37,29 @@ export default function ShipmentPartiesOverrideModal({
   const [brk, setBrk] = useState<Party>({ ...broker })
   const si = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setImp((p) => ({ ...p, [k]: e.target.value }))
   const sb = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setBrk((p) => ({ ...p, [k]: e.target.value }))
+  // A11y audit — dialog semantics (was missing entirely), focus trap, Escape.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalDismiss(true, dialogRef, onClose)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/40 p-4 backdrop-blur-sm">
-      <div className="my-6 w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/40 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="parties-override-title"
+      onClick={onClose}
+    >
+      <div
+        ref={dialogRef}
+        className="my-6 w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-start justify-between gap-4 bg-[#1f150c] px-6 py-4 text-[#f4eede]">
           <div>
             <p className="flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-[#b6a684]">
               <FiGlobe className="h-3 w-3" /> This shipment only · {destCountry || '—'}
             </p>
-            <h2 className="mt-0.5 text-lg font-semibold">Importer & broker override</h2>
+            <h2 id="parties-override-title" className="mt-0.5 text-lg font-semibold">Importer & broker override</h2>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-[#b6a684] transition hover:bg-white/10 hover:text-white" aria-label="Close">
             <FiX className="h-5 w-5" />

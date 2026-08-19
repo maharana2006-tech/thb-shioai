@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { FiAlertCircle, FiCalendar, FiCheckCircle, FiTruck, FiX } from 'react-icons/fi'
 import { pickupService, type PickupRequest, type PickupResponse } from '../../api/pickupService'
 import { notify } from '../../utils/notify'
@@ -10,6 +10,7 @@ import {
   validatePhoneForCountry,
   validateZip,
 } from '../../utils/clientValidation'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 
 /**
  * Sprint 33 — schedule a courier pickup. Modal collects carrier, date,
@@ -43,6 +44,9 @@ type FieldKey =
   | 'packageCount' | 'totalWeight' | 'specialInstructions'
 
 export default function SchedulePickupModal({ onClose, defaults }: SchedulePickupModalProps) {
+  // A11y audit — focus trap + Escape-to-close + focus restoration.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalDismiss(true, dialogRef, onClose)
   const today = new Date().toISOString().slice(0, 10)
   const [form, setForm] = useState<PickupRequest>({
     carrierCode: defaults?.carrierCode ?? 'UPS',
@@ -204,6 +208,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         className="flex h-[min(760px,92vh)] w-full max-w-[640px] flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-[0_30px_80px_rgba(31,21,12,0.35)]"
         onClick={(e) => e.stopPropagation()}
       >
