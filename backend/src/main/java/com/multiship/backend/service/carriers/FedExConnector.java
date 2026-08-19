@@ -2135,10 +2135,11 @@ public class FedExConnector implements CarrierConnector {
 
         try {
             return OffsetDateTime.parse(value).withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime();
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
             try {
                 return LocalDateTime.parse(value);
-            } catch (Exception ignoredAgain) {
+            } catch (Exception ex2) {
+                log.debug("FedEx parseDateTime: unparseable timestamp '{}' (neither OffsetDateTime nor LocalDateTime matched)", value);
                 return null;
             }
         }

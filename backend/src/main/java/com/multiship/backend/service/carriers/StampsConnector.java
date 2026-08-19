@@ -589,10 +589,11 @@ public class StampsConnector implements CarrierConnector {
         if (!StringUtils.hasText(value)) return null;
         try {
             return LocalDateTime.parse(value);
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
             try {
                 return OffsetDateTime.parse(value).toLocalDateTime();
-            } catch (Exception ignored2) {
+            } catch (Exception ex2) {
+                log.debug("Stamps parseSwsimTimestamp: unparseable timestamp '{}' (neither LocalDateTime nor OffsetDateTime matched)", value);
                 return null;
             }
         }
@@ -1864,7 +1865,8 @@ public class StampsConnector implements CarrierConnector {
         } catch (Exception ex) {
             try {
                 return LocalDateTime.parse(value);
-            } catch (Exception ignored) {
+            } catch (Exception ex2) {
+                log.debug("Stamps parseDateTime: unparseable timestamp '{}' (neither OffsetDateTime nor LocalDateTime matched)", value);
                 return null;
             }
         }
