@@ -527,8 +527,14 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (account != null && carrier != null && KNOWN_CARRIERS.contains(carrier) && !thirdParty) {
                 java.util.Set<String> known = accountsByCarrier.getOrDefault(carrier, java.util.Set.of());
                 if (!known.contains(account)) {
-                    warnings.add("accountNumber " + account + " is not a registered "
-                            + carrier + " account; the default account cascade may override it");
+                    // A shipper's own account number, if provided, MUST be one
+                    // registered in the platform (this client's accounts +
+                    // platform accounts). Not found → hard error. THIRD_PARTY
+                    // (external bill-to) accounts are exempt — they live on the
+                    // recipient's carrier account, not ours, and are only
+                    // format-checked in validateRow.
+                    errors.add("accountNumber " + account + " is not a registered "
+                            + carrier + " account in the platform");
                 }
             }
 
@@ -543,7 +549,7 @@ public class OrderImportServiceImpl implements OrderImportService {
 
             String pkg = normalizeOrNull(row.getPackageType());
             if (pkg != null && !knownPackages.isEmpty() && !knownPackages.contains(pkg)) {
-                warnings.add("packageType '" + pkg + "' is not a registered package preset");
+                errors.add("packageType '" + pkg + "' is not a registered package preset");
             }
 
             row.setErrors(errors);
@@ -1073,6 +1079,16 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     @Override
     public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy) {
+        return commit(rows, requestedBy, false);
+    }
+
+    /**
+     * @param usePlatformAccount when true, every group bills to the platform
+     *   (house) account for its carrier, overriding any row/client account.
+     *   Used by the Data History "Use platform account" generate option.
+     */
+    public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy,
+                                                     boolean usePlatformAccount) {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
         }
@@ -1143,7 +1159,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         List<Callable<GroupOutcome>> tasks = new ArrayList<>(groupCount);
         for (Map.Entry<String, List<OrderImportRowDTO>> entry : groups.entrySet()) {
             List<OrderImportRowDTO> group = entry.getValue();
-            tasks.add(() -> processGroup(group, batchId));
+            tasks.add(() -> processGroup(group, batchId, usePlatformAccount));
         }
 
         // Sprint 50 Tier 1 finding #15 — tenant key for fair-share. Groups
@@ -1355,8 +1371,22 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .invalidRows(b.getInvalidRows())
                         .deletedAt(b.getDeletedAt() == null ? null : b.getDeletedAt().toString())
                         .deletedBy(b.getDeletedBy())
+                        .billingMode(StringUtils.hasText(b.getBillingMode()) ? b.getBillingMode() : "AUTO")
                         .build())
                 .toList();
+    }
+
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO setBillingMode(Long id, String mode, String requestedBy) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
+        if (b == null) return null;
+        requireMatch(firstClientCode(parseBatchRows(b)));
+        String m = "PLATFORM".equalsIgnoreCase(mode == null ? "" : mode.trim()) ? "PLATFORM" : "AUTO";
+        b.setBillingMode(m);
+        b = importBatchRepository.save(b);
+        log.info("Import batch {} billing mode set to {} by {}", id, m, requestedBy);
+        return toBatchDTO(b, parseBatchRows(b));
     }
 
     @Override
@@ -1457,6 +1487,12 @@ public class OrderImportServiceImpl implements OrderImportService {
      */
     @Override
     public com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(Long id, String requestedBy) {
+        return generateLabelsForBatch(id, requestedBy, false);
+    }
+
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(
+            Long id, String requestedBy, boolean usePlatformAccount) {
         if (importBatchRepository == null || id == null) return null;
         com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
         if (batch == null) return null;
@@ -1478,14 +1514,20 @@ public class OrderImportServiceImpl implements OrderImportService {
         // gets 403 here rather than after we've minted N labels.
         requireMatch(firstClientCode(rows));
 
+        // Honor the persisted billing mode too, so the platform-account choice
+        // survives reloads/retries even when the caller omits the flag.
+        boolean platform = usePlatformAccount || "PLATFORM".equalsIgnoreCase(
+                batch.getBillingMode() == null ? "" : batch.getBillingMode());
+
         // Mark IN_PROGRESS before the (potentially slow) carrier calls.
         batch.setStatus("IN_PROGRESS");
         importBatchRepository.save(batch);
 
         // Reuse the commit path — it generates labels and stamps each row's
-        // generatedStatus (GENERATED / FAILED) in place.
+        // generatedStatus (GENERATED / FAILED) in place. platform forces the
+        // house account for every row in this batch.
         if (!rows.isEmpty()) {
-            commit(rows, requestedBy);
+            commit(rows, requestedBy, platform);
         }
 
         int total = rows.size();
@@ -1737,6 +1779,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .invalidRows(batch.getInvalidRows())
                 .deletedAt(batch.getDeletedAt() == null ? null : batch.getDeletedAt().toString())
                 .deletedBy(batch.getDeletedBy())
+                .billingMode(StringUtils.hasText(batch.getBillingMode()) ? batch.getBillingMode() : "AUTO")
                 .rows(rows)
                 .build();
     }
@@ -2597,7 +2640,7 @@ public class OrderImportServiceImpl implements OrderImportService {
      * invocation). Catches every failure per-group so one bad row can't
      * take down the whole batch.
      */
-    private GroupOutcome processGroup(List<OrderImportRowDTO> group, Integer batchId) {
+    private GroupOutcome processGroup(List<OrderImportRowDTO> group, Integer batchId, boolean usePlatformAccount) {
         OrderImportRowDTO leader = group.get(0);
         // Merge shape errors with the reference/international errors already
         // stamped on the row by the pre-loop validators (commit() runs
@@ -2642,7 +2685,23 @@ public class OrderImportServiceImpl implements OrderImportService {
             // account when the client has none, mirroring the cascade's
             // SCENARIO_DEFAULT. Only genuine ambiguity (several client accounts,
             // none flagged default) still fails, now with an actionable message.
-            if (!StringUtils.hasText(req.getAccountNumber())) {
+            // Sprint 51 — "Use platform account" (Data History generate option):
+            // force the platform (house) account for this carrier, overriding
+            // whatever the row/client resolution would pick. Otherwise fall back
+            // to the normal cascade only when the bill-to account is blank.
+            if (usePlatformAccount) {
+                BulkAccountPick pick = resolvePlatformAccount(leader.getCarrierCode());
+                if (pick.error != null) {
+                    List<String> ce = new ArrayList<>(leader.getErrors() == null ? List.of() : leader.getErrors());
+                    ce.add(pick.error);
+                    leader.setErrors(ce);
+                    for (int i = 1; i < group.size(); i++) {
+                        group.get(i).setErrors(List.of("orderRef leader failed validation"));
+                    }
+                    return new GroupOutcome(0, group.size(), 0);
+                }
+                req.setAccountNumber(pick.accountNumber);
+            } else if (!StringUtils.hasText(req.getAccountNumber())) {
                 BulkAccountPick pick = resolveBulkAccount(leader.getClientCode(), leader.getCarrierCode());
                 if (pick.error != null) {
                     List<String> ce = new ArrayList<>(leader.getErrors() == null ? List.of() : leader.getErrors());
@@ -2770,6 +2829,21 @@ public class OrderImportServiceImpl implements OrderImportService {
      * Genuine ambiguity (several client accounts, none flagged default) fails
      * with a message telling the operator how to disambiguate.
      */
+    /** Pick the platform (house) account for a carrier, ignoring client/row
+     *  accounts entirely — backs the "Use platform account" generate option. */
+    private BulkAccountPick resolvePlatformAccount(String carrierCode) {
+        String carrier = StringUtils.hasText(carrierCode)
+                ? carrierCode.trim().toUpperCase(Locale.ROOT) : null;
+        if (carrier == null) {
+            return BulkAccountPick.fail("carrierCode is required to resolve a bill-to account");
+        }
+        CarrierAccountRef platform = accountRefRepository
+                .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+        if (platform != null) return BulkAccountPick.of(platform.getAccountNumber());
+        return BulkAccountPick.fail("No platform " + carrier
+                + " account is configured; add one under Carriers before using the platform account");
+    }
+
     private BulkAccountPick resolveBulkAccount(String clientCode, String carrierCode) {
         String carrier = StringUtils.hasText(carrierCode)
                 ? carrierCode.trim().toUpperCase(Locale.ROOT) : null;

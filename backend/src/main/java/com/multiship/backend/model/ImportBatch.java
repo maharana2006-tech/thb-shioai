@@ -83,4 +83,13 @@ public class ImportBatch {
     /** User who moved this batch to Trash (null while live). */
     @Column(name = "deleted_by", length = 120)
     private String deletedBy;
+
+    /**
+     * Which carrier account this batch bills to when labels are generated:
+     *   AUTO     — the normal cascade (row account → client default → platform).
+     *   PLATFORM — force the platform (house) account for every row.
+     * Persisted so the choice survives reloads/retries and is auditable.
+     */
+    @Column(name = "billing_mode", length = 16)
+    private String billingMode;
 }

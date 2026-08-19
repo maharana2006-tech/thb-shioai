@@ -79,10 +79,24 @@ public interface OrderImportService {
     int purgeTrash(String requestedBy);
 
     /**
+     * Set a batch's bill-to account mode: "AUTO" (cascade) or "PLATFORM"
+     * (house account). Persisted so the choice survives reloads. Returns the
+     * updated DTO, or null if not found.
+     */
+    com.multiship.backend.dto.ImportBatchDTO setBillingMode(Long id, String mode, String requestedBy);
+
+    /**
      * Generate carrier labels for a saved import batch, advancing its status
      * INITIATE → IN_PROGRESS → COMPLETE / PARTIAL_COMPLETE. Null if not found.
      */
     com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(Long id, String requestedBy);
+
+    /**
+     * Generate labels for a batch, optionally forcing the platform (house)
+     * account for every row (Data History "Use platform account" option).
+     */
+    com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(
+            Long id, String requestedBy, boolean usePlatformAccount);
 
     /** Generate a label for a single row of a saved batch. Null if not found. */
     com.multiship.backend.dto.ImportBatchDTO generateLabelForRow(Long id, int rowNumber, String requestedBy);

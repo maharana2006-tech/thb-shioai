@@ -7,6 +7,7 @@ import {
   FiDatabase,
   FiFileText,
   FiFilter,
+  FiHome,
   FiRefreshCw,
   FiSearch,
   FiSliders,
@@ -35,6 +36,10 @@ export default function DataHistoryPage() {
   const [openId, setOpenId] = useState<number | null>(null)
   const [rowsById, setRowsById] = useState<Record<number, OrderImportRow[] | 'loading'>>({})
   const [generatingId, setGeneratingId] = useState<number | null>(null)
+  // Bill-to account: the batch whose "Bills to" selector is mid-save.
+  const [billingSavingId, setBillingSavingId] = useState<number | null>(null)
+  // Confirm-before-generate when a batch bills to the platform account.
+  const [confirmGenId, setConfirmGenId] = useState<number | null>(null)
   const [genRowKey, setGenRowKey] = useState<string | null>(null)
   // Inline correction: the cell being saved (rowKey), for a per-cell spinner.
   const [savingCell, setSavingCell] = useState<string | null>(null)
@@ -272,11 +277,29 @@ export default function DataHistoryPage() {
 
   /** Kick off label generation for a batch. Optimistically flips the row to
    *  "In progress" while the carrier calls run, then reflects the result. */
+  /** Persist a batch's bill-to account mode (survives reload + auditable). */
+  const setBilling = async (id: number, mode: 'AUTO' | 'PLATFORM') => {
+    setBillingSavingId(id)
+    // Optimistic: reflect the choice immediately.
+    setBatches((list) => list.map((b) => (b.id === id ? { ...b, billingMode: mode } : b)))
+    if (mode !== 'PLATFORM') setConfirmGenId((c) => (c === id ? null : c))
+    try {
+      await orderImportService.setBillingMode(id, mode)
+    } catch (e) {
+      notify.apiError(e, 'Could not update the bill-to account.')
+      await load() // revert to server truth on failure
+    } finally {
+      setBillingSavingId(null)
+    }
+  }
+
   const generate = async (id: number) => {
+    const platform = batches.find((b) => b.id === id)?.billingMode === 'PLATFORM'
+    setConfirmGenId(null)
     setGeneratingId(id)
     setBatches((list) => list.map((b) => (b.id === id ? { ...b, status: 'IN_PROGRESS' } : b)))
     try {
-      const res = await orderImportService.generateLabels(id)
+      const res = await orderImportService.generateLabels(id, platform)
       const updated = res.data
       if (updated) {
         setBatches((list) =>
@@ -682,6 +705,19 @@ export default function DataHistoryPage() {
           </div>
         ) : (
           <div className="divide-y divide-[#eee6d6]">
+            {/* Column headers — aligned to each row's grid + actions area */}
+            <div className="flex items-stretch bg-[#faf7f0]">
+              <div className="grid flex-1 grid-cols-[24px_60px_minmax(0,1fr)_130px_120px] items-center gap-3 px-5 py-2 text-[9px] font-bold uppercase tracking-[0.12em] text-[#b6a684]">
+                <span aria-hidden="true" />
+                <span>Serial no.</span>
+                <span>File</span>
+                <span className="text-center">Status</span>
+                <span className="text-right">Rows</span>
+              </div>
+              <div className="flex w-[420px] shrink-0 items-center justify-end pr-4 text-[9px] font-bold uppercase tracking-[0.12em] text-[#b6a684]">
+                Actions
+              </div>
+            </div>
             {paged.map((b) => {
               const open = openId === b.id
               const rows = rowsById[b.id]
@@ -745,7 +781,7 @@ export default function DataHistoryPage() {
                       ) : null}
                     </span>
                   </button>
-                  <div className="my-2 mr-4 flex shrink-0 items-center gap-1.5 self-center">
+                  <div className="my-2 flex w-[420px] shrink-0 items-center justify-end gap-1.5 self-center pr-4">
                     {viewTrash ? (
                       <button
                         type="button"
@@ -764,20 +800,73 @@ export default function DataHistoryPage() {
                     ) : (
                       <>
                         {canGenerate ? (
-                          <button
-                            type="button"
-                            onClick={() => void generate(b.id)}
-                            disabled={busy}
-                            title={isRetry ? 'Retry generating labels for the rows that failed' : 'Generate carrier labels for this saved import'}
-                            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
-                          >
-                            {busy ? (
-                              <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                            ) : (
-                              <FiZap className="h-3.5 w-3.5" />
-                            )}
-                            {busy ? 'Generating…' : isRetry ? 'Retry labels' : 'Generate labels'}
-                          </button>
+                          (() => {
+                            const platform = b.billingMode === 'PLATFORM'
+                            const confirming = confirmGenId === b.id
+                            return (
+                              <>
+                                {/* Bills-to account selector (persisted) — hidden mid-confirm to save room */}
+                                <span
+                                  title="Which carrier account this batch bills to. Platform bills the house account and rebills the client with markup."
+                                  className={`${confirming ? 'hidden' : 'inline-flex'} items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold ${
+                                    platform
+                                      ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]'
+                                      : 'border-[#e3d9c4] bg-white text-[#5a4526]'
+                                  }`}
+                                >
+                                  <FiHome className="h-3.5 w-3.5 shrink-0" />
+                                  <span className="hidden sm:inline text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>
+                                  <select
+                                    value={platform ? 'PLATFORM' : 'AUTO'}
+                                    disabled={busy || billingSavingId === b.id}
+                                    onChange={(e) => void setBilling(b.id, e.target.value as 'AUTO' | 'PLATFORM')}
+                                    className="cursor-pointer border-0 bg-transparent pr-1 text-[11px] font-semibold text-inherit focus:outline-none disabled:cursor-not-allowed"
+                                  >
+                                    <option value="AUTO">Client account</option>
+                                    <option value="PLATFORM">Platform account</option>
+                                  </select>
+                                </span>
+
+                                {/* Generate — confirm first when billing to platform */}
+                                {platform && confirming ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => void generate(b.id)}
+                                      disabled={busy}
+                                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#412d15] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#5a4526] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                                    >
+                                      <FiHome className="h-3.5 w-3.5" />
+                                      Confirm — bill to platform
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmGenId(null)}
+                                      disabled={busy}
+                                      className="inline-flex items-center rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => (platform ? setConfirmGenId(b.id) : void generate(b.id))}
+                                    disabled={busy}
+                                    title={isRetry ? 'Retry generating labels for the rows that failed' : 'Generate carrier labels for this saved import'}
+                                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                                  >
+                                    {busy ? (
+                                      <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                                    ) : (
+                                      <FiZap className="h-3.5 w-3.5" />
+                                    )}
+                                    {busy ? 'Generating…' : isRetry ? 'Retry labels' : 'Generate labels'}
+                                  </button>
+                                )}
+                              </>
+                            )
+                          })()
                         ) : null}
                         <button
                           type="button"

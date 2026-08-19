@@ -139,6 +139,25 @@ public class OrderImportController {
                 .message("Import restored.").data(dto).build());
     }
 
+    @Operation(summary = "Set a batch's bill-to account mode (AUTO | PLATFORM)")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @org.springframework.web.bind.annotation.PutMapping("/history/{id}/billing-mode")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> setBillingMode(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @RequestParam String mode,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        String username = userDetails == null ? "unknown" : userDetails.getUsername();
+        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.setBillingMode(id, mode, username);
+        if (dto == null) {
+            return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                    .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
+                    .message("Import not found.").build());
+        }
+        return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message("Billing mode updated.").data(dto).build());
+    }
+
     @Operation(summary = "Empty the Trash — permanently delete all soft-deleted imports",
             description = "Irreversible. Hard-deletes every batch currently in Trash for the caller's tenant.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
@@ -180,9 +199,11 @@ public class OrderImportController {
     @PostMapping("/history/{id}/generate")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> generateForBatch(
             @org.springframework.web.bind.annotation.PathVariable Long id,
+            @RequestParam(required = false, defaultValue = "false") boolean usePlatformAccount,
             @AuthenticationPrincipal UserDetails userDetails) {
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
-        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.generateLabelsForBatch(id, username);
+        com.multiship.backend.dto.ImportBatchDTO dto =
+                orderImportService.generateLabelsForBatch(id, username, usePlatformAccount);
         if (dto == null) {
             return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                     .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())

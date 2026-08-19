@@ -25,5 +25,7 @@ public class ImportBatchDTO {
     private String deletedAt;
     /** User who moved this batch to Trash (null while live). */
     private String deletedBy;
+    /** Bill-to account mode: AUTO (cascade) or PLATFORM (house account). */
+    private String billingMode;
     private List<OrderImportRowDTO> rows;
 }

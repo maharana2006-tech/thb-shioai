@@ -86,6 +86,8 @@ export interface ImportBatchSummary {
   deletedAt?: string | null
   /** User who moved this batch to Trash. */
   deletedBy?: string | null
+  /** Bill-to account mode: 'AUTO' (cascade) or 'PLATFORM' (house account). */
+  billingMode?: 'AUTO' | 'PLATFORM' | string | null
 }
 
 /** A saved import with its full rows (detail view). */
@@ -159,10 +161,21 @@ export const orderImportService = {
   emptyTrash: () =>
     apiClient.delete<ApiResponse<number>>('/orders/import/history/trash'),
 
+  /** Set a batch's bill-to account mode ('AUTO' | 'PLATFORM'). Persisted. */
+  setBillingMode: (id: number, mode: 'AUTO' | 'PLATFORM') =>
+    apiClient.put<ApiResponse<ImportBatchDetail>>(
+      `/orders/import/history/${id}/billing-mode?mode=${mode}`,
+      {},
+    ),
+
   /** Generate carrier labels for a saved batch — advances its status
-   *  INITIATE → IN_PROGRESS → COMPLETE / PARTIAL_COMPLETE. */
-  generateLabels: (id: number) =>
-    apiClient.post<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}/generate`, {}),
+   *  INITIATE → IN_PROGRESS → COMPLETE / PARTIAL_COMPLETE.
+   *  `usePlatformAccount` forces the platform (house) account for every row. */
+  generateLabels: (id: number, usePlatformAccount = false) =>
+    apiClient.post<ApiResponse<ImportBatchDetail>>(
+      `/orders/import/history/${id}/generate${usePlatformAccount ? '?usePlatformAccount=true' : ''}`,
+      {},
+    ),
 
   /** Generate a carrier label for a single row of a saved batch. */
   generateRowLabel: (id: number, rowNumber: number) =>
