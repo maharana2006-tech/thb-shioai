@@ -1,10 +1,11 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { notify } from '../../utils/notify'
 import { FiX, FiZap } from 'react-icons/fi'
 import { accountRefService } from '../../api/accountRefService'
 import type { OrderAccountResolution } from '../../api/accountRefService'
 import { carrierEnvironmentOptions, formatCarrierName, type CarrierEnvironment } from '../../utils/carrierUtils'
 import CarrierLogo from '../workspace/CarrierLogo'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 
 interface FillCarrierDetailsModalProps {
   orderNo: number
@@ -46,6 +47,9 @@ export default function FillCarrierDetailsModal({
   onSaved,
   onClose,
 }: FillCarrierDetailsModalProps) {
+  // A11y audit — focus trap + Escape-to-close + focus restoration.
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalDismiss(true, dialogRef, onClose)
   const [accountNumber, setAccountNumber] = useState(resolution.accountNumber || '')
   const [carrierCode, setCarrierCode] = useState(resolution.carrierCode || 'UPS')
   const [accountName, setAccountName] = useState(resolution.accountName || '')
@@ -95,6 +99,7 @@ export default function FillCarrierDetailsModal({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_30px_80px_rgba(15,23,42,0.35)]"
         onClick={(event) => event.stopPropagation()}
       >

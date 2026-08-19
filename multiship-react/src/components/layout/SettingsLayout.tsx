@@ -74,6 +74,7 @@ export default function SettingsLayout() {
               <NavLink
                 key={item.key}
                 to={item.to}
+                aria-current={active ? 'page' : undefined}
                 className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-[13px] font-semibold transition ${
                   active ? 'bg-[#1f150c] !text-white' : '!text-slate-600 hover:bg-slate-100'
                 }`}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { FiAlertTriangle, FiCheck, FiPackage, FiX } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
 import {
@@ -8,6 +8,7 @@ import {
   type ShippingServiceItem,
 } from '../../api/shippingConfigService'
 import { formatCarrierName } from '../../utils/carrierUtils'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 
 /** Convert package max weight to lb for comparison against ShippingService.maxWeightLb. */
 const toLb = (p: PackagePreset): number | null => {
@@ -62,6 +63,9 @@ export default function RulePackagesDrawer({
   onClose: () => void
   onSaved: (nextIds: number[]) => void
 }) {
+  // A11y audit — focus trap + Escape-to-close + focus restoration.
+  const dialogRef = useRef<HTMLElement>(null)
+  useModalDismiss(true, dialogRef, onClose)
   const [presets, setPresets] = useState<PackagePreset[]>([])
   const [selected, setSelected] = useState<Set<number>>(new Set(initialPresetIds))
   const [loading, setLoading] = useState(true)
@@ -230,6 +234,7 @@ export default function RulePackagesDrawer({
     <>
       <div className="fixed inset-0 z-[55] bg-slate-950/50 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
       <aside
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="rule-pkg-title"

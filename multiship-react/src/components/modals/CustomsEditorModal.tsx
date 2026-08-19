@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { FiGlobe, FiX } from 'react-icons/fi'
 import { customsProfileService, type CustomsProfile } from '../../api/customsProfileService'
 import { orderService, type OrderLine } from '../../api/orderService'
 import { isAbortError } from '../../api/apiClient'
 import { countryName } from '../../utils/countries'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 
 interface CustomsEditorModalProps {
   orderNo: number
@@ -39,6 +40,9 @@ const money = (v: number | null | undefined) => (typeof v === 'number' ? `$${v.t
  * looks — there is nothing to edit here.
  */
 export default function CustomsEditorModal({ orderNo, onClose }: CustomsEditorModalProps) {
+  // A11y audit — focus trap + Escape-to-close + focus restoration.
+  const dialogRef = useRef<HTMLElement>(null)
+  useModalDismiss(true, dialogRef, onClose)
   const [loading, setLoading] = useState(true)
   const [country, setCountry] = useState('')
   const [clientCode, setClientCode] = useState('')
@@ -93,6 +97,7 @@ export default function CustomsEditorModal({ orderNo, onClose }: CustomsEditorMo
         aria-hidden="true"
       />
       <aside
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={`Customs declaration for order ${orderNo}`}

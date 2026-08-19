@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { FiCheck, FiCheckCircle, FiHome, FiSearch, FiX } from 'react-icons/fi'
 import { notify } from '../../utils/notify'
 import { ApiError } from '../../api/apiClient'
@@ -15,6 +15,7 @@ import {
 import { accountRefService } from '../../api/accountRefService'
 import Select from '../workspace/Select'
 import AttachClientsStep from './AttachClientsStep'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 import {
   FIELD_LIMITS,
   validateCode,
@@ -311,6 +312,9 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
     onClose()
   }
   const closeAction = created ? () => onSaved(created) : closeWithGuard
+  // A11y audit — focus trap + Escape-to-close + focus restoration.
+  const dialogRef = useRef<HTMLElement>(null)
+  useModalDismiss(true, dialogRef, closeAction)
 
   /** Error for a field, but only after it's been touched. */
   const err = (k: keyof typeof errors): string | null => (touched[k] ? errors[k] : null)
@@ -328,6 +332,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
         aria-hidden="true"
       />
       <aside
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="warehouse-editor-title"
