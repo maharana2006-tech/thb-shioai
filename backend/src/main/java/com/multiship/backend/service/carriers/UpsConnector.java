@@ -485,7 +485,8 @@ public class UpsConnector implements CarrierConnector {
                 sec = Integer.parseInt(hhmmss.substring(4, 6));
             }
             return LocalDateTime.of(y, mo, d, hr, mn, sec);
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            log.debug("UPS joinUpsDateTime: unparseable date='{}' time='{}'", yyyymmdd, hhmmss);
             return null;
         }
     }
@@ -2154,7 +2155,8 @@ public class UpsConnector implements CarrierConnector {
         } catch (Exception ex) {
             try {
                 return LocalDateTime.parse(value);
-            } catch (Exception ignored) {
+            } catch (Exception ex2) {
+                log.debug("UPS parseDateTime: unparseable timestamp '{}' (neither OffsetDateTime nor LocalDateTime matched)", value);
                 return null;
             }
         }

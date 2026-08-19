@@ -360,12 +360,14 @@ public class DhlConnector implements CarrierConnector {
             if (isoTime != null && !isoTime.isEmpty()) {
                 try {
                     return d.atTime(java.time.LocalTime.parse(isoTime));
-                } catch (Exception ignored) {
+                } catch (Exception ex) {
                     // Malformed time — fall through to midnight.
+                    log.debug("DHL joinDhlDateTime: unparseable time '{}' (falling back to midnight)", isoTime);
                 }
             }
             return d.atStartOfDay();
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            log.debug("DHL joinDhlDateTime: unparseable date '{}'", isoDate);
             return null;
         }
     }
@@ -380,7 +382,8 @@ public class DhlConnector implements CarrierConnector {
             try {
                 // DHL sometimes includes an offset (e.g. "2024-01-15T14:00:00Z").
                 return OffsetDateTime.parse(value).toLocalDateTime();
-            } catch (Exception ignored) {
+            } catch (Exception ex) {
+                log.debug("DHL parseIsoDateTime: unparseable timestamp '{}' (neither LocalDateTime nor OffsetDateTime matched)", value);
                 return null;
             }
         }
@@ -1526,6 +1529,7 @@ public class DhlConnector implements CarrierConnector {
         try {
             return LocalDateTime.parse(cleaned);
         } catch (Exception ex) {
+            log.debug("DHL parseDhlEstimated: unparseable estimatedDelivery '{}' (cleaned to '{}')", value, cleaned);
             return null;
         }
     }
