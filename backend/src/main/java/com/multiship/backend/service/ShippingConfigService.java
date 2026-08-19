@@ -433,10 +433,11 @@ public class ShippingConfigService {
                         .toList();
         rulePackageRepository.deleteAllByRuleId(rule.getId());
         rulePackageRepository.flush();
-        for (Long presetId : ids) {
-            rulePackageRepository.save(com.multiship.backend.model.ShipMethodRulePackage.builder()
-                    .ruleId(rule.getId()).presetId(presetId).build());
-        }
+        // Batched insert (perf audit): single saveAll instead of N loop-saves.
+        rulePackageRepository.saveAll(ids.stream()
+                .map(presetId -> com.multiship.backend.model.ShipMethodRulePackage.builder()
+                        .ruleId(rule.getId()).presetId(presetId).build())
+                .toList());
 
         // Origin warehouses on the rule — same diff-free replace as packages.
         // Empty warehouseIds = "any warehouse" (matches legacy rules).
@@ -448,10 +449,11 @@ public class ShippingConfigService {
                         .toList();
         ruleWarehouseRepository.deleteAllByRuleId(rule.getId());
         ruleWarehouseRepository.flush();
-        for (Long whId : whIds) {
-            ruleWarehouseRepository.save(com.multiship.backend.model.ShipMethodRuleWarehouse.builder()
-                    .ruleId(rule.getId()).warehouseId(whId).build());
-        }
+        // Batched insert (perf audit): single saveAll instead of N loop-saves.
+        ruleWarehouseRepository.saveAll(whIds.stream()
+                .map(whId -> com.multiship.backend.model.ShipMethodRuleWarehouse.builder()
+                        .ruleId(rule.getId()).warehouseId(whId).build())
+                .toList());
 
         // Weight fit: warn (don't block) when a linked preset's max weight
         // exceeds the service's carrier cap. Normalise kg → lb.
@@ -508,9 +510,9 @@ public class ShippingConfigService {
         Integer cap = svc.getMaxWeightLb();
         if (cap == null || presetIds.isEmpty()) return List.of();
         List<String> out = new ArrayList<>();
-        for (Long pid : presetIds) {
-            PackagePreset p = presetRepository.findById(pid).orElse(null);
-            if (p == null || p.getMaxWeight() == null) continue;
+        // N+1 fix (perf audit): one batch fetch, not one SELECT per preset.
+        for (PackagePreset p : presetRepository.findAllById(presetIds)) {
+            if (p.getMaxWeight() == null) continue;
             double lb = "KG".equalsIgnoreCase(p.getWeightUnit())
                     ? p.getMaxWeight().doubleValue() * 2.20462
                     : p.getMaxWeight().doubleValue();

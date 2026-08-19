@@ -50,8 +50,13 @@ public class WarehouseSelectorImpl implements WarehouseSelector {
         }
 
         List<Candidate> candidates = new ArrayList<>(attached.size());
+        // N+1 fix (perf audit): one batch fetch of all attached warehouses,
+        // not one SELECT per link (this runs on every shipment-routing hit).
+        List<Long> whIds = attached.stream().map(ClientWarehouse::getWarehouseId).toList();
+        java.util.Map<Long, Warehouse> whById = warehouseRepository.findAllById(whIds).stream()
+                .collect(java.util.stream.Collectors.toMap(Warehouse::getId, w -> w));
         for (ClientWarehouse cw : attached) {
-            Warehouse w = warehouseRepository.findById(cw.getWarehouseId()).orElse(null);
+            Warehouse w = whById.get(cw.getWarehouseId());
             if (w == null) continue; // repo cleanup lag — skip
 
             String whCountry = w.getAddress() != null ? normalize(w.getAddress().getCountry()) : "";

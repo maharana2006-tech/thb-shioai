@@ -278,11 +278,11 @@ public class ClientServiceImpl implements ClientService {
         // Client-warehouse link rows have no active flag; drop them and
         // remember the target warehouse codes on the snapshot so re-enable
         // can re-attach. The re-attach uses attach() which is idempotent.
-        java.util.List<String> detachedWarehouseCodes = new java.util.ArrayList<>();
-        for (ClientWarehouse link : links) {
-            Warehouse w = warehouseRepository.findById(link.getWarehouseId()).orElse(null);
-            if (w != null) detachedWarehouseCodes.add(w.getCode());
-        }
+        // N+1 fix (perf audit): one batch fetch, not one SELECT per link.
+        List<Long> warehouseIds = links.stream().map(ClientWarehouse::getWarehouseId).toList();
+        java.util.List<String> detachedWarehouseCodes = warehouseRepository.findAllById(warehouseIds).stream()
+                .map(Warehouse::getCode)
+                .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
         if (!links.isEmpty()) {
             clientWarehouseRepository.deleteAll(links);
         }
