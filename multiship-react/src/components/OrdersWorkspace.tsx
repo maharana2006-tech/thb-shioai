@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { notify } from '../utils/notify'
@@ -32,15 +32,21 @@ import type { CarrierAccountRef, OrderAccountResolution } from '../api/accountRe
 import AccountScenarioBadge from './workspace/AccountScenarioBadge'
 import OrderStatusBadge from './workspace/OrderStatusBadge'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
-import FillCarrierDetailsModal from './modals/FillCarrierDetailsModal'
-import AccountPickerModal from './modals/AccountPickerModal'
-import OrderDetailsModal from './modals/OrderDetailsModal'
-import TrackingTimelineModal from './tracking/TrackingTimelineModal'
-import SchedulePickupModal from './modals/SchedulePickupModal'
-import CloseOutModal from './modals/CloseOutModal'
-import BulkLabelModal from './modals/BulkLabelModal'
-import MultiWarehouseSplitModal from './modals/MultiWarehouseSplitModal'
-import OrderImportModal from './modals/OrderImportModal'
+// Bundle audit #434 follow-up: modals are only rendered behind
+// `xxxOpen ?` guards, so React.lazy defers each chunk fetch until an
+// operator actually opens the modal. Fallback is null — the modal
+// itself is the visible transition so a spinner in its place would
+// double up. First-open cost is one small RTT for the modal's chunk;
+// cached thereafter.
+const FillCarrierDetailsModal = lazy(() => import('./modals/FillCarrierDetailsModal'))
+const AccountPickerModal = lazy(() => import('./modals/AccountPickerModal'))
+const OrderDetailsModal = lazy(() => import('./modals/OrderDetailsModal'))
+const TrackingTimelineModal = lazy(() => import('./tracking/TrackingTimelineModal'))
+const SchedulePickupModal = lazy(() => import('./modals/SchedulePickupModal'))
+const CloseOutModal = lazy(() => import('./modals/CloseOutModal'))
+const BulkLabelModal = lazy(() => import('./modals/BulkLabelModal'))
+const MultiWarehouseSplitModal = lazy(() => import('./modals/MultiWarehouseSplitModal'))
+const OrderImportModal = lazy(() => import('./modals/OrderImportModal'))
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
 
@@ -1450,66 +1456,73 @@ export default function OrdersWorkspace() {
         </div>
       ) : null}
 
-      {pickerTarget ? (
-        <AccountPickerModal
-          orderNo={pickerTarget.orderDetails.orderNo}
-          clientCode={pickerTarget.orderDetails.customerCode}
-          carrierCode={pickerCarrier}
-          suggestedAccountNumber={pickerSuggested}
-          onClose={() => {
-            setPickerTarget(null)
-            setPickerCarrier(null)
-            setPickerSuggested(null)
-          }}
-          onPick={(account) => {
-            void generateWithAccount(pickerTarget.orderDetails.orderNo, account)
-          }}
-        />
-      ) : null}
+      {/* Bundle audit #434 follow-up — all modals below are lazy(). One
+          shared Suspense boundary is enough because at most one modal is
+          open at a time (state guards are mutually exclusive in practice)
+          and each modal is its own render-conditional. Fallback is null
+          — the modal is the visible transition, so a spinner in its slot
+          would flash and then vanish. */}
+      <Suspense fallback={null}>
+        {pickerTarget ? (
+          <AccountPickerModal
+            orderNo={pickerTarget.orderDetails.orderNo}
+            clientCode={pickerTarget.orderDetails.customerCode}
+            carrierCode={pickerCarrier}
+            suggestedAccountNumber={pickerSuggested}
+            onClose={() => {
+              setPickerTarget(null)
+              setPickerCarrier(null)
+              setPickerSuggested(null)
+            }}
+            onPick={(account) => {
+              void generateWithAccount(pickerTarget.orderDetails.orderNo, account)
+            }}
+          />
+        ) : null}
 
+        {fillDetailsTarget ? (
+          <FillCarrierDetailsModal
+            orderNo={fillDetailsTarget.orderNo}
+            resolution={fillDetailsTarget.resolution}
+            onClose={() => setFillDetailsTarget(null)}
+            onSaved={() => retryAfterDetailsSaved(fillDetailsTarget.orderNo)}
+          />
+        ) : null}
 
-      {fillDetailsTarget ? (
-        <FillCarrierDetailsModal
-          orderNo={fillDetailsTarget.orderNo}
-          resolution={fillDetailsTarget.resolution}
-          onClose={() => setFillDetailsTarget(null)}
-          onSaved={() => retryAfterDetailsSaved(fillDetailsTarget.orderNo)}
-        />
-      ) : null}
+        {detailsOrderNo !== null ? (
+          <OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} />
+        ) : null}
 
-      {detailsOrderNo !== null ? (
-        <OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} />
-      ) : null}
+        {trackingOrderNo !== null ? (
+          <TrackingTimelineModal orderNo={trackingOrderNo} onClose={() => setTrackingOrderNo(null)} />
+        ) : null}
 
-      {trackingOrderNo !== null ? (
-        <TrackingTimelineModal orderNo={trackingOrderNo} onClose={() => setTrackingOrderNo(null)} />
-      ) : null}
+        {pickupOpen ? (
+          <SchedulePickupModal onClose={() => setPickupOpen(false)} />
+        ) : null}
 
-      {pickupOpen ? (
-        <SchedulePickupModal onClose={() => setPickupOpen(false)} />
-      ) : null}
+        {closeOutOpen ? (
+          <CloseOutModal
+            onClose={() => setCloseOutOpen(false)}
+            trackingNumbers={rows
+              .map((o) => o.labelDetails.trackingNumber)
+              .filter((t): t is string => Boolean(t))}
+          />
+        ) : null}
 
-      {closeOutOpen ? (
-        <CloseOutModal
-          onClose={() => setCloseOutOpen(false)}
-          trackingNumbers={rows
-            .map((o) => o.labelDetails.trackingNumber)
-            .filter((t): t is string => Boolean(t))}
-        />
-      ) : null}
+        {bulkLabelOpen ? (
+          <BulkLabelModal
+            onClose={() => setBulkLabelOpen(false)}
+            orderNumbers={rows.map((o) => o.orderDetails.orderNo)}
+          />
+        ) : null}
 
-      {bulkLabelOpen ? (
-        <BulkLabelModal
-          onClose={() => setBulkLabelOpen(false)}
-          orderNumbers={rows.map((o) => o.orderDetails.orderNo)}
-        />
-      ) : null}
+        {splitOpen ? <MultiWarehouseSplitModal onClose={() => setSplitOpen(false)} /> : null}
 
-      {splitOpen ? <MultiWarehouseSplitModal onClose={() => setSplitOpen(false)} /> : null}
-
-      {importOpen ? (
-        <OrderImportModal onClose={() => setImportOpen(false)} />
-      ) : null}
+        {importOpen ? (
+          <OrderImportModal onClose={() => setImportOpen(false)} />
+        ) : null}
+      </Suspense>
     </div>
   )
 }
