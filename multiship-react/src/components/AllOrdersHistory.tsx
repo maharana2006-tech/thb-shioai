@@ -11,14 +11,14 @@ import AdvancedDataTable from './workspace/AdvancedDataTable'
  * `source` filter. Rendered through AdvancedDataTable so columns can be
  * reordered, resized, shown/hidden, and the layout is remembered.
  */
-const SOURCES = ['ALL', 'BULK', 'MANUAL', 'API', 'WMS', 'ERP'] as const
+// Three real sources: Bulk (CSV/Excel), Manual, and API. Orders from the WMS
+// app (and any legacy ERP rows) arrive over the API, so they roll up under API.
+const SOURCES = ['ALL', 'BULK', 'MANUAL', 'API'] as const
 type SourceKey = (typeof SOURCES)[number]
 
 const SOURCE_TONE: Record<string, string> = {
   MANUAL: 'bg-amber-50 text-amber-700 ring-amber-200',
   API: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  WMS: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
-  ERP: 'bg-slate-100 text-slate-600 ring-slate-200',
   BULK: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
 }
 
@@ -26,9 +26,13 @@ const SOURCE_LABEL: Record<SourceKey, string> = {
   ALL: 'All sources',
   BULK: 'Bulk (CSV/Excel)',
   MANUAL: 'Manual',
-  API: 'API (D2C/B2B)',
-  WMS: 'WMS',
-  ERP: 'ERP',
+  API: 'API',
+}
+
+/** Everything that isn't a manual entry or a bulk import is API (WMS/ERP included). */
+const normSource = (s?: string | null) => {
+  const u = (s || 'API').toUpperCase()
+  return u === 'MANUAL' || u === 'BULK' ? u : 'API'
 }
 
 const fmtDate = (v?: string | null) =>
@@ -116,17 +120,17 @@ export default function AllOrdersHistory() {
       {
         id: 'source',
         header: 'Source',
-        accessorFn: (o) => (o.orderDetails.source ?? 'ERP').toUpperCase(),
+        accessorFn: (o) => normSource(o.orderDetails.source),
         enableSorting: false,
         cell: ({ row }) => {
-          const s = (row.original.orderDetails.source || 'ERP').toUpperCase()
+          const s = normSource(row.original.orderDetails.source)
           return (
-            <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${SOURCE_TONE[s] || SOURCE_TONE.ERP}`}>
+            <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${SOURCE_TONE[s] || SOURCE_TONE.API}`}>
               {s}
             </span>
           )
         },
-        meta: { headerLabel: 'Source', exportValue: (o: Order) => (o.orderDetails.source ?? 'ERP').toUpperCase() },
+        meta: { headerLabel: 'Source', exportValue: (o: Order) => normSource(o.orderDetails.source) },
       },
       {
         id: 'client',

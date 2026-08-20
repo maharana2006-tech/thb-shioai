@@ -92,7 +92,11 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             t.error_message,
             t.label_generated_at,
             s.shipvia_desc,
-            COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'ERP' END) as order_source,
+            CASE
+                WHEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END)) IN ('MANUAL', 'BULK')
+                  THEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END))
+                ELSE 'API'
+            END as order_source,
             b.batch_id
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
@@ -282,7 +286,11 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
           AND (:createdFrom = '' OR b.created_date >= TO_DATE(NULLIF(:createdFrom, ''), 'YYYY-MM-DD'))
           AND (:createdTo = '' OR b.created_date <= TO_DATE(NULLIF(:createdTo, ''), 'YYYY-MM-DD'))
           AND (:source = ''
-               OR COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'ERP' END) = :source)
+               OR (CASE
+                     WHEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END)) IN ('MANUAL', 'BULK')
+                       THEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END))
+                     ELSE 'API'
+                   END) = :source)
           AND (:resolution = ''
                OR (:resolution = 'READY' AND """ + RESOLUTION_READY_SQL + """
                )
@@ -315,7 +323,11 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             t.error_message,
             t.label_generated_at,
             s.shipvia_desc,
-            COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'ERP' END) as order_source,
+            CASE
+                WHEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END)) IN ('MANUAL', 'BULK')
+                  THEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END))
+                ELSE 'API'
+            END as order_source,
             b.batch_id
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no

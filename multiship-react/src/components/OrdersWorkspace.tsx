@@ -818,21 +818,20 @@ export default function OrdersWorkspace() {
 
     defs.push({
       id: 'source',
-      accessorFn: (o) => o.orderDetails.source ?? 'ERP',
+      accessorFn: (o) => o.orderDetails.source ?? 'API',
       header: 'Source',
       enableSorting: false,
       cell: ({ row }) => {
-        const s = (row.original.orderDetails.source || 'ERP').toUpperCase()
+        // Server folds WMS/ERP/legacy into API; only MANUAL/BULK/API reach here.
+        const s = (row.original.orderDetails.source || 'API').toUpperCase()
         const tone: Record<string, string> = {
           MANUAL: 'bg-amber-50 text-amber-700 ring-amber-200',
           API: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-          WMS: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
-          ERP: 'bg-slate-100 text-slate-600 ring-slate-200',
           BULK: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
         }
         return (
           <span
-            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone[s] || tone.ERP}`}
+            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone[s] || tone.API}`}
           >
             {s}
           </span>
@@ -840,7 +839,7 @@ export default function OrdersWorkspace() {
       },
       meta: {
         headerLabel: 'Source',
-        exportValue: (o: Order) => (o.orderDetails.source ?? 'ERP').toUpperCase(),
+        exportValue: (o: Order) => (o.orderDetails.source ?? 'API').toUpperCase(),
       },
     })
 
@@ -1359,9 +1358,7 @@ export default function OrdersWorkspace() {
                           <option value="">Any source</option>
                           <option value="MANUAL">Manual</option>
                           <option value="BULK">Bulk (CSV/Excel)</option>
-                          <option value="API">API (D2C / B2B)</option>
-                          <option value="WMS">WMS</option>
-                          <option value="ERP">ERP</option>
+                          <option value="API">API</option>
                         </select>,
                       )}
                     </div>
