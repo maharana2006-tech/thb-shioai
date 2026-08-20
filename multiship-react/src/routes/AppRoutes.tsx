@@ -22,15 +22,19 @@ function LegacyTemplateRedirect() {
 //  - WorkspaceLayout / SettingsLayout (shell chrome)
 //  - Protected/Anonymous/RequireRole guards (per-request)
 //  - Dashboard, Orders (post-login default landing)
-//  - LabelDocumentPage (frequent print flow)
 //
 // Everything else — settings, admin, editors, one-shot flows —
 // splits to its own chunk. React.lazy + <Suspense> handles the
 // async import; the fallback is a simple centered spinner so a
 // slow network doesn't blank the screen.
+//
+// LabelDocumentPage was previously eager on the argument that print is
+// a "frequent" flow — but the file is 924 LoC and contributed 51 KB
+// rendered / 10 KB gzipped to the main chunk (bundle audit #434). Moved
+// to lazy in the bundle-audit follow-up; the trade-off is a single extra
+// network round-trip the first time an operator opens /label/:orderNo.
 import Login from '../components/Login'
 import Signup from '../components/Signup'
-import LabelDocumentPage from '../components/LabelDocumentPage'
 import WorkspaceLayout from '../components/layout/WorkspaceLayout'
 import SettingsLayout from '../components/layout/SettingsLayout'
 import DashboardPage from '../pages/DashboardPage'
@@ -56,6 +60,11 @@ const ShippingServiceMappingPage = lazy(() => import('../components/ShippingServ
 const WarehousesPage = lazy(() => import('../components/WarehousesPage'))
 const CodeMapsPage = lazy(() => import('../components/CodeMapsPage'))
 const AuditLogPage = lazy(() => import('../components/AuditLogPage'))
+// Bundle audit #434 follow-up: LabelDocumentPage moved from eager
+// (was justified as "frequent print flow") to lazy — 51 KB rendered /
+// 10 KB gz off the main chunk. One extra RTT the first time an
+// operator opens /label/:orderNo.
+const LabelDocumentPage = lazy(() => import('../components/LabelDocumentPage'))
 // Lazy — admin-only pages (small user set, loaded on demand).
 const ApiKeysPage = lazy(() => import('../components/ApiKeysPage'))
 const ApiReferencePage = lazy(() => import('../components/ApiReferencePage'))
