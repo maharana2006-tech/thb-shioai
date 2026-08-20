@@ -3,6 +3,15 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../test/renderWithProviders'
 
+// CI-flake fix: default `userEvent.type` has a per-character setTimeout(0)
+// that races React 19's automatic batching + Formik-style synchronous
+// validators — under CI load, characters after the first were dropping
+// (dev CI red for 24h; failure pattern: expected `my-secret`, got `m`).
+// `delay: null` flushes each keystroke via microtask instead, which is
+// deterministic. Passes locally 5x, matches the behavior we want in tests
+// anyway (nobody's simulating human typing speed here).
+const typeUser = () => userEvent.setup({ delay: null })
+
 /**
  * Sprint 53 /settings/carriers page-tests (slice: FE-fill-modal).
  *
@@ -177,7 +186,7 @@ describe('FillCarrierDetailsModal — validation', () => {
     // Add a client secret so only clientId is blank.
     const dialog = screen.getByRole('dialog')
     const password = dialog.querySelector('input[type="password"]') as HTMLInputElement
-    await userEvent.type(password, 'sec')
+    await typeUser().type(password, 'sec')
 
     await userEvent.click(screen.getByRole('button', { name: /Save & Generate Label/i }))
 
@@ -193,7 +202,7 @@ describe('FillCarrierDetailsModal — validation', () => {
     )
     const dialog = screen.getByRole('dialog')
     const password = dialog.querySelector('input[type="password"]') as HTMLInputElement
-    await userEvent.type(password, 'sec')
+    await typeUser().type(password, 'sec')
 
     await userEvent.click(screen.getByRole('button', { name: /Save & Generate Label/i }))
 
@@ -214,7 +223,7 @@ describe('FillCarrierDetailsModal — save flow', () => {
     )
     const dialog = screen.getByRole('dialog')
     const password = dialog.querySelector('input[type="password"]') as HTMLInputElement
-    await userEvent.type(password, 'my-secret')
+    await typeUser().type(password, 'my-secret')
 
     await userEvent.click(screen.getByRole('button', { name: /Save & Generate Label/i }))
 
@@ -242,7 +251,7 @@ describe('FillCarrierDetailsModal — save flow', () => {
     )
     const dialog = screen.getByRole('dialog')
     const password = dialog.querySelector('input[type="password"]') as HTMLInputElement
-    await userEvent.type(password, 'sec')
+    await typeUser().type(password, 'sec')
     await userEvent.click(screen.getByRole('button', { name: /Save & Generate Label/i }))
 
     await waitFor(() => expect(upsertAccountMock).toHaveBeenCalled())
@@ -261,7 +270,7 @@ describe('FillCarrierDetailsModal — save flow', () => {
     )
     const dialog = screen.getByRole('dialog')
     const password = dialog.querySelector('input[type="password"]') as HTMLInputElement
-    await userEvent.type(password, 'sec')
+    await typeUser().type(password, 'sec')
 
     await userEvent.click(screen.getByRole('button', { name: /Save & Generate Label/i }))
 

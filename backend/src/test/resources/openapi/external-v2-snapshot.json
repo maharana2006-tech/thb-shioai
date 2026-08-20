@@ -1293,10 +1293,12 @@
         "type" : "object",
         "properties" : {
           "name" : {
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[^<>]*$"
           },
           "company" : {
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[^<>]*$"
           },
           "phone" : {
             "type" : "string"
@@ -1305,16 +1307,20 @@
             "type" : "string"
           },
           "addressLine1" : {
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[^<>]*$"
           },
           "addressLine2" : {
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[^<>]*$"
           },
           "city" : {
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[^<>]*$"
           },
           "state" : {
-            "type" : "string"
+            "type" : "string",
+            "pattern" : "^[^<>]*$"
           },
           "postalCode" : {
             "type" : "string"
