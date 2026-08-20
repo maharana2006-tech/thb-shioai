@@ -87,7 +87,7 @@ public class ExternalV2Controller {
     @PostMapping("/rates")
     @RequiresScope(ApiKeyScope.RATES)
     public ResponseEntity<ApiResponse<ExternalRateResponse>> rates(
-            @RequestBody ExternalRateRequest req,
+            @jakarta.validation.Valid @RequestBody ExternalRateRequest req,
             @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         ApiKeyPrincipal api = requireApi(caller);
@@ -208,7 +208,8 @@ public class ExternalV2Controller {
     @PostMapping("/addresses/validate")
     @RequiresScope(ApiKeyScope.ADDRESSES)
     public ResponseEntity<ApiResponse<ExternalAddressValidationResponse>> validate(
-            @RequestBody ExternalAddress address, @AuthenticationPrincipal ApiKeyPrincipal caller) {
+            @jakarta.validation.Valid @RequestBody ExternalAddress address,
+            @AuthenticationPrincipal ApiKeyPrincipal caller) {
         try {
             requireApi(caller);
             return ok("Address validated.", externalApiService.validateAddress(address));
@@ -234,7 +235,8 @@ public class ExternalV2Controller {
     @PostMapping("/rate-shop")
     @RequiresScope(ApiKeyScope.RATES)
     public ResponseEntity<ApiResponse<RateShopResponseDTO>> rateShop(
-            @RequestBody RateShopRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
+            @jakarta.validation.Valid @RequestBody RateShopRequestDTO req,
+            @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         ApiKeyPrincipal api = requireApi(caller);
         return idempotency.executeOrReplay(api.getApiKeyId(), idempotencyKey,
@@ -263,7 +265,8 @@ public class ExternalV2Controller {
     @PostMapping("/pickups")
     @RequiresScope(ApiKeyScope.PICKUPS)
     public ResponseEntity<ApiResponse<PickupResponseDTO>> schedulePickup(
-            @RequestBody PickupRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
+            @jakarta.validation.Valid @RequestBody PickupRequestDTO req,
+            @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         ApiKeyPrincipal api = requireApi(caller);
         // Sprint 50 Tier 1-C — money-touching (a scheduled pickup dispatches a
@@ -291,7 +294,8 @@ public class ExternalV2Controller {
     @PostMapping("/close-out")
     @RequiresScope(ApiKeyScope.PICKUPS)
     public ResponseEntity<ApiResponse<ManifestResponseDTO>> closeOut(
-            @RequestBody ManifestRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller,
+            @jakarta.validation.Valid @RequestBody ManifestRequestDTO req,
+            @AuthenticationPrincipal ApiKeyPrincipal caller,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         ApiKeyPrincipal api = requireApi(caller);
         // Sprint 50 Tier 1-C — money-touching (close-out commits the day's
@@ -321,7 +325,8 @@ public class ExternalV2Controller {
     @PostMapping("/landed-cost")
     @RequiresScope(ApiKeyScope.LANDED_COST)
     public ResponseEntity<ApiResponse<LandedCostResponseDTO>> landedCost(
-            @RequestBody LandedCostRequestDTO req, @AuthenticationPrincipal ApiKeyPrincipal caller) {
+            @jakarta.validation.Valid @RequestBody LandedCostRequestDTO req,
+            @AuthenticationPrincipal ApiKeyPrincipal caller) {
         requireApi(caller);
         ApiResponse<LandedCostResponseDTO> result = landedCostService.estimate(req);
         return ResponseEntity.status(result.getCode()).body(result);
@@ -342,7 +347,8 @@ public class ExternalV2Controller {
     @PostMapping("/dangerous-goods/validate")
     @RequiresScope(ApiKeyScope.SHIPMENTS)
     public ResponseEntity<ApiResponse<Map<String, Object>>> validateDg(
-            @RequestBody Map<String, Object> req, @AuthenticationPrincipal ApiKeyPrincipal caller) {
+            @jakarta.validation.Valid @RequestBody Map<String, Object> req,
+            @AuthenticationPrincipal ApiKeyPrincipal caller) {
         requireApi(caller);
         // Thin passthrough — the shipment create path already validates DG.
         // A dedicated validator is out of scope for this PR (see v1's
