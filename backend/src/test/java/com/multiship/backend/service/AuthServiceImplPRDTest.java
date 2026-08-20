@@ -134,7 +134,11 @@ class AuthServiceImplPRDTest {
 
         ResponseEntity<MessageResponse> resp = service.registerUser(signup(null), "1.2.3.4");
 
-        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, resp.getStatusCode());
+        // Spring 6 renamed the 422 enum from UNPROCESSABLE_ENTITY (RFC 4918)
+        // to UNPROCESSABLE_CONTENT (RFC 9110). AuthServiceImpl emits the new
+        // name; keep the test on the current name so the assertion matches
+        // by enum identity, not just by status code.
+        assertEquals(HttpStatus.UNPROCESSABLE_CONTENT, resp.getStatusCode());
         assertEquals(ErrorCode.CLIENT_CODE_REQUIRED.name(), resp.getBody().getErrorCode());
     }
 
