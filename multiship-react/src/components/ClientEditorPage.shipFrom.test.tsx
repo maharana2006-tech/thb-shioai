@@ -14,6 +14,13 @@ import type { ComponentType } from 'react'
  *
  * All network-touching services are fully mocked; nothing hits real fetch.
  * The router is a MemoryRouter so useParams / useNavigate resolve.
+ *
+ * CI-flake note: every `userEvent.setup()` in this file uses
+ * `{ delay: null }`. Default per-character setTimeout(0) races React 19's
+ * automatic batching + Formik's synchronous validation on slow CI runners
+ * — under load, trailing characters of multi-char `user.type` calls were
+ * dropping and this file went red intermittently for 24h on dev. Microtask
+ * flushing (delay: null) is deterministic.
  */
 
 // ===== Service mocks (top level; vi.mock is hoisted before dynamic import
@@ -270,7 +277,7 @@ describe('ClientEditorPage · ShipFrom · positive', () => {
 
     const Page = await loadPage()
     renderEdit(Page)
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     // Wait for hydration (identity fields appear) then hop to Ship From.
     await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
@@ -321,7 +328,7 @@ describe('ClientEditorPage · ShipFrom · positive', () => {
 
     const Page = await loadPage()
     renderEdit(Page)
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
     await gotoShipFrom(user)
@@ -364,7 +371,7 @@ describe('ClientEditorPage · ShipFrom · positive', () => {
 
     const Page = await loadPage()
     renderEdit(Page)
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
     await gotoShipFrom(user)
@@ -398,7 +405,7 @@ describe('ClientEditorPage · ShipFrom · positive', () => {
 
     const Page = await loadPage()
     renderEdit(Page)
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
     await gotoShipFrom(user)
@@ -418,7 +425,7 @@ describe('ClientEditorPage · ShipFrom · positive', () => {
 
     const Page = await loadPage()
     renderEdit(Page)
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
     await gotoShipFrom(user)
@@ -475,7 +482,7 @@ describe('ClientEditorPage · ShipFrom · positive', () => {
 
     const Page = await loadPage()
     renderEdit(Page)
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
     await gotoShipFrom(user)
@@ -517,7 +524,7 @@ describe('ClientEditorPage · ShipFrom · positive', () => {
 
     const Page = await loadPage()
     renderEdit(Page)
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
     await gotoShipFrom(user)
@@ -553,7 +560,7 @@ describe('ClientEditorPage · ShipFrom · positive', () => {
 
     const Page = await loadPage()
     renderEdit(Page)
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
     await gotoShipFrom(user)
@@ -587,7 +594,7 @@ describe('ClientEditorPage · ShipFrom · negative', () => {
 
     const Page = await loadPage()
     renderEdit(Page)
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
     await gotoShipFrom(user)
@@ -606,7 +613,7 @@ describe('ClientEditorPage · ShipFrom · negative', () => {
   it('Verify button is disabled until line1/city/zip/country are all filled', async () => {
     const Page = await loadPage()
     renderEdit(Page)
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
     await gotoShipFrom(user)
@@ -640,7 +647,7 @@ describe('ClientEditorPage · ShipFrom · negative', () => {
 
     const Page = await loadPage()
     renderEdit(Page)
-    const user = userEvent.setup()
+    const user = userEvent.setup({ delay: null })
 
     await waitFor(() => expect(screen.getByPlaceholderText('MA1885')).toBeTruthy())
     await gotoShipFrom(user)
