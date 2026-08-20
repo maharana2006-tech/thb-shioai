@@ -116,6 +116,8 @@ export default function OrdersWorkspace() {
   const [clientFilter, setClientFilter] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  // Order source filter: '' (all) | MANUAL | BULK | API | WMS | ERP.
+  const [sourceFilter, setSourceFilter] = useState('')
   const [clientCodes, setClientCodes] = useState<string[]>([])
   // Sprint 51 migration — sort is owned by the shared AdvancedDataTable now.
   // sortBy / sortDirection remain the fetch-effect inputs (derived below).
@@ -269,6 +271,7 @@ export default function OrdersWorkspace() {
         tracking: debouncedFilters.tracking || undefined,
         createdFrom: dateFrom || undefined,
         createdTo: dateTo || undefined,
+        source: sourceFilter || undefined,
         page: page - 1,
         size: pageSize,
         sortBy,
@@ -292,7 +295,7 @@ export default function OrdersWorkspace() {
     return () => {
       cancelled = true
     }
-  }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sortBy, sortDirection, debouncedFilters, reloadToken])
+  }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sourceFilter, sortBy, sortDirection, debouncedFilters, reloadToken])
 
   const refreshQueues = () => setReloadToken((token) => token + 1)
 
@@ -1092,18 +1095,11 @@ export default function OrdersWorkspace() {
               Split across warehouses
             </button>
             <button type="button"
-                    onClick={() => setImportOpen(true)}
-                    className={BTN_GHOST_SM}
-                    title="Upload a CSV or Excel with one order per row">
-              <FiUpload className="h-3 w-3" />
-              Import CSV/Excel
-            </button>
-            <button type="button"
                     onClick={() => navigate('/orders/history')}
                     className={BTN_GHOST_SM}
-                    title="Saved imports — data saved from CSV/Excel imports">
+                    title="Order Intake — all orders (Bulk/Manual/API/WMS), the CSV/Excel importer, and import history">
               <FiDatabase className="h-3 w-3" />
-              Data history
+              Order Intake
             </button>
             <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY_SM}>
               <FiPlus className="h-3 w-3" />
@@ -1346,6 +1342,22 @@ export default function OrdersWorkspace() {
                           onChange={(e) => setDateTo(e.target.value)}
                           className={advInputCls}
                         />,
+                      )}
+                      {advField(
+                        <FiDatabase className="h-3 w-3" />,
+                        'Source',
+                        <select
+                          value={sourceFilter}
+                          onChange={(e) => setSourceFilter(e.target.value)}
+                          className={advInputCls}
+                        >
+                          <option value="">Any source</option>
+                          <option value="MANUAL">Manual</option>
+                          <option value="BULK">Bulk (CSV/Excel)</option>
+                          <option value="API">API (D2C / B2B)</option>
+                          <option value="WMS">WMS</option>
+                          <option value="ERP">ERP</option>
+                        </select>,
                       )}
                     </div>
 

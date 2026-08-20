@@ -45,4 +45,6 @@ public class OrderListFilters {
     /** Created-date range (inclusive, yyyy-MM-dd). */
     private String createdFrom;
     private String createdTo;
+    /** Order source filter: MANUAL | BULK | API | WMS | ERP. Null/blank = all. */
+    private String source;
 }

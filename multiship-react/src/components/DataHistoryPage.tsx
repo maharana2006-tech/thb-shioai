@@ -17,6 +17,8 @@ import {
   FiZap,
 } from 'react-icons/fi'
 import PageSectionHeader from './workspace/PageSectionHeader'
+import AllOrdersHistory from './AllOrdersHistory'
+import OrderImportModal from './modals/OrderImportModal'
 import { notify } from '../utils/notify'
 import {
   orderImportService,
@@ -68,6 +70,10 @@ export default function DataHistoryPage() {
   const [sortKey, setSortKey] = useState<SortKey>('created')
   const [sortDir, setSortDir] = useState<'ASC' | 'DESC'>('DESC')
   const [showAdvanced, setShowAdvanced] = useState(false)
+  // Order Intake has three views: "orders" (unified per-order list across
+  // Bulk / Manual / API / WMS), "import" (inline CSV/Excel upload + validation),
+  // and "imports" (history of bulk import batches).
+  const [dhView, setDhView] = useState<'orders' | 'import' | 'imports'>('orders')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [createdBy, setCreatedBy] = useState('')
@@ -442,36 +448,40 @@ export default function DataHistoryPage() {
     <div className="space-y-4 pb-24">
       <PageSectionHeader
         eyebrow="Operations"
-        title="Data history"
-        description="Every saved CSV / Excel import. Rows are stored here — no labels are generated on save."
+        title="Order Intake"
+        description="Every order in one place — Bulk, Manual, API, and WMS — plus the CSV/Excel importer and saved import history."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowAdvanced((v) => !v)}
-              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
-                showAdvanced || activeAdvancedCount > 0
-                  ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
-                  : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-              }`}
-            >
-              <FiSliders className="h-3.5 w-3.5" />
-              Advanced
-              {activeAdvancedCount > 0 ? (
-                <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#f4eede] px-1 text-[9.5px] font-bold text-[#412d15]">
-                  {activeAdvancedCount}
-                </span>
-              ) : null}
-            </button>
-            <button
-              type="button"
-              onClick={() => void load()}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-            >
-              <FiRefreshCw className="h-3.5 w-3.5" />
-              Refresh
-            </button>
-            {viewTrash && batches.length > 0 ? (
+            {dhView === 'imports' ? (
+              <button
+                type="button"
+                onClick={() => setShowAdvanced((v) => !v)}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
+                  showAdvanced || activeAdvancedCount > 0
+                    ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
+                    : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+                }`}
+              >
+                <FiSliders className="h-3.5 w-3.5" />
+                Advanced
+                {activeAdvancedCount > 0 ? (
+                  <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#f4eede] px-1 text-[9.5px] font-bold text-[#412d15]">
+                    {activeAdvancedCount}
+                  </span>
+                ) : null}
+              </button>
+            ) : null}
+            {dhView === 'imports' ? (
+              <button
+                type="button"
+                onClick={() => void load()}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+              >
+                <FiRefreshCw className="h-3.5 w-3.5" />
+                Refresh
+              </button>
+            ) : null}
+            {dhView === 'imports' && viewTrash && batches.length > 0 ? (
               confirmEmpty ? (
                 <span className="inline-flex items-center gap-1.5">
                   <button
@@ -508,19 +518,21 @@ export default function DataHistoryPage() {
                 </button>
               )
             ) : null}
-            <button
-              type="button"
-              onClick={() => setViewTrash((v) => !v)}
-              title={viewTrash ? 'Back to live imports' : 'View deleted imports (Trash)'}
-              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
-                viewTrash
-                  ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
-                  : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-              }`}
-            >
-              {viewTrash ? <FiArrowLeft className="h-3.5 w-3.5" /> : <FiTrash2 className="h-3.5 w-3.5" />}
-              {viewTrash ? 'Back to imports' : 'Trash'}
-            </button>
+            {dhView === 'imports' ? (
+              <button
+                type="button"
+                onClick={() => setViewTrash((v) => !v)}
+                title={viewTrash ? 'Back to live imports' : 'View deleted imports (Trash)'}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
+                  viewTrash
+                    ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
+                    : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+                }`}
+              >
+                {viewTrash ? <FiArrowLeft className="h-3.5 w-3.5" /> : <FiTrash2 className="h-3.5 w-3.5" />}
+                {viewTrash ? 'Back to imports' : 'Trash'}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => navigate('/orders')}
@@ -533,6 +545,47 @@ export default function DataHistoryPage() {
         }
       />
 
+      {/* View tabs — Imports (bulk batches) vs All orders (every source) */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {([
+          { key: 'orders', label: 'All orders', hint: 'Bulk · Manual · API · WMS' },
+          { key: 'import', label: 'Import CSV/Excel', hint: 'Upload & validate' },
+          { key: 'imports', label: 'Import history', hint: 'Saved batches' },
+        ] as { key: 'orders' | 'import' | 'imports'; label: string; hint: string }[]).map((t) => {
+          const active = dhView === t.key
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setDhView(t.key)}
+              className={`inline-flex items-baseline gap-1.5 rounded-xl px-3.5 py-2 text-[12.5px] font-semibold transition ${
+                active
+                  ? 'bg-[#1f150c] text-[#f4eede]'
+                  : 'border border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+              }`}
+            >
+              {t.label}
+              <span className={`text-[9.5px] font-medium uppercase tracking-[0.06em] ${active ? 'text-[#cdbf9f]' : 'text-[#b6a684]'}`}>
+                {t.hint}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      {dhView === 'orders' ? (
+        <AllOrdersHistory />
+      ) : dhView === 'import' ? (
+        <OrderImportModal
+          inline
+          onImported={() => {
+            // After a save, jump to the batch history and refresh it.
+            setDhView('imports')
+            void load()
+          }}
+        />
+      ) : (
+      <>
       {/* ── Advanced filter toolbar ─────────────────────────────────────── */}
       <section className="rounded-2xl border border-[#e3d9c4] bg-white p-4 shadow-sm">
         {/* Status chips + clear */}
@@ -1067,6 +1120,8 @@ export default function DataHistoryPage() {
           </div>
         ) : null}
       </section>
+      </>
+      )}
     </div>
   )
 }

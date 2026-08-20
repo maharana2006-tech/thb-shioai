@@ -13,6 +13,11 @@ import java.util.Optional;
 @Repository
 public interface OrderRepository extends JpaRepository<Order, Integer> {
 
+    /** True when an order pulled from the WMS with this external id already
+     *  exists — makes the WMS pull idempotent (skip re-import). */
+    boolean existsByWmsExternalId(String wmsExternalId);
+
+
     Optional<Order> findByOrderNo(Integer orderNo);
 
     /**
@@ -276,6 +281,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
           AND (:tracking = '' OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :tracking, '%')))
           AND (:createdFrom = '' OR b.created_date >= TO_DATE(NULLIF(:createdFrom, ''), 'YYYY-MM-DD'))
           AND (:createdTo = '' OR b.created_date <= TO_DATE(NULLIF(:createdTo, ''), 'YYYY-MM-DD'))
+          AND (:source = ''
+               OR COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'ERP' END) = :source)
           AND (:resolution = ''
                OR (:resolution = 'READY' AND """ + RESOLUTION_READY_SQL + """
                )
@@ -344,6 +351,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("tracking") String tracking,
             @Param("createdFrom") String createdFrom,
             @Param("createdTo") String createdTo,
+            @Param("source") String source,
             @Param("offset") int offset,
             @Param("limit") int limit,
             @Param("sortBy") String sortBy,
@@ -365,7 +373,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("orderNoLike") String orderNoLike,
             @Param("tracking") String tracking,
             @Param("createdFrom") String createdFrom,
-            @Param("createdTo") String createdTo
+            @Param("createdTo") String createdTo,
+            @Param("source") String source
     );
 
     /** Tab counts for the Labels work queue, computed in one pass. */
