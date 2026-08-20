@@ -43,7 +43,7 @@ public class AddressController {
                     "For carrier-native validation (UPS AVS, FedEx AV, ...) use /validate/carrier.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/validate/structural")
-    public ResponseEntity<ApiResponse<ExternalAddressValidationResponse>> validateStructural(@RequestBody ExternalAddress address) {
+    public ResponseEntity<ApiResponse<ExternalAddressValidationResponse>> validateStructural(@jakarta.validation.Valid @RequestBody ExternalAddress address) {
         return doValidate(address);
     }
 
@@ -60,7 +60,7 @@ public class AddressController {
                     "This path is removed in Sprint 53.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/validate")
-    public ResponseEntity<ApiResponse<ExternalAddressValidationResponse>> validate(@RequestBody ExternalAddress address) {
+    public ResponseEntity<ApiResponse<ExternalAddressValidationResponse>> validate(@jakarta.validation.Valid @RequestBody ExternalAddress address) {
         log.warn("Deprecated route hit: POST /api/v1/addresses/validate — migrate to /validate/structural (Sprint 51 AC-L2).");
         return doValidate(address);
     }
