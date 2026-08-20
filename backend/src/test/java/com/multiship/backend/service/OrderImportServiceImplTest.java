@@ -79,8 +79,10 @@ class OrderImportServiceImplTest {
 
     @Test
     void csvParserPopulatesRequiredFields() {
-        String csv = "recipientName,recipientPhone,addressLine1,city,state,postalCode,countryCode,weight,weightUnit,carrierCode\n"
-                + "Jane Doe,5559876543,42 Broadway,New York,NY,10001,US,2.5,LB,UPS\n";
+        // clientCode joined the required-field set (Sprint 55, "new validation")
+        // to prevent orphan custNo="MANUAL" orders. Header + data row updated.
+        String csv = "clientCode,recipientName,recipientPhone,addressLine1,city,state,postalCode,countryCode,weight,weightUnit,carrierCode\n"
+                + "ACME,Jane Doe,5559876543,42 Broadway,New York,NY,10001,US,2.5,LB,UPS\n";
         OrderImportPreviewDTO data = service.preview("test.csv",
                 new ByteArrayInputStream(csv.getBytes(StandardCharsets.UTF_8))).getData();
         assertEquals(1, data.getTotalRows());
@@ -100,8 +102,10 @@ class OrderImportServiceImplTest {
 
     @Test
     void csvParserPreservesHeaderCaseInsensitive() {
-        String csv = "RecipientName,ADDRESSLINE1,City,POSTALCODE,countrycode,Weight\n"
-                + "Jane,42 Broadway,NYC,10001,US,2\n";
+        // clientCode, state, weightUnit — required-field set (Sprint 55).
+        // Mixed-case headers exercise the case-insensitive header match.
+        String csv = "ClientCode,RecipientName,ADDRESSLINE1,City,STATE,POSTALCODE,countrycode,Weight,weightunit\n"
+                + "ACME,Jane,42 Broadway,NYC,NY,10001,US,2,LB\n";
         OrderImportPreviewDTO data = service.preview("test.csv",
                 new ByteArrayInputStream(csv.getBytes(StandardCharsets.UTF_8))).getData();
         assertEquals("Jane", data.getRows().get(0).getRecipientName());
@@ -155,8 +159,9 @@ class OrderImportServiceImplTest {
         // Sprint 48 revision — declaredValue is derived from items at
         // commit rather than parsed as a top-level column. Exercise the
         // same parseDecimal(",") tolerance via itemUnitValue instead.
-        String csv = "recipientName,addressLine1,city,postalCode,countryCode,weight,itemUnitValue\n"
-                + "Jane,42 Broadway,NYC,10001,US,2.5,\"1,000.00\"\n";
+        // Sprint 55 — clientCode, state, weightUnit joined required set.
+        String csv = "clientCode,recipientName,addressLine1,city,state,postalCode,countryCode,weight,weightUnit,itemUnitValue\n"
+                + "ACME,Jane,42 Broadway,NYC,NY,10001,US,2.5,LB,\"1,000.00\"\n";
         OrderImportPreviewDTO data = service.preview("test.csv",
                 new ByteArrayInputStream(csv.getBytes(StandardCharsets.UTF_8))).getData();
         assertEquals(1, data.getValidRows());
@@ -189,11 +194,12 @@ class OrderImportServiceImplTest {
 
     @Test
     void xlsxParserPopulatesRequiredFields() throws Exception {
+        // Sprint 55 — added clientCode, state, weightUnit to required set.
         byte[] xlsx = buildXlsx(List.of(
-                List.of("recipientName", "addressLine1", "city", "postalCode",
-                        "countryCode", "weight", "carrierCode"),
-                List.of("Jane Doe", "42 Broadway", "New York", "10001", "US",
-                        "2.5", "UPS")));
+                List.of("clientCode", "recipientName", "addressLine1", "city", "state",
+                        "postalCode", "countryCode", "weight", "weightUnit", "carrierCode"),
+                List.of("ACME", "Jane Doe", "42 Broadway", "New York", "NY",
+                        "10001", "US", "2.5", "LB", "UPS")));
 
         OrderImportPreviewDTO data = service.preview("orders.xlsx",
                 new ByteArrayInputStream(xlsx)).getData();
@@ -249,10 +255,13 @@ class OrderImportServiceImplTest {
 
     @Test
     void commitCountsValidAndInvalidRows() {
+        // Sprint 55 — required set expanded to include clientCode + weightUnit;
+        // state is also required for US destinations.
         OrderImportRowDTO good = OrderImportRowDTO.builder()
-                .rowNumber(1).recipientName("Jane").addressLine1("42 Broadway")
-                .city("NYC").postalCode("10001").countryCode("US")
-                .weight(new BigDecimal("2")).build();
+                .rowNumber(1).clientCode("ACME").recipientName("Jane")
+                .addressLine1("42 Broadway")
+                .city("NYC").state("NY").postalCode("10001").countryCode("US")
+                .weight(new BigDecimal("2")).weightUnit("LB").build();
         OrderImportRowDTO bad = OrderImportRowDTO.builder()
                 .rowNumber(2).recipientName("John").build();  // Missing everything else
 
@@ -285,18 +294,24 @@ class OrderImportServiceImplTest {
 
     @Test
     void validateRowReturnsEmptyForGoodRow() {
+        // Sprint 55 — required set expanded (clientCode, state-for-US, weightUnit).
         OrderImportRowDTO row = OrderImportRowDTO.builder()
-                .recipientName("Jane").addressLine1("42 Broadway")
-                .city("NYC").postalCode("10001").countryCode("US")
-                .weight(new BigDecimal("2")).build();
+                .clientCode("ACME").recipientName("Jane").addressLine1("42 Broadway")
+                .city("NYC").state("NY").postalCode("10001").countryCode("US")
+                .weight(new BigDecimal("2")).weightUnit("LB").build();
         assertTrue(OrderImportServiceImpl.validateRow(row).isEmpty());
     }
 
     @Test
     void validateRowFlagsAllRequiredFieldsIndividually() {
+        // Sprint 55 — clientCode + weightUnit added to the required-field set.
+        // Empty row now surfaces 8 errors (was 6): clientCode, recipientName,
+        // addressLine1, city, postalCode, countryCode, weight (>0), weightUnit.
+        // (state is country-conditional so a blank countryCode doesn't emit it.)
         OrderImportRowDTO row = OrderImportRowDTO.builder().build();
         List<String> errors = OrderImportServiceImpl.validateRow(row);
-        assertEquals(6, errors.size(),
-                "6 required fields = 6 error lines: name, address, city, postal, country, weight");
+        assertEquals(8, errors.size(),
+                "8 required fields on an empty row: clientCode, name, address, city, "
+                        + "postal, country, weight, weightUnit");
     }
 }
