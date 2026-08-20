@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import {
   flexRender,
   getCoreRowModel,
@@ -90,7 +90,20 @@ export interface AdvancedDataTableProps<T> {
   inlineFormRow?: React.ReactNode
   /** Rendered inside <tbody> when there are no rows. */
   emptyState?: React.ReactNode
+  /**
+   * When provided, rows become expandable: clicking a non-interactive cell
+   * toggles a full-width sub-row that renders this content for that row.
+   * Buttons/inputs/selects/links inside a row do NOT toggle it. Inert (no
+   * expand behavior) when omitted, so existing tables are unaffected.
+   */
+  renderExpanded?: (row: T) => React.ReactNode
+  /** Fired when a row is expanded (not collapsed) — lets the parent lazy-load
+   *  the expanded content's data. */
+  onRowExpand?: (row: T) => void
   initialHiddenColumns?: string[]
+  /** Default column pinning (e.g. keep an Actions column visible on the right).
+   *  Applied only when the user hasn't pinned anything themselves. */
+  initialColumnPinning?: ColumnPinningState
   initialDensity?: Density
   initialPageSize?: number
   /** Filename base for the CSV export (no extension). */
@@ -319,7 +332,10 @@ export default function AdvancedDataTable<T>({
   toolbarActions,
   inlineFormRow,
   emptyState,
+  renderExpanded,
+  onRowExpand,
   initialHiddenColumns,
+  initialColumnPinning,
   initialDensity = 'compact',
   initialPageSize = 25,
   csvFilename,
@@ -348,6 +364,8 @@ export default function AdvancedDataTable<T>({
   // update it after mount (and back to localStorage).
   const persisted = useMemo(() => loadLayout(tableKey), [tableKey])
 
+  // Which row's expansion sub-row is open (id), when renderExpanded is set.
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const [internalSorting, setInternalSorting] = useState<SortingState>([])
   const [internalPageIndex, setInternalPageIndex] = useState(0)
   const [internalPageSize, setInternalPageSize] = useState(initialPageSize)
@@ -365,9 +383,12 @@ export default function AdvancedDataTable<T>({
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(
     () => persisted?.columnSizing ?? {},
   )
-  const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(
-    () => persisted?.columnPinning ?? { left: [], right: [] },
-  )
+  const [columnPinning, setColumnPinning] = useState<ColumnPinningState>(() => {
+    const p = persisted?.columnPinning
+    // Respect the user's own pinning; otherwise apply the caller's default.
+    if (p && ((p.left?.length ?? 0) + (p.right?.length ?? 0)) > 0) return p
+    return initialColumnPinning ?? { left: [], right: [] }
+  })
   const [density, setDensity] = useState<Density>(persisted?.density ?? initialDensity)
   const [openMenu, setOpenMenu] = useState<null | 'columns' | 'density' | 'export'>(null)
   /** Which cell is currently in edit mode. `null` = read-only view. */
@@ -593,6 +614,10 @@ export default function AdvancedDataTable<T>({
         ) : null}
 
         {filterToggle}
+
+        {/* When there's no search box to hold the left edge, push the menu
+            cluster to the right so their right-aligned dropdowns stay on-screen. */}
+        {!search ? <div className="flex-1" /> : null}
 
         {/* Columns menu with visibility + pin toggle */}
         <div ref={columnsMenuRef} className="relative">
@@ -861,7 +886,25 @@ export default function AdvancedDataTable<T>({
               ) : null}
 
               {visibleRows.map((row) => (
-                <tr key={row.id} className="align-top">
+                <Fragment key={row.id}>
+                <tr
+                  className={`align-top ${renderExpanded ? 'cursor-pointer hover:bg-slate-50/60' : ''} ${
+                    renderExpanded && expandedId === row.id ? 'bg-slate-50' : ''
+                  }`}
+                  onClick={
+                    renderExpanded
+                      ? (e) => {
+                          // Interactive controls inside the row keep their own behavior.
+                          if ((e.target as HTMLElement).closest('button, a, input, select, textarea, label')) return
+                          setExpandedId((prev) => {
+                            const next = prev === row.id ? null : row.id
+                            if (next) onRowExpand?.(row.original)
+                            return next
+                          })
+                        }
+                      : undefined
+                  }
+                >
                   {row.getVisibleCells().map((cell) => {
                     const pinned = pinnedStyle(cell.column)
                     const meta = cell.column.columnDef.meta as
@@ -903,6 +946,14 @@ export default function AdvancedDataTable<T>({
                     )
                   })}
                 </tr>
+                {renderExpanded && expandedId === row.id ? (
+                  <tr>
+                    <td colSpan={visibleColumnCount} className="p-0">
+                      {renderExpanded(row.original)}
+                    </td>
+                  </tr>
+                ) : null}
+                </Fragment>
               ))}
             </tbody>
           </table>
