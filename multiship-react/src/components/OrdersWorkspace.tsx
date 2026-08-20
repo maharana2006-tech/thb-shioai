@@ -12,7 +12,6 @@ import {
   FiRotateCw,
   FiCalendar,
   FiPackage,
-  FiUpload,
   FiTruck,
   FiX,
   FiXCircle,

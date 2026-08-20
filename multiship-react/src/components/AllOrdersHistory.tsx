@@ -64,11 +64,13 @@ export default function AllOrdersHistory() {
 
   // Reset to page 0 whenever the filter set changes.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- filter-derived page reset
     setPage(0)
   }, [source, debounced])
 
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-lifecycle loading flag
     setLoading(true)
     orderService
       .listOrders({
