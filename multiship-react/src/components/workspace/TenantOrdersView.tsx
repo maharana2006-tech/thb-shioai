@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { notify } from '../../utils/notify'
 import { FiFileText, FiRefreshCw, FiTag, FiTruck } from 'react-icons/fi'
 import { orderService, type Order } from '../../api/orderService'
 import { formatCarrierName } from '../../utils/carrierUtils'
-import OrderDetailsModal from '../modals/OrderDetailsModal'
-import TrackingTimelineModal from '../tracking/TrackingTimelineModal'
+// Bundle audit #434 follow-up — same chunks as OrdersWorkspace, so a
+// TENANT opening a detail/track modal reuses the already-fetched
+// chunk from the parent OrdersPage (or downloads once, on demand).
+const OrderDetailsModal = lazy(() => import('../modals/OrderDetailsModal'))
+const TrackingTimelineModal = lazy(() => import('../tracking/TrackingTimelineModal'))
 import OrdersTable from './OrdersTable'
 import PageSectionHeader from './PageSectionHeader'
 import TablePagination from './TablePagination'
@@ -209,13 +212,15 @@ export default function TenantOrdersView({ tenantId }: TenantOrdersViewProps) {
         ) : null}
       </section>
 
-      {detailsOrderNo !== null ? (
-        <OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} />
-      ) : null}
+      <Suspense fallback={null}>
+        {detailsOrderNo !== null ? (
+          <OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} />
+        ) : null}
 
-      {trackingOrderNo !== null ? (
-        <TrackingTimelineModal orderNo={trackingOrderNo} onClose={() => setTrackingOrderNo(null)} />
-      ) : null}
+        {trackingOrderNo !== null ? (
+          <TrackingTimelineModal orderNo={trackingOrderNo} onClose={() => setTrackingOrderNo(null)} />
+        ) : null}
+      </Suspense>
     </div>
   )
 }
