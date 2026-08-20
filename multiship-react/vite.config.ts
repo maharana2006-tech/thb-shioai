@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import { loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { visualizer } from 'rollup-plugin-visualizer'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
@@ -25,7 +26,23 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
-  plugins: [react()],
+  plugins: [
+    react(),
+    // Bundle-size attribution — enabled only for production builds.
+    // Writes `dist/stats.html` on every `npm run build` so devs can eyeball
+    // what actually ships. gzip + brotli sizes are computed inline. The
+    // file is gitignored (see multiship-react/.gitignore — `stats.html`).
+    // Zero effect on dev startup or the runtime bundle.
+    ...(mode === 'production'
+      ? [visualizer({
+          filename: 'dist/stats.html',
+          template: 'treemap',
+          gzipSize: true,
+          brotliSize: true,
+          open: false,
+        })]
+      : []),
+  ],
   // Pre-bundle deps that the router-code-split path pulls in lazily.
   // Vite's dep-optimizer discovers deps on first import; when a lazy
   // route hits `zod` (via dashboardService) mid-session, Vite kicks
