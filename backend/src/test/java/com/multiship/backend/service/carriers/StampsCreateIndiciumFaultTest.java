@@ -81,6 +81,50 @@ class StampsCreateIndiciumFaultTest {
         assertEquals(0, new java.math.BigDecimal("7.85").compareTo(result.shippingCost()));
     }
 
+    // ===== ETA — Bug 4: no more hardcoded 5-day fallback =====
+
+    @Test
+    void etaFromSwsimDeliveryDate_isSurfaced_notHardcoded() throws Throwable {
+        // Pre-fix, every ETA was now().plusDays(5) regardless of service
+        // class (Priority 1-3d, Ground 2-5d, Media 2-8d all showed 5 days).
+        // Post-fix reads DeliveryDate from the response and surfaces it as-is.
+        String xml = "<CreateIndiciumResponse>"
+                + "<TrackingNumber>9400111899223197428490</TrackingNumber>"
+                + "<URL>https://labels.stamps.com/label/abc.pdf</URL>"
+                + "<DeliveryDate>2026-08-22T15:00:00</DeliveryDate>"
+                + "</CreateIndiciumResponse>";
+
+        CarrierConnector.ShipmentResult result = parse(xml, request());
+
+        assertNotNull(result.estimatedDelivery(),
+                "SWSIM DeliveryDate must surface on the result");
+        assertEquals(2026, result.estimatedDelivery().getYear());
+        assertEquals(8, result.estimatedDelivery().getMonthValue());
+        assertEquals(22, result.estimatedDelivery().getDayOfMonth());
+    }
+
+    @Test
+    void etaAbsent_returnsNull_notFabricated() throws Throwable {
+        // SWSIM omits DeliveryDate for some service classes / destinations.
+        // Pre-fix returned now().plusDays(5) unconditionally — a made-up ETA.
+        // Post-fix returns null so the receipt UI can render "—" instead
+        // of lying to the recipient.
+        String xml = "<CreateIndiciumResponse>"
+                + "<TrackingNumber>9400111899223197428490</TrackingNumber>"
+                + "<URL>https://labels.stamps.com/label/abc.pdf</URL>"
+                + "</CreateIndiciumResponse>";
+
+        CarrierConnector.ShipmentResult result = parse(xml, request());
+
+        assertNotNull(result, "no-ETA response must still yield a valid ShipmentResult");
+        assertEquals("9400111899223197428490", result.trackingNumber());
+        if (result.estimatedDelivery() != null) {
+            org.junit.jupiter.api.Assertions.fail(
+                    "estimatedDelivery must be null when SWSIM omits DeliveryDate "
+                            + "(pre-fix bug fabricated 5-day ETA); got: " + result.estimatedDelivery());
+        }
+    }
+
     // ===== fault-response cases — must THROW, not silently succeed =====
 
     @Test
