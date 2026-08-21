@@ -26,6 +26,17 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
+  // Pre-bundle React explicitly. Without this, Vite's dependency-discovery
+  // scan sometimes misses `react` (only picks up `react-dom`, `react-dom/client`,
+  // etc.) and produces a `node_modules/.vite/deps/` cache with react-dom.js
+  // but NO react.js — every `import { useState } from 'react'` then resolves
+  // to an empty module and destructuring throws "Cannot read properties of
+  // null (reading 'useState')" the moment the operator hits a route that
+  // uses hooks. Pinning `react` in optimizeDeps.include forces it into the
+  // initial pre-bundle pass and stops the cache from drifting mid-session.
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'react-dom/client'],
+  },
   plugins: [
     react(),
     // Bundle-size attribution — enabled only for production builds.
