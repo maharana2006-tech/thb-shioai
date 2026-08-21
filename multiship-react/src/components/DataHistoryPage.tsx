@@ -2,9 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   FiArrowLeft,
-  FiChevronDown,
-  FiChevronRight,
-  FiDatabase,
   FiFileText,
   FiFilter,
   FiHome,
@@ -83,8 +80,14 @@ export default function DataHistoryPage() {
   const [minSaved, setMinSaved] = useState('')
 
   // ── Pagination ────────────────────────────────────────────────────────────
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  // page + pageSize state kept as scaffolding for the pagination UI wired in
+  // by ad81192 ("import history"); page value and setPageSize setter aren't
+  // read yet (no pager control mounted). Disables silence lint until the UI
+  // catches up — see setPage usage in the filter-reset effect below.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- scaffold for the paginator UI; setPage is used in the reset effect below
+  const [_page, setPage] = useState(1)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- scaffold; pageSize is read by the reset effect, setter waits for the pager UI
+  const [pageSize, _setPageSize] = useState(10)
 
   /** Distinct createdBy values for the advanced "Created by" dropdown. */
   const creators = useMemo(
