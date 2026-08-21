@@ -1902,7 +1902,20 @@ public class StampsConnector implements CarrierConnector {
             }
         }
         String trackingUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + tracking;
-        java.time.LocalDateTime estimated = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusDays(5);
+        // ETA — read from SWSIM's response. Pre-fix this was hardcoded to
+        // now().plusDays(5) for EVERY service class regardless of what SWSIM
+        // said, so a Priority Mail (1-3d) label and a Media Mail (2-8d)
+        // label both surfaced "delivered in 5 days" on the receipt. That
+        // misleads recipients and doesn't match what parseGetRatesResponse
+        // reads from the same response shape (see the DeliveryDate lookup
+        // ~445 lines above in parseGetRatesResponse).
+        //
+        // SWSIM CreateIndicium responses may or may not include
+        // DeliveryDate depending on service class — falling back to null
+        // when absent is deliberate: the receipt UI already renders "—"
+        // for null ETA, which is honest.
+        java.time.LocalDateTime estimated = parseSwsimTimestamp(
+                extractElement(responseXml, "DeliveryDate"));
         return new ShipmentResult(tracking, trackingUrl, url, url, cost, estimated, responseXml);
     }
 
