@@ -907,7 +907,15 @@ public class StampsConnector implements CarrierConnector {
                     "SWSIM address validation needs live credentials; the account is on a fallback token.",
                     null);
         }
-        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        // Env routing — mirrors every other SWSIM endpoint in this class
+        // (getAccessToken, createShipment, getRates, trackShipment,
+        // voidShipment, schedulePickup, closeOutDay). Previously hardcoded
+        // to getApiBaseUrl() so a SANDBOX operator's address validation
+        // hit prod SWSIM — real production request from a test session
+        // (env bleed). Fixed by routing SANDBOX to the sandbox host.
+        String swsimUrl = isSandbox(environment)
+                ? carrierProperties.getStamps().getSandboxUrl()
+                : carrierProperties.getStamps().getApiBaseUrl();
         boolean domestic = !StringUtils.hasText(address.countryCode())
                 || "US".equalsIgnoreCase(address.countryCode().trim());
         String operation = domestic ? "CleanseAddress" : "ValidateForeignAddress";
