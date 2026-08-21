@@ -1974,16 +1974,6 @@ public class StampsConnector implements CarrierConnector {
         return fault == null ? "no fault element" : fault;
     }
 
-    private ShipmentResult buildFallbackShipmentResult(ShipmentRequestDTO request) {
-        String trackingNumber = "9" + hashShort(request.getReferenceNumber() + ":" + request.getCarrierCode());
-        String trackingUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + trackingNumber;
-        String labelUrl = "https://labels.local/usps/" + trackingNumber + ".pdf";
-        String labelPdf = labelUrl;
-        BigDecimal shippingCost = request.getWeight() != null ? request.getWeight().multiply(BigDecimal.valueOf(0.95)) : BigDecimal.ZERO;
-        LocalDateTime estimatedDelivery = LocalDateTime.now(ZoneOffset.UTC).plusDays(4);
-        return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelPdf, shippingCost, estimatedDelivery, null);
-    }
-
     private String buildFallbackToken(String clientId, String clientSecret) {
         return "stamps-local-" + hashShort(clientId + ":" + clientSecret + ":" + LocalDateTime.now(ZoneOffset.UTC));
     }
