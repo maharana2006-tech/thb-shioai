@@ -208,7 +208,17 @@ public class StampsConnector implements CarrierConnector {
     @Override
     public CarrierConnectionResult connect(String clientId, String clientSecret, String accountNumber) {
         validateCredentials(clientId, clientSecret);
-        String accessToken = getAccessToken(clientId, clientSecret);
+        // Bug fix: previously called the 2-arg getAccessToken(clientId, clientSecret)
+        // which forwarded accountNumber=null to the 4-arg version, which then threw
+        // CarrierConnectionException("Stamps.com verification needs the account number
+        // as the SWSIM Username."). Effect: `POST /carriers/connect` for USPS
+        // always 500'd regardless of what the caller supplied — the accountNumber
+        // sitting in the argument list was silently discarded. Now passing it
+        // through to the 4-arg overload where SWSIM AuthenticateUser needs it.
+        // Environment left null so the default-environment property drives the
+        // sandbox-vs-prod routing (matches the pre-fix behaviour for the
+        // environment field on CarrierConnectionResult at line 218).
+        String accessToken = getAccessToken(clientId, clientSecret, accountNumber, null);
         LocalDateTime tokenExpiresAt = LocalDateTime.now(ZoneOffset.UTC).plusHours(1);
         return new CarrierConnectionResult(
                 CARRIER_CODE,
