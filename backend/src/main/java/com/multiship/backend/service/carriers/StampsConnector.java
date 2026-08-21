@@ -1454,7 +1454,17 @@ public class StampsConnector implements CarrierConnector {
 
             String amount = extractElement(body, "Amount");
             java.math.BigDecimal totalAmount = parseSwsimAmount(amount);
-            if (totalAmount == null) continue;
+            if (totalAmount == null) {
+                // Pre-fix this skipped silently — operator saw N-1 rates
+                // when SWSIM returned N with no way to trace the missing
+                // one. Log the offending service + raw Amount so ops can
+                // reproduce; we still skip because a rate without a
+                // parseable price can't be surfaced (customers rely on
+                // total for rate-shop comparison).
+                log.warn("Stamps GetRates: dropping unparseable Amount '{}' for service {} — "
+                        + "rate omitted from response.", amount, serviceCode);
+                continue;
+            }
 
             Integer transitDays = parseSwsimDeliverDays(extractElement(body, "DeliverDays"));
             LocalDateTime estimatedDelivery = parseSwsimTimestamp(
