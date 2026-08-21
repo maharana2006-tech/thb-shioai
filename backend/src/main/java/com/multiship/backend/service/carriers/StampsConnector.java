@@ -1811,7 +1811,13 @@ public class StampsConnector implements CarrierConnector {
                 xml.append("<CountryOfOrigin>").append(xmlEscape(c.getCountryOfOrigin())).append("</CountryOfOrigin>");
             }
             if (StringUtils.hasText(c.getSku())) {
-                xml.append("<sku>").append(xmlEscape(c.getSku())).append("</sku>");
+                // SWSIM XML is case-sensitive and every sibling element in
+                // this CustomsLine block is PascalCase (Description,
+                // Quantity, Value, WeightOz, HSTariffNumber, CountryOfOrigin).
+                // Pre-fix this was lowercased `<sku>` which SWSIM's parser
+                // silently dropped — the SKU disappeared from the printed
+                // customs form (silent data loss on international shipments).
+                xml.append("<SKU>").append(xmlEscape(c.getSku())).append("</SKU>");
             }
             xml.append("</CustomsLine>");
         }
