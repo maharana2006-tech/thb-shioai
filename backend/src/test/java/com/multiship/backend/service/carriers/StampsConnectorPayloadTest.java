@@ -200,12 +200,20 @@ class StampsConnectorPayloadTest {
     }
 
     @Test
-    void skuGoesIntoLowercaseSkuElement() throws Exception {
+    void skuGoesIntoPascalCaseSkuElement() throws Exception {
+        // Bug 7 fix: SWSIM XML is case-sensitive and every sibling element
+        // in CustomsLine is PascalCase (Description, Quantity, Value,
+        // WeightOz, HSTariffNumber, CountryOfOrigin). Pre-fix this
+        // emitted `<sku>` which SWSIM's parser silently dropped — the SKU
+        // vanished from the printed customs form. Now emitting `<SKU>`.
         ShipmentRequestDTO r = baseRequest();
         r.setRecipientCountryCode("GB");
         r.setIntl(baseIntl());
         String soap = build(r, "T");
-        assertTrue(soap.contains("<sku>SKU-1</sku>"));
+        assertTrue(soap.contains("<SKU>SKU-1</SKU>"),
+                "SKU element must be PascalCase to match SWSIM's schema");
+        assertFalse(soap.contains("<sku>"),
+                "the pre-fix lowercase form must NOT appear — SWSIM drops it silently");
     }
 
     @Test
