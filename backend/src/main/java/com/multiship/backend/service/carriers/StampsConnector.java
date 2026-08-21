@@ -35,9 +35,58 @@ public class StampsConnector implements CarrierConnector {
 
     private static final String CARRIER_CODE = "USPS";
 
-    /** Stamps.com SWSIM requires the IntegrationID to be a real GUID. */
+    /** Stamps.com SWSIM requires the IntegrationID to be a real GUID.
+     *  Canonical shape: {@code 8-4-4-4-12} hex with hyphens. */
     private static final java.util.regex.Pattern GUID_PATTERN = java.util.regex.Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+    /** 32-hex-no-hyphens form Stamps.com's dev portal occasionally emits (e.g. via
+     *  its .NET SDK code samples). We insert the hyphens ourselves so the operator
+     *  doesn't have to reshape the value before pasting. */
+    private static final java.util.regex.Pattern GUID_NO_HYPHENS = java.util.regex.Pattern.compile(
+            "^[0-9a-fA-F]{32}$");
+    /** Braced-GUID {@code {01234567-...}} form the Windows/registry-style portal
+     *  copy button emits — very common paste variant. */
+    private static final java.util.regex.Pattern BRACED_GUID_WRAPPER = java.util.regex.Pattern.compile(
+            "^\\{(.*)\\}$");
+    /** URN-form {@code urn:uuid:01234567-...} that IETF-style tooling produces. */
+    private static final String URN_UUID_PREFIX = "urn:uuid:";
+
+    /**
+     * Normalise the IntegrationID the operator pasted into a canonical GUID.
+     * Accepts + reshapes these variants (all seen in the wild pasting from the
+     * Stamps.com developer portal or third-party SDK docs):
+     * <ul>
+     *   <li>canonical {@code 01234567-89ab-cdef-0123-456789abcdef} — pass-through</li>
+     *   <li>braced {@code {01234567-89ab-cdef-0123-456789abcdef}} — strip braces</li>
+     *   <li>URN {@code urn:uuid:01234567-...} — strip prefix</li>
+     *   <li>no-hyphens {@code 0123456789abcdef0123456789abcdef} — insert hyphens</li>
+     * </ul>
+     * Returns {@code null} when the value can't be reshaped into a canonical GUID;
+     * callers then surface an actionable error. All matches are case-insensitive
+     * because the hex range in {@link #GUID_PATTERN} allows both cases.
+     */
+    static String normaliseIntegrationId(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim();
+        if (s.isEmpty()) return null;
+        // Strip URN prefix (case-insensitive) so callers pasting from IETF docs work.
+        if (s.length() > URN_UUID_PREFIX.length()
+                && s.substring(0, URN_UUID_PREFIX.length()).equalsIgnoreCase(URN_UUID_PREFIX)) {
+            s = s.substring(URN_UUID_PREFIX.length()).trim();
+        }
+        // Strip braces {…}
+        java.util.regex.Matcher braced = BRACED_GUID_WRAPPER.matcher(s);
+        if (braced.matches()) {
+            s = braced.group(1).trim();
+        }
+        // Insert hyphens for the 32-hex form.
+        if (GUID_NO_HYPHENS.matcher(s).matches()) {
+            s = s.substring(0, 8) + "-" + s.substring(8, 12) + "-"
+                    + s.substring(12, 16) + "-" + s.substring(16, 20) + "-"
+                    + s.substring(20);
+        }
+        return GUID_PATTERN.matcher(s).matches() ? s : null;
+    }
 
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
@@ -217,16 +266,27 @@ public class StampsConnector implements CarrierConnector {
         // (HTTP 500 "value is invalid according to its datatype 'guid'") before
         // it ever checks the credentials. Catch that here with an actionable
         // message instead of firing a request we know the schema will bounce.
-        if (clientId == null || !GUID_PATTERN.matcher(clientId.trim()).matches()) {
+        // Also normalise common paste variants (braces, urn:uuid:, no-hyphens)
+        // so operators don't fail auth over registry-style copy-paste — the
+        // Stamps.com developer portal's "copy" button emits the braced form on
+        // Windows, which the strict pattern used to reject.
+        String normalisedGuid = normaliseIntegrationId(clientId);
+        if (normalisedGuid == null) {
             LAST_AUTH_DETAIL.set("the Stamps.com Client ID (IntegrationID) must be a GUID like "
-                    + "\"01234567-89ab-cdef-0123-456789abcdef\". The value entered isn't a GUID — "
-                    + "copy the IntegrationID from your Stamps.com developer portal.");
-            log.warn("Stamps SWSIM: IntegrationID '{}' is not a GUID; skipping call and returning fallback token.",
-                    clientId);
+                    + "\"01234567-89ab-cdef-0123-456789abcdef\" (braces {...}, urn:uuid: prefix, "
+                    + "or 32-hex-no-hyphens are also accepted and auto-normalised). The value entered "
+                    + "isn't recognisable as a GUID — copy the IntegrationID from your Stamps.com "
+                    + "developer portal.");
+            log.warn("Stamps SWSIM: IntegrationID '{}' is not a GUID after normalisation; "
+                    + "skipping call and returning fallback token.", clientId);
             return buildFallbackToken(clientId, clientSecret);
         }
+        if (!normalisedGuid.equals(clientId == null ? null : clientId.trim())) {
+            log.info("Stamps SWSIM: IntegrationID normalised from '{}' → '{}' (strip braces / "
+                    + "urn:uuid: / insert hyphens).", clientId, normalisedGuid);
+        }
 
-        String soap = buildAuthenticateUserEnvelope(clientId, accountNumber.trim(), clientSecret);
+        String soap = buildAuthenticateUserEnvelope(normalisedGuid, accountNumber.trim(), clientSecret);
 
         try {
             String response = HttpClients.newBuilder().baseUrl(swsimUrl).build().post()
