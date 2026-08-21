@@ -1823,11 +1823,28 @@ public class StampsConnector implements CarrierConnector {
         };
     }
 
-    /** Total shipment weight in ounces — the unit SWSIM speaks natively. */
+    /**
+     * Total shipment weight in ounces — the unit SWSIM speaks natively.
+     *
+     * <p>Throws {@link IllegalArgumentException} when UnitConverter can't
+     * convert the input (unrecognised weight unit, null weight, negative
+     * value). Pre-fix, this silently fell back to {@code "0"} which
+     * SWSIM would either quote a bogus near-free rate for OR reject with
+     * a confusing error further down — a classic silent-fallback that
+     * the codebase actively hunts (5-batch silent-fallback audit shipped
+     * as PRs #410-#414). Failing early with a diagnosable message beats
+     * shipping a fake-weight envelope every time.
+     */
     private static String weightInOz(com.multiship.backend.dto.PackageDetailDTO p) {
         java.math.BigDecimal oz = com.multiship.backend.util.UnitConverter
                 .toOunces(p.getWeight(), p.getWeightUnit());
-        return oz == null ? "0" : oz.toPlainString();
+        if (oz == null) {
+            throw new IllegalArgumentException(
+                    "Stamps.com: could not convert package weight to ounces. "
+                            + "Value=" + p.getWeight() + " unit=" + p.getWeightUnit()
+                            + " — provide a positive numeric weight in LB, OZ, KG, or G.");
+        }
+        return oz.toPlainString();
     }
 
     private static String nonBlank(String value, String fallback) {
