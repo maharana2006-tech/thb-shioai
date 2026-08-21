@@ -1861,10 +1861,34 @@ public class StampsConnector implements CarrierConnector {
      * Parse a CreateIndicium SOAP response for the fields we care about:
      * TrackingNumber, URL (the label PDF), StampsTxID (SWSIM's own id), plus
      * the new Authenticator for the next call.
+     *
+     * <p>Fault handling: SWSIM can return HTTP 200 with a SOAP
+     * {@code <faultstring>} inside the envelope (e.g. "insufficient postage",
+     * "USPS service unavailable" — these don't 4xx at the transport level).
+     * Pre-fix, a fault response missing a TrackingNumber silently returned a
+     * ShipmentResult with null tracking/URL/PDF, which the MPS aggregator
+     * treated as a successful piece — the operator saw a "created" shipment
+     * with no label and no error. Every sibling parser in this class
+     * (parseCancelIndiciumResponse, parseSchedulePickupResponse,
+     * parseCreateScanFormResponse) checks for faultstring; createIndicium
+     * was the outlier. Now aligned: a fault response throws an
+     * IllegalStateException that the createShipment loop catches, routes
+     * through CarrierExceptionMapper, and triggers the MPS rollback for
+     * any pieces that DID succeed earlier in the batch.
      */
     private ShipmentResult parseCreateIndiciumResponse(String responseXml, ShipmentRequestDTO request) {
         String tracking = extractElement(responseXml, "TrackingNumber");
         String url = extractElement(responseXml, "URL");
+        // Fault-first check: a valid label response ALWAYS has a TrackingNumber.
+        // If it's missing, look for a SOAP fault and throw so the caller sees
+        // a diagnosable failure instead of a null-tracking "success".
+        if (!StringUtils.hasText(tracking)) {
+            String fault = extractSoapFault(responseXml);
+            throw new IllegalStateException(
+                    "SWSIM CreateIndicium returned no TrackingNumber for order "
+                            + (request == null ? "?" : request.getReferenceNumber())
+                            + ". Fault: " + fault);
+        }
         // SWSIM returns the total postage under Rate.Amount when the label
         // prints successfully; fall back to null (client shows unpriced).
         java.math.BigDecimal cost = null;
@@ -1877,9 +1901,7 @@ public class StampsConnector implements CarrierConnector {
                 // responses; treat those as unpriced rather than crashing.
             }
         }
-        String trackingUrl = StringUtils.hasText(tracking)
-                ? "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + tracking
-                : null;
+        String trackingUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + tracking;
         java.time.LocalDateTime estimated = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusDays(5);
         return new ShipmentResult(tracking, trackingUrl, url, url, cost, estimated, responseXml);
     }
