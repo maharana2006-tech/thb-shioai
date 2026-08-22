@@ -206,6 +206,16 @@ public class DhlConnector implements CarrierConnector {
 
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        // F7 fix — recipient country is required. DHL Express is
+        // international-first; a blank recipient country previously fell
+        // through the buildParty helper's `firstNonBlank(country, "US")`
+        // default and shipped to a US address the operator never confirmed.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "DHL Express shipment requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before generating a label.");
+        }
         String host = isSandbox(environment)
                 ? carrierProperties.getDhl().getSandboxUrl()
                 : carrierProperties.getDhl().getApiBaseUrl();

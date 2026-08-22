@@ -201,6 +201,16 @@ public class FedExConnector implements CarrierConnector {
 
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        // F7 fix — recipient country is required. Pre-fix, blank silently
+        // defaulted to "US" downstream in buildShipmentPayload (line ~955)
+        // which shipped international parcels as US domestic. Fail at
+        // the boundary instead.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "FedEx shipment requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before generating a label.");
+        }
         try {
             String shipmentUrl = getShipmentUrl(environment);
             RestClient restClient = HttpClients.newBuilder().baseUrl(shipmentUrl).build();
