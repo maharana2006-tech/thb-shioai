@@ -657,7 +657,21 @@ public class CarrierServiceImpl implements CarrierService {
                     + carrier + " account first.");
         }
         // Bill-to account number that prints on the label: the typed number wins.
-        String billToNumber = firstNonBlank(typedNumber, account.getAccountNumber(), "ACCOUNT");
+        // Pre-fix had a "ACCOUNT" literal string as the ultimate fallback which
+        // would silently print on labels if both typedNumber and the resolved
+        // account's accountNumber were blank — the DB has account_number as
+        // NOT NULL so this shouldn't happen in practice, but if a row ever
+        // shipped with a blank account_number (data integrity issue), the
+        // label would show "ACCOUNT" as the biller — obviously wrong. Now
+        // failing loudly at the boundary instead.
+        String billToNumber = firstNonBlank(typedNumber, account.getAccountNumber());
+        if (!StringUtils.hasText(billToNumber)) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                    "Could not resolve a bill-to account number for this " + carrier
+                            + " shipment. The account on file has no account number stored "
+                            + "and none was supplied on the request. Add a valid account number "
+                            + "and retry.");
+        }
 
         CarrierConnector connector = getCarrierConnector(carrier);
 
