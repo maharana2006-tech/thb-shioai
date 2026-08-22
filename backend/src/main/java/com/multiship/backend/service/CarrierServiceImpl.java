@@ -853,7 +853,14 @@ public class CarrierServiceImpl implements CarrierService {
                 .shipperPostalCode(firstNonBlank(from != null ? from.getPostalCode() : null, dflt.getPostalCode()))
                 .shipperCountryCode(fromCountry)
                 .recipientName(to.getName())
-                .recipientPhone(firstNonBlank(to.getPhone(), "0000000000"))
+                // Pass null through when the recipient phone is blank. Every
+                // connector's appendAddress helper already guards with
+                // StringUtils.hasText(phone) and omits the element from the
+                // envelope when absent. Pre-fix substituted the literal string
+                // "0000000000" which then printed on labels + went to USPS
+                // notification systems — fake-data anti-pattern the codebase
+                // actively hunts (silent-fallback audit, PRs #410-#414).
+                .recipientPhone(to.getPhone())
                 .recipientAddressLine1(to.getAddressLine1())
                 .recipientAddressLine2(to.getAddressLine2())
                 .recipientAddressLine3(to.getAddressLine3())
@@ -1968,7 +1975,10 @@ public class CarrierServiceImpl implements CarrierService {
                 .shipperPostalCode(shipper.getPostalCode())
                 .shipperCountryCode(shipper.getCountryCode())
                 .recipientName(firstNonBlank(order.getShipName(), order.getShipAttn(), order.getCustNo()))
-                .recipientPhone(firstNonBlank(order.getPhone(), "0000000000"))
+                // Pass null through when order.phone is blank (see F2 fix
+                // above for the manual-shipment path). Every connector omits
+                // the phone element when null instead of printing fake data.
+                .recipientPhone(order.getPhone())
                 .recipientAddressLine1(firstNonBlank(order.getShipAddr1(), order.getLocation(), ""))
                 .recipientAddressLine2(null)
                 .recipientCity(firstNonBlank(order.getShiptoCity(), ""))
