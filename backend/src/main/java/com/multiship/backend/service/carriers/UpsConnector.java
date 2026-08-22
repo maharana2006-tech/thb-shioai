@@ -315,6 +315,17 @@ public class UpsConnector implements CarrierConnector {
 
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        // F7 fix — recipient country is required. UPS lets you ship anywhere
+        // the ShipTo party's country is set to; a blank country would pass
+        // through to the UPS envelope and either error out (400 InvalidCountry)
+        // or ship as an unspecified destination. Fail early with a clear
+        // message so operators know what to fix on the Order.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "UPS shipment requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before generating a label.");
+        }
         try {
             Map<String, Object> payload = buildShipmentPayload(request);
             String baseUrl = isSandbox(environment)

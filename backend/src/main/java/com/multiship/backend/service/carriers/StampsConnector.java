@@ -417,6 +417,16 @@ public class StampsConnector implements CarrierConnector {
                             + "the Carriers page before shipping — SWSIM will reject any "
                             + "label call with a fallback token.");
         }
+        // F7 fix — recipient country is required. Pre-fix, blank silently
+        // defaulted to "US" downstream in buildCreateIndiciumEnvelope, which
+        // shipped international parcels as domestic USPS (wrong service,
+        // wrong price, wrong customs). Now failing at the boundary.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "USPS shipment requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before generating a label.");
+        }
         String swsimUrl = isSandbox(environment)
                 ? carrierProperties.getStamps().getSandboxUrl()
                 : carrierProperties.getStamps().getApiBaseUrl();

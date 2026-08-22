@@ -1998,7 +1998,14 @@ public class CarrierServiceImpl implements CarrierService {
                 .recipientCity(firstNonBlank(order.getShiptoCity(), ""))
                 .recipientState(firstNonBlank(order.getShiptoState(), ""))
                 .recipientPostalCode(firstNonBlank(order.getShiptoZip(), ""))
-                .recipientCountryCode(firstNonBlank(order.getShiptoCountryCd(), "US"))
+                // F7 fix — pass through instead of silently defaulting to "US".
+                // Order.shiptoCountryCd is nullable in the DB but a shipment
+                // without a real destination country is uninshippable: wrong
+                // service, wrong customs, wrong price. Each connector's
+                // createShipment now throws on blank recipient country with
+                // an actionable message instead of the silent-domestic
+                // fallback that used to ship international parcels as US.
+                .recipientCountryCode(order.getShiptoCountryCd())
                 .referenceNumber(order.getOrderNo() != null ? String.valueOf(order.getOrderNo()) : null)
                 .specialInstructions(firstNonBlank(order.getGoodsDesc(), order.getShipVia()))
                 .declaredValue(order.getPrice())
