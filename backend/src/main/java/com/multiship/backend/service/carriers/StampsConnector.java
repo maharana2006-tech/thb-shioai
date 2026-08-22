@@ -401,6 +401,22 @@ public class StampsConnector implements CarrierConnector {
      */
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        // Sibling-parity guard (F4 fix): trackShipment, getRates, voidShipment,
+        // validateAddress, schedulePickup, closeOutDay all short-circuit when
+        // the accessToken is a `-local-*` fallback (unverified/rejected creds).
+        // createShipment was the only outlier — pre-fix it fired the CreateIndicium
+        // SOAP with the fallback token and let SWSIM 500 with a generic auth
+        // fault. Now failing fast at the boundary with an actionable message
+        // that tells the operator to re-verify the account. Same message shape
+        // and errorCode as the NOT_SUPPORTED sibling returns so downstream
+        // handlers stay consistent.
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            throw new com.multiship.backend.exception.CarrierConnectionException(
+                    "USPS via Stamps.com: this account's credentials aren't verified "
+                            + "(no live SWSIM Authenticator). Re-verify the account on "
+                            + "the Carriers page before shipping — SWSIM will reject any "
+                            + "label call with a fallback token.");
+        }
         String swsimUrl = isSandbox(environment)
                 ? carrierProperties.getStamps().getSandboxUrl()
                 : carrierProperties.getStamps().getApiBaseUrl();
