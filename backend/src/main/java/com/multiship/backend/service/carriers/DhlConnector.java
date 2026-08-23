@@ -976,7 +976,7 @@ public class DhlConnector implements CarrierConnector {
         boolean isReturn = Boolean.TRUE.equals(request.getIsReturn());
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("productCode", firstNonBlank(request.getServiceType(), "P"));
-        payload.put("plannedShippingDateAndTime", plannedShipDate());
+        payload.put("plannedShippingDateAndTime", plannedShipDate(request.getShipperTimezone()));
         // Sprint 25 — Print Return Label. DHL Express treats return labels
         // as normal shipments with the customer as receiver and the return
         // depot as shipper (billing is on the shipper's account); we flip
@@ -1254,7 +1254,9 @@ public class DhlConnector implements CarrierConnector {
         ed.put("lineItems", lines);
         ed.put("invoice", Map.of(
                 "number", firstNonBlank(request.getReferenceNumber(), "INV-" + System.currentTimeMillis()),
-                "date", LocalDate.now(ZoneOffset.UTC).format(DateTimeFormatter.ISO_LOCAL_DATE)));
+                // F6-E — invoice date follows the shipper's local calendar day.
+                "date", com.multiship.backend.util.LabelDates.today(request.getShipperTimezone())
+                        .format(DateTimeFormatter.ISO_LOCAL_DATE)));
         ed.put("exportReason", mapExportReason(intl.getReasonForExport()));
 
         // Duty billing — DHL uses shipperAccountNumber for SENDER, otherwise
@@ -1437,7 +1439,7 @@ public class DhlConnector implements CarrierConnector {
         payload.put("accounts", List.of(Map.of(
                 "typeCode", "shipper",
                 "number", firstNonBlank(request.getAccountNumber(), ""))));
-        payload.put("plannedShippingDateAndTime", plannedShipDate());
+        payload.put("plannedShippingDateAndTime", plannedShipDate(request.getShipperTimezone()));
         payload.put("unitOfMeasurement",
                 "KG".equalsIgnoreCase(request.getWeightUnit()) ? "metric" : "imperial");
         boolean isIntl = request.getIntl() != null && request.getIntl().isReadyForCarrier();
@@ -1566,9 +1568,18 @@ public class DhlConnector implements CarrierConnector {
         }
     }
 
-    /** DHL's "planned shipping date" — next business day at 13:00 GMT+00:00. */
-    private static String plannedShipDate() {
-        return LocalDate.now(ZoneOffset.UTC).plusDays(1) + "T13:00:00 GMT+00:00";
+    /**
+     * DHL's "planned shipping date" — next business day at 13:00 GMT+00:00.
+     *
+     * <p>F6-E: the DATE part follows the shipper's local calendar so an
+     * evening print in Asia doesn't produce "tomorrow-in-UTC" (== the same
+     * calendar day the shipper is already in). The 13:00 GMT+00:00 clock
+     * portion is preserved verbatim — it's DHL's expected pickup slot
+     * literal, not a real-clock time in the shipper's zone.
+     */
+    private static String plannedShipDate(String timezone) {
+        return com.multiship.backend.util.LabelDates.todayPlus(timezone, 1)
+                + "T13:00:00 GMT+00:00";
     }
 
     /** Environment-tolerant SANDBOX check. */

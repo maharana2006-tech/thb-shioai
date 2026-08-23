@@ -1441,8 +1441,11 @@ public class StampsConnector implements CarrierConnector {
                 .append(xmlEscape(nonBlank(
                         nonBlank(pkg.getPackageType(), request.getPackageType()), "Package")))
                 .append("</PackageType>");
+        // F6-E — SWSIM ShipDate follows the shipper's local calendar day;
+        // USPS/Endicia service-selection rules key off it (Same-Day, next-
+        // day cutoffs), so a UTC-1-day skew silently mis-quotes.
         xml.append("<ShipDate>")
-                .append(java.time.LocalDate.now(java.time.ZoneOffset.UTC))
+                .append(com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()))
                 .append("</ShipDate>");
         // Declared value: prefer per-package, else shipment-level.
         java.math.BigDecimal declared = pkg.getDeclaredValue() != null
@@ -1691,7 +1694,10 @@ public class StampsConnector implements CarrierConnector {
         xml.append("<PackageType>").append(xmlEscape(
                 nonBlank(nonBlank(p.getPackageType(), request.getPackageType()), "Package"))).append("</PackageType>");
         xml.append("<WeightOz>").append(xmlEscape(weightOz)).append("</WeightOz>");
-        xml.append("<ShipDate>").append(java.time.LocalDate.now(java.time.ZoneOffset.UTC)).append("</ShipDate>");
+        // F6-E — see the sibling ShipDate emit in buildGetRatesEnvelope.
+        xml.append("<ShipDate>")
+                .append(com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()))
+                .append("</ShipDate>");
         // Sprint 48 B11 — DeclaredValue resolution:
         //   1. per-box CI-derived value (grouped from OrderCustomsItem.boxSeq)
         //   2. explicit packageDetail.declaredValue (legacy override)
