@@ -75,6 +75,12 @@ public class CarrierServiceImpl implements CarrierService {
     private final com.multiship.backend.repository.ShipmentBatchRepository shipmentBatchRepository;
     private final CarrierLimitService carrierLimitService;
     private final ShipmentSplitter shipmentSplitter;
+    /** F6-B3 — resolves per-shipment defaults (currency, weight/dim unit,
+     *  timezone, shipping purpose, clearance option) from the documented
+     *  precedence chain: request → customs → Client → CarrierAccountRef →
+     *  hardcode/throw. Replaces the scattered fallback logic that used to
+     *  live inline in buildShipmentRequest. */
+    private final ShipmentDefaultsResolver shipmentDefaultsResolver;
     /**
      * Sprint 50 Tier 0.5 PR E - clamp tenantId on carrier-connect so a
      * scoped USER cannot persist a CarrierConfig for a foreign tenant.
@@ -1975,33 +1981,44 @@ public class CarrierServiceImpl implements CarrierService {
         boolean customsRequired = international && !sameCustomsTerritory;
         com.multiship.backend.dto.IntlShipmentBlockDTO intlBlock = buildIntlBlock(customsRequired, customs, profile);
 
-        // Currency for declared value: prefer customs currency (OrderCustoms /
-        // profile default), fall back to null → FedEx defaults to USD, matching
-        // the pre-fix behavior for domestic-only accounts.
-        String declaredValueCurrency = intlBlock != null ? intlBlock.getCustomsCurrency() : null;
-
-        // Weight/dim unit: from the customs declaration when available, else
-        // LB/IN (the historical default the connectors assumed).
-        // Sprint 50 Tier 1 finding #4 — source resolution order:
-        //   1. customs.weightUnit (explicit shipment declaration)
-        //   2. Client.defaultWeightUnit (tenant preference)
-        //   3. LB (platform-wide historical default; retained for legacy domestic).
-        String tenantDefaultWeightUnit = null;
-        String tenantDefaultDimUnit = null;
+        // F6-B3 — centralised defaults resolution. The scattered
+        // per-field fallback logic that used to live inline here (weight
+        // unit, dim unit, currency) is now behind ShipmentDefaultsResolver
+        // which walks the documented precedence chain:
+        //   request → customs → Client → CarrierAccountRef → hardcode/throw
+        // This closes three prior gaps:
+        //   1. dimUnit ignored customs.dimUnit (only read customs.weightUnit)
+        //   2. currency had no client-level fallback
+        //   3. shippingPurpose / clearanceOption weren't wired from the
+        //      account (F6-C picks these up in the connector envelopes)
         String tenantCodeForDefaults = order.getTenantId() != null && !order.getTenantId().isBlank()
                 ? order.getTenantId() : order.getCustNo();
-        if (tenantCodeForDefaults != null && !tenantCodeForDefaults.isBlank()) {
-            var clientRow = clientRepository.findByClientCodeIgnoreCase(tenantCodeForDefaults.trim()).orElse(null);
-            if (clientRow != null) {
-                tenantDefaultWeightUnit = clientRow.getDefaultWeightUnit();
-                tenantDefaultDimUnit = clientRow.getDefaultDimUnit();
-            }
-        }
-        String weightUnit = firstNonBlank(
-                customs != null ? customs.getWeightUnit() : null,
-                tenantDefaultWeightUnit,
-                "LB");
-        String dimUnit = firstNonBlank(tenantDefaultDimUnit, "IN");
+        com.multiship.backend.model.Client clientRow = tenantCodeForDefaults != null
+                && !tenantCodeForDefaults.isBlank()
+                ? clientRepository.findByClientCodeIgnoreCase(tenantCodeForDefaults.trim()).orElse(null)
+                : null;
+        com.multiship.backend.model.CarrierAccountRef accountRow = accountNumber != null
+                && !accountNumber.isBlank()
+                ? carrierAccountRefRepository
+                        .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(
+                                accountNumber, connector.getCarrierCode())
+                        .orElse(null)
+                : null;
+        ShipmentDefaultsResolver.ResolvedDefaults defaults = shipmentDefaultsResolver.resolve(
+                new ShipmentDefaultsResolver.ResolveInputs(
+                        null,                                  // request-level currency — none at this layer
+                        null,                                  // request-level weight unit — none at this layer
+                        null,                                  // request-level dim unit — none at this layer
+                        null,                                  // request-level timezone — none at this layer
+                        intlBlock != null ? intlBlock.getReasonForExport() : null,   // purpose from customs
+                        null,                                  // request-level clearance — none at this layer
+                        customs,
+                        clientRow,
+                        accountRow,
+                        international));
+        String declaredValueCurrency = defaults.currency();
+        String weightUnit = defaults.weightUnit();
+        String dimUnit = defaults.dimUnit();
 
         return ShipmentRequestDTO.builder()
                 .carrierCode(connector.getCarrierCode())
