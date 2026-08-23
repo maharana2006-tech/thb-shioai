@@ -1342,16 +1342,38 @@ public class CarrierServiceImpl implements CarrierService {
         // Any HARD violation surfaces as a CarrierConnectionException with an
         // actionable message before we spend the carrier round-trip.
         if (packagingValidationEnabled) {
-            com.multiship.backend.model.ShippingService resolvedService = shippingConfigService
-                    .resolveService(connector.getCarrierCode(),
-                            firstNonBlank(order.getTenantId(), order.getCustNo()),
+            // F5-B — use resolveRoute + pickPackageForClient so this pre-flight
+            // resolves the SAME preset buildShipmentRequest picked (both call
+            // sites now use the strict client-aware algorithm). Since we're
+            // downstream of buildShipmentRequest which already ran the strict
+            // pick, this call is deterministic — same client + rule + service
+            // → same preset. Wrapped defensively in case a race changes the
+            // config mid-flight; a resolution failure here is non-fatal for
+            // the pre-flight (validator degrades to zero-outcome).
+            String preflightClient = firstNonBlank(order.getTenantId(), order.getCustNo());
+            ShippingConfigService.ResolvedRoute preflightRoute = shippingConfigService
+                    .resolveRoute(connector.getCarrierCode(), preflightClient,
                             order.getShipviaCd(), order.getShiptoCountryCd(),
-                            isInternational(order), carrierProperties.getShipper().getCountryCode())
+                            isInternational(order), carrierProperties.getShipper().getCountryCode(),
+                            null)
                     .orElse(null);
-            com.multiship.backend.model.PackagePreset preset = shippingConfigService
-                    .pickPackage(resolvedService != null ? resolvedService.getId() : null, order.getWeight())
-                    .map(ShippingConfigService.PickedPackage::preset)
-                    .orElse(null);
+            com.multiship.backend.model.ShippingService resolvedService = preflightRoute != null
+                    ? preflightRoute.service() : null;
+            com.multiship.backend.model.PackagePreset preset = null;
+            if (preflightClient != null && resolvedService != null) {
+                try {
+                    preset = shippingConfigService.pickPackageForClient(
+                            resolvedService.getId(),
+                            preflightRoute.ruleId(),
+                            preflightClient,
+                            order.getWeight()).preset();
+                } catch (ShippingConfigService.PackageResolutionException ignore) {
+                    // Non-fatal here — the strict pick would have already thrown
+                    // in buildShipmentRequest before we got to this pre-flight
+                    // if it were going to. Degrade to zero-outcome validation.
+                    preset = null;
+                }
+            }
             com.multiship.backend.util.PackagingValidator.Outcome outcome =
                     preset == null
                             ? new com.multiship.backend.util.PackagingValidator.Outcome(java.util.List.of())
@@ -1896,20 +1918,32 @@ public class CarrierServiceImpl implements CarrierService {
                 ? resolutionService.resolveWarehouse(orderClient, null)
                         .map(com.multiship.backend.model.Warehouse::getId).orElse(null)
                 : null;
-        com.multiship.backend.model.ShippingService resolvedService = shippingConfigService
-                .resolveService(connector.getCarrierCode(), orderClient, order.getShipviaCd(),
+        // F5-B — resolveRoute returns both the ship-method rule ID AND the
+        // resolved service so pickPackageForClient can enforce per-lane
+        // package restrictions (ShipMethodRulePackage) alongside the
+        // client's allowlist. Falls back to null ruleId when no shipvia
+        // rule matched (reached service via the carrier-catalog scope path).
+        ShippingConfigService.ResolvedRoute route = shippingConfigService
+                .resolveRoute(connector.getCarrierCode(), orderClient, order.getShipviaCd(),
                         order.getShiptoCountryCd(), international, shipper.getCountryCode(), originWarehouseId)
                 .orElse(null);
+        com.multiship.backend.model.ShippingService resolvedService = route != null ? route.service() : null;
+        Long resolvedRuleId = route != null ? route.ruleId() : null;
         String serviceType = resolvedService != null ? resolvedService.getServiceCode()
                 : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");
 
-        // Package: auto-picked from the service's linked packages (smallest
-        // box whose max weight fits the order), falling back to the global
-        // default preset. Weight = order weight + the box's tare.
-        com.multiship.backend.model.PackagePreset preset = shippingConfigService
-                .pickPackage(resolvedService != null ? resolvedService.getId() : null, order.getWeight())
-                .map(ShippingConfigService.PickedPackage::preset)
-                .orElse(null);
+        // F5-B — package selection is now strict: ClientAllowedPackage ∩
+        // ServicePackage ∩ (rule allowlist if any) ∩ enabled ∩ fits-weight.
+        // Client-owned presets are auto-allowed for the owner. No silent
+        // fallback to the global default preset. If nothing fits, throws
+        // PackageResolutionException with an actionable message that names
+        // the constraint that failed. Caller's own try/catch (further up
+        // the stack in generateLabel) translates it into an operator-visible
+        // error response.
+        com.multiship.backend.model.PackagePreset preset = orderClient != null && resolvedService != null
+                ? shippingConfigService.pickPackageForClient(resolvedService.getId(),
+                        resolvedRuleId, orderClient, order.getWeight()).preset()
+                : null;
         String packageType = preset != null
                 ? ("CARRIER".equalsIgnoreCase(preset.getKind()) ? preset.getCarrierPackageCode() : "YOUR_PACKAGING")
                 : firstNonBlank(connector.getConfiguration().defaultPackageType(), "YOUR_PACKAGING");
