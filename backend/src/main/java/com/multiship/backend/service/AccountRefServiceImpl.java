@@ -269,6 +269,16 @@ public class AccountRefServiceImpl implements AccountRefService {
             account.setClearanceOption(c.isEmpty() ? null : c.toUpperCase(Locale.ROOT));
         }
 
+        // F6-B2 — per-account currency override. Same null-vs-empty-string
+        // semantics as purpose/clearance: null in request = keep persisted;
+        // empty string = clear (revert to carrier default); non-empty =
+        // normalise + persist. ISO 4217 is always uppercase.
+        String currency = request.getCurrency();
+        if (currency != null) {
+            String cc = currency.trim();
+            account.setCurrency(cc.isEmpty() ? null : cc.toUpperCase(Locale.ROOT));
+        }
+
         // Third-party billing defaults. Same null-vs-empty-string semantics:
         // null in request = keep persisted; non-null (incl. empty) = write
         // through with empty normalized to null. Country is upper-cased to
@@ -409,6 +419,7 @@ public class AccountRefServiceImpl implements AccountRefService {
                 .lastVerifiedAt(account.getLastVerifiedAt())
                 .shippingPurpose(account.getShippingPurpose())
                 .clearanceOption(account.getClearanceOption())
+                .currency(account.getCurrency())
                 .thirdPartyAccount(account.getThirdPartyAccount())
                 .thirdPartyName(account.getThirdPartyName())
                 .thirdPartyAddress1(account.getThirdPartyAddress1())

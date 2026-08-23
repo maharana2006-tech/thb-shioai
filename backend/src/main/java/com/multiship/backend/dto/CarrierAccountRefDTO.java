@@ -37,6 +37,9 @@ public class CarrierAccountRefDTO {
      *  defaults when unset. */
     private String shippingPurpose;
     private String clearanceOption;
+    /** F6-B2 — per-account billing currency override. ISO 4217. NULL means
+     *  "use carrier home currency" (USPS/UPS/FedEx → USD, DHL → EUR). */
+    private String currency;
     /** Third-party billing address (default, when clearanceOption=THIRD_PARTY).
      *  Nullable — per-shipment overrides live on the Shipment row. */
     private String thirdPartyAccount;
