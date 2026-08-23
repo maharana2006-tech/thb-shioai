@@ -81,6 +81,11 @@ public class CarrierServiceImpl implements CarrierService {
      *  hardcode/throw. Replaces the scattered fallback logic that used to
      *  live inline in buildShipmentRequest. */
     private final ShipmentDefaultsResolver shipmentDefaultsResolver;
+    /** F6-D — converts every money field on the outgoing request DTO into
+     *  the carrier account's billing currency (via ECB FX rates) so a EUR
+     *  client shipping on a USD UPS account no longer sends EUR figures
+     *  labelled USD on the wire. Fails closed when a rate is unavailable. */
+    private final ShipmentCurrencyConverter shipmentCurrencyConverter;
     /**
      * Sprint 50 Tier 0.5 PR E - clamp tenantId on carrier-connect so a
      * scoped USER cannot persist a CarrierConfig for a foreign tenant.
@@ -2037,7 +2042,7 @@ public class CarrierServiceImpl implements CarrierService {
         }
 
 
-        return ShipmentRequestDTO.builder()
+        ShipmentRequestDTO dto = ShipmentRequestDTO.builder()
                 .carrierCode(connector.getCarrierCode())
                 .accountNumber(firstNonBlank(accountNumber, "ACCOUNT"))
                 .serviceType(serviceType)
@@ -2087,6 +2092,14 @@ public class CarrierServiceImpl implements CarrierService {
                 .isReturn("Y".equalsIgnoreCase(
                         order.getIsReturn() == null ? "" : order.getIsReturn().trim()))
                 .build();
+
+        // F6-D — if the resolved client currency differs from the carrier
+        // account's billing currency, convert declaredValue / insuredValue /
+        // per-package declared / per-commodity unitValue via ECB FX. No-op
+        // when currencies match. accountRow may be null on the platform
+        // (no-CarrierAccountRef) path, in which case the converter uses the
+        // per-carrier home currency (USD/USD/USD/EUR).
+        return shipmentCurrencyConverter.apply(dto, accountRow);
     }
 
     /**
