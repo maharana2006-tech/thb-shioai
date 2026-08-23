@@ -26,6 +26,10 @@ export interface CarrierAccountRef {
    *  defaults when unset. */
   shippingPurpose?: string | null
   clearanceOption?: string | null
+  /** F6-B2 — per-account billing currency (ISO 4217). NULL means "use
+   *  carrier home currency" (USPS/UPS/FedEx → USD, DHL → EUR). Non-null
+   *  overrides both carrier default AND client currency. */
+  currency?: string | null
   /** Third-party billing default — only meaningful when clearanceOption is
    *  THIRD_PARTY. Nullable individually; per-shipment overrides live on the
    *  Shipment row (follow-up). */
@@ -62,6 +66,9 @@ export interface AccountRefUpsertPayload {
    *  frontend against the enum in ../utils/customsOptions. */
   shippingPurpose?: string | null
   clearanceOption?: string | null
+  /** F6-B2 — per-account billing currency (ISO 4217, e.g. USD / EUR). Null
+   *  in the payload clears the persisted value; omitted keeps it. */
+  currency?: string | null
   /** Third-party billing default (only sent when clearance = THIRD_PARTY).
    *  Null on any field = clear the persisted value; omitting the field from
    *  the payload entirely = keep the persisted value. */
