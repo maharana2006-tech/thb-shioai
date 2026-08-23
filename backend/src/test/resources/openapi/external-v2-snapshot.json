@@ -1788,6 +1788,9 @@
           "reasonForExport" : {
             "type" : "string"
           },
+          "clearanceOption" : {
+            "type" : "string"
+          },
           "customsCurrency" : {
             "type" : "string"
           },

@@ -2020,6 +2020,23 @@ public class CarrierServiceImpl implements CarrierService {
         String weightUnit = defaults.weightUnit();
         String dimUnit = defaults.dimUnit();
 
+        // F6-C — thread the resolved clearanceOption onto the intl block so
+        // the 4 connectors can pick it up in their envelope builders. The
+        // resolver returns per-carrier vocabulary verbatim (F6-A locked
+        // decision: no normalization layer); each connector maps the value
+        // to its own field:
+        //   · UPS   → BillShipper / BillReceiver / BillThirdParty
+        //   · FedEx → paymentType SENDER / RECIPIENT / THIRD_PARTY / COLLECT
+        //   · DHL   → incoterms1 (DAP / DDP / EXW / …)
+        //   · USPS  → routed via ContentType where applicable
+        // Null (unset) leaves each connector to apply its own carrier default
+        // (typically sender-pays / DAP). Only set when an intlBlock exists —
+        // the domestic path doesn't need the field.
+        if (intlBlock != null && defaults.clearanceOption() != null) {
+            intlBlock.setClearanceOption(defaults.clearanceOption());
+        }
+
+
         return ShipmentRequestDTO.builder()
                 .carrierCode(connector.getCarrierCode())
                 .accountNumber(firstNonBlank(accountNumber, "ACCOUNT"))

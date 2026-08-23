@@ -1807,6 +1807,15 @@ public class StampsConnector implements CarrierConnector {
      */
     private void appendCustomsInfo(StringBuilder xml, ShipmentRequestDTO request) {
         com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
+        // F6-C note: unlike UPS/FedEx/DHL, USPS via Stamps.com has NO
+        // dedicated envelope field for clearanceOption (SENDER vs RECIPIENT
+        // vs DDU vs DDP). USPS encodes duty payment via SERVICE CLASS
+        // ("Priority Mail Intl - DDU" vs "Priority Mail Intl - DDP" are
+        // distinct SWSIM ServiceType codes). So `intl.getClearanceOption()`
+        // is intentionally not read here; the resolver's account-level
+        // clearanceOption should ideally flow into service-code selection
+        // upstream (out of scope for F6-C — see follow-up ticket if the
+        // client needs USPS DDP routing).
         xml.append("<CustomsInfo>");
         xml.append("<ContentType>").append(mapContentType(intl.getReasonForExport())).append("</ContentType>");
         String notes = nonBlank(intl.getImporterCompanyReg(), "");
