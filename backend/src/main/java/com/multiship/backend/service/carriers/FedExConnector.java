@@ -1755,7 +1755,13 @@ public class FedExConnector implements CarrierConnector {
      */
     private Map<String, Object> buildDutiesPayment(com.multiship.backend.dto.IntlShipmentBlockDTO intl,
                                                     ShipmentRequestDTO request) {
-        String paymentType = firstNonBlank(intl.getDutyBillTo(),
+        // F6-C — clearanceOption (per-account, resolved by
+        // ShipmentDefaultsResolver from CarrierAccountRef) wins over
+        // dutyBillTo (per-customs-profile). Both fall back to
+        // incoterms-derived default (DDP → SENDER, else RECIPIENT).
+        String paymentType = firstNonBlank(
+                intl.getClearanceOption(),
+                intl.getDutyBillTo(),
                 "DDP".equalsIgnoreCase(intl.getIncoterms()) ? "SENDER" : "RECIPIENT").toUpperCase();
 
         Map<String, Object> duties = new LinkedHashMap<>();

@@ -1716,7 +1716,13 @@ public class UpsConnector implements CarrierConnector {
                 "BillShipper", Map.of("AccountNumber", shipperAccount)));
 
         if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {
-            String dutyBillTo = request.getIntl().getDutyBillTo();
+            // F6-C — clearanceOption (per-account, resolved by
+            // ShipmentDefaultsResolver from CarrierAccountRef) wins over
+            // dutyBillTo (per-customs-profile). Falls back to the profile
+            // value when the account has no explicit clearance set.
+            String dutyBillTo = firstNonBlank(
+                    request.getIntl().getClearanceOption(),
+                    request.getIntl().getDutyBillTo());
             String dutyAccount = request.getIntl().getDutyAccount();
             if ("SENDER".equalsIgnoreCase(dutyBillTo)
                     || "DDP".equalsIgnoreCase(request.getIntl().getIncoterms())) {

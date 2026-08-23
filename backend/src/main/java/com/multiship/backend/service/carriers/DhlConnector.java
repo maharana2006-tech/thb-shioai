@@ -1259,8 +1259,14 @@ public class DhlConnector implements CarrierConnector {
 
         // Duty billing — DHL uses shipperAccountNumber for SENDER, otherwise
         // the payer's account. Absent = recipient (DHL default).
-        String dutyBillTo = intl.getDutyBillTo();
+        // F6-C — clearanceOption (per-account, resolved by
+        // ShipmentDefaultsResolver from CarrierAccountRef) wins over
+        // dutyBillTo (per-customs-profile) when set. Both accept DHL's
+        // Incoterms vocabulary (DAP / DDP / EXW / …) too — DDP means
+        // sender pays duties, matching the SENDER branch.
+        String dutyBillTo = firstNonBlank(intl.getClearanceOption(), intl.getDutyBillTo());
         if ("SENDER".equalsIgnoreCase(dutyBillTo)
+                || "DDP".equalsIgnoreCase(dutyBillTo)
                 || "DDP".equalsIgnoreCase(intl.getIncoterms())) {
             ed.put("customsDocuments", List.of(Map.of("typeCode", "INV")));
         }
