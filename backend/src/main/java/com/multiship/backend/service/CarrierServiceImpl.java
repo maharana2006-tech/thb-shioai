@@ -2083,6 +2083,12 @@ public class CarrierServiceImpl implements CarrierService {
                 .specialInstructions(firstNonBlank(order.getGoodsDesc(), order.getShipVia()))
                 .declaredValue(order.getPrice())
                 .declaredValueCurrency(declaredValueCurrency)
+                // F6-E — thread the resolved IANA timezone onto the request
+                // so every connector's ship/invoice date stamp uses the
+                // shipper's local calendar day (not UTC). Null passes through
+                // and each connector falls back to UTC — the pre-F6-E
+                // behavior — so a client row with no timezone is safe.
+                .shipperTimezone(defaults.timezone())
                 .intl(intlBlock)
                 // Sprint 25 — thread the Order entity's isReturn flag so
                 // ERP-side return orders get the carrier return-label wire

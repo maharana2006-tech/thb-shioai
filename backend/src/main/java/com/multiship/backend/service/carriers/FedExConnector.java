@@ -1465,7 +1465,11 @@ public class FedExConnector implements CarrierConnector {
         payload.put("accountNumber", accountNumber);
 
         Map<String, Object> requestedShipment = new LinkedHashMap<>();
-        requestedShipment.put("shipDatestamp", LocalDateTime.now(ZoneOffset.UTC).toLocalDate().toString());
+        // F6-E — shipDatestamp is FedEx's authoritative "when did this ship"
+        // date; SLA counters (Ground business-day math, Express AM/PM
+        // deadlines) all key off it. Use the shipper's local day, not UTC.
+        requestedShipment.put("shipDatestamp",
+                com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()).toString());
         requestedShipment.put("serviceType", request.getServiceType());
         requestedShipment.put("packagingType", request.getPackageType());
         requestedShipment.put("pickupType", "USE_SCHEDULED_PICKUP");

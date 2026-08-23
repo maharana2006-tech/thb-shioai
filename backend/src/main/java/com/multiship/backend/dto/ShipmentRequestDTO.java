@@ -241,6 +241,21 @@ public class ShipmentRequestDTO {
     private String insuredValueCurrency;
 
     /**
+     * F6-E — IANA timezone ID of the shipper's warehouse (e.g.
+     * {@code "America/New_York"}, {@code "Europe/London"},
+     * {@code "Asia/Kolkata"}). Populated by
+     * {@link com.multiship.backend.service.ShipmentDefaultsResolver} from the
+     * request/client chain; consumed by every connector when it stamps a
+     * ship/invoice date on the outgoing envelope. Pre-F6-E each connector
+     * used {@code ZoneOffset.UTC} which produced dates a day off for shippers
+     * printing labels early morning in APAC / late night on the US west coast.
+     *
+     * <p>Null (unset) → connectors fall back to UTC — the pre-F6-E behavior —
+     * so this field is safe to leave blank on legacy callers.
+     */
+    private String shipperTimezone;
+
+    /**
      * Return the packages list connectors should iterate. Guarantees a
      * non-empty list so per-connector code doesn't have to fork on
      * null/empty:
