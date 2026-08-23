@@ -31,6 +31,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -194,20 +195,52 @@ public class BulkLabelServiceImpl implements BulkLabelService {
 
     @Override
     public ApiResponse<BulkLabelJobDTO> submit(BulkLabelRequestDTO request, String requestedBy) {
-        if (request == null || request.getOrderNumbers() == null || request.getOrderNumbers().isEmpty()) {
-            return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, "orderNumbers is required.");
+        if (request == null) {
+            return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, "request body is required.");
         }
-        if (request.getOrderNumbers().size() > MAX_BULK_ORDERS) {
+
+        // F1 — XOR check: exactly one of orderNumbers / identifiers must
+        // be populated. Both empty means "no orders" (the pre-F1 400);
+        // both set is ambiguous — refuse rather than silently merging.
+        boolean hasNumbers = request.getOrderNumbers() != null && !request.getOrderNumbers().isEmpty();
+        boolean hasIdentifiers = request.getIdentifiers() != null && !request.getIdentifiers().isEmpty();
+        if (!hasNumbers && !hasIdentifiers) {
+            return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
+                    "Either orderNumbers or identifiers is required.");
+        }
+        if (hasNumbers && hasIdentifiers) {
+            return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR,
+                    "Send either orderNumbers or identifiers, not both — pick one lookup mode "
+                            + "per request. Mix orderNo + orderRef inside identifiers if you need both.");
+        }
+
+        // F1 — collapse both lookup modes to a single List<Long> of internal
+        // orderNos so the downstream tenant check, persistence, and worker
+        // dispatch stay identical to the pre-F1 flow.
+        List<Long> resolvedOrderNos;
+        try {
+            resolvedOrderNos = hasNumbers
+                    ? request.getOrderNumbers()
+                    : resolveIdentifiers(request.getIdentifiers());
+        } catch (IdentifierResolutionException ex) {
+            // Fail-fast (matches the tenant-guard invariant): if ANY entry
+            // can't resolve, refuse the whole batch and list every offender
+            // in one message so the caller can fix them all in one round-trip.
+            return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, ex.getMessage());
+        }
+
+        if (resolvedOrderNos.size() > MAX_BULK_ORDERS) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.BULK_LIMIT_EXCEEDED,
                     "Bulk batch limited to " + MAX_BULK_ORDERS + " orders — this request has "
-                            + request.getOrderNumbers().size()
+                            + resolvedOrderNos.size()
                             + ". Split larger batches into multiple submissions.");
         }
+
         // Sprint 50 Tier 0.5 PR E - tenant guard. Verify EVERY order in
         // the request belongs to the caller's tenant before enqueuing;
         // any foreign order aborts the whole submission (fail-fast).
         // Platform operators pass through unchanged.
-        for (Long orderNo : request.getOrderNumbers()) {
+        for (Long orderNo : resolvedOrderNos) {
             if (orderNo == null) continue;
             orderRepository.findByOrderNo(orderNo.intValue()).ifPresent(o ->
                     tenantScope.requireTenantMatch(
@@ -216,12 +249,12 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         // Persist the job row before we return so the client can poll
         // immediately.
         BulkLabelJob job = new BulkLabelJob();
-        job.setOrderNumbers(request.getOrderNumbers().stream()
+        job.setOrderNumbers(resolvedOrderNos.stream()
                 .map(String::valueOf)
                 .collect(Collectors.joining(",")));
         job.setRequestedBy(requestedBy);
         job.setStatus("PENDING");
-        job.setTotalCount(request.getOrderNumbers().size());
+        job.setTotalCount(resolvedOrderNos.size());
         job.setCreatedAt(LocalDateTime.now(ZoneOffset.UTC));
         BulkLabelJob saved = jobRepository.save(job);
 
@@ -229,6 +262,71 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         dispatchExecutor.submit(() -> runJob(saved.getId()));
 
         return success(toDto(saved), "Bulk-label job submitted.");
+    }
+
+    /**
+     * F1 — resolve a mixed list of {@code {type, value}} identifiers into
+     * internal orderNos. Each entry independently:
+     *
+     * <ul>
+     *   <li>{@code orderNo} — parses {@code value} to Long; a non-numeric
+     *       value becomes a per-entry error.</li>
+     *   <li>{@code orderRef} — looks up
+     *       {@link com.multiship.backend.model.Order#getWmsExternalId}
+     *       case-insensitively; a miss becomes a per-entry error.</li>
+     * </ul>
+     *
+     * <p>Every unresolved entry is collected and surfaced in one exception
+     * message so the caller sees all offenders in one round-trip instead of
+     * discovering them one at a time via retry.
+     */
+    List<Long> resolveIdentifiers(List<com.multiship.backend.dto.BulkLabelIdentifierDTO> identifiers) {
+        List<Long> resolved = new java.util.ArrayList<>(identifiers.size());
+        List<String> failures = new java.util.ArrayList<>();
+        for (int i = 0; i < identifiers.size(); i++) {
+            // Capture the loop index for lambda use (must be effectively final).
+            final int idx = i;
+            com.multiship.backend.dto.BulkLabelIdentifierDTO id = identifiers.get(i);
+            if (id == null) {
+                failures.add("[" + idx + "] null identifier entry");
+                continue;
+            }
+            String type = id.getType() == null ? "" : id.getType().trim();
+            String value = id.getValue() == null ? "" : id.getValue().trim();
+            if (value.isEmpty()) {
+                failures.add("[" + idx + "] blank value");
+                continue;
+            }
+            switch (type) {
+                case "orderNo" -> {
+                    try {
+                        resolved.add(Long.parseLong(value));
+                    } catch (NumberFormatException nfe) {
+                        failures.add("[" + idx + "] orderNo '" + value + "' is not numeric");
+                    }
+                }
+                case "orderRef" -> orderRepository.findByWmsExternalIdIgnoreCase(value)
+                        .ifPresentOrElse(
+                                o -> resolved.add((long) o.getOrderNo()),
+                                () -> failures.add("[" + idx + "] orderRef '" + value
+                                        + "' not found (wms_external_id lookup miss)"));
+                default -> failures.add("[" + idx + "] unknown type '" + type
+                        + "' — expected \"orderNo\" or \"orderRef\"");
+            }
+        }
+        if (!failures.isEmpty()) {
+            throw new IdentifierResolutionException(
+                    "identifiers resolution failed for " + failures.size()
+                            + " entr" + (failures.size() == 1 ? "y" : "ies") + ": "
+                            + String.join("; ", failures));
+        }
+        return resolved;
+    }
+
+    /** F1 — internal signal for the submit() 400 mapping. Not thrown outside
+     *  this service; the message carries the itemised offender list. */
+    static final class IdentifierResolutionException extends RuntimeException {
+        IdentifierResolutionException(String message) { super(message); }
     }
 
     /** Sprint 49 Tier 3 Fix 4 — throttle progress persistence. */
