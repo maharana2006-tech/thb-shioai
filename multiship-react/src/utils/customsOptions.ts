@@ -20,11 +20,20 @@ export type ShippingPurpose = typeof SHIPPING_PURPOSES[number]['value']
 
 /**
  * Customs clearance option per carrier. Names differ between UPS / FedEx /
- * USPS in a way the carriers care about at the API — SENDER on UPS is
+ * USPS / DHL in a way the carriers care about at the API — SENDER on UPS is
  * spelled the same as SENDER on FedEx but RECEIVER (UPS) vs RECIPIENT
- * (FedEx) differ, so we return the per-carrier list rather than a shared
- * mapping. Returns an empty array when the carrier isn't recognised so the
- * UI can render an empty picker with a "not modelled" hint.
+ * (FedEx) differ, and DHL uses Incoterms codes (DAP/DDP/EXW) instead of a
+ * bill-to enum. We return the per-carrier list rather than a shared mapping
+ * so the picker offers exactly what the connector envelope will accept.
+ * Returns an empty array when the carrier isn't recognised so the UI can
+ * render an empty picker with a "not modelled" hint.
+ *
+ * DHL Express (F6-F): the connector maps clearanceOption / incoterms to
+ * the `incoterm` field on the export declaration. The 3 codes here are the
+ * ones DHL Express commonly quotes for parcel-level shipments — the wider
+ * Incoterms 2020 vocabulary (FCA / CPT / CIP / DPU / …) is freight-oriented
+ * and not exposed here to avoid mis-selection. Add more values as
+ * operators ask for them; the connector passes anything through verbatim.
  */
 export type ClearanceOption = { value: string; label: string }
 
@@ -42,6 +51,11 @@ const CLEARANCE_BY_CARRIER: Record<string, ReadonlyArray<ClearanceOption>> = {
   USPS: [
     { value: 'DDU', label: 'DDU — Duties on Delivery' },
     { value: 'DDP', label: 'DDP — Duties Paid' },
+  ],
+  DHL: [
+    { value: 'DAP', label: 'DAP — Delivered At Place (receiver pays duties)' },
+    { value: 'DDP', label: 'DDP — Delivered Duty Paid (sender pays duties)' },
+    { value: 'EXW', label: 'EXW — Ex Works (receiver arranges pickup)' },
   ],
 }
 
