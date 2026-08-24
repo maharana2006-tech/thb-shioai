@@ -212,4 +212,30 @@ class RecipientCountryGuardTest {
         assertTrue(rates.isEmpty(),
                 "-local- tokens must short-circuit to empty regardless of country presence");
     }
+
+    // ===== FDX-B3 — DHL rate-shop path =====
+
+    @Test
+    void dhl_getRates_blankRecipientCountry_throws() {
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        DhlConnector connector = new DhlConnector(props, new ObjectMapper());
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> connector.getRates(minimal(""), "real-basic-auth-token", "SANDBOX"));
+        assertTrue(ex.getMessage().contains("recipient country"),
+                "got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("US-domestic"),
+                "message should explain the silent-fallback risk; got: " + ex.getMessage());
+    }
+
+    @Test
+    void dhl_getRates_localToken_shortCircuits_evenWithoutCountry() {
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        DhlConnector connector = new DhlConnector(props, new ObjectMapper());
+        java.util.List<CarrierConnector.RateOption> rates = connector.getRates(
+                minimal(""), "dhl-local-xyz", "SANDBOX");
+        assertTrue(rates.isEmpty(),
+                "-local- tokens must short-circuit to empty regardless of country presence");
+    }
 }
