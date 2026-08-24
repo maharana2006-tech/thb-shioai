@@ -238,4 +238,27 @@ class RecipientCountryGuardTest {
         assertTrue(rates.isEmpty(),
                 "-local- tokens must short-circuit to empty regardless of country presence");
     }
+
+    // ===== FDX-B4 — Stamps/USPS rate-shop path =====
+
+    @Test
+    void stamps_getRates_blankRecipientCountry_throws() {
+        StampsConnector connector = new StampsConnector(propsWithLocalSwsim(), new ObjectMapper());
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> connector.getRates(minimal(""),
+                        "real-swsim-authenticator-guid-here", "SANDBOX"));
+        assertTrue(ex.getMessage().contains("recipient country"),
+                "got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("US-domestic"),
+                "message should explain the silent-fallback risk; got: " + ex.getMessage());
+    }
+
+    @Test
+    void stamps_getRates_localToken_shortCircuits_evenWithoutCountry() {
+        StampsConnector connector = new StampsConnector(propsWithLocalSwsim(), new ObjectMapper());
+        java.util.List<CarrierConnector.RateOption> rates = connector.getRates(
+                minimal(""), "stamps-local-abc", "SANDBOX");
+        assertTrue(rates.isEmpty(),
+                "-local- tokens must short-circuit to empty regardless of country presence");
+    }
 }

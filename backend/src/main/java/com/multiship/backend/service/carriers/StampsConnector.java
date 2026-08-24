@@ -741,6 +741,20 @@ public class StampsConnector implements CarrierConnector {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return java.util.List.of();
         }
+        // FDX-B4 — recipient country is required. Pre-fix, blank silently
+        // defaulted to "US" downstream in the SWSIM envelope builders
+        // (appendServiceRate line 1434 + rate envelope line 1688 both use
+        // nonBlank(recipientCountry, "US")), so an intl rate-shop returned
+        // believable US-domestic USPS quotes even though USPS only offers
+        // limited intl services. Operator would ship and get rejected at
+        // manifest time. Same F7 guard shape.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "USPS rate-shop requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before rate-shopping — "
+                            + "quotes without a destination silently fall to US-domestic.");
+        }
         java.util.List<com.multiship.backend.dto.PackageDetailDTO> pkgList = request.effectivePackages();
         if (pkgList.isEmpty()) {
             log.warn("Stamps rate-shop skipped: request has no packages.");
