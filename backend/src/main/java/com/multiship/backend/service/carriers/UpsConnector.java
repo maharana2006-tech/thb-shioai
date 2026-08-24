@@ -1964,6 +1964,18 @@ public class UpsConnector implements CarrierConnector {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return java.util.List.of();
         }
+        // FDX-B2 — recipient country is required. Pre-fix, blank silently
+        // defaulted to "US" downstream in buildRateShopShipment (UPS envelope
+        // has firstNonBlank(country, "US") at lines 1050, 1068, 1087), so an
+        // intl rate-shop with a blank recipient country returned believable
+        // US-domestic quotes and the operator shipped anyway. Same F7 guard.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "UPS rate-shop requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before rate-shopping — "
+                            + "quotes without a destination silently fall to US-domestic.");
+        }
         try {
             Map<String, Object> shipment = buildRateShopShipment(request);
             Map<String, Object> body = new LinkedHashMap<>();

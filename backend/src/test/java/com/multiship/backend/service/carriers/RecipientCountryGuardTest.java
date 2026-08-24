@@ -183,4 +183,33 @@ class RecipientCountryGuardTest {
         assertTrue(rates.isEmpty(),
                 "-local- tokens must short-circuit to empty regardless of country presence");
     }
+
+    // ===== FDX-B2 — UPS rate-shop path =====
+
+    @Test
+    void ups_getRates_blankRecipientCountry_throws() {
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        UpsConnector connector = new UpsConnector(props, new ObjectMapper());
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> connector.getRates(minimal(""), "real-oauth-bearer-token", "SANDBOX"));
+        assertTrue(ex.getMessage().contains("recipient country"),
+                "got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("US-domestic"),
+                "message should explain the silent-fallback risk; got: " + ex.getMessage());
+    }
+
+    @Test
+    void ups_getRates_localToken_shortCircuits_evenWithoutCountry() {
+        // -local- guard must fire before the country guard (same invariant
+        // as FedEx above; rate-comparison background jobs on fallback
+        // credentials return [] instead of throwing).
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        UpsConnector connector = new UpsConnector(props, new ObjectMapper());
+        java.util.List<CarrierConnector.RateOption> rates = connector.getRates(
+                minimal(""), "ups-local-xyz", "SANDBOX");
+        assertTrue(rates.isEmpty(),
+                "-local- tokens must short-circuit to empty regardless of country presence");
+    }
 }
