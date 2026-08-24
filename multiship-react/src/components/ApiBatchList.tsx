@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
+import { FiDownloadCloud, FiRefreshCw, FiZap } from 'react-icons/fi'
 import { wmsService } from '../api/wmsService'
 import { orderImportService } from '../api/orderImportService'
 import type { ImportBatchSummary, OrderImportRow } from '../api/orderImportService'
 import { notify } from '../utils/notify'
 import { GridCell, DH_COLUMNS, bucketRowErrors, type DhColumn } from './batchGrid'
+import { BTN_PRIMARY, BTN_GHOST, BTN_PRIMARY_SM } from './ui/buttons'
 
 /**
  * The "API" section of Order Intake. Every "Fetch from WMS" lands as ONE batch
@@ -207,18 +209,17 @@ export default function ApiBatchList() {
             onClick={() => void fetchFromWms()}
             disabled={fetching}
             title="Pull the WMS's current pending shipments in as a new batch"
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+            className={BTN_PRIMARY}
           >
             {fetching ? (
               <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-            ) : null}
+            ) : (
+              <FiDownloadCloud className="h-3.5 w-3.5" />
+            )}
             {fetching ? 'Fetching…' : 'Fetch from WMS'}
           </button>
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-          >
+          <button type="button" onClick={() => void load()} className={BTN_GHOST}>
+            <FiRefreshCw className="h-3.5 w-3.5" />
             Refresh
           </button>
         </div>
@@ -303,11 +304,13 @@ export default function ApiBatchList() {
                             ? 'Retry generating labels for the rows that failed or aren’t generated yet'
                             : 'Generate carrier labels for every row in this batch'
                       }
-                      className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                      className={`${BTN_PRIMARY_SM} shrink-0`}
                     >
                       {genBusy ? (
                         <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                      ) : null}
+                      ) : (
+                        <FiZap className="h-3.5 w-3.5" />
+                      )}
                       {genBusy ? 'Generating…' : isRetry ? 'Retry labels' : 'Generate labels'}
                     </button>
                   ) : null}
@@ -388,11 +391,13 @@ export default function ApiBatchList() {
                                         type="button"
                                         onClick={() => void generateRow(b.id, r.rowNumber)}
                                         disabled={rowBusy}
-                                        className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                                        className={BTN_PRIMARY_SM}
                                       >
                                         {rowBusy ? (
                                           <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                                        ) : null}
+                                        ) : (
+                                          <FiZap className="h-3 w-3" />
+                                        )}
                                         {rowBusy ? 'Generating…' : 'Generate label'}
                                       </button>
                                     ) : (

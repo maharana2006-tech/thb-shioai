@@ -2,6 +2,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { useLocation, useNavigate } from 'react-router-dom'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { notify } from '../utils/notify'
+// Espresso/cream button tokens — shared across the app (see components/ui/buttons).
+import { BTN_PRIMARY, BTN_GHOST_SM, BTN_PRIMARY_SM } from './ui/buttons'
 import {
   FiCheckCircle,
   FiEdit3,
@@ -78,16 +80,6 @@ const ACTION_OUTLINE =
   'border border-[#d8cbb0] bg-white text-[#412d15] hover:border-[#412d15] hover:bg-[#faf7f0] disabled:opacity-50'
 const ACTION_RETRY =
   'border border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-400 hover:bg-amber-100 disabled:opacity-50'
-
-/** Toolbar button tokens — espresso/cream, consistent across the workspace. */
-const BTN_PRIMARY =
-  'inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none'
-
-/** Compact toolbar tokens — smaller so every action fits on one line. */
-const BTN_GHOST_SM =
-  'inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40'
-const BTN_PRIMARY_SM =
-  'inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none'
 
 const relativeTime = (value?: string | null) => {
   if (!value) return null

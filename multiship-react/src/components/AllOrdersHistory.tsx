@@ -4,6 +4,7 @@ import { orderService, type Order } from '../api/orderService'
 import { notify } from '../utils/notify'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import ApiBatchList from './ApiBatchList'
+import { BTN_GHOST_SM } from './ui/buttons'
 
 /**
  * Order Intake → "All orders" view. A unified list of every order regardless of
@@ -242,11 +243,7 @@ export default function AllOrdersHistory() {
               </p>
             }
             toolbarActions={
-              <button
-                type="button"
-                onClick={() => setReload((n) => n + 1)}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-              >
+              <button type="button" onClick={() => setReload((n) => n + 1)} className={BTN_GHOST_SM}>
                 Refresh
               </button>
             }
