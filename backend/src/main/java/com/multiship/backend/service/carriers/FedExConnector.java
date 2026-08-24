@@ -454,10 +454,19 @@ public class FedExConnector implements CarrierConnector {
         return null;
     }
 
+    /**
+     * FDX-D — pre-fix, a missing currency in the rate response silently
+     * defaulted to "USD". FedEx's real responses always include currency,
+     * but a parsing edge case that mislabels a GBP or EUR rate as USD
+     * silently over/under-charges by the FX difference. Now returns null
+     * and lets downstream {@link RateOption#currency} carry it (nullable
+     * per the record definition). The rate-shop UI treats null currency
+     * as "no quote" — surfaces the missing field instead of hiding it.
+     */
     private static String readFedExCurrency(JsonNode entry) {
         String currency = entry.at("/shipmentRateDetail/totalNetCharge/currency").asText(null);
         if (currency == null || currency.isEmpty()) currency = entry.path("currency").asText(null);
-        return currency == null || currency.isEmpty() ? "USD" : currency;
+        return currency == null || currency.isEmpty() ? null : currency;
     }
 
     /**
@@ -1441,9 +1450,17 @@ public class FedExConnector implements CarrierConnector {
 
     /** €150 = the IOSS threshold for EU B2C low-value goods. */
     private static final BigDecimal IOSS_EUR_THRESHOLD = new BigDecimal("150.00");
-    /** Loose FX guardrails so the threshold isn't off by an order of magnitude
-     *  for the common invoice currencies. Real FX conversion lands in a
-     *  future sprint (gap 15). */
+    /** Fallback FX thresholds for the common invoice currencies. Used only
+     *  when {@link com.multiship.backend.service.fx.FxRateService#convert}
+     *  returns empty (feed down, unsupported currency). Rates are close
+     *  enough to spot to keep the IOSS threshold within one order of
+     *  magnitude — a false negative just leaves VAT for delivery-time
+     *  invoicing; a false positive attaches IOSS where it doesn't apply.
+     *
+     *  <p>FDX-D — the pre-fix comment claimed "Real FX conversion lands in
+     *  a future sprint (gap 15)" but F6-D shipped ECB-backed FX (see
+     *  {@link com.multiship.backend.service.fx.EcbFxRateService}). This
+     *  table is now the second-tier fallback, not the primary path. */
     private static final Map<String, BigDecimal> IOSS_LOCAL_THRESHOLD = Map.of(
             "USD", new BigDecimal("165.00"),
             "GBP", new BigDecimal("128.00"),
@@ -2019,17 +2036,35 @@ public class FedExConnector implements CarrierConnector {
         return address;
     }
 
-    /** Our reason-for-export enum → FedEx commercialInvoice.purpose. */
+    /**
+     * Our reason-for-export enum → FedEx commercialInvoice.purpose.
+     *
+     * <p>FDX-D — pre-fix, only 6 of the 8 resolver-validated enum values
+     * were explicitly mapped; MERCHANDISE / PERSONAL_USE / REPAIR_AND_RETURN
+     * silently fell to the default "SOLD", which mislabels the customs
+     * invoice (PERSONAL_USE incorrectly declared as commercial sale would
+     * VAT the parcel at the border; REPAIR_AND_RETURN incorrectly declared
+     * as sale would double-tax on the return leg).
+     *
+     * <p>Now all 8 {@link com.multiship.backend.service.ShipmentDefaultsResolver
+     * #SHIPPING_PURPOSE_ENUM} values are explicit. Unknown values still
+     * fall to SOLD but log a warning so future audits catch drift.
+     */
     private static String mapFedExPurpose(String reason) {
         if (reason == null) return "SOLD";
-        return switch (reason.trim().toUpperCase()) {
-            case "SALE" -> "SOLD";
+        String v = reason.trim().toUpperCase();
+        return switch (v) {
+            case "SALE", "MERCHANDISE" -> "SOLD";
             case "GIFT" -> "GIFT";
             case "SAMPLE" -> "SAMPLE";
-            case "RETURN" -> "RETURN";
-            case "REPAIR" -> "REPAIR_AND_RETURN";
+            case "RETURN", "REPAIR", "REPAIR_AND_RETURN" -> "REPAIR_AND_RETURN";
+            case "PERSONAL_USE" -> "PERSONAL_EFFECTS";
             case "DOCUMENTS" -> "NOT_SOLD";
-            default -> "SOLD";
+            default -> {
+                log.warn("FedEx mapFedExPurpose: unrecognised reason '{}' — defaulting to SOLD. "
+                        + "Add an explicit mapping in mapFedExPurpose if this is a real value.", v);
+                yield "SOLD";
+            }
         };
     }
 
