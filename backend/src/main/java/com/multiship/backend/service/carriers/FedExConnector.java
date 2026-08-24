@@ -201,6 +201,16 @@ public class FedExConnector implements CarrierConnector {
 
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        // F7 fix — recipient country is required. Pre-fix, blank silently
+        // defaulted to "US" downstream in buildShipmentPayload (line ~955)
+        // which shipped international parcels as US domestic. Fail at
+        // the boundary instead.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "FedEx shipment requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before generating a label.");
+        }
         try {
             String shipmentUrl = getShipmentUrl(environment);
             RestClient restClient = HttpClients.newBuilder().baseUrl(shipmentUrl).build();
@@ -219,45 +229,16 @@ public class FedExConnector implements CarrierConnector {
             throw cex;
         } catch (Exception ex) {
             log.warn("FedEx createShipment failed: {}", ex.getMessage());
-            // Sandbox / non-production: fall back to a clearly-marked TEST label
-            // ("TEST LABEL – DO NOT SHIP") so local + sandbox order-flow testing
-            // isn't blocked by carrier-side account authorization. PRODUCTION
-            // still throws — Sprint 49 Tier 2 keeps live shipments honest (no
-            // fake labels for real freight).
-            if (!"PRODUCTION".equalsIgnoreCase(environment)) {
-                log.warn("FedEx sandbox — returning a TEST fallback label so the order flow can be exercised.");
-                return buildFallbackShipmentResult(request);
-            }
+            // FDX-A — no more sandbox fake-label fallback. Pre-fix, any
+            // exception in sandbox / non-production silently synthesised a
+            // "78xxxxxxxxxx" tracking + https://labels.local/fedex/... URL,
+            // masking real config errors (wrong serviceType, missing customs,
+            // bad credentials) as a "successful" sandbox test. Now every
+            // environment sees the real carrier error — the exception mapper
+            // already produces an actionable operator message and the
+            // idempotency layer still prevents double-charges on retry.
             throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
                     .map("FEDEX", ex, "createShipment");
-        }
-    }
-
-    private ShipmentResult buildFallbackShipmentResult(ShipmentRequestDTO request) {
-        String trackingNumber = "78" + hashDigits(request.getReferenceNumber() + ":" + request.getCarrierCode(), 10);
-        String trackingUrl = "https://www.fedex.com/fedextrack/?trknbr=" + trackingNumber;
-        String labelUrl = "https://labels.local/fedex/" + trackingNumber + ".pdf";
-        BigDecimal shippingCost = request.getWeight() != null
-                ? request.getWeight().multiply(BigDecimal.valueOf(1.4))
-                : BigDecimal.ZERO;
-        LocalDateTime estimatedDelivery = LocalDateTime.now(ZoneOffset.UTC).plusDays(2);
-        return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelUrl, shippingCost, estimatedDelivery, null);
-    }
-
-    private String hashDigits(String value, int length) {
-        try {
-            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder builder = new StringBuilder();
-            for (byte b : hash) {
-                builder.append(Math.abs(b) % 10);
-                if (builder.length() == length) {
-                    break;
-                }
-            }
-            return builder.toString();
-        } catch (java.security.NoSuchAlgorithmException ex) {
-            return String.valueOf(Math.abs(value.hashCode()));
         }
     }
 
@@ -294,6 +275,18 @@ public class FedExConnector implements CarrierConnector {
     public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return java.util.List.of();
+        }
+        // FDX-B1 — recipient country is required. Pre-fix, blank silently
+        // defaulted to "US" in buildRateRequestBody, which returned
+        // US-domestic quotes for what should have been an international
+        // rate-shop. The operator would see believable-but-wrong pricing
+        // and ship anyway. Same guard shape F7 added to createShipment.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "FedEx rate-shop requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before rate-shopping — "
+                            + "quotes without a destination silently fall to US-domestic.");
         }
         // Guard: caller must supply either a shipment-level weight or a
         // packages[] with at least one entry. Rate-shopping with zero weight
@@ -933,6 +926,17 @@ public class FedExConnector implements CarrierConnector {
                     "FedEx EDT needs live credentials; the account is on a fallback token.",
                     null);
         }
+        // FDX-B1 — recipient country is required. Pre-fix, blank silently
+        // failed the isInternational check (both null == "not international")
+        // and returned NOT_SUPPORTED, suppressing what should have been an
+        // intl duties estimate. Fail loudly instead — same F7-style guard.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "FedEx EDT (duties estimate) requires a recipient country code "
+                            + "(order " + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order — blank recipients "
+                            + "silently suppress duties estimates.");
+        }
         if (!isInternational(request)) {
             return new LandedCostResult("FEDEX", "NOT_SUPPORTED",
                     null, null, null, null, null, null,
@@ -1105,6 +1109,21 @@ public class FedExConnector implements CarrierConnector {
                     "FedEx pickup needs live credentials; the account is on a fallback token.",
                     null);
         }
+        // FDX-C — pre-fix, buildFedExPickupRequest hardcoded the literal
+        // string "ACCOUNT" as the shipper's associatedAccountNumber, which
+        // FedEx rejects with a validation error every time. Same bug shape
+        // as Sprint 49 T2 fixed for voidShipment + Sprint 50 T1 #10 fixed
+        // for closeOutDay. Now sourced from the caller (PickupServiceImpl
+        // threads account.getAccountNumber() onto PickupRequest); short-
+        // circuit to ERROR when blank rather than send a placeholder that
+        // FedEx will silently reject.
+        if (!StringUtils.hasText(request.accountNumber())) {
+            return new PickupResult("FEDEX", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "FedEx pickup needs the shipper account number that owns the labels; none was passed.",
+                    null);
+        }
         try {
             Map<String, Object> body = buildFedExPickupRequest(request);
             String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
@@ -1138,7 +1157,12 @@ public class FedExConnector implements CarrierConnector {
     /** Build the FedEx CreatePickupRequest body. */
     Map<String, Object> buildFedExPickupRequest(PickupRequest req) {
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("associatedAccountNumber", Map.of("value", "ACCOUNT"));
+        // FDX-C — real shipper account (pre-fix, hardcoded literal "ACCOUNT").
+        // The schedulePickup entry point already guards against blank here;
+        // firstNonBlank retained as a defence-in-depth for direct callers
+        // of buildFedExPickupRequest in tests.
+        body.put("associatedAccountNumber", Map.of("value",
+                firstNonBlank(req.accountNumber(), "")));
 
         Map<String, Object> originDetail = new LinkedHashMap<>();
         AddressToValidate a = req.address();
@@ -1455,7 +1479,11 @@ public class FedExConnector implements CarrierConnector {
         payload.put("accountNumber", accountNumber);
 
         Map<String, Object> requestedShipment = new LinkedHashMap<>();
-        requestedShipment.put("shipDatestamp", LocalDateTime.now(ZoneOffset.UTC).toLocalDate().toString());
+        // F6-E — shipDatestamp is FedEx's authoritative "when did this ship"
+        // date; SLA counters (Ground business-day math, Express AM/PM
+        // deadlines) all key off it. Use the shipper's local day, not UTC.
+        requestedShipment.put("shipDatestamp",
+                com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()).toString());
         requestedShipment.put("serviceType", request.getServiceType());
         requestedShipment.put("packagingType", request.getPackageType());
         requestedShipment.put("pickupType", "USE_SCHEDULED_PICKUP");
@@ -1745,7 +1773,13 @@ public class FedExConnector implements CarrierConnector {
      */
     private Map<String, Object> buildDutiesPayment(com.multiship.backend.dto.IntlShipmentBlockDTO intl,
                                                     ShipmentRequestDTO request) {
-        String paymentType = firstNonBlank(intl.getDutyBillTo(),
+        // F6-C — clearanceOption (per-account, resolved by
+        // ShipmentDefaultsResolver from CarrierAccountRef) wins over
+        // dutyBillTo (per-customs-profile). Both fall back to
+        // incoterms-derived default (DDP → SENDER, else RECIPIENT).
+        String paymentType = firstNonBlank(
+                intl.getClearanceOption(),
+                intl.getDutyBillTo(),
                 "DDP".equalsIgnoreCase(intl.getIncoterms()) ? "SENDER" : "RECIPIENT").toUpperCase();
 
         Map<String, Object> duties = new LinkedHashMap<>();

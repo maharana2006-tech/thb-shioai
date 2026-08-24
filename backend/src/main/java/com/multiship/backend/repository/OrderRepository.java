@@ -17,6 +17,16 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
      *  exists — makes the WMS pull idempotent (skip re-import). */
     boolean existsByWmsExternalId(String wmsExternalId);
 
+    /**
+     * F1 — resolve a WMS-supplied external id to the internal Order row so
+     * the bulk-labels endpoint can accept orderRef entries. Case-insensitive
+     * because upstream WMS systems' ref conventions are inconsistent (some
+     * uppercase everything, some preserve mixed-case, some pad with hyphens).
+     * Only rows imported from a WMS carry a non-null wms_external_id —
+     * CSV / API-created orders return {@link Optional#empty()}.
+     */
+    Optional<Order> findByWmsExternalIdIgnoreCase(String wmsExternalId);
+
 
     Optional<Order> findByOrderNo(Integer orderNo);
 

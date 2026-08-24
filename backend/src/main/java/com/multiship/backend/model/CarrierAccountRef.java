@@ -101,6 +101,18 @@ public class CarrierAccountRef {
     private String clearanceOption;
 
     /**
+     * F6-B2 — per-account billing currency override. ISO 4217 3-letter code.
+     * When NULL, the resolver falls back to the carrier's hardcoded home
+     * currency (USPS/UPS/FedEx → USD; DHL → EUR). When set, this value is
+     * authoritative for anything this account bills — regardless of client
+     * currency or carrier default. If it differs from the client's currency,
+     * F6-D converts declared value / commodities / insured value / freight
+     * via FxRateService before the connector envelope is built.
+     */
+    @Column(name = "currency", length = 3)
+    private String currency;
+
+    /**
      * Third-party billing party — used only when clearanceOption is THIRD_PARTY
      * (UPS / FedEx). Acts as the ACCOUNT-LEVEL DEFAULT for every shipment on
      * this account; per-shipment overrides live on the Shipment row (follow-up

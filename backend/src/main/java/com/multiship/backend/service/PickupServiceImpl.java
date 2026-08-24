@@ -105,7 +105,12 @@ public class PickupServiceImpl implements PickupService {
                 request.getPackageCount(),
                 request.getTotalWeight(),
                 request.getWeightUnit(),
-                request.getSpecialInstructions());
+                request.getSpecialInstructions(),
+                // FDX-C — thread the resolved shipper account number so the
+                // carrier's pickup envelope carries a real account instead of
+                // the historical placeholder ("ACCOUNT" for FedEx, empty for
+                // DHL, contact name misfiled for UPS).
+                account.getAccountNumber());
 
         PickupResult result;
         try {

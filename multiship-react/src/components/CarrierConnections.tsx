@@ -95,8 +95,14 @@ const credentialLabelsFor = (carrierCode: string) => {
       secretLong: 'Password',
       idShort: 'IntegrationID',
       secretShort: 'password',
+      // Placeholder shows the GUID example so operators paste the right shape
+      // upfront (used to fail server-side after Save with a "must be a GUID"
+      // message that only appeared post-round-trip). Braced {…}, urn:uuid: and
+      // 32-hex-no-hyphens variants are auto-normalised — the FE + BE both
+      // reshape them into the canonical 8-4-4-4-12 form.
+      idPlaceholder: 'e.g. 01234567-89ab-cdef-0123-456789abcdef',
       helper:
-        'Stamps.com SWSIM: IntegrationID is a GUID assigned to the integrator on developer.stamps.com. Username + Password are the end-user\'s Stamps.com account login.',
+        'Stamps.com SWSIM: IntegrationID is a GUID assigned to the integrator on developer.stamps.com. Username + Password are the end-user\'s Stamps.com account login. Braces {…}, urn:uuid: prefix, and no-hyphens variants are auto-normalised.',
     }
   }
   if (normalized === 'DHL') {
@@ -151,6 +157,9 @@ interface DrawerState {
    *  their own defaults when unset. Values come from ../utils/customsOptions. */
   shippingPurpose: string
   clearanceOption: string
+  /** F6-B2 — per-account billing currency (ISO 4217). Blank string means
+   *  "use carrier home currency" (USPS/UPS/FedEx → USD, DHL → EUR). */
+  currency: string
   /** Third-party billing default. Only shown / persisted when the operator
    *  picked THIRD_PARTY for clearanceOption. All optional individually — a
    *  future per-shipment override on Shipment can fill in what's missing. */
@@ -176,6 +185,7 @@ const emptyDrawer: DrawerState = {
   clientDefault: false,
   shippingPurpose: '',
   clearanceOption: '',
+  currency: '',
   thirdPartyAccount: '',
   thirdPartyName: '',
   thirdPartyAddress1: '',
@@ -466,6 +476,7 @@ export default function CarrierConnections({
         clientDefault: Boolean(account.clientDefault),
         shippingPurpose: account.shippingPurpose || '',
         clearanceOption: account.clearanceOption || '',
+        currency: account.currency || '',
         thirdPartyAccount:  account.thirdPartyAccount  || '',
         thirdPartyName:     account.thirdPartyName     || '',
         thirdPartyAddress1: account.thirdPartyAddress1 || '',
@@ -593,6 +604,9 @@ export default function CarrierConnections({
         // "unset", empty string as "keep" — this matches the credentials rule).
         shippingPurpose: drawer.shippingPurpose || null,
         clearanceOption: drawer.clearanceOption || null,
+        // F6-B2 — per-account billing currency. Uppercased for ISO 4217;
+        // null = clear the override (revert to carrier home currency).
+        currency: drawer.currency ? drawer.currency.trim().toUpperCase() : null,
         // Third-party billing default. Only send the address when the picked
         // clearance is THIRD_PARTY — flipping to SENDER/RECIPIENT explicitly
         // clears the persisted third-party row (send empty strings so the
@@ -1331,7 +1345,8 @@ export default function CarrierConnections({
                         value={drawer.clientId}
                         onChange={(e) => setDrawer((c) => ({ ...c, clientId: e.target.value }))}
                         className={`${inputClassName}${drawerErrors.clientId ? ' !border-rose-400' : ''}`}
-                        placeholder={credentialLabelsFor(drawer.carrierCode).idLong}
+                        placeholder={credentialLabelsFor(drawer.carrierCode).idPlaceholder
+                          ?? credentialLabelsFor(drawer.carrierCode).idLong}
                         autoComplete="off"
                       />
                     </Field>
@@ -1403,6 +1418,37 @@ export default function CarrierConnections({
                         ))}
                       </Select>
                     </Field>
+                  </div>
+
+                  {/* F6-B2 — per-account billing currency override. Blank means
+                      "use the carrier's home currency" (USPS/UPS/FedEx → USD,
+                      DHL → EUR). When set, this overrides both the client's
+                      defaultCurrency AND the carrier default; F6-D converts
+                      money-shaped request fields to this currency via
+                      FxRateService if they arrive in a different currency. */}
+                  <div className="mt-2">
+                    <Field label="Billing currency (per-account override)">
+                      <input
+                        type="text"
+                        value={drawer.currency}
+                        onChange={(e) => setDrawer((c) => ({ ...c, currency: e.target.value.toUpperCase() }))}
+                        maxLength={3}
+                        placeholder={
+                          drawer.carrierCode === 'DHL'
+                            ? 'e.g. EUR (leave blank to use DHL default)'
+                            : 'e.g. USD (leave blank to use carrier default)'
+                        }
+                        className={inputClassName}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                    </Field>
+                    <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
+                      ISO 4217 3-letter code. Leave blank to use the carrier's home
+                      currency ({drawer.carrierCode === 'DHL' ? 'EUR' : 'USD'}).
+                      Only override when this account bills in a different currency
+                      than the carrier's default.
+                    </p>
                   </div>
 
                   {/* Third-party billing sub-panel — only shown when the

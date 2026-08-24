@@ -442,6 +442,18 @@ public interface CarrierConnector {
      * @param totalWeight        Total weight across all parcels.
      * @param weightUnit         LB | KG. Null = LB.
      * @param specialInstructions Free-form notes (e.g. "ring apartment 5B").
+     * @param accountNumber      FDX-C — the shipper's carrier account number
+     *                           that owns the labels being collected. Same
+     *                           semantics as the account passed to
+     *                           {@link #voidShipment} + {@link #closeOutDay}:
+     *                           FedEx / UPS / DHL all reject pickups whose
+     *                           account doesn't match the shipper's book
+     *                           (FedEx historically got the literal {@code
+     *                           "ACCOUNT"} string; UPS got the contact name
+     *                           in place of the account; DHL got empty
+     *                           string). Nullable for connectors that don't
+     *                           need a per-request account (SWSIM keys off
+     *                           the auth cred).
      */
     record PickupRequest(
             java.time.LocalDate pickupDate,
@@ -453,7 +465,8 @@ public interface CarrierConnector {
             int packageCount,
             java.math.BigDecimal totalWeight,
             String weightUnit,
-            String specialInstructions
+            String specialInstructions,
+            String accountNumber
     ) {
     }
 

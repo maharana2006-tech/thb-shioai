@@ -57,6 +57,22 @@ public class AccountRefUpsertRequest {
     private String clearanceOption;
 
     /**
+     * F6-B2 — per-account billing currency (ISO 4217, e.g. USD / EUR / GBP).
+     * Nullable; NULL means "use the carrier's hardcoded home currency"
+     * (USPS/UPS/FedEx → USD, DHL → EUR). Non-NULL overrides both the
+     * carrier default AND the client's default currency. If it differs
+     * from the resolved client currency, F6-D converts money-shaped
+     * request fields via FxRateService before sending to the carrier.
+     * Same null-vs-empty-string semantics as {@link #shippingPurpose}:
+     * null = keep persisted value, empty string = clear.
+     */
+    @jakarta.validation.constraints.Size(min = 3, max = 3,
+            message = "currency must be a 3-letter ISO 4217 code (e.g. USD, EUR, GBP)")
+    @jakarta.validation.constraints.Pattern(regexp = "[A-Za-z]{3}|",
+            message = "currency must be alphabetic ISO 4217")
+    private String currency;
+
+    /**
      * Third-party billing address — captured against the account when
      * clearanceOption = THIRD_PARTY. All optional here (backend validates only
      * the max lengths); the frontend enforces "at least account number"

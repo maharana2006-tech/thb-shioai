@@ -18,6 +18,35 @@
 const NO_ANGLE = /^[^<>]*$/
 const NO_ANGLE_MSG = 'Cannot contain < or >'
 
+/** Canonical Stamps.com IntegrationID shape: 8-4-4-4-12 hex with hyphens. */
+const CANONICAL_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+/** 32-hex-no-hyphens variant some Stamps.com SDK samples emit. */
+const GUID_NO_HYPHENS = /^[0-9a-fA-F]{32}$/
+/** {@code {01234567-…}} form the Windows dev-portal copy button emits. */
+const BRACED_GUID = /^\{(.*)\}$/
+/** IETF-style prefix; case-insensitive per RFC 4122. */
+const URN_UUID_PREFIX = /^urn:uuid:/i
+
+/**
+ * True when {@code raw} can be normalised into a canonical Stamps.com
+ * IntegrationID. Kept in lockstep with StampsConnector.normaliseIntegrationId
+ * on the backend so the FE and BE agree on what's accepted — variants:
+ *  - canonical `8-4-4-4-12` — pass-through
+ *  - braced `{...}` — strip braces
+ *  - URN `urn:uuid:...` — strip prefix
+ *  - 32-hex-no-hyphens — insert hyphens
+ */
+function isValidStampsIntegrationId(raw: string): boolean {
+  let s = raw.trim()
+  if (URN_UUID_PREFIX.test(s)) s = s.replace(URN_UUID_PREFIX, '').trim()
+  const braced = BRACED_GUID.exec(s)
+  if (braced) s = braced[1].trim()
+  if (GUID_NO_HYPHENS.test(s)) {
+    s = `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`
+  }
+  return CANONICAL_GUID.test(s)
+}
+
 /** Per-carrier account-number formats; anything else uses GENERIC. */
 const ACCOUNT_RULES: Record<string, { re: RegExp; msg: string }> = {
   UPS: { re: /^[A-Za-z0-9]{6,10}$/, msg: 'UPS shipper number is 6–10 letters or digits' },
@@ -89,6 +118,14 @@ export function validateCarrierAccount(
     else if (idT.length > 120) e.clientId = 'Too long — did you paste extra text?'
     else if (/\s/.test(idT)) e.clientId = 'Remove spaces — paste the key exactly as issued'
     else if (!NO_ANGLE.test(idT)) e.clientId = NO_ANGLE_MSG
+    // Stamps.com SWSIM requires the IntegrationID to be a GUID. Reject inline
+    // BEFORE the operator hits Save/Verify (used to fail server-side with a
+    // "must be a GUID" message that showed up only after the round trip).
+    // Accepts the same shapes the backend normaliser does: canonical
+    // 8-4-4-4-12, braced {…}, urn:uuid: prefix, and 32-hex-no-hyphens.
+    else if (isUsps && !isValidStampsIntegrationId(idT)) {
+      e.clientId = `${idLabel} must be a GUID (e.g. 01234567-89ab-cdef-0123-456789abcdef)`
+    }
 
     const secT = v.clientSecret.trim()
     if (!secT) e.clientSecret = `${secretLabel} is required`
