@@ -1926,17 +1926,12 @@ public class UpsConnector implements CarrierConnector {
         }
     }
 
-    private ShipmentResult buildFallbackShipmentResult(ShipmentRequestDTO request) {
-        String trackingNumber = "1Z" + hashShort(request.getReferenceNumber() + ":" + request.getCarrierCode());
-        String trackingUrl = "https://www.ups.com/track?tracknum=" + trackingNumber;
-        String labelUrl = "https://labels.local/ups/" + trackingNumber + ".pdf";
-        String labelPdf = labelUrl;
-        BigDecimal shippingCost = request.getWeight() != null ? request.getWeight().multiply(BigDecimal.valueOf(1.25)) : BigDecimal.ZERO;
-        LocalDateTime estimatedDelivery = LocalDateTime.now(ZoneOffset.UTC).plusDays(3);
-        return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelPdf, shippingCost, estimatedDelivery, null);
-    }
+    // FDX-A — buildFallbackShipmentResult removed. It was dead code (no
+    // caller) and produced a synthetic 1Z-prefixed tracking + labels.local
+    // URL that would have masked real UPS errors if ever wired in. Kept in
+    // git history for reference.
 
-    /**
+/**
      * UPS Rate Shop — POST {@code /api/rating/{version}/Shop} with a Bearer
      * token returns rates for EVERY available service on the lane in a single
      * call (versus {@code /Rate} which prices one specific service). Perfect

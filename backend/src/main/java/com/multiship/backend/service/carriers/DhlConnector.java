@@ -1349,16 +1349,12 @@ public class DhlConnector implements CarrierConnector {
         return StringUtils.hasText(a) ? a : (StringUtils.hasText(b) ? b : null);
     }
 
-    private ShipmentResult buildFallbackShipmentResult(ShipmentRequestDTO request) {
-        String tracking = "JD" + hashShort(request.getReferenceNumber() + ":" + request.getCarrierCode());
-        String labelUrl = "https://labels.local/dhl/" + tracking + ".pdf";
-        return new ShipmentResult(tracking,
-                "https://www.dhl.com/en/express/tracking.html?AWB=" + tracking,
-                labelUrl, labelUrl, null,
-                LocalDateTime.now(ZoneOffset.UTC).plusDays(2), null);
-    }
+    // FDX-A — buildFallbackShipmentResult removed. It was dead code (no
+    // caller) and produced a synthetic JD-prefixed tracking + labels.local
+    // URL that would have masked real DHL errors if ever wired in. Kept in
+    // git history for reference.
 
-    /**
+/**
      * DHL Express Rate quote — POST {@code /rates} with Basic Auth returns
      * the {@code products[]} array; every entry is a priced product for the
      * lane. Perfect for rate shopping.
