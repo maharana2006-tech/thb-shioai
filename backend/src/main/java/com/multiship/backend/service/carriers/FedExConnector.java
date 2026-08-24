@@ -229,45 +229,16 @@ public class FedExConnector implements CarrierConnector {
             throw cex;
         } catch (Exception ex) {
             log.warn("FedEx createShipment failed: {}", ex.getMessage());
-            // Sandbox / non-production: fall back to a clearly-marked TEST label
-            // ("TEST LABEL – DO NOT SHIP") so local + sandbox order-flow testing
-            // isn't blocked by carrier-side account authorization. PRODUCTION
-            // still throws — Sprint 49 Tier 2 keeps live shipments honest (no
-            // fake labels for real freight).
-            if (!"PRODUCTION".equalsIgnoreCase(environment)) {
-                log.warn("FedEx sandbox — returning a TEST fallback label so the order flow can be exercised.");
-                return buildFallbackShipmentResult(request);
-            }
+            // FDX-A — no more sandbox fake-label fallback. Pre-fix, any
+            // exception in sandbox / non-production silently synthesised a
+            // "78xxxxxxxxxx" tracking + https://labels.local/fedex/... URL,
+            // masking real config errors (wrong serviceType, missing customs,
+            // bad credentials) as a "successful" sandbox test. Now every
+            // environment sees the real carrier error — the exception mapper
+            // already produces an actionable operator message and the
+            // idempotency layer still prevents double-charges on retry.
             throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
                     .map("FEDEX", ex, "createShipment");
-        }
-    }
-
-    private ShipmentResult buildFallbackShipmentResult(ShipmentRequestDTO request) {
-        String trackingNumber = "78" + hashDigits(request.getReferenceNumber() + ":" + request.getCarrierCode(), 10);
-        String trackingUrl = "https://www.fedex.com/fedextrack/?trknbr=" + trackingNumber;
-        String labelUrl = "https://labels.local/fedex/" + trackingNumber + ".pdf";
-        BigDecimal shippingCost = request.getWeight() != null
-                ? request.getWeight().multiply(BigDecimal.valueOf(1.4))
-                : BigDecimal.ZERO;
-        LocalDateTime estimatedDelivery = LocalDateTime.now(ZoneOffset.UTC).plusDays(2);
-        return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelUrl, shippingCost, estimatedDelivery, null);
-    }
-
-    private String hashDigits(String value, int length) {
-        try {
-            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder builder = new StringBuilder();
-            for (byte b : hash) {
-                builder.append(Math.abs(b) % 10);
-                if (builder.length() == length) {
-                    break;
-                }
-            }
-            return builder.toString();
-        } catch (java.security.NoSuchAlgorithmException ex) {
-            return String.valueOf(Math.abs(value.hashCode()));
         }
     }
 
