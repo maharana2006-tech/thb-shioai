@@ -46,7 +46,8 @@ class PickupTest {
                 3,
                 new BigDecimal("15"),
                 "LB",
-                "Ring the loading bay bell");
+                "Ring the loading bay bell",
+                "740561111");   // FDX-C — real FedEx shipper account for the pickup
     }
 
     /* -------------------------- Auth guardrails -------------------------- */
@@ -154,6 +155,41 @@ class PickupTest {
         FedExConnector c = new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx());
         PickupResult r = c.parseFedExPickupResponse(baseRequest(), "{\"output\": {}}");
         assertEquals("ERROR", r.status());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void fedex_pickup_body_carries_real_account_number_not_placeholder() {
+        // FDX-C — pre-fix, associatedAccountNumber was the literal string
+        // "ACCOUNT" (hardcoded on line 1151 pre-refactor). FedEx pickup
+        // rejects that with a validation error every time. Now sourced
+        // from PickupRequest.accountNumber().
+        FedExConnector c = new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx());
+        java.util.Map<String, Object> body = c.buildFedExPickupRequest(baseRequest());
+        java.util.Map<String, Object> account =
+                (java.util.Map<String, Object>) body.get("associatedAccountNumber");
+        assertEquals("740561111", account.get("value"),
+                "pickup body must carry the real shipper account from PickupRequest, "
+                        + "not the pre-FDX-C \"ACCOUNT\" placeholder");
+    }
+
+    @Test
+    void fedex_schedulePickup_blank_account_shortCircuits_with_operator_message() {
+        // FDX-C — pre-fix, schedulePickup would call FedEx with the literal
+        // "ACCOUNT" placeholder and get a cryptic FedEx validation error.
+        // Now short-circuits at the entry point with an actionable message.
+        FedExConnector c = new FedExConnector(new CarrierProperties(), new ObjectMapper(), noFx());
+        PickupRequest noAccount = new PickupRequest(
+                LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), LocalTime.of(17, 0),
+                new AddressToValidate(null, null, "1 A St", null, null,
+                        "Denver", "CO", "80202", "US"),
+                "Contact", "5551234567", 1, new BigDecimal("5"), "LB",
+                null,
+                "");   // blank account
+        PickupResult r = c.schedulePickup(noAccount, "real-oauth-bearer-token", "SANDBOX");
+        assertEquals("ERROR", r.status());
+        assertTrue(r.message().contains("shipper account number"),
+                "message must name the missing field for the operator; got: " + r.message());
     }
 
     /* -------------------------- DHL -------------------------- */
