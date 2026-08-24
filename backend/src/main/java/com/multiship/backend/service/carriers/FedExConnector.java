@@ -276,6 +276,18 @@ public class FedExConnector implements CarrierConnector {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return java.util.List.of();
         }
+        // FDX-B1 — recipient country is required. Pre-fix, blank silently
+        // defaulted to "US" in buildRateRequestBody, which returned
+        // US-domestic quotes for what should have been an international
+        // rate-shop. The operator would see believable-but-wrong pricing
+        // and ship anyway. Same guard shape F7 added to createShipment.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "FedEx rate-shop requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before rate-shopping — "
+                            + "quotes without a destination silently fall to US-domestic.");
+        }
         // Guard: caller must supply either a shipment-level weight or a
         // packages[] with at least one entry. Rate-shopping with zero weight
         // is meaningless — return empty so the operator sees "no FedEx rates
@@ -913,6 +925,17 @@ public class FedExConnector implements CarrierConnector {
                     java.util.List.of(), java.util.List.of(),
                     "FedEx EDT needs live credentials; the account is on a fallback token.",
                     null);
+        }
+        // FDX-B1 — recipient country is required. Pre-fix, blank silently
+        // failed the isInternational check (both null == "not international")
+        // and returned NOT_SUPPORTED, suppressing what should have been an
+        // intl duties estimate. Fail loudly instead — same F7-style guard.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "FedEx EDT (duties estimate) requires a recipient country code "
+                            + "(order " + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order — blank recipients "
+                            + "silently suppress duties estimates.");
         }
         if (!isInternational(request)) {
             return new LandedCostResult("FEDEX", "NOT_SUPPORTED",
