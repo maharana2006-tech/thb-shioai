@@ -1385,6 +1385,19 @@ public class DhlConnector implements CarrierConnector {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return List.of();
         }
+        // FDX-B3 — recipient country is required. Pre-fix, blank silently
+        // defaulted to "US" downstream in buildParty (line ~1025 —
+        // firstNonBlank(country, "US")). DHL primarily quotes intl lanes,
+        // so a blank recipient country produced a nonsensical US→US rate
+        // request that DHL either rejected loudly (best case) or returned
+        // wrong "domestic" pricing for (worst case). Same F7 guard.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "DHL rate-shop requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before rate-shopping — "
+                            + "quotes without a destination silently fall to US-domestic.");
+        }
         try {
             Map<String, Object> body = buildRatePayload(request);
             String host = isSandbox(environment)
