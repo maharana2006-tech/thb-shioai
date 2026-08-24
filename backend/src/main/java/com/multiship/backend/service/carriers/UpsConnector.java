@@ -1004,6 +1004,18 @@ public class UpsConnector implements CarrierConnector {
                     "UPS pickup needs live credentials; the account is on a fallback token.",
                     null);
         }
+        // FDX-C2 — pre-fix, buildUpsPickupRequest sent req.address().name()
+        // (the shipper's CONTACT NAME) in the AccountNumber field. UPS
+        // rejected that with a validation error every time. Now guarded at
+        // the entry point + real account plumbed by FDX-C onto
+        // PickupRequest.accountNumber().
+        if (!StringUtils.hasText(request.accountNumber())) {
+            return new PickupResult("UPS", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "UPS pickup needs the shipper account number that owns the labels; none was passed.",
+                    null);
+        }
         try {
             Map<String, Object> body = buildUpsPickupRequest(request);
             String baseUrl = isSandbox(environment)
@@ -1044,8 +1056,12 @@ public class UpsConnector implements CarrierConnector {
         Map<String, Object> body = new LinkedHashMap<>();
         Map<String, Object> pcr = new LinkedHashMap<>();
         pcr.put("RatePickupIndicator", "N");
+        // FDX-C2 — AccountNumber is the SHIPPER'S CARRIER ACCOUNT (not the
+        // contact person's name; pre-fix used req.address().name() by
+        // mistake). AccountCountryCode is the shipper's country from the
+        // pickup address.
         pcr.put("Shipper", Map.of("Account", Map.of(
-                "AccountNumber", firstNonBlank(req.address() == null ? null : req.address().name(), ""),
+                "AccountNumber", firstNonBlank(req.accountNumber(), ""),
                 "AccountCountryCode", firstNonBlank(
                         req.address() == null ? null : req.address().countryCode(), "US"))));
         Map<String, Object> pickupDateInfo = new LinkedHashMap<>();

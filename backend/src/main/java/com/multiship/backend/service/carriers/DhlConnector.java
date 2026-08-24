@@ -760,6 +760,17 @@ public class DhlConnector implements CarrierConnector {
                     "DHL pickup needs live credentials; the account is on a fallback token.",
                     null);
         }
+        // FDX-C2 — pre-fix, buildDhlPickupRequest hardcoded the shipper
+        // account "number" to empty string. DHL rejected that with a
+        // validation error every time. Now guarded at the entry point +
+        // real account plumbed by FDX-C onto PickupRequest.accountNumber().
+        if (!StringUtils.hasText(request.accountNumber())) {
+            return new PickupResult("DHL", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "DHL pickup needs the shipper account number that owns the labels; none was passed.",
+                    null);
+        }
         try {
             Map<String, Object> body = buildDhlPickupRequest(request);
             String host = isSandbox(environment)
@@ -800,9 +811,12 @@ public class DhlConnector implements CarrierConnector {
         payload.put("plannedPickupDateAndTime", formatDhlPickupTimestamp(req));
         payload.put("closeTime", req.pickupWindowEnd() == null
                 ? "17:00" : req.pickupWindowEnd().toString());
+        // FDX-C2 — real shipper account (pre-fix, hardcoded empty string).
+        // schedulePickup already short-circuits when blank; firstNonBlank
+        // defence-in-depth for direct callers in tests.
         payload.put("accounts", List.of(Map.of(
                 "typeCode", "shipper",
-                "number", "")));
+                "number", firstNonBlank(req.accountNumber(), ""))));
 
         AddressToValidate a = req.address();
         Map<String, Object> shipper = new LinkedHashMap<>();
