@@ -1217,10 +1217,24 @@ public class FedExConnector implements CarrierConnector {
         return body;
     }
 
-    /** Produce a FedEx-compatible ISO-8601 timestamp for readyDateTimestamp. */
+    /**
+     * Produce a FedEx-compatible ISO-8601 timestamp for readyDateTimestamp.
+     *
+     * <p>FDX-E — the {@code pickupDate}-missing fallback used to call
+     * {@link java.time.LocalDate#now()} which resolves to the JVM's default
+     * zone (server-dependent — usually UTC on K8s, could be anything on a
+     * dev box). {@link com.multiship.backend.util.LabelDates#today(String)}
+     * with a null zone returns UTC deterministically, matching the pre-F6-E
+     * behavior on label ship dates and the pattern F6-E established for
+     * every other date field. The DTO layer ({@code PickupRequestDTO})
+     * marks {@code pickupDate} as {@code @NotNull} so this fallback only
+     * fires on direct-constructor callers; the fix still tightens the
+     * safety net for those.
+     */
     private static String formatFedExPickupTimestamp(PickupRequest req) {
         java.time.LocalDate date = req.pickupDate() != null
-                ? req.pickupDate() : java.time.LocalDate.now();
+                ? req.pickupDate()
+                : com.multiship.backend.util.LabelDates.today(null);
         java.time.LocalTime time = req.pickupWindowStart() != null
                 ? req.pickupWindowStart() : java.time.LocalTime.of(9, 0);
         return date.toString() + "T" + time.toString();
