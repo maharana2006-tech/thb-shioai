@@ -267,9 +267,12 @@ class FedExRateShopTest {
     }
 
     @Test
-    void parseFedExRateResponseDefaultsCurrencyToUsd() {
-        // Currency omitted → default USD (matches the Sprint 3 FedEx
-        // declaredValue currency fallback).
+    void parseFedExRateResponseReturnsNullCurrencyWhenMissing() {
+        // FDX-D — currency omitted returns null, not the pre-fix silent
+        // "USD" default. FedEx's real responses always include currency;
+        // if one lands without it we surface null instead of mislabeling
+        // (a GBP or EUR rate silently tagged USD over/under-charges by
+        // the FX difference). The rate-shop UI treats null as "no quote".
         String canned = """
                 {
                   "output": {
@@ -288,7 +291,8 @@ class FedExRateShopTest {
                     ]
                   }
                 }""";
-        assertEquals("USD", connector.parseFedExRateResponse(canned).get(0).currency());
+        assertNull(connector.parseFedExRateResponse(canned).get(0).currency(),
+                "missing currency must surface as null, not silently mislabel as USD");
     }
 
     /* -------------------------- Transit time enum matrix -------------------------- */
