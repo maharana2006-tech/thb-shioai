@@ -1,12 +1,18 @@
 package com.multiship.backend.service.wms;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.multiship.backend.dto.OrderImportRowDTO;
+import com.multiship.backend.dto.wms.WmsPendingOrderDTO;
+import com.multiship.backend.dto.wms.WmsPendingOrderDTO.WmsAddress;
+import com.multiship.backend.dto.wms.WmsPendingOrderDTO.WmsContainer;
 import com.multiship.backend.dto.wms.WmsPullResultDTO;
-import com.multiship.backend.dto.wms.WmsShippableOrderDTO;
-import com.multiship.backend.model.Order;
-import com.multiship.backend.repository.OrderRepository;
+import com.multiship.backend.model.ImportBatch;
+import com.multiship.backend.repository.ImportBatchRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 
@@ -15,50 +21,71 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Unit coverage for {@link WmsService}. The service was direct-pushed
- * with zero tests. Every branch of {@link WmsService#pullShippable} is
- * exercised: unconfigured no-op, blank/null externalId → failed,
- * existing externalId → skipped (idempotent re-pull), successful save →
- * imported, save exception → failed. The {@code toOrder} mapping is
- * verified through the successful-import path via an ArgumentCaptor
- * on {@code orderRepository.save}.
+ * Unit coverage for {@link WmsService} against the real WMS
+ * {@code /api/v1/shipping-label/pending-orders} contract. Each fetch is recorded
+ * as ONE editable import batch (source = WMS): unconfigured no-op, blank/null
+ * shipmentNumber → failed, the row field-mapping (crammed-address cleanup,
+ * container-weight sum, ship-via → carrier), and up-front validation that flags
+ * the missing billing client so it shows in the grid.
  */
 class WmsServiceTest {
 
     private WmsClient wmsClient;
-    private OrderRepository orderRepository;
+    private ImportBatchRepository importBatchRepository;
+    private final ObjectMapper mapper = new ObjectMapper();
     private WmsService service;
 
     @BeforeEach
     void setUp() {
         wmsClient = mock(WmsClient.class);
-        orderRepository = mock(OrderRepository.class);
-        service = new WmsService(wmsClient, orderRepository);
+        importBatchRepository = mock(ImportBatchRepository.class);
+        service = new WmsService(wmsClient);
+        ReflectionTestUtils.setField(service, "importBatchRepository", importBatchRepository);
+        ReflectionTestUtils.setField(service, "importObjectMapper", mapper);
+        when(importBatchRepository.save(any(ImportBatch.class))).thenAnswer(inv -> {
+            ImportBatch b = inv.getArgument(0);
+            b.setId(1L);
+            return b;
+        });
     }
 
-    private WmsShippableOrderDTO sample(String externalId, String clientCode) {
-        WmsShippableOrderDTO dto = new WmsShippableOrderDTO();
-        dto.setExternalId(externalId);
-        dto.setClientCode(clientCode);
-        dto.setRecipientName("Jane Recipient");
-        dto.setRecipientCompany("Recipient Co.");
-        dto.setAddressLine1("42 Overseas Ave");
-        dto.setCity("London");
-        dto.setState("");
-        dto.setPostalCode("SW1A 1AA");
-        dto.setCountryCode("GB");
-        dto.setCarrierCode("UPS");
-        dto.setServiceType("UPS_WS");
-        dto.setWeight(2.5);
-        dto.setReference("PO-9876");
+    private WmsPendingOrderDTO sample(String shipmentNumber, String custNo) {
+        WmsPendingOrderDTO dto = new WmsPendingOrderDTO();
+        dto.setOrderNo("ORD-64596");
+        dto.setPoNumber("PO-9876");
+        dto.setShipmentNumber(shipmentNumber);
+        dto.setCustNo(custNo);
+        dto.setShipVia("U11");
+        WmsAddress to = new WmsAddress();
+        to.setName("Jane Recipient");
+        to.setAttn("Emily Contact");
+        // WMS crams the street + city/state/zip into addr1 with long space runs.
+        to.setAddr1("42 Overseas Ave           London, GB SW1A 1AA      ");
+        to.setCity("London");
+        to.setState("");
+        to.setZip("SW1A 1AA");
+        to.setCountry("GB");
+        dto.setShipToAddress(to);
+        WmsContainer c1 = new WmsContainer();
+        c1.setWeight(1.5);
+        WmsContainer c2 = new WmsContainer();
+        c2.setWeight(1.0);
+        dto.setContainers(List.of(c1, c2));
         return dto;
+    }
+
+    /** Parse the rows_json off the single ImportBatch the pull saved. */
+    private List<OrderImportRowDTO> capturedRows() throws Exception {
+        ArgumentCaptor<ImportBatch> cap = ArgumentCaptor.forClass(ImportBatch.class);
+        verify(importBatchRepository).save(cap.capture());
+        return mapper.readValue(cap.getValue().getRowsJson(),
+                new TypeReference<List<OrderImportRowDTO>>() {});
     }
 
     // ===== isConfigured — pure delegation =====
@@ -84,20 +111,16 @@ class WmsServiceTest {
         WmsPullResultDTO result = service.pullShippable("alice");
 
         assertFalse(result.isConfigured());
-        assertTrue(result.getMessages().get(0).contains("WMS_BASE_URL"),
-                "message must tell the operator how to enable the pull");
+        assertTrue(result.getMessages().get(0).contains("WMS_BASE_URL"));
         assertTrue(result.getImportedOrderNos().isEmpty());
-        // Critical: no WMS fetch when unconfigured — the client's mock
-        // fetchShippable would return an empty list even if called, but we
-        // want to prove the guard SHORT-CIRCUITS before the HTTP call.
         verify(wmsClient, never()).fetchShippable();
-        verify(orderRepository, never()).save(any());
+        verify(importBatchRepository, never()).save(any());
     }
 
-    // ===== empty WMS list =====
+    // ===== empty WMS list — no batch recorded =====
 
     @Test
-    void pullShippable_emptyList_reportsZeroCounts_noSaves() {
+    void pullShippable_emptyList_reportsZeroCounts_noBatch() {
         when(wmsClient.isConfigured()).thenReturn(true);
         when(wmsClient.fetchShippable()).thenReturn(List.of());
 
@@ -106,220 +129,160 @@ class WmsServiceTest {
         assertTrue(result.isConfigured());
         assertEquals(0, result.getFetched());
         assertEquals(0, result.getImported());
-        assertEquals(0, result.getSkipped());
-        assertEquals(0, result.getFailed());
-        verify(orderRepository, never()).save(any());
+        assertNull(result.getImportBatchId());
+        verify(importBatchRepository, never()).save(any());
     }
 
     // ===== bad-input branches =====
 
     @Test
-    void pullShippable_blankExternalId_countsAsFailed_withMessage() {
-        WmsShippableOrderDTO bad = sample("   ", "ACME");
+    void pullShippable_blankShipmentNumber_countsAsFailed_noBatch() {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(bad));
+        when(wmsClient.fetchShippable()).thenReturn(List.of(sample("   ", "ACME")));
 
         WmsPullResultDTO result = service.pullShippable("alice");
 
         assertEquals(1, result.getFetched());
-        assertEquals(0, result.getImported());
         assertEquals(1, result.getFailed());
-        assertTrue(result.getMessages().get(0).contains("no externalId"));
-        verify(orderRepository, never()).save(any());
+        assertEquals(0, result.getImported());
+        assertTrue(result.getMessages().get(0).contains("no shipmentNumber"));
+        verify(importBatchRepository, never()).save(any());
     }
 
     @Test
     void pullShippable_nullDto_countsAsFailed_withoutNullPointer() {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(java.util.Arrays.asList((WmsShippableOrderDTO) null));
+        when(wmsClient.fetchShippable()).thenReturn(java.util.Arrays.asList((WmsPendingOrderDTO) null));
 
         WmsPullResultDTO result = service.pullShippable("alice");
 
-        assertEquals(1, result.getFailed(),
-                "a null entry in the WMS list must be counted, not thrown on");
-        verify(orderRepository, never()).save(any());
+        assertEquals(1, result.getFailed());
+        verify(importBatchRepository, never()).save(any());
     }
 
-    // ===== idempotent re-pull =====
+    // ===== no dedup — each fetch is its own snapshot batch =====
 
     @Test
-    void pullShippable_alreadyImported_countsAsSkipped_noSave() {
-        WmsShippableOrderDTO existing = sample("WMS-EXT-1", "ACME");
+    void pullShippable_neverSkips_recordsEveryShipment() {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(existing));
-        when(orderRepository.existsByWmsExternalId("WMS-EXT-1")).thenReturn(true);
+        when(wmsClient.fetchShippable()).thenReturn(List.of(sample("SHP-1", "ACME")));
 
         WmsPullResultDTO result = service.pullShippable("alice");
 
-        assertEquals(1, result.getFetched());
+        assertEquals(0, result.getSkipped());
+        assertEquals(1, result.getImported());
+        assertEquals(1L, result.getImportBatchId());
+    }
+
+    // ===== dedup: re-fetching the same set reuses the batch =====
+
+    @Test
+    void pullShippable_sameSetReFetched_reusesExistingBatch_noNewSave() {
+        when(wmsClient.isConfigured()).thenReturn(true);
+        when(wmsClient.fetchShippable()).thenReturn(List.of(sample("SHP-D1", "ACME")));
+        ImportBatch existing = new ImportBatch();
+        existing.setId(77L);
+        existing.setSource("WMS");
+        when(importBatchRepository.findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(any()))
+                .thenReturn(java.util.Optional.of(existing));
+
+        WmsPullResultDTO result = service.pullShippable("alice");
+
         assertEquals(0, result.getImported());
         assertEquals(1, result.getSkipped());
-        assertEquals(0, result.getFailed());
-        verify(orderRepository, never()).save(any());
+        assertEquals(77L, result.getImportBatchId());
+        verify(importBatchRepository, never()).save(any());
+        assertTrue(result.getMessages().stream().anyMatch(m -> m.contains("already fetched")));
     }
 
-    // ===== successful import + toOrder mapping =====
+    // ===== successful import + row mapping =====
 
     @Test
-    void pullShippable_newOrder_saves_countsAsImported_andReturnsOrderNo() {
-        WmsShippableOrderDTO fresh = sample("WMS-EXT-99", "ACME");
+    void pullShippable_recordsOneBatch_sourceWms_ready() {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(fresh));
-        when(orderRepository.existsByWmsExternalId("WMS-EXT-99")).thenReturn(false);
-        when(orderRepository.nextManualOrderNo()).thenReturn(70001);
-        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
-            Order arg = inv.getArgument(0);
-            arg.setOrderNo(arg.getOrderNo() != null ? arg.getOrderNo() : 70001);
-            return arg;
-        });
+        when(wmsClient.fetchShippable()).thenReturn(List.of(sample("SHP-99", "ACME")));
 
         WmsPullResultDTO result = service.pullShippable("alice");
 
         assertEquals(1, result.getImported());
-        assertEquals(0, result.getSkipped());
-        assertEquals(0, result.getFailed());
-        assertEquals(List.of(70001), result.getImportedOrderNos());
+        ArgumentCaptor<ImportBatch> cap = ArgumentCaptor.forClass(ImportBatch.class);
+        verify(importBatchRepository).save(cap.capture());
+        ImportBatch b = cap.getValue();
+        assertEquals("WMS", b.getSource());
+        assertEquals(1, b.getTotalRows());
+        assertEquals(0, b.getInvalidRows());
+        // A complete, valid client → ready to generate.
+        assertEquals("INITIATE", b.getStatus());
     }
 
     @Test
-    void toOrder_mapsAllFields_fromDtoOntoTheEntity() {
-        WmsShippableOrderDTO fresh = sample("WMS-42", "ACME");
+    void toImportRow_mapsFields_cleansAddress_sumsWeight_mapsCarrier() throws Exception {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(fresh));
-        when(orderRepository.existsByWmsExternalId("WMS-42")).thenReturn(false);
-        when(orderRepository.nextManualOrderNo()).thenReturn(70002);
-        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(wmsClient.fetchShippable()).thenReturn(List.of(sample("SHP-42", "ACME")));
 
         service.pullShippable("alice");
 
-        ArgumentCaptor<Order> saved = ArgumentCaptor.forClass(Order.class);
-        verify(orderRepository).save(saved.capture());
-        Order order = saved.getValue();
-
-        assertEquals(70002, order.getOrderNo());
-        assertEquals(0, order.getOrderSuffix());
-        assertEquals("PENDING", order.getOrderStatus(),
-                "WMS-imported orders start PENDING — they still need labels generated");
-        assertEquals("WMS", order.getSource());
-        assertEquals("N", order.getIsManual());
-        assertEquals("N", order.getIsReturn());
-        assertEquals("WMS-42", order.getWmsExternalId());
-        assertEquals("ACME", order.getCustNo());
-        assertEquals("ACME", order.getTenantId());
-        assertEquals("Jane Recipient", order.getShipName());
-        assertEquals("Recipient Co.", order.getShipAttn());
-        assertEquals("42 Overseas Ave", order.getShipAddr1());
-        assertEquals("London", order.getShiptoCity());
-        assertEquals("SW1A 1AA", order.getShiptoZip());
-        assertEquals("GB", order.getShiptoCountryCd());
-        assertEquals("PO-9876", order.getGoodsDesc());
-        assertEquals(0, order.getWeight().compareTo(new java.math.BigDecimal("2.5")));
+        OrderImportRowDTO r = capturedRows().get(0);
+        assertEquals("ORD-64596", r.getOrderRef());
+        assertEquals("ACME", r.getClientCode());
+        assertEquals("Jane Recipient", r.getRecipientName());
+        assertEquals("Emily Contact", r.getRecipientCompany());
+        // Crammed addr1 reduced to just the street.
+        assertEquals("42 Overseas Ave", r.getAddressLine1());
+        assertEquals("London", r.getCity());
+        assertEquals("SW1A 1AA", r.getPostalCode());
+        assertEquals("GB", r.getCountryCode());
+        // U11 → UPS heuristic.
+        assertEquals("UPS", r.getCarrierCode());
+        assertEquals("PO-9876", r.getReference());
+        assertEquals("LB", r.getWeightUnit());
+        // 1.5 + 1.0 containers → 2.5.
+        assertEquals(0, r.getWeight().compareTo(new java.math.BigDecimal("2.5")));
+        // Complete client + address → valid.
+        assertTrue(r.getErrors() == null || r.getErrors().isEmpty());
     }
 
     @Test
-    void toOrder_shipviaCd_prefersServiceType_overCarrierCode() {
-        WmsShippableOrderDTO dto = sample("WMS-A", "ACME");
-        // Both set; serviceType wins.
-        dto.setCarrierCode("UPS");
-        dto.setServiceType("UPS_NEXT_DAY");
+    void toImportRow_blankCustNo_flagsClientRequired_batchIsDraft() throws Exception {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(dto));
-        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(wmsClient.fetchShippable()).thenReturn(List.of(sample("SHP-C", "")));
 
         service.pullShippable("alice");
 
-        ArgumentCaptor<Order> saved = ArgumentCaptor.forClass(Order.class);
-        verify(orderRepository).save(saved.capture());
-        assertEquals("UPS_NEXT_DAY", saved.getValue().getShipviaCd(),
-                "serviceType is more specific than carrierCode — prefer it");
+        OrderImportRowDTO r = capturedRows().get(0);
+        assertNull(r.getClientCode());
+        assertTrue(r.getErrors().stream().anyMatch(e -> e.contains("clientCode")));
+
+        ArgumentCaptor<ImportBatch> cap = ArgumentCaptor.forClass(ImportBatch.class);
+        verify(importBatchRepository).save(cap.capture());
+        // A row needing fixes holds the batch in DRAFT (Generate gated off).
+        assertEquals("DRAFT", cap.getValue().getStatus());
+        assertEquals(1, cap.getValue().getInvalidRows());
     }
 
+    // ===== ship-via → carrier heuristic =====
+
     @Test
-    void toOrder_shipviaCd_fallsBackToCarrierCode_whenServiceTypeBlank() {
-        WmsShippableOrderDTO dto = sample("WMS-B", "ACME");
-        dto.setCarrierCode("UPS");
-        dto.setServiceType("");   // blank → fall through to carrierCode
-        when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(dto));
-        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        service.pullShippable("alice");
-
-        ArgumentCaptor<Order> saved = ArgumentCaptor.forClass(Order.class);
-        verify(orderRepository).save(saved.capture());
-        assertEquals("UPS", saved.getValue().getShipviaCd());
+    void mapCarrier_heuristics() {
+        assertEquals("UPS", WmsService.mapCarrier("U11"));
+        assertEquals("FEDEX", WmsService.mapCarrier("F03"));
+        assertEquals("USPS", WmsService.mapCarrier("USPS-PM"));
+        assertNull(WmsService.mapCarrier("  "));
     }
 
-    @Test
-    void toOrder_clientCodeBlank_stillProduces_orderWithFallbackCustNo() {
-        WmsShippableOrderDTO dto = sample("WMS-C", "");
-        when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(dto));
-        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        service.pullShippable("alice");
-
-        ArgumentCaptor<Order> saved = ArgumentCaptor.forClass(Order.class);
-        verify(orderRepository).save(saved.capture());
-        Order o = saved.getValue();
-        assertEquals("WMS", o.getCustNo(),
-                "custNo falls back to 'WMS' when the WMS omits clientCode");
-        assertNull(o.getTenantId(),
-                "tenantId stays null when clientCode is blank — no phantom scope");
-    }
-
-    // ===== per-row failure isolation =====
+    // ===== mixed batch summary (blank shipmentNumber excluded) =====
 
     @Test
-    void pullShippable_saveException_countsAsFailed_withMessage_andDoesNotKillJob() {
-        WmsShippableOrderDTO row1 = sample("WMS-OK-1", "ACME");
-        WmsShippableOrderDTO row2 = sample("WMS-BOOM", "ACME");
-        WmsShippableOrderDTO row3 = sample("WMS-OK-2", "ACME");
+    void pullShippable_mixedBatch_reportsAccurateCounts() {
         when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(row1, row2, row3));
-        when(orderRepository.existsByWmsExternalId(any())).thenReturn(false);
-        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> {
-            Order arg = inv.getArgument(0);
-            if ("WMS-BOOM".equals(arg.getWmsExternalId())) {
-                throw new RuntimeException("DB unique violation simulated");
-            }
-            return arg;
-        });
+        when(wmsClient.fetchShippable()).thenReturn(List.of(
+                sample("SHP-N1", "ACME"), sample("", "ACME"), sample("SHP-N2", "ACME")));
 
         WmsPullResultDTO result = service.pullShippable("alice");
 
         assertEquals(3, result.getFetched());
-        assertEquals(2, result.getImported(), "row1 + row3 survive");
+        assertEquals(2, result.getImported());   // the two with a shipmentNumber
+        assertEquals(1, result.getFailed());      // blank shipmentNumber
         assertEquals(0, result.getSkipped());
-        assertEquals(1, result.getFailed());
-        assertTrue(result.getMessages().stream().anyMatch(m -> m.contains("WMS-BOOM")));
-        assertTrue(result.getMessages().stream().anyMatch(m -> m.contains("DB unique violation")));
-    }
-
-    // ===== mixed batch summary =====
-
-    @Test
-    void pullShippable_mixedBatch_reportsAccurateCounts() {
-        WmsShippableOrderDTO existing = sample("WMS-E1", "ACME");
-        WmsShippableOrderDTO fresh1 = sample("WMS-N1", "ACME");
-        WmsShippableOrderDTO badId = sample("", "ACME");
-        WmsShippableOrderDTO fresh2 = sample("WMS-N2", "ACME");
-        when(wmsClient.isConfigured()).thenReturn(true);
-        when(wmsClient.fetchShippable()).thenReturn(List.of(existing, fresh1, badId, fresh2));
-        when(orderRepository.existsByWmsExternalId("WMS-E1")).thenReturn(true);
-        when(orderRepository.existsByWmsExternalId("WMS-N1")).thenReturn(false);
-        when(orderRepository.existsByWmsExternalId("WMS-N2")).thenReturn(false);
-        when(orderRepository.save(any(Order.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        WmsPullResultDTO result = service.pullShippable("alice");
-
-        assertEquals(4, result.getFetched());
-        assertEquals(2, result.getImported(), "N1 + N2");
-        assertEquals(1, result.getSkipped(), "E1");
-        assertEquals(1, result.getFailed(), "blank externalId");
-        // Save called exactly for the two importable rows — never for the
-        // existing (already-imported) row.
-        verify(orderRepository, never()).save(
-                org.mockito.ArgumentMatchers.<Order>argThat(o -> "WMS-E1".equals(o.getWmsExternalId())));
     }
 }

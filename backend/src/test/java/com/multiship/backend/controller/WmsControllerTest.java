@@ -2,6 +2,7 @@ package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.wms.WmsPullResultDTO;
+import com.multiship.backend.service.OrderImportService;
 import com.multiship.backend.service.wms.WmsClient;
 import com.multiship.backend.service.wms.WmsService;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,12 +35,14 @@ import static org.mockito.Mockito.when;
 class WmsControllerTest {
 
     private WmsService wmsService;
+    private OrderImportService orderImportService;
     private WmsController controller;
 
     @BeforeEach
     void setUp() {
         wmsService = mock(WmsService.class);
-        controller = new WmsController(wmsService);
+        orderImportService = mock(OrderImportService.class);
+        controller = new WmsController(wmsService, orderImportService);
     }
 
     private UserDetails alice() {

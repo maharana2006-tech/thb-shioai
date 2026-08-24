@@ -3,6 +3,7 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { orderService, type Order } from '../api/orderService'
 import { notify } from '../utils/notify'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
+import ApiBatchList from './ApiBatchList'
 
 /**
  * Order Intake → "All orders" view. A unified list of every order regardless of
@@ -73,6 +74,8 @@ export default function AllOrdersHistory() {
   }, [source, debounced])
 
   useEffect(() => {
+    // The API section is a batch view (ApiBatchList), not the flat order list.
+    if (source === 'API') return
     let cancelled = false
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-lifecycle loading flag
     setLoading(true)
@@ -209,42 +212,47 @@ export default function AllOrdersHistory() {
         })}
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
-      <AdvancedDataTable<Order>
-        tableKey="order-intake-all-orders"
-        columns={columns}
-        data={rows}
-        manualPagination
-        pageIndex={page}
-        pageSize={pageSize}
-        pageCount={pageCount}
-        onPaginationChange={(next) => {
-          setPage(next.pageIndex)
-          setPageSize(next.pageSize)
-        }}
-        search={{ value: search, onChange: setSearch, placeholder: 'Search order #, city, client, tracking…' }}
-        csvFilename="order-intake-orders"
-        caption={
-          loading
-            ? 'Loading…'
-            : `Showing ${rows.length ? page * pageSize + 1 : 0}–${page * pageSize + rows.length} of ${total} orders`
-        }
-        emptyState={
-          <p className="px-5 py-14 text-center text-sm text-[#8a7959]">
-            No orders match {source === 'ALL' ? 'your search' : `source “${SOURCE_LABEL[source]}”`}.
-          </p>
-        }
-        toolbarActions={
-          <button
-            type="button"
-            onClick={() => setReload((n) => n + 1)}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-          >
-            Refresh
-          </button>
-        }
-      />
-      </div>
+      {source === 'API' ? (
+        // The API section is a batch view — one card per WMS/API fetch, open to reveal its shipments.
+        <ApiBatchList />
+      ) : (
+        <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+          <AdvancedDataTable<Order>
+            tableKey="order-intake-all-orders"
+            columns={columns}
+            data={rows}
+            manualPagination
+            pageIndex={page}
+            pageSize={pageSize}
+            pageCount={pageCount}
+            onPaginationChange={(next) => {
+              setPage(next.pageIndex)
+              setPageSize(next.pageSize)
+            }}
+            search={{ value: search, onChange: setSearch, placeholder: 'Search order #, city, client, tracking…' }}
+            csvFilename="order-intake-orders"
+            caption={
+              loading
+                ? 'Loading…'
+                : `Showing ${rows.length ? page * pageSize + 1 : 0}–${page * pageSize + rows.length} of ${total} orders`
+            }
+            emptyState={
+              <p className="px-5 py-14 text-center text-sm text-[#8a7959]">
+                No orders match {source === 'ALL' ? 'your search' : `source “${SOURCE_LABEL[source]}”`}.
+              </p>
+            }
+            toolbarActions={
+              <button
+                type="button"
+                onClick={() => setReload((n) => n + 1)}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+              >
+                Refresh
+              </button>
+            }
+          />
+        </div>
+      )}
     </div>
   )
 }

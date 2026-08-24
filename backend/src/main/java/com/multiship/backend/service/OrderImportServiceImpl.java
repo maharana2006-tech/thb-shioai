@@ -1082,13 +1082,20 @@ public class OrderImportServiceImpl implements OrderImportService {
         return commit(rows, requestedBy, false);
     }
 
+    public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy,
+                                                     boolean usePlatformAccount) {
+        return commit(rows, requestedBy, usePlatformAccount, null);
+    }
+
     /**
      * @param usePlatformAccount when true, every group bills to the platform
      *   (house) account for its carrier, overriding any row/client account.
      *   Used by the Data History "Use platform account" generate option.
+     * @param sourceOverride stamps the persisted order's {@code source} (e.g.
+     *   "API" for WMS-fetched batches). Null → the default "BULK".
      */
     public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy,
-                                                     boolean usePlatformAccount) {
+                                                     boolean usePlatformAccount, String sourceOverride) {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
         }
@@ -1159,7 +1166,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         List<Callable<GroupOutcome>> tasks = new ArrayList<>(groupCount);
         for (Map.Entry<String, List<OrderImportRowDTO>> entry : groups.entrySet()) {
             List<OrderImportRowDTO> group = entry.getValue();
-            tasks.add(() -> processGroup(group, batchId, usePlatformAccount));
+            tasks.add(() -> processGroup(group, batchId, usePlatformAccount, sourceOverride));
         }
 
         // Sprint 50 Tier 1 finding #15 — tenant key for fair-share. Groups
@@ -1334,7 +1341,25 @@ public class OrderImportServiceImpl implements OrderImportService {
     @Override
     public java.util.List<com.multiship.backend.dto.ImportBatchDTO> history() {
         if (importBatchRepository == null) return java.util.List.of();
-        return summariesFor(importBatchRepository.findAllByDeletedAtIsNullOrderByIdDesc());
+        // WMS/API fetches surface under the "API" section of All Orders, not in
+        // the CSV/XLSX Import history — filter them out here.
+        return summariesFor(importBatchRepository.findAllByDeletedAtIsNullOrderByIdDesc()
+                .stream().filter(b -> !isApiSource(b.getSource())).toList());
+    }
+
+    /** Batches from a non-file source (WMS / external API) — shown in the API section. */
+    @Override
+    public java.util.List<com.multiship.backend.dto.ImportBatchDTO> apiBatches() {
+        if (importBatchRepository == null) return java.util.List.of();
+        return summariesFor(importBatchRepository.findAllByDeletedAtIsNullOrderByIdDesc()
+                .stream().filter(b -> isApiSource(b.getSource())).toList());
+    }
+
+    /** True for batches that belong under the API section (WMS pulls, external API). */
+    private static boolean isApiSource(String source) {
+        if (source == null) return false;
+        String s = source.trim().toUpperCase();
+        return s.equals("WMS") || s.equals("API");
     }
 
     @Override
@@ -1372,6 +1397,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .deletedAt(b.getDeletedAt() == null ? null : b.getDeletedAt().toString())
                         .deletedBy(b.getDeletedBy())
                         .billingMode(StringUtils.hasText(b.getBillingMode()) ? b.getBillingMode() : "AUTO")
+                        .source(StringUtils.hasText(b.getSource()) ? b.getSource() : "BULK")
                         .build())
                 .toList();
     }
@@ -1475,6 +1501,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .totalRows(b.getTotalRows())
                 .savedRows(b.getSavedRows())
                 .invalidRows(b.getInvalidRows())
+                .billingMode(StringUtils.hasText(b.getBillingMode()) ? b.getBillingMode() : "AUTO")
+                .source(StringUtils.hasText(b.getSource()) ? b.getSource() : "BULK")
                 .rows(parsedRows)
                 .build();
     }
@@ -1537,7 +1565,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         // generatedStatus (GENERATED / FAILED) in place. platform forces the
         // house account for every row; onlyFailed limits to the not-yet-done subset.
         if (!rowsToProcess.isEmpty()) {
-            commit(rowsToProcess, requestedBy, platform);
+            // WMS/API batches persist their generated orders as source=API.
+            String sourceOverride = isApiSource(batch.getSource()) ? "API" : null;
+            commit(rowsToProcess, requestedBy, platform, sourceOverride);
         }
 
         int total = rows.size();
@@ -1617,8 +1647,10 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .orElse(null);
         if (target == null) return toBatchDTO(batch, rows);
 
-        // Generate just this one row (commit mutates it in place).
-        commit(new ArrayList<>(List.of(target)), requestedBy);
+        // Generate just this one row (commit mutates it in place). WMS/API
+        // batches persist their order as source=API, matching full-batch generate.
+        String sourceOverride = isApiSource(batch.getSource()) ? "API" : null;
+        commit(new ArrayList<>(List.of(target)), requestedBy, false, sourceOverride);
 
         int total = rows.size();
         int generated = (int) rows.stream()
@@ -1790,6 +1822,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .deletedAt(batch.getDeletedAt() == null ? null : batch.getDeletedAt().toString())
                 .deletedBy(batch.getDeletedBy())
                 .billingMode(StringUtils.hasText(batch.getBillingMode()) ? batch.getBillingMode() : "AUTO")
+                .source(StringUtils.hasText(batch.getSource()) ? batch.getSource() : "BULK")
                 .rows(rows)
                 .build();
     }
@@ -2359,7 +2392,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             Map.entry("MX", java.util.regex.Pattern.compile("^\\d{5}$")),
             Map.entry("SG", java.util.regex.Pattern.compile("^\\d{6}$")));
 
-    static List<String> validateRow(OrderImportRowDTO row) {
+    public static List<String> validateRow(OrderImportRowDTO row) {
         List<String> errors = new ArrayList<>();
         // Sprint 51 — clientCode is the owning-client identifier; a blank one
         // was silently accepted (validateReferences only checks it when
@@ -2527,7 +2560,7 @@ public class OrderImportServiceImpl implements OrderImportService {
      *  status), so two uploads of the same file collide even if renamed, while
      *  an edited file hashes differently. Null when hashing is unavailable —
      *  callers then skip the duplicate guard rather than block. */
-    private static String contentHash(List<OrderImportRowDTO> rows) {
+    public static String contentHash(List<OrderImportRowDTO> rows) {
         if (rows == null || rows.isEmpty()) return null;
         StringBuilder sb = new StringBuilder(rows.size() * 64);
         for (OrderImportRowDTO r : rows) {
@@ -2656,7 +2689,8 @@ public class OrderImportServiceImpl implements OrderImportService {
      * invocation). Catches every failure per-group so one bad row can't
      * take down the whole batch.
      */
-    private GroupOutcome processGroup(List<OrderImportRowDTO> group, Integer batchId, boolean usePlatformAccount) {
+    private GroupOutcome processGroup(List<OrderImportRowDTO> group, Integer batchId, boolean usePlatformAccount,
+                                      String sourceOverride) {
         OrderImportRowDTO leader = group.get(0);
         // Merge shape errors with the reference/international errors already
         // stamped on the row by the pre-loop validators (commit() runs
@@ -2679,6 +2713,9 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         try {
             com.multiship.backend.dto.ManualShipmentRequest req = toManualShipmentRequest(group);
+            // WMS/API-fetched batches persist their orders as source=API (not
+            // the default BULK) so they stay grouped under the API section.
+            if (StringUtils.hasText(sourceOverride)) req.setSource(sourceOverride);
 
             // Sprint 51 fix #2 — establish the ship-from origin from the
             // client's configured address. Without a sender the manual path

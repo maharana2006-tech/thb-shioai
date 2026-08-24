@@ -19,6 +19,10 @@ public class WmsPullResultDTO {
     private int skipped;
     /** How many failed to import (bad/missing data). */
     private int failed;
+    /** Batch id all orders from this fetch were grouped under (null if none imported). */
+    private Integer batchId;
+    /** Import-history batch id recording this fetch (null if none imported / not recorded). */
+    private Long importBatchId;
     /** The order numbers created by this pull. */
     private List<Integer> importedOrderNos;
     /** Per-row notes (skips / failures) for the operator. */

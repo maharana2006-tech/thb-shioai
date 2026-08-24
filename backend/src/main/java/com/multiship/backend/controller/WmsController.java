@@ -1,7 +1,9 @@
 package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.ApiResponse;
+import com.multiship.backend.dto.ImportBatchDTO;
 import com.multiship.backend.dto.wms.WmsPullResultDTO;
+import com.multiship.backend.service.OrderImportService;
 import com.multiship.backend.service.wms.WmsClient;
 import com.multiship.backend.service.wms.WmsService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -13,11 +15,13 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -34,6 +38,7 @@ import java.util.Map;
 public class WmsController {
 
     private final WmsService wmsService;
+    private final OrderImportService orderImportService;
 
     @Operation(summary = "Is the WMS integration configured?",
             description = "Returns { configured: true|false }. False until WMS_BASE_URL + WMS_API_KEY are set.")
@@ -45,6 +50,36 @@ public class WmsController {
                 .message("WMS status")
                 .data(Map.of("configured", wmsService.isConfigured()))
                 .build());
+    }
+
+    @Operation(summary = "List API/WMS fetch batches",
+            description = "Each 'Fetch from WMS' is one batch. Shown as openable cards under the API " +
+                    "section of All Orders (not in the CSV/XLSX Import history).")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/batches")
+    public ResponseEntity<ApiResponse<List<ImportBatchDTO>>> batches() {
+        return ResponseEntity.ok(ApiResponse.<List<ImportBatchDTO>>builder()
+                .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
+                .message("API batches")
+                .data(orderImportService.apiBatches())
+                .build());
+    }
+
+    @Operation(summary = "One API/WMS batch with its shipment rows",
+            description = "The full row payload for a single fetch batch, to expand a batch card.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/batches/{id}")
+    public ResponseEntity<ApiResponse<ImportBatchDTO>> batch(@PathVariable Long id) {
+        ImportBatchDTO dto = orderImportService.historyDetail(id);
+        if (dto == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.<ImportBatchDTO>builder()
+                            .status("ERROR").code(404).timestamp(LocalDateTime.now())
+                            .message("Batch not found").build());
+        }
+        return ResponseEntity.ok(ApiResponse.<ImportBatchDTO>builder()
+                .status("SUCCESS").code(200).timestamp(LocalDateTime.now())
+                .message("API batch").data(dto).build());
     }
 
     @Operation(summary = "Pull shippable orders from the WMS",

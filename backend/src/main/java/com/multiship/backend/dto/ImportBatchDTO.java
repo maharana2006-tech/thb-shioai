@@ -27,5 +27,7 @@ public class ImportBatchDTO {
     private String deletedBy;
     /** Bill-to account mode: AUTO (cascade) or PLATFORM (house account). */
     private String billingMode;
+    /** Origin of the rows: BULK (uploaded file) or WMS (Fetch from WMS). Null = BULK. */
+    private String source;
     private List<OrderImportRowDTO> rows;
 }

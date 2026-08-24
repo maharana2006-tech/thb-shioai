@@ -21,6 +21,7 @@ import PageSectionHeader from './workspace/PageSectionHeader'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import AllOrdersHistory from './AllOrdersHistory'
 import OrderImportModal from './modals/OrderImportModal'
+import { GridCell, DH_COLUMNS, bucketRowErrors, type DhColumn } from './batchGrid'
 import { notify } from '../utils/notify'
 import {
   orderImportService,
@@ -455,6 +456,7 @@ export default function DataHistoryPage() {
         accessorFn: (b) => b.fileName ?? '',
         cell: ({ row }) => {
           const b = row.original
+          const isWms = (b.source || '').toUpperCase() === 'WMS'
           return (
             <span className="block min-w-0">
               <span className="flex items-center gap-1.5">
@@ -462,6 +464,14 @@ export default function DataHistoryPage() {
                 <span className="truncate text-[12.5px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
                   {b.fileName || 'Untitled import'}
                 </span>
+                {isWms ? (
+                  <span
+                    title="Pulled in by Fetch from WMS — orders are PENDING and labelled in the Shipments workspace"
+                    className="inline-flex shrink-0 items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-emerald-700 ring-1 ring-emerald-200"
+                  >
+                    WMS
+                  </span>
+                ) : null}
               </span>
               <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#8a7959]">
                 <span>
@@ -526,7 +536,11 @@ export default function DataHistoryPage() {
         cell: ({ row }) => {
           const b = row.original
           const st = (b.status || '').toUpperCase()
-          const canGenerate = canWrite && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED')
+          // WMS fetches are a read-only record — their orders are already
+          // created (PENDING) and labelled in the Shipments workspace, so the
+          // batch-level Generate/Retry flow doesn't apply.
+          const isWms = (b.source || '').toUpperCase() === 'WMS'
+          const canGenerate = canWrite && !isWms && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED')
           const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED'
           const busy = generatingId === b.id
           const platform = b.billingMode === 'PLATFORM'
@@ -667,6 +681,7 @@ export default function DataHistoryPage() {
                   {rows.map((r) => {
                     const ok = (r.errors?.length ?? 0) === 0
                     const gen = (r.generatedStatus ?? '').toUpperCase()
+                    const rowIsWms = (b.source || '').toUpperCase() === 'WMS'
                     const generated = gen === 'GENERATED'
                     const rowKey = `${b.id}-${r.rowNumber}`
                     const rowBusy = genRowKey === rowKey
@@ -713,6 +728,13 @@ export default function DataHistoryPage() {
                               ) : (
                                 <span className="text-[9.5px] text-[#8a7959]">—</span>
                               )}
+                            </span>
+                          ) : rowIsWms ? (
+                            <span
+                              className="text-[9.5px] text-[#8a7959]"
+                              title="Imported from WMS as a PENDING order — generate the label in the Shipments workspace"
+                            >
+                              {r.generatedOrderNo ? `Order #${r.generatedOrderNo} · label in Shipments` : 'Label in Shipments'}
                             </span>
                           ) : !canWrite ? (
                             <span className="text-[9.5px] text-[#b6a684]">Read-only view</span>
@@ -1082,131 +1104,3 @@ export default function DataHistoryPage() {
   )
 }
 
-// Every backend validation message is prefixed with the column it belongs to
-// ("postalCode is required", "hsCode is required for international shipments…").
-// This maps a message to its field so the offending input can go red; messages
-// with no field prefix (group-level customs rules) stay row-level.
-const EDIT_FIELD_KEYS = [
-  'orderRef', 'clientCode', 'billTo', 'warehouseCode',
-  'recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail',
-  'addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode',
-  'carrierCode', 'accountNumber', 'serviceType', 'packageType',
-  'weight', 'weightUnit', 'currency', 'reference',
-  'itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue',
-  'hsCode', 'countryOfOrigin',
-] as const
-
-/** Split a row's error strings into per-field buckets + row-level leftovers. */
-function bucketRowErrors(errors: string[]): {
-  byField: Record<string, string[]>
-  rowLevel: string[]
-} {
-  const byField: Record<string, string[]> = {}
-  const rowLevel: string[] = []
-  for (const msg of errors) {
-    const first = msg.split(/[\s']/, 1)[0]
-    if ((EDIT_FIELD_KEYS as readonly string[]).includes(first)) {
-      ;(byField[first] ??= []).push(msg)
-    } else {
-      rowLevel.push(msg)
-    }
-  }
-  return { byField, rowLevel }
-}
-
-/** Column model for the Data-History spreadsheet grid — every import field,
- *  in template order. `numeric`/`upper` shape how an edited value is written
- *  back; `w` is the cell input min-width. Mirrors the import modal's grid. */
-type DhColumn = { key: string; mono?: boolean; upper?: boolean; numeric?: boolean; w: string }
-const DH_COLUMNS: DhColumn[] = [
-  { key: 'orderRef', mono: true, w: 'w-24' },
-  { key: 'clientCode', mono: true, upper: true, w: 'w-24' },
-  { key: 'billTo', mono: true, upper: true, w: 'w-24' },
-  { key: 'warehouseCode', mono: true, upper: true, w: 'w-24' },
-  { key: 'recipientName', w: 'w-40' },
-  { key: 'recipientCompany', w: 'w-40' },
-  { key: 'recipientPhone', w: 'w-28' },
-  { key: 'recipientEmail', w: 'w-44' },
-  { key: 'addressLine1', w: 'w-48' },
-  { key: 'addressLine2', w: 'w-40' },
-  { key: 'city', w: 'w-32' },
-  { key: 'state', mono: true, upper: true, w: 'w-16' },
-  { key: 'postalCode', mono: true, w: 'w-24' },
-  { key: 'countryCode', mono: true, upper: true, w: 'w-16' },
-  { key: 'carrierCode', mono: true, upper: true, w: 'w-24' },
-  { key: 'accountNumber', mono: true, w: 'w-32' },
-  { key: 'serviceType', mono: true, w: 'w-28' },
-  { key: 'packageType', mono: true, w: 'w-24' },
-  { key: 'weight', numeric: true, w: 'w-16' },
-  { key: 'weightUnit', mono: true, upper: true, w: 'w-16' },
-  { key: 'currency', mono: true, upper: true, w: 'w-16' },
-  { key: 'reference', mono: true, w: 'w-28' },
-  { key: 'itemDescription', w: 'w-48' },
-  { key: 'itemSku', mono: true, w: 'w-24' },
-  { key: 'itemQuantity', numeric: true, w: 'w-16' },
-  { key: 'itemUnitValue', numeric: true, w: 'w-20' },
-  { key: 'hsCode', mono: true, w: 'w-24' },
-  { key: 'countryOfOrigin', mono: true, upper: true, w: 'w-16' },
-]
-
-/**
- * A read-only grid cell that becomes an input on click. Shows the value as
- * plain text (red + tooltip when the field failed validation); clicking opens
- * an inline editor that commits on blur or Enter, cancels on Escape. Generated
- * rows are read-only. The commit fires once on exit, not per keystroke.
- */
-function GridCell({
-  value,
-  onCommit,
-  bad = false,
-  mono = false,
-  errors,
-  readOnly = false,
-}: {
-  value: string
-  onCommit: (v: string) => void
-  bad?: boolean
-  mono?: boolean
-  errors?: string[]
-  readOnly?: boolean
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(value)
-  const inputRef = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (editing) { inputRef.current?.focus(); inputRef.current?.select() }
-  }, [editing])
-  const begin = () => { if (readOnly) return; setDraft(value); setEditing(true) }
-  const commit = () => { setEditing(false); if (draft !== value) onCommit(draft) }
-  const cancel = () => { setEditing(false); setDraft(value) }
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.preventDefault(); commit() }
-          else if (e.key === 'Escape') { e.preventDefault(); cancel() }
-        }}
-        className={`w-full rounded-[5px] border border-[#412d15] bg-white px-1.5 py-0.5 text-[10.5px] text-[#1f150c] outline-none ring-1 ring-[#412d15] ${mono ? 'font-mono' : ''}`}
-      />
-    )
-  }
-  const tooltip = bad && errors && errors.length > 0 ? errors.join('\n') : value || undefined
-  return (
-    <button
-      type="button"
-      onClick={begin}
-      title={tooltip}
-      className={`block w-full truncate rounded-[5px] px-1.5 py-0.5 text-left text-[10.5px] transition ${mono ? 'font-mono' : ''} ${
-        readOnly ? 'cursor-default text-[#8a7959]'
-          : bad ? 'cursor-text bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-300 hover:ring-rose-400'
-          : 'cursor-text text-[#3f3527] hover:bg-[#efe7d4]'
-      }`}
-    >
-      {value || <span className="text-[#cdbf9f]">—</span>}
-    </button>
-  )
-}
