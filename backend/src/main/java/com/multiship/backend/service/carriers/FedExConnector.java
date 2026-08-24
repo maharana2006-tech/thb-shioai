@@ -1109,6 +1109,21 @@ public class FedExConnector implements CarrierConnector {
                     "FedEx pickup needs live credentials; the account is on a fallback token.",
                     null);
         }
+        // FDX-C — pre-fix, buildFedExPickupRequest hardcoded the literal
+        // string "ACCOUNT" as the shipper's associatedAccountNumber, which
+        // FedEx rejects with a validation error every time. Same bug shape
+        // as Sprint 49 T2 fixed for voidShipment + Sprint 50 T1 #10 fixed
+        // for closeOutDay. Now sourced from the caller (PickupServiceImpl
+        // threads account.getAccountNumber() onto PickupRequest); short-
+        // circuit to ERROR when blank rather than send a placeholder that
+        // FedEx will silently reject.
+        if (!StringUtils.hasText(request.accountNumber())) {
+            return new PickupResult("FEDEX", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "FedEx pickup needs the shipper account number that owns the labels; none was passed.",
+                    null);
+        }
         try {
             Map<String, Object> body = buildFedExPickupRequest(request);
             String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
@@ -1142,7 +1157,12 @@ public class FedExConnector implements CarrierConnector {
     /** Build the FedEx CreatePickupRequest body. */
     Map<String, Object> buildFedExPickupRequest(PickupRequest req) {
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("associatedAccountNumber", Map.of("value", "ACCOUNT"));
+        // FDX-C — real shipper account (pre-fix, hardcoded literal "ACCOUNT").
+        // The schedulePickup entry point already guards against blank here;
+        // firstNonBlank retained as a defence-in-depth for direct callers
+        // of buildFedExPickupRequest in tests.
+        body.put("associatedAccountNumber", Map.of("value",
+                firstNonBlank(req.accountNumber(), "")));
 
         Map<String, Object> originDetail = new LinkedHashMap<>();
         AddressToValidate a = req.address();
