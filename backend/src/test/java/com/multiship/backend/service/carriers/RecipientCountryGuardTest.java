@@ -121,4 +121,66 @@ class RecipientCountryGuardTest {
         assertTrue(ex.getMessage().contains("recipient country"),
                 "got: " + ex.getMessage());
     }
+
+    // ===== FDX-B1 — FedEx rate-shop + EDT paths =====
+    //
+    // Pre-fix, FedExConnector.buildRateRequestBody + estimateLandedCost both
+    // defaulted blank countries to "US" and returned believable-but-wrong
+    // domestic quotes. F7 fixed createShipment; these tests lock the rate
+    // paths against the same regression class.
+
+    @Test
+    void fedex_getRates_blankRecipientCountry_throws() {
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        FedExConnector connector = new FedExConnector(props, new ObjectMapper(), null);
+        // Use a real-looking token so the -local- guard doesn't short-circuit
+        // to an empty list before our country guard runs.
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> connector.getRates(minimal(""), "real-oauth-bearer-token", "SANDBOX"));
+        assertTrue(ex.getMessage().contains("recipient country"),
+                "got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("US-domestic"),
+                "message should explain the silent-fallback risk; got: " + ex.getMessage());
+    }
+
+    @Test
+    void fedex_getRates_nullRecipientCountry_throws() {
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        FedExConnector connector = new FedExConnector(props, new ObjectMapper(), null);
+        assertThrows(IllegalArgumentException.class,
+                () -> connector.getRates(minimal(null), "real-oauth-bearer-token", "SANDBOX"));
+    }
+
+    @Test
+    void fedex_estimateLandedCost_blankRecipientCountry_throws() {
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        FedExConnector connector = new FedExConnector(props, new ObjectMapper(), null);
+        // EDT's isInternational check would silently short-circuit to
+        // NOT_SUPPORTED when both countries are blank/equal — the guard
+        // must fire FIRST so a config bug becomes a loud error, not a
+        // suppressed duty estimate.
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> connector.estimateLandedCost(minimal(""), "real-oauth-bearer-token", "SANDBOX"));
+        assertTrue(ex.getMessage().contains("recipient country"),
+                "got: " + ex.getMessage());
+    }
+
+    // Sanity guard — the -local-* short-circuit MUST still fire before the
+    // country guard, matching every other connector method's pattern.
+    // Otherwise a rate-shop from a caller with only fallback credentials
+    // (rate-comparison background job) would throw instead of returning
+    // an empty list.
+    @Test
+    void fedex_getRates_localToken_shortCircuits_evenWithoutCountry() {
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        FedExConnector connector = new FedExConnector(props, new ObjectMapper(), null);
+        java.util.List<CarrierConnector.RateOption> rates = connector.getRates(
+                minimal(""), "fedex-local-abc123", "SANDBOX");
+        assertTrue(rates.isEmpty(),
+                "-local- tokens must short-circuit to empty regardless of country presence");
+    }
 }
