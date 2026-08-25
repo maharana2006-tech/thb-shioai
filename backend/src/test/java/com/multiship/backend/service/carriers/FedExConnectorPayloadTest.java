@@ -128,6 +128,58 @@ class FedExConnectorPayloadTest {
         assertNull(rs.get("shipmentSpecialServicesRequested"));
     }
 
+    // ===== FDX-2 — boundary guard on blank / placeholder accountNumber =====
+
+    /** Unwrap the InvocationTargetException from the reflection-based
+     *  build helper so callers can assertThrows the real cause. */
+    private static IllegalArgumentException expectBlankAccountThrow(
+            org.junit.jupiter.api.function.Executable action) {
+        try {
+            action.execute();
+        } catch (java.lang.reflect.InvocationTargetException ite) {
+            if (ite.getCause() instanceof IllegalArgumentException iae) return iae;
+            throw new AssertionError("expected IllegalArgumentException, got: " + ite.getCause(), ite);
+        } catch (Throwable t) {
+            throw new AssertionError("expected IllegalArgumentException (wrapped), got: " + t, t);
+        }
+        throw new AssertionError("expected IllegalArgumentException, but nothing was thrown");
+    }
+
+    @Test
+    void accountNumber_blank_throws_at_boundary() {
+        // Pre-FDX-2, a blank accountNumber silently became "ACCOUNT" which
+        // FedEx rejects with a cryptic validation error. Now the connector
+        // throws IllegalArgumentException at the boundary so the operator
+        // sees an actionable message instead of chasing a FedEx 400.
+        ShipmentRequestDTO r = baseRequest();
+        r.setAccountNumber("");
+        IllegalArgumentException ex = expectBlankAccountThrow(() -> requestedShipment(r));
+        assertTrue(ex.getMessage().contains("account number"),
+                "must name the missing field; got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("CarrierAccountRef"),
+                "should point the operator at the fix; got: " + ex.getMessage());
+    }
+
+    @Test
+    void accountNumber_null_throws_at_boundary() {
+        ShipmentRequestDTO r = baseRequest();
+        r.setAccountNumber(null);
+        expectBlankAccountThrow(() -> requestedShipment(r));
+    }
+
+    @Test
+    void accountNumber_literalACCOUNT_throws_at_boundary() {
+        // CarrierServiceImpl.buildShipmentRequest still plants "ACCOUNT" as
+        // a defensive fallback (line 2048). Post-FDX-2, if that placeholder
+        // reaches the connector we fail fast instead of forwarding it to
+        // FedEx (which rejects). Surfaces the upstream cleanup opportunity.
+        ShipmentRequestDTO r = baseRequest();
+        r.setAccountNumber("ACCOUNT");
+        IllegalArgumentException ex = expectBlankAccountThrow(() -> requestedShipment(r));
+        assertTrue(ex.getMessage().contains("ACCOUNT"),
+                "message should call out the placeholder; got: " + ex.getMessage());
+    }
+
     // ===== FDX-H2 — pickupType wired from ShipmentRequestDTO =====
 
     @SuppressWarnings("unchecked")
