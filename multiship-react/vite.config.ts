@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import { loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { visualizer } from 'rollup-plugin-visualizer'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
@@ -25,18 +26,34 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
-  plugins: [react()],
-  // Pre-bundle deps that the router-code-split path pulls in lazily.
-  // Vite's dep-optimizer discovers deps on first import; when a lazy
-  // route hits `zod` (via dashboardService) mid-session, Vite kicks
-  // off a re-optimize and the current tab's already-buffered request
-  // is aborted with `504 Outdated Optimize Dep` — the app then renders
-  // as a white page because dashboardService.ts throws on module load.
-  // Explicitly including it here forces the pre-bundle up front so no
-  // lazy discovery is needed.
+  // Pre-bundle React explicitly. Without this, Vite's dependency-discovery
+  // scan sometimes misses `react` (only picks up `react-dom`, `react-dom/client`,
+  // etc.) and produces a `node_modules/.vite/deps/` cache with react-dom.js
+  // but NO react.js — every `import { useState } from 'react'` then resolves
+  // to an empty module and destructuring throws "Cannot read properties of
+  // null (reading 'useState')" the moment the operator hits a route that
+  // uses hooks. Pinning `react` in optimizeDeps.include forces it into the
+  // initial pre-bundle pass and stops the cache from drifting mid-session.
   optimizeDeps: {
-    include: ['zod'],
+    include: ['react', 'react-dom', 'react-dom/client'],
   },
+  plugins: [
+    react(),
+    // Bundle-size attribution — enabled only for production builds.
+    // Writes `dist/stats.html` on every `npm run build` so devs can eyeball
+    // what actually ships. gzip + brotli sizes are computed inline. The
+    // file is gitignored (see multiship-react/.gitignore — `stats.html`).
+    // Zero effect on dev startup or the runtime bundle.
+    ...(mode === 'production'
+      ? [visualizer({
+          filename: 'dist/stats.html',
+          template: 'treemap',
+          gzipSize: true,
+          brotliSize: true,
+          open: false,
+        })]
+      : []),
+  ],
   // Local dev proxy — routes /api/* to the Spring Boot backend so the SPA
   // + API share origin. Required for the httpOnly JWT cookie from Sprint 50
   // Q1/Q2/Q3 to be sent by the browser (cross-origin cookies on HTTP

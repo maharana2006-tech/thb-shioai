@@ -92,4 +92,15 @@ public class ImportBatch {
      */
     @Column(name = "billing_mode", length = 16)
     private String billingMode;
+
+    /**
+     * Where this batch's rows came from:
+     *   BULK (or null) — a CSV/XLSX file the operator uploaded.
+     *   WMS            — a "Fetch from WMS" pull. Its orders are already created
+     *                    (PENDING, labelled later in the Shipments workspace), so
+     *                    the batch is a read-only record of the fetch and the
+     *                    Generate/Retry actions are hidden for it.
+     */
+    @Column(name = "source", length = 16)
+    private String source;
 }

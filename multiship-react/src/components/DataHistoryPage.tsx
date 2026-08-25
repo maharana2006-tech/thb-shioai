@@ -1,10 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   FiArrowLeft,
-  FiChevronDown,
-  FiChevronRight,
-  FiDatabase,
   FiFileText,
   FiFilter,
   FiHome,
@@ -16,7 +13,12 @@ import {
   FiX,
   FiZap,
 } from 'react-icons/fi'
+import type { ColumnDef } from '@tanstack/react-table'
 import PageSectionHeader from './workspace/PageSectionHeader'
+import AdvancedDataTable from './workspace/AdvancedDataTable'
+import AllOrdersHistory from './AllOrdersHistory'
+import OrderImportModal from './modals/OrderImportModal'
+import { GridCell, DH_COLUMNS, bucketRowErrors, type DhColumn } from './batchGrid'
 import { notify } from '../utils/notify'
 import {
   orderImportService,
@@ -68,6 +70,10 @@ export default function DataHistoryPage() {
   const [sortKey, setSortKey] = useState<SortKey>('created')
   const [sortDir, setSortDir] = useState<'ASC' | 'DESC'>('DESC')
   const [showAdvanced, setShowAdvanced] = useState(false)
+  // Order Intake has three views: "orders" (unified per-order list across
+  // Bulk / Manual / API / WMS), "import" (inline CSV/Excel upload + validation),
+  // and "imports" (history of bulk import batches).
+  const [dhView, setDhView] = useState<'orders' | 'import' | 'imports'>('orders')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [createdBy, setCreatedBy] = useState('')
@@ -75,8 +81,14 @@ export default function DataHistoryPage() {
   const [minSaved, setMinSaved] = useState('')
 
   // ── Pagination ────────────────────────────────────────────────────────────
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  // page + pageSize state kept as scaffolding for the pagination UI wired in
+  // by ad81192 ("import history"); page value and setPageSize setter aren't
+  // read yet (no pager control mounted). Disables silence lint until the UI
+  // catches up — see setPage usage in the filter-reset effect below.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- scaffold for the paginator UI; setPage is used in the reset effect below
+  const [_page, setPage] = useState(1)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- scaffold; pageSize is read by the reset effect, setter waits for the pager UI
+  const [pageSize, _setPageSize] = useState(10)
 
   /** Distinct createdBy values for the advanced "Created by" dropdown. */
   const creators = useMemo(
@@ -174,12 +186,6 @@ export default function DataHistoryPage() {
     setPage(1)
   }, [search, statusFilter, sortKey, sortDir, dateFrom, dateTo, createdBy, batchPresence, minSaved, pageSize])
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
-  const safePage = Math.min(page, totalPages)
-  const pageStart = (safePage - 1) * pageSize
-  const paged = filtered.slice(pageStart, pageStart + pageSize)
-  const rangeStart = filtered.length === 0 ? 0 : pageStart + 1
-  const rangeEnd = Math.min(pageStart + pageSize, filtered.length)
 
   const load = async () => {
     setLoading(true)
@@ -245,24 +251,6 @@ export default function DataHistoryPage() {
       notify.apiError(e, 'Could not restore import.')
     } finally {
       setTrashBusyId(null)
-    }
-  }
-
-  const toggle = async (id: number) => {
-    if (openId === id) {
-      setOpenId(null)
-      return
-    }
-    setOpenId(id)
-    if (!rowsById[id]) {
-      setRowsById((m) => ({ ...m, [id]: 'loading' }))
-      try {
-        const res = await orderImportService.getHistory(id)
-        setRowsById((m) => ({ ...m, [id]: res.data?.rows ?? [] }))
-      } catch (e) {
-        notify.apiError(e, 'Could not load import rows.')
-        setRowsById((m) => ({ ...m, [id]: [] }))
-      }
     }
   }
 
@@ -438,40 +426,389 @@ export default function DataHistoryPage() {
     }
   }
 
+  /** Lazy-load a batch's rows when its row is expanded. */
+  const ensureRows = (id: number) => {
+    if (rowsById[id]) return
+    setRowsById((m) => ({ ...m, [id]: 'loading' }))
+    orderImportService
+      .getHistory(id)
+      .then((res) => setRowsById((m) => ({ ...m, [id]: res.data?.rows ?? [] })))
+      .catch((e) => {
+        notify.apiError(e, 'Could not load import rows.')
+        setRowsById((m) => ({ ...m, [id]: [] }))
+      })
+  }
+
+  // Columns for the Import-history table (reorder/resize via AdvancedDataTable).
+  const dhColumns = useMemo<ColumnDef<ImportBatchSummary, unknown>[]>(
+    () => [
+      {
+        id: 'serial',
+        header: 'Serial no.',
+        enableSorting: false,
+        size: 70,
+        accessorFn: (b) => b.id,
+        cell: ({ row }) => <span className="font-mono text-[13px] font-bold text-[#1f150c]">#{row.original.id}</span>,
+        meta: { headerLabel: 'Serial no.' },
+      },
+      {
+        id: 'file',
+        header: 'File',
+        enableSorting: false,
+        size: 240,
+        accessorFn: (b) => b.fileName ?? '',
+        cell: ({ row }) => {
+          const b = row.original
+          const isWms = (b.source || '').toUpperCase() === 'WMS'
+          return (
+            <span className="block min-w-0">
+              <span className="flex items-center gap-1.5">
+                <FiFileText className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
+                <span className="truncate text-[12.5px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
+                  {b.fileName || 'Untitled import'}
+                </span>
+                {isWms ? (
+                  <span
+                    title="Pulled in by Fetch from WMS — orders are PENDING and labelled in the Shipments workspace"
+                    className="inline-flex shrink-0 items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-emerald-700 ring-1 ring-emerald-200"
+                  >
+                    WMS
+                  </span>
+                ) : null}
+              </span>
+              <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#8a7959]">
+                <span>
+                  {fmtDate(b.createdAt)} · {b.createdBy || '—'}
+                </span>
+                {b.labelBatchId != null ? (
+                  <span
+                    title="Label batch — find these orders together in All Orders"
+                    className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[9.5px] font-bold uppercase tracking-[0.08em] text-[#f4eede]"
+                  >
+                    <FiZap className="h-2.5 w-2.5" /> Batch {b.labelBatchId}
+                  </span>
+                ) : (
+                  <span className="font-mono text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">No batch yet</span>
+                )}
+              </span>
+            </span>
+          )
+        },
+        meta: { headerLabel: 'File' },
+      },
+      {
+        id: 'status',
+        header: 'Status',
+        enableSorting: false,
+        size: 130,
+        accessorFn: (b) => b.status ?? '',
+        cell: ({ row }) => {
+          const s = statusMeta(row.original.status)
+          return <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>{s.label}</span>
+        },
+        meta: { headerLabel: 'Status' },
+      },
+      {
+        id: 'rows',
+        header: 'Rows',
+        enableSorting: false,
+        size: 120,
+        accessorFn: (b) => b.savedRows,
+        cell: ({ row }) => {
+          const b = row.original
+          return (
+            <span className="flex items-center gap-1.5">
+              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 ring-1 ring-emerald-200">
+                {b.savedRows} saved
+              </span>
+              {b.invalidRows > 0 ? (
+                <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10.5px] font-bold text-rose-700 ring-1 ring-rose-200">
+                  {b.invalidRows} err
+                </span>
+              ) : null}
+            </span>
+          )
+        },
+        meta: { headerLabel: 'Rows' },
+      },
+      {
+        id: 'actions',
+        header: 'Actions',
+        enableSorting: false,
+        size: 400,
+        cell: ({ row }) => {
+          const b = row.original
+          const st = (b.status || '').toUpperCase()
+          // WMS fetches are a read-only record — their orders are already
+          // created (PENDING) and labelled in the Shipments workspace, so the
+          // batch-level Generate/Retry flow doesn't apply.
+          const isWms = (b.source || '').toUpperCase() === 'WMS'
+          const canGenerate = canWrite && !isWms && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED')
+          const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED'
+          const busy = generatingId === b.id
+          const platform = b.billingMode === 'PLATFORM'
+          const confirming = confirmGenId === b.id
+          return (
+            <div className="flex items-center justify-end gap-1.5">
+              {viewTrash ? (
+                canWrite ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleRestore(b.id, b.fileName)}
+                    disabled={trashBusyId === b.id}
+                    title="Restore this import from Trash"
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[#412d15] bg-white px-3 py-2 text-[12px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {trashBusyId === b.id ? (
+                      <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#412d15]/30 border-t-[#412d15]" />
+                    ) : (
+                      <FiRotateCcw className="h-3.5 w-3.5" />
+                    )}
+                    Restore
+                  </button>
+                ) : null
+              ) : (
+                <>
+                  {canGenerate ? (
+                    <>
+                      <span
+                        title="Which carrier account this batch bills to. Platform bills the house account and rebills the client with markup."
+                        className={`${confirming ? 'hidden' : 'inline-flex'} items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold ${
+                          platform ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]' : 'border-[#e3d9c4] bg-white text-[#5a4526]'
+                        }`}
+                      >
+                        <FiHome className="h-3.5 w-3.5 shrink-0" />
+                        <span className="hidden sm:inline text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>
+                        <select
+                          value={platform ? 'PLATFORM' : 'AUTO'}
+                          disabled={busy || billingSavingId === b.id}
+                          onChange={(e) => void setBilling(b.id, e.target.value as 'AUTO' | 'PLATFORM')}
+                          className="cursor-pointer border-0 bg-transparent pr-1 text-[11px] font-semibold text-inherit focus:outline-none disabled:cursor-not-allowed"
+                        >
+                          <option value="AUTO">Client account</option>
+                          <option value="PLATFORM">Platform account</option>
+                        </select>
+                      </span>
+                      {platform && confirming ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void generate(b.id, isRetry)}
+                            disabled={busy}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-[#412d15] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#5a4526] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                          >
+                            <FiHome className="h-3.5 w-3.5" />
+                            Confirm — bill to platform
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmGenId(null)}
+                            disabled={busy}
+                            className="inline-flex items-center rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => (platform ? setConfirmGenId(b.id) : void generate(b.id, isRetry))}
+                          disabled={busy}
+                          title={isRetry ? 'Retry generating labels — only rows that FAILED or are un-generated will be re-sent' : 'Generate carrier labels for this saved import'}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                        >
+                          {busy ? (
+                            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                          ) : (
+                            <FiZap className="h-3.5 w-3.5" />
+                          )}
+                          {busy ? 'Generating…' : isRetry ? 'Retry labels' : 'Generate labels'}
+                        </button>
+                      )}
+                    </>
+                  ) : null}
+                  {canWrite ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleDelete(b.id, b.fileName)}
+                      disabled={trashBusyId === b.id}
+                      title="Move this import to Trash (recoverable)"
+                      aria-label="Delete import"
+                      className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#8a7959] transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {trashBusyId === b.id ? (
+                        <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300/40 border-t-rose-500" />
+                      ) : (
+                        <FiTrash2 className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  ) : null}
+                </>
+              )}
+            </div>
+          )
+        },
+        meta: { headerLabel: 'Actions' },
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId],
+  )
+
+  /** Expanded content for a batch row — the all-columns editable grid. */
+  const renderBatchExpanded = (b: ImportBatchSummary) => {
+    const rows = rowsById[b.id]
+    return (
+      <div className="border-t border-dashed border-[#eee6d6] bg-[#faf7f0]/50 px-5 py-3">
+        {rows === 'loading' || rows === undefined ? (
+          <p className="py-4 text-center text-[12px] text-[#8a7959]">Loading rows…</p>
+        ) : rows.length === 0 ? (
+          <p className="py-4 text-center text-[12px] text-[#8a7959]">No rows stored for this import.</p>
+        ) : (
+          <>
+            <p className="mb-1.5 text-[10.5px] text-[#b6a684]">
+              All columns shown — click any cell to edit; it saves and re-validates on blur. Scroll right for more.
+            </p>
+            <div className="overflow-x-auto rounded-xl border border-[#e3d9c4] bg-white">
+              <table className="w-full border-collapse text-[11px] text-[#3f3527]">
+                <thead>
+                  <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.1em] text-[#8a7959]">
+                    <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
+                    {DH_COLUMNS.map((c) => (
+                      <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">{c.key}</th>
+                    ))}
+                    <th className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">Label</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => {
+                    const ok = (r.errors?.length ?? 0) === 0
+                    const gen = (r.generatedStatus ?? '').toUpperCase()
+                    const rowIsWms = (b.source || '').toUpperCase() === 'WMS'
+                    const generated = gen === 'GENERATED'
+                    const rowKey = `${b.id}-${r.rowNumber}`
+                    const rowBusy = genRowKey === rowKey
+                    const saving = savingCell === rowKey
+                    const { byField } = bucketRowErrors(r.errors ?? [])
+                    const statusTitle = (r.errors ?? []).map((m) => '✗ ' + m).join('\n') || undefined
+                    return (
+                      <tr key={r.rowNumber} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
+                        <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-[10px] font-bold text-[#8a7959]">{r.rowNumber}</span>
+                            {generated ? (
+                              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Generated</span>
+                            ) : ok ? (
+                              <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Ready</span>
+                            ) : (
+                              <span title={statusTitle} className="cursor-help rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800">{r.errors!.length} err</span>
+                            )}
+                            {saving ? <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" /> : null}
+                          </div>
+                        </td>
+                        {DH_COLUMNS.map((c) => {
+                          const raw = (r as unknown as Record<string, unknown>)[c.key]
+                          return (
+                            <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
+                              <div className={c.w}>
+                                <GridCell
+                                  value={raw == null ? '' : String(raw)}
+                                  readOnly={generated}
+                                  bad={(byField[c.key]?.length ?? 0) > 0}
+                                  errors={byField[c.key]}
+                                  mono={c.mono}
+                                  onCommit={(v) => void commitCell(b.id, r, c, v)}
+                                />
+                              </div>
+                            </td>
+                          )
+                        })}
+                        <td className="whitespace-nowrap border-b border-[#f2ecdf] px-2 py-1">
+                          {generated ? (
+                            <span className="inline-flex flex-col gap-0.5">
+                              {r.generatedTrackingNumber ? (
+                                <span className="font-mono text-[9.5px] text-[#8a7959]">{r.generatedTrackingNumber}</span>
+                              ) : (
+                                <span className="text-[9.5px] text-[#8a7959]">—</span>
+                              )}
+                            </span>
+                          ) : rowIsWms ? (
+                            <span
+                              className="text-[9.5px] text-[#8a7959]"
+                              title="Imported from WMS as a PENDING order — generate the label in the Shipments workspace"
+                            >
+                              {r.generatedOrderNo ? `Order #${r.generatedOrderNo} · label in Shipments` : 'Label in Shipments'}
+                            </span>
+                          ) : !canWrite ? (
+                            <span className="text-[9.5px] text-[#b6a684]">Read-only view</span>
+                          ) : ok ? (
+                            <button
+                              type="button"
+                              onClick={() => void generateRow(b.id, r.rowNumber)}
+                              disabled={rowBusy}
+                              className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                            >
+                              {rowBusy ? (
+                                <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                              ) : (
+                                <FiZap className="h-3 w-3" />
+                              )}
+                              {rowBusy ? 'Generating…' : 'Generate label'}
+                            </button>
+                          ) : (
+                            <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4 pb-24">
       <PageSectionHeader
         eyebrow="Operations"
-        title="Data history"
-        description="Every saved CSV / Excel import. Rows are stored here — no labels are generated on save."
+        title="Order Intake"
+        description="Every order in one place — Bulk, Manual, API, and WMS — plus the CSV/Excel importer and saved import history."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowAdvanced((v) => !v)}
-              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
-                showAdvanced || activeAdvancedCount > 0
-                  ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
-                  : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-              }`}
-            >
-              <FiSliders className="h-3.5 w-3.5" />
-              Advanced
-              {activeAdvancedCount > 0 ? (
-                <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#f4eede] px-1 text-[9.5px] font-bold text-[#412d15]">
-                  {activeAdvancedCount}
-                </span>
-              ) : null}
-            </button>
-            <button
-              type="button"
-              onClick={() => void load()}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-            >
-              <FiRefreshCw className="h-3.5 w-3.5" />
-              Refresh
-            </button>
-            {viewTrash && batches.length > 0 ? (
+            {dhView === 'imports' ? (
+              <button
+                type="button"
+                onClick={() => setShowAdvanced((v) => !v)}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
+                  showAdvanced || activeAdvancedCount > 0
+                    ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
+                    : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+                }`}
+              >
+                <FiSliders className="h-3.5 w-3.5" />
+                Advanced
+                {activeAdvancedCount > 0 ? (
+                  <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#f4eede] px-1 text-[9.5px] font-bold text-[#412d15]">
+                    {activeAdvancedCount}
+                  </span>
+                ) : null}
+              </button>
+            ) : null}
+            {dhView === 'imports' ? (
+              <button
+                type="button"
+                onClick={() => void load()}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+              >
+                <FiRefreshCw className="h-3.5 w-3.5" />
+                Refresh
+              </button>
+            ) : null}
+            {dhView === 'imports' && viewTrash && batches.length > 0 ? (
               confirmEmpty ? (
                 <span className="inline-flex items-center gap-1.5">
                   <button
@@ -508,19 +845,21 @@ export default function DataHistoryPage() {
                 </button>
               )
             ) : null}
-            <button
-              type="button"
-              onClick={() => setViewTrash((v) => !v)}
-              title={viewTrash ? 'Back to live imports' : 'View deleted imports (Trash)'}
-              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
-                viewTrash
-                  ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
-                  : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
-              }`}
-            >
-              {viewTrash ? <FiArrowLeft className="h-3.5 w-3.5" /> : <FiTrash2 className="h-3.5 w-3.5" />}
-              {viewTrash ? 'Back to imports' : 'Trash'}
-            </button>
+            {dhView === 'imports' ? (
+              <button
+                type="button"
+                onClick={() => setViewTrash((v) => !v)}
+                title={viewTrash ? 'Back to live imports' : 'View deleted imports (Trash)'}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
+                  viewTrash
+                    ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
+                    : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+                }`}
+              >
+                {viewTrash ? <FiArrowLeft className="h-3.5 w-3.5" /> : <FiTrash2 className="h-3.5 w-3.5" />}
+                {viewTrash ? 'Back to imports' : 'Trash'}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => navigate('/orders')}
@@ -533,6 +872,47 @@ export default function DataHistoryPage() {
         }
       />
 
+      {/* View tabs — Imports (bulk batches) vs All orders (every source) */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {([
+          { key: 'orders', label: 'All orders', hint: 'Bulk · Manual · API · WMS' },
+          { key: 'import', label: 'Import CSV/Excel', hint: 'Upload & validate' },
+          { key: 'imports', label: 'Import history', hint: 'Saved batches' },
+        ] as { key: 'orders' | 'import' | 'imports'; label: string; hint: string }[]).map((t) => {
+          const active = dhView === t.key
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setDhView(t.key)}
+              className={`inline-flex items-baseline gap-1.5 rounded-xl px-3.5 py-2 text-[12.5px] font-semibold transition ${
+                active
+                  ? 'bg-[#1f150c] text-[#f4eede]'
+                  : 'border border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
+              }`}
+            >
+              {t.label}
+              <span className={`text-[9.5px] font-medium uppercase tracking-[0.06em] ${active ? 'text-[#cdbf9f]' : 'text-[#b6a684]'}`}>
+                {t.hint}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      {dhView === 'orders' ? (
+        <AllOrdersHistory />
+      ) : dhView === 'import' ? (
+        <OrderImportModal
+          inline
+          onImported={() => {
+            // After a save, jump to the batch history and refresh it.
+            setDhView('imports')
+            void load()
+          }}
+        />
+      ) : (
+      <>
       {/* ── Advanced filter toolbar ─────────────────────────────────────── */}
       <section className="rounded-2xl border border-[#e3d9c4] bg-white p-4 shadow-sm">
         {/* Status chips + clear */}
@@ -688,514 +1068,42 @@ export default function DataHistoryPage() {
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b border-dashed border-[#e3d9c4] px-5 py-3">
-          <span className="inline-flex items-center gap-2 font-mono text-[9px] font-bold uppercase tracking-[0.2em] text-[#b6a684]">
-            {viewTrash ? <FiTrash2 className="h-3.5 w-3.5" /> : <FiDatabase className="h-3.5 w-3.5" />}
-            {viewTrash ? 'Trash — deleted imports' : 'Saved imports'}
-          </span>
-          <span className="font-mono text-[9px] font-bold uppercase tracking-[0.16em] tabular-nums text-[#b6a684]">
-            {filtered.length === 0 ? '0 imports' : `${rangeStart}–${rangeEnd} of ${filtered.length}`}
-          </span>
-        </div>
-
+      <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
         {loading ? (
           <p className="px-5 py-14 text-center text-sm text-[#8a7959]">Loading…</p>
         ) : batches.length === 0 ? (
           <p className="px-5 py-14 text-center text-sm text-[#8a7959]">
             {viewTrash
               ? 'Trash is empty — no deleted imports.'
-              : 'No saved imports yet. Import a CSV/Excel from Orders → Import CSV/Excel, then click Save.'}
+              : 'No saved imports yet. Import a CSV/Excel from the Import CSV/Excel tab, then click Save.'}
           </p>
-        ) : filtered.length === 0 ? (
-          <div className="px-5 py-14 text-center">
-            <p className="text-sm text-[#8a7959]">No imports match your filters.</p>
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="mt-3 inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
-            >
-              <FiX className="h-3.5 w-3.5" /> Clear filters
-            </button>
-          </div>
         ) : (
-          <div className="divide-y divide-[#eee6d6]">
-            {/* Column headers — aligned to each row's grid + actions area */}
-            <div className="flex items-stretch bg-[#faf7f0]">
-              <div className="grid flex-1 grid-cols-[24px_60px_minmax(0,1fr)_130px_120px] items-center gap-3 px-5 py-2 text-[9px] font-bold uppercase tracking-[0.12em] text-[#b6a684]">
-                <span aria-hidden="true" />
-                <span>Serial no.</span>
-                <span>File</span>
-                <span className="text-center">Status</span>
-                <span className="text-right">Rows</span>
+          <AdvancedDataTable<ImportBatchSummary>
+            tableKey={viewTrash ? 'order-intake-imports-trash-v2' : 'order-intake-imports-v2'}
+            columns={dhColumns}
+            data={filtered}
+            renderExpanded={renderBatchExpanded}
+            onRowExpand={(b) => ensureRows(b.id)}
+            initialColumnPinning={{ left: [], right: ['actions'] }}
+            caption={viewTrash ? 'Trash — deleted imports · click a row to view its rows' : 'Saved imports · click a row to view & edit its rows'}
+            emptyState={
+              <div className="px-5 py-10 text-center">
+                <p className="text-sm text-[#8a7959]">No imports match your filters.</p>
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="mt-3 inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                >
+                  <FiX className="h-3.5 w-3.5" /> Clear filters
+                </button>
               </div>
-              <div className="flex w-[420px] shrink-0 items-center justify-end pr-4 text-[9px] font-bold uppercase tracking-[0.12em] text-[#b6a684]">
-                Actions
-              </div>
-            </div>
-            {paged.map((b) => {
-              const open = openId === b.id
-              const rows = rowsById[b.id]
-              const st = (b.status || '').toUpperCase()
-              // Audit R2 #329 — combine backend-eligible status with FE role
-              // check so TENANT never sees a button that would 403 on click.
-              const canGenerate = canWrite && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED')
-              const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED'
-              const busy = generatingId === b.id
-              return (
-                <div key={b.id}>
-                  <div className="flex items-stretch transition hover:bg-[#faf7f0]">
-                  <button
-                    type="button"
-                    onClick={() => void toggle(b.id)}
-                    className="grid flex-1 grid-cols-[24px_60px_minmax(0,1fr)_130px_120px] items-center gap-3 px-5 py-3 text-left"
-                  >
-                    <span className="text-[#8a7959]">
-                      {open ? <FiChevronDown className="h-4 w-4" /> : <FiChevronRight className="h-4 w-4" />}
-                    </span>
-                    <span className="font-mono text-[13px] font-bold text-[#1f150c]">#{b.id}</span>
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-1.5">
-                        <FiFileText className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
-                        <span className="truncate text-[12.5px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
-                          {b.fileName || 'Untitled import'}
-                        </span>
-                      </span>
-                      <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#8a7959]">
-                        <span>{fmtDate(b.createdAt)} · {b.createdBy || '—'}</span>
-                        {b.labelBatchId != null ? (
-                          <span
-                            title="Label batch — find these orders together in All Orders"
-                            className="inline-flex items-center gap-1 rounded-full bg-[#412d15] px-2 py-0.5 font-mono text-[9.5px] font-bold uppercase tracking-[0.08em] text-[#f4eede]"
-                          >
-                            <FiZap className="h-2.5 w-2.5" /> Batch {b.labelBatchId}
-                          </span>
-                        ) : (
-                          <span className="font-mono text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">
-                            No batch yet
-                          </span>
-                        )}
-                      </span>
-                    </span>
-                    <span className="flex justify-center">
-                      {(() => {
-                        const s = statusMeta(b.status)
-                        return (
-                          <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>
-                            {s.label}
-                          </span>
-                        )
-                      })()}
-                    </span>
-                    <span className="flex items-center justify-end gap-1.5">
-                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 ring-1 ring-emerald-200">
-                        {b.savedRows} saved
-                      </span>
-                      {b.invalidRows > 0 ? (
-                        <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10.5px] font-bold text-rose-700 ring-1 ring-rose-200">
-                          {b.invalidRows} err
-                        </span>
-                      ) : null}
-                    </span>
-                  </button>
-                  <div className="my-2 flex w-[420px] shrink-0 items-center justify-end gap-1.5 self-center pr-4">
-                    {viewTrash ? (
-                      canWrite ? (
-                        <button
-                          type="button"
-                          onClick={() => void handleRestore(b.id, b.fileName)}
-                          disabled={trashBusyId === b.id}
-                          title="Restore this import from Trash"
-                          className="inline-flex items-center gap-1.5 rounded-xl border border-[#412d15] bg-white px-3 py-2 text-[12px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {trashBusyId === b.id ? (
-                            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#412d15]/30 border-t-[#412d15]" />
-                          ) : (
-                            <FiRotateCcw className="h-3.5 w-3.5" />
-                          )}
-                          Restore
-                        </button>
-                      ) : null
-                    ) : (
-                      <>
-                        {canGenerate ? (
-                          (() => {
-                            const platform = b.billingMode === 'PLATFORM'
-                            const confirming = confirmGenId === b.id
-                            return (
-                              <>
-                                {/* Bills-to account selector (persisted) — hidden mid-confirm to save room */}
-                                <span
-                                  title="Which carrier account this batch bills to. Platform bills the house account and rebills the client with markup."
-                                  className={`${confirming ? 'hidden' : 'inline-flex'} items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold ${
-                                    platform
-                                      ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]'
-                                      : 'border-[#e3d9c4] bg-white text-[#5a4526]'
-                                  }`}
-                                >
-                                  <FiHome className="h-3.5 w-3.5 shrink-0" />
-                                  <span className="hidden sm:inline text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>
-                                  <select
-                                    value={platform ? 'PLATFORM' : 'AUTO'}
-                                    disabled={busy || billingSavingId === b.id}
-                                    onChange={(e) => void setBilling(b.id, e.target.value as 'AUTO' | 'PLATFORM')}
-                                    className="cursor-pointer border-0 bg-transparent pr-1 text-[11px] font-semibold text-inherit focus:outline-none disabled:cursor-not-allowed"
-                                  >
-                                    <option value="AUTO">Client account</option>
-                                    <option value="PLATFORM">Platform account</option>
-                                  </select>
-                                </span>
-
-                                {/* Generate — confirm first when billing to platform */}
-                                {platform && confirming ? (
-                                  <>
-                                    <button
-                                      type="button"
-                                      onClick={() => void generate(b.id, isRetry)}
-                                      disabled={busy}
-                                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#412d15] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#5a4526] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
-                                    >
-                                      <FiHome className="h-3.5 w-3.5" />
-                                      Confirm — bill to platform
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => setConfirmGenId(null)}
-                                      disabled={busy}
-                                      className="inline-flex items-center rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
-                                    >
-                                      Cancel
-                                    </button>
-                                  </>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => (platform ? setConfirmGenId(b.id) : void generate(b.id, isRetry))}
-                                    disabled={busy}
-                                    title={isRetry
-                                      ? 'Retry generating labels — only rows that FAILED or are un-generated will be re-sent'
-                                      : 'Generate carrier labels for this saved import'}
-                                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
-                                  >
-                                    {busy ? (
-                                      <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                                    ) : (
-                                      <FiZap className="h-3.5 w-3.5" />
-                                    )}
-                                    {busy ? 'Generating…' : isRetry ? 'Retry labels' : 'Generate labels'}
-                                  </button>
-                                )}
-                              </>
-                            )
-                          })()
-                        ) : null}
-                        {canWrite ? (
-                          <button
-                            type="button"
-                            onClick={() => void handleDelete(b.id, b.fileName)}
-                            disabled={trashBusyId === b.id}
-                            title="Move this import to Trash (recoverable)"
-                            aria-label="Delete import"
-                            className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#8a7959] transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {trashBusyId === b.id ? (
-                              <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300/40 border-t-rose-500" />
-                            ) : (
-                              <FiTrash2 className="h-3.5 w-3.5" />
-                            )}
-                          </button>
-                        ) : null}
-                      </>
-                    )}
-                  </div>
-                  </div>
-
-                  {busy ? (
-                    <div className="relative h-1 w-full overflow-hidden bg-[#eee6d6]">
-                      <div className="data-history-progress-bar absolute inset-y-0 w-1/3 rounded-full bg-[#1f150c]" />
-                    </div>
-                  ) : null}
-
-                  {open ? (
-                    <div className="border-t border-dashed border-[#eee6d6] bg-[#faf7f0]/50 px-5 py-3">
-                      {rows === 'loading' || rows === undefined ? (
-                        <p className="py-4 text-center text-[12px] text-[#8a7959]">Loading rows…</p>
-                      ) : rows.length === 0 ? (
-                        <p className="py-4 text-center text-[12px] text-[#8a7959]">No rows stored for this import.</p>
-                      ) : (
-                        <>
-                        <p className="mb-1.5 text-[10.5px] text-[#b6a684]">
-                          All columns shown — click any cell to edit; it saves and re-validates on blur. Scroll right for more.
-                        </p>
-                        <div className="overflow-x-auto rounded-xl border border-[#e3d9c4] bg-white">
-                          <table className="w-full border-collapse text-[11px] text-[#3f3527]">
-                            <thead>
-                              <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.1em] text-[#8a7959]">
-                                <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
-                                {DH_COLUMNS.map((c) => (
-                                  <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">{c.key}</th>
-                                ))}
-                                <th className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">Label</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {rows.map((r) => {
-                                const ok = (r.errors?.length ?? 0) === 0
-                                const gen = (r.generatedStatus ?? '').toUpperCase()
-                                const generated = gen === 'GENERATED'
-                                const rowKey = `${b.id}-${r.rowNumber}`
-                                const rowBusy = genRowKey === rowKey
-                                const saving = savingCell === rowKey
-                                const { byField } = bucketRowErrors(r.errors ?? [])
-                                const statusTitle = (r.errors ?? []).map((m) => '✗ ' + m).join('\n') || undefined
-                                return (
-                                  <tr key={r.rowNumber} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
-                                    <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="font-mono text-[10px] font-bold text-[#8a7959]">{r.rowNumber}</span>
-                                        {generated ? (
-                                          <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Generated</span>
-                                        ) : ok ? (
-                                          <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Ready</span>
-                                        ) : (
-                                          <span title={statusTitle} className="cursor-help rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800">{r.errors.length} err</span>
-                                        )}
-                                        {saving ? <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" /> : null}
-                                      </div>
-                                    </td>
-                                    {DH_COLUMNS.map((c) => {
-                                      const raw = (r as unknown as Record<string, unknown>)[c.key]
-                                      return (
-                                        <td key={c.key} className="border-b border-[#f2ecdf] px-1 py-1 align-top">
-                                          <div className={c.w}>
-                                            <GridCell
-                                              value={raw == null ? '' : String(raw)}
-                                              readOnly={generated}
-                                              bad={(byField[c.key]?.length ?? 0) > 0}
-                                              errors={byField[c.key]}
-                                              mono={c.mono}
-                                              onCommit={(v) => void commitCell(b.id, r, c, v)}
-                                            />
-                                          </div>
-                                        </td>
-                                      )
-                                    })}
-                                    <td className="whitespace-nowrap border-b border-[#f2ecdf] px-2 py-1">
-                                      {generated ? (
-                                        <span className="inline-flex flex-col gap-0.5">
-                                          {r.generatedTrackingNumber ? (
-                                            <span className="font-mono text-[9.5px] text-[#8a7959]">{r.generatedTrackingNumber}</span>
-                                          ) : <span className="text-[9.5px] text-[#8a7959]">—</span>}
-                                        </span>
-                                      ) : !canWrite ? (
-                                        /* Audit R2 #329 — TENANT read-only. */
-                                        <span className="text-[9.5px] text-[#b6a684]">Read-only view</span>
-                                      ) : ok ? (
-                                        <button
-                                          type="button"
-                                          onClick={() => void generateRow(b.id, r.rowNumber)}
-                                          disabled={rowBusy}
-                                          className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
-                                        >
-                                          {rowBusy ? (
-                                            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                                          ) : (
-                                            <FiZap className="h-3 w-3" />
-                                          )}
-                                          {rowBusy ? 'Generating…' : 'Generate label'}
-                                        </button>
-                                      ) : (
-                                        <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
-                                      )}
-                                    </td>
-                                  </tr>
-                                )
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                        </>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-              )
-            })}
-          </div>
+            }
+          />
         )}
-
-        {/* ── Pagination footer ─────────────────────────────────────────── */}
-        {!loading && filtered.length > 0 ? (
-          <div className="flex flex-col gap-3 border-t border-dashed border-[#e3d9c4] px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2 text-[11.5px] text-[#8a7959]">
-              <span>Rows per page</span>
-              <select
-                value={pageSize}
-                onChange={(e) => setPageSize(Number(e.target.value))}
-                className="rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11.5px] font-semibold text-[#5a4526] outline-none transition focus:border-[#cdbf9f]"
-              >
-                {[10, 25, 50, 100].map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
-              <span className="text-[#cdbf9f]">·</span>
-              <span>
-                Showing <span className="font-semibold text-[#5a4526]">{rangeStart}–{rangeEnd}</span> of {filtered.length}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 text-[11.5px] text-[#5a4526]">
-              <button
-                type="button"
-                disabled={safePage <= 1}
-                onClick={() => setPage(safePage - 1)}
-                className="rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 font-semibold transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Previous
-              </button>
-              <span className="font-mono text-[11px] tabular-nums text-[#8a7959]">
-                Page {safePage} of {totalPages}
-              </span>
-              <button
-                type="button"
-                disabled={safePage >= totalPages}
-                onClick={() => setPage(safePage + 1)}
-                className="rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 font-semibold transition hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        ) : null}
       </section>
+      </>
+      )}
     </div>
   )
 }
 
-// Every backend validation message is prefixed with the column it belongs to
-// ("postalCode is required", "hsCode is required for international shipments…").
-// This maps a message to its field so the offending input can go red; messages
-// with no field prefix (group-level customs rules) stay row-level.
-const EDIT_FIELD_KEYS = [
-  'orderRef', 'clientCode', 'billTo', 'warehouseCode',
-  'recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail',
-  'addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode',
-  'carrierCode', 'accountNumber', 'serviceType', 'packageType',
-  'weight', 'weightUnit', 'currency', 'reference',
-  'itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue',
-  'hsCode', 'countryOfOrigin',
-] as const
-
-/** Split a row's error strings into per-field buckets + row-level leftovers. */
-function bucketRowErrors(errors: string[]): {
-  byField: Record<string, string[]>
-  rowLevel: string[]
-} {
-  const byField: Record<string, string[]> = {}
-  const rowLevel: string[] = []
-  for (const msg of errors) {
-    const first = msg.split(/[\s']/, 1)[0]
-    if ((EDIT_FIELD_KEYS as readonly string[]).includes(first)) {
-      ;(byField[first] ??= []).push(msg)
-    } else {
-      rowLevel.push(msg)
-    }
-  }
-  return { byField, rowLevel }
-}
-
-/** Column model for the Data-History spreadsheet grid — every import field,
- *  in template order. `numeric`/`upper` shape how an edited value is written
- *  back; `w` is the cell input min-width. Mirrors the import modal's grid. */
-type DhColumn = { key: string; mono?: boolean; upper?: boolean; numeric?: boolean; w: string }
-const DH_COLUMNS: DhColumn[] = [
-  { key: 'orderRef', mono: true, w: 'w-24' },
-  { key: 'clientCode', mono: true, upper: true, w: 'w-24' },
-  { key: 'billTo', mono: true, upper: true, w: 'w-24' },
-  { key: 'warehouseCode', mono: true, upper: true, w: 'w-24' },
-  { key: 'recipientName', w: 'w-40' },
-  { key: 'recipientCompany', w: 'w-40' },
-  { key: 'recipientPhone', w: 'w-28' },
-  { key: 'recipientEmail', w: 'w-44' },
-  { key: 'addressLine1', w: 'w-48' },
-  { key: 'addressLine2', w: 'w-40' },
-  { key: 'city', w: 'w-32' },
-  { key: 'state', mono: true, upper: true, w: 'w-16' },
-  { key: 'postalCode', mono: true, w: 'w-24' },
-  { key: 'countryCode', mono: true, upper: true, w: 'w-16' },
-  { key: 'carrierCode', mono: true, upper: true, w: 'w-24' },
-  { key: 'accountNumber', mono: true, w: 'w-32' },
-  { key: 'serviceType', mono: true, w: 'w-28' },
-  { key: 'packageType', mono: true, w: 'w-24' },
-  { key: 'weight', numeric: true, w: 'w-16' },
-  { key: 'weightUnit', mono: true, upper: true, w: 'w-16' },
-  { key: 'currency', mono: true, upper: true, w: 'w-16' },
-  { key: 'reference', mono: true, w: 'w-28' },
-  { key: 'itemDescription', w: 'w-48' },
-  { key: 'itemSku', mono: true, w: 'w-24' },
-  { key: 'itemQuantity', numeric: true, w: 'w-16' },
-  { key: 'itemUnitValue', numeric: true, w: 'w-20' },
-  { key: 'hsCode', mono: true, w: 'w-24' },
-  { key: 'countryOfOrigin', mono: true, upper: true, w: 'w-16' },
-]
-
-/**
- * A read-only grid cell that becomes an input on click. Shows the value as
- * plain text (red + tooltip when the field failed validation); clicking opens
- * an inline editor that commits on blur or Enter, cancels on Escape. Generated
- * rows are read-only. The commit fires once on exit, not per keystroke.
- */
-function GridCell({
-  value,
-  onCommit,
-  bad = false,
-  mono = false,
-  errors,
-  readOnly = false,
-}: {
-  value: string
-  onCommit: (v: string) => void
-  bad?: boolean
-  mono?: boolean
-  errors?: string[]
-  readOnly?: boolean
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(value)
-  const inputRef = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (editing) { inputRef.current?.focus(); inputRef.current?.select() }
-  }, [editing])
-  const begin = () => { if (readOnly) return; setDraft(value); setEditing(true) }
-  const commit = () => { setEditing(false); if (draft !== value) onCommit(draft) }
-  const cancel = () => { setEditing(false); setDraft(value) }
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.preventDefault(); commit() }
-          else if (e.key === 'Escape') { e.preventDefault(); cancel() }
-        }}
-        className={`w-full rounded-[5px] border border-[#412d15] bg-white px-1.5 py-0.5 text-[10.5px] text-[#1f150c] outline-none ring-1 ring-[#412d15] ${mono ? 'font-mono' : ''}`}
-      />
-    )
-  }
-  const tooltip = bad && errors && errors.length > 0 ? errors.join('\n') : value || undefined
-  return (
-    <button
-      type="button"
-      onClick={begin}
-      title={tooltip}
-      className={`block w-full truncate rounded-[5px] px-1.5 py-0.5 text-left text-[10.5px] transition ${mono ? 'font-mono' : ''} ${
-        readOnly ? 'cursor-default text-[#8a7959]'
-          : bad ? 'cursor-text bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-300 hover:ring-rose-400'
-          : 'cursor-text text-[#3f3527] hover:bg-[#efe7d4]'
-      }`}
-    >
-      {value || <span className="text-[#cdbf9f]">—</span>}
-    </button>
-  )
-}

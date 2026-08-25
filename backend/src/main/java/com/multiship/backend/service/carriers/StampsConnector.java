@@ -35,9 +35,58 @@ public class StampsConnector implements CarrierConnector {
 
     private static final String CARRIER_CODE = "USPS";
 
-    /** Stamps.com SWSIM requires the IntegrationID to be a real GUID. */
+    /** Stamps.com SWSIM requires the IntegrationID to be a real GUID.
+     *  Canonical shape: {@code 8-4-4-4-12} hex with hyphens. */
     private static final java.util.regex.Pattern GUID_PATTERN = java.util.regex.Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+    /** 32-hex-no-hyphens form Stamps.com's dev portal occasionally emits (e.g. via
+     *  its .NET SDK code samples). We insert the hyphens ourselves so the operator
+     *  doesn't have to reshape the value before pasting. */
+    private static final java.util.regex.Pattern GUID_NO_HYPHENS = java.util.regex.Pattern.compile(
+            "^[0-9a-fA-F]{32}$");
+    /** Braced-GUID {@code {01234567-...}} form the Windows/registry-style portal
+     *  copy button emits — very common paste variant. */
+    private static final java.util.regex.Pattern BRACED_GUID_WRAPPER = java.util.regex.Pattern.compile(
+            "^\\{(.*)\\}$");
+    /** URN-form {@code urn:uuid:01234567-...} that IETF-style tooling produces. */
+    private static final String URN_UUID_PREFIX = "urn:uuid:";
+
+    /**
+     * Normalise the IntegrationID the operator pasted into a canonical GUID.
+     * Accepts + reshapes these variants (all seen in the wild pasting from the
+     * Stamps.com developer portal or third-party SDK docs):
+     * <ul>
+     *   <li>canonical {@code 01234567-89ab-cdef-0123-456789abcdef} — pass-through</li>
+     *   <li>braced {@code {01234567-89ab-cdef-0123-456789abcdef}} — strip braces</li>
+     *   <li>URN {@code urn:uuid:01234567-...} — strip prefix</li>
+     *   <li>no-hyphens {@code 0123456789abcdef0123456789abcdef} — insert hyphens</li>
+     * </ul>
+     * Returns {@code null} when the value can't be reshaped into a canonical GUID;
+     * callers then surface an actionable error. All matches are case-insensitive
+     * because the hex range in {@link #GUID_PATTERN} allows both cases.
+     */
+    static String normaliseIntegrationId(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim();
+        if (s.isEmpty()) return null;
+        // Strip URN prefix (case-insensitive) so callers pasting from IETF docs work.
+        if (s.length() > URN_UUID_PREFIX.length()
+                && s.substring(0, URN_UUID_PREFIX.length()).equalsIgnoreCase(URN_UUID_PREFIX)) {
+            s = s.substring(URN_UUID_PREFIX.length()).trim();
+        }
+        // Strip braces {…}
+        java.util.regex.Matcher braced = BRACED_GUID_WRAPPER.matcher(s);
+        if (braced.matches()) {
+            s = braced.group(1).trim();
+        }
+        // Insert hyphens for the 32-hex form.
+        if (GUID_NO_HYPHENS.matcher(s).matches()) {
+            s = s.substring(0, 8) + "-" + s.substring(8, 12) + "-"
+                    + s.substring(12, 16) + "-" + s.substring(16, 20) + "-"
+                    + s.substring(20);
+        }
+        return GUID_PATTERN.matcher(s).matches() ? s : null;
+    }
 
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
@@ -159,7 +208,17 @@ public class StampsConnector implements CarrierConnector {
     @Override
     public CarrierConnectionResult connect(String clientId, String clientSecret, String accountNumber) {
         validateCredentials(clientId, clientSecret);
-        String accessToken = getAccessToken(clientId, clientSecret);
+        // Bug fix: previously called the 2-arg getAccessToken(clientId, clientSecret)
+        // which forwarded accountNumber=null to the 4-arg version, which then threw
+        // CarrierConnectionException("Stamps.com verification needs the account number
+        // as the SWSIM Username."). Effect: `POST /carriers/connect` for USPS
+        // always 500'd regardless of what the caller supplied — the accountNumber
+        // sitting in the argument list was silently discarded. Now passing it
+        // through to the 4-arg overload where SWSIM AuthenticateUser needs it.
+        // Environment left null so the default-environment property drives the
+        // sandbox-vs-prod routing (matches the pre-fix behaviour for the
+        // environment field on CarrierConnectionResult at line 218).
+        String accessToken = getAccessToken(clientId, clientSecret, accountNumber, null);
         LocalDateTime tokenExpiresAt = LocalDateTime.now(ZoneOffset.UTC).plusHours(1);
         return new CarrierConnectionResult(
                 CARRIER_CODE,
@@ -217,16 +276,27 @@ public class StampsConnector implements CarrierConnector {
         // (HTTP 500 "value is invalid according to its datatype 'guid'") before
         // it ever checks the credentials. Catch that here with an actionable
         // message instead of firing a request we know the schema will bounce.
-        if (clientId == null || !GUID_PATTERN.matcher(clientId.trim()).matches()) {
+        // Also normalise common paste variants (braces, urn:uuid:, no-hyphens)
+        // so operators don't fail auth over registry-style copy-paste — the
+        // Stamps.com developer portal's "copy" button emits the braced form on
+        // Windows, which the strict pattern used to reject.
+        String normalisedGuid = normaliseIntegrationId(clientId);
+        if (normalisedGuid == null) {
             LAST_AUTH_DETAIL.set("the Stamps.com Client ID (IntegrationID) must be a GUID like "
-                    + "\"01234567-89ab-cdef-0123-456789abcdef\". The value entered isn't a GUID — "
-                    + "copy the IntegrationID from your Stamps.com developer portal.");
-            log.warn("Stamps SWSIM: IntegrationID '{}' is not a GUID; skipping call and returning fallback token.",
-                    clientId);
+                    + "\"01234567-89ab-cdef-0123-456789abcdef\" (braces {...}, urn:uuid: prefix, "
+                    + "or 32-hex-no-hyphens are also accepted and auto-normalised). The value entered "
+                    + "isn't recognisable as a GUID — copy the IntegrationID from your Stamps.com "
+                    + "developer portal.");
+            log.warn("Stamps SWSIM: IntegrationID '{}' is not a GUID after normalisation; "
+                    + "skipping call and returning fallback token.", clientId);
             return buildFallbackToken(clientId, clientSecret);
         }
+        if (!normalisedGuid.equals(clientId == null ? null : clientId.trim())) {
+            log.info("Stamps SWSIM: IntegrationID normalised from '{}' → '{}' (strip braces / "
+                    + "urn:uuid: / insert hyphens).", clientId, normalisedGuid);
+        }
 
-        String soap = buildAuthenticateUserEnvelope(clientId, accountNumber.trim(), clientSecret);
+        String soap = buildAuthenticateUserEnvelope(normalisedGuid, accountNumber.trim(), clientSecret);
 
         try {
             String response = HttpClients.newBuilder().baseUrl(swsimUrl).build().post()
@@ -331,6 +401,32 @@ public class StampsConnector implements CarrierConnector {
      */
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        // Sibling-parity guard (F4 fix): trackShipment, getRates, voidShipment,
+        // validateAddress, schedulePickup, closeOutDay all short-circuit when
+        // the accessToken is a `-local-*` fallback (unverified/rejected creds).
+        // createShipment was the only outlier — pre-fix it fired the CreateIndicium
+        // SOAP with the fallback token and let SWSIM 500 with a generic auth
+        // fault. Now failing fast at the boundary with an actionable message
+        // that tells the operator to re-verify the account. Same message shape
+        // and errorCode as the NOT_SUPPORTED sibling returns so downstream
+        // handlers stay consistent.
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            throw new com.multiship.backend.exception.CarrierConnectionException(
+                    "USPS via Stamps.com: this account's credentials aren't verified "
+                            + "(no live SWSIM Authenticator). Re-verify the account on "
+                            + "the Carriers page before shipping — SWSIM will reject any "
+                            + "label call with a fallback token.");
+        }
+        // F7 fix — recipient country is required. Pre-fix, blank silently
+        // defaulted to "US" downstream in buildCreateIndiciumEnvelope, which
+        // shipped international parcels as domestic USPS (wrong service,
+        // wrong price, wrong customs). Now failing at the boundary.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "USPS shipment requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before generating a label.");
+        }
         String swsimUrl = isSandbox(environment)
                 ? carrierProperties.getStamps().getSandboxUrl()
                 : carrierProperties.getStamps().getApiBaseUrl();
@@ -645,6 +741,20 @@ public class StampsConnector implements CarrierConnector {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return java.util.List.of();
         }
+        // FDX-B4 — recipient country is required. Pre-fix, blank silently
+        // defaulted to "US" downstream in the SWSIM envelope builders
+        // (appendServiceRate line 1434 + rate envelope line 1688 both use
+        // nonBlank(recipientCountry, "US")), so an intl rate-shop returned
+        // believable US-domestic USPS quotes even though USPS only offers
+        // limited intl services. Operator would ship and get rejected at
+        // manifest time. Same F7 guard shape.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "USPS rate-shop requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before rate-shopping — "
+                            + "quotes without a destination silently fall to US-domestic.");
+        }
         java.util.List<com.multiship.backend.dto.PackageDetailDTO> pkgList = request.effectivePackages();
         if (pkgList.isEmpty()) {
             log.warn("Stamps rate-shop skipped: request has no packages.");
@@ -847,7 +957,15 @@ public class StampsConnector implements CarrierConnector {
                     "SWSIM address validation needs live credentials; the account is on a fallback token.",
                     null);
         }
-        String swsimUrl = carrierProperties.getStamps().getApiBaseUrl();
+        // Env routing — mirrors every other SWSIM endpoint in this class
+        // (getAccessToken, createShipment, getRates, trackShipment,
+        // voidShipment, schedulePickup, closeOutDay). Previously hardcoded
+        // to getApiBaseUrl() so a SANDBOX operator's address validation
+        // hit prod SWSIM — real production request from a test session
+        // (env bleed). Fixed by routing SANDBOX to the sandbox host.
+        String swsimUrl = isSandbox(environment)
+                ? carrierProperties.getStamps().getSandboxUrl()
+                : carrierProperties.getStamps().getApiBaseUrl();
         boolean domestic = !StringUtils.hasText(address.countryCode())
                 || "US".equalsIgnoreCase(address.countryCode().trim());
         String operation = domestic ? "CleanseAddress" : "ValidateForeignAddress";
@@ -1337,8 +1455,11 @@ public class StampsConnector implements CarrierConnector {
                 .append(xmlEscape(nonBlank(
                         nonBlank(pkg.getPackageType(), request.getPackageType()), "Package")))
                 .append("</PackageType>");
+        // F6-E — SWSIM ShipDate follows the shipper's local calendar day;
+        // USPS/Endicia service-selection rules key off it (Same-Day, next-
+        // day cutoffs), so a UTC-1-day skew silently mis-quotes.
         xml.append("<ShipDate>")
-                .append(java.time.LocalDate.now(java.time.ZoneOffset.UTC))
+                .append(com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()))
                 .append("</ShipDate>");
         // Declared value: prefer per-package, else shipment-level.
         java.math.BigDecimal declared = pkg.getDeclaredValue() != null
@@ -1376,7 +1497,17 @@ public class StampsConnector implements CarrierConnector {
 
             String amount = extractElement(body, "Amount");
             java.math.BigDecimal totalAmount = parseSwsimAmount(amount);
-            if (totalAmount == null) continue;
+            if (totalAmount == null) {
+                // Pre-fix this skipped silently — operator saw N-1 rates
+                // when SWSIM returned N with no way to trace the missing
+                // one. Log the offending service + raw Amount so ops can
+                // reproduce; we still skip because a rate without a
+                // parseable price can't be surfaced (customers rely on
+                // total for rate-shop comparison).
+                log.warn("Stamps GetRates: dropping unparseable Amount '{}' for service {} — "
+                        + "rate omitted from response.", amount, serviceCode);
+                continue;
+            }
 
             Integer transitDays = parseSwsimDeliverDays(extractElement(body, "DeliverDays"));
             LocalDateTime estimatedDelivery = parseSwsimTimestamp(
@@ -1577,7 +1708,10 @@ public class StampsConnector implements CarrierConnector {
         xml.append("<PackageType>").append(xmlEscape(
                 nonBlank(nonBlank(p.getPackageType(), request.getPackageType()), "Package"))).append("</PackageType>");
         xml.append("<WeightOz>").append(xmlEscape(weightOz)).append("</WeightOz>");
-        xml.append("<ShipDate>").append(java.time.LocalDate.now(java.time.ZoneOffset.UTC)).append("</ShipDate>");
+        // F6-E — see the sibling ShipDate emit in buildGetRatesEnvelope.
+        xml.append("<ShipDate>")
+                .append(com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()))
+                .append("</ShipDate>");
         // Sprint 48 B11 — DeclaredValue resolution:
         //   1. per-box CI-derived value (grouped from OrderCustomsItem.boxSeq)
         //   2. explicit packageDetail.declaredValue (legacy override)
@@ -1693,6 +1827,15 @@ public class StampsConnector implements CarrierConnector {
      */
     private void appendCustomsInfo(StringBuilder xml, ShipmentRequestDTO request) {
         com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
+        // F6-C note: unlike UPS/FedEx/DHL, USPS via Stamps.com has NO
+        // dedicated envelope field for clearanceOption (SENDER vs RECIPIENT
+        // vs DDU vs DDP). USPS encodes duty payment via SERVICE CLASS
+        // ("Priority Mail Intl - DDU" vs "Priority Mail Intl - DDP" are
+        // distinct SWSIM ServiceType codes). So `intl.getClearanceOption()`
+        // is intentionally not read here; the resolver's account-level
+        // clearanceOption should ideally flow into service-code selection
+        // upstream (out of scope for F6-C — see follow-up ticket if the
+        // client needs USPS DDP routing).
         xml.append("<CustomsInfo>");
         xml.append("<ContentType>").append(mapContentType(intl.getReasonForExport())).append("</ContentType>");
         String notes = nonBlank(intl.getImporterCompanyReg(), "");
@@ -1723,7 +1866,13 @@ public class StampsConnector implements CarrierConnector {
                 xml.append("<CountryOfOrigin>").append(xmlEscape(c.getCountryOfOrigin())).append("</CountryOfOrigin>");
             }
             if (StringUtils.hasText(c.getSku())) {
-                xml.append("<sku>").append(xmlEscape(c.getSku())).append("</sku>");
+                // SWSIM XML is case-sensitive and every sibling element in
+                // this CustomsLine block is PascalCase (Description,
+                // Quantity, Value, WeightOz, HSTariffNumber, CountryOfOrigin).
+                // Pre-fix this was lowercased `<sku>` which SWSIM's parser
+                // silently dropped — the SKU disappeared from the printed
+                // customs form (silent data loss on international shipments).
+                xml.append("<SKU>").append(xmlEscape(c.getSku())).append("</SKU>");
             }
             xml.append("</CustomsLine>");
         }
@@ -1745,11 +1894,28 @@ public class StampsConnector implements CarrierConnector {
         };
     }
 
-    /** Total shipment weight in ounces — the unit SWSIM speaks natively. */
+    /**
+     * Total shipment weight in ounces — the unit SWSIM speaks natively.
+     *
+     * <p>Throws {@link IllegalArgumentException} when UnitConverter can't
+     * convert the input (unrecognised weight unit, null weight, negative
+     * value). Pre-fix, this silently fell back to {@code "0"} which
+     * SWSIM would either quote a bogus near-free rate for OR reject with
+     * a confusing error further down — a classic silent-fallback that
+     * the codebase actively hunts (5-batch silent-fallback audit shipped
+     * as PRs #410-#414). Failing early with a diagnosable message beats
+     * shipping a fake-weight envelope every time.
+     */
     private static String weightInOz(com.multiship.backend.dto.PackageDetailDTO p) {
         java.math.BigDecimal oz = com.multiship.backend.util.UnitConverter
                 .toOunces(p.getWeight(), p.getWeightUnit());
-        return oz == null ? "0" : oz.toPlainString();
+        if (oz == null) {
+            throw new IllegalArgumentException(
+                    "Stamps.com: could not convert package weight to ounces. "
+                            + "Value=" + p.getWeight() + " unit=" + p.getWeightUnit()
+                            + " — provide a positive numeric weight in LB, OZ, KG, or G.");
+        }
+        return oz.toPlainString();
     }
 
     private static String nonBlank(String value, String fallback) {
@@ -1783,10 +1949,34 @@ public class StampsConnector implements CarrierConnector {
      * Parse a CreateIndicium SOAP response for the fields we care about:
      * TrackingNumber, URL (the label PDF), StampsTxID (SWSIM's own id), plus
      * the new Authenticator for the next call.
+     *
+     * <p>Fault handling: SWSIM can return HTTP 200 with a SOAP
+     * {@code <faultstring>} inside the envelope (e.g. "insufficient postage",
+     * "USPS service unavailable" — these don't 4xx at the transport level).
+     * Pre-fix, a fault response missing a TrackingNumber silently returned a
+     * ShipmentResult with null tracking/URL/PDF, which the MPS aggregator
+     * treated as a successful piece — the operator saw a "created" shipment
+     * with no label and no error. Every sibling parser in this class
+     * (parseCancelIndiciumResponse, parseSchedulePickupResponse,
+     * parseCreateScanFormResponse) checks for faultstring; createIndicium
+     * was the outlier. Now aligned: a fault response throws an
+     * IllegalStateException that the createShipment loop catches, routes
+     * through CarrierExceptionMapper, and triggers the MPS rollback for
+     * any pieces that DID succeed earlier in the batch.
      */
     private ShipmentResult parseCreateIndiciumResponse(String responseXml, ShipmentRequestDTO request) {
         String tracking = extractElement(responseXml, "TrackingNumber");
         String url = extractElement(responseXml, "URL");
+        // Fault-first check: a valid label response ALWAYS has a TrackingNumber.
+        // If it's missing, look for a SOAP fault and throw so the caller sees
+        // a diagnosable failure instead of a null-tracking "success".
+        if (!StringUtils.hasText(tracking)) {
+            String fault = extractSoapFault(responseXml);
+            throw new IllegalStateException(
+                    "SWSIM CreateIndicium returned no TrackingNumber for order "
+                            + (request == null ? "?" : request.getReferenceNumber())
+                            + ". Fault: " + fault);
+        }
         // SWSIM returns the total postage under Rate.Amount when the label
         // prints successfully; fall back to null (client shows unpriced).
         java.math.BigDecimal cost = null;
@@ -1799,10 +1989,21 @@ public class StampsConnector implements CarrierConnector {
                 // responses; treat those as unpriced rather than crashing.
             }
         }
-        String trackingUrl = StringUtils.hasText(tracking)
-                ? "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + tracking
-                : null;
-        java.time.LocalDateTime estimated = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusDays(5);
+        String trackingUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + tracking;
+        // ETA — read from SWSIM's response. Pre-fix this was hardcoded to
+        // now().plusDays(5) for EVERY service class regardless of what SWSIM
+        // said, so a Priority Mail (1-3d) label and a Media Mail (2-8d)
+        // label both surfaced "delivered in 5 days" on the receipt. That
+        // misleads recipients and doesn't match what parseGetRatesResponse
+        // reads from the same response shape (see the DeliveryDate lookup
+        // ~445 lines above in parseGetRatesResponse).
+        //
+        // SWSIM CreateIndicium responses may or may not include
+        // DeliveryDate depending on service class — falling back to null
+        // when absent is deliberate: the receipt UI already renders "—"
+        // for null ETA, which is honest.
+        java.time.LocalDateTime estimated = parseSwsimTimestamp(
+                extractElement(responseXml, "DeliveryDate"));
         return new ShipmentResult(tracking, trackingUrl, url, url, cost, estimated, responseXml);
     }
 
@@ -1826,16 +2027,6 @@ public class StampsConnector implements CarrierConnector {
         if (!StringUtils.hasText(responseXml)) return "unknown";
         String fault = extractElement(responseXml, "faultstring");
         return fault == null ? "no fault element" : fault;
-    }
-
-    private ShipmentResult buildFallbackShipmentResult(ShipmentRequestDTO request) {
-        String trackingNumber = "9" + hashShort(request.getReferenceNumber() + ":" + request.getCarrierCode());
-        String trackingUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + trackingNumber;
-        String labelUrl = "https://labels.local/usps/" + trackingNumber + ".pdf";
-        String labelPdf = labelUrl;
-        BigDecimal shippingCost = request.getWeight() != null ? request.getWeight().multiply(BigDecimal.valueOf(0.95)) : BigDecimal.ZERO;
-        LocalDateTime estimatedDelivery = LocalDateTime.now(ZoneOffset.UTC).plusDays(4);
-        return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelPdf, shippingCost, estimatedDelivery, null);
     }
 
     private String buildFallbackToken(String clientId, String clientSecret) {

@@ -26,6 +26,15 @@ export interface CarrierAccountRef {
    *  defaults when unset. */
   shippingPurpose?: string | null
   clearanceOption?: string | null
+  /** F6-B2 — per-account billing currency (ISO 4217). NULL means "use
+   *  carrier home currency" (USPS/UPS/FedEx → USD, DHL → EUR). Non-null
+   *  overrides both carrier default AND client currency. */
+  currency?: string | null
+  /** FDX-H1 — per-account default pickupType (FedEx only; UPS/DHL/USPS
+   *  ignore). NULL means USE_SCHEDULED_PICKUP (pre-FDX-H1 hardcode).
+   *  Values: REGULAR_PICKUP | REQUEST_COURIER | DROP_BOX |
+   *  BUSINESS_SERVICE_CENTER | STATION | USE_SCHEDULED_PICKUP. */
+  pickupType?: string | null
   /** Third-party billing default — only meaningful when clearanceOption is
    *  THIRD_PARTY. Nullable individually; per-shipment overrides live on the
    *  Shipment row (follow-up). */
@@ -62,6 +71,14 @@ export interface AccountRefUpsertPayload {
    *  frontend against the enum in ../utils/customsOptions. */
   shippingPurpose?: string | null
   clearanceOption?: string | null
+  /** F6-B2 — per-account billing currency (ISO 4217, e.g. USD / EUR). Null
+   *  in the payload clears the persisted value; omitted keeps it. */
+  currency?: string | null
+  /** FDX-H1 — per-account default pickupType (FedEx only). Null clears the
+   *  persisted value; omitted keeps it. Value must be a FedEx pickupType
+   *  enum member; the backend rejects anything else with a Bean-Validation
+   *  400 (pattern-constrained). */
+  pickupType?: string | null
   /** Third-party billing default (only sent when clearance = THIRD_PARTY).
    *  Null on any field = clear the persisted value; omitting the field from
    *  the payload entirely = keep the persisted value. */

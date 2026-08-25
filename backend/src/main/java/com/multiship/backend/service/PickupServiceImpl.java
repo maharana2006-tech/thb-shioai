@@ -105,7 +105,16 @@ public class PickupServiceImpl implements PickupService {
                 request.getPackageCount(),
                 request.getTotalWeight(),
                 request.getWeightUnit(),
-                request.getSpecialInstructions());
+                request.getSpecialInstructions(),
+                // FDX-C — thread the resolved shipper account number so the
+                // carrier's pickup envelope carries a real account instead of
+                // the historical placeholder ("ACCOUNT" for FedEx, empty for
+                // DHL, contact name misfiled for UPS).
+                account.getAccountNumber(),
+                // FDX-F — operator's Express/Ground/International selection
+                // from the FE modal. FedEx maps to carrierCode=FDXE/FDXG,
+                // UPS maps to ServiceCode=007/003, DHL/USPS no-op.
+                request.getPickupServiceType());
 
         PickupResult result;
         try {

@@ -88,6 +88,10 @@ export interface ImportBatchSummary {
   deletedBy?: string | null
   /** Bill-to account mode: 'AUTO' (cascade) or 'PLATFORM' (house account). */
   billingMode?: 'AUTO' | 'PLATFORM' | string | null
+  /** Origin of the rows: 'BULK' (uploaded file) or 'WMS' (Fetch from WMS).
+   *  WMS batches are a read-only record of a fetch — labels are generated in
+   *  the Shipments workspace, so Generate/Retry are hidden for them. */
+  source?: 'BULK' | 'WMS' | string | null
 }
 
 /** A saved import with its full rows (detail view). */

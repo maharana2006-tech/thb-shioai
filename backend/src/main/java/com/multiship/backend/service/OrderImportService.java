@@ -50,8 +50,13 @@ public interface OrderImportService {
     ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy,
                                             String fileName, boolean draft);
 
-    /** Live (non-deleted) imports, newest first (row payload omitted). */
+    /** Live (non-deleted) CSV/XLSX imports, newest first (row payload omitted).
+     *  Excludes WMS/API-sourced batches — those surface via {@link #apiBatches()}. */
     java.util.List<com.multiship.backend.dto.ImportBatchDTO> history();
+
+    /** Live batches from a non-file source (WMS pulls / external API), newest
+     *  first — shown under the "API" section of All Orders, not Import history. */
+    java.util.List<com.multiship.backend.dto.ImportBatchDTO> apiBatches();
 
     /** Soft-deleted imports, newest first — the Trash view. */
     java.util.List<com.multiship.backend.dto.ImportBatchDTO> deletedHistory();

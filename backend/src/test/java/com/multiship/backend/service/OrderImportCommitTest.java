@@ -42,6 +42,12 @@ class OrderImportCommitTest {
     private static OrderImportRowDTO validRow(int rowNumber) {
         return OrderImportRowDTO.builder()
                 .rowNumber(rowNumber)
+                // clientCode + weightUnit joined the required-field set in
+                // the "new validation and new features changes" push (Sprint 55).
+                // Blank clientCode was previously silently accepted and produced
+                // orphaned custNo="MANUAL" orders — see OrderImportServiceImpl
+                // validateRow doc comment. Fixture updated to keep pace.
+                .clientCode("ACME")
                 .recipientName("Jane " + rowNumber)
                 .addressLine1(rowNumber + " Broadway")
                 .city("New York")

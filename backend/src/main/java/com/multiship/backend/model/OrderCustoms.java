@@ -87,6 +87,12 @@ public class OrderCustoms {
     @Column(name = "weight_unit", length = 3)
     private String weightUnit;
 
+    /** F6-B1 — IN | CM — the unit item dimensions are expressed in.
+     *  Optional per-shipment override; falls through to Client.defaultDimUnit
+     *  then "IN" hardcode when null. Parallel to weightUnit above. */
+    @Column(name = "dim_unit", length = 4)
+    private String dimUnit;
+
     @Column(length = 500)
     private String notes;
 

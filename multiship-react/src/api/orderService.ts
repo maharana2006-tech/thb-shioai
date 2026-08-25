@@ -536,6 +536,8 @@ export interface OrderListParams {
   createdFrom?: string
   /** Created on or before (yyyy-MM-dd). */
   createdTo?: string
+  /** Order source: MANUAL | BULK | API | WMS | ERP. Empty = all sources. */
+  source?: string
 }
 
 /** Tab counts for the Labels work queue. */
@@ -570,6 +572,7 @@ export const orderService = {
     if (params.tracking?.trim()) query.set('tracking', params.tracking.trim())
     if (params.createdFrom) query.set('createdFrom', params.createdFrom)
     if (params.createdTo) query.set('createdTo', params.createdTo)
+    if (params.source) query.set('source', params.source)
 
     return apiClient.get<ApiResponse<PaginatedOrderData>>(`/orders?${query.toString()}`)
   },

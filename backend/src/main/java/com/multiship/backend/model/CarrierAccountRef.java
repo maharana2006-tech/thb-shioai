@@ -101,6 +101,45 @@ public class CarrierAccountRef {
     private String clearanceOption;
 
     /**
+     * F6-B2 — per-account billing currency override. ISO 4217 3-letter code.
+     * When NULL, the resolver falls back to the carrier's hardcoded home
+     * currency (USPS/UPS/FedEx → USD; DHL → EUR). When set, this value is
+     * authoritative for anything this account bills — regardless of client
+     * currency or carrier default. If it differs from the client's currency,
+     * F6-D converts declared value / commodities / insured value / freight
+     * via FxRateService before the connector envelope is built.
+     */
+    @Column(name = "currency", length = 3)
+    private String currency;
+
+    /**
+     * FDX-H1 — per-account default pickupType. Only FedEx currently maps
+     * this to the wire; UPS / DHL / SWSIM connectors ignore the value.
+     *
+     * <p>FedEx pickupType enum:
+     * <ul>
+     *   <li>{@code REGULAR_PICKUP} — standard scheduled pickup</li>
+     *   <li>{@code REQUEST_COURIER} — on-demand courier request</li>
+     *   <li>{@code DROP_BOX} — shipper drops at a FedEx drop box</li>
+     *   <li>{@code BUSINESS_SERVICE_CENTER} — shipper drops at a FedEx BSC</li>
+     *   <li>{@code STATION} — shipper drops at a FedEx station</li>
+     *   <li>{@code USE_SCHEDULED_PICKUP} — shipper has a standing daily
+     *       pickup; the default when this column is NULL</li>
+     * </ul>
+     *
+     * <p>Return labels bypass this column entirely — the FedEx connector
+     * force-sets {@code CONTACT_FEDEX_TO_SCHEDULE} for {@code isReturn=true}
+     * shipments so the customer doesn't need a scheduled pickup.
+     *
+     * <p>NULL → resolver falls back to {@code USE_SCHEDULED_PICKUP} (matches
+     * the pre-FDX-H1 behavior). Deliberately not backfilled — silently
+     * flipping every existing account would misclassify shippers whose
+     * ops mode changes day-to-day.
+     */
+    @Column(name = "pickup_type", length = 30)
+    private String pickupType;
+
+    /**
      * Third-party billing party — used only when clearanceOption is THIRD_PARTY
      * (UPS / FedEx). Acts as the ACCOUNT-LEVEL DEFAULT for every shipment on
      * this account; per-shipment overrides live on the Shipment row (follow-up

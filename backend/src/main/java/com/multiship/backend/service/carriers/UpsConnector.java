@@ -315,6 +315,17 @@ public class UpsConnector implements CarrierConnector {
 
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        // F7 fix — recipient country is required. UPS lets you ship anywhere
+        // the ShipTo party's country is set to; a blank country would pass
+        // through to the UPS envelope and either error out (400 InvalidCountry)
+        // or ship as an unspecified destination. Fail early with a clear
+        // message so operators know what to fix on the Order.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "UPS shipment requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before generating a label.");
+        }
         try {
             Map<String, Object> payload = buildShipmentPayload(request);
             String baseUrl = isSandbox(environment)
@@ -993,6 +1004,18 @@ public class UpsConnector implements CarrierConnector {
                     "UPS pickup needs live credentials; the account is on a fallback token.",
                     null);
         }
+        // FDX-C2 — pre-fix, buildUpsPickupRequest sent req.address().name()
+        // (the shipper's CONTACT NAME) in the AccountNumber field. UPS
+        // rejected that with a validation error every time. Now guarded at
+        // the entry point + real account plumbed by FDX-C onto
+        // PickupRequest.accountNumber().
+        if (!StringUtils.hasText(request.accountNumber())) {
+            return new PickupResult("UPS", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "UPS pickup needs the shipper account number that owns the labels; none was passed.",
+                    null);
+        }
         try {
             Map<String, Object> body = buildUpsPickupRequest(request);
             String baseUrl = isSandbox(environment)
@@ -1033,8 +1056,12 @@ public class UpsConnector implements CarrierConnector {
         Map<String, Object> body = new LinkedHashMap<>();
         Map<String, Object> pcr = new LinkedHashMap<>();
         pcr.put("RatePickupIndicator", "N");
+        // FDX-C2 — AccountNumber is the SHIPPER'S CARRIER ACCOUNT (not the
+        // contact person's name; pre-fix used req.address().name() by
+        // mistake). AccountCountryCode is the shipper's country from the
+        // pickup address.
         pcr.put("Shipper", Map.of("Account", Map.of(
-                "AccountNumber", firstNonBlank(req.address() == null ? null : req.address().name(), ""),
+                "AccountNumber", firstNonBlank(req.accountNumber(), ""),
                 "AccountCountryCode", firstNonBlank(
                         req.address() == null ? null : req.address().countryCode(), "US"))));
         Map<String, Object> pickupDateInfo = new LinkedHashMap<>();
@@ -1068,9 +1095,13 @@ public class UpsConnector implements CarrierConnector {
                     "Phone", Map.of("Number", firstNonBlank(req.contactPhone(), ""))));
         }
 
-        // PickupPiece — total quantity + weight; service defaults to 03 (Ground).
+        // PickupPiece — total quantity + weight. FDX-F: ServiceCode
+        // derived from operator's pickupServiceType selection. Pre-fix
+        // hardcoded to "003" (Ground); Express-only shippers couldn't
+        // schedule pickups. UPS uses "003" Ground / "007" Worldwide
+        // Express — the two fleets that dispatch different drivers.
         Map<String, Object> piece = new LinkedHashMap<>();
-        piece.put("ServiceCode", "003");
+        piece.put("ServiceCode", mapUpsPickupServiceCode(req.pickupServiceType()));
         piece.put("Quantity", String.valueOf(Math.max(1, req.packageCount())));
         piece.put("DestinationCountryCode", firstNonBlank(
                 a == null ? null : a.countryCode(), "US"));
@@ -1094,6 +1125,30 @@ public class UpsConnector implements CarrierConnector {
     private static String formatUpsTime(java.time.LocalTime t) {
         if (t == null) return "";
         return String.format("%02d%02d", t.getHour(), t.getMinute());
+    }
+
+    /**
+     * FDX-F — resolve UPS PickupPiece.ServiceCode from the operator's
+     * pickupServiceType. Case-insensitive. Any unknown value falls to
+     * "003" (Ground) — the pre-FDX-F default.
+     *
+     * <p>UPS ServiceCode is a two-tier fleet selector (Ground vs Air):
+     * <ul>
+     *   <li>{@code 003} — Ground pickup</li>
+     *   <li>{@code 007} — UPS Worldwide Express (covers Next-Day Air /
+     *       2nd-Day Air / Express Saver / Worldwide services)</li>
+     * </ul>
+     * The per-service split within Express (Next-Day vs 2nd-Day) is a
+     * label-time concern, not a pickup-time one — one Express driver
+     * collects all Express labels regardless of tier.
+     */
+    static String mapUpsPickupServiceCode(String pickupServiceType) {
+        if (pickupServiceType == null) return "003";
+        String v = pickupServiceType.trim().toUpperCase(java.util.Locale.ROOT);
+        return switch (v) {
+            case "EXPRESS", "INTERNATIONAL" -> "007";
+            default -> "003";
+        };
     }
 
     /**
@@ -1705,7 +1760,13 @@ public class UpsConnector implements CarrierConnector {
                 "BillShipper", Map.of("AccountNumber", shipperAccount)));
 
         if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {
-            String dutyBillTo = request.getIntl().getDutyBillTo();
+            // F6-C — clearanceOption (per-account, resolved by
+            // ShipmentDefaultsResolver from CarrierAccountRef) wins over
+            // dutyBillTo (per-customs-profile). Falls back to the profile
+            // value when the account has no explicit clearance set.
+            String dutyBillTo = firstNonBlank(
+                    request.getIntl().getClearanceOption(),
+                    request.getIntl().getDutyBillTo());
             String dutyAccount = request.getIntl().getDutyAccount();
             if ("SENDER".equalsIgnoreCase(dutyBillTo)
                     || "DDP".equalsIgnoreCase(request.getIntl().getIncoterms())) {
@@ -1740,7 +1801,11 @@ public class UpsConnector implements CarrierConnector {
         Map<String, Object> forms = new LinkedHashMap<>();
         forms.put("FormType", "01");
         forms.put("InvoiceNumber", firstNonBlank(request.getReferenceNumber(), ""));
-        forms.put("InvoiceDate", java.time.LocalDate.now(java.time.ZoneOffset.UTC)
+        // F6-E — invoice date follows the shipper's local calendar day.
+        // Pre-F6-E UTC produced a 1-day-earlier date for shippers printing
+        // in APAC before 08:00 local, which UPS's paperless invoice service
+        // silently accepts but the destination customs office may reject.
+        forms.put("InvoiceDate", com.multiship.backend.util.LabelDates.today(request.getShipperTimezone())
                 .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")));
         forms.put("PurchaseOrderNumber", firstNonBlank(request.getReferenceNumber(), ""));
         forms.put("TermsOfShipment", firstNonBlank(intl.getIncoterms(), "DAP").toUpperCase());
@@ -1905,17 +1970,12 @@ public class UpsConnector implements CarrierConnector {
         }
     }
 
-    private ShipmentResult buildFallbackShipmentResult(ShipmentRequestDTO request) {
-        String trackingNumber = "1Z" + hashShort(request.getReferenceNumber() + ":" + request.getCarrierCode());
-        String trackingUrl = "https://www.ups.com/track?tracknum=" + trackingNumber;
-        String labelUrl = "https://labels.local/ups/" + trackingNumber + ".pdf";
-        String labelPdf = labelUrl;
-        BigDecimal shippingCost = request.getWeight() != null ? request.getWeight().multiply(BigDecimal.valueOf(1.25)) : BigDecimal.ZERO;
-        LocalDateTime estimatedDelivery = LocalDateTime.now(ZoneOffset.UTC).plusDays(3);
-        return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelPdf, shippingCost, estimatedDelivery, null);
-    }
+    // FDX-A — buildFallbackShipmentResult removed. It was dead code (no
+    // caller) and produced a synthetic 1Z-prefixed tracking + labels.local
+    // URL that would have masked real UPS errors if ever wired in. Kept in
+    // git history for reference.
 
-    /**
+/**
      * UPS Rate Shop — POST {@code /api/rating/{version}/Shop} with a Bearer
      * token returns rates for EVERY available service on the lane in a single
      * call (versus {@code /Rate} which prices one specific service). Perfect
@@ -1947,6 +2007,18 @@ public class UpsConnector implements CarrierConnector {
     public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return java.util.List.of();
+        }
+        // FDX-B2 — recipient country is required. Pre-fix, blank silently
+        // defaulted to "US" downstream in buildRateShopShipment (UPS envelope
+        // has firstNonBlank(country, "US") at lines 1050, 1068, 1087), so an
+        // intl rate-shop with a blank recipient country returned believable
+        // US-domestic quotes and the operator shipped anyway. Same F7 guard.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "UPS rate-shop requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before rate-shopping — "
+                            + "quotes without a destination silently fall to US-domestic.");
         }
         try {
             Map<String, Object> shipment = buildRateShopShipment(request);

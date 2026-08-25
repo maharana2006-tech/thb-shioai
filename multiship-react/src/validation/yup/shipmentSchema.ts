@@ -1,4 +1,19 @@
 import * as Yup from 'yup'
+import { COUNTRIES } from '../../utils/countries'
+
+/** Real ISO-3166 alpha-2 codes — so 'ZZ' fails membership, not just shape. */
+const VALID_COUNTRIES = new Set(COUNTRIES.map((c) => c.code.toUpperCase()))
+
+/** Valid state/province codes for the countries where carriers demand a real one. */
+const US_STATES = new Set([
+  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS',
+  'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY',
+  'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV',
+  'WI', 'WY', 'DC', 'PR', 'VI', 'GU', 'AS', 'MP',
+])
+const CA_PROVINCES = new Set(['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'])
+const AU_STATES = new Set(['ACT', 'NSW', 'NT', 'QLD', 'SA', 'TAS', 'VIC', 'WA'])
+const STATE_CODE_SETS: Record<string, Set<string>> = { US: US_STATES, CA: CA_PROVINCES, AU: AU_STATES }
 
 /**
  * Manual "New Shipment" validation. Mirrors what carriers (UPS/FedEx/USPS/DHL)
@@ -26,8 +41,8 @@ const POSTAL_RULES: Record<string, RegExp> = {
 }
 const GENERIC_POSTAL = /^[A-Za-z0-9][A-Za-z0-9 -]{1,10}$/
 
-/** States/provinces are required (2-letter) for these countries. */
-const STATE_REQUIRED = new Set(['US', 'CA', 'AU'])
+/** States/provinces are required for these countries (matches the import gate). */
+const STATE_REQUIRED = new Set(['US', 'CA', 'AU', 'IN', 'BR', 'MX'])
 
 // Unicode-aware: \p{L} accepts accented/international letters (é, ü, ñ, ç, …)
 // and \p{M} the combining marks that follow them; the `u` flag enables both.
@@ -74,13 +89,23 @@ export const addressSchema = Yup.object({
     .matches(SAFE_TEXT_RE, { excludeEmptyString: true, message: SAFE_TEXT_MSG }),
   countryCode: Yup.string()
     .required('Country is required')
-    .matches(ISO2_RE, 'Pick a country'),
+    .matches(ISO2_RE, 'Pick a country')
+    .test('country-iso', 'Not a recognized country', (v) => !v || VALID_COUNTRIES.has(v.toUpperCase())),
   state: Yup.string()
     .nullable()
     .matches(SAFE_TEXT_RE, { excludeEmptyString: true, message: SAFE_TEXT_MSG })
     .when('countryCode', {
       is: (c: string) => STATE_REQUIRED.has((c || '').toUpperCase()),
-      then: (s) => s.required('State / region is required').max(3, 'Use the 2-letter code'),
+      then: (s) =>
+        s
+          .required('State / region is required')
+          .test('state-code', 'Not a valid state/province code', function (value) {
+            const country = ((this.parent as { countryCode?: string }).countryCode || '').toUpperCase()
+            const set = STATE_CODE_SETS[country]
+            // US/CA/AU must be a real code; IN/BR/MX just require a value.
+            if (!set) return true
+            return !!value && set.has(value.trim().toUpperCase())
+          }),
       otherwise: (s) => s.max(35, 'Max 35 characters'),
     }),
   postalCode: Yup.string()
@@ -113,7 +138,8 @@ export const itemSchema = Yup.object({
     .matches(HS_RE, { excludeEmptyString: true, message: 'HS code must be 6–10 digits' }),
   countryOfOrigin: Yup.string()
     .nullable()
-    .matches(ISO2_RE, { excludeEmptyString: true, message: 'Use a 2-letter country code' }),
+    .matches(ISO2_RE, { excludeEmptyString: true, message: 'Use a 2-letter country code' })
+    .test('coo-iso', 'Not a recognized country', (v) => !v || VALID_COUNTRIES.has(v.toUpperCase())),
   quantity: Yup.number()
     .transform(emptyToUndef)
     .typeError('Quantity must be a number')
@@ -124,7 +150,10 @@ export const itemSchema = Yup.object({
     .transform(emptyToUndef)
     .typeError('Unit value must be a number')
     .required('Value required')
-    .moreThan(0, 'Must be greater than 0'),
+    .moreThan(0, 'Must be greater than 0')
+    .test('max-2-decimals', 'At most 2 decimal places', (v) =>
+      v == null || Math.abs(v * 100 - Math.round(v * 100)) < 1e-9,
+    ),
 })
 
 export const shipmentSchema = Yup.object({

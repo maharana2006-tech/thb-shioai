@@ -8,6 +8,7 @@ import com.multiship.backend.model.ShipMethodRuleWarehouse;
 import com.multiship.backend.model.ShipViaMapping;
 import com.multiship.backend.model.ShippingService;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
+import com.multiship.backend.repository.ClientAllowedPackageRepository;
 import com.multiship.backend.repository.PackagePresetRepository;
 import com.multiship.backend.repository.ServicePackageRepository;
 import com.multiship.backend.repository.ShipMethodRulePackageRepository;
@@ -67,6 +68,7 @@ class ShippingConfigServiceTest {
     private ServicePackageRepository servicePackageRepository;
     private ShipMethodRulePackageRepository rulePackageRepository;
     private ShipMethodRuleWarehouseRepository ruleWarehouseRepository;
+    private ClientAllowedPackageRepository clientAllowedPackageRepository;
     private WarehouseRepository warehouseRepository;
     private CarrierAccountRefRepository carrierAccountRefRepository;
     private ApplicationEventPublisher eventPublisher;
@@ -83,6 +85,7 @@ class ShippingConfigServiceTest {
         servicePackageRepository = mock(ServicePackageRepository.class);
         rulePackageRepository = mock(ShipMethodRulePackageRepository.class);
         ruleWarehouseRepository = mock(ShipMethodRuleWarehouseRepository.class);
+        clientAllowedPackageRepository = mock(ClientAllowedPackageRepository.class);
         warehouseRepository = mock(WarehouseRepository.class);
         carrierAccountRefRepository = mock(CarrierAccountRefRepository.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
@@ -98,8 +101,8 @@ class ShippingConfigServiceTest {
         service = new ShippingConfigService(
                 serviceRepository, ruleRepository, presetRepository,
                 servicePackageRepository, rulePackageRepository,
-                ruleWarehouseRepository, warehouseRepository,
-                List.of(upsMock, fedexMock),
+                ruleWarehouseRepository, clientAllowedPackageRepository,
+                warehouseRepository, List.of(upsMock, fedexMock),
                 carrierAccountRefRepository, eventPublisher);
     }
 

@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { notify } from '../utils/notify'
+// Espresso/cream button tokens — shared across the app (see components/ui/buttons).
+import { BTN_PRIMARY, BTN_GHOST_SM, BTN_PRIMARY_SM } from './ui/buttons'
 import {
   FiCheckCircle,
   FiEdit3,
@@ -12,7 +14,6 @@ import {
   FiRotateCw,
   FiCalendar,
   FiPackage,
-  FiUpload,
   FiTruck,
   FiX,
   FiXCircle,
@@ -32,15 +33,21 @@ import type { CarrierAccountRef, OrderAccountResolution } from '../api/accountRe
 import AccountScenarioBadge from './workspace/AccountScenarioBadge'
 import OrderStatusBadge from './workspace/OrderStatusBadge'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
-import FillCarrierDetailsModal from './modals/FillCarrierDetailsModal'
-import AccountPickerModal from './modals/AccountPickerModal'
-import OrderDetailsModal from './modals/OrderDetailsModal'
-import TrackingTimelineModal from './tracking/TrackingTimelineModal'
-import SchedulePickupModal from './modals/SchedulePickupModal'
-import CloseOutModal from './modals/CloseOutModal'
-import BulkLabelModal from './modals/BulkLabelModal'
-import MultiWarehouseSplitModal from './modals/MultiWarehouseSplitModal'
-import OrderImportModal from './modals/OrderImportModal'
+// Bundle audit #434 follow-up: modals are only rendered behind
+// `xxxOpen ?` guards, so React.lazy defers each chunk fetch until an
+// operator actually opens the modal. Fallback is null — the modal
+// itself is the visible transition so a spinner in its place would
+// double up. First-open cost is one small RTT for the modal's chunk;
+// cached thereafter.
+const FillCarrierDetailsModal = lazy(() => import('./modals/FillCarrierDetailsModal'))
+const AccountPickerModal = lazy(() => import('./modals/AccountPickerModal'))
+const OrderDetailsModal = lazy(() => import('./modals/OrderDetailsModal'))
+const TrackingTimelineModal = lazy(() => import('./tracking/TrackingTimelineModal'))
+const SchedulePickupModal = lazy(() => import('./modals/SchedulePickupModal'))
+const CloseOutModal = lazy(() => import('./modals/CloseOutModal'))
+const BulkLabelModal = lazy(() => import('./modals/BulkLabelModal'))
+const MultiWarehouseSplitModal = lazy(() => import('./modals/MultiWarehouseSplitModal'))
+const OrderImportModal = lazy(() => import('./modals/OrderImportModal'))
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
 
@@ -74,16 +81,6 @@ const ACTION_OUTLINE =
 const ACTION_RETRY =
   'border border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-400 hover:bg-amber-100 disabled:opacity-50'
 
-/** Toolbar button tokens — espresso/cream, consistent across the workspace. */
-const BTN_PRIMARY =
-  'inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none'
-
-/** Compact toolbar tokens — smaller so every action fits on one line. */
-const BTN_GHOST_SM =
-  'inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40'
-const BTN_PRIMARY_SM =
-  'inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none'
-
 const relativeTime = (value?: string | null) => {
   if (!value) return null
   const then = new Date(value).getTime()
@@ -116,6 +113,8 @@ export default function OrdersWorkspace() {
   const [clientFilter, setClientFilter] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  // Order source filter: '' (all) | MANUAL | BULK | API | WMS | ERP.
+  const [sourceFilter, setSourceFilter] = useState('')
   const [clientCodes, setClientCodes] = useState<string[]>([])
   // Sprint 51 migration — sort is owned by the shared AdvancedDataTable now.
   // sortBy / sortDirection remain the fetch-effect inputs (derived below).
@@ -269,6 +268,7 @@ export default function OrdersWorkspace() {
         tracking: debouncedFilters.tracking || undefined,
         createdFrom: dateFrom || undefined,
         createdTo: dateTo || undefined,
+        source: sourceFilter || undefined,
         page: page - 1,
         size: pageSize,
         sortBy,
@@ -292,7 +292,7 @@ export default function OrdersWorkspace() {
     return () => {
       cancelled = true
     }
-  }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sortBy, sortDirection, debouncedFilters, reloadToken])
+  }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sourceFilter, sortBy, sortDirection, debouncedFilters, reloadToken])
 
   const refreshQueues = () => setReloadToken((token) => token + 1)
 
@@ -810,21 +810,20 @@ export default function OrdersWorkspace() {
 
     defs.push({
       id: 'source',
-      accessorFn: (o) => o.orderDetails.source ?? 'ERP',
+      accessorFn: (o) => o.orderDetails.source ?? 'API',
       header: 'Source',
       enableSorting: false,
       cell: ({ row }) => {
-        const s = (row.original.orderDetails.source || 'ERP').toUpperCase()
+        // Server folds WMS/ERP/legacy into API; only MANUAL/BULK/API reach here.
+        const s = (row.original.orderDetails.source || 'API').toUpperCase()
         const tone: Record<string, string> = {
           MANUAL: 'bg-amber-50 text-amber-700 ring-amber-200',
           API: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-          WMS: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
-          ERP: 'bg-slate-100 text-slate-600 ring-slate-200',
           BULK: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
         }
         return (
           <span
-            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone[s] || tone.ERP}`}
+            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone[s] || tone.API}`}
           >
             {s}
           </span>
@@ -832,7 +831,7 @@ export default function OrdersWorkspace() {
       },
       meta: {
         headerLabel: 'Source',
-        exportValue: (o: Order) => (o.orderDetails.source ?? 'ERP').toUpperCase(),
+        exportValue: (o: Order) => (o.orderDetails.source ?? 'API').toUpperCase(),
       },
     })
 
@@ -1092,18 +1091,11 @@ export default function OrdersWorkspace() {
               Split across warehouses
             </button>
             <button type="button"
-                    onClick={() => setImportOpen(true)}
-                    className={BTN_GHOST_SM}
-                    title="Upload a CSV or Excel with one order per row">
-              <FiUpload className="h-3 w-3" />
-              Import CSV/Excel
-            </button>
-            <button type="button"
                     onClick={() => navigate('/orders/history')}
                     className={BTN_GHOST_SM}
-                    title="Saved imports — data saved from CSV/Excel imports">
+                    title="Order Intake — all orders (Bulk/Manual/API/WMS), the CSV/Excel importer, and import history">
               <FiDatabase className="h-3 w-3" />
-              Data history
+              Order Intake
             </button>
             <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY_SM}>
               <FiPlus className="h-3 w-3" />
@@ -1347,6 +1339,20 @@ export default function OrdersWorkspace() {
                           className={advInputCls}
                         />,
                       )}
+                      {advField(
+                        <FiDatabase className="h-3 w-3" />,
+                        'Source',
+                        <select
+                          value={sourceFilter}
+                          onChange={(e) => setSourceFilter(e.target.value)}
+                          className={advInputCls}
+                        >
+                          <option value="">Any source</option>
+                          <option value="MANUAL">Manual</option>
+                          <option value="BULK">Bulk (CSV/Excel)</option>
+                          <option value="API">API</option>
+                        </select>,
+                      )}
                     </div>
 
                     <div className="mt-3 flex items-center justify-end gap-2 border-t border-dashed border-[#e3d9c4] pt-2.5">
@@ -1450,66 +1456,73 @@ export default function OrdersWorkspace() {
         </div>
       ) : null}
 
-      {pickerTarget ? (
-        <AccountPickerModal
-          orderNo={pickerTarget.orderDetails.orderNo}
-          clientCode={pickerTarget.orderDetails.customerCode}
-          carrierCode={pickerCarrier}
-          suggestedAccountNumber={pickerSuggested}
-          onClose={() => {
-            setPickerTarget(null)
-            setPickerCarrier(null)
-            setPickerSuggested(null)
-          }}
-          onPick={(account) => {
-            void generateWithAccount(pickerTarget.orderDetails.orderNo, account)
-          }}
-        />
-      ) : null}
+      {/* Bundle audit #434 follow-up — all modals below are lazy(). One
+          shared Suspense boundary is enough because at most one modal is
+          open at a time (state guards are mutually exclusive in practice)
+          and each modal is its own render-conditional. Fallback is null
+          — the modal is the visible transition, so a spinner in its slot
+          would flash and then vanish. */}
+      <Suspense fallback={null}>
+        {pickerTarget ? (
+          <AccountPickerModal
+            orderNo={pickerTarget.orderDetails.orderNo}
+            clientCode={pickerTarget.orderDetails.customerCode}
+            carrierCode={pickerCarrier}
+            suggestedAccountNumber={pickerSuggested}
+            onClose={() => {
+              setPickerTarget(null)
+              setPickerCarrier(null)
+              setPickerSuggested(null)
+            }}
+            onPick={(account) => {
+              void generateWithAccount(pickerTarget.orderDetails.orderNo, account)
+            }}
+          />
+        ) : null}
 
+        {fillDetailsTarget ? (
+          <FillCarrierDetailsModal
+            orderNo={fillDetailsTarget.orderNo}
+            resolution={fillDetailsTarget.resolution}
+            onClose={() => setFillDetailsTarget(null)}
+            onSaved={() => retryAfterDetailsSaved(fillDetailsTarget.orderNo)}
+          />
+        ) : null}
 
-      {fillDetailsTarget ? (
-        <FillCarrierDetailsModal
-          orderNo={fillDetailsTarget.orderNo}
-          resolution={fillDetailsTarget.resolution}
-          onClose={() => setFillDetailsTarget(null)}
-          onSaved={() => retryAfterDetailsSaved(fillDetailsTarget.orderNo)}
-        />
-      ) : null}
+        {detailsOrderNo !== null ? (
+          <OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} />
+        ) : null}
 
-      {detailsOrderNo !== null ? (
-        <OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} />
-      ) : null}
+        {trackingOrderNo !== null ? (
+          <TrackingTimelineModal orderNo={trackingOrderNo} onClose={() => setTrackingOrderNo(null)} />
+        ) : null}
 
-      {trackingOrderNo !== null ? (
-        <TrackingTimelineModal orderNo={trackingOrderNo} onClose={() => setTrackingOrderNo(null)} />
-      ) : null}
+        {pickupOpen ? (
+          <SchedulePickupModal onClose={() => setPickupOpen(false)} />
+        ) : null}
 
-      {pickupOpen ? (
-        <SchedulePickupModal onClose={() => setPickupOpen(false)} />
-      ) : null}
+        {closeOutOpen ? (
+          <CloseOutModal
+            onClose={() => setCloseOutOpen(false)}
+            trackingNumbers={rows
+              .map((o) => o.labelDetails.trackingNumber)
+              .filter((t): t is string => Boolean(t))}
+          />
+        ) : null}
 
-      {closeOutOpen ? (
-        <CloseOutModal
-          onClose={() => setCloseOutOpen(false)}
-          trackingNumbers={rows
-            .map((o) => o.labelDetails.trackingNumber)
-            .filter((t): t is string => Boolean(t))}
-        />
-      ) : null}
+        {bulkLabelOpen ? (
+          <BulkLabelModal
+            onClose={() => setBulkLabelOpen(false)}
+            orderNumbers={rows.map((o) => o.orderDetails.orderNo)}
+          />
+        ) : null}
 
-      {bulkLabelOpen ? (
-        <BulkLabelModal
-          onClose={() => setBulkLabelOpen(false)}
-          orderNumbers={rows.map((o) => o.orderDetails.orderNo)}
-        />
-      ) : null}
+        {splitOpen ? <MultiWarehouseSplitModal onClose={() => setSplitOpen(false)} /> : null}
 
-      {splitOpen ? <MultiWarehouseSplitModal onClose={() => setSplitOpen(false)} /> : null}
-
-      {importOpen ? (
-        <OrderImportModal onClose={() => setImportOpen(false)} />
-      ) : null}
+        {importOpen ? (
+          <OrderImportModal onClose={() => setImportOpen(false)} />
+        ) : null}
+      </Suspense>
     </div>
   )
 }

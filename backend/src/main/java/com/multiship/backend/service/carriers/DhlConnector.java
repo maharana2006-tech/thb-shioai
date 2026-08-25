@@ -206,6 +206,16 @@ public class DhlConnector implements CarrierConnector {
 
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        // F7 fix — recipient country is required. DHL Express is
+        // international-first; a blank recipient country previously fell
+        // through the buildParty helper's `firstNonBlank(country, "US")`
+        // default and shipped to a US address the operator never confirmed.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "DHL Express shipment requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before generating a label.");
+        }
         String host = isSandbox(environment)
                 ? carrierProperties.getDhl().getSandboxUrl()
                 : carrierProperties.getDhl().getApiBaseUrl();
@@ -750,6 +760,17 @@ public class DhlConnector implements CarrierConnector {
                     "DHL pickup needs live credentials; the account is on a fallback token.",
                     null);
         }
+        // FDX-C2 — pre-fix, buildDhlPickupRequest hardcoded the shipper
+        // account "number" to empty string. DHL rejected that with a
+        // validation error every time. Now guarded at the entry point +
+        // real account plumbed by FDX-C onto PickupRequest.accountNumber().
+        if (!StringUtils.hasText(request.accountNumber())) {
+            return new PickupResult("DHL", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "DHL pickup needs the shipper account number that owns the labels; none was passed.",
+                    null);
+        }
         try {
             Map<String, Object> body = buildDhlPickupRequest(request);
             String host = isSandbox(environment)
@@ -790,9 +811,12 @@ public class DhlConnector implements CarrierConnector {
         payload.put("plannedPickupDateAndTime", formatDhlPickupTimestamp(req));
         payload.put("closeTime", req.pickupWindowEnd() == null
                 ? "17:00" : req.pickupWindowEnd().toString());
+        // FDX-C2 — real shipper account (pre-fix, hardcoded empty string).
+        // schedulePickup already short-circuits when blank; firstNonBlank
+        // defence-in-depth for direct callers in tests.
         payload.put("accounts", List.of(Map.of(
                 "typeCode", "shipper",
-                "number", "")));
+                "number", firstNonBlank(req.accountNumber(), ""))));
 
         AddressToValidate a = req.address();
         Map<String, Object> shipper = new LinkedHashMap<>();
@@ -839,9 +863,17 @@ public class DhlConnector implements CarrierConnector {
         return pkgs;
     }
 
+    /**
+     * FDX-E — see the FedEx-side counterpart's javadoc for full context.
+     * {@code LocalDate.now()} → JVM default zone (server-dependent); switch
+     * to {@code LabelDates.today(null)} → deterministic UTC so the
+     * plannedPickupDateAndTime doesn't shift when the same code runs on
+     * boxes in different timezones.
+     */
     private static String formatDhlPickupTimestamp(PickupRequest req) {
         java.time.LocalDate date = req.pickupDate() != null
-                ? req.pickupDate() : java.time.LocalDate.now();
+                ? req.pickupDate()
+                : com.multiship.backend.util.LabelDates.today(null);
         java.time.LocalTime time = req.pickupWindowStart() != null
                 ? req.pickupWindowStart() : java.time.LocalTime.of(13, 0);
         return date + "T" + time + " GMT+00:00";
@@ -966,7 +998,7 @@ public class DhlConnector implements CarrierConnector {
         boolean isReturn = Boolean.TRUE.equals(request.getIsReturn());
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("productCode", firstNonBlank(request.getServiceType(), "P"));
-        payload.put("plannedShippingDateAndTime", plannedShipDate());
+        payload.put("plannedShippingDateAndTime", plannedShipDate(request.getShipperTimezone()));
         // Sprint 25 — Print Return Label. DHL Express treats return labels
         // as normal shipments with the customer as receiver and the return
         // depot as shipper (billing is on the shipper's account); we flip
@@ -1244,13 +1276,21 @@ public class DhlConnector implements CarrierConnector {
         ed.put("lineItems", lines);
         ed.put("invoice", Map.of(
                 "number", firstNonBlank(request.getReferenceNumber(), "INV-" + System.currentTimeMillis()),
-                "date", LocalDate.now(ZoneOffset.UTC).format(DateTimeFormatter.ISO_LOCAL_DATE)));
+                // F6-E — invoice date follows the shipper's local calendar day.
+                "date", com.multiship.backend.util.LabelDates.today(request.getShipperTimezone())
+                        .format(DateTimeFormatter.ISO_LOCAL_DATE)));
         ed.put("exportReason", mapExportReason(intl.getReasonForExport()));
 
         // Duty billing — DHL uses shipperAccountNumber for SENDER, otherwise
         // the payer's account. Absent = recipient (DHL default).
-        String dutyBillTo = intl.getDutyBillTo();
+        // F6-C — clearanceOption (per-account, resolved by
+        // ShipmentDefaultsResolver from CarrierAccountRef) wins over
+        // dutyBillTo (per-customs-profile) when set. Both accept DHL's
+        // Incoterms vocabulary (DAP / DDP / EXW / …) too — DDP means
+        // sender pays duties, matching the SENDER branch.
+        String dutyBillTo = firstNonBlank(intl.getClearanceOption(), intl.getDutyBillTo());
         if ("SENDER".equalsIgnoreCase(dutyBillTo)
+                || "DDP".equalsIgnoreCase(dutyBillTo)
                 || "DDP".equalsIgnoreCase(intl.getIncoterms())) {
             ed.put("customsDocuments", List.of(Map.of("typeCode", "INV")));
         }
@@ -1331,16 +1371,12 @@ public class DhlConnector implements CarrierConnector {
         return StringUtils.hasText(a) ? a : (StringUtils.hasText(b) ? b : null);
     }
 
-    private ShipmentResult buildFallbackShipmentResult(ShipmentRequestDTO request) {
-        String tracking = "JD" + hashShort(request.getReferenceNumber() + ":" + request.getCarrierCode());
-        String labelUrl = "https://labels.local/dhl/" + tracking + ".pdf";
-        return new ShipmentResult(tracking,
-                "https://www.dhl.com/en/express/tracking.html?AWB=" + tracking,
-                labelUrl, labelUrl, null,
-                LocalDateTime.now(ZoneOffset.UTC).plusDays(2), null);
-    }
+    // FDX-A — buildFallbackShipmentResult removed. It was dead code (no
+    // caller) and produced a synthetic JD-prefixed tracking + labels.local
+    // URL that would have masked real DHL errors if ever wired in. Kept in
+    // git history for reference.
 
-    /**
+/**
      * DHL Express Rate quote — POST {@code /rates} with Basic Auth returns
      * the {@code products[]} array; every entry is a priced product for the
      * lane. Perfect for rate shopping.
@@ -1370,6 +1406,19 @@ public class DhlConnector implements CarrierConnector {
     public List<RateOption> getRates(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return List.of();
+        }
+        // FDX-B3 — recipient country is required. Pre-fix, blank silently
+        // defaulted to "US" downstream in buildParty (line ~1025 —
+        // firstNonBlank(country, "US")). DHL primarily quotes intl lanes,
+        // so a blank recipient country produced a nonsensical US→US rate
+        // request that DHL either rejected loudly (best case) or returned
+        // wrong "domestic" pricing for (worst case). Same F7 guard.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "DHL rate-shop requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before rate-shopping — "
+                            + "quotes without a destination silently fall to US-domestic.");
         }
         try {
             Map<String, Object> body = buildRatePayload(request);
@@ -1421,7 +1470,7 @@ public class DhlConnector implements CarrierConnector {
         payload.put("accounts", List.of(Map.of(
                 "typeCode", "shipper",
                 "number", firstNonBlank(request.getAccountNumber(), ""))));
-        payload.put("plannedShippingDateAndTime", plannedShipDate());
+        payload.put("plannedShippingDateAndTime", plannedShipDate(request.getShipperTimezone()));
         payload.put("unitOfMeasurement",
                 "KG".equalsIgnoreCase(request.getWeightUnit()) ? "metric" : "imperial");
         boolean isIntl = request.getIntl() != null && request.getIntl().isReadyForCarrier();
@@ -1550,9 +1599,18 @@ public class DhlConnector implements CarrierConnector {
         }
     }
 
-    /** DHL's "planned shipping date" — next business day at 13:00 GMT+00:00. */
-    private static String plannedShipDate() {
-        return LocalDate.now(ZoneOffset.UTC).plusDays(1) + "T13:00:00 GMT+00:00";
+    /**
+     * DHL's "planned shipping date" — next business day at 13:00 GMT+00:00.
+     *
+     * <p>F6-E: the DATE part follows the shipper's local calendar so an
+     * evening print in Asia doesn't produce "tomorrow-in-UTC" (== the same
+     * calendar day the shipper is already in). The 13:00 GMT+00:00 clock
+     * portion is preserved verbatim — it's DHL's expected pickup slot
+     * literal, not a real-clock time in the shipper's zone.
+     */
+    private static String plannedShipDate(String timezone) {
+        return com.multiship.backend.util.LabelDates.todayPlus(timezone, 1)
+                + "T13:00:00 GMT+00:00";
     }
 
     /** Environment-tolerant SANDBOX check. */

@@ -70,3 +70,10 @@ backend/backend-dev.log
 ~$*.xls*
 # Local safety-net backups.
 *.bak
+# pg_dump / pg_dumpall output — real DB rows carry password hashes,
+# carrier credentials, and PII. NEVER useful in git. Repo-root pattern
+# because Flyway migrations live under backend/src/main/resources/db/
+# and don't match this glob.
+multiship_db_*.sql
+*.pg_dump
+*_pgdump.sql

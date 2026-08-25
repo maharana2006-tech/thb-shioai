@@ -92,6 +92,22 @@ public class ShippingService {
     @Builder.Default
     private boolean enabled = true;
 
+    /**
+     * FDX-G1 — true when this service ships on the carrier's Express /
+     * Air fleet (FedEx FDXE, UPS 007/Air, DHL Express). False for Ground
+     * services (FEDEX_GROUND, UPS 03, GROUND_HOME_DELIVERY) and every
+     * USPS/SWSIM row (SWSIM manifest has no per-request fleet code).
+     *
+     * <p>{@link com.multiship.backend.service.ManifestServiceImpl} reads
+     * this flag to split closeOutDay calls by fleet — pre-FDX-G, FedEx
+     * always sent carrierCode="FDXG" which silently manifested Express
+     * labels as Ground, leaving the Express carrier's manifest empty.
+     * Backfilled by Flyway V25.
+     */
+    @Column(name = "is_express", nullable = false)
+    @Builder.Default
+    private boolean express = false;
+
     @Column(name = "sort_order", nullable = false)
     @Builder.Default
     private int sortOrder = 0;

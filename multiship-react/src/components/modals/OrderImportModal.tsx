@@ -7,7 +7,6 @@ import {
   FiCheckCircle,
   FiDownload,
   FiFile,
-  FiFileText,
   FiLoader,
   FiSave,
   FiUploadCloud,
@@ -28,13 +27,19 @@ import { notify } from '../../utils/notify'
  * Espresso/cream palette to match the rest of the workspace.
  */
 export interface OrderImportModalProps {
-  onClose: () => void
+  /** Dismiss handler. Optional in inline mode (no overlay to close). */
+  onClose?: () => void
+  /** Render the flow inline on a page (no modal overlay / focus trap) instead
+   *  of as a popup. Used by the Order Intake page's "Import" tab. */
+  inline?: boolean
+  /** Called after a successful save so the host can switch to the history view. */
+  onImported?: () => void
 }
 
-export default function OrderImportModal({ onClose }: OrderImportModalProps) {
-  // Sprint 51 T6b — focus trap.
+export default function OrderImportModal({ onClose, inline = false, onImported }: OrderImportModalProps) {
+  // Sprint 51 T6b — focus trap (modal only).
   const dialogRef = useRef<HTMLDivElement>(null)
-  useFocusTrap(true, dialogRef)
+  useFocusTrap(!inline, dialogRef)
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<OrderImportPreview | null>(null)
   const [committedSummary, setCommittedSummary] = useState<OrderImportPreview | null>(null)
@@ -132,6 +137,7 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
       if (response.status === 'success' && response.data) {
         setCommittedSummary(response.data)
         notify.success(response.message ?? 'Saved.')
+        onImported?.()
       } else {
         notify.error(response.message ?? 'Save failed.')
       }
@@ -149,18 +155,15 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
     setError(null)
   }
 
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Import orders"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-[1px]"
-      onClick={onClose}
-    >
+  const panel = (
       <div
-        ref={dialogRef}
-        className="flex h-[min(780px,92vh)] w-full max-w-[920px] flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-[#fffdf8] shadow-[0_30px_80px_rgba(31,21,12,0.35)]"
-        onClick={(e) => e.stopPropagation()}
+        ref={inline ? undefined : dialogRef}
+        className={
+          inline
+            ? 'flex w-full flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-[#fffdf8] shadow-sm'
+            : 'flex h-[min(780px,92vh)] w-full max-w-[920px] flex-col overflow-hidden rounded-2xl border border-[#e3d9c4] bg-[#fffdf8] shadow-[0_30px_80px_rgba(31,21,12,0.35)]'
+        }
+        onClick={inline ? undefined : (e) => e.stopPropagation()}
       >
         {/* ── Header ── */}
         <div className="flex items-start justify-between gap-4 border-b border-[#eee6d6] bg-white px-6 py-4">
@@ -176,14 +179,16 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#8a7959] transition hover:bg-[#faf7f0] hover:text-[#412d15]"
-          >
-            <FiX className="h-4 w-4" />
-          </button>
+          {onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#8a7959] transition hover:bg-[#faf7f0] hover:text-[#412d15]"
+            >
+              <FiX className="h-4 w-4" />
+            </button>
+          ) : null}
         </div>
 
         {/* ── Stepper ── */}
@@ -230,9 +235,11 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
               </button>
             ) : null}
 
-            <button type="button" onClick={onClose} className={GHOST_BTN}>
-              {step === 3 ? 'Done' : 'Cancel'}
-            </button>
+            {onClose ? (
+              <button type="button" onClick={onClose} className={GHOST_BTN}>
+                {step === 3 ? 'Done' : 'Cancel'}
+              </button>
+            ) : null}
 
             {step === 2 && preview ? (
               <>
@@ -276,6 +283,19 @@ export default function OrderImportModal({ onClose }: OrderImportModalProps) {
           </div>
         </div>
       </div>
+  )
+
+  if (inline) return panel
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Import orders"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-[1px]"
+      onClick={onClose}
+    >
+      {panel}
     </div>
   )
 }
@@ -410,8 +430,8 @@ function UploadStep({
         </div>
       ) : null}
 
-      {/* Template + required columns helper */}
-      <div className="grid gap-3 sm:grid-cols-2">
+      {/* Template helper */}
+      <div>
         <div className="rounded-xl border border-[#e3d9c4] bg-white p-4">
           <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#8a7959]">
             <FiDownload className="h-3.5 w-3.5" /> Templates
@@ -431,22 +451,6 @@ function UploadStep({
             >
               <FiDownload className="h-3 w-3" /> Plain CSV
             </a>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-[#e3d9c4] bg-white p-4">
-          <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#8a7959]">
-            <FiFileText className="h-3.5 w-3.5" /> Required columns
-          </p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {['clientCode', 'recipientName', 'addressLine1', 'city', 'postalCode', 'countryCode', 'weight', 'weightUnit'].map((c) => (
-              <span
-                key={c}
-                className="rounded-md bg-[#faf7f0] px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-[#5a4526] ring-1 ring-[#eee6d6]"
-              >
-                {c}
-              </span>
-            ))}
           </div>
         </div>
       </div>
@@ -622,6 +626,40 @@ const PREVIEW_COLUMNS: PreviewColumn[] = [
   { key: 'countryOfOrigin', mono: true, upper: true, w: 'w-16' },
 ]
 
+/** Column lookup so the detail view can render the same editable cell per field. */
+const COL_BY_KEY: Record<string, PreviewColumn> = Object.fromEntries(
+  PREVIEW_COLUMNS.map((c) => [c.key, c]),
+)
+
+/** Detail-pane box widths, sized to each field. Fields not listed fall back to
+ *  the grid's compact `col.w` (so state/zip/qty stay small). The detail pane has
+ *  more room than the grid, so free-text fields get wider than the grid cap. */
+const DETAIL_FIELD_W: Record<string, string> = {
+  recipientName: 'w-64',
+  recipientCompany: 'w-64',
+  recipientEmail: 'w-72',
+  addressLine1: 'w-72',
+  addressLine2: 'w-64',
+  city: 'w-48',
+  itemDescription: 'w-72',
+  recipientPhone: 'w-40',
+  accountNumber: 'w-40',
+  serviceType: 'w-40',
+  reference: 'w-40',
+  itemSku: 'w-32',
+  hsCode: 'w-28',
+}
+
+/** Field groups for the detail view. Every editable column must appear in a
+ *  group, otherwise its value AND its validation error have nowhere to render. */
+const CARD_GROUPS: { title: string; keys: string[] }[] = [
+  { title: 'Order', keys: ['orderRef', 'clientCode', 'billTo', 'warehouseCode'] },
+  { title: 'Recipient', keys: ['recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail'] },
+  { title: 'Ship to', keys: ['addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode'] },
+  { title: 'Shipment', keys: ['carrierCode', 'accountNumber', 'serviceType', 'packageType', 'weight', 'weightUnit', 'currency', 'reference'] },
+  { title: 'Customs', keys: ['itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue', 'hsCode', 'countryOfOrigin'] },
+]
+
 function PreviewStep({
   preview,
   onEdit,
@@ -636,6 +674,10 @@ function PreviewStep({
   const customCols = Array.from(
     new Set(preview.rows.flatMap((r) => Object.keys(r.customFields ?? {}))),
   )
+  // Two ways to review: the dense spreadsheet grid, or a master–detail (a row
+  // list on the left, the selected order's editable fields on the right).
+  const [view, setView] = useState<'table' | 'detail'>('table')
+  const [selectedRowNo, setSelectedRowNo] = useState<number | null>(null)
 
   const cellFor = (r: OrderImportRow, col: PreviewColumn, errs?: string[]) => {
     const raw = (r as unknown as Record<string, unknown>)[col.key]
@@ -656,6 +698,21 @@ function PreviewStep({
         <StatPill tone="valid" label={`✓ ${preview.validRows} valid`} />
         {preview.invalidRows > 0 ? <StatPill tone="error" label={`✗ ${preview.invalidRows} with errors`} /> : null}
         {warned > 0 ? <StatPill tone="warn" label={`⚠ ${warned} with warnings`} /> : null}
+        {/* View toggle: dense spreadsheet grid vs one card per order */}
+        <div className="inline-flex overflow-hidden rounded-lg border border-[#e3d9c4]">
+          {(['table', 'detail'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setView(v)}
+              className={`px-2.5 py-1 text-[10.5px] font-semibold capitalize transition ${
+                view === v ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'
+              }`}
+            >
+              {v === 'table' ? 'Table' : 'Detail'}
+            </button>
+          ))}
+        </div>
         <span className="ml-auto inline-flex items-center gap-1.5 text-[10.5px] text-[#b6a684]">
           {autoValidating ? (
             <>
@@ -668,9 +725,9 @@ function PreviewStep({
         </span>
       </div>
 
-      {/* Spreadsheet-style review grid: one row per order, one column per CSV
-          field. Cells edit in place; a cell that fails validation goes red and
-          the row's messages are listed on a detail line beneath it. */}
+      {/* TABLE view — dense spreadsheet grid: one row per order, one column per
+          CSV field. Cells edit in place; a failing cell goes red. */}
+      {view === 'table' ? (
       <div className="overflow-x-auto rounded-xl border border-[#e3d9c4]">
         <table className="w-full border-collapse text-[11px]">
           <thead>
@@ -754,6 +811,145 @@ function PreviewStep({
           </tbody>
         </table>
       </div>
+      ) : (
+      /* MASTER–DETAIL: pick a row on the left, edit its fields on the right. */
+      (() => {
+        const selected =
+          preview.rows.find((r) => r.rowNumber === selectedRowNo) ??
+          preview.rows.find((r) => (r.errors?.length ?? 0) > 0) ??
+          preview.rows[0]
+        const customKeys = selected ? Object.keys(selected.customFields ?? {}) : []
+        const { byField, rowLevel } = selected
+          ? bucketErrors(selected.errors ?? [], customKeys)
+          : { byField: {} as Record<string, string[]>, rowLevel: [] as string[] }
+
+        return (
+          <div className="flex h-[440px] overflow-hidden rounded-xl border border-[#e3d9c4]">
+            {/* Left — row list */}
+            <div className="w-56 shrink-0 overflow-y-auto border-r border-[#eee6d6] bg-[#faf7f0]">
+              {preview.rows.map((r) => {
+                const rOk = (r.errors?.length ?? 0) === 0
+                const active = selected?.rowNumber === r.rowNumber
+                return (
+                  <button
+                    key={r.rowNumber}
+                    type="button"
+                    onClick={() => setSelectedRowNo(r.rowNumber)}
+                    className={`flex w-full items-center gap-2 border-b border-[#f2ecdf] px-2.5 py-1.5 text-left text-[11px] transition ${
+                      active ? 'bg-white shadow-[inset_2px_0_0_#1f150c]' : 'hover:bg-white/60'
+                    }`}
+                  >
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${rOk ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                    <span className="font-mono text-[9.5px] font-bold text-[#8a7959]">R{r.rowNumber}</span>
+                    <span className="min-w-0 flex-1 truncate">
+                      <span className="font-semibold text-[#1f150c]">{r.orderRef || r.recipientName || '—'}</span>
+                      {r.clientCode ? <span className="ml-1 font-mono text-[9.5px] text-[#8a7959]">{r.clientCode}</span> : null}
+                    </span>
+                    {!rOk ? (
+                      <span className="shrink-0 rounded-full bg-rose-100 px-1.5 text-[9px] font-bold text-rose-700">
+                        {r.errors!.length}
+                      </span>
+                    ) : null}
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Right — detail editor for the selected row */}
+            <div className="min-w-0 flex-1 overflow-y-auto p-4">
+              {!selected ? (
+                <p className="py-10 text-center text-[12px] text-[#8a7959]">Select a row on the left.</p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-2 border-b border-dashed border-[#eee6d6] pb-2.5">
+                    <span className="font-mono text-[11px] font-bold text-[#8a7959]">Row {selected.rowNumber}</span>
+                    {selected.orderRef ? <span className="font-mono text-[13px] font-semibold text-[#1f150c]">{selected.orderRef}</span> : null}
+                    {selected.clientCode ? (
+                      <span className="rounded bg-[#faf7f0] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#5a4526]">{selected.clientCode}</span>
+                    ) : null}
+                    <span className="ml-auto">
+                      {(selected.errors?.length ?? 0) === 0 ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                          <FiCheckCircle className="h-2.5 w-2.5" /> Ready
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
+                          <FiAlertCircle className="h-2.5 w-2.5" /> {selected.errors!.length} error{selected.errors!.length === 1 ? '' : 's'}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+
+                  {/* Row-level (non-field) errors + warnings */}
+                  {rowLevel.length > 0 || (selected.warnings?.length ?? 0) > 0 ? (
+                    <div className="mt-2 space-y-0.5">
+                      {rowLevel.map((m, i) => (
+                        <p key={`e${i}`} className="text-[10.5px] text-rose-700">✗ {m}</p>
+                      ))}
+                      {(selected.warnings ?? []).map((m, i) => (
+                        <p key={`w${i}`} className="text-[10.5px] text-amber-700">⚠ {m}</p>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {/* Grouped, editable fields — label left, value right, error below */}
+                  <div className="mt-3 space-y-3">
+                    {CARD_GROUPS.map((g) => (
+                      <div key={g.title}>
+                        <p className="mb-1 text-[9px] font-bold uppercase tracking-[0.12em] text-[#b6a684]">{g.title}</p>
+                        <div className="space-y-1">
+                          {g.keys.map((k) => {
+                            const col = COL_BY_KEY[k]
+                            if (!col) return null
+                            const fe = byField[k]
+                            return (
+                              <div key={k} className="grid grid-cols-[120px_minmax(0,1fr)] items-start gap-2">
+                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{k}</span>
+                                <div className="min-w-0">
+                                  {/* Box sized to the field: state/zip narrow, address/email/description wide. */}
+                                  <div className={`max-w-full ${DETAIL_FIELD_W[k] ?? col.w ?? 'w-40'}`}>{cellFor(selected, col, fe)}</div>
+                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.join('; ')}</p> : null}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                    {customKeys.length > 0 ? (
+                      <div>
+                        <p className="mb-1 text-[9px] font-bold uppercase tracking-[0.12em] text-[#b6a684]">Custom fields</p>
+                        <div className="space-y-1">
+                          {customKeys.map((k) => {
+                            const fe = byField[k]
+                            return (
+                              <div key={k} className="grid grid-cols-[120px_minmax(0,1fr)] items-start gap-2">
+                                <span className="pt-1 text-[9.5px] uppercase tracking-[0.04em] text-[#a1906d]">{k}</span>
+                                <div className="min-w-0">
+                                  <div className="w-48 max-w-full">
+                                    <EditCell
+                                      value={selected.customFields?.[k] ?? ''}
+                                      bad={(fe?.length ?? 0) > 0}
+                                      errors={fe}
+                                      onCommit={(v) => onEdit(selected.rowNumber, { customFields: { ...(selected.customFields ?? {}), [k]: v } })}
+                                    />
+                                  </div>
+                                  {fe?.length ? <p className="mt-0.5 text-[9.5px] leading-snug text-rose-600">✗ {fe.join('; ')}</p> : null}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )
+      })()
+      )}
     </div>
   )
 }

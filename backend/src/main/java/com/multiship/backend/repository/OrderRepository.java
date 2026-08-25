@@ -13,6 +13,21 @@ import java.util.Optional;
 @Repository
 public interface OrderRepository extends JpaRepository<Order, Integer> {
 
+    /** True when an order pulled from the WMS with this external id already
+     *  exists — makes the WMS pull idempotent (skip re-import). */
+    boolean existsByWmsExternalId(String wmsExternalId);
+
+    /**
+     * F1 — resolve a WMS-supplied external id to the internal Order row so
+     * the bulk-labels endpoint can accept orderRef entries. Case-insensitive
+     * because upstream WMS systems' ref conventions are inconsistent (some
+     * uppercase everything, some preserve mixed-case, some pad with hyphens).
+     * Only rows imported from a WMS carry a non-null wms_external_id —
+     * CSV / API-created orders return {@link Optional#empty()}.
+     */
+    Optional<Order> findByWmsExternalIdIgnoreCase(String wmsExternalId);
+
+
     Optional<Order> findByOrderNo(Integer orderNo);
 
     /**
@@ -87,7 +102,11 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             t.error_message,
             t.label_generated_at,
             s.shipvia_desc,
-            COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'ERP' END) as order_source,
+            CASE
+                WHEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END)) IN ('MANUAL', 'BULK')
+                  THEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END))
+                ELSE 'API'
+            END as order_source,
             b.batch_id
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
@@ -276,6 +295,12 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
           AND (:tracking = '' OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :tracking, '%')))
           AND (:createdFrom = '' OR b.created_date >= TO_DATE(NULLIF(:createdFrom, ''), 'YYYY-MM-DD'))
           AND (:createdTo = '' OR b.created_date <= TO_DATE(NULLIF(:createdTo, ''), 'YYYY-MM-DD'))
+          AND (:source = ''
+               OR (CASE
+                     WHEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END)) IN ('MANUAL', 'BULK')
+                       THEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END))
+                     ELSE 'API'
+                   END) = :source)
           AND (:resolution = ''
                OR (:resolution = 'READY' AND """ + RESOLUTION_READY_SQL + """
                )
@@ -308,7 +333,11 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             t.error_message,
             t.label_generated_at,
             s.shipvia_desc,
-            COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'ERP' END) as order_source,
+            CASE
+                WHEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END)) IN ('MANUAL', 'BULK')
+                  THEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END))
+                ELSE 'API'
+            END as order_source,
             b.batch_id
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
@@ -344,6 +373,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("tracking") String tracking,
             @Param("createdFrom") String createdFrom,
             @Param("createdTo") String createdTo,
+            @Param("source") String source,
             @Param("offset") int offset,
             @Param("limit") int limit,
             @Param("sortBy") String sortBy,
@@ -365,7 +395,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("orderNoLike") String orderNoLike,
             @Param("tracking") String tracking,
             @Param("createdFrom") String createdFrom,
-            @Param("createdTo") String createdTo
+            @Param("createdTo") String createdTo,
+            @Param("source") String source
     );
 
     /** Tab counts for the Labels work queue, computed in one pass. */

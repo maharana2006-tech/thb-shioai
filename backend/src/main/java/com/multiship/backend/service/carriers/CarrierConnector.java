@@ -380,11 +380,30 @@ public interface CarrierConnector {
             List<String> trackingNumbers,
             java.time.LocalDate closeDate,
             AddressToValidate address,
-            String accountNumber
+            String accountNumber,
+            /**
+             * FDX-G2 — true when every tracking in this batch ships on the
+             * carrier's Express fleet (FedEx FDXE, UPS Air, DHL). Pre-FDX-G
+             * FedEx hardcoded carrierCode="FDXG" so Express labels silently
+             * manifested as Ground; ManifestServiceImpl now splits by fleet
+             * and calls this once per group. Only FedEx maps this to its
+             * body (FDXE vs FDXG); UPS + DHL + USPS ignore the flag —
+             * their EndOfDay envelopes don't carry a fleet code.
+             *
+             * <p>Default false via the back-compat constructors below —
+             * matches the pre-FDX-G "everything is Ground" behavior.
+             */
+            boolean express
     ) {
         /** Backward-compat convenience — omits the account number (Sprint 34 shape). */
         public CloseOutRequest(List<String> trackingNumbers, java.time.LocalDate closeDate, AddressToValidate address) {
-            this(trackingNumbers, closeDate, address, null);
+            this(trackingNumbers, closeDate, address, null, false);
+        }
+
+        /** Backward-compat convenience — includes account but omits FDX-G2 express flag. */
+        public CloseOutRequest(List<String> trackingNumbers, java.time.LocalDate closeDate,
+                                AddressToValidate address, String accountNumber) {
+            this(trackingNumbers, closeDate, address, accountNumber, false);
         }
     }
 
@@ -442,6 +461,27 @@ public interface CarrierConnector {
      * @param totalWeight        Total weight across all parcels.
      * @param weightUnit         LB | KG. Null = LB.
      * @param specialInstructions Free-form notes (e.g. "ring apartment 5B").
+     * @param accountNumber      FDX-C — the shipper's carrier account number
+     *                           that owns the labels being collected. Same
+     *                           semantics as the account passed to
+     *                           {@link #voidShipment} + {@link #closeOutDay}:
+     *                           FedEx / UPS / DHL all reject pickups whose
+     *                           account doesn't match the shipper's book
+     *                           (FedEx historically got the literal {@code
+     *                           "ACCOUNT"} string; UPS got the contact name
+     *                           in place of the account; DHL got empty
+     *                           string). Nullable for connectors that don't
+     *                           need a per-request account (SWSIM keys off
+     *                           the auth cred).
+     * @param pickupServiceType  FDX-F — one of {@code EXPRESS} / {@code GROUND}
+     *                           / {@code INTERNATIONAL} (or null). Determines
+     *                           which driver fleet the carrier dispatches:
+     *                           FedEx maps to {@code carrierCode=FDXE/FDXG},
+     *                           UPS maps to {@code PickupPiece.ServiceCode=007/003}.
+     *                           DHL Express has one product (P) and SWSIM
+     *                           has no per-request service code; both accept
+     *                           the field but no-op on it. Null falls to
+     *                           GROUND (matches the pre-FDX-F hardcode).
      */
     record PickupRequest(
             java.time.LocalDate pickupDate,
@@ -453,7 +493,9 @@ public interface CarrierConnector {
             int packageCount,
             java.math.BigDecimal totalWeight,
             String weightUnit,
-            String specialInstructions
+            String specialInstructions,
+            String accountNumber,
+            String pickupServiceType
     ) {
     }
 

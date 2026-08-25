@@ -75,6 +75,17 @@ public class CarrierServiceImpl implements CarrierService {
     private final com.multiship.backend.repository.ShipmentBatchRepository shipmentBatchRepository;
     private final CarrierLimitService carrierLimitService;
     private final ShipmentSplitter shipmentSplitter;
+    /** F6-B3 — resolves per-shipment defaults (currency, weight/dim unit,
+     *  timezone, shipping purpose, clearance option) from the documented
+     *  precedence chain: request → customs → Client → CarrierAccountRef →
+     *  hardcode/throw. Replaces the scattered fallback logic that used to
+     *  live inline in buildShipmentRequest. */
+    private final ShipmentDefaultsResolver shipmentDefaultsResolver;
+    /** F6-D — converts every money field on the outgoing request DTO into
+     *  the carrier account's billing currency (via ECB FX rates) so a EUR
+     *  client shipping on a USD UPS account no longer sends EUR figures
+     *  labelled USD on the wire. Fails closed when a rate is unavailable. */
+    private final ShipmentCurrencyConverter shipmentCurrencyConverter;
     /**
      * Runs the failed-shipment ERROR-order persistence in its own DB
      * transaction, independent of the enclosing @Transactional method's.
@@ -668,7 +679,21 @@ public class CarrierServiceImpl implements CarrierService {
                     + carrier + " account first.");
         }
         // Bill-to account number that prints on the label: the typed number wins.
-        String billToNumber = firstNonBlank(typedNumber, account.getAccountNumber(), "ACCOUNT");
+        // Pre-fix had a "ACCOUNT" literal string as the ultimate fallback which
+        // would silently print on labels if both typedNumber and the resolved
+        // account's accountNumber were blank — the DB has account_number as
+        // NOT NULL so this shouldn't happen in practice, but if a row ever
+        // shipped with a blank account_number (data integrity issue), the
+        // label would show "ACCOUNT" as the biller — obviously wrong. Now
+        // failing loudly at the boundary instead.
+        String billToNumber = firstNonBlank(typedNumber, account.getAccountNumber());
+        if (!StringUtils.hasText(billToNumber)) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                    "Could not resolve a bill-to account number for this " + carrier
+                            + " shipment. The account on file has no account number stored "
+                            + "and none was supplied on the request. Add a valid account number "
+                            + "and retry.");
+        }
 
         CarrierConnector connector = getCarrierConnector(carrier);
 
@@ -864,7 +889,14 @@ public class CarrierServiceImpl implements CarrierService {
                 .shipperPostalCode(firstNonBlank(from != null ? from.getPostalCode() : null, dflt.getPostalCode()))
                 .shipperCountryCode(fromCountry)
                 .recipientName(to.getName())
-                .recipientPhone(firstNonBlank(to.getPhone(), "0000000000"))
+                // Pass null through when the recipient phone is blank. Every
+                // connector's appendAddress helper already guards with
+                // StringUtils.hasText(phone) and omits the element from the
+                // envelope when absent. Pre-fix substituted the literal string
+                // "0000000000" which then printed on labels + went to USPS
+                // notification systems — fake-data anti-pattern the codebase
+                // actively hunts (silent-fallback audit, PRs #410-#414).
+                .recipientPhone(to.getPhone())
                 .recipientAddressLine1(to.getAddressLine1())
                 .recipientAddressLine2(to.getAddressLine2())
                 .recipientAddressLine3(to.getAddressLine3())
@@ -1345,16 +1377,38 @@ public class CarrierServiceImpl implements CarrierService {
         // Any HARD violation surfaces as a CarrierConnectionException with an
         // actionable message before we spend the carrier round-trip.
         if (packagingValidationEnabled) {
-            com.multiship.backend.model.ShippingService resolvedService = shippingConfigService
-                    .resolveService(connector.getCarrierCode(),
-                            firstNonBlank(order.getTenantId(), order.getCustNo()),
+            // F5-B — use resolveRoute + pickPackageForClient so this pre-flight
+            // resolves the SAME preset buildShipmentRequest picked (both call
+            // sites now use the strict client-aware algorithm). Since we're
+            // downstream of buildShipmentRequest which already ran the strict
+            // pick, this call is deterministic — same client + rule + service
+            // → same preset. Wrapped defensively in case a race changes the
+            // config mid-flight; a resolution failure here is non-fatal for
+            // the pre-flight (validator degrades to zero-outcome).
+            String preflightClient = firstNonBlank(order.getTenantId(), order.getCustNo());
+            ShippingConfigService.ResolvedRoute preflightRoute = shippingConfigService
+                    .resolveRoute(connector.getCarrierCode(), preflightClient,
                             order.getShipviaCd(), order.getShiptoCountryCd(),
-                            isInternational(order), carrierProperties.getShipper().getCountryCode())
+                            isInternational(order), carrierProperties.getShipper().getCountryCode(),
+                            null)
                     .orElse(null);
-            com.multiship.backend.model.PackagePreset preset = shippingConfigService
-                    .pickPackage(resolvedService != null ? resolvedService.getId() : null, order.getWeight())
-                    .map(ShippingConfigService.PickedPackage::preset)
-                    .orElse(null);
+            com.multiship.backend.model.ShippingService resolvedService = preflightRoute != null
+                    ? preflightRoute.service() : null;
+            com.multiship.backend.model.PackagePreset preset = null;
+            if (preflightClient != null && resolvedService != null) {
+                try {
+                    preset = shippingConfigService.pickPackageForClient(
+                            resolvedService.getId(),
+                            preflightRoute.ruleId(),
+                            preflightClient,
+                            order.getWeight()).preset();
+                } catch (ShippingConfigService.PackageResolutionException ignore) {
+                    // Non-fatal here — the strict pick would have already thrown
+                    // in buildShipmentRequest before we got to this pre-flight
+                    // if it were going to. Degrade to zero-outcome validation.
+                    preset = null;
+                }
+            }
             com.multiship.backend.util.PackagingValidator.Outcome outcome =
                     preset == null
                             ? new com.multiship.backend.util.PackagingValidator.Outcome(java.util.List.of())
@@ -1899,20 +1953,32 @@ public class CarrierServiceImpl implements CarrierService {
                 ? resolutionService.resolveWarehouse(orderClient, null)
                         .map(com.multiship.backend.model.Warehouse::getId).orElse(null)
                 : null;
-        com.multiship.backend.model.ShippingService resolvedService = shippingConfigService
-                .resolveService(connector.getCarrierCode(), orderClient, order.getShipviaCd(),
+        // F5-B — resolveRoute returns both the ship-method rule ID AND the
+        // resolved service so pickPackageForClient can enforce per-lane
+        // package restrictions (ShipMethodRulePackage) alongside the
+        // client's allowlist. Falls back to null ruleId when no shipvia
+        // rule matched (reached service via the carrier-catalog scope path).
+        ShippingConfigService.ResolvedRoute route = shippingConfigService
+                .resolveRoute(connector.getCarrierCode(), orderClient, order.getShipviaCd(),
                         order.getShiptoCountryCd(), international, shipper.getCountryCode(), originWarehouseId)
                 .orElse(null);
+        com.multiship.backend.model.ShippingService resolvedService = route != null ? route.service() : null;
+        Long resolvedRuleId = route != null ? route.ruleId() : null;
         String serviceType = resolvedService != null ? resolvedService.getServiceCode()
                 : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");
 
-        // Package: auto-picked from the service's linked packages (smallest
-        // box whose max weight fits the order), falling back to the global
-        // default preset. Weight = order weight + the box's tare.
-        com.multiship.backend.model.PackagePreset preset = shippingConfigService
-                .pickPackage(resolvedService != null ? resolvedService.getId() : null, order.getWeight())
-                .map(ShippingConfigService.PickedPackage::preset)
-                .orElse(null);
+        // F5-B — package selection is now strict: ClientAllowedPackage ∩
+        // ServicePackage ∩ (rule allowlist if any) ∩ enabled ∩ fits-weight.
+        // Client-owned presets are auto-allowed for the owner. No silent
+        // fallback to the global default preset. If nothing fits, throws
+        // PackageResolutionException with an actionable message that names
+        // the constraint that failed. Caller's own try/catch (further up
+        // the stack in generateLabel) translates it into an operator-visible
+        // error response.
+        com.multiship.backend.model.PackagePreset preset = orderClient != null && resolvedService != null
+                ? shippingConfigService.pickPackageForClient(resolvedService.getId(),
+                        resolvedRuleId, orderClient, order.getWeight()).preset()
+                : null;
         String packageType = preset != null
                 ? ("CARRIER".equalsIgnoreCase(preset.getKind()) ? preset.getCarrierPackageCode() : "YOUR_PACKAGING")
                 : firstNonBlank(connector.getConfiguration().defaultPackageType(), "YOUR_PACKAGING");
@@ -1944,35 +2010,63 @@ public class CarrierServiceImpl implements CarrierService {
         boolean customsRequired = international && !sameCustomsTerritory;
         com.multiship.backend.dto.IntlShipmentBlockDTO intlBlock = buildIntlBlock(customsRequired, customs, profile);
 
-        // Currency for declared value: prefer customs currency (OrderCustoms /
-        // profile default), fall back to null → FedEx defaults to USD, matching
-        // the pre-fix behavior for domestic-only accounts.
-        String declaredValueCurrency = intlBlock != null ? intlBlock.getCustomsCurrency() : null;
-
-        // Weight/dim unit: from the customs declaration when available, else
-        // LB/IN (the historical default the connectors assumed).
-        // Sprint 50 Tier 1 finding #4 — source resolution order:
-        //   1. customs.weightUnit (explicit shipment declaration)
-        //   2. Client.defaultWeightUnit (tenant preference)
-        //   3. LB (platform-wide historical default; retained for legacy domestic).
-        String tenantDefaultWeightUnit = null;
-        String tenantDefaultDimUnit = null;
+        // F6-B3 — centralised defaults resolution. The scattered
+        // per-field fallback logic that used to live inline here (weight
+        // unit, dim unit, currency) is now behind ShipmentDefaultsResolver
+        // which walks the documented precedence chain:
+        //   request → customs → Client → CarrierAccountRef → hardcode/throw
+        // This closes three prior gaps:
+        //   1. dimUnit ignored customs.dimUnit (only read customs.weightUnit)
+        //   2. currency had no client-level fallback
+        //   3. shippingPurpose / clearanceOption weren't wired from the
+        //      account (F6-C picks these up in the connector envelopes)
         String tenantCodeForDefaults = order.getTenantId() != null && !order.getTenantId().isBlank()
                 ? order.getTenantId() : order.getCustNo();
-        if (tenantCodeForDefaults != null && !tenantCodeForDefaults.isBlank()) {
-            var clientRow = clientRepository.findByClientCodeIgnoreCase(tenantCodeForDefaults.trim()).orElse(null);
-            if (clientRow != null) {
-                tenantDefaultWeightUnit = clientRow.getDefaultWeightUnit();
-                tenantDefaultDimUnit = clientRow.getDefaultDimUnit();
-            }
-        }
-        String weightUnit = firstNonBlank(
-                customs != null ? customs.getWeightUnit() : null,
-                tenantDefaultWeightUnit,
-                "LB");
-        String dimUnit = firstNonBlank(tenantDefaultDimUnit, "IN");
+        com.multiship.backend.model.Client clientRow = tenantCodeForDefaults != null
+                && !tenantCodeForDefaults.isBlank()
+                ? clientRepository.findByClientCodeIgnoreCase(tenantCodeForDefaults.trim()).orElse(null)
+                : null;
+        com.multiship.backend.model.CarrierAccountRef accountRow = accountNumber != null
+                && !accountNumber.isBlank()
+                ? carrierAccountRefRepository
+                        .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(
+                                accountNumber, connector.getCarrierCode())
+                        .orElse(null)
+                : null;
+        ShipmentDefaultsResolver.ResolvedDefaults defaults = shipmentDefaultsResolver.resolve(
+                new ShipmentDefaultsResolver.ResolveInputs(
+                        null,                                  // request-level currency — none at this layer
+                        null,                                  // request-level weight unit — none at this layer
+                        null,                                  // request-level dim unit — none at this layer
+                        null,                                  // request-level timezone — none at this layer
+                        intlBlock != null ? intlBlock.getReasonForExport() : null,   // purpose from customs
+                        null,                                  // request-level clearance — none at this layer
+                        customs,
+                        clientRow,
+                        accountRow,
+                        international));
+        String declaredValueCurrency = defaults.currency();
+        String weightUnit = defaults.weightUnit();
+        String dimUnit = defaults.dimUnit();
 
-        return ShipmentRequestDTO.builder()
+        // F6-C — thread the resolved clearanceOption onto the intl block so
+        // the 4 connectors can pick it up in their envelope builders. The
+        // resolver returns per-carrier vocabulary verbatim (F6-A locked
+        // decision: no normalization layer); each connector maps the value
+        // to its own field:
+        //   · UPS   → BillShipper / BillReceiver / BillThirdParty
+        //   · FedEx → paymentType SENDER / RECIPIENT / THIRD_PARTY / COLLECT
+        //   · DHL   → incoterms1 (DAP / DDP / EXW / …)
+        //   · USPS  → routed via ContentType where applicable
+        // Null (unset) leaves each connector to apply its own carrier default
+        // (typically sender-pays / DAP). Only set when an intlBlock exists —
+        // the domestic path doesn't need the field.
+        if (intlBlock != null && defaults.clearanceOption() != null) {
+            intlBlock.setClearanceOption(defaults.clearanceOption());
+        }
+
+
+        ShipmentRequestDTO dto = ShipmentRequestDTO.builder()
                 .carrierCode(connector.getCarrierCode())
                 .accountNumber(firstNonBlank(accountNumber, "ACCOUNT"))
                 .serviceType(serviceType)
@@ -1992,17 +2086,33 @@ public class CarrierServiceImpl implements CarrierService {
                 .shipperPostalCode(shipper.getPostalCode())
                 .shipperCountryCode(shipper.getCountryCode())
                 .recipientName(firstNonBlank(order.getShipName(), order.getShipAttn(), order.getCustNo()))
-                .recipientPhone(firstNonBlank(order.getPhone(), "0000000000"))
+                // Pass null through when order.phone is blank (see F2 fix
+                // above for the manual-shipment path). Every connector omits
+                // the phone element when null instead of printing fake data.
+                .recipientPhone(order.getPhone())
                 .recipientAddressLine1(firstNonBlank(order.getShipAddr1(), order.getLocation(), ""))
                 .recipientAddressLine2(null)
                 .recipientCity(firstNonBlank(order.getShiptoCity(), ""))
                 .recipientState(firstNonBlank(order.getShiptoState(), ""))
                 .recipientPostalCode(firstNonBlank(order.getShiptoZip(), ""))
-                .recipientCountryCode(firstNonBlank(order.getShiptoCountryCd(), "US"))
+                // F7 fix — pass through instead of silently defaulting to "US".
+                // Order.shiptoCountryCd is nullable in the DB but a shipment
+                // without a real destination country is uninshippable: wrong
+                // service, wrong customs, wrong price. Each connector's
+                // createShipment now throws on blank recipient country with
+                // an actionable message instead of the silent-domestic
+                // fallback that used to ship international parcels as US.
+                .recipientCountryCode(order.getShiptoCountryCd())
                 .referenceNumber(order.getOrderNo() != null ? String.valueOf(order.getOrderNo()) : null)
                 .specialInstructions(firstNonBlank(order.getGoodsDesc(), order.getShipVia()))
                 .declaredValue(order.getPrice())
                 .declaredValueCurrency(declaredValueCurrency)
+                // F6-E — thread the resolved IANA timezone onto the request
+                // so every connector's ship/invoice date stamp uses the
+                // shipper's local calendar day (not UTC). Null passes through
+                // and each connector falls back to UTC — the pre-F6-E
+                // behavior — so a client row with no timezone is safe.
+                .shipperTimezone(defaults.timezone())
                 .intl(intlBlock)
                 // Sprint 25 — thread the Order entity's isReturn flag so
                 // ERP-side return orders get the carrier return-label wire
@@ -2012,6 +2122,14 @@ public class CarrierServiceImpl implements CarrierService {
                 .isReturn("Y".equalsIgnoreCase(
                         order.getIsReturn() == null ? "" : order.getIsReturn().trim()))
                 .build();
+
+        // F6-D — if the resolved client currency differs from the carrier
+        // account's billing currency, convert declaredValue / insuredValue /
+        // per-package declared / per-commodity unitValue via ECB FX. No-op
+        // when currencies match. accountRow may be null on the platform
+        // (no-CarrierAccountRef) path, in which case the converter uses the
+        // per-carrier home currency (USD/USD/USD/EUR).
+        return shipmentCurrencyConverter.apply(dto, accountRow);
     }
 
     /**

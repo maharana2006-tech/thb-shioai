@@ -95,8 +95,14 @@ const credentialLabelsFor = (carrierCode: string) => {
       secretLong: 'Password',
       idShort: 'IntegrationID',
       secretShort: 'password',
+      // Placeholder shows the GUID example so operators paste the right shape
+      // upfront (used to fail server-side after Save with a "must be a GUID"
+      // message that only appeared post-round-trip). Braced {…}, urn:uuid: and
+      // 32-hex-no-hyphens variants are auto-normalised — the FE + BE both
+      // reshape them into the canonical 8-4-4-4-12 form.
+      idPlaceholder: 'e.g. 01234567-89ab-cdef-0123-456789abcdef',
       helper:
-        'Stamps.com SWSIM: IntegrationID is a GUID assigned to the integrator on developer.stamps.com. Username + Password are the end-user\'s Stamps.com account login.',
+        'Stamps.com SWSIM: IntegrationID is a GUID assigned to the integrator on developer.stamps.com. Username + Password are the end-user\'s Stamps.com account login. Braces {…}, urn:uuid: prefix, and no-hyphens variants are auto-normalised.',
     }
   }
   if (normalized === 'DHL') {
@@ -151,6 +157,13 @@ interface DrawerState {
    *  their own defaults when unset. Values come from ../utils/customsOptions. */
   shippingPurpose: string
   clearanceOption: string
+  /** F6-B2 — per-account billing currency (ISO 4217). Blank string means
+   *  "use carrier home currency" (USPS/UPS/FedEx → USD, DHL → EUR). */
+  currency: string
+  /** FDX-H1 — per-account default FedEx pickupType. Null = no override
+   *  (resolver falls back to USE_SCHEDULED_PICKUP). Only FEDEX rows
+   *  render the picker; other carriers keep this null. */
+  pickupType: string | null
   /** Third-party billing default. Only shown / persisted when the operator
    *  picked THIRD_PARTY for clearanceOption. All optional individually — a
    *  future per-shipment override on Shipment can fill in what's missing. */
@@ -176,6 +189,8 @@ const emptyDrawer: DrawerState = {
   clientDefault: false,
   shippingPurpose: '',
   clearanceOption: '',
+  currency: '',
+  pickupType: null,
   thirdPartyAccount: '',
   thirdPartyName: '',
   thirdPartyAddress1: '',
@@ -466,6 +481,8 @@ export default function CarrierConnections({
         clientDefault: Boolean(account.clientDefault),
         shippingPurpose: account.shippingPurpose || '',
         clearanceOption: account.clearanceOption || '',
+        currency: account.currency || '',
+        pickupType: account.pickupType ?? null,
         thirdPartyAccount:  account.thirdPartyAccount  || '',
         thirdPartyName:     account.thirdPartyName     || '',
         thirdPartyAddress1: account.thirdPartyAddress1 || '',
@@ -593,6 +610,13 @@ export default function CarrierConnections({
         // "unset", empty string as "keep" — this matches the credentials rule).
         shippingPurpose: drawer.shippingPurpose || null,
         clearanceOption: drawer.clearanceOption || null,
+        // F6-B2 — per-account billing currency. Uppercased for ISO 4217;
+        // null = clear the override (revert to carrier home currency).
+        currency: drawer.currency ? drawer.currency.trim().toUpperCase() : null,
+        // FDX-H1 — per-account FedEx pickupType. Only FEDEX rows render
+        // the picker, so non-FedEx carriers send null (no-op backend
+        // side). Null on the wire = clear the override.
+        pickupType: drawer.carrierCode === 'FEDEX' ? (drawer.pickupType || null) : null,
         // Third-party billing default. Only send the address when the picked
         // clearance is THIRD_PARTY — flipping to SENDER/RECIPIENT explicitly
         // clears the persisted third-party row (send empty strings so the
@@ -1331,7 +1355,8 @@ export default function CarrierConnections({
                         value={drawer.clientId}
                         onChange={(e) => setDrawer((c) => ({ ...c, clientId: e.target.value }))}
                         className={`${inputClassName}${drawerErrors.clientId ? ' !border-rose-400' : ''}`}
-                        placeholder={credentialLabelsFor(drawer.carrierCode).idLong}
+                        placeholder={credentialLabelsFor(drawer.carrierCode).idPlaceholder
+                          ?? credentialLabelsFor(drawer.carrierCode).idLong}
                         autoComplete="off"
                       />
                     </Field>
@@ -1404,6 +1429,70 @@ export default function CarrierConnections({
                       </Select>
                     </Field>
                   </div>
+
+                  {/* F6-B2 — per-account billing currency override. Blank means
+                      "use the carrier's home currency" (USPS/UPS/FedEx → USD,
+                      DHL → EUR). When set, this overrides both the client's
+                      defaultCurrency AND the carrier default; F6-D converts
+                      money-shaped request fields to this currency via
+                      FxRateService if they arrive in a different currency. */}
+                  <div className="mt-2">
+                    <Field label="Billing currency (per-account override)">
+                      <input
+                        type="text"
+                        value={drawer.currency}
+                        onChange={(e) => setDrawer((c) => ({ ...c, currency: e.target.value.toUpperCase() }))}
+                        maxLength={3}
+                        placeholder={
+                          drawer.carrierCode === 'DHL'
+                            ? 'e.g. EUR (leave blank to use DHL default)'
+                            : 'e.g. USD (leave blank to use carrier default)'
+                        }
+                        className={inputClassName}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                    </Field>
+                    <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
+                      ISO 4217 3-letter code. Leave blank to use the carrier's home
+                      currency ({drawer.carrierCode === 'DHL' ? 'EUR' : 'USD'}).
+                      Only override when this account bills in a different currency
+                      than the carrier's default.
+                    </p>
+                  </div>
+
+                  {/* FDX-H1 — per-account default pickupType. Only FedEx
+                      maps this to its shipment envelope; UPS / DHL / SWSIM
+                      accept the field but no-op on it. Field only shown
+                      for FEDEX carrier rows so operators aren't confused
+                      by a dropdown that does nothing on other carriers.
+                      Blank falls to USE_SCHEDULED_PICKUP (pre-FDX-H1
+                      hardcode) so existing rows read exactly as before. */}
+                  {drawer.carrierCode === 'FEDEX' ? (
+                    <div className="mt-2">
+                      <Field label="Default pickup type (FedEx only)">
+                        <select
+                          value={drawer.pickupType ?? ''}
+                          onChange={(e) => setDrawer((c) => ({ ...c, pickupType: e.target.value || null }))}
+                          className={inputClassName}
+                        >
+                          <option value="">Use scheduled pickup (default)</option>
+                          <option value="REGULAR_PICKUP">Regular pickup (scheduled)</option>
+                          <option value="REQUEST_COURIER">On-demand courier</option>
+                          <option value="DROP_BOX">Drop box</option>
+                          <option value="BUSINESS_SERVICE_CENTER">Business service center</option>
+                          <option value="STATION">FedEx station</option>
+                          <option value="USE_SCHEDULED_PICKUP">Use scheduled pickup (explicit)</option>
+                        </select>
+                      </Field>
+                      <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
+                        Which FedEx driver / fleet picks up labels from this
+                        account. Blank = USE_SCHEDULED_PICKUP (assumes a
+                        standing daily pickup). Return labels bypass this
+                        setting and always use CONTACT_FEDEX_TO_SCHEDULE.
+                      </p>
+                    </div>
+                  ) : null}
 
                   {/* Third-party billing sub-panel — only shown when the
                       operator picks THIRD_PARTY. Every field is an

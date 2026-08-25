@@ -52,6 +52,8 @@ public class ShippingConfigService {
     private final ServicePackageRepository servicePackageRepository;
     private final com.multiship.backend.repository.ShipMethodRulePackageRepository rulePackageRepository;
     private final com.multiship.backend.repository.ShipMethodRuleWarehouseRepository ruleWarehouseRepository;
+    /** F5-B — strict client-scoped package selection needs the client's allowlist. */
+    private final com.multiship.backend.repository.ClientAllowedPackageRepository clientAllowedPackageRepository;
     private final com.multiship.backend.repository.WarehouseRepository warehouseRepository;
     /** The carrier connectors — the source of truth for what a carrier offers per origin. */
     private final List<CarrierConnector> carrierConnectors;
@@ -62,6 +64,26 @@ public class ShippingConfigService {
 
     /** A package chosen for a service. */
     public record PickedPackage(PackagePreset preset) {}
+
+    /**
+     * F5-B — a resolved route bundles the ship-method rule ID with the
+     * resolved carrier service. The rule ID drives the ShipMethodRulePackage
+     * lookup during package selection; the service drives the fit algorithm.
+     * Rule ID is null when the caller reached this route via the plain
+     * service-catalog fallback (no matching shipvia rule).
+     */
+    public record ResolvedRoute(Long ruleId, ShippingService service) {}
+
+    /**
+     * F5-B — thrown by the strict client-scoped package selector when no
+     * candidate preset survives the filter pipeline. Message names the
+     * constraint that failed (empty allowlist, no fit-by-weight, no
+     * service link, rule restriction, etc) so operators can fix the
+     * config instead of chasing a silent misconfiguration.
+     */
+    public static class PackageResolutionException extends RuntimeException {
+        public PackageResolutionException(String message) { super(message); }
+    }
 
     /**
      * ERP connect code → canonical carrier (mirror of the private map in
@@ -183,12 +205,17 @@ public class ShippingConfigService {
                             canonical, off.serviceCode(), origin)
                     .orElse(null);
             if (existing == null) {
+                // FDX-G1 — classify the new service as Express or Ground so
+                // ManifestServiceImpl can split closeOutDay by fleet. Matches
+                // the V25 backfill logic verbatim so sync + backfill agree.
+                boolean isExpress = classifyExpress(canonical, off.serviceCode());
                 serviceRepository.save(ShippingService.builder()
                         .carrier(canonical).serviceCode(off.serviceCode()).name(off.name()).scope(off.scope())
                         .originCountry(origin).source(source).syncedAt(now)
                         .maxWeightLb(lim.maxWeightLb()).maxLengthIn(lim.maxLengthIn())
                         .maxLengthGirthIn(lim.maxLengthGirthIn()).surchargeLengthGirthIn(lim.surchargeLengthGirthIn())
-                        .enabled(true).sortOrder(sort++).build());
+                        .enabled(true).sortOrder(sort++)
+                        .express(isExpress).build());
                 added++;
             } else {
                 existing.setName(off.name());
@@ -808,6 +835,90 @@ public class ShippingConfigService {
     }
 
     /**
+     * F5-B — same resolution as {@link #resolveService} but returns the
+     * matched ship-method rule ID alongside the service. Callers that need
+     * to enforce per-rule package restrictions (ShipMethodRulePackage)
+     * during {@link #pickPackage} use this variant so the rule ID threads
+     * through in a single traversal.
+     *
+     * <p>Rule ID is null when the resolution reached the service via the
+     * carrier-catalog scope fallback (no matching shipvia rule fired).
+     */
+    @Transactional(readOnly = true)
+    public Optional<ResolvedRoute> resolveRoute(String canonicalCarrier, String clientCode,
+                                                String orderService, String destCountry,
+                                                boolean international, String originCountry,
+                                                Long orderWarehouseId) {
+        // First try the rule-based resolution — captures the ruleId if a
+        // shipvia rule matches. Mirrors the internal composition of
+        // resolveService (rule first, then scope fallback).
+        Optional<ShipViaMapping> ruleMatch = resolveRuleRow(clientCode, orderService, destCountry, orderWarehouseId);
+        if (ruleMatch.isPresent()) {
+            ShipViaMapping rule = ruleMatch.get();
+            Optional<ShippingService> svc = serviceRepository.findById(rule.getServiceId())
+                    .filter(ShippingService::isEnabled);
+            if (svc.isPresent() && (canonicalCarrier == null
+                    || canonicalCarrier.equalsIgnoreCase(svc.get().getCarrier()))) {
+                return Optional.of(new ResolvedRoute(rule.getId(), svc.get()));
+            }
+        }
+        // Fallback to scope resolution — no rule matched, so ruleId is null.
+        return resolveService(canonicalCarrier, clientCode, orderService, destCountry,
+                international, originCountry, orderWarehouseId)
+                .map(s -> new ResolvedRoute(null, s));
+    }
+
+    /**
+     * F5-B — internal variant of {@link #resolveRule} that returns the
+     * winning {@link ShipViaMapping} row itself instead of the joined
+     * service. Callers that need the rule ID for downstream lookups
+     * (ShipMethodRulePackage) use this via {@link #resolveRoute}.
+     */
+    private Optional<ShipViaMapping> resolveRuleRow(String clientCode, String orderService,
+                                                     String destCountry, Long orderWarehouseId) {
+        if (!StringUtils.hasText(orderService)) return Optional.empty();
+        String client = StringUtils.hasText(clientCode) ? clientCode.trim().toUpperCase(Locale.ROOT) : null;
+        String region = CountryRegions.regionOf(destCountry);
+        String dest = destCountry != null ? destCountry.trim().toUpperCase(Locale.ROOT) : "";
+
+        List<ShipViaMapping> candidates = ruleRepository.findByShipviaCdIgnoreCase(orderService.trim());
+        if (candidates.isEmpty()) return Optional.empty();
+
+        List<Long> ruleIds = candidates.stream()
+                .map(ShipViaMapping::getId)
+                .filter(Objects::nonNull)
+                .toList();
+        java.util.Map<Long, java.util.Set<Long>> warehousesByRule = new java.util.HashMap<>();
+        if (!ruleIds.isEmpty()) {
+            for (var link : ruleWarehouseRepository.findByRuleIdIn(ruleIds)) {
+                warehousesByRule
+                        .computeIfAbsent(link.getRuleId(), k -> new java.util.HashSet<>())
+                        .add(link.getWarehouseId());
+            }
+        }
+
+        return candidates.stream()
+                .filter(r -> r.getClientCode() == null || r.getClientCode().equalsIgnoreCase(client == null ? "" : client))
+                .filter(r -> switch (normType(r)) {
+                    case "COUNTRIES" -> !dest.isEmpty() && r.getDestValue() != null
+                            && (" " + r.getDestValue() + " ").contains(" " + dest + " ");
+                    case "COUNTRY" -> !dest.isEmpty() && dest.equalsIgnoreCase(r.getDestValue());
+                    case "REGION" -> region.equalsIgnoreCase(r.getDestValue());
+                    default -> true;
+                })
+                .filter(r -> warehouseMatches(r, warehousesByRule.get(r.getId()), orderWarehouseId))
+                .max(Comparator
+                        .comparingInt((ShipViaMapping r) -> (r.getClientCode() != null ? 8 : 0)
+                                + (warehouseRestricted(r, warehousesByRule.get(r.getId())) ? 4 : 0)
+                                + (switch (normType(r)) {
+                                    case "COUNTRIES", "COUNTRY" -> 2;
+                                    case "REGION" -> 1;
+                                    default -> 0;
+                                }))
+                        .thenComparing(Comparator.comparing(ShipViaMapping::getId).reversed()));
+    }
+
+    /**
      * The package a shipment goes in — chosen by what the CARRIER WILL BILL,
      * not just what fits: among the service's linked packages that can carry
      * the order's weight and aren't over parcel limits, prefer non-surcharge
@@ -859,6 +970,174 @@ public class ShippingConfigService {
                 .map(PickedPackage::new);
     }
 
+    /**
+     * F5-B — strict, client-scoped package selector for the createShipment
+     * path. Same billable-weight fit algorithm as {@link #pickPackage(Long, BigDecimal)},
+     * but the candidate pool is the strict intersection:
+     * <pre>
+     *   ServicePackage(serviceId)                 (linked to the resolved service)
+     *   ∩ (
+     *       ClientAllowedPackage(clientCode)      (explicitly allowed for this client)
+     *       OR
+     *       preset.ownerType=CLIENT + ownerClientCode=clientCode
+     *                                              (client-owned presets auto-allowed
+     *                                               for the owner — no explicit
+     *                                               allowlist entry required)
+     *     )
+     *   ∩ (
+     *       (ruleId == null) OR
+     *       (rule has no ShipMethodRulePackage rows) OR
+     *       ShipMethodRulePackage(ruleId).contains(preset.id)
+     *                                              (per-lane package restrictions
+     *                                               from the resolved shipvia rule)
+     *     )
+     *   ∩ preset.enabled = true
+     *   ∩ preset.maxWeight >= orderWeight
+     *   ∩ NOT PackageMath.OversizeStatus.OVER_MAX for this service
+     * </pre>
+     *
+     * <p>Throws {@link PackageResolutionException} when nothing survives —
+     * message names the constraint that failed (empty allowlist, no fit,
+     * rule-restricted-out) so operators can fix the config instead of
+     * silently shipping in the wrong box.
+     *
+     * <p>NO silent fallback to a global default preset. Pre-fix, if no
+     * service-linked package fit, {@link #pickPackage(Long, BigDecimal)}
+     * fell back to {@code findFirstByIsDefaultTrueAndEnabledTrue} — which
+     * could return a preset from a different client / different service /
+     * off-limit weight. F5-B closes that silent-wrong-box gap by throwing.
+     */
+    @Transactional(readOnly = true)
+    public PickedPackage pickPackageForClient(Long serviceId, Long ruleId,
+                                              String clientCode, BigDecimal orderWeight) {
+        if (!StringUtils.hasText(clientCode)) {
+            throw new PackageResolutionException(
+                    "Package selection requires a client code — the strict allowlist "
+                            + "filter can't run without one. If this is a rate-shop or "
+                            + "preview call (no client context), use the plain pickPackage() "
+                            + "overload instead.");
+        }
+        if (serviceId == null) {
+            throw new PackageResolutionException(
+                    "Package selection requires a resolved service ID — the fit algorithm "
+                            + "must know the carrier's own package limits (max weight, "
+                            + "girth, length) to filter oversize presets. Resolve the "
+                            + "service via resolveRoute() first.");
+        }
+        BigDecimal actual = orderWeight != null ? orderWeight : BigDecimal.ONE;
+
+        // Step 1: build the client's allowed-preset ID set. Empty allowlist
+        // is treated as "client can ship in nothing" — throw with a config
+        // hint so ops knows to add allowlist rows for the client.
+        java.util.Set<Long> clientAllowedIds = clientAllowedPackageRepository
+                .findByClientCodeIgnoreCaseOrderByIsDefaultDescCreatedAtAsc(clientCode)
+                .stream()
+                .map(com.multiship.backend.model.ClientAllowedPackage::getPresetId)
+                .filter(Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+        // NOTE: an EMPTY set is NOT immediately fatal — client-owned presets
+        // are auto-allowed for the owner (checked per-candidate below), so a
+        // client could ship exclusively in their own boxes without ever
+        // populating ClientAllowedPackage. The truly-empty case fails later
+        // when candidates.isEmpty() with the appropriate message.
+
+        // Step 2: rule-level restrictions (Phase 6). Only enforced when the
+        // rule actually has ShipMethodRulePackage rows. No rows = no per-rule
+        // restriction on this lane (behaves like unrestricted).
+        final java.util.Set<Long> rulePresetIds;
+        if (ruleId != null) {
+            java.util.Set<Long> rp = rulePackageRepository
+                    .findByRuleIdOrderByPresetIdAsc(ruleId)
+                    .stream()
+                    .map(com.multiship.backend.model.ShipMethodRulePackage::getPresetId)
+                    .filter(Objects::nonNull)
+                    .collect(java.util.stream.Collectors.toSet());
+            rulePresetIds = rp.isEmpty() ? null : rp;   // null = unrestricted
+        } else {
+            rulePresetIds = null;
+        }
+
+        // Step 3: fetch service limits (same shape the loose pickPackage
+        // uses) so oversize filtering can run.
+        com.multiship.backend.util.PackageMath.ServiceLimits limits =
+                serviceRepository.findById(serviceId)
+                        .map(s -> com.multiship.backend.util.PackageMath.limitsOf(
+                                s.getCarrier(), s.getServiceCode(),
+                                s.getMaxWeightLb(), s.getMaxLengthIn(),
+                                s.getMaxLengthGirthIn(), s.getSurchargeLengthGirthIn()))
+                        .orElse(null);
+
+        // Step 4: build the candidate pool from service-linked presets and
+        // apply every filter. Track the reason each preset was rejected so
+        // the empty-pool exception can explain what went wrong.
+        List<ServicePackage> links = servicePackageRepository.findByServiceId(serviceId);
+        String normalisedClientCode = clientCode.trim();
+        List<PickedPackage> candidates = links.stream()
+                .map(l -> presetRepository.findById(l.getPresetId()).orElse(null))
+                .filter(Objects::nonNull)
+                .filter(p -> Boolean.TRUE.equals(p.getEnabled()))
+                // client allowlist OR client-owned
+                .filter(p -> clientAllowedIds.contains(p.getId())
+                        || (PackagePreset.OWNER_CLIENT.equalsIgnoreCase(p.getOwnerType())
+                                && normalisedClientCode.equalsIgnoreCase(p.getOwnerClientCode())))
+                // rule allowlist (null = unrestricted)
+                .filter(p -> rulePresetIds == null || rulePresetIds.contains(p.getId()))
+                // weight fit
+                .filter(p -> p.getMaxWeight() == null || p.getMaxWeight().compareTo(actual) >= 0)
+                // service oversize limits
+                .filter(p -> com.multiship.backend.util.PackageMath.oversizeStatus(p, limits)
+                        != com.multiship.backend.util.PackageMath.OversizeStatus.OVER_MAX)
+                .map(PickedPackage::new)
+                .toList();
+
+        if (candidates.isEmpty()) {
+            // Diagnose the most likely cause so ops fixes the right thing.
+            long totalLinks = links.size();
+            boolean clientHasAnyAllowlist = !clientAllowedIds.isEmpty();
+            String hint;
+            if (totalLinks == 0) {
+                hint = "This service has no linked packages (ServicePackage). Link at "
+                        + "least one preset to service " + serviceId + " on the "
+                        + "Shipping catalog page.";
+            } else if (!clientHasAnyAllowlist) {
+                hint = "Client " + normalisedClientCode + " has no allowed packages "
+                        + "(ClientAllowedPackage) AND owns none. Either add allowed-package "
+                        + "rows for this client on the Client Editor page, or upload a "
+                        + "client-owned preset.";
+            } else if (rulePresetIds != null) {
+                hint = "The resolved ship-method rule " + ruleId + " restricts packages "
+                        + "to a set that doesn't overlap with the client's allowlist for "
+                        + "this service. Widen either set on the Shipping mapping page.";
+            } else {
+                hint = "None of the packages allowed for client " + normalisedClientCode
+                        + " on service " + serviceId + " can carry " + actual + " (weight) "
+                        + "within the carrier's parcel limits. Raise maxWeight on an "
+                        + "allowed preset, add a bigger box to the client's allowlist, "
+                        + "or link a larger preset to the service.";
+            }
+            throw new PackageResolutionException("No package fits this shipment. " + hint);
+        }
+
+        // Step 5: same ranking as loose pickPackage — prefer non-surcharge,
+        // then minimize billable weight, tie-break on sort_order then
+        // max_weight. Result is deterministic per (client, service, weight).
+        List<PickedPackage> preferred = candidates.stream()
+                .filter(pp -> com.multiship.backend.util.PackageMath.oversizeStatus(pp.preset(), limits)
+                        == com.multiship.backend.util.PackageMath.OversizeStatus.OK)
+                .toList();
+        return (preferred.isEmpty() ? candidates : preferred).stream()
+                .min(Comparator
+                        .comparing((PickedPackage pp) ->
+                                com.multiship.backend.util.PackageMath.billableWeight(pp.preset(), actual))
+                        .thenComparing(pp -> pp.preset().getSortOrder() != null
+                                ? pp.preset().getSortOrder() : Integer.MAX_VALUE)
+                        .thenComparing(pp -> pp.preset().getMaxWeight() != null
+                                ? pp.preset().getMaxWeight() : new BigDecimal("999999")))
+                .orElseThrow(() -> new PackageResolutionException(
+                        "Package selection ranking failed for client " + normalisedClientCode
+                                + " / service " + serviceId + " — this should not happen."));
+    }
+
     /** Default preset regardless of links (fallback + document display). */
     @Transactional(readOnly = true)
     public Optional<PackagePreset> defaultPreset() {
@@ -893,5 +1172,26 @@ public class ShippingConfigService {
     private <T> ApiResponse<T> failure(HttpStatus status, ErrorCode errorCode, String message) {
         return ApiResponse.<T>builder().status("ERROR").code(status.value()).errorCode(errorCode.name())
                 .message(message).timestamp(LocalDateTime.now()).build();
+    }
+
+    /**
+     * FDX-G1 — Java-side mirror of the V25 backfill SQL. Called by
+     * {@link #syncFromCarrier} when a NEW ShippingService is materialised
+     * from a carrier availability call, so freshly-synced rows land with
+     * the correct fleet flag instead of the default false.
+     *
+     * <p>Kept package-private + static-friendly so the classification logic
+     * is trivially unit-testable (see ShippingConfigServiceClassifyExpressTest).
+     */
+    static boolean classifyExpress(String carrier, String serviceCode) {
+        if (carrier == null || serviceCode == null) return false;
+        String c = carrier.trim().toUpperCase(java.util.Locale.ROOT);
+        String s = serviceCode.trim().toUpperCase(java.util.Locale.ROOT);
+        return switch (c) {
+            case "FEDEX" -> !s.contains("GROUND") && !s.contains("HOME_DELIVERY");
+            case "UPS"   -> !s.equals("03") && !s.equals("003") && !s.contains("GROUND");
+            case "DHL"   -> true;   // DHL Express is single-fleet
+            default      -> false;  // USPS / SWSIM / unknown → no fleet split
+        };
     }
 }

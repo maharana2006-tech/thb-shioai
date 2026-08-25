@@ -42,6 +42,20 @@ public class IntlShipmentBlockDTO {
     /** SALE | GIFT | SAMPLE | RETURN | REPAIR | DOCUMENTS. */
     private String reasonForExport;
 
+    /**
+     * F6-C — who pays customs duties. Per-carrier vocabulary passed through
+     * verbatim (F6-A locked decision: no normalization layer). Each connector
+     * maps the value to its own envelope field:
+     *   · UPS: BillShipper vs BillReceiver vs BillThirdParty
+     *   · FedEx: paymentType SENDER / RECIPIENT / THIRD_PARTY / COLLECT
+     *   · DHL: incoterms1 (DAP / DDP / EXW / …)
+     *   · Stamps.com: encoded via ContentDeclaration when the service supports it
+     * Populated from {@code CarrierAccountRef.clearanceOption} via
+     * {@link ShipmentDefaultsResolver}. Null → connector applies its own
+     * carrier default (typically sender-pays / DAP).
+     */
+    private String clearanceOption;
+
     /** ISO-4217 (USD, EUR, GBP, ...). Both customs values AND declared value use this. */
     private String customsCurrency;
 

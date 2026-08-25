@@ -116,6 +116,9 @@ public class OrderServiceImpl implements OrderService {
         String trackingFilter = trimmed(filters.getTracking());
         String createdFrom = trimmed(filters.getCreatedFrom());
         String createdTo = trimmed(filters.getCreatedTo());
+        // Order source: MANUAL | BULK | API | WMS | ERP. '' = all sources.
+        // Uppercased so ?source=manual matches the stored MANUAL.
+        String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<PageResponseDTO<OrderResponseDTO>>builder()
@@ -155,12 +158,12 @@ public class OrderServiceImpl implements OrderService {
         List<Object[]> results = orderRepository.findOrdersUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
-                createdFrom, createdTo,
+                createdFrom, createdTo, sourceFilter,
                 page * size, size, sortBy, sortDirection);
         long totalRecords = orderRepository.countOrdersUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
-                createdFrom, createdTo);
+                createdFrom, createdTo, sourceFilter);
 
         List<OrderResponseDTO> orders = results.stream()
                 .map(this::mapToOrderResponseDTO)
