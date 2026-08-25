@@ -326,6 +326,24 @@ public class UpsConnector implements CarrierConnector {
                             + request.getReferenceNumber() + "). Set the "
                             + "recipient's country on the Order before generating a label.");
         }
+        // FDX-I2 — boundary guard on shipper accountNumber. Pre-fix,
+        // buildPaymentInformation:1755 + buildRateShopShipment:2076 used
+        // firstNonBlank(request.getAccountNumber(), "") which shipped an
+        // empty Shipper.Account.AccountNumber on the wire. UPS rejects
+        // that with a validation error but the operator saw a cryptic
+        // "400 InvalidAccount" rather than a message pointing at the
+        // CarrierAccountRef row. Mirrors the FDX-2 FedEx pattern; also
+        // catches the pre-FDX-I1 CarrierServiceImpl "ACCOUNT" placeholder
+        // in case any legacy call site still plants it.
+        if (!StringUtils.hasText(request.getAccountNumber())
+                || "ACCOUNT".equalsIgnoreCase(request.getAccountNumber().trim())) {
+            throw new IllegalArgumentException(
+                    "UPS shipment requires the shipper account number that owns the label (order "
+                            + request.getReferenceNumber() + "). The upstream account resolution "
+                            + "returned blank or the \"ACCOUNT\" placeholder — check that a "
+                            + "CarrierAccountRef row exists for this shipper + carrier before "
+                            + "generating the label.");
+        }
         try {
             Map<String, Object> payload = buildShipmentPayload(request);
             String baseUrl = isSandbox(environment)

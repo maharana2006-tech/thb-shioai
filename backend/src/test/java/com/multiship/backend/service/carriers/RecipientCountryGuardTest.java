@@ -109,6 +109,42 @@ class RecipientCountryGuardTest {
                 "got: " + ex.getMessage());
     }
 
+    // ===== FDX-I2 — UPS account boundary guard =====
+
+    @Test
+    void ups_createShipment_blankAccountNumber_throws() {
+        // Pre-FDX-I2, a blank account silently reached
+        // Shipper.Account.AccountNumber as "" on the wire. UPS rejects
+        // with a cryptic 400. Now throws at the boundary with an
+        // actionable message. Same F3/FDX-2 pattern.
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        UpsConnector connector = new UpsConnector(props, new ObjectMapper());
+        ShipmentRequestDTO r = minimal("US");
+        r.setAccountNumber("");
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> connector.createShipment(r, "fake-token", "SANDBOX"));
+        assertTrue(ex.getMessage().contains("account number"),
+                "got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("CarrierAccountRef"),
+                "message should point at the fix; got: " + ex.getMessage());
+    }
+
+    @Test
+    void ups_createShipment_literalACCOUNT_throws() {
+        // Catches the pre-FDX-I1 CarrierServiceImpl placeholder if any
+        // legacy call site still plants "ACCOUNT" upstream.
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        UpsConnector connector = new UpsConnector(props, new ObjectMapper());
+        ShipmentRequestDTO r = minimal("US");
+        r.setAccountNumber("ACCOUNT");
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> connector.createShipment(r, "fake-token", "SANDBOX"));
+        assertTrue(ex.getMessage().contains("ACCOUNT"),
+                "message should call out the placeholder; got: " + ex.getMessage());
+    }
+
     // ===== DhlConnector =====
 
     @Test
