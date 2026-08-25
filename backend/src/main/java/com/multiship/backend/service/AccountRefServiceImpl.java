@@ -279,6 +279,16 @@ public class AccountRefServiceImpl implements AccountRefService {
             account.setCurrency(cc.isEmpty() ? null : cc.toUpperCase(Locale.ROOT));
         }
 
+        // FDX-H1 — per-account pickupType default. Same null-vs-empty-string
+        // semantics. Uppercased on persist because the FedEx enum is
+        // strict. Only FedEx maps this to the wire; other connectors
+        // ignore the field.
+        String pickupType = request.getPickupType();
+        if (pickupType != null) {
+            String pt = pickupType.trim();
+            account.setPickupType(pt.isEmpty() ? null : pt.toUpperCase(Locale.ROOT));
+        }
+
         // Third-party billing defaults. Same null-vs-empty-string semantics:
         // null in request = keep persisted; non-null (incl. empty) = write
         // through with empty normalized to null. Country is upper-cased to
@@ -420,6 +430,7 @@ public class AccountRefServiceImpl implements AccountRefService {
                 .shippingPurpose(account.getShippingPurpose())
                 .clearanceOption(account.getClearanceOption())
                 .currency(account.getCurrency())
+                .pickupType(account.getPickupType())
                 .thirdPartyAccount(account.getThirdPartyAccount())
                 .thirdPartyName(account.getThirdPartyName())
                 .thirdPartyAddress1(account.getThirdPartyAddress1())
