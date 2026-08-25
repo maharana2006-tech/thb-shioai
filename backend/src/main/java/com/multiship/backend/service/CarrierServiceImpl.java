@@ -1024,6 +1024,8 @@ public class CarrierServiceImpl implements CarrierService {
             // ("Transaction silently rolled back...") when this method returns.
             final Integer[] failedOrderNoHolder = new Integer[1];
             try {
+                com.multiship.backend.model.ShippingService finalService = service;
+                String finalBillToNumber = billToNumber;
                 requiresNewTransactionTemplate.executeWithoutResult(status -> {
                     int failedOrderNo = orderRepository.nextManualOrderNo();
                     failedOrderNoHolder[0] = failedOrderNo;
@@ -1039,7 +1041,7 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setSource(firstNonBlank(req.getSource(), "MANUAL"));
                     errOrder.setCustNo(firstNonBlank(req.getClientCode(), "MANUAL"));
                     errOrder.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : null);
-                    errOrder.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
+                    errOrder.setShipviaCd( finalService != null ? finalService.getServiceCode() : serviceType);
                     errOrder.setShipName(to.getName());
                     errOrder.setShipAttn(to.getCompany());
                     errOrder.setShipAddr1(to.getAddressLine1());
@@ -1063,7 +1065,7 @@ public class CarrierServiceImpl implements CarrierService {
                     errTracking.setOrderNo(failedOrderNo);
                     errTracking.setOrderSuffix(0);
                     errTracking.setShipViaCd(errOrder.getShipviaCd());
-                    errTracking.setAccountNumber(billToNumber);
+                    errTracking.setAccountNumber(finalBillToNumber);
                     errTracking.setIsLabelGenerated(false);
                     errTracking.setStatus("FAILED");
                     errTracking.setErrorMessage(ex.getMessage());
