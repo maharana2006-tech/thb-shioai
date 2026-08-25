@@ -67,6 +67,10 @@ public class ShipmentDefaultsResolver {
     /** Domestic-safe purpose fallback — matches what every connector's
      *  legacy hardcode picks when the customs record is missing. */
     static final String DEFAULT_SHIPPING_PURPOSE = "SALE";
+    /** FDX-H2 — pre-fix FedEx hardcode. FedEx accepts this even for accounts
+     *  without a standing pickup (they'll reject at label-buy time with an
+     *  actionable error); every other carrier ignores the field. */
+    static final String DEFAULT_PICKUP_TYPE = "USE_SCHEDULED_PICKUP";
 
     /**
      * Resolves defaults for a single shipment. Every {@code inputs} field is
@@ -89,7 +93,8 @@ public class ShipmentDefaultsResolver {
                 resolveDimUnit(inputs),
                 resolveTimezone(inputs),
                 resolveShippingPurpose(inputs),
-                resolveClearanceOption(inputs));
+                resolveClearanceOption(inputs),
+                resolvePickupType(inputs));
     }
 
     // ===== per-field resolvers =====
@@ -198,6 +203,24 @@ public class ShipmentDefaultsResolver {
         return null;
     }
 
+    /**
+     * FDX-H2 — pickupType precedence: request → account → hardcoded
+     * USE_SCHEDULED_PICKUP fallback. Only FedEx consumes this; other
+     * connectors accept the value but no-op on it. Return labels
+     * bypass this in the connector (force-set to
+     * CONTACT_FEDEX_TO_SCHEDULE) so the resolver doesn't need a
+     * return-vs-outbound branch here.
+     */
+    private String resolvePickupType(ResolveInputs inputs) {
+        String candidate = trimUpper(inputs.requestPickupType());
+        if (candidate != null) return candidate;
+        if (inputs.account() != null) {
+            candidate = trimUpper(inputs.account().getPickupType());
+            if (candidate != null) return candidate;
+        }
+        return DEFAULT_PICKUP_TYPE;
+    }
+
     // ===== helpers =====
 
     private static String trim(String s) {
@@ -225,6 +248,7 @@ public class ShipmentDefaultsResolver {
             String requestTimezone,
             String requestShippingPurpose,
             String requestClearanceOption,
+            String requestPickupType,
             OrderCustoms customs,
             Client client,
             CarrierAccountRef account,
@@ -238,7 +262,8 @@ public class ShipmentDefaultsResolver {
             String dimUnit,
             String timezone,
             String shippingPurpose,
-            String clearanceOption) {}
+            String clearanceOption,
+            String pickupType) {}
 
     /** Thrown when a required field can't be resolved OR shippingPurpose
      *  is set to a value outside the enum. */

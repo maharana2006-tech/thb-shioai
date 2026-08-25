@@ -1562,7 +1562,17 @@ public class FedExConnector implements CarrierConnector {
                 com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()).toString());
         requestedShipment.put("serviceType", request.getServiceType());
         requestedShipment.put("packagingType", request.getPackageType());
-        requestedShipment.put("pickupType", "USE_SCHEDULED_PICKUP");
+        // FDX-H2 — pickupType from the resolver (account default →
+        // USE_SCHEDULED_PICKUP hardcode). Pre-fix hardcoded to
+        // USE_SCHEDULED_PICKUP so drop-off / on-demand shippers had labels
+        // rejected. Null-safe fallback to the pre-fix default preserves
+        // back-compat for callers that don't populate the field. The
+        // return-label branch below (line ~1657) still overrides this to
+        // CONTACT_FEDEX_TO_SCHEDULE for isReturn=true shipments.
+        requestedShipment.put("pickupType",
+                StringUtils.hasText(request.getPickupType())
+                        ? request.getPickupType()
+                        : "USE_SCHEDULED_PICKUP");
 
         Map<String, Object> shipper = buildParty(
                 request.getShipperName(),
