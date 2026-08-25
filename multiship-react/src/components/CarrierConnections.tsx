@@ -160,6 +160,10 @@ interface DrawerState {
   /** F6-B2 — per-account billing currency (ISO 4217). Blank string means
    *  "use carrier home currency" (USPS/UPS/FedEx → USD, DHL → EUR). */
   currency: string
+  /** FDX-H1 — per-account default FedEx pickupType. Null = no override
+   *  (resolver falls back to USE_SCHEDULED_PICKUP). Only FEDEX rows
+   *  render the picker; other carriers keep this null. */
+  pickupType: string | null
   /** Third-party billing default. Only shown / persisted when the operator
    *  picked THIRD_PARTY for clearanceOption. All optional individually — a
    *  future per-shipment override on Shipment can fill in what's missing. */
@@ -186,6 +190,7 @@ const emptyDrawer: DrawerState = {
   shippingPurpose: '',
   clearanceOption: '',
   currency: '',
+  pickupType: null,
   thirdPartyAccount: '',
   thirdPartyName: '',
   thirdPartyAddress1: '',
@@ -477,6 +482,7 @@ export default function CarrierConnections({
         shippingPurpose: account.shippingPurpose || '',
         clearanceOption: account.clearanceOption || '',
         currency: account.currency || '',
+        pickupType: account.pickupType ?? null,
         thirdPartyAccount:  account.thirdPartyAccount  || '',
         thirdPartyName:     account.thirdPartyName     || '',
         thirdPartyAddress1: account.thirdPartyAddress1 || '',
@@ -607,6 +613,10 @@ export default function CarrierConnections({
         // F6-B2 — per-account billing currency. Uppercased for ISO 4217;
         // null = clear the override (revert to carrier home currency).
         currency: drawer.currency ? drawer.currency.trim().toUpperCase() : null,
+        // FDX-H1 — per-account FedEx pickupType. Only FEDEX rows render
+        // the picker, so non-FedEx carriers send null (no-op backend
+        // side). Null on the wire = clear the override.
+        pickupType: drawer.carrierCode === 'FEDEX' ? (drawer.pickupType || null) : null,
         // Third-party billing default. Only send the address when the picked
         // clearance is THIRD_PARTY — flipping to SENDER/RECIPIENT explicitly
         // clears the persisted third-party row (send empty strings so the
@@ -1450,6 +1460,39 @@ export default function CarrierConnections({
                       than the carrier's default.
                     </p>
                   </div>
+
+                  {/* FDX-H1 — per-account default pickupType. Only FedEx
+                      maps this to its shipment envelope; UPS / DHL / SWSIM
+                      accept the field but no-op on it. Field only shown
+                      for FEDEX carrier rows so operators aren't confused
+                      by a dropdown that does nothing on other carriers.
+                      Blank falls to USE_SCHEDULED_PICKUP (pre-FDX-H1
+                      hardcode) so existing rows read exactly as before. */}
+                  {drawer.carrierCode === 'FEDEX' ? (
+                    <div className="mt-2">
+                      <Field label="Default pickup type (FedEx only)">
+                        <select
+                          value={drawer.pickupType ?? ''}
+                          onChange={(e) => setDrawer((c) => ({ ...c, pickupType: e.target.value || null }))}
+                          className={inputClassName}
+                        >
+                          <option value="">Use scheduled pickup (default)</option>
+                          <option value="REGULAR_PICKUP">Regular pickup (scheduled)</option>
+                          <option value="REQUEST_COURIER">On-demand courier</option>
+                          <option value="DROP_BOX">Drop box</option>
+                          <option value="BUSINESS_SERVICE_CENTER">Business service center</option>
+                          <option value="STATION">FedEx station</option>
+                          <option value="USE_SCHEDULED_PICKUP">Use scheduled pickup (explicit)</option>
+                        </select>
+                      </Field>
+                      <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
+                        Which FedEx driver / fleet picks up labels from this
+                        account. Blank = USE_SCHEDULED_PICKUP (assumes a
+                        standing daily pickup). Return labels bypass this
+                        setting and always use CONTACT_FEDEX_TO_SCHEDULE.
+                      </p>
+                    </div>
+                  ) : null}
 
                   {/* Third-party billing sub-panel — only shown when the
                       operator picks THIRD_PARTY. Every field is an
