@@ -1196,14 +1196,25 @@ public class FedExConnector implements CarrierConnector {
         }
         originDetail.put("pickupLocation", pickupLocation);
         originDetail.put("readyDateTimestamp", formatFedExPickupTimestamp(req));
+        // FDX-F — customerCloseTime is when the warehouse stops receiving
+        // pickups; pull from the operator-supplied window end. Pre-fix,
+        // 17:00:00 was hardcoded — wrong for early-close warehouses (driver
+        // arrives after close) and for late-close warehouses (missed slot).
         originDetail.put("customerCloseTime", req.pickupWindowEnd() == null
                 ? "17:00:00" : req.pickupWindowEnd().toString() + ":00");
-        originDetail.put("pickupDateType", "SAME_DAY");
+        // FDX-F — pickupDateType computed from pickupDate. SAME_DAY when
+        // the operator schedules for today; FUTURE_DAY otherwise. Pre-fix,
+        // SAME_DAY was hardcoded — FedEx rejects future-dated SAME_DAY
+        // pickups outright.
+        originDetail.put("pickupDateType", isSameDayPickup(req) ? "SAME_DAY" : "FUTURE_DAY");
         body.put("originDetail", originDetail);
 
-        // FDXG = FedEx Ground; FDXE = FedEx Express. Ground is the safe
-        // operational default — most manual-label flows are Ground.
-        body.put("carrierCode", "FDXG");
+        // FDX-F — carrierCode selects the driver fleet. FDXE = FedEx
+        // Express (time-sensitive), FDXG = FedEx Ground. Pre-fix hardcoded
+        // to FDXG which meant Express-only shippers couldn't schedule
+        // pickups. Now derived from pickupServiceType (EXPRESS or
+        // INTERNATIONAL → FDXE; GROUND / null / anything else → FDXG).
+        body.put("carrierCode", mapFedExPickupCarrierCode(req.pickupServiceType()));
 
         body.put("totalPackageCount", req.packageCount());
         String fedexWeightUnit = "KG".equalsIgnoreCase(req.weightUnit()) ? "KG" : "LB";
@@ -1238,6 +1249,33 @@ public class FedExConnector implements CarrierConnector {
         java.time.LocalTime time = req.pickupWindowStart() != null
                 ? req.pickupWindowStart() : java.time.LocalTime.of(9, 0);
         return date.toString() + "T" + time.toString();
+    }
+
+    /**
+     * FDX-F — resolve FedEx carrierCode (Express vs Ground driver fleet)
+     * from the operator's pickupServiceType selection. Case-insensitive.
+     * Any unknown value falls to Ground (FDXG) — the pre-FDX-F default —
+     * so existing callers keep working.
+     */
+    static String mapFedExPickupCarrierCode(String pickupServiceType) {
+        if (pickupServiceType == null) return "FDXG";
+        String v = pickupServiceType.trim().toUpperCase(Locale.ROOT);
+        return switch (v) {
+            case "EXPRESS", "INTERNATIONAL" -> "FDXE";
+            default -> "FDXG";
+        };
+    }
+
+    /**
+     * FDX-F — SAME_DAY vs FUTURE_DAY for pickupDateType. FedEx rejects a
+     * future-dated pickup submitted as SAME_DAY. Uses UTC to compare when
+     * the timezone isn't known — matches the fallback in
+     * {@link com.multiship.backend.util.LabelDates#today(String)}.
+     */
+    static boolean isSameDayPickup(PickupRequest req) {
+        java.time.LocalDate pickup = req.pickupDate();
+        if (pickup == null) return true;   // no date supplied → treat as today
+        return pickup.equals(com.multiship.backend.util.LabelDates.today(null));
     }
 
     /**
