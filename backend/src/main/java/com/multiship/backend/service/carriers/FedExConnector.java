@@ -1545,13 +1545,30 @@ public class FedExConnector implements CarrierConnector {
      * registrant (the seller); FedEx propagates it to EU customs.
      */
     private Map<String, Object> buildShipmentPayload(ShipmentRequestDTO request) {
+        // FDX-2 — boundary guard. Pre-fix, a blank accountNumber silently
+        // became the literal string "ACCOUNT" which FedEx rejects with a
+        // cryptic validation error. F3 fixed the bill-to resolution path
+        // upstream but the top-level accountNumber still had a defensive
+        // fallback that would have shipped "ACCOUNT" for any programmatic
+        // caller that reached this method with a null / blank / literal
+        // "ACCOUNT" DTO. Mirrors the FDX-C void/pickup/close-out pattern:
+        // fail loudly with an actionable message so the operator knows to
+        // fix the account resolution instead of chasing a FedEx 400.
+        if (!StringUtils.hasText(request.getAccountNumber())
+                || "ACCOUNT".equalsIgnoreCase(request.getAccountNumber().trim())) {
+            throw new IllegalArgumentException(
+                    "FedEx shipment requires the shipper account number that owns the label (order "
+                            + request.getReferenceNumber() + "). The upstream account resolution "
+                            + "returned blank or the \"ACCOUNT\" placeholder — check that a "
+                            + "CarrierAccountRef row exists for this shipper + carrier before "
+                            + "generating the label.");
+        }
+
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("labelResponseOptions", carrierProperties.getFedEx().getLabelResponseOption());
 
         Map<String, Object> accountNumber = new LinkedHashMap<>();
-        accountNumber.put("value", StringUtils.hasText(request.getAccountNumber())
-                ? request.getAccountNumber()
-                : "ACCOUNT");
+        accountNumber.put("value", request.getAccountNumber());
         payload.put("accountNumber", accountNumber);
 
         Map<String, Object> requestedShipment = new LinkedHashMap<>();
@@ -1562,7 +1579,17 @@ public class FedExConnector implements CarrierConnector {
                 com.multiship.backend.util.LabelDates.today(request.getShipperTimezone()).toString());
         requestedShipment.put("serviceType", request.getServiceType());
         requestedShipment.put("packagingType", request.getPackageType());
-        requestedShipment.put("pickupType", "USE_SCHEDULED_PICKUP");
+        // FDX-H2 — pickupType from the resolver (account default →
+        // USE_SCHEDULED_PICKUP hardcode). Pre-fix hardcoded to
+        // USE_SCHEDULED_PICKUP so drop-off / on-demand shippers had labels
+        // rejected. Null-safe fallback to the pre-fix default preserves
+        // back-compat for callers that don't populate the field. The
+        // return-label branch below (line ~1657) still overrides this to
+        // CONTACT_FEDEX_TO_SCHEDULE for isReturn=true shipments.
+        requestedShipment.put("pickupType",
+                StringUtils.hasText(request.getPickupType())
+                        ? request.getPickupType()
+                        : "USE_SCHEDULED_PICKUP");
 
         Map<String, Object> shipper = buildParty(
                 request.getShipperName(),

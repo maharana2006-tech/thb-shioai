@@ -128,6 +128,100 @@ class FedExConnectorPayloadTest {
         assertNull(rs.get("shipmentSpecialServicesRequested"));
     }
 
+    // ===== FDX-2 — boundary guard on blank / placeholder accountNumber =====
+
+    /** Unwrap the InvocationTargetException from the reflection-based
+     *  build helper so callers can assertThrows the real cause. */
+    private static IllegalArgumentException expectBlankAccountThrow(
+            org.junit.jupiter.api.function.Executable action) {
+        try {
+            action.execute();
+        } catch (java.lang.reflect.InvocationTargetException ite) {
+            if (ite.getCause() instanceof IllegalArgumentException iae) return iae;
+            throw new AssertionError("expected IllegalArgumentException, got: " + ite.getCause(), ite);
+        } catch (Throwable t) {
+            throw new AssertionError("expected IllegalArgumentException (wrapped), got: " + t, t);
+        }
+        throw new AssertionError("expected IllegalArgumentException, but nothing was thrown");
+    }
+
+    @Test
+    void accountNumber_blank_throws_at_boundary() {
+        // Pre-FDX-2, a blank accountNumber silently became "ACCOUNT" which
+        // FedEx rejects with a cryptic validation error. Now the connector
+        // throws IllegalArgumentException at the boundary so the operator
+        // sees an actionable message instead of chasing a FedEx 400.
+        ShipmentRequestDTO r = baseRequest();
+        r.setAccountNumber("");
+        IllegalArgumentException ex = expectBlankAccountThrow(() -> requestedShipment(r));
+        assertTrue(ex.getMessage().contains("account number"),
+                "must name the missing field; got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("CarrierAccountRef"),
+                "should point the operator at the fix; got: " + ex.getMessage());
+    }
+
+    @Test
+    void accountNumber_null_throws_at_boundary() {
+        ShipmentRequestDTO r = baseRequest();
+        r.setAccountNumber(null);
+        expectBlankAccountThrow(() -> requestedShipment(r));
+    }
+
+    @Test
+    void accountNumber_literalACCOUNT_throws_at_boundary() {
+        // CarrierServiceImpl.buildShipmentRequest still plants "ACCOUNT" as
+        // a defensive fallback (line 2048). Post-FDX-2, if that placeholder
+        // reaches the connector we fail fast instead of forwarding it to
+        // FedEx (which rejects). Surfaces the upstream cleanup opportunity.
+        ShipmentRequestDTO r = baseRequest();
+        r.setAccountNumber("ACCOUNT");
+        IllegalArgumentException ex = expectBlankAccountThrow(() -> requestedShipment(r));
+        assertTrue(ex.getMessage().contains("ACCOUNT"),
+                "message should call out the placeholder; got: " + ex.getMessage());
+    }
+
+    // ===== FDX-H2 — pickupType wired from ShipmentRequestDTO =====
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void pickupType_defaultsToUseScheduledPickup_whenDtoLeavesItNull() throws Exception {
+        // Pre-FDX-H2 behavior preserved for callers that don't populate
+        // the new DTO field. Matches the pre-FDX-H hardcode exactly.
+        ShipmentRequestDTO r = baseRequest();
+        r.setPickupType(null);
+        Map<String, Object> rs = requestedShipment(r);
+        assertEquals("USE_SCHEDULED_PICKUP", rs.get("pickupType"),
+                "null pickupType must fall to the pre-FDX-H hardcode for back-compat");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void pickupType_dropBoxOnDtoLandsOnFedExWire() throws Exception {
+        // Operator-set DROP_BOX (drop-off shipper without a standing pickup)
+        // must reach the wire so FedEx dispatches the drop-box driver
+        // instead of rejecting the label. Fixes the pre-FDX-H bug where
+        // drop-off shippers couldn't buy labels at all.
+        ShipmentRequestDTO r = baseRequest();
+        r.setPickupType("DROP_BOX");
+        Map<String, Object> rs = requestedShipment(r);
+        assertEquals("DROP_BOX", rs.get("pickupType"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void pickupType_returnLabelForcesContactFedexToSchedule_overridingDto() throws Exception {
+        // Return labels have a hard requirement: the customer isn't in the
+        // shipper's book so no standing pickup applies. Connector's return-
+        // label branch must WIN over the pickupType field (which came from
+        // the shipper's account default, not the customer's context).
+        ShipmentRequestDTO r = baseRequest();
+        r.setPickupType("DROP_BOX");       // shipper's account default
+        r.setIsReturn(true);
+        Map<String, Object> rs = requestedShipment(r);
+        assertEquals("CONTACT_FEDEX_TO_SCHEDULE", rs.get("pickupType"),
+                "return-label override must win over the DTO pickupType");
+    }
+
     @SuppressWarnings("unchecked")
     @Test
     void kgOnDtoLandsAsKgOnFedExWire() throws Exception {

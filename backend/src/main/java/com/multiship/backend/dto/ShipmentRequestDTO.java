@@ -256,6 +256,25 @@ public class ShipmentRequestDTO {
     private String shipperTimezone;
 
     /**
+     * FDX-H2 — FedEx pickupType (drives which driver fleet picks up the
+     * label). Populated by
+     * {@link com.multiship.backend.service.ShipmentDefaultsResolver} from
+     * the precedence chain (request → account → hardcoded
+     * {@code USE_SCHEDULED_PICKUP} default). Only FedEx maps this to the
+     * wire; UPS / DHL / USPS ignore the field.
+     *
+     * <p>Values: {@code REGULAR_PICKUP} | {@code REQUEST_COURIER} |
+     * {@code DROP_BOX} | {@code BUSINESS_SERVICE_CENTER} | {@code STATION}
+     * | {@code USE_SCHEDULED_PICKUP}. Return labels bypass this and always
+     * emit {@code CONTACT_FEDEX_TO_SCHEDULE} — the connector's return-
+     * label override wins.
+     *
+     * <p>Null (unset) → connectors fall back to {@code USE_SCHEDULED_PICKUP}
+     * so legacy callers see no behavior change.
+     */
+    private String pickupType;
+
+    /**
      * Return the packages list connectors should iterate. Guarantees a
      * non-empty list so per-connector code doesn't have to fork on
      * null/empty:
