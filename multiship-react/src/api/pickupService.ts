@@ -19,7 +19,16 @@ export interface PickupRequest {
   totalWeight: number
   weightUnit?: 'LB' | 'KG'
   specialInstructions?: string
+  /**
+   * FDX-F — which driver fleet the carrier dispatches for this pickup.
+   * FedEx maps to FDXE / FDXG; UPS maps to ServiceCode 007 / 003; DHL
+   * has one product (P) and USPS/SWSIM has no per-request service, so
+   * both accept the field but no-op. Undefined falls to GROUND.
+   */
+  pickupServiceType?: PickupServiceType
 }
+
+export type PickupServiceType = 'GROUND' | 'EXPRESS' | 'INTERNATIONAL'
 
 /**
  * status drives the UI:

@@ -38,10 +38,19 @@ class ManifestServiceImplTest {
         token.setDetails(new JwtAuthenticationFilter.AuthDetails("ACME"));
         SecurityContextHolder.getContext().setAuthentication(token);
 
+        // FDX-G2 — constructor gained 5 classification-chain deps
+        // (OrderTracking, Order, ClientShipviaCodeMap, ShipViaMapping,
+        // ShippingService repos). Test only exercises the tenant-clamp
+        // early-exit path so the deps go in as mocks and never fire.
         ManifestServiceImpl service = new ManifestServiceImpl(
                 mock(CarrierService.class),
                 mock(CarrierAccountRefRepository.class),
-                new TenantScopeEnforcer(new AccessScopePolicy(true)));
+                new TenantScopeEnforcer(new AccessScopePolicy(true)),
+                mock(com.multiship.backend.repository.OrderTrackingRepository.class),
+                mock(com.multiship.backend.repository.OrderRepository.class),
+                mock(com.multiship.backend.repository.ClientShipviaCodeMapRepository.class),
+                mock(com.multiship.backend.repository.ShipViaMappingRepository.class),
+                mock(com.multiship.backend.repository.ShippingServiceRepository.class));
 
         ManifestRequestDTO req = new ManifestRequestDTO();
         req.setCarrierCode("UPS");

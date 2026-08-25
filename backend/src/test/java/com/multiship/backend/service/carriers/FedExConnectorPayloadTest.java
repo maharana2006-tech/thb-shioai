@@ -279,21 +279,31 @@ class FedExConnectorPayloadTest {
     @SuppressWarnings("unchecked")
     @Test
     void reasonForExportMapsToFedExPurpose() throws Exception {
-        for (Map.Entry<String, String> mapping : Map.of(
-                "SALE", "SOLD",
-                "GIFT", "GIFT",
-                "SAMPLE", "SAMPLE",
-                "RETURN", "RETURN",
-                "REPAIR", "REPAIR_AND_RETURN",
-                "DOCUMENTS", "NOT_SOLD"
-        ).entrySet()) {
+        // FDX-D — mapping expanded to cover all 8
+        // ShipmentDefaultsResolver.SHIPPING_PURPOSE_ENUM values.
+        // Pre-FDX-D, MERCHANDISE/PERSONAL_USE/REPAIR_AND_RETURN silently
+        // fell to SOLD; RETURN mapped to the literal "RETURN" which isn't
+        // a valid FedEx purpose enum. Now every value hits an explicit
+        // branch and RETURN/REPAIR share REPAIR_AND_RETURN (FedEx's
+        // repair-flow enum value).
+        Map<String, String> mapping = new java.util.LinkedHashMap<>();
+        mapping.put("SALE", "SOLD");
+        mapping.put("MERCHANDISE", "SOLD");                 // FDX-D — was silently defaulting to SOLD; now explicit
+        mapping.put("GIFT", "GIFT");
+        mapping.put("SAMPLE", "SAMPLE");
+        mapping.put("RETURN", "REPAIR_AND_RETURN");         // FDX-D — was "RETURN" (invalid FedEx enum)
+        mapping.put("REPAIR", "REPAIR_AND_RETURN");
+        mapping.put("REPAIR_AND_RETURN", "REPAIR_AND_RETURN"); // FDX-D — was falling to SOLD default
+        mapping.put("PERSONAL_USE", "PERSONAL_EFFECTS");    // FDX-D — was falling to SOLD default
+        mapping.put("DOCUMENTS", "NOT_SOLD");
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
             ShipmentRequestDTO r = baseRequest();
             IntlShipmentBlockDTO intl = baseIntl();
-            intl.setReasonForExport(mapping.getKey());
+            intl.setReasonForExport(entry.getKey());
             r.setIntl(intl);
             Map<String, Object> ci = (Map<String, Object>) ((Map<String, Object>)
                     requestedShipment(r).get("customsClearanceDetail")).get("commercialInvoice");
-            assertEquals(mapping.getValue(), ci.get("purpose"), "Reason " + mapping.getKey());
+            assertEquals(entry.getValue(), ci.get("purpose"), "Reason " + entry.getKey());
         }
     }
 

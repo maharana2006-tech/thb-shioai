@@ -1095,9 +1095,13 @@ public class UpsConnector implements CarrierConnector {
                     "Phone", Map.of("Number", firstNonBlank(req.contactPhone(), ""))));
         }
 
-        // PickupPiece — total quantity + weight; service defaults to 03 (Ground).
+        // PickupPiece — total quantity + weight. FDX-F: ServiceCode
+        // derived from operator's pickupServiceType selection. Pre-fix
+        // hardcoded to "003" (Ground); Express-only shippers couldn't
+        // schedule pickups. UPS uses "003" Ground / "007" Worldwide
+        // Express — the two fleets that dispatch different drivers.
         Map<String, Object> piece = new LinkedHashMap<>();
-        piece.put("ServiceCode", "003");
+        piece.put("ServiceCode", mapUpsPickupServiceCode(req.pickupServiceType()));
         piece.put("Quantity", String.valueOf(Math.max(1, req.packageCount())));
         piece.put("DestinationCountryCode", firstNonBlank(
                 a == null ? null : a.countryCode(), "US"));
@@ -1121,6 +1125,30 @@ public class UpsConnector implements CarrierConnector {
     private static String formatUpsTime(java.time.LocalTime t) {
         if (t == null) return "";
         return String.format("%02d%02d", t.getHour(), t.getMinute());
+    }
+
+    /**
+     * FDX-F — resolve UPS PickupPiece.ServiceCode from the operator's
+     * pickupServiceType. Case-insensitive. Any unknown value falls to
+     * "003" (Ground) — the pre-FDX-F default.
+     *
+     * <p>UPS ServiceCode is a two-tier fleet selector (Ground vs Air):
+     * <ul>
+     *   <li>{@code 003} — Ground pickup</li>
+     *   <li>{@code 007} — UPS Worldwide Express (covers Next-Day Air /
+     *       2nd-Day Air / Express Saver / Worldwide services)</li>
+     * </ul>
+     * The per-service split within Express (Next-Day vs 2nd-Day) is a
+     * label-time concern, not a pickup-time one — one Express driver
+     * collects all Express labels regardless of tier.
+     */
+    static String mapUpsPickupServiceCode(String pickupServiceType) {
+        if (pickupServiceType == null) return "003";
+        String v = pickupServiceType.trim().toUpperCase(java.util.Locale.ROOT);
+        return switch (v) {
+            case "EXPRESS", "INTERNATIONAL" -> "007";
+            default -> "003";
+        };
     }
 
     /**

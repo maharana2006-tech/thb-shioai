@@ -58,6 +58,11 @@ export default function ApiBatchList() {
   }, [])
 
   useEffect(() => {
+    // load() is a useCallback that fetches + sets loading/error state;
+    // the setState-in-effect warning fires because it eventually calls
+    // setLoading, but this is the idiomatic React data-loading pattern
+    // (fire-and-forget async load on mount / dep change).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load()
   }, [load])
 

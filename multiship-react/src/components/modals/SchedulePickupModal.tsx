@@ -66,6 +66,9 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
     totalWeight: defaults?.totalWeight ?? 5,
     weightUnit: defaults?.weightUnit ?? 'LB',
     specialInstructions: defaults?.specialInstructions ?? '',
+    // FDX-F — Ground is the pre-FDX-F default; the operator can flip
+    // to Express or International via the new picker in the modal.
+    pickupServiceType: defaults?.pickupServiceType ?? 'GROUND',
   })
   const [result, setResult] = useState<PickupResponse | null>(null)
   /** Transport-level failure (network / 5xx) — rendered as an inline banner
@@ -267,6 +270,23 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
                        value={form.pickupWindowEnd ?? ''}
                        onChange={(e) => update({ pickupWindowEnd: e.target.value })}
                        onBlur={() => touch('pickupWindowEnd')} />
+              </Field>
+              {/* FDX-F — pickup service selector. Determines which driver
+                  fleet the carrier dispatches:
+                    · FedEx  → carrierCode FDXE (Express) vs FDXG (Ground)
+                    · UPS    → ServiceCode 007 (Express) vs 003 (Ground)
+                    · DHL/USPS accept the field but have one fleet;
+                      picker still shown so the operator's mental model
+                      stays consistent across carriers.
+                  Undefined falls to GROUND — matches the pre-FDX-F
+                  hardcode so existing operators see no behavior change. */}
+              <Field label="Service">
+                <select className={inputCls()} value={form.pickupServiceType ?? 'GROUND'}
+                        onChange={(e) => update({ pickupServiceType: e.target.value as 'GROUND' | 'EXPRESS' | 'INTERNATIONAL' })}>
+                  <option value="GROUND">Ground</option>
+                  <option value="EXPRESS">Express</option>
+                  <option value="INTERNATIONAL">International</option>
+                </select>
               </Field>
             </div>
           </Section>

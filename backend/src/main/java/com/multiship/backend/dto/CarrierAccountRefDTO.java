@@ -40,6 +40,11 @@ public class CarrierAccountRefDTO {
     /** F6-B2 — per-account billing currency override. ISO 4217. NULL means
      *  "use carrier home currency" (USPS/UPS/FedEx → USD, DHL → EUR). */
     private String currency;
+    /** FDX-H1 — per-account default pickupType (FedEx only; UPS/DHL/USPS
+     *  ignore). NULL means USE_SCHEDULED_PICKUP (pre-FDX-H1 hardcode).
+     *  Values: REGULAR_PICKUP | REQUEST_COURIER | DROP_BOX |
+     *  BUSINESS_SERVICE_CENTER | STATION | USE_SCHEDULED_PICKUP. */
+    private String pickupType;
     /** Third-party billing address (default, when clearanceOption=THIRD_PARTY).
      *  Nullable — per-shipment overrides live on the Shipment row. */
     private String thirdPartyAccount;

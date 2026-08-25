@@ -454,10 +454,19 @@ public class FedExConnector implements CarrierConnector {
         return null;
     }
 
+    /**
+     * FDX-D — pre-fix, a missing currency in the rate response silently
+     * defaulted to "USD". FedEx's real responses always include currency,
+     * but a parsing edge case that mislabels a GBP or EUR rate as USD
+     * silently over/under-charges by the FX difference. Now returns null
+     * and lets downstream {@link RateOption#currency} carry it (nullable
+     * per the record definition). The rate-shop UI treats null currency
+     * as "no quote" — surfaces the missing field instead of hiding it.
+     */
     private static String readFedExCurrency(JsonNode entry) {
         String currency = entry.at("/shipmentRateDetail/totalNetCharge/currency").asText(null);
         if (currency == null || currency.isEmpty()) currency = entry.path("currency").asText(null);
-        return currency == null || currency.isEmpty() ? "USD" : currency;
+        return currency == null || currency.isEmpty() ? null : currency;
     }
 
     /**
@@ -1187,14 +1196,25 @@ public class FedExConnector implements CarrierConnector {
         }
         originDetail.put("pickupLocation", pickupLocation);
         originDetail.put("readyDateTimestamp", formatFedExPickupTimestamp(req));
+        // FDX-F — customerCloseTime is when the warehouse stops receiving
+        // pickups; pull from the operator-supplied window end. Pre-fix,
+        // 17:00:00 was hardcoded — wrong for early-close warehouses (driver
+        // arrives after close) and for late-close warehouses (missed slot).
         originDetail.put("customerCloseTime", req.pickupWindowEnd() == null
                 ? "17:00:00" : req.pickupWindowEnd().toString() + ":00");
-        originDetail.put("pickupDateType", "SAME_DAY");
+        // FDX-F — pickupDateType computed from pickupDate. SAME_DAY when
+        // the operator schedules for today; FUTURE_DAY otherwise. Pre-fix,
+        // SAME_DAY was hardcoded — FedEx rejects future-dated SAME_DAY
+        // pickups outright.
+        originDetail.put("pickupDateType", isSameDayPickup(req) ? "SAME_DAY" : "FUTURE_DAY");
         body.put("originDetail", originDetail);
 
-        // FDXG = FedEx Ground; FDXE = FedEx Express. Ground is the safe
-        // operational default — most manual-label flows are Ground.
-        body.put("carrierCode", "FDXG");
+        // FDX-F — carrierCode selects the driver fleet. FDXE = FedEx
+        // Express (time-sensitive), FDXG = FedEx Ground. Pre-fix hardcoded
+        // to FDXG which meant Express-only shippers couldn't schedule
+        // pickups. Now derived from pickupServiceType (EXPRESS or
+        // INTERNATIONAL → FDXE; GROUND / null / anything else → FDXG).
+        body.put("carrierCode", mapFedExPickupCarrierCode(req.pickupServiceType()));
 
         body.put("totalPackageCount", req.packageCount());
         String fedexWeightUnit = "KG".equalsIgnoreCase(req.weightUnit()) ? "KG" : "LB";
@@ -1208,13 +1228,54 @@ public class FedExConnector implements CarrierConnector {
         return body;
     }
 
-    /** Produce a FedEx-compatible ISO-8601 timestamp for readyDateTimestamp. */
+    /**
+     * Produce a FedEx-compatible ISO-8601 timestamp for readyDateTimestamp.
+     *
+     * <p>FDX-E — the {@code pickupDate}-missing fallback used to call
+     * {@link java.time.LocalDate#now()} which resolves to the JVM's default
+     * zone (server-dependent — usually UTC on K8s, could be anything on a
+     * dev box). {@link com.multiship.backend.util.LabelDates#today(String)}
+     * with a null zone returns UTC deterministically, matching the pre-F6-E
+     * behavior on label ship dates and the pattern F6-E established for
+     * every other date field. The DTO layer ({@code PickupRequestDTO})
+     * marks {@code pickupDate} as {@code @NotNull} so this fallback only
+     * fires on direct-constructor callers; the fix still tightens the
+     * safety net for those.
+     */
     private static String formatFedExPickupTimestamp(PickupRequest req) {
         java.time.LocalDate date = req.pickupDate() != null
-                ? req.pickupDate() : java.time.LocalDate.now();
+                ? req.pickupDate()
+                : com.multiship.backend.util.LabelDates.today(null);
         java.time.LocalTime time = req.pickupWindowStart() != null
                 ? req.pickupWindowStart() : java.time.LocalTime.of(9, 0);
         return date.toString() + "T" + time.toString();
+    }
+
+    /**
+     * FDX-F — resolve FedEx carrierCode (Express vs Ground driver fleet)
+     * from the operator's pickupServiceType selection. Case-insensitive.
+     * Any unknown value falls to Ground (FDXG) — the pre-FDX-F default —
+     * so existing callers keep working.
+     */
+    static String mapFedExPickupCarrierCode(String pickupServiceType) {
+        if (pickupServiceType == null) return "FDXG";
+        String v = pickupServiceType.trim().toUpperCase(Locale.ROOT);
+        return switch (v) {
+            case "EXPRESS", "INTERNATIONAL" -> "FDXE";
+            default -> "FDXG";
+        };
+    }
+
+    /**
+     * FDX-F — SAME_DAY vs FUTURE_DAY for pickupDateType. FedEx rejects a
+     * future-dated pickup submitted as SAME_DAY. Uses UTC to compare when
+     * the timezone isn't known — matches the fallback in
+     * {@link com.multiship.backend.util.LabelDates#today(String)}.
+     */
+    static boolean isSameDayPickup(PickupRequest req) {
+        java.time.LocalDate pickup = req.pickupDate();
+        if (pickup == null) return true;   // no date supplied → treat as today
+        return pickup.equals(com.multiship.backend.util.LabelDates.today(null));
     }
 
     /**
@@ -1282,7 +1343,14 @@ public class FedExConnector implements CarrierConnector {
         try {
             java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
             body.put("accountNumber", java.util.Map.of("value", accountNumber));
-            body.put("carrierCode", "FDXG");
+            // FDX-G2 — carrierCode picks the driver fleet the manifest
+            // rolls up to. Pre-fix: hardcoded FDXG so every Express label
+            // in the batch was invisibly manifested-as-Ground; the Ground
+            // driver picked up the label but the Express fleet's manifest
+            // was empty. Now derived from CloseOutRequest.express which
+            // ManifestServiceImpl sets after classifying trackings via the
+            // shipping_service.is_express column (FDX-G1).
+            body.put("carrierCode", request.express() ? "FDXE" : "FDXG");
 
             String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
                     .post()
@@ -1441,9 +1509,17 @@ public class FedExConnector implements CarrierConnector {
 
     /** €150 = the IOSS threshold for EU B2C low-value goods. */
     private static final BigDecimal IOSS_EUR_THRESHOLD = new BigDecimal("150.00");
-    /** Loose FX guardrails so the threshold isn't off by an order of magnitude
-     *  for the common invoice currencies. Real FX conversion lands in a
-     *  future sprint (gap 15). */
+    /** Fallback FX thresholds for the common invoice currencies. Used only
+     *  when {@link com.multiship.backend.service.fx.FxRateService#convert}
+     *  returns empty (feed down, unsupported currency). Rates are close
+     *  enough to spot to keep the IOSS threshold within one order of
+     *  magnitude — a false negative just leaves VAT for delivery-time
+     *  invoicing; a false positive attaches IOSS where it doesn't apply.
+     *
+     *  <p>FDX-D — the pre-fix comment claimed "Real FX conversion lands in
+     *  a future sprint (gap 15)" but F6-D shipped ECB-backed FX (see
+     *  {@link com.multiship.backend.service.fx.EcbFxRateService}). This
+     *  table is now the second-tier fallback, not the primary path. */
     private static final Map<String, BigDecimal> IOSS_LOCAL_THRESHOLD = Map.of(
             "USD", new BigDecimal("165.00"),
             "GBP", new BigDecimal("128.00"),
@@ -2019,17 +2095,35 @@ public class FedExConnector implements CarrierConnector {
         return address;
     }
 
-    /** Our reason-for-export enum → FedEx commercialInvoice.purpose. */
+    /**
+     * Our reason-for-export enum → FedEx commercialInvoice.purpose.
+     *
+     * <p>FDX-D — pre-fix, only 6 of the 8 resolver-validated enum values
+     * were explicitly mapped; MERCHANDISE / PERSONAL_USE / REPAIR_AND_RETURN
+     * silently fell to the default "SOLD", which mislabels the customs
+     * invoice (PERSONAL_USE incorrectly declared as commercial sale would
+     * VAT the parcel at the border; REPAIR_AND_RETURN incorrectly declared
+     * as sale would double-tax on the return leg).
+     *
+     * <p>Now all 8 {@link com.multiship.backend.service.ShipmentDefaultsResolver
+     * #SHIPPING_PURPOSE_ENUM} values are explicit. Unknown values still
+     * fall to SOLD but log a warning so future audits catch drift.
+     */
     private static String mapFedExPurpose(String reason) {
         if (reason == null) return "SOLD";
-        return switch (reason.trim().toUpperCase()) {
-            case "SALE" -> "SOLD";
+        String v = reason.trim().toUpperCase();
+        return switch (v) {
+            case "SALE", "MERCHANDISE" -> "SOLD";
             case "GIFT" -> "GIFT";
             case "SAMPLE" -> "SAMPLE";
-            case "RETURN" -> "RETURN";
-            case "REPAIR" -> "REPAIR_AND_RETURN";
+            case "RETURN", "REPAIR", "REPAIR_AND_RETURN" -> "REPAIR_AND_RETURN";
+            case "PERSONAL_USE" -> "PERSONAL_EFFECTS";
             case "DOCUMENTS" -> "NOT_SOLD";
-            default -> "SOLD";
+            default -> {
+                log.warn("FedEx mapFedExPurpose: unrecognised reason '{}' — defaulting to SOLD. "
+                        + "Add an explicit mapping in mapFedExPurpose if this is a real value.", v);
+                yield "SOLD";
+            }
         };
     }
 

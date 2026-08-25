@@ -863,9 +863,17 @@ public class DhlConnector implements CarrierConnector {
         return pkgs;
     }
 
+    /**
+     * FDX-E — see the FedEx-side counterpart's javadoc for full context.
+     * {@code LocalDate.now()} → JVM default zone (server-dependent); switch
+     * to {@code LabelDates.today(null)} → deterministic UTC so the
+     * plannedPickupDateAndTime doesn't shift when the same code runs on
+     * boxes in different timezones.
+     */
     private static String formatDhlPickupTimestamp(PickupRequest req) {
         java.time.LocalDate date = req.pickupDate() != null
-                ? req.pickupDate() : java.time.LocalDate.now();
+                ? req.pickupDate()
+                : com.multiship.backend.util.LabelDates.today(null);
         java.time.LocalTime time = req.pickupWindowStart() != null
                 ? req.pickupWindowStart() : java.time.LocalTime.of(13, 0);
         return date + "T" + time + " GMT+00:00";
