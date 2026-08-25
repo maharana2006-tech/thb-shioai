@@ -454,6 +454,15 @@ public interface CarrierConnector {
      *                           string). Nullable for connectors that don't
      *                           need a per-request account (SWSIM keys off
      *                           the auth cred).
+     * @param pickupServiceType  FDX-F — one of {@code EXPRESS} / {@code GROUND}
+     *                           / {@code INTERNATIONAL} (or null). Determines
+     *                           which driver fleet the carrier dispatches:
+     *                           FedEx maps to {@code carrierCode=FDXE/FDXG},
+     *                           UPS maps to {@code PickupPiece.ServiceCode=007/003}.
+     *                           DHL Express has one product (P) and SWSIM
+     *                           has no per-request service code; both accept
+     *                           the field but no-op on it. Null falls to
+     *                           GROUND (matches the pre-FDX-F hardcode).
      */
     record PickupRequest(
             java.time.LocalDate pickupDate,
@@ -466,7 +475,8 @@ public interface CarrierConnector {
             java.math.BigDecimal totalWeight,
             String weightUnit,
             String specialInstructions,
-            String accountNumber
+            String accountNumber,
+            String pickupServiceType
     ) {
     }
 

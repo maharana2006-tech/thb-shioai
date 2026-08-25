@@ -75,4 +75,22 @@ public class PickupRequestDTO {
 
     /** Free-form notes for the driver. */
     private String specialInstructions;
+
+    /**
+     * FDX-F — carrier service the pickup covers. Determines which driver
+     * fleet the carrier dispatches:
+     * <ul>
+     *   <li>{@code EXPRESS} — FedEx Express (FDXE) / UPS Air (007). Time-
+     *       sensitive parcels; different driver than Ground.</li>
+     *   <li>{@code GROUND} — FedEx Ground (FDXG) / UPS Ground (003).
+     *       Default when unset — matches the pre-FDX-F hardcode.</li>
+     *   <li>{@code INTERNATIONAL} — same as EXPRESS for FedEx/UPS but
+     *       kept distinct so the FE can surface an intl-only picker for
+     *       operators shipping across borders.</li>
+     * </ul>
+     * DHL Express only offers one product (P) and SWSIM has no per-request
+     * service code; both connectors accept the field but no-op on it.
+     * Null falls to GROUND.
+     */
+    private String pickupServiceType;
 }
