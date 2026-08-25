@@ -1,3 +1,10 @@
+/* eslint-disable react-refresh/only-export-components */
+// This file intentionally co-locates the shared cell component (GridCell)
+// with its column model + error-bucketing helper. Splitting into two
+// files just to appease react-refresh would touch every import site of
+// EDIT_FIELD_KEYS / bucketRowErrors / DH_COLUMNS with no runtime benefit
+// (HMR fast-refresh on a spreadsheet cell component isn't a common
+// dev workflow here).
 import { useEffect, useRef, useState } from 'react'
 
 /**
