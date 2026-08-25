@@ -76,6 +76,17 @@ public class CarrierServiceImpl implements CarrierService {
     private final CarrierLimitService carrierLimitService;
     private final ShipmentSplitter shipmentSplitter;
     /**
+     * Runs the failed-shipment ERROR-order persistence in its own DB
+     * transaction, independent of the enclosing @Transactional method's.
+     * Needed because the outer transaction may already be broken (a flush
+     * failure invalidates the whole Hibernate session/JDBC transaction even
+     * if the exception it throws is caught locally) — writing through the
+     * same session here would just fail again and get silently swallowed,
+     * leaving the outer commit to blow up with UnexpectedRollbackException
+     * ("Transaction silently rolled back...") and mask the real cause.
+     */
+    private final org.springframework.transaction.support.TransactionTemplate requiresNewTransactionTemplate;
+    /**
      * Sprint 50 Tier 0.5 PR E - clamp tenantId on carrier-connect so a
      * scoped USER cannot persist a CarrierConfig for a foreign tenant.
      */
@@ -967,59 +978,72 @@ public class CarrierServiceImpl implements CarrierService {
                     + (retry > 0 ? " — retry after " + retry + "s." : ".");
             return failure(HttpStatus.TOO_MANY_REQUESTS, ErrorCode.CARRIER_RATE_LIMITED, msg);
         } catch (Exception ex) {
-            log.warn("Manual shipment failed at carrier {}: {}", carrier, ex.getMessage());
+            log.warn("Manual shipment failed at carrier {}: {}", carrier, ex.getMessage(), ex);
             // Persist the failed attempt as an ERROR order so it's visible in
             // the orders list (with the carrier error) and can be retried —
             // instead of silently vanishing when the carrier rejects it.
-            Integer failedOrderNo = null;
+            //
+            // Runs in its own REQUIRES_NEW transaction: this method's own
+            // transaction may already be unusable by this point (a flush
+            // failure invalidates the whole Hibernate session even when the
+            // exception it throws is caught locally), so writing through
+            // that same session here would just fail again silently and
+            // leave the *real* cause hidden behind an UnexpectedRollbackException
+            // ("Transaction silently rolled back...") when this method returns.
+            final Integer[] failedOrderNoHolder = new Integer[1];
             try {
-                failedOrderNo = orderRepository.nextManualOrderNo();
-                boolean intlErr = to.getCountryCode() != null && fromCountry != null
-                        && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
-                Order errOrder = new Order();
-                errOrder.setOrderNo(failedOrderNo);
-                errOrder.setOrderSuffix(0);
-                errOrder.setOrderStatus("ERROR");
-                errOrder.setIsError(true);
-                errOrder.setIsManual("Y");
-                errOrder.setIsReturn(Boolean.TRUE.equals(req.getIsReturn()) ? "Y" : "N");
-                errOrder.setSource(firstNonBlank(req.getSource(), "MANUAL"));
-                errOrder.setCustNo(firstNonBlank(req.getClientCode(), "MANUAL"));
-                errOrder.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : null);
-                errOrder.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
-                errOrder.setShipName(to.getName());
-                errOrder.setShipAttn(to.getCompany());
-                errOrder.setShipAddr1(to.getAddressLine1());
-                errOrder.setLocation(to.getAddressLine2());
-                errOrder.setShiptoCity(to.getCity());
-                errOrder.setShiptoState(to.getState());
-                errOrder.setShiptoZip(to.getPostalCode());
-                errOrder.setShiptoCountryCd(to.getCountryCode());
-                errOrder.setCountryName(to.getCountryCode());
-                errOrder.setPhone(to.getPhone());
-                errOrder.setWeight(req.getWeight());
-                errOrder.setGoodsDesc(req.getGoodsDescription());
-                errOrder.setPrice(req.getDeclaredValue());
-                errOrder.setIntlYn(intlErr ? "Y" : "N");
-                errOrder.setCreatedDate(java.time.LocalDate.now());
-                errOrder.setPackageCount(1);
-                orderRepository.save(errOrder);
-                // Record the carrier error on the tracking row for the detail view.
-                OrderTracking errTracking = orderTrackingRepository.findByOrderNo(failedOrderNo)
-                        .orElseGet(OrderTracking::new);
-                errTracking.setOrderNo(failedOrderNo);
-                errTracking.setOrderSuffix(0);
-                errTracking.setShipViaCd(errOrder.getShipviaCd());
-                errTracking.setAccountNumber(billToNumber);
-                errTracking.setIsLabelGenerated(false);
-                errTracking.setStatus("FAILED");
-                errTracking.setErrorMessage(ex.getMessage());
-                errTracking.setCreatedAt(java.time.LocalDateTime.now());
-                errTracking.setUpdatedAt(java.time.LocalDateTime.now());
-                orderTrackingRepository.save(errTracking);
+                requiresNewTransactionTemplate.executeWithoutResult(status -> {
+                    int failedOrderNo = orderRepository.nextManualOrderNo();
+                    failedOrderNoHolder[0] = failedOrderNo;
+                    boolean intlErr = to.getCountryCode() != null && fromCountry != null
+                            && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
+                    Order errOrder = new Order();
+                    errOrder.setOrderNo(failedOrderNo);
+                    errOrder.setOrderSuffix(0);
+                    errOrder.setOrderStatus("ERROR");
+                    errOrder.setIsError(true);
+                    errOrder.setIsManual("Y");
+                    errOrder.setIsReturn(Boolean.TRUE.equals(req.getIsReturn()) ? "Y" : "N");
+                    errOrder.setSource(firstNonBlank(req.getSource(), "MANUAL"));
+                    errOrder.setCustNo(firstNonBlank(req.getClientCode(), "MANUAL"));
+                    errOrder.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : null);
+                    errOrder.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
+                    errOrder.setShipName(to.getName());
+                    errOrder.setShipAttn(to.getCompany());
+                    errOrder.setShipAddr1(to.getAddressLine1());
+                    errOrder.setLocation(to.getAddressLine2());
+                    errOrder.setShiptoCity(to.getCity());
+                    errOrder.setShiptoState(to.getState());
+                    errOrder.setShiptoZip(to.getPostalCode());
+                    errOrder.setShiptoCountryCd(to.getCountryCode());
+                    errOrder.setCountryName(to.getCountryCode());
+                    errOrder.setPhone(to.getPhone());
+                    errOrder.setWeight(req.getWeight());
+                    errOrder.setGoodsDesc(req.getGoodsDescription());
+                    errOrder.setPrice(req.getDeclaredValue());
+                    errOrder.setIntlYn(intlErr ? "Y" : "N");
+                    errOrder.setCreatedDate(java.time.LocalDate.now());
+                    errOrder.setPackageCount(1);
+                    orderRepository.save(errOrder);
+                    // Record the carrier error on the tracking row for the detail view.
+                    OrderTracking errTracking = orderTrackingRepository.findByOrderNo(failedOrderNo)
+                            .orElseGet(OrderTracking::new);
+                    errTracking.setOrderNo(failedOrderNo);
+                    errTracking.setOrderSuffix(0);
+                    errTracking.setShipViaCd(errOrder.getShipviaCd());
+                    errTracking.setAccountNumber(billToNumber);
+                    errTracking.setIsLabelGenerated(false);
+                    errTracking.setStatus("FAILED");
+                    errTracking.setErrorMessage(ex.getMessage());
+                    errTracking.setCreatedAt(java.time.LocalDateTime.now());
+                    errTracking.setUpdatedAt(java.time.LocalDateTime.now());
+                    orderTrackingRepository.save(errTracking);
+                });
             } catch (Exception persistEx) {
-                log.warn("Could not persist ERROR order for failed manual shipment: {}", persistEx.getMessage());
+                log.warn("Could not persist ERROR order for failed manual shipment: {}",
+                        persistEx.getMessage(), persistEx);
             }
+            Integer failedOrderNo = failedOrderNoHolder[0];
             return failure(HttpStatus.BAD_GATEWAY, ErrorCode.CARRIER_FAILURE,
                     "The carrier rejected the manual shipment: " + ex.getMessage()
                             + (failedOrderNo != null ? " (saved as order " + failedOrderNo + ")" : ""));
