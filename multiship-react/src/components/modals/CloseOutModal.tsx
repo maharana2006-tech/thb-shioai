@@ -1,12 +1,14 @@
 import { useRef, useState } from 'react'
 import {
   FiAlertCircle,
+  FiAlertTriangle,
   FiCheckCircle,
   FiDownload,
   FiFileText,
+  FiTruck,
   FiX,
 } from 'react-icons/fi'
-import { manifestService, type ManifestRequest, type ManifestResponse } from '../../api/manifestService'
+import { manifestService, type ManifestEntry, type ManifestRequest, type ManifestResponse } from '../../api/manifestService'
 import { notify } from '../../utils/notify'
 import { useModalDismiss } from '../../hooks/useModalDismiss'
 
@@ -73,8 +75,21 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
     try {
       const response = await manifestService.closeOut({ ...form, trackingNumbers: parsedTracking })
       setResult(response.data ?? null)
+      // FDX-G2 — success toast reflects fleet-split outcomes:
+      //   MANIFESTED (single-fleet) → "Manifested N shipment(s) · <id>"
+      //   MANIFESTED (multi-fleet)  → "Manifested N shipment(s) across 2 fleets"
+      //   PARTIAL                   → amber warning naming the ratio
+      //   ERROR / NOT_SUPPORTED     → red toast with the backend message
       if (response.data?.status === 'MANIFESTED') {
-        notify.success(`Manifested ${response.data.trackingCount} shipment(s) · ${response.data.manifestId}`)
+        const isSplit = response.data.manifests && response.data.manifests.length > 0
+        notify.success(isSplit
+          ? `Manifested ${response.data.trackingCount} shipment(s) across ${response.data.manifests!.length} fleets`
+          : `Manifested ${response.data.trackingCount} shipment(s) · ${response.data.manifestId}`)
+      } else if (response.data?.status === 'PARTIAL') {
+        // No 'warning' variant on notify; use info so the operator sees
+        // a non-red toast while the amber ResultBanner below carries the
+        // per-fleet detail.
+        notify.info(response.data.message)
       } else if (response.data) {
         notify.error(response.data.message)
       }
@@ -208,48 +223,168 @@ export default function CloseOutModal({ onClose, trackingNumbers, defaults }: Cl
 }
 
 function ResultBanner({ result }: { result: ManifestResponse }) {
-  if (result.status === 'MANIFESTED') {
+  // FDX-G2 — prefer manifests[] rendering when the backend split by fleet.
+  // Even single-fleet responses now go through the split path if the
+  // failedToClassify list is non-empty (so the operator can see which
+  // trackings were skipped). Flat single-fleet response (manifests=null,
+  // failedToClassify=null) still renders the pre-FDX-G banner.
+  const isSplit = result.manifests && result.manifests.length > 0
+  const hasFailed = result.failedToClassify && result.failedToClassify.length > 0
+
+  if (result.status === 'MANIFESTED' && !isSplit && !hasFailed) {
+    // Pre-FDX-G single-fleet happy path — unchanged.
+    return <FlatManifestedBanner result={result} />
+  }
+
+  if (result.status === 'MANIFESTED' || result.status === 'PARTIAL') {
+    // Multi-fleet split OR any manifested run with failedToClassify entries.
     return (
-      <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800">
-        <p className="flex items-center gap-1.5 font-semibold">
-          <FiCheckCircle className="h-3.5 w-3.5" /> Manifest confirmed
-        </p>
-        <p className="mt-1 font-mono text-[11px]">
-          {result.carrierCode} · {result.manifestId} · {result.trackingCount} shipment(s)
-        </p>
-        <p className="mt-1">{result.message}</p>
-        {result.manifestPdfUrl ? (
-          <a href={result.manifestPdfUrl} target="_blank" rel="noreferrer"
-             className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white/60 px-2.5 py-1 text-[11px] font-semibold text-emerald-800 hover:bg-white/80">
-            <FiDownload className="h-3 w-3" /> Open manifest PDF
-          </a>
-        ) : null}
-        {result.manifestPdfBase64 && !result.manifestPdfUrl ? (
-          <a
-            href={`data:application/pdf;base64,${result.manifestPdfBase64}`}
-            download={`${result.carrierCode}-${result.manifestId}.pdf`}
-            className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white/60 px-2.5 py-1 text-[11px] font-semibold text-emerald-800 hover:bg-white/80"
-          >
-            <FiDownload className="h-3 w-3" /> Download manifest PDF
-          </a>
-        ) : null}
+      <div className="space-y-2">
+        {result.status === 'PARTIAL' ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+            <p className="flex items-center gap-1.5 font-semibold">
+              <FiAlertTriangle className="h-3.5 w-3.5" /> Partial manifest — check per-fleet detail below
+            </p>
+            <p className="mt-1">{result.message}</p>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800">
+            <p className="flex items-center gap-1.5 font-semibold">
+              <FiCheckCircle className="h-3.5 w-3.5" /> Manifests confirmed
+            </p>
+            <p className="mt-1">{result.message}</p>
+          </div>
+        )}
+        {isSplit
+          ? result.manifests!.map((m) => (
+              <FleetManifestCard key={`${m.fleet}-${m.manifestId ?? 'noid'}`}
+                                 carrierCode={result.carrierCode} entry={m} />
+            ))
+          : null}
+        {hasFailed ? <FailedToClassifyList trackings={result.failedToClassify!} /> : null}
       </div>
     )
   }
+
   if (result.status === 'NOT_SUPPORTED') {
     return (
-      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-700">
-        <p className="font-semibold">Close-out not supported</p>
-        <p className="mt-1">{result.message}</p>
+      <div className="space-y-2">
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-700">
+          <p className="font-semibold">Close-out not supported</p>
+          <p className="mt-1">{result.message}</p>
+        </div>
+        {hasFailed ? <FailedToClassifyList trackings={result.failedToClassify!} /> : null}
       </div>
     )
   }
+  // ERROR — flat + optional failed list. FDX-G2 all-unresolvable branch
+  // returns status=ERROR with only failedToClassify populated; render both.
   return (
-    <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800">
+    <div className="space-y-2">
+      <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800">
+        <p className="flex items-center gap-1.5 font-semibold">
+          <FiAlertCircle className="h-3.5 w-3.5" /> Carrier rejected the manifest
+        </p>
+        <p className="mt-1">{result.message}</p>
+      </div>
+      {hasFailed ? <FailedToClassifyList trackings={result.failedToClassify!} /> : null}
+    </div>
+  )
+}
+
+/** Pre-FDX-G flat happy-path banner. Kept as a separate component so the
+ *  main ResultBanner can conditionally render it without duplication. */
+function FlatManifestedBanner({ result }: { result: ManifestResponse }) {
+  return (
+    <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12px] text-emerald-800">
       <p className="flex items-center gap-1.5 font-semibold">
-        <FiAlertCircle className="h-3.5 w-3.5" /> Carrier rejected the manifest
+        <FiCheckCircle className="h-3.5 w-3.5" /> Manifest confirmed
+      </p>
+      <p className="mt-1 font-mono text-[11px]">
+        {result.carrierCode} · {result.manifestId} · {result.trackingCount} shipment(s)
       </p>
       <p className="mt-1">{result.message}</p>
+      {result.manifestPdfUrl ? (
+        <a href={result.manifestPdfUrl} target="_blank" rel="noreferrer"
+           className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white/60 px-2.5 py-1 text-[11px] font-semibold text-emerald-800 hover:bg-white/80">
+          <FiDownload className="h-3 w-3" /> Open manifest PDF
+        </a>
+      ) : null}
+      {result.manifestPdfBase64 && !result.manifestPdfUrl ? (
+        <a
+          href={`data:application/pdf;base64,${result.manifestPdfBase64}`}
+          download={`${result.carrierCode}-${result.manifestId}.pdf`}
+          className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white/60 px-2.5 py-1 text-[11px] font-semibold text-emerald-800 hover:bg-white/80"
+        >
+          <FiDownload className="h-3 w-3" /> Download manifest PDF
+        </a>
+      ) : null}
+    </div>
+  )
+}
+
+/** FDX-G2 — one per-fleet manifest card inside a split response. */
+function FleetManifestCard({ carrierCode, entry }: { carrierCode: string; entry: ManifestEntry }) {
+  const isOk = entry.status === 'MANIFESTED'
+  const tone = isOk
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+    : 'border-rose-200 bg-rose-50 text-rose-800'
+  const badgeTone = entry.fleet === 'EXPRESS'
+    ? 'bg-sky-100 text-sky-800 ring-sky-200'
+    : 'bg-slate-100 text-slate-800 ring-slate-200'
+  return (
+    <div className={`rounded-xl border ${tone} px-3 py-2 text-[12px]`}>
+      <p className="flex items-center gap-1.5 font-semibold">
+        <FiTruck className="h-3.5 w-3.5" />
+        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${badgeTone}`}>
+          {entry.fleet}
+        </span>
+        <span>{entry.status === 'MANIFESTED' ? 'Manifest confirmed' : 'Fleet manifest failed'}</span>
+      </p>
+      <p className="mt-1 font-mono text-[11px]">
+        {carrierCode} · {entry.manifestId ?? '—'} · {entry.trackingCount} shipment(s)
+      </p>
+      <p className="mt-1">{entry.message}</p>
+      {entry.manifestPdfUrl ? (
+        <a href={entry.manifestPdfUrl} target="_blank" rel="noreferrer"
+           className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white/60 px-2.5 py-1 text-[11px] font-semibold text-emerald-800 hover:bg-white/80">
+          <FiDownload className="h-3 w-3" /> Open manifest PDF
+        </a>
+      ) : null}
+      {entry.manifestPdfBase64 && !entry.manifestPdfUrl ? (
+        <a
+          href={`data:application/pdf;base64,${entry.manifestPdfBase64}`}
+          download={`${carrierCode}-${entry.fleet}-${entry.manifestId ?? 'manifest'}.pdf`}
+          className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white/60 px-2.5 py-1 text-[11px] font-semibold text-emerald-800 hover:bg-white/80"
+        >
+          <FiDownload className="h-3 w-3" /> Download manifest PDF
+        </a>
+      ) : null}
+    </div>
+  )
+}
+
+/** FDX-G2 — trackings the classifier couldn't resolve via the mapping chain.
+ *  Excluded from the manifest — the operator re-runs after fixing the
+ *  ClientShipviaCodeMap / ShippingService entry for the offending code. */
+function FailedToClassifyList({ trackings }: { trackings: string[] }) {
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+      <p className="flex items-center gap-1.5 font-semibold">
+        <FiAlertTriangle className="h-3.5 w-3.5" />
+        Excluded — couldn't classify fleet ({trackings.length})
+      </p>
+      <p className="mt-1 text-[11px]">
+        These trackings weren't included in the carrier manifest because the
+        classifier couldn't resolve their fleet via the shipping-service-mapping
+        chain (missing OrderTracking row, no per-client alias, or no
+        ShippingService for the resolved code). Fix the mapping and re-run.
+      </p>
+      <ul className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-amber-200 bg-white/60 px-2 py-1.5 font-mono text-[11px]">
+        {trackings.map((t) => (
+          <li key={t}>{t || '(blank)'}</li>
+        ))}
+      </ul>
     </div>
   )
 }
