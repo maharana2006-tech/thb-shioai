@@ -78,7 +78,9 @@ class ShipmentDefaultsResolverTest {
     private ShipmentDefaultsResolver.ResolveInputs inputsFor(OrderCustoms customs, Client client,
                                                               CarrierAccountRef account, boolean intl) {
         return new ShipmentDefaultsResolver.ResolveInputs(
-                null, null, null, null, null, null, customs, client, account, intl);
+                null, null, null, null, null, null,
+                null,   // FDX-H2 requestPickupType
+                customs, client, account, intl);
     }
 
     // ===== currency =====
@@ -215,6 +217,7 @@ class ShipmentDefaultsResolverTest {
                 null, null, null, null,
                 cu.getReasonForExport(),   // ← caller threads customs.reasonForExport here
                 null,
+                null,   // FDX-H2 requestPickupType
                 cu, null, a, false);
         var out = resolver.resolve(inputs);
         assertEquals("GIFT", out.shippingPurpose(),
@@ -272,6 +275,54 @@ class ShipmentDefaultsResolverTest {
         var out = resolver.resolve(inputsFor(null, null, a, false));
         assertEquals("DDP", out.clearanceOption(),
                 "Stamps-style DDP passes through without translation");
+    }
+
+    // ===== pickupType (FDX-H2) =====
+
+    @Test
+    void pickupType_defaultUseScheduledPickup_whenNoRequestNoAccount() {
+        // Matches pre-FDX-H2 FedEx hardcode; keeps back-compat for callers
+        // that don't populate the field.
+        var out = resolver.resolve(inputsFor(null, null, null, false));
+        assertEquals("USE_SCHEDULED_PICKUP", out.pickupType());
+    }
+
+    @Test
+    void pickupType_accountDefault_passesThrough() {
+        // Operator set DROP_BOX on the account (drop-off shipper without a
+        // standing pickup). Resolver picks it up so FedEx labels don't send
+        // USE_SCHEDULED_PICKUP and get rejected.
+        CarrierAccountRef a = new CarrierAccountRef();
+        a.setId(42L);
+        a.setCarrierCode("FEDEX");
+        a.setAccountNumber("A12345");
+        a.setPickupType("DROP_BOX");
+        var out = resolver.resolve(inputsFor(null, null, a, false));
+        assertEquals("DROP_BOX", out.pickupType(),
+                "account default must survive to the resolved output");
+    }
+
+    @Test
+    void pickupType_requestOverridesAccount() {
+        // Per-shipment override wins over the account default (per-shipment
+        // is more specific than per-account).
+        CarrierAccountRef a = new CarrierAccountRef();
+        a.setPickupType("DROP_BOX");
+        var inputs = new ShipmentDefaultsResolver.ResolveInputs(
+                null, null, null, null, null, null,
+                "REQUEST_COURIER",      // request-level override
+                null, null, a, false);
+        assertEquals("REQUEST_COURIER", resolver.resolve(inputs).pickupType());
+    }
+
+    @Test
+    void pickupType_upperCasedOnResolve() {
+        // The DTO field is @Pattern-validated to the enum values in upper
+        // case but the resolver still normalises defensively in case a
+        // programmatic caller passes lower-case.
+        CarrierAccountRef a = new CarrierAccountRef();
+        a.setPickupType("drop_box");
+        assertEquals("DROP_BOX", resolver.resolve(inputsFor(null, null, a, false)).pickupType());
     }
 
     // ===== defensive =====

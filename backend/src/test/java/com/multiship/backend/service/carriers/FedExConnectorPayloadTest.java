@@ -128,6 +128,48 @@ class FedExConnectorPayloadTest {
         assertNull(rs.get("shipmentSpecialServicesRequested"));
     }
 
+    // ===== FDX-H2 — pickupType wired from ShipmentRequestDTO =====
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void pickupType_defaultsToUseScheduledPickup_whenDtoLeavesItNull() throws Exception {
+        // Pre-FDX-H2 behavior preserved for callers that don't populate
+        // the new DTO field. Matches the pre-FDX-H hardcode exactly.
+        ShipmentRequestDTO r = baseRequest();
+        r.setPickupType(null);
+        Map<String, Object> rs = requestedShipment(r);
+        assertEquals("USE_SCHEDULED_PICKUP", rs.get("pickupType"),
+                "null pickupType must fall to the pre-FDX-H hardcode for back-compat");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void pickupType_dropBoxOnDtoLandsOnFedExWire() throws Exception {
+        // Operator-set DROP_BOX (drop-off shipper without a standing pickup)
+        // must reach the wire so FedEx dispatches the drop-box driver
+        // instead of rejecting the label. Fixes the pre-FDX-H bug where
+        // drop-off shippers couldn't buy labels at all.
+        ShipmentRequestDTO r = baseRequest();
+        r.setPickupType("DROP_BOX");
+        Map<String, Object> rs = requestedShipment(r);
+        assertEquals("DROP_BOX", rs.get("pickupType"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void pickupType_returnLabelForcesContactFedexToSchedule_overridingDto() throws Exception {
+        // Return labels have a hard requirement: the customer isn't in the
+        // shipper's book so no standing pickup applies. Connector's return-
+        // label branch must WIN over the pickupType field (which came from
+        // the shipper's account default, not the customer's context).
+        ShipmentRequestDTO r = baseRequest();
+        r.setPickupType("DROP_BOX");       // shipper's account default
+        r.setIsReturn(true);
+        Map<String, Object> rs = requestedShipment(r);
+        assertEquals("CONTACT_FEDEX_TO_SCHEDULE", rs.get("pickupType"),
+                "return-label override must win over the DTO pickupType");
+    }
+
     @SuppressWarnings("unchecked")
     @Test
     void kgOnDtoLandsAsKgOnFedExWire() throws Exception {

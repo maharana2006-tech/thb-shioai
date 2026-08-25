@@ -2017,6 +2017,7 @@ public class CarrierServiceImpl implements CarrierService {
                         null,                                  // request-level timezone — none at this layer
                         intlBlock != null ? intlBlock.getReasonForExport() : null,   // purpose from customs
                         null,                                  // request-level clearance — none at this layer
+                        null,                                  // FDX-H2 — request-level pickupType none at this layer
                         customs,
                         clientRow,
                         accountRow,
@@ -2089,6 +2090,10 @@ public class CarrierServiceImpl implements CarrierService {
                 // and each connector falls back to UTC — the pre-F6-E
                 // behavior — so a client row with no timezone is safe.
                 .shipperTimezone(defaults.timezone())
+                // FDX-H2 — resolved FedEx pickupType (account default →
+                // hardcoded USE_SCHEDULED_PICKUP). Only FedEx maps this;
+                // other connectors ignore. Null-safe on the connector side.
+                .pickupType(defaults.pickupType())
                 .intl(intlBlock)
                 // Sprint 25 — thread the Order entity's isReturn flag so
                 // ERP-side return orders get the carrier return-label wire
