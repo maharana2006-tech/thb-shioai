@@ -205,12 +205,17 @@ public class ShippingConfigService {
                             canonical, off.serviceCode(), origin)
                     .orElse(null);
             if (existing == null) {
+                // FDX-G1 — classify the new service as Express or Ground so
+                // ManifestServiceImpl can split closeOutDay by fleet. Matches
+                // the V25 backfill logic verbatim so sync + backfill agree.
+                boolean isExpress = classifyExpress(canonical, off.serviceCode());
                 serviceRepository.save(ShippingService.builder()
                         .carrier(canonical).serviceCode(off.serviceCode()).name(off.name()).scope(off.scope())
                         .originCountry(origin).source(source).syncedAt(now)
                         .maxWeightLb(lim.maxWeightLb()).maxLengthIn(lim.maxLengthIn())
                         .maxLengthGirthIn(lim.maxLengthGirthIn()).surchargeLengthGirthIn(lim.surchargeLengthGirthIn())
-                        .enabled(true).sortOrder(sort++).build());
+                        .enabled(true).sortOrder(sort++)
+                        .express(isExpress).build());
                 added++;
             } else {
                 existing.setName(off.name());
@@ -1167,5 +1172,26 @@ public class ShippingConfigService {
     private <T> ApiResponse<T> failure(HttpStatus status, ErrorCode errorCode, String message) {
         return ApiResponse.<T>builder().status("ERROR").code(status.value()).errorCode(errorCode.name())
                 .message(message).timestamp(LocalDateTime.now()).build();
+    }
+
+    /**
+     * FDX-G1 — Java-side mirror of the V25 backfill SQL. Called by
+     * {@link #syncFromCarrier} when a NEW ShippingService is materialised
+     * from a carrier availability call, so freshly-synced rows land with
+     * the correct fleet flag instead of the default false.
+     *
+     * <p>Kept package-private + static-friendly so the classification logic
+     * is trivially unit-testable (see ShippingConfigServiceClassifyExpressTest).
+     */
+    static boolean classifyExpress(String carrier, String serviceCode) {
+        if (carrier == null || serviceCode == null) return false;
+        String c = carrier.trim().toUpperCase(java.util.Locale.ROOT);
+        String s = serviceCode.trim().toUpperCase(java.util.Locale.ROOT);
+        return switch (c) {
+            case "FEDEX" -> !s.contains("GROUND") && !s.contains("HOME_DELIVERY");
+            case "UPS"   -> !s.equals("03") && !s.equals("003") && !s.contains("GROUND");
+            case "DHL"   -> true;   // DHL Express is single-fleet
+            default      -> false;  // USPS / SWSIM / unknown → no fleet split
+        };
     }
 }
