@@ -2069,9 +2069,30 @@ public class CarrierServiceImpl implements CarrierService {
         }
 
 
+        // FDX-I1 — pre-fix, firstNonBlank(accountNumber, "ACCOUNT") planted
+        // the literal string "ACCOUNT" as a defensive fallback. In practice
+        // this line was dead code: generateLabel short-circuits five null-
+        // account AccountResolution scenarios (NEEDS_DETAILS / CLIENT_MISSING
+        // / CLIENT_INACTIVE / NO_DEFAULT / CHOOSE_ACCOUNT) with 422 responses
+        // before attemptShipment fires, so only real-account scenarios
+        // (ORDER / REFERENCE / CLIENT_DEFAULT / MANUAL / DEFAULT /
+        // PLATFORM_FALLBACK / GENERATED) reach here. If a null still makes
+        // it through, that's a bug — a new scenario was added without a
+        // matching short-circuit — and we should fail fast with an actionable
+        // message rather than plant a placeholder that FedEx (post-FDX-2)
+        // throws on and UPS/DHL (post-FDX-I2/I3) would silently ship as "".
+        if (!StringUtils.hasText(accountNumber)) {
+            throw new IllegalStateException(
+                    "CarrierServiceImpl.buildShipmentRequest reached with a blank accountNumber "
+                            + "for order " + order.getOrderNo() + " on carrier "
+                            + connector.getCarrierCode() + ". This is a bug: some AccountResolution "
+                            + "scenario returned a null account without a matching 422 short-circuit "
+                            + "in generateLabel(). Check the five null-account scenarios at "
+                            + "CarrierServiceImpl lines 400/407/426/439/446 for coverage of the new case.");
+        }
         ShipmentRequestDTO dto = ShipmentRequestDTO.builder()
                 .carrierCode(connector.getCarrierCode())
-                .accountNumber(firstNonBlank(accountNumber, "ACCOUNT"))
+                .accountNumber(accountNumber)
                 .serviceType(serviceType)
                 .packageType(packageType)
                 .length(preset != null ? preset.getLength() : null)
