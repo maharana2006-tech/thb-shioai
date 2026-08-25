@@ -1343,7 +1343,14 @@ public class FedExConnector implements CarrierConnector {
         try {
             java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
             body.put("accountNumber", java.util.Map.of("value", accountNumber));
-            body.put("carrierCode", "FDXG");
+            // FDX-G2 — carrierCode picks the driver fleet the manifest
+            // rolls up to. Pre-fix: hardcoded FDXG so every Express label
+            // in the batch was invisibly manifested-as-Ground; the Ground
+            // driver picked up the label but the Express fleet's manifest
+            // was empty. Now derived from CloseOutRequest.express which
+            // ManifestServiceImpl sets after classifying trackings via the
+            // shipping_service.is_express column (FDX-G1).
+            body.put("carrierCode", request.express() ? "FDXE" : "FDXG");
 
             String response = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build()
                     .post()
