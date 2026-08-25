@@ -1093,9 +1093,9 @@ export default function OrdersWorkspace() {
             <button type="button"
                     onClick={() => navigate('/orders/history')}
                     className={BTN_GHOST_SM}
-                    title="Order Intake — all orders (Bulk/Manual/API/WMS), the CSV/Excel importer, and import history">
+                    title="Order History — all orders (Bulk/Manual/API/WMS), the CSV/Excel importer, and import history">
               <FiDatabase className="h-3 w-3" />
-              Order Intake
+              Order History
             </button>
             <button type="button" onClick={() => navigate('/orders/new')} className={BTN_PRIMARY_SM}>
               <FiPlus className="h-3 w-3" />

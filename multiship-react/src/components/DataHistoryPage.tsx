@@ -775,7 +775,7 @@ export default function DataHistoryPage() {
     <div className="space-y-4 pb-24">
       <PageSectionHeader
         eyebrow="Operations"
-        title="Order Intake"
+        title="Order History"
         description="Every order in one place — Bulk, Manual, API, and WMS — plus the CSV/Excel importer and saved import history."
         actions={
           <div className="flex flex-wrap items-center gap-2">
