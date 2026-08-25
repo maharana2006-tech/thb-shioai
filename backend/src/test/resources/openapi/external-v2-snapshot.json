@@ -2552,6 +2552,39 @@
           }
         }
       },
+      "ManifestEntryDTO" : {
+        "type" : "object",
+        "properties" : {
+          "fleet" : {
+            "type" : "string"
+          },
+          "manifestId" : {
+            "type" : "string"
+          },
+          "manifestPdfUrl" : {
+            "type" : "string"
+          },
+          "manifestPdfBase64" : {
+            "type" : "string"
+          },
+          "trackingCount" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "status" : {
+            "type" : "string"
+          },
+          "message" : {
+            "type" : "string"
+          },
+          "trackingNumbers" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
+          }
+        }
+      },
       "ManifestResponseDTO" : {
         "type" : "object",
         "properties" : {
@@ -2576,6 +2609,18 @@
           },
           "message" : {
             "type" : "string"
+          },
+          "manifests" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ManifestEntryDTO"
+            }
+          },
+          "failedToClassify" : {
+            "type" : "array",
+            "items" : {
+              "type" : "string"
+            }
           }
         }
       },

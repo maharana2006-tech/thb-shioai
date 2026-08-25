@@ -380,11 +380,30 @@ public interface CarrierConnector {
             List<String> trackingNumbers,
             java.time.LocalDate closeDate,
             AddressToValidate address,
-            String accountNumber
+            String accountNumber,
+            /**
+             * FDX-G2 — true when every tracking in this batch ships on the
+             * carrier's Express fleet (FedEx FDXE, UPS Air, DHL). Pre-FDX-G
+             * FedEx hardcoded carrierCode="FDXG" so Express labels silently
+             * manifested as Ground; ManifestServiceImpl now splits by fleet
+             * and calls this once per group. Only FedEx maps this to its
+             * body (FDXE vs FDXG); UPS + DHL + USPS ignore the flag —
+             * their EndOfDay envelopes don't carry a fleet code.
+             *
+             * <p>Default false via the back-compat constructors below —
+             * matches the pre-FDX-G "everything is Ground" behavior.
+             */
+            boolean express
     ) {
         /** Backward-compat convenience — omits the account number (Sprint 34 shape). */
         public CloseOutRequest(List<String> trackingNumbers, java.time.LocalDate closeDate, AddressToValidate address) {
-            this(trackingNumbers, closeDate, address, null);
+            this(trackingNumbers, closeDate, address, null, false);
+        }
+
+        /** Backward-compat convenience — includes account but omits FDX-G2 express flag. */
+        public CloseOutRequest(List<String> trackingNumbers, java.time.LocalDate closeDate,
+                                AddressToValidate address, String accountNumber) {
+            this(trackingNumbers, closeDate, address, accountNumber, false);
         }
     }
 
