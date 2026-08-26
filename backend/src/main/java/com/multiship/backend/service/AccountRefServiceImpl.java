@@ -289,6 +289,15 @@ public class AccountRefServiceImpl implements AccountRefService {
             account.setPickupType(pt.isEmpty() ? null : pt.toUpperCase(Locale.ROOT));
         }
 
+        // UPS-4a — per-account UPS LabelImageFormat. Same null-vs-empty-string
+        // semantics. Uppercased on persist because the UPS enum is strict.
+        // Only UPS maps this to the wire; other connectors ignore.
+        String labelImageFormat = request.getLabelImageFormat();
+        if (labelImageFormat != null) {
+            String lf = labelImageFormat.trim();
+            account.setLabelImageFormat(lf.isEmpty() ? null : lf.toUpperCase(Locale.ROOT));
+        }
+
         // Third-party billing defaults. Same null-vs-empty-string semantics:
         // null in request = keep persisted; non-null (incl. empty) = write
         // through with empty normalized to null. Country is upper-cased to
@@ -431,6 +440,7 @@ public class AccountRefServiceImpl implements AccountRefService {
                 .clearanceOption(account.getClearanceOption())
                 .currency(account.getCurrency())
                 .pickupType(account.getPickupType())
+                .labelImageFormat(account.getLabelImageFormat())
                 .thirdPartyAccount(account.getThirdPartyAccount())
                 .thirdPartyName(account.getThirdPartyName())
                 .thirdPartyAddress1(account.getThirdPartyAddress1())

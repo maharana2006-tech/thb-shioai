@@ -164,6 +164,10 @@ interface DrawerState {
    *  (resolver falls back to USE_SCHEDULED_PICKUP). Only FEDEX rows
    *  render the picker; other carriers keep this null. */
   pickupType: string | null
+  /** UPS-4a — per-account UPS LabelImageFormat. Null = no override
+   *  (resolver falls back to GIF). Only UPS rows render the picker;
+   *  other carriers keep this null. */
+  labelImageFormat: string | null
   /** Third-party billing default. Only shown / persisted when the operator
    *  picked THIRD_PARTY for clearanceOption. All optional individually — a
    *  future per-shipment override on Shipment can fill in what's missing. */
@@ -191,6 +195,7 @@ const emptyDrawer: DrawerState = {
   clearanceOption: '',
   currency: '',
   pickupType: null,
+  labelImageFormat: null,
   thirdPartyAccount: '',
   thirdPartyName: '',
   thirdPartyAddress1: '',
@@ -483,6 +488,7 @@ export default function CarrierConnections({
         clearanceOption: account.clearanceOption || '',
         currency: account.currency || '',
         pickupType: account.pickupType ?? null,
+        labelImageFormat: account.labelImageFormat ?? null,
         thirdPartyAccount:  account.thirdPartyAccount  || '',
         thirdPartyName:     account.thirdPartyName     || '',
         thirdPartyAddress1: account.thirdPartyAddress1 || '',
@@ -617,6 +623,9 @@ export default function CarrierConnections({
         // the picker, so non-FedEx carriers send null (no-op backend
         // side). Null on the wire = clear the override.
         pickupType: drawer.carrierCode === 'FEDEX' ? (drawer.pickupType || null) : null,
+        // UPS-4a — per-account UPS LabelImageFormat. Only UPS rows render
+        // the picker; non-UPS send null (no-op).
+        labelImageFormat: drawer.carrierCode === 'UPS' ? (drawer.labelImageFormat || null) : null,
         // Third-party billing default. Only send the address when the picked
         // clearance is THIRD_PARTY — flipping to SENDER/RECIPIENT explicitly
         // clears the persisted third-party row (send empty strings so the
@@ -1490,6 +1499,37 @@ export default function CarrierConnections({
                         account. Blank = USE_SCHEDULED_PICKUP (assumes a
                         standing daily pickup). Return labels bypass this
                         setting and always use CONTACT_FEDEX_TO_SCHEDULE.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {/* UPS-4a — per-account UPS label format. Only UPS maps
+                      this to the shipment envelope; other carriers ignore.
+                      Blank falls to GIF (pre-UPS-4a hardcode) so existing
+                      rows read exactly as before. GIF is the smallest wire
+                      size but rasterises fuzzy on ZPL printers; PDF is
+                      sharpest, ZPL/EPL are native to Zebra label printers. */}
+                  {drawer.carrierCode === 'UPS' ? (
+                    <div className="mt-2">
+                      <Field label="Label image format (UPS only)">
+                        <select
+                          value={drawer.labelImageFormat ?? ''}
+                          onChange={(e) => setDrawer((c) => ({ ...c, labelImageFormat: e.target.value || null }))}
+                          className={inputClassName}
+                        >
+                          <option value="">GIF (default)</option>
+                          <option value="GIF">GIF (explicit)</option>
+                          <option value="PDF">PDF (vector, sharp)</option>
+                          <option value="PNG">PNG (raster)</option>
+                          <option value="ZPL">ZPL (Zebra)</option>
+                          <option value="EPL">EPL (Eltron/legacy Zebra)</option>
+                        </select>
+                      </Field>
+                      <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
+                        Format UPS returns the label in. Blank = GIF (default;
+                        smallest wire size, fuzzy on ZPL printers). Pick PDF
+                        for high-quality office printers, ZPL/EPL for label
+                        printers that decode the format natively.
                       </p>
                     </div>
                   ) : null}
