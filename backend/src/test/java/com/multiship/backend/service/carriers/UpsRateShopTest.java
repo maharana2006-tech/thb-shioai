@@ -11,6 +11,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -226,7 +227,14 @@ class UpsRateShopTest {
     }
 
     @Test
-    void parseUpsRateResponseDefaultsCurrencyToUsd() {
+    void parseUpsRateResponseReturnsNullCurrencyWhenMissing() {
+        // UPS-14 — currency omitted returns null, not the pre-fix silent
+        // "USD" default. UPS's real responses always include currency;
+        // if one lands without it we surface null instead of mislabeling
+        // (a GBP or EUR rate silently tagged USD over/under-charges by
+        // the FX difference). Downstream RateOption.currency (nullable)
+        // carries it; the rate-shop UI treats null as "no quote". Same
+        // fix as FDX-D on FedEx.
         String canned = """
                 {
                   "RateResponse": {
@@ -238,7 +246,8 @@ class UpsRateShopTest {
                     ]
                   }
                 }""";
-        assertEquals("USD", connector.parseUpsRateResponse(canned).get(0).currency());
+        assertNull(connector.parseUpsRateResponse(canned).get(0).currency(),
+                "missing currency must surface as null, not silently mislabel as USD");
     }
 
     @Test
