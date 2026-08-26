@@ -51,8 +51,19 @@ public final class IntlShipmentValidator {
     private static final Set<String> VALID_INCOTERMS = Set.of("DDP", "DAP", "DDU");
     /** Same enum as ClientCustomsProfile.dutiesBillTo. */
     private static final Set<String> VALID_DUTY_BILL_TO = Set.of("SENDER", "RECIPIENT", "THIRD_PARTY");
-    /** Same enum as OrderCustoms.reasonForExport. */
-    private static final Set<String> VALID_REASON = Set.of("SALE", "GIFT", "SAMPLE", "RETURN", "REPAIR", "DOCUMENTS");
+    /**
+     * Approved shipping-purpose values. Must stay in lockstep with
+     * {@link com.multiship.backend.service.ShipmentDefaultsResolver#SHIPPING_PURPOSE_ENUM}
+     * (all 8 values). Pre-UPS-9 fix, this set only had 6 values so shipments
+     * with a resolver-valid MERCHANDISE / PERSONAL_USE / REPAIR_AND_RETURN
+     * purpose failed validation with CODE_BAD_REASON — the resolver said "OK"
+     * but this validator said "no". Each connector is responsible for mapping
+     * the resolver value to its carrier-specific enum (FedEx via
+     * mapFedExPurpose per FDX-D; UPS via mapUpsReasonForExport per UPS-9).
+     */
+    private static final Set<String> VALID_REASON = Set.of(
+            "SALE", "GIFT", "SAMPLE", "REPAIR_AND_RETURN",
+            "DOCUMENTS", "MERCHANDISE", "PERSONAL_USE", "RETURN");
     /**
      * HS (Harmonized System) tariff code — 6 digits at the WCO root, with
      * per-country extensions up to 10 digits. UPS / FedEx / most customs
@@ -135,7 +146,8 @@ public final class IntlShipmentValidator {
         if (!isBlank(intl.getReasonForExport())
                 && !VALID_REASON.contains(intl.getReasonForExport().trim().toUpperCase())) {
             errors.add(new ValidationError(CODE_BAD_REASON,
-                    "Reason for export must be SALE, GIFT, SAMPLE, RETURN, REPAIR, or DOCUMENTS."));
+                    "Reason for export must be one of SALE, GIFT, SAMPLE, RETURN, REPAIR_AND_RETURN, "
+                            + "DOCUMENTS, MERCHANDISE, or PERSONAL_USE."));
         }
 
         // Duty bill-to: when non-SENDER a payer account is required so the

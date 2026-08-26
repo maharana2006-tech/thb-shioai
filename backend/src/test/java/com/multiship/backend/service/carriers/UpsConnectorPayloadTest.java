@@ -246,4 +246,47 @@ class UpsConnectorPayloadTest {
         assertNull(shipment.get("ShipmentServiceOptions"),
                 "Incomplete intl block should skip InternationalForms silently");
     }
+
+    // ===== UPS-9 — reasonForExport mapping =====
+
+    @Test
+    void reasonForExportMapsToUpsEnum() {
+        // Pre-UPS-9 the ReasonForExport field was firstNonBlank(x, "SALE").toUpperCase()
+        // — the resolver's 8-value SHIPPING_PURPOSE_ENUM was passed through
+        // as-is. UPS accepts only 7 values (SALE/GIFT/SAMPLE/RETURN/REPAIR/
+        // INTERCOMPANYDATA/DOCUMENTS), so MERCHANDISE, PERSONAL_USE, and
+        // REPAIR_AND_RETURN reached UPS as unsupported strings. Now the
+        // connector maps to UPS's enum explicitly. Mirrors FDX-D on FedEx.
+        java.util.LinkedHashMap<String, String> mapping = new java.util.LinkedHashMap<>();
+        mapping.put("SALE", "SALE");
+        mapping.put("MERCHANDISE", "SALE");           // UPS-9 — was passed as MERCHANDISE (invalid); commercial = SALE
+        mapping.put("GIFT", "GIFT");
+        mapping.put("SAMPLE", "SAMPLE");
+        mapping.put("PERSONAL_USE", "SAMPLE");        // UPS-9 — was passed as PERSONAL_USE (invalid); UPS has no PERSONAL_EFFECTS
+        mapping.put("RETURN", "RETURN");
+        mapping.put("REPAIR", "REPAIR");
+        mapping.put("REPAIR_AND_RETURN", "REPAIR");   // UPS-9 — was passed as REPAIR_AND_RETURN (invalid); consolidate
+        mapping.put("DOCUMENTS", "DOCUMENTS");
+        for (java.util.Map.Entry<String, String> entry : mapping.entrySet()) {
+            assertEquals(entry.getValue(),
+                    UpsConnector.mapUpsReasonForExport(entry.getKey()),
+                    "Reason " + entry.getKey());
+        }
+    }
+
+    @Test
+    void reasonForExportUnknownFallsToSaleWithWarning() {
+        // Unknown values still default to SALE (matches pre-UPS-9 default);
+        // helper logs a warning via log.warn so future audits catch drift.
+        assertEquals("SALE", UpsConnector.mapUpsReasonForExport(null));
+        assertEquals("SALE", UpsConnector.mapUpsReasonForExport("GARBAGE"));
+        assertEquals("SALE", UpsConnector.mapUpsReasonForExport(""));
+    }
+
+    @Test
+    void reasonForExportIsCaseInsensitive() {
+        assertEquals("REPAIR", UpsConnector.mapUpsReasonForExport("repair_and_return"));
+        assertEquals("GIFT", UpsConnector.mapUpsReasonForExport("Gift"));
+        assertEquals("SAMPLE", UpsConnector.mapUpsReasonForExport("personal_use"));
+    }
 }
