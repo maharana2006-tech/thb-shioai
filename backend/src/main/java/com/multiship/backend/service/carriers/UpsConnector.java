@@ -967,10 +967,14 @@ public class UpsConnector implements CarrierConnector {
             java.math.BigDecimal freight = readUpsMoney(rated.at("/TotalCharges/MonetaryValue"));
             java.math.BigDecimal duty = readUpsMoney(rated.at("/EstimatedDuties/TotalAmount/MonetaryValue"));
             java.math.BigDecimal tax = readUpsMoney(rated.at("/EstimatedTaxes/TotalAmount/MonetaryValue"));
-            String currency = firstNonBlank(
-                    rated.at("/EstimatedDuties/TotalAmount/CurrencyCode").asText(null),
-                    rated.at("/TotalCharges/CurrencyCode").asText(null),
-                    "USD");
+            // UPS-15 — same fix as UPS-14 / FDX-D: return null instead of
+            // silently mislabelling a missing-currency rate as USD.
+            // Downstream LandedCostResult.currency is nullable; the UI
+            // treats null as "no quote" surface rather than hiding it.
+            String direct = rated.at("/EstimatedDuties/TotalAmount/CurrencyCode").asText(null);
+            String totals = rated.at("/TotalCharges/CurrencyCode").asText(null);
+            String currency = StringUtils.hasText(direct) ? direct
+                    : (StringUtils.hasText(totals) ? totals : null);
 
             java.math.BigDecimal grand = zero();
             if (freight != null) grand = grand.add(freight);
@@ -2240,12 +2244,21 @@ public class UpsConnector implements CarrierConnector {
         return null;
     }
 
+    /**
+     * UPS-14 — pre-fix, a missing currency in the rate response silently
+     * defaulted to "USD". UPS's real responses always include currency,
+     * but a parsing edge case that mislabels a GBP or EUR rate as USD
+     * silently over/under-charges by the FX difference. Now returns null
+     * so downstream {@link RateOption#currency} (nullable) carries the
+     * miss and the rate-shop UI treats it as "no quote" — surfaces the
+     * missing field instead of hiding it. Same fix as FDX-D on FedEx.
+     */
     private static String readUpsCurrency(JsonNode entry) {
         String currency = entry.at("/NegotiatedRateCharges/TotalCharge/CurrencyCode").asText(null);
         if (!StringUtils.hasText(currency)) {
             currency = entry.at("/TotalCharges/CurrencyCode").asText(null);
         }
-        return StringUtils.hasText(currency) ? currency : "USD";
+        return StringUtils.hasText(currency) ? currency : null;
     }
 
     /**
