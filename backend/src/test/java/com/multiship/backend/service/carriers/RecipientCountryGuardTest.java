@@ -158,6 +158,42 @@ class RecipientCountryGuardTest {
                 "got: " + ex.getMessage());
     }
 
+    // ===== FDX-I3 — DHL account boundary guard =====
+
+    @Test
+    void dhl_createShipment_blankAccountNumber_throws() {
+        // Pre-FDX-I3, blank account silently reached accounts[0].number as
+        // "" on the wire. DHL rejects with a cryptic 400. Post-fix, fail
+        // at the boundary with an actionable message. Same F3/FDX-2/FDX-I2
+        // pattern.
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        DhlConnector connector = new DhlConnector(props, new ObjectMapper());
+        ShipmentRequestDTO r = minimal("GB");   // DHL is intl-first
+        r.setAccountNumber("");
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> connector.createShipment(r, "fake-token", "SANDBOX"));
+        assertTrue(ex.getMessage().contains("account number"),
+                "got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("CarrierAccountRef"),
+                "message should point at the fix; got: " + ex.getMessage());
+    }
+
+    @Test
+    void dhl_createShipment_literalACCOUNT_throws() {
+        // Catches the pre-FDX-I1 CarrierServiceImpl placeholder if any
+        // legacy call site still plants "ACCOUNT" upstream.
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        DhlConnector connector = new DhlConnector(props, new ObjectMapper());
+        ShipmentRequestDTO r = minimal("GB");
+        r.setAccountNumber("ACCOUNT");
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> connector.createShipment(r, "fake-token", "SANDBOX"));
+        assertTrue(ex.getMessage().contains("ACCOUNT"),
+                "message should call out the placeholder; got: " + ex.getMessage());
+    }
+
     // ===== FDX-B1 — FedEx rate-shop + EDT paths =====
     //
     // Pre-fix, FedExConnector.buildRateRequestBody + estimateLandedCost both
