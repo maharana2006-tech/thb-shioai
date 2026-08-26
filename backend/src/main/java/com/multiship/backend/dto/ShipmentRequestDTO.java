@@ -275,6 +275,23 @@ public class ShipmentRequestDTO {
     private String pickupType;
 
     /**
+     * UPS-4b — UPS LabelImageFormat (drives which file format UPS returns
+     * the label as). Populated by
+     * {@link com.multiship.backend.service.ShipmentDefaultsResolver} from
+     * the precedence chain (request → account → hardcoded {@code GIF}
+     * default). Only UPS maps this to the wire; FedEx / DHL / USPS ignore
+     * the field.
+     *
+     * <p>Values: {@code GIF} | {@code PDF} | {@code PNG} | {@code ZPL} |
+     * {@code EPL}. GIF is the smallest wire size but rasterises fuzzy on
+     * ZPL printers; PDF is sharpest.
+     *
+     * <p>Null (unset) → connectors fall back to {@code GIF} so legacy
+     * callers see no behavior change.
+     */
+    private String labelImageFormat;
+
+    /**
      * Return the packages list connectors should iterate. Guarantees a
      * non-empty list so per-connector code doesn't have to fork on
      * null/empty:

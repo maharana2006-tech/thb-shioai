@@ -71,6 +71,9 @@ public class ShipmentDefaultsResolver {
      *  without a standing pickup (they'll reject at label-buy time with an
      *  actionable error); every other carrier ignores the field. */
     static final String DEFAULT_PICKUP_TYPE = "USE_SCHEDULED_PICKUP";
+    /** UPS-4b — pre-fix UPS hardcode. GIF is the smallest wire size and
+     *  UPS's own default; every other carrier ignores the field. */
+    static final String DEFAULT_LABEL_IMAGE_FORMAT = "GIF";
 
     /**
      * Resolves defaults for a single shipment. Every {@code inputs} field is
@@ -94,7 +97,8 @@ public class ShipmentDefaultsResolver {
                 resolveTimezone(inputs),
                 resolveShippingPurpose(inputs),
                 resolveClearanceOption(inputs),
-                resolvePickupType(inputs));
+                resolvePickupType(inputs),
+                resolveLabelImageFormat(inputs));
     }
 
     // ===== per-field resolvers =====
@@ -221,6 +225,20 @@ public class ShipmentDefaultsResolver {
         return DEFAULT_PICKUP_TYPE;
     }
 
+    /**
+     * UPS-4b — labelImageFormat precedence: request → account → hardcoded
+     * GIF fallback. Only UPS consumes this; other connectors ignore.
+     */
+    private String resolveLabelImageFormat(ResolveInputs inputs) {
+        String candidate = trimUpper(inputs.requestLabelImageFormat());
+        if (candidate != null) return candidate;
+        if (inputs.account() != null) {
+            candidate = trimUpper(inputs.account().getLabelImageFormat());
+            if (candidate != null) return candidate;
+        }
+        return DEFAULT_LABEL_IMAGE_FORMAT;
+    }
+
     // ===== helpers =====
 
     private static String trim(String s) {
@@ -249,6 +267,7 @@ public class ShipmentDefaultsResolver {
             String requestShippingPurpose,
             String requestClearanceOption,
             String requestPickupType,
+            String requestLabelImageFormat,
             OrderCustoms customs,
             Client client,
             CarrierAccountRef account,
@@ -263,7 +282,8 @@ public class ShipmentDefaultsResolver {
             String timezone,
             String shippingPurpose,
             String clearanceOption,
-            String pickupType) {}
+            String pickupType,
+            String labelImageFormat) {}
 
     /** Thrown when a required field can't be resolved OR shippingPurpose
      *  is set to a value outside the enum. */

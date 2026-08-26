@@ -2044,6 +2044,7 @@ public class CarrierServiceImpl implements CarrierService {
                         intlBlock != null ? intlBlock.getReasonForExport() : null,   // purpose from customs
                         null,                                  // request-level clearance — none at this layer
                         null,                                  // FDX-H2 — request-level pickupType none at this layer
+                        null,                                  // UPS-4b — request-level labelImageFormat none at this layer
                         customs,
                         clientRow,
                         accountRow,
@@ -2141,6 +2142,10 @@ public class CarrierServiceImpl implements CarrierService {
                 // hardcoded USE_SCHEDULED_PICKUP). Only FedEx maps this;
                 // other connectors ignore. Null-safe on the connector side.
                 .pickupType(defaults.pickupType())
+                // UPS-4b — resolved UPS LabelImageFormat (account default →
+                // hardcoded GIF). Only UPS maps this; other connectors
+                // ignore. Null-safe on the connector side.
+                .labelImageFormat(defaults.labelImageFormat())
                 .intl(intlBlock)
                 // Sprint 25 — thread the Order entity's isReturn flag so
                 // ERP-side return orders get the carrier return-label wire
