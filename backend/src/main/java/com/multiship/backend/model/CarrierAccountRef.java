@@ -140,6 +140,27 @@ public class CarrierAccountRef {
     private String pickupType;
 
     /**
+     * UPS-4a — per-account UPS LabelImageFormat. Only UPS currently maps
+     * this to the wire; FedEx / DHL / SWSIM connectors ignore the value.
+     *
+     * <p>UPS LabelImageFormat enum:
+     * <ul>
+     *   <li>{@code GIF} — raster; smallest wire size; pre-UPS-4a default;
+     *       fuzzy on ZPL printers</li>
+     *   <li>{@code PDF} — vector; sharp on any printer; larger wire size</li>
+     *   <li>{@code PNG} — raster; similar quality to GIF</li>
+     *   <li>{@code ZPL} — Zebra printer language; text-only</li>
+     *   <li>{@code EPL} — Eltron printer language; legacy Zebra</li>
+     * </ul>
+     *
+     * <p>NULL → resolver falls back to {@code GIF} (matches the pre-UPS-4a
+     * hardcode). Deliberately not backfilled — silently flipping every
+     * UPS account would break operators tuned around GIF.
+     */
+    @Column(name = "label_image_format", length = 10)
+    private String labelImageFormat;
+
+    /**
      * Third-party billing party — used only when clearanceOption is THIRD_PARTY
      * (UPS / FedEx). Acts as the ACCOUNT-LEVEL DEFAULT for every shipment on
      * this account; per-shipment overrides live on the Shipment row (follow-up

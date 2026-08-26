@@ -45,6 +45,10 @@ public class CarrierAccountRefDTO {
      *  Values: REGULAR_PICKUP | REQUEST_COURIER | DROP_BOX |
      *  BUSINESS_SERVICE_CENTER | STATION | USE_SCHEDULED_PICKUP. */
     private String pickupType;
+    /** UPS-4a — per-account UPS LabelImageFormat (UPS only; other carriers
+     *  ignore). NULL means GIF (pre-UPS-4a hardcode). Values: GIF | PDF |
+     *  PNG | ZPL | EPL. */
+    private String labelImageFormat;
     /** Third-party billing address (default, when clearanceOption=THIRD_PARTY).
      *  Nullable — per-shipment overrides live on the Shipment row. */
     private String thirdPartyAccount;

@@ -94,6 +94,20 @@ public class AccountRefUpsertRequest {
     private String pickupType;
 
     /**
+     * UPS-4a — per-account UPS LabelImageFormat. Only UPS maps this to the
+     * shipment envelope (FedEx / DHL / SWSIM ignore). Constrained to the UPS
+     * LabelImageFormat enum values via regex; empty string clears the
+     * persisted value, null keeps it.
+     *
+     * <p>Values: GIF | PDF | PNG | ZPL | EPL. NULL / unset → resolver
+     * falls back to {@code GIF} (matches the pre-UPS-4a hardcode).
+     */
+    @jakarta.validation.constraints.Pattern(
+            regexp = "GIF|PDF|PNG|ZPL|EPL|",
+            message = "labelImageFormat must be one of GIF / PDF / PNG / ZPL / EPL")
+    private String labelImageFormat;
+
+    /**
      * Third-party billing address — captured against the account when
      * clearanceOption = THIRD_PARTY. All optional here (backend validates only
      * the max lengths); the frontend enforces "at least account number"
