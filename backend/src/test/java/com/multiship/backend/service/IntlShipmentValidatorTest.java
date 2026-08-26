@@ -157,4 +157,40 @@ class IntlShipmentValidatorTest {
         assertTrue(msg.contains("International shipment failed validation"));
         assertTrue(msg.contains(" • "));
     }
+
+    // ===== UPS-9 — VALID_REASON aligned with resolver's 8-value enum =====
+
+    @Test
+    void merchandiseReasonIsValid() {
+        // Pre-UPS-9, MERCHANDISE (valid resolver enum value) failed validation
+        // with CODE_BAD_REASON because the validator's set was only 6 values.
+        assertTrue(IntlShipmentValidator.validate(
+                requestWith(validIntl().reasonForExport("MERCHANDISE").build()))
+                .isEmpty(),
+                "MERCHANDISE is a valid resolver purpose — validator must accept it");
+    }
+
+    @Test
+    void personalUseReasonIsValid() {
+        assertTrue(IntlShipmentValidator.validate(
+                requestWith(validIntl().reasonForExport("PERSONAL_USE").build()))
+                .isEmpty());
+    }
+
+    @Test
+    void repairAndReturnReasonIsValid() {
+        assertTrue(IntlShipmentValidator.validate(
+                requestWith(validIntl().reasonForExport("REPAIR_AND_RETURN").build()))
+                .isEmpty());
+    }
+
+    @Test
+    void unknownReasonStillRejected() {
+        // Regression guard — the enum extension didn't loosen the check for
+        // genuinely bad values. GARBAGE isn't in the resolver's 8-value set
+        // so the validator still rejects with CODE_BAD_REASON.
+        var errors = IntlShipmentValidator.validate(
+                requestWith(validIntl().reasonForExport("GARBAGE").build()));
+        assertTrue(errors.stream().anyMatch(e -> IntlShipmentValidator.CODE_BAD_REASON.equals(e.code())));
+    }
 }

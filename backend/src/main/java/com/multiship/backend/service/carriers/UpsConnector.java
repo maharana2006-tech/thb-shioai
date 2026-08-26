@@ -1827,8 +1827,12 @@ public class UpsConnector implements CarrierConnector {
                 .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")));
         forms.put("PurchaseOrderNumber", firstNonBlank(request.getReferenceNumber(), ""));
         forms.put("TermsOfShipment", firstNonBlank(intl.getIncoterms(), "DAP").toUpperCase());
-        String reason = firstNonBlank(intl.getReasonForExport(), "SALE").toUpperCase();
-        forms.put("ReasonForExport", reason);
+        // UPS-9 — map our 8-value SHIPPING_PURPOSE_ENUM to UPS's 7-value
+        // ReasonForExport enum. Pre-fix, MERCHANDISE / PERSONAL_USE /
+        // REPAIR_AND_RETURN silently reached UPS as unsupported strings —
+        // UPS either rejected the request or defaulted to an unknown value
+        // on the paperless invoice. Same fix shape as FDX-D on FedEx.
+        forms.put("ReasonForExport", mapUpsReasonForExport(intl.getReasonForExport()));
         forms.put("CurrencyCode", firstNonBlank(intl.getCustomsCurrency(), "USD").toUpperCase());
 
         String weightUnitCode = "KG".equalsIgnoreCase(intl.getWeightUnit()) ? "KGS" : "LBS";
@@ -1897,6 +1901,43 @@ public class UpsConnector implements CarrierConnector {
             if (s != null && !s.trim().isEmpty()) return s;
         }
         return "";
+    }
+
+    /**
+     * UPS-9 — map our 8-value {@link com.multiship.backend.service.ShipmentDefaultsResolver#SHIPPING_PURPOSE_ENUM}
+     * to UPS's ReasonForExport enum. UPS accepts:
+     * SALE / GIFT / SAMPLE / RETURN / REPAIR / INTERCOMPANYDATA / DOCUMENTS.
+     *
+     * <p>Mapping rationale (mirrors FDX-D on FedEx):
+     * <ul>
+     *   <li>SALE, MERCHANDISE → SALE (both are commercial sale from UPS's perspective)</li>
+     *   <li>GIFT → GIFT</li>
+     *   <li>SAMPLE → SAMPLE</li>
+     *   <li>PERSONAL_USE → SAMPLE (closest match — non-commercial personal use; UPS has no
+     *       PERSONAL_EFFECTS category, and SAMPLE is the standard non-commercial fallback)</li>
+     *   <li>RETURN → RETURN</li>
+     *   <li>REPAIR, REPAIR_AND_RETURN → REPAIR</li>
+     *   <li>DOCUMENTS → DOCUMENTS</li>
+     *   <li>null / unknown → SALE + log.warn (matches pre-UPS-9 default; drift catcher for
+     *       future resolver enum additions).</li>
+     * </ul>
+     */
+    static String mapUpsReasonForExport(String reason) {
+        if (reason == null) return "SALE";
+        String v = reason.trim().toUpperCase(Locale.ROOT);
+        return switch (v) {
+            case "SALE", "MERCHANDISE" -> "SALE";
+            case "GIFT" -> "GIFT";
+            case "SAMPLE", "PERSONAL_USE" -> "SAMPLE";
+            case "RETURN" -> "RETURN";
+            case "REPAIR", "REPAIR_AND_RETURN" -> "REPAIR";
+            case "DOCUMENTS" -> "DOCUMENTS";
+            default -> {
+                log.warn("UPS mapUpsReasonForExport: unrecognised reason '{}' — defaulting to SALE. "
+                        + "Add an explicit mapping if this is a real resolver value.", v);
+                yield "SALE";
+            }
+        };
     }
 
     /**
