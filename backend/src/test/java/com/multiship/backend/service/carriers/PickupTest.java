@@ -156,6 +156,41 @@ class PickupTest {
                 "got: " + r.message());
     }
 
+    @Test
+    void ups_schedulePickup_blank_addressCountry_shortCircuits() {
+        // UPS-12 — pickup address country is required so UPS's
+        // DestinationCountryCode reflects the shipper's country instead of
+        // silently defaulting to "US" (misroutes European shippers). Guard
+        // fires at entry with an actionable ERROR message.
+        UpsConnector c = new UpsConnector(new CarrierProperties(), new ObjectMapper());
+        PickupRequest noCountry = new PickupRequest(
+                LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), LocalTime.of(17, 0),
+                new AddressToValidate(null, null, "1 A St", null, null,
+                        "Denver", "CO", "80202", ""),   // blank country
+                "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
+                "REAL-ACCOUNT",   // account is fine
+                null);
+        PickupResult r = c.schedulePickup(noCountry, "real-oauth-bearer-token", "SANDBOX");
+        assertEquals("ERROR", r.status());
+        assertTrue(r.message().contains("pickup address country"),
+                "message must name the missing field; got: " + r.message());
+    }
+
+    @Test
+    void ups_schedulePickup_null_address_shortCircuits() {
+        // Sanity — a null address is also caught (rare but possible for
+        // direct-constructor callers without going through PickupRequestDTO).
+        UpsConnector c = new UpsConnector(new CarrierProperties(), new ObjectMapper());
+        PickupRequest noAddress = new PickupRequest(
+                LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), LocalTime.of(17, 0),
+                null,
+                "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
+                "REAL-ACCOUNT", null);
+        PickupResult r = c.schedulePickup(noAddress, "real-oauth-bearer-token", "SANDBOX");
+        assertEquals("ERROR", r.status());
+        assertTrue(r.message().contains("pickup address country"), "got: " + r.message());
+    }
+
     /* -------------------------- FedEx -------------------------- */
 
     @Test
