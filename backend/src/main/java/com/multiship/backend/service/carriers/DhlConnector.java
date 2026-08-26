@@ -216,6 +216,23 @@ public class DhlConnector implements CarrierConnector {
                             + request.getReferenceNumber() + "). Set the "
                             + "recipient's country on the Order before generating a label.");
         }
+        // FDX-I3 — boundary guard on shipper accountNumber. Pre-fix,
+        // buildShipmentPayload (line ~1472) + buildRatePayload (line ~1015)
+        // used firstNonBlank(request.getAccountNumber(), "") which shipped
+        // an empty accounts[0].number on the wire. DHL rejects with a
+        // validation error but the operator saw a cryptic 400. Mirrors
+        // the FDX-2 (FedEx) and FDX-I2 (UPS) patterns; also catches the
+        // pre-FDX-I1 "ACCOUNT" placeholder in case any legacy call site
+        // still plants it.
+        if (!StringUtils.hasText(request.getAccountNumber())
+                || "ACCOUNT".equalsIgnoreCase(request.getAccountNumber().trim())) {
+            throw new IllegalArgumentException(
+                    "DHL Express shipment requires the shipper account number that owns the label (order "
+                            + request.getReferenceNumber() + "). The upstream account resolution "
+                            + "returned blank or the \"ACCOUNT\" placeholder — check that a "
+                            + "CarrierAccountRef row exists for this shipper + carrier before "
+                            + "generating the label.");
+        }
         String host = isSandbox(environment)
                 ? carrierProperties.getDhl().getSandboxUrl()
                 : carrierProperties.getDhl().getApiBaseUrl();
