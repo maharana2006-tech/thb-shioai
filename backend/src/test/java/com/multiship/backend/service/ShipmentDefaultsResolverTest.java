@@ -80,6 +80,7 @@ class ShipmentDefaultsResolverTest {
         return new ShipmentDefaultsResolver.ResolveInputs(
                 null, null, null, null, null, null,
                 null,   // FDX-H2 requestPickupType
+                null,   // UPS-4b requestLabelImageFormat
                 customs, client, account, intl);
     }
 
@@ -218,6 +219,7 @@ class ShipmentDefaultsResolverTest {
                 cu.getReasonForExport(),   // ← caller threads customs.reasonForExport here
                 null,
                 null,   // FDX-H2 requestPickupType
+                null,   // UPS-4b requestLabelImageFormat
                 cu, null, a, false);
         var out = resolver.resolve(inputs);
         assertEquals("GIFT", out.shippingPurpose(),
@@ -311,6 +313,7 @@ class ShipmentDefaultsResolverTest {
         var inputs = new ShipmentDefaultsResolver.ResolveInputs(
                 null, null, null, null, null, null,
                 "REQUEST_COURIER",      // request-level override
+                null,                   // UPS-4b requestLabelImageFormat
                 null, null, a, false);
         assertEquals("REQUEST_COURIER", resolver.resolve(inputs).pickupType());
     }
@@ -323,6 +326,52 @@ class ShipmentDefaultsResolverTest {
         CarrierAccountRef a = new CarrierAccountRef();
         a.setPickupType("drop_box");
         assertEquals("DROP_BOX", resolver.resolve(inputsFor(null, null, a, false)).pickupType());
+    }
+
+    // ===== labelImageFormat (UPS-4b) =====
+
+    @Test
+    void labelImageFormat_defaultGIF_whenNoRequestNoAccount() {
+        // Matches pre-UPS-4b UPS hardcode; keeps back-compat for callers
+        // that don't populate the field.
+        var out = resolver.resolve(inputsFor(null, null, null, false));
+        assertEquals("GIF", out.labelImageFormat());
+    }
+
+    @Test
+    void labelImageFormat_accountDefault_passesThrough() {
+        // Operator set PDF on the account (high-quality printer). Resolver
+        // picks it up so UPS returns a sharp vector label instead of
+        // rasterised GIF.
+        CarrierAccountRef a = new CarrierAccountRef();
+        a.setId(42L);
+        a.setCarrierCode("UPS");
+        a.setAccountNumber("A12345");
+        a.setLabelImageFormat("PDF");
+        var out = resolver.resolve(inputsFor(null, null, a, false));
+        assertEquals("PDF", out.labelImageFormat(),
+                "account default must survive to the resolved output");
+    }
+
+    @Test
+    void labelImageFormat_requestOverridesAccount() {
+        // Per-shipment override wins over the account default.
+        CarrierAccountRef a = new CarrierAccountRef();
+        a.setLabelImageFormat("PDF");
+        var inputs = new ShipmentDefaultsResolver.ResolveInputs(
+                null, null, null, null, null, null,
+                null,   // FDX-H2 requestPickupType
+                "ZPL",  // UPS-4b request-level override
+                null, null, a, false);
+        assertEquals("ZPL", resolver.resolve(inputs).labelImageFormat());
+    }
+
+    @Test
+    void labelImageFormat_upperCasedOnResolve() {
+        // Defensive normalisation for programmatic callers passing lower.
+        CarrierAccountRef a = new CarrierAccountRef();
+        a.setLabelImageFormat("pdf");
+        assertEquals("PDF", resolver.resolve(inputsFor(null, null, a, false)).labelImageFormat());
     }
 
     // ===== defensive =====

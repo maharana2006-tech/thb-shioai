@@ -1481,8 +1481,16 @@ public class UpsConnector implements CarrierConnector {
                 "TransactionReference", Map.of(
                         "CustomerContext", firstNonBlank(request.getReferenceNumber(), ""))));
         shipmentRequest.put("Shipment", shipment);
+        // UPS-4b — LabelImageFormat from the resolver (account default →
+        // hardcoded GIF fallback). Pre-fix hardcoded to "GIF" so shippers
+        // with ZPL / high-quality label printers got fuzzy rasterised
+        // labels regardless of preference. Null-safe fallback to GIF
+        // preserves back-compat for callers that don't populate the field.
+        String labelFormat = StringUtils.hasText(request.getLabelImageFormat())
+                ? request.getLabelImageFormat().trim().toUpperCase(Locale.ROOT)
+                : "GIF";
         shipmentRequest.put("LabelSpecification", Map.of(
-                "LabelImageFormat", Map.of("Code", "GIF"),
+                "LabelImageFormat", Map.of("Code", labelFormat),
                 "HTTPUserAgent", "Mozilla/4.5"));
         payload.put("ShipmentRequest", shipmentRequest);
         return payload;

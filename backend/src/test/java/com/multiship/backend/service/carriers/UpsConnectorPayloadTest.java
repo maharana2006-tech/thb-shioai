@@ -289,4 +289,48 @@ class UpsConnectorPayloadTest {
         assertEquals("GIFT", UpsConnector.mapUpsReasonForExport("Gift"));
         assertEquals("SAMPLE", UpsConnector.mapUpsReasonForExport("personal_use"));
     }
+
+    // ===== UPS-4b — LabelImageFormat wired from ShipmentRequestDTO =====
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void labelImageFormat_defaultsToGIF_whenDtoLeavesItNull() throws Exception {
+        // Pre-UPS-4b behavior preserved for callers that don't populate
+        // the new DTO field. Matches the pre-fix hardcode exactly.
+        ShipmentRequestDTO r = domesticRequest();
+        r.setLabelImageFormat(null);
+        Map<String, Object> shipmentRequest = (Map<String, Object>) build(r).get("ShipmentRequest");
+        Map<String, Object> labelSpec = (Map<String, Object>) shipmentRequest.get("LabelSpecification");
+        Map<String, Object> format = (Map<String, Object>) labelSpec.get("LabelImageFormat");
+        assertEquals("GIF", format.get("Code"),
+                "null labelImageFormat must fall to the pre-UPS-4b hardcode for back-compat");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void labelImageFormat_pdfOnDtoLandsOnUpsWire() throws Exception {
+        // Operator-set PDF (high-quality printer) must reach the wire so
+        // UPS returns a sharp vector label instead of rasterised GIF.
+        // Fixes the pre-UPS-4b bug where ZPL-printer shippers had no way
+        // to override the fuzzy default.
+        ShipmentRequestDTO r = domesticRequest();
+        r.setLabelImageFormat("PDF");
+        Map<String, Object> shipmentRequest = (Map<String, Object>) build(r).get("ShipmentRequest");
+        Map<String, Object> labelSpec = (Map<String, Object>) shipmentRequest.get("LabelSpecification");
+        Map<String, Object> format = (Map<String, Object>) labelSpec.get("LabelImageFormat");
+        assertEquals("PDF", format.get("Code"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void labelImageFormat_lowerCaseNormalisedToUpper() throws Exception {
+        // Defensive normalisation for programmatic callers that pass
+        // lower-case — UPS's enum is strict on case.
+        ShipmentRequestDTO r = domesticRequest();
+        r.setLabelImageFormat("zpl");
+        Map<String, Object> shipmentRequest = (Map<String, Object>) build(r).get("ShipmentRequest");
+        Map<String, Object> labelSpec = (Map<String, Object>) shipmentRequest.get("LabelSpecification");
+        Map<String, Object> format = (Map<String, Object>) labelSpec.get("LabelImageFormat");
+        assertEquals("ZPL", format.get("Code"));
+    }
 }

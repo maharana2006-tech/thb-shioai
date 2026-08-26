@@ -2117,6 +2117,9 @@
           },
           "pickupType" : {
             "type" : "string"
+          },
+          "labelImageFormat" : {
+            "type" : "string"
           }
         },
         "required" : [ "carrierCode", "packageType", "recipientAddressLine1", "recipientCity", "recipientCountryCode", "recipientName", "recipientPhone", "recipientPostalCode", "recipientState", "serviceType", "shipperAddressLine1", "shipperCity", "shipperCountryCode", "shipperName", "shipperPhone", "shipperPostalCode", "shipperState", "weight" ]
