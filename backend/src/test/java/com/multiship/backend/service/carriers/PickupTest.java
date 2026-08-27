@@ -191,6 +191,55 @@ class PickupTest {
         assertTrue(r.message().contains("pickup address country"), "got: " + r.message());
     }
 
+    @Test
+    void ups_schedulePickup_null_pickupDate_shortCircuits() {
+        // UPS-18 — null pickupDate serialised as "" on the wire pre-fix,
+        // UPS rejected with a validation error. Now short-circuits at
+        // entry with an actionable ERROR.
+        UpsConnector c = new UpsConnector(new CarrierProperties(), new ObjectMapper());
+        PickupRequest noDate = new PickupRequest(
+                null, LocalTime.of(13, 0), LocalTime.of(17, 0),
+                new AddressToValidate(null, null, "1 A St", null, null,
+                        "Denver", "CO", "80202", "US"),
+                "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
+                "REAL-ACCOUNT", null);
+        PickupResult r = c.schedulePickup(noDate, "real-oauth-bearer-token", "SANDBOX");
+        assertEquals("ERROR", r.status());
+        assertTrue(r.message().contains("pickupDate"),
+                "message must name the missing field; got: " + r.message());
+    }
+
+    @Test
+    void ups_schedulePickup_null_windowStart_shortCircuits() {
+        // UPS-20 — null pickupWindowStart serialised as "" for ReadyTime
+        // pre-fix, UPS rejected. Same guard as pickupDate.
+        UpsConnector c = new UpsConnector(new CarrierProperties(), new ObjectMapper());
+        PickupRequest noStart = new PickupRequest(
+                LocalDate.of(2026, 8, 1), null, LocalTime.of(17, 0),
+                new AddressToValidate(null, null, "1 A St", null, null,
+                        "Denver", "CO", "80202", "US"),
+                "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
+                "REAL-ACCOUNT", null);
+        PickupResult r = c.schedulePickup(noStart, "real-oauth-bearer-token", "SANDBOX");
+        assertEquals("ERROR", r.status());
+        assertTrue(r.message().contains("pickupWindowStart"), "got: " + r.message());
+    }
+
+    @Test
+    void ups_schedulePickup_null_windowEnd_shortCircuits() {
+        // UPS-20 — null pickupWindowEnd serialised as "" for CloseTime.
+        UpsConnector c = new UpsConnector(new CarrierProperties(), new ObjectMapper());
+        PickupRequest noEnd = new PickupRequest(
+                LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), null,
+                new AddressToValidate(null, null, "1 A St", null, null,
+                        "Denver", "CO", "80202", "US"),
+                "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
+                "REAL-ACCOUNT", null);
+        PickupResult r = c.schedulePickup(noEnd, "real-oauth-bearer-token", "SANDBOX");
+        assertEquals("ERROR", r.status());
+        assertTrue(r.message().contains("pickupWindowEnd"), "got: " + r.message());
+    }
+
     /* -------------------------- FedEx -------------------------- */
 
     @Test
