@@ -343,6 +343,41 @@ class PickupTest {
     }
 
     @Test
+    void dhl_schedulePickup_blank_addressCountry_shortCircuits() {
+        // DHL-5 — pickup address country is required so the DHL wire
+        // reflects the real origin instead of silently defaulting to "US"
+        // (misroutes European shippers whose pickup address has a blank
+        // countryCode). Same UPS-12 pattern (#492).
+        DhlConnector c = new DhlConnector(new CarrierProperties(), new ObjectMapper());
+        PickupRequest noCountry = new PickupRequest(
+                LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), LocalTime.of(17, 0),
+                new AddressToValidate(null, null, "1 A St", null, null,
+                        "Denver", "CO", "80202", ""),   // blank country
+                "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
+                "740561111",   // account is fine
+                null);
+        PickupResult r = c.schedulePickup(noCountry, "real-basic-auth-token", "SANDBOX");
+        assertEquals("ERROR", r.status());
+        assertTrue(r.message().contains("pickup address country"),
+                "message must name the missing field; got: " + r.message());
+    }
+
+    @Test
+    void dhl_schedulePickup_null_address_shortCircuits() {
+        // Sanity — a null address is also caught (rare but possible for
+        // direct-constructor callers without going through PickupRequestDTO).
+        DhlConnector c = new DhlConnector(new CarrierProperties(), new ObjectMapper());
+        PickupRequest noAddress = new PickupRequest(
+                LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), LocalTime.of(17, 0),
+                null,
+                "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
+                "740561111", null);
+        PickupResult r = c.schedulePickup(noAddress, "real-basic-auth-token", "SANDBOX");
+        assertEquals("ERROR", r.status());
+        assertTrue(r.message().contains("pickup address country"), "got: " + r.message());
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void dhl_pickup_body_carries_real_account_number_not_empty_string() {
         // FDX-C2 — pre-fix, DHL accounts[0].number was hardcoded to "".
