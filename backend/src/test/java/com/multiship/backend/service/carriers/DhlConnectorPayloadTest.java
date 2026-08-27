@@ -280,6 +280,44 @@ class DhlConnectorPayloadTest {
     }
 
     @Test
+    void parseDhlShipmentEtaReturnsNullWhenAbsent() throws Exception {
+        // DHL-9 — the pre-fix parseShipmentResult fabricated `now + 2 days`
+        // for every DHL label result, misleading downstream code into
+        // treating a made-up date as a real DHL SLA commitment. Post-fix
+        // we read DHL's real estimatedDeliveryDate when present and
+        // surface null otherwise so the FE / tracking widgets see
+        // "no ETA yet".
+        var mapper = new ObjectMapper();
+        assertNull(connector.parseDhlShipmentEta(mapper.readTree("{}")),
+                "response without ETA fields must surface null, not a fabricated date");
+    }
+
+    @Test
+    void parseDhlShipmentEtaReadsEstimatedDeliveryDate() throws Exception {
+        // DHL-9 — real DHL responses populate estimatedDeliveryDate on
+        // accounts with EDD enabled. Read the carrier's own value.
+        var mapper = new ObjectMapper();
+        var eta = connector.parseDhlShipmentEta(mapper.readTree(
+                "{\"estimatedDeliveryDate\":\"2026-08-05\"}"));
+        assertNotNull(eta);
+        assertEquals(2026, eta.getYear());
+        assertEquals(8, eta.getMonthValue());
+        assertEquals(5, eta.getDayOfMonth());
+    }
+
+    @Test
+    void parseDhlShipmentEtaReadsEstimatedDeliveryDateAndTime() throws Exception {
+        // DHL-9 — some accounts get the full datetime variant.
+        var mapper = new ObjectMapper();
+        var eta = connector.parseDhlShipmentEta(mapper.readTree(
+                "{\"estimatedDeliveryDateAndTime\":\"2026-08-05T13:30:00 GMT+00:00\"}"));
+        assertNotNull(eta);
+        assertEquals(2026, eta.getYear());
+        assertEquals(13, eta.getHour());
+        assertEquals(30, eta.getMinute());
+    }
+
+    @Test
     void carrierMetadataIsSensible() {
         assertEquals("DHL", connector.getCarrierCode());
         assertEquals("DHL Express", connector.getCarrierName());
