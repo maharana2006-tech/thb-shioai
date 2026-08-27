@@ -233,6 +233,21 @@ public class DhlConnector implements CarrierConnector {
                             + "CarrierAccountRef row exists for this shipper + carrier before "
                             + "generating the label.");
         }
+        // DHL-4 — shipper country is required. The F7 fix already blocks a
+        // blank recipient country from silently defaulting to "US" via
+        // buildParty's firstNonBlank(country, "US") fallback, but the
+        // shipper side was unguarded. A European shipper with a somehow-
+        // blank shipperCountryCode would have shipped from a phantom "US"
+        // shipper — DHL charges the wrong lane, customs paperwork lists
+        // wrong origin, and label routing goes sideways. Same F7 shape.
+        if (!StringUtils.hasText(request.getShipperCountryCode())) {
+            throw new IllegalArgumentException(
+                    "DHL Express shipment requires a shipper country code (order "
+                            + request.getReferenceNumber() + "). Set the shipper's "
+                            + "country on the CarrierAccountRef or the Order before "
+                            + "generating a label — a blank shipper country would "
+                            + "otherwise silently default to \"US\" on the DHL wire.");
+        }
         String host = isSandbox(environment)
                 ? carrierProperties.getDhl().getSandboxUrl()
                 : carrierProperties.getDhl().getApiBaseUrl();
@@ -1053,7 +1068,13 @@ public class DhlConnector implements CarrierConnector {
 
     /** DHL Party — postalAddress + contactInformation grouped.
      *  Line 3 is optional and comes through as {@code addressLine3} in the
-     *  postal address block; DHL supports up to three street lines. */
+     *  postal address block; DHL supports up to three street lines.
+     *
+     *  <p>Country default is defense-in-depth only: the F7 (recipient) and
+     *  DHL-4 (shipper) boundary guards at createShipment + getRates already
+     *  throw on blank country, so in normal flow the {@code "US"} fallback
+     *  here never fires. Left as a belt-and-braces guard so direct-constructor
+     *  test callers don't crash on a blank field. */
     private Map<String, Object> buildParty(String name, String phone,
                                             String line1, String line2, String line3,
                                             String city, String state,
@@ -1436,6 +1457,18 @@ public class DhlConnector implements CarrierConnector {
                             + request.getReferenceNumber() + "). Set the "
                             + "recipient's country on the Order before rate-shopping — "
                             + "quotes without a destination silently fall to US-domestic.");
+        }
+        // DHL-4 — shipper country is required for the rate lane too. Same
+        // reason as the createShipment guard above — buildParty's
+        // firstNonBlank(country, "US") fallback would otherwise quote from
+        // a phantom "US" shipper origin and hand back the wrong rate lane.
+        if (!StringUtils.hasText(request.getShipperCountryCode())) {
+            throw new IllegalArgumentException(
+                    "DHL rate-shop requires a shipper country code (order "
+                            + request.getReferenceNumber() + "). Set the shipper's "
+                            + "country on the CarrierAccountRef or the Order before "
+                            + "rate-shopping — a blank shipper country would otherwise "
+                            + "silently default to \"US\" and produce a wrong-lane quote.");
         }
         try {
             Map<String, Object> body = buildRatePayload(request);
