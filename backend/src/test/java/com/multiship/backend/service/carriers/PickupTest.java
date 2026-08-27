@@ -48,7 +48,8 @@ class PickupTest {
                 "LB",
                 "Ring the loading bay bell",
                 "740561111",    // FDX-C — real FedEx shipper account for the pickup
-                null);           // FDX-F — pickupServiceType null → Ground (pre-FDX-F default)
+                null,           // FDX-F — pickupServiceType null → Ground (pre-FDX-F default)
+                null, null, null, null);   // DHL-8 — default box dims (unset → DHL fallback)
     }
 
     /* -------------------------- Auth guardrails -------------------------- */
@@ -149,7 +150,8 @@ class PickupTest {
                 LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), LocalTime.of(17, 0),
                 new AddressToValidate(null, null, "1 A St", null, null,
                         "Denver", "CO", "80202", "US"),
-                "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null, "", null);
+                "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null, "", null,
+                null, null, null, null);
         PickupResult r = c.schedulePickup(noAccount, "real-oauth-bearer-token", "SANDBOX");
         assertEquals("ERROR", r.status());
         assertTrue(r.message().contains("shipper account number"),
@@ -169,7 +171,8 @@ class PickupTest {
                         "Denver", "CO", "80202", ""),   // blank country
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
                 "REAL-ACCOUNT",   // account is fine
-                null);
+                null,
+                null, null, null, null);
         PickupResult r = c.schedulePickup(noCountry, "real-oauth-bearer-token", "SANDBOX");
         assertEquals("ERROR", r.status());
         assertTrue(r.message().contains("pickup address country"),
@@ -185,7 +188,8 @@ class PickupTest {
                 LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), LocalTime.of(17, 0),
                 null,
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
-                "REAL-ACCOUNT", null);
+                "REAL-ACCOUNT", null,
+                null, null, null, null);
         PickupResult r = c.schedulePickup(noAddress, "real-oauth-bearer-token", "SANDBOX");
         assertEquals("ERROR", r.status());
         assertTrue(r.message().contains("pickup address country"), "got: " + r.message());
@@ -202,7 +206,8 @@ class PickupTest {
                 new AddressToValidate(null, null, "1 A St", null, null,
                         "Denver", "CO", "80202", "US"),
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
-                "REAL-ACCOUNT", null);
+                "REAL-ACCOUNT", null,
+                null, null, null, null);
         PickupResult r = c.schedulePickup(noDate, "real-oauth-bearer-token", "SANDBOX");
         assertEquals("ERROR", r.status());
         assertTrue(r.message().contains("pickupDate"),
@@ -219,7 +224,8 @@ class PickupTest {
                 new AddressToValidate(null, null, "1 A St", null, null,
                         "Denver", "CO", "80202", "US"),
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
-                "REAL-ACCOUNT", null);
+                "REAL-ACCOUNT", null,
+                null, null, null, null);
         PickupResult r = c.schedulePickup(noStart, "real-oauth-bearer-token", "SANDBOX");
         assertEquals("ERROR", r.status());
         assertTrue(r.message().contains("pickupWindowStart"), "got: " + r.message());
@@ -234,7 +240,8 @@ class PickupTest {
                 new AddressToValidate(null, null, "1 A St", null, null,
                         "Denver", "CO", "80202", "US"),
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
-                "REAL-ACCOUNT", null);
+                "REAL-ACCOUNT", null,
+                null, null, null, null);
         PickupResult r = c.schedulePickup(noEnd, "real-oauth-bearer-token", "SANDBOX");
         assertEquals("ERROR", r.status());
         assertTrue(r.message().contains("pickupWindowEnd"), "got: " + r.message());
@@ -301,7 +308,8 @@ class PickupTest {
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB",
                 null,
                 "",     // blank account
-                null);   // FDX-F pickupServiceType
+                null,   // FDX-F pickupServiceType
+                null, null, null, null);
         PickupResult r = c.schedulePickup(noAccount, "real-oauth-bearer-token", "SANDBOX");
         assertEquals("ERROR", r.status());
         assertTrue(r.message().contains("shipper account number"),
@@ -379,6 +387,53 @@ class PickupTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    void dhl_pickup_body_dimensions_default_to_30x20x10_when_dims_unset() {
+        // DHL-8 backward-compat — unset defaultLength/Width/Height falls to
+        // the historical 30 × 20 × 10 cm so pre-DHL-8 callers keep working.
+        DhlConnector c = new DhlConnector(new CarrierProperties(), new ObjectMapper());
+        java.util.Map<String, Object> body = c.buildDhlPickupRequest(baseRequest());
+        java.util.List<java.util.Map<String, Object>> shipmentDetails =
+                (java.util.List<java.util.Map<String, Object>>) body.get("shipmentDetails");
+        java.util.List<java.util.Map<String, Object>> packages =
+                (java.util.List<java.util.Map<String, Object>>) shipmentDetails.get(0).get("packages");
+        java.util.Map<String, Object> dims =
+                (java.util.Map<String, Object>) packages.get(0).get("dimensions");
+        assertEquals(30, dims.get("length"));
+        assertEquals(20, dims.get("width"));
+        assertEquals(10, dims.get("height"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void dhl_pickup_body_dimensions_use_request_dims_when_set() {
+        // DHL-8 — operator-supplied default dims flow through to every package
+        // on the wire. Pre-fix, every package on the DHL pickup body carried
+        // the hardcoded 30 × 20 × 10 cm regardless of actual parcel size,
+        // and DHL routed a bulk shipment of ~60 cm parcels to shoebox-sized
+        // vehicles.
+        DhlConnector c = new DhlConnector(new CarrierProperties(), new ObjectMapper());
+        PickupRequest bigParcels = new PickupRequest(
+                LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), LocalTime.of(17, 0),
+                new AddressToValidate("Acme", null, "1 A St", null, null,
+                        "London", null, "SW1A 1AA", "GB"),
+                "Contact", "5551234567", 2, new BigDecimal("20"), "KG",
+                null, "740561111", null,
+                new BigDecimal("60"), new BigDecimal("40"), new BigDecimal("30"), "CM");
+        java.util.Map<String, Object> body = c.buildDhlPickupRequest(bigParcels);
+        java.util.List<java.util.Map<String, Object>> shipmentDetails =
+                (java.util.List<java.util.Map<String, Object>>) body.get("shipmentDetails");
+        java.util.List<java.util.Map<String, Object>> packages =
+                (java.util.List<java.util.Map<String, Object>>) shipmentDetails.get(0).get("packages");
+        assertEquals(2, packages.size());
+        java.util.Map<String, Object> dims =
+                (java.util.Map<String, Object>) packages.get(0).get("dimensions");
+        assertEquals(new BigDecimal("60"), dims.get("length"));
+        assertEquals(new BigDecimal("40"), dims.get("width"));
+        assertEquals(new BigDecimal("30"), dims.get("height"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
     void dhl_pickup_body_carries_real_account_number_not_empty_string() {
         // FDX-C2 — pre-fix, DHL accounts[0].number was hardcoded to "".
         // DHL rejected that with a validation error every time. Now
@@ -419,7 +474,8 @@ class PickupTest {
                 new AddressToValidate(null, null, "1 A St", null, null,
                         "Denver", "CO", "80202", "US"),
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
-                "740561111", "EXPRESS");
+                "740561111", "EXPRESS",
+                null, null, null, null);
         java.util.Map<String, Object> body = c.buildFedExPickupRequest(req);
         assertEquals("FDXE", body.get("carrierCode"));
     }
@@ -451,7 +507,8 @@ class PickupTest {
                 new AddressToValidate(null, null, "1 A St", null, null,
                         "Denver", "CO", "80202", "US"),
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
-                "740561111", null);
+                "740561111", null,
+                null, null, null, null);
         java.util.Map<String, Object> body = c.buildFedExPickupRequest(req);
         java.util.Map<String, Object> originDetail =
                 (java.util.Map<String, Object>) body.get("originDetail");
@@ -498,7 +555,8 @@ class PickupTest {
                 new AddressToValidate(null, null, "1 A St", null, null,
                         "Denver", "CO", "80202", "US"),
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
-                "V4-UPS-42", "EXPRESS");
+                "V4-UPS-42", "EXPRESS",
+                null, null, null, null);
         java.util.Map<String, Object> body = c.buildUpsPickupRequest(req);
         java.util.Map<String, Object> pcr = (java.util.Map<String, Object>) body.get("PickupCreationRequest");
         java.util.List<java.util.Map<String, Object>> pieces =
@@ -524,7 +582,8 @@ class PickupTest {
                 LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), LocalTime.of(17, 0),
                 new AddressToValidate(null, null, "1 A St", null, null,
                         "London", null, "SW1A 1AA", "GB"),
-                "Contact", "5551234567", 1, new BigDecimal("5"), "KG", null, "", null);
+                "Contact", "5551234567", 1, new BigDecimal("5"), "KG", null, "", null,
+                null, null, null, null);
         PickupResult r = c.schedulePickup(noAccount, "real-basic-auth-token", "SANDBOX");
         assertEquals("ERROR", r.status());
         assertTrue(r.message().contains("shipper account number"),

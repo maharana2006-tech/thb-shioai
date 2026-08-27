@@ -26,6 +26,18 @@ export interface PickupRequest {
    * both accept the field but no-op. Undefined falls to GROUND.
    */
   pickupServiceType?: PickupServiceType
+  /**
+   * DHL-8 — per-package default dimensions on the pickup body. DHL uses
+   * dims to route the pickup to the right vehicle class (van vs truck).
+   * Pre-fix, every package on the DHL pickup wire carried a hardcoded
+   * 30 × 20 × 10 cm regardless of actual parcel size. All optional —
+   * FedEx/UPS/USPS accept but no-op; when unset the DHL connector falls
+   * back to the historical 30 × 20 × 10 cm default.
+   */
+  defaultLength?: number
+  defaultWidth?: number
+  defaultHeight?: number
+  dimUnit?: 'CM' | 'IN'
 }
 
 export type PickupServiceType = 'GROUND' | 'EXPRESS' | 'INTERNATIONAL'

@@ -366,6 +366,35 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
                   <option value="KG">KG</option>
                 </select>
               </Field>
+              {/* DHL-8 — per-package dims flow through to DHL's pickup body
+                  so its routing reflects real parcel size. Optional; DHL
+                  falls back to 30 × 20 × 10 cm when unset. Other carriers
+                  accept but no-op. */}
+              <Field label="Default length (per box)">
+                <input type="number" min="0" step="0.1"
+                       className={inputCls()}
+                       value={form.defaultLength ?? ''}
+                       onChange={(e) => update({ defaultLength: e.target.value ? Number(e.target.value) : undefined })} />
+              </Field>
+              <Field label="Default width">
+                <input type="number" min="0" step="0.1"
+                       className={inputCls()}
+                       value={form.defaultWidth ?? ''}
+                       onChange={(e) => update({ defaultWidth: e.target.value ? Number(e.target.value) : undefined })} />
+              </Field>
+              <Field label="Default height / Unit">
+                <div className="flex gap-1">
+                  <input type="number" min="0" step="0.1"
+                         className={`${inputCls()} flex-1`}
+                         value={form.defaultHeight ?? ''}
+                         onChange={(e) => update({ defaultHeight: e.target.value ? Number(e.target.value) : undefined })} />
+                  <select className={inputCls()} value={form.dimUnit ?? 'CM'}
+                          onChange={(e) => update({ dimUnit: e.target.value as 'CM' | 'IN' })}>
+                    <option value="CM">CM</option>
+                    <option value="IN">IN</option>
+                  </select>
+                </div>
+              </Field>
               <Field label="Notes for driver" className="col-span-3" error={err('specialInstructions')}>
                 <textarea rows={2} className={inputCls('specialInstructions')}
                           maxLength={NOTES_MAX}

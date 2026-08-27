@@ -73,6 +73,24 @@ public class PickupRequestDTO {
     /** LB | KG. Null defaults to LB. */
     private String weightUnit;
 
+    /**
+     * DHL-8 — default box dimensions the driver expects to collect (applied
+     * per package on the pickup wire). Pre-fix, {@link
+     * com.multiship.backend.service.carriers.DhlConnector#generateDhlPickupPackages}
+     * hardcoded 30 × 20 × 10 cm for every package on the DHL pickup body,
+     * which drove DHL's routing to the wrong vehicle class for larger
+     * parcels. All 4 fields are optional so callers that haven't been
+     * updated for DHL-8 keep working; the connector falls back to the
+     * historical 30 × 20 × 10 cm default when any of the length/width/
+     * height are unset.
+     */
+    private BigDecimal defaultLength;
+    private BigDecimal defaultWidth;
+    private BigDecimal defaultHeight;
+
+    /** CM | IN. Null defaults to CM (matches DHL's expected default). */
+    private String dimUnit;
+
     /** Free-form notes for the driver. */
     private String specialInstructions;
 

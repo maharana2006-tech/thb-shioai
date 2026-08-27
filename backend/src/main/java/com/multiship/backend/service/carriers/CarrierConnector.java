@@ -482,6 +482,16 @@ public interface CarrierConnector {
      *                           has no per-request service code; both accept
      *                           the field but no-op on it. Null falls to
      *                           GROUND (matches the pre-FDX-F hardcode).
+     * @param defaultLength      DHL-8 — per-package default length. Consumed
+     *                           by DHL's pickup body so the driver's routing
+     *                           reflects real dimensions. Nullable; null +
+     *                           any other blank dim falls to the historical
+     *                           30 × 20 × 10 cm default in the DHL connector.
+     * @param defaultWidth       DHL-8 — per-package default width. Same
+     *                           semantics as {@code defaultLength}.
+     * @param defaultHeight      DHL-8 — per-package default height. Same
+     *                           semantics as {@code defaultLength}.
+     * @param dimUnit            DHL-8 — CM | IN. Null defaults to CM.
      */
     record PickupRequest(
             java.time.LocalDate pickupDate,
@@ -495,7 +505,11 @@ public interface CarrierConnector {
             String weightUnit,
             String specialInstructions,
             String accountNumber,
-            String pickupServiceType
+            String pickupServiceType,
+            java.math.BigDecimal defaultLength,
+            java.math.BigDecimal defaultWidth,
+            java.math.BigDecimal defaultHeight,
+            String dimUnit
     ) {
     }
 
