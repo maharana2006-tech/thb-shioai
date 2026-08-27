@@ -683,9 +683,13 @@ public class DhlConnector implements CarrierConnector {
                         "DHL returned no products.", response);
             }
 
-            String currency = firstNonBlank(
-                    product.at("/totalPrice/0/priceCurrency").asText(null),
-                    "USD");
+            // DHL-3 — pre-fix silently defaulted to "USD" when the response
+            // omitted priceCurrency. Real DHL responses always include
+            // priceCurrency (mandatory in the /rates schema), so surfacing
+            // a genuine null tells downstream "no quote" instead of
+            // mislabeling a GBP/EUR rate as USD by the FX difference.
+            // Same UPS-14/15 fix on UpsConnector.
+            String currency = product.at("/totalPrice/0/priceCurrency").asText(null);
 
             java.math.BigDecimal freight = null;
             java.math.BigDecimal duty = java.math.BigDecimal.ZERO;
@@ -1560,16 +1564,24 @@ public class DhlConnector implements CarrierConnector {
         return readDhlAmount(fallback);
     }
 
+    /**
+     * DHL-2 — pre-fix silently defaulted to "USD" in 3 spots (empty array,
+     * BILLC entry without priceCurrency, and first-entry fallback). Real
+     * DHL responses always populate priceCurrency (mandatory in the /rates
+     * response schema); surfacing a genuine null tells the rate-shop UI
+     * "no quote" rather than mislabeling a GBP/EUR rate as USD by the FX
+     * difference. Same UPS-14/15 fix on UpsConnector.
+     */
     private static String pickDhlCurrency(JsonNode totalPrice) {
-        if (!totalPrice.isArray() || totalPrice.isEmpty()) return "USD";
+        if (!totalPrice.isArray() || totalPrice.isEmpty()) return null;
         for (JsonNode entry : totalPrice) {
             if ("BILLC".equalsIgnoreCase(entry.path("typeCode").asText(""))) {
                 String c = entry.path("priceCurrency").asText(null);
-                return StringUtils.hasText(c) ? c : "USD";
+                return StringUtils.hasText(c) ? c : null;
             }
         }
         String c = totalPrice.get(0).path("priceCurrency").asText(null);
-        return StringUtils.hasText(c) ? c : "USD";
+        return StringUtils.hasText(c) ? c : null;
     }
 
     private static BigDecimal readDhlAmount(JsonNode entry) {

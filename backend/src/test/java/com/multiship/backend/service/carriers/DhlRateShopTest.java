@@ -11,6 +11,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -193,7 +194,13 @@ class DhlRateShopTest {
     }
 
     @Test
-    void parseDhlRateResponseDefaultsCurrencyToUsd() {
+    void parseDhlRateResponseReturnsNullCurrencyWhenMissing() {
+        // DHL-2 — currency omitted returns null, not the pre-fix silent
+        // "USD" default. Real DHL responses always populate priceCurrency
+        // (mandatory in the /rates schema); if one lands without it we
+        // surface null so the rate-shop UI sees "no quote" rather than
+        // mislabeling a GBP/EUR rate as USD by the FX difference. Same
+        // fix as UPS-14 on UpsConnector.
         String canned = """
                 {
                   "products": [
@@ -203,7 +210,8 @@ class DhlRateShopTest {
                     }
                   ]
                 }""";
-        assertEquals("USD", connector.parseDhlRateResponse(canned).get(0).currency());
+        assertNull(connector.parseDhlRateResponse(canned).get(0).currency(),
+                "missing currency must surface as null, not silently mislabel as USD");
     }
 
     @Test
