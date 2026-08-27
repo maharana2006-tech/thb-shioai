@@ -1314,17 +1314,45 @@ public class DhlConnector implements CarrierConnector {
         return ed;
     }
 
-    /** OUR reason-for-export enum → DHL exportReason. */
-    private static String mapExportReason(String reason) {
+    /**
+     * OUR reason-for-export enum → DHL {@code exportReason}.
+     *
+     * <p>DHL-1 — DHL-audit. Mirrors {@code mapUpsReasonForExport} (UPS-9)
+     * and {@code mapFedExPurpose} (FDX-D). Two bugs fixed here:
+     *
+     * <ul>
+     *   <li>Pre-fix {@code DOCUMENTS → "personal_effects"} was flat-out
+     *       wrong — {@code personal_effects} is DHL's category for a
+     *       shipper's own personal-use goods, not commercial documents.
+     *       Documents ship as regular commercial cargo; realigned to
+     *       {@code commercial_purpose_or_sale}. {@code PERSONAL_USE}
+     *       (added below) is what actually maps to {@code personal_effects}.</li>
+     *   <li>Pre-fix switch only covered 6 of the resolver's 8
+     *       {@code SHIPPING_PURPOSE_ENUM} values — {@code MERCHANDISE},
+     *       {@code PERSONAL_USE}, {@code REPAIR_AND_RETURN} silently
+     *       fell through to {@code commercial_purpose_or_sale} the
+     *       moment resolver expansions landed. Now every resolver value
+     *       maps explicitly; the {@code default} branch logs a warning
+     *       so future resolver additions surface loudly.</li>
+     * </ul>
+     */
+    static String mapExportReason(String reason) {
         if (reason == null) return "commercial_purpose_or_sale";
-        return switch (reason.trim().toUpperCase()) {
-            case "SALE" -> "commercial_purpose_or_sale";
+        String v = reason.trim().toUpperCase(Locale.ROOT);
+        return switch (v) {
+            case "SALE", "MERCHANDISE" -> "commercial_purpose_or_sale";
             case "GIFT" -> "gift";
             case "SAMPLE" -> "sample";
+            case "PERSONAL_USE" -> "personal_effects";
             case "RETURN" -> "return";
-            case "REPAIR" -> "repair_or_processing";
-            case "DOCUMENTS" -> "personal_effects";
-            default -> "commercial_purpose_or_sale";
+            case "REPAIR", "REPAIR_AND_RETURN" -> "repair_or_processing";
+            case "DOCUMENTS" -> "commercial_purpose_or_sale";
+            default -> {
+                log.warn("DHL mapExportReason: unrecognised reason '{}' — defaulting to "
+                        + "commercial_purpose_or_sale. Add an explicit mapping if this is "
+                        + "a real resolver value.", v);
+                yield "commercial_purpose_or_sale";
+            }
         };
     }
 
