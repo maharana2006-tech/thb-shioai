@@ -171,13 +171,41 @@ public class FedExConnector implements CarrierConnector {
 
     @Override
     public String getAccessToken(String clientId, String clientSecret) {
+        return getAccessToken(clientId, clientSecret, null, null);
+    }
+
+    @Override
+    public String getAccessToken(String clientId, String clientSecret, String accountNumber) {
+        return getAccessToken(clientId, clientSecret, accountNumber, null);
+    }
+
+    /**
+     * FedEx OAuth 2.0 (client_credentials) — mirror of the UPS 4-arg pattern.
+     *
+     * <p>F-MODE-1 — pre-fix FedExConnector only overrode the 2-arg overload,
+     * so the interface's 4-arg default dropped the {@code environment}
+     * argument on the floor. {@code getTokenUrl()} then routed via
+     * {@code carrierProperties.getDefaultEnvironment()} — a GLOBAL config
+     * value rather than the per-account env. Result: any FedEx account
+     * whose environment didn't match the global default silently 401'd
+     * against the wrong OAuth host (FedEx sandbox and prod each 401 the
+     * other's credentials), and verify reported "credentials rejected"
+     * for CORRECT keys.
+     *
+     * <p>FedEx sandbox / production credentials are minted separately on
+     * the FedEx Developer Portal and are not interchangeable. The token
+     * host mirrors the API host: {@code apis-sandbox.fedex.com} vs
+     * {@code apis.fedex.com}.
+     */
+    @Override
+    public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
+        String tokenUrl = getTokenUrl(environment);
         try {
             MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
             form.add("grant_type", "client_credentials");
             form.add("client_id", clientId);
             form.add("client_secret", clientSecret);
 
-            String tokenUrl = getTokenUrl();
             RestClient restClient = HttpClients.newBuilder().baseUrl(tokenUrl).build();
             String response = restClient.post()
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
@@ -194,7 +222,7 @@ public class FedExConnector implements CarrierConnector {
 
             return accessToken;
         } catch (Exception ex) {
-            log.error("Failed to obtain FedEx access token from {}", getTokenUrl(), ex);
+            log.error("Failed to obtain FedEx access token from {}", tokenUrl, ex);
             throw new CarrierConnectionException("Unable to obtain FedEx access token.", ex);
         }
     }
@@ -2322,16 +2350,34 @@ public class FedExConnector implements CarrierConnector {
         return fedEx.getApiBaseUrl();
     }
 
-    private String getTokenUrl() {
+    /**
+     * OAuth token URL for the given caller environment.
+     *
+     * <p>F-MODE-1 — pre-fix this method took no argument and read
+     * {@code carrierProperties.getDefaultEnvironment()} (a GLOBAL config
+     * value) so token minting ignored the per-account env. Now takes
+     * {@code environment} from the caller; null / anything non-SANDBOX
+     * routes to production.
+     *
+     * <p>Routing:
+     * <ul>
+     *   <li>SANDBOX → {@code sandboxUrl + tokenPath} (e.g.
+     *       {@code https://apis-sandbox.fedex.com/oauth/token})</li>
+     *   <li>Anything else → the configured {@code authUrl}, which points
+     *       at production ({@code https://apis.fedex.com/oauth/token}).
+     *       Falls to {@code apiBaseUrl + tokenPath} if authUrl is blank.</li>
+     * </ul>
+     */
+    private String getTokenUrl(String environment) {
         CarrierProperties.FedEx fedEx = carrierProperties.getFedEx();
-        if ("SANDBOX".equalsIgnoreCase(carrierProperties.getDefaultEnvironment())
+        if ("SANDBOX".equalsIgnoreCase(environment)
                 && StringUtils.hasText(fedEx.getSandboxUrl())) {
             return fedEx.getSandboxUrl() + fedEx.getTokenPath();
         }
         if (StringUtils.hasText(fedEx.getAuthUrl())) {
             return fedEx.getAuthUrl();
         }
-        return getBaseUrl() + fedEx.getTokenPath();
+        return getBaseUrl(environment) + fedEx.getTokenPath();
     }
 
     private String getShipmentUrl(String environment) {
