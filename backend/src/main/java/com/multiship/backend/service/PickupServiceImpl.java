@@ -114,7 +114,15 @@ public class PickupServiceImpl implements PickupService {
                 // FDX-F — operator's Express/Ground/International selection
                 // from the FE modal. FedEx maps to carrierCode=FDXE/FDXG,
                 // UPS maps to ServiceCode=007/003, DHL/USPS no-op.
-                request.getPickupServiceType());
+                request.getPickupServiceType(),
+                // DHL-8 — operator's per-package default dims. Consumed by
+                // DHL's pickup body so its routing reflects real dimensions
+                // (pre-fix hardcoded 30 × 20 × 10 cm regardless of parcel
+                // size). Nullable — other connectors accept but no-op on.
+                request.getDefaultLength(),
+                request.getDefaultWidth(),
+                request.getDefaultHeight(),
+                request.getDimUnit());
 
         PickupResult result;
         try {

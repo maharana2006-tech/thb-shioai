@@ -865,17 +865,33 @@ public class DhlConnector implements CarrierConnector {
         return payload;
     }
 
+    /**
+     * Build the {@code packages[]} array for the DHL pickup body.
+     *
+     * <p>DHL-8 — pre-fix every parcel on the wire carried the hardcoded
+     * dimensions {@code 30 × 20 × 10 cm} regardless of the actual parcel
+     * size. DHL uses dimensions to route the pickup to the right vehicle
+     * class (van vs truck); a bulk shipment of ~60 cm parcels routed as
+     * shoebox-sized parcels routinely under-provisioned the vehicle. Now
+     * consumes {@link PickupRequest#defaultLength} / {@code defaultWidth}
+     * / {@code defaultHeight}; when any is unset we fall back to the
+     * historical 30 × 20 × 10 cm to preserve behaviour for pre-DHL-8
+     * callers.
+     */
     private static List<Map<String, Object>> generateDhlPickupPackages(PickupRequest req) {
         int count = Math.max(1, req.packageCount());
         java.math.BigDecimal perPackage = req.totalWeight() != null && count > 0
                 ? req.totalWeight().divide(java.math.BigDecimal.valueOf(count),
                         2, java.math.RoundingMode.HALF_UP)
                 : java.math.BigDecimal.ONE;
+        Object length = req.defaultLength() != null ? req.defaultLength() : 30;
+        Object width = req.defaultWidth() != null ? req.defaultWidth() : 20;
+        Object height = req.defaultHeight() != null ? req.defaultHeight() : 10;
         List<Map<String, Object>> pkgs = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             pkgs.add(Map.of(
                     "weight", perPackage,
-                    "dimensions", Map.of("length", 30, "width", 20, "height", 10)));
+                    "dimensions", Map.of("length", length, "width", width, "height", height)));
         }
         return pkgs;
     }
