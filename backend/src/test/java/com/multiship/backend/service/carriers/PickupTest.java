@@ -351,38 +351,53 @@ class PickupTest {
     }
 
     @Test
-    void dhl_schedulePickup_blank_addressCountry_shortCircuits() {
-        // DHL-5 — pickup address country is required so the DHL wire
-        // reflects the real origin instead of silently defaulting to "US"
-        // (misroutes European shippers whose pickup address has a blank
-        // countryCode). Same UPS-12 pattern (#492).
+    void dhl_schedulePickup_null_pickupDate_shortCircuits() {
+        // DHL-6 — null pickupDate silently reached formatDhlPickupTimestamp
+        // pre-fix and fell to today's UTC date on the wire, masking a
+        // misconfigured DTO. Same UPS-18 pattern (#493).
         DhlConnector c = new DhlConnector(new CarrierProperties(), new ObjectMapper());
-        PickupRequest noCountry = new PickupRequest(
-                LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), LocalTime.of(17, 0),
+        PickupRequest noDate = new PickupRequest(
+                null, LocalTime.of(13, 0), LocalTime.of(17, 0),
                 new AddressToValidate(null, null, "1 A St", null, null,
-                        "Denver", "CO", "80202", ""),   // blank country
+                        "Denver", "CO", "80202", "US"),
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
-                "740561111",   // account is fine
-                null);
-        PickupResult r = c.schedulePickup(noCountry, "real-basic-auth-token", "SANDBOX");
+                "740561111", null);
+        PickupResult r = c.schedulePickup(noDate, "real-basic-auth-token", "SANDBOX");
         assertEquals("ERROR", r.status());
-        assertTrue(r.message().contains("pickup address country"),
+        assertTrue(r.message().contains("pickupDate"),
                 "message must name the missing field; got: " + r.message());
     }
 
     @Test
-    void dhl_schedulePickup_null_address_shortCircuits() {
-        // Sanity — a null address is also caught (rare but possible for
-        // direct-constructor callers without going through PickupRequestDTO).
+    void dhl_schedulePickup_null_windowStart_shortCircuits() {
+        // DHL-7 — null pickupWindowStart silently defaulted to 13:00 on
+        // plannedPickupDateAndTime. Same UPS-20 pattern.
         DhlConnector c = new DhlConnector(new CarrierProperties(), new ObjectMapper());
-        PickupRequest noAddress = new PickupRequest(
-                LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), LocalTime.of(17, 0),
-                null,
+        PickupRequest noStart = new PickupRequest(
+                LocalDate.of(2026, 8, 1), null, LocalTime.of(17, 0),
+                new AddressToValidate(null, null, "1 A St", null, null,
+                        "Denver", "CO", "80202", "US"),
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
                 "740561111", null);
-        PickupResult r = c.schedulePickup(noAddress, "real-basic-auth-token", "SANDBOX");
+        PickupResult r = c.schedulePickup(noStart, "real-basic-auth-token", "SANDBOX");
         assertEquals("ERROR", r.status());
-        assertTrue(r.message().contains("pickup address country"), "got: " + r.message());
+        assertTrue(r.message().contains("pickupWindowStart"), "got: " + r.message());
+    }
+
+    @Test
+    void dhl_schedulePickup_null_windowEnd_shortCircuits() {
+        // DHL-7 — null pickupWindowEnd silently defaulted to "17:00" on
+        // closeTime. Same UPS-20 pattern.
+        DhlConnector c = new DhlConnector(new CarrierProperties(), new ObjectMapper());
+        PickupRequest noEnd = new PickupRequest(
+                LocalDate.of(2026, 8, 1), LocalTime.of(13, 0), null,
+                new AddressToValidate(null, null, "1 A St", null, null,
+                        "Denver", "CO", "80202", "US"),
+                "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
+                "740561111", null);
+        PickupResult r = c.schedulePickup(noEnd, "real-basic-auth-token", "SANDBOX");
+        assertEquals("ERROR", r.status());
+        assertTrue(r.message().contains("pickupWindowEnd"), "got: " + r.message());
     }
 
     @Test

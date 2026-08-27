@@ -824,6 +824,27 @@ public class DhlConnector implements CarrierConnector {
                             + "none was passed.",
                     null);
         }
+        // DHL-6 + DHL-7 — pickup date + window are required. Pre-fix,
+        // buildDhlPickupRequest silently defaulted a missing
+        // pickupWindowStart to 13:00 on plannedPickupDateAndTime and a
+        // missing pickupWindowEnd to "17:00" on closeTime. Silent defaults
+        // masked misconfigured DTOs — the operator saw a successful DHL
+        // response but the driver arrived at a wrong time (or no time was
+        // communicated to the depot at all). Same UPS-18/20 pattern (#493).
+        // PickupRequestDTO marks pickupDate as @NotNull at the HTTP layer
+        // so this mainly covers direct-constructor callers, but the exit
+        // for the window fields is uniform across carriers now.
+        if (request.pickupDate() == null
+                || request.pickupWindowStart() == null
+                || request.pickupWindowEnd() == null) {
+            return new PickupResult("DHL", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "DHL pickup requires pickupDate + pickupWindowStart + pickupWindowEnd. "
+                            + "Missing any of these silently defaulted to 13:00/17:00 pre-fix "
+                            + "and led to drivers arriving outside the operator's window.",
+                    null);
+        }
         try {
             Map<String, Object> body = buildDhlPickupRequest(request);
             String host = isSandbox(environment)
@@ -862,6 +883,10 @@ public class DhlConnector implements CarrierConnector {
     Map<String, Object> buildDhlPickupRequest(PickupRequest req) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("plannedPickupDateAndTime", formatDhlPickupTimestamp(req));
+        // DHL-7 — closeTime falls back to "17:00" only when the entry
+        // guard is bypassed (direct-constructor test callers).
+        // schedulePickup throws on null pickupWindowEnd; the fallback
+        // exists to keep test constructors compiling.
         payload.put("closeTime", req.pickupWindowEnd() == null
                 ? "17:00" : req.pickupWindowEnd().toString());
         // FDX-C2 — real shipper account (pre-fix, hardcoded empty string).
@@ -943,6 +968,13 @@ public class DhlConnector implements CarrierConnector {
      * to {@code LabelDates.today(null)} → deterministic UTC so the
      * plannedPickupDateAndTime doesn't shift when the same code runs on
      * boxes in different timezones.
+     *
+     * <p>DHL-6/7 — schedulePickup boundary-throws when
+     * pickupDate/pickupWindowStart are null, so in normal flow the
+     * fallbacks here never fire. Retained as defence-in-depth for direct
+     * callers of this helper in unit tests. Pre-fix the silent 13:00
+     * default masked misconfigured DTOs and drivers arrived at the wrong
+     * time.
      */
     private static String formatDhlPickupTimestamp(PickupRequest req) {
         java.time.LocalDate date = req.pickupDate() != null
