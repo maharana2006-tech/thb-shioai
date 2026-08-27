@@ -1038,6 +1038,22 @@ public class UpsConnector implements CarrierConnector {
                     "UPS pickup needs the shipper account number that owns the labels; none was passed.",
                     null);
         }
+        // UPS-12 — pickup address country is required so UPS's
+        // DestinationCountryCode reflects the shipper's country instead of
+        // silently defaulting to "US" (misroutes European shippers whose
+        // pickup address has a blank countryCode). Address is @NotBlank
+        // on PickupRequestDTO at the HTTP surface but the boundary throw
+        // guarantees the same for direct-constructor callers.
+        if (request.address() == null
+                || !StringUtils.hasText(request.address().countryCode())) {
+            return new PickupResult("UPS", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "UPS pickup needs the shipper pickup address country code "
+                            + "so the DestinationCountryCode reflects the correct country; "
+                            + "none was passed.",
+                    null);
+        }
         try {
             Map<String, Object> body = buildUpsPickupRequest(request);
             String baseUrl = isSandbox(environment)
@@ -1125,8 +1141,14 @@ public class UpsConnector implements CarrierConnector {
         Map<String, Object> piece = new LinkedHashMap<>();
         piece.put("ServiceCode", mapUpsPickupServiceCode(req.pickupServiceType()));
         piece.put("Quantity", String.valueOf(Math.max(1, req.packageCount())));
+        // UPS-12 — DestinationCountryCode reflects the shipper's pickup
+        // address country (schedulePickup guards non-blank at entry).
+        // Pre-fix defaulted to "US" via firstNonBlank(a.countryCode(), "US")
+        // which misrouted European shippers whose address was somehow blank.
+        // firstNonBlank retained as defence-in-depth for direct callers of
+        // buildUpsPickupRequest in tests.
         piece.put("DestinationCountryCode", firstNonBlank(
-                a == null ? null : a.countryCode(), "US"));
+                a == null ? null : a.countryCode(), ""));
         piece.put("ContainerCode", "01");
         pcr.put("PickupPiece", java.util.List.of(piece));
 
