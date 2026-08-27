@@ -1111,6 +1111,12 @@ public class UpsConnector implements CarrierConnector {
     Map<String, Object> buildUpsPickupRequest(PickupRequest req) {
         Map<String, Object> body = new LinkedHashMap<>();
         Map<String, Object> pcr = new LinkedHashMap<>();
+        // UPS-21 — RatePickupIndicator=Y asks UPS to price the pickup and
+        // return charges in the response; N schedules without rating.
+        // Hardcoded to N because every pickup path in this app is fire-
+        // and-forget (operator gets a confirmation number, not a bill).
+        // Add per-account/per-request field if a future flow needs pickup
+        // pricing back in the response.
         pcr.put("RatePickupIndicator", "N");
         // FDX-C2 — AccountNumber is the SHIPPER'S CARRIER ACCOUNT (not the
         // contact person's name; pre-fix used req.address().name() by
@@ -1533,9 +1539,14 @@ public class UpsConnector implements CarrierConnector {
         String labelFormat = StringUtils.hasText(request.getLabelImageFormat())
                 ? request.getLabelImageFormat().trim().toUpperCase(Locale.ROOT)
                 : "GIF";
+        // UPS-5 — HTTPUserAgent is UPS's Label-Spec-side identifier for the
+        // label-generating tool. Historical "Mozilla/4.5" was legacy cargo
+        // from the pre-2010 UPS integration guides. Switched to a
+        // descriptive value so support tickets can correlate labels to this
+        // application. UPS accepts any non-empty string.
         shipmentRequest.put("LabelSpecification", Map.of(
                 "LabelImageFormat", Map.of("Code", labelFormat),
-                "HTTPUserAgent", "Mozilla/4.5"));
+                "HTTPUserAgent", "multiship"));
         payload.put("ShipmentRequest", shipmentRequest);
         return payload;
     }
@@ -1686,6 +1697,12 @@ public class UpsConnector implements CarrierConnector {
         Map<String, Object> pkg = new LinkedHashMap<>();
         pkg.put("Description", firstNonBlank(p.getDescription(),
                 firstNonBlank(request.getSpecialInstructions(), "Package")));
+        // UPS-3 — PackagingType.Code "02" = Customer Supplied Package
+        // (operator's own box). Sensible default when the resolver /
+        // PackageMath doesn't pick a UPS-specific packaging type
+        // (Letter/Pak/Tube/etc); covers the common "brown box" case.
+        // Documented here so future audits don't re-flag the hardcoded
+        // "02" as a silent-fallback bug.
         pkg.put("PackagingType", Map.of(
                 "Code", firstNonBlank(
                         firstNonBlank(p.getPackageType(), request.getPackageType()),
