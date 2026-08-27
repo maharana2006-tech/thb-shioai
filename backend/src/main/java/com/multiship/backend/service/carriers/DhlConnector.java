@@ -1177,6 +1177,15 @@ public class DhlConnector implements CarrierConnector {
         }
         content.put("packages", buildPackages(request));
         content.put("unitOfMeasurement", "KG".equalsIgnoreCase(request.getWeightUnit()) ? "metric" : "imperial");
+        // DHL-14 — description falls back to "General merchandise" when
+        // specialInstructions is blank. This is intentional: DHL requires
+        // a non-empty description on every shipment and "General
+        // merchandise" is the historical default that DHL's own portal
+        // uses. Real per-shipment descriptions ride on the customs
+        // commodity lines (buildExportDeclaration.lineItems[].description)
+        // for intl clearance — customs officers read those, not this
+        // top-level string. Document rather than change so downstream
+        // "no description" symptoms aren't misattributed to this line.
         content.put("description", firstNonBlank(request.getSpecialInstructions(), "General merchandise"));
         content.put("incoterm", firstNonBlank(
                 isIntl ? request.getIntl().getIncoterms() : null, "DAP").toUpperCase());
@@ -1292,7 +1301,16 @@ public class DhlConnector implements CarrierConnector {
 
     /** DHL Package — typeCode + weight + dimensions in metric or imperial.
      *  Sprint 28 — takes a PackageDetailDTO so per-box shape overrides
-     *  the shipment-level top-level fields. */
+     *  the shipment-level top-level fields.
+     *
+     *  <p>DHL-13 — the {@code "3BX"} default (DHL Express Box Medium,
+     *  ~25 kg cap) is intentional: DHL requires a typeCode on every
+     *  package and 3BX is DHL's own default in the portal for
+     *  non-flat-rate shipments. Real per-package types resolve upstream
+     *  through the resolver (per-account default → shipment default →
+     *  per-package DTO). Callers who ship &gt;25 kg shipments must set a
+     *  packageType explicitly; documented rather than changed so future
+     *  audits don't re-flag it. */
     private Map<String, Object> buildPackage(ShipmentRequestDTO request,
                                               com.multiship.backend.dto.PackageDetailDTO p) {
         Map<String, Object> pkg = new LinkedHashMap<>();
@@ -1466,12 +1484,56 @@ public class DhlConnector implements CarrierConnector {
                 }
             }
 
+            // DHL-9 — pre-fix, every DHL label result carried a fabricated
+            // `now + 2 days` ETA regardless of what DHL actually returned.
+            // Downstream code treated it as a real DHL SLA commitment
+            // (customer-facing tracking pages, delivery-window widgets).
+            // Now read the carrier's own estimatedDeliveryDate when
+            // present; null otherwise so downstream shows "no ETA yet"
+            // instead of a made-up date. The tracking endpoint carries
+            // the real ETA once the package moves — this parser doesn't
+            // fabricate one at label-creation time.
+            LocalDateTime estimatedDelivery = parseDhlShipmentEta(root);
+
             return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelUrl,
-                    null, LocalDateTime.now(ZoneOffset.UTC).plusDays(2), response, packages);
+                    null, estimatedDelivery, response, packages);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            // DHL-10 — pre-fix any parse failure returned an empty
+            // ShipmentResult with the raw response, which downstream
+            // could misread as "shipment succeeded, tracking pending".
+            // Narrow the catch to JSON parse failures (the only class
+            // that's actually recoverable) and rethrow as a typed
+            // CarrierException so CarrierExceptionMapper marks the
+            // shipment FAILED_CARRIER instead of pretending success.
+            log.warn("DHL createShipment response was not valid JSON: {}", ex.getMessage());
+            throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                    .map("DHL", ex, "parseShipmentResult");
+        }
+    }
+
+    /**
+     * Read DHL's own {@code estimatedDeliveryDate} / {@code
+     * estimatedDeliveryDateAndTime} off the shipment response, if present.
+     * Real DHL responses populate this when the account has ETD/EDD
+     * enabled; when absent we return null so downstream shows "no ETA"
+     * rather than a fabricated one. Package-visible for tests.
+     */
+    LocalDateTime parseDhlShipmentEta(JsonNode root) {
+        String value = root.path("estimatedDeliveryDate").asText(null);
+        if (value == null) value = root.path("estimatedDeliveryDateAndTime").asText(null);
+        if (!StringUtils.hasText(value)) return null;
+        // DHL sometimes appends a trailing "GMT+00:00" marker (same shape
+        // as the rate response); strip it so LocalDateTime can parse.
+        String cleaned = value.contains(" ") ? value.substring(0, value.indexOf(' ')) : value;
+        try {
+            return LocalDateTime.parse(cleaned);
         } catch (Exception ex) {
-            log.warn("Failed to parse DHL response; treating as fallback. Reason: {}", ex.getMessage());
-            return new ShipmentResult(null, null, null, null, null, null, response,
-                    java.util.List.of());
+            try {
+                return java.time.LocalDate.parse(cleaned).atStartOfDay();
+            } catch (Exception ignored) {
+                log.debug("DHL parseDhlShipmentEta: unparseable value '{}' (cleaned to '{}')", value, cleaned);
+                return null;
+            }
         }
     }
 
