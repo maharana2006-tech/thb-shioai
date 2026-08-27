@@ -788,6 +788,23 @@ public class DhlConnector implements CarrierConnector {
                     "DHL pickup needs the shipper account number that owns the labels; none was passed.",
                     null);
         }
+        // DHL-5 — pickup address country is required so the shipper's
+        // postalAddress reflects the actual origin instead of silently
+        // defaulting to "US" (misroutes European shippers whose pickup
+        // address has a blank countryCode). Same UPS-12 shape (fixed
+        // #492). Address is @NotBlank on PickupRequestDTO at the HTTP
+        // surface but the boundary guard covers direct-constructor
+        // callers too.
+        if (request.address() == null
+                || !StringUtils.hasText(request.address().countryCode())) {
+            return new PickupResult("DHL", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "DHL pickup needs the shipper pickup address country code "
+                            + "so the DHL wire reflects the real origin; "
+                            + "none was passed.",
+                    null);
+        }
         try {
             Map<String, Object> body = buildDhlPickupRequest(request);
             String host = isSandbox(environment)
@@ -840,7 +857,12 @@ public class DhlConnector implements CarrierConnector {
         if (a != null) {
             Map<String, Object> postal = new LinkedHashMap<>();
             postal.put("cityName", firstNonBlank(a.city(), ""));
-            postal.put("countryCode", firstNonBlank(a.countryCode(), "US"));
+            // DHL-5 — countryCode reflects the shipper's pickup address
+            // country (schedulePickup guards non-blank at entry). Pre-fix
+            // defaulted to "US" and misrouted European shippers with a
+            // somehow-blank pickup address country. firstNonBlank retained
+            // as defence-in-depth for direct-constructor callers in tests.
+            postal.put("countryCode", firstNonBlank(a.countryCode(), ""));
             postal.put("postalCode", firstNonBlank(a.postalCode(), ""));
             if (StringUtils.hasText(a.addressLine1())) postal.put("addressLine1", a.addressLine1());
             if (StringUtils.hasText(a.addressLine2())) postal.put("addressLine2", a.addressLine2());
