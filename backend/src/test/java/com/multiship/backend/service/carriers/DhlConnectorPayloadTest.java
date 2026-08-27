@@ -202,14 +202,22 @@ class DhlConnectorPayloadTest {
 
     @Test
     void exportReasonEnumMapping() throws Exception {
+        // DHL-1 — covers all 8 resolver SHIPPING_PURPOSE_ENUM values plus
+        // legacy REPAIR alias. Pre-fix DOCUMENTS incorrectly mapped to
+        // "personal_effects" (DHL's personal-goods category); documents
+        // ship as regular commercial cargo. PERSONAL_USE (added post-fix)
+        // is the resolver value that maps to personal_effects.
         record TC(String our, String dhl) {}
         for (TC tc : List.of(
                 new TC("SALE", "commercial_purpose_or_sale"),
+                new TC("MERCHANDISE", "commercial_purpose_or_sale"),
                 new TC("GIFT", "gift"),
                 new TC("SAMPLE", "sample"),
+                new TC("PERSONAL_USE", "personal_effects"),
                 new TC("RETURN", "return"),
                 new TC("REPAIR", "repair_or_processing"),
-                new TC("DOCUMENTS", "personal_effects"))) {
+                new TC("REPAIR_AND_RETURN", "repair_or_processing"),
+                new TC("DOCUMENTS", "commercial_purpose_or_sale"))) {
             ShipmentRequestDTO r = baseRequest();
             IntlShipmentBlockDTO intl = baseIntl();
             intl.setReasonForExport(tc.our());
@@ -220,6 +228,20 @@ class DhlConnectorPayloadTest {
             assertEquals(tc.dhl(), ed.get("exportReason"),
                     "Our " + tc.our() + " → DHL " + tc.dhl());
         }
+    }
+
+    @Test
+    void exportReasonUnknownValueDefaultsToCommercialPurposeOrSale() throws Exception {
+        // DHL-1 — future resolver additions surface via the log.warn on
+        // the default branch, but the wire value stays sensible.
+        ShipmentRequestDTO r = baseRequest();
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setReasonForExport("SOME_NEW_VALUE_WE_DONT_KNOW");
+        r.setIntl(intl);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ed = (Map<String, Object>) ((Map<String, Object>)
+                build(r).get("content")).get("exportDeclaration");
+        assertEquals("commercial_purpose_or_sale", ed.get("exportReason"));
     }
 
     @SuppressWarnings("unchecked")
