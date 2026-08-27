@@ -1054,6 +1054,24 @@ public class UpsConnector implements CarrierConnector {
                             + "none was passed.",
                     null);
         }
+        // UPS-18 + UPS-20 — pickup date + window are required. Pre-fix,
+        // null pickupDate serialised as "" and null pickupWindowStart /
+        // pickupWindowEnd serialised as "" for ReadyTime / CloseTime —
+        // UPS rejects empty date/time fields with a validation error.
+        // PickupRequestDTO marks pickupDate as @NotNull at the HTTP layer
+        // (window fields are optional there but UPS requires them), so
+        // this guard mainly covers direct-constructor callers.
+        if (request.pickupDate() == null
+                || request.pickupWindowStart() == null
+                || request.pickupWindowEnd() == null) {
+            return new PickupResult("UPS", null, request.pickupDate(),
+                    request.pickupWindowStart(), request.pickupWindowEnd(),
+                    "ERROR",
+                    "UPS pickup requires pickupDate + pickupWindowStart + pickupWindowEnd. "
+                            + "Missing any of these produces empty date/time fields on the wire "
+                            + "which UPS rejects.",
+                    null);
+        }
         try {
             Map<String, Object> body = buildUpsPickupRequest(request);
             String baseUrl = isSandbox(environment)
