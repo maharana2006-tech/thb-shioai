@@ -194,6 +194,43 @@ class RecipientCountryGuardTest {
                 "message should call out the placeholder; got: " + ex.getMessage());
     }
 
+    // ===== DHL-4 — shipper country boundary guard =====
+
+    @Test
+    void dhl_createShipment_blankShipperCountry_throws() {
+        // Pre-DHL-4, a blank shipper country silently reached buildParty's
+        // firstNonBlank(country, "US") fallback and shipped from a phantom
+        // "US" origin — wrong lane, wrong customs origin, wrong routing.
+        // F7 guarded recipient; DHL-4 completes the pair for shipper.
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        DhlConnector connector = new DhlConnector(props, new ObjectMapper());
+        ShipmentRequestDTO r = minimal("GB");
+        r.setAccountNumber("A123456789");   // clear FDX-I3 guard first
+        r.setShipperCountryCode("");
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> connector.createShipment(r, "fake-token", "SANDBOX"));
+        assertTrue(ex.getMessage().contains("shipper country"),
+                "got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("PO-9999"),
+                "message must name the order for log-correlation; got: " + ex.getMessage());
+    }
+
+    @Test
+    void dhl_getRates_blankShipperCountry_throws() {
+        // Same DHL-4 guard on the rate-shop path — a blank shipper country
+        // otherwise silently quotes from a phantom "US" origin.
+        CarrierProperties props = new CarrierProperties();
+        props.setDefaultEnvironment("SANDBOX");
+        DhlConnector connector = new DhlConnector(props, new ObjectMapper());
+        ShipmentRequestDTO r = minimal("GB");
+        r.setShipperCountryCode("");
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> connector.getRates(r, "real-basic-auth-token", "SANDBOX"));
+        assertTrue(ex.getMessage().contains("shipper country"),
+                "got: " + ex.getMessage());
+    }
+
     // ===== FDX-B1 — FedEx rate-shop + EDT paths =====
     //
     // Pre-fix, FedExConnector.buildRateRequestBody + estimateLandedCost both
