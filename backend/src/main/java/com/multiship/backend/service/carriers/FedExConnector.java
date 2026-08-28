@@ -751,7 +751,13 @@ public class FedExConnector implements CarrierConnector {
             // JSON but often omits the charset, so the default String converter
             // would fall back to ISO-8859-1 and mojibake accented place names
             // (e.g. "Región" → "RegiÃ³n").
-            byte[] raw = HttpClients.newBuilder().baseUrl(getBaseUrl()).build().post()
+            //
+            // F-MODE-2 — pre-fix used getBaseUrl() (no arg) which fell back
+            // to the GLOBAL default env instead of the caller's account env.
+            // Address validation on a sandbox account with prod as global
+            // default silently hit prod. Route via the account env like
+            // every other endpoint on this connector.
+            byte[] raw = HttpClients.newBuilder().baseUrl(getBaseUrl(environment)).build().post()
                     .uri("/address/v1/addresses/resolve")
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
