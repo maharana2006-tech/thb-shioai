@@ -222,7 +222,9 @@ class ShippingConfigServiceTest {
                 .environment("SANDBOX").active(true).build();
         when(carrierAccountRefRepository.findPlatformAccountsByCarrier("UPS"))
                 .thenReturn(List.of(acct));
-        when(upsMock.getAccessToken("cid", "csecret", "ACCT-1"))
+        // F-MODE-3 — platformAccessToken now calls the 4-arg getAccessToken
+        // so FedEx routes the OAuth host by the account's env.
+        when(upsMock.getAccessToken("cid", "csecret", "ACCT-1", "SANDBOX"))
                 .thenReturn("live-token");
         when(upsMock.listServices("US", "live-token", "SANDBOX"))
                 .thenReturn(new CarrierConnector.ServiceAvailability(
@@ -434,7 +436,9 @@ class ShippingConfigServiceTest {
                 .environment("SANDBOX").active(true).build();
         when(carrierAccountRefRepository.findPlatformAccountsByCarrier("UPS"))
                 .thenReturn(List.of(acct));
-        when(upsMock.getAccessToken("cid", "csecret", "ACCT-1")).thenReturn("live-token");
+        // F-MODE-3 — platformAccessToken now calls the 4-arg getAccessToken
+        // so FedEx routes the OAuth host by the account's env.
+        when(upsMock.getAccessToken("cid", "csecret", "ACCT-1", "SANDBOX")).thenReturn("live-token");
         when(upsMock.listPackages("US", "live-token", "SANDBOX")).thenReturn(
                 new CarrierConnector.PackageAvailability(
                         List.of(new CarrierConnector.PackageOffering(

@@ -981,9 +981,13 @@ public class CarrierServiceImpl implements CarrierService {
         java.util.List<CarrierConnector.ShipmentResult> batchResults = new java.util.ArrayList<>();
         try {
             connector.validateCredentials(account.getClientId(), account.getClientSecret());
-            String token = connector.getAccessToken(account.getClientId(), account.getClientSecret(),
-                    account.getAccountNumber());
             String envForCall = firstNonBlank(account.getEnvironment(), carrierProperties.getDefaultEnvironment());
+            // F-MODE-3 — pass envForCall to getAccessToken so FedEx routes
+            // the OAuth token URL to the matching host (sandbox vs prod).
+            // UPS/Stamps already respect env on the 4-arg overload;
+            // DHL Basic-auth accepts but ignores env.
+            String token = connector.getAccessToken(account.getClientId(), account.getClientSecret(),
+                    account.getAccountNumber(), envForCall);
             // Sprint 49 Tier 2 — auth-retry per sub-request. If the token
             // 401s mid-loop (rotation / revocation), refresh once and retry
             // that sub only; second failure propagates as CarrierAuthException.
@@ -996,7 +1000,7 @@ public class CarrierServiceImpl implements CarrierService {
                 batchResults.add(com.multiship.backend.service.carriers.AuthRetry.withAuthRetry(
                         token,
                         () -> fConnector.getAccessToken(fAccount.getClientId(), fAccount.getClientSecret(),
-                                fAccount.getAccountNumber()),
+                                fAccount.getAccountNumber(), fEnv),
                         t -> fConnector.createShipment(sub, t, fEnv)));
             }
         } catch (CarrierRateLimitException rle) {
@@ -1341,7 +1345,11 @@ public class CarrierServiceImpl implements CarrierService {
     /** One shipment attempt against a resolved account; throws on carrier failure. */
     private CarrierConnector.ShipmentResult attemptShipment(Order order, AccountResolution res, CarrierConnector connector) {
         connector.validateCredentials(res.clientId(), res.clientSecret());
-        String accessToken = connector.getAccessToken(res.clientId(), res.clientSecret(), res.accountNumber());
+        // F-MODE-3 — pass the resolved account's env so FedEx routes the
+        // OAuth token URL to the matching host (sandbox vs prod).
+        String envForCall = firstNonBlank(res.environment(), carrierProperties.getDefaultEnvironment());
+        String accessToken = connector.getAccessToken(res.clientId(), res.clientSecret(),
+                res.accountNumber(), envForCall);
         ShipmentRequestDTO shipmentRequest = buildShipmentRequest(order, res.accountNumber(), connector);
 
         // Fail fast on incomplete customs before the carrier call — the
@@ -2289,7 +2297,11 @@ public class CarrierServiceImpl implements CarrierService {
         }
 
         connector.validateCredentials(clientId, clientSecret);
-        String token = connector.getAccessToken(clientId, clientSecret, config.getAccountNumber());
+        // F-MODE-3 — pass the persisted env so FedEx routes the OAuth
+        // token URL to the matching host (sandbox vs prod) on cron refresh.
+        String envForCall = firstNonBlank(config.getEnvironment(), carrierProperties.getDefaultEnvironment());
+        String token = connector.getAccessToken(clientId, clientSecret,
+                config.getAccountNumber(), envForCall);
         LocalDateTime expiresAt = LocalDateTime.now().plusHours(1);
         config.setAccessToken(token);
         config.setTokenExpiresAt(expiresAt);

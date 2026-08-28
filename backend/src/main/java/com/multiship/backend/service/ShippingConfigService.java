@@ -352,8 +352,10 @@ public class ShippingConfigService {
             return null;
         }
         try {
+            // F-MODE-3 — pass account.getEnvironment() so FedEx routes the
+            // OAuth token URL to the matching host (sandbox vs prod).
             String token = connector.getAccessToken(account.getClientId(), account.getClientSecret(),
-                    account.getAccountNumber());
+                    account.getAccountNumber(), account.getEnvironment());
             return new TokenAndEnv(token, account.getEnvironment());
         } catch (Exception ex) {
             // Null return is the caller contract (STUB architecture — see
