@@ -1,6 +1,7 @@
 package com.multiship.backend.service.carriers;
 
 import com.multiship.backend.dto.ShipmentRequestDTO;
+import com.multiship.backend.service.WebhookService;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -46,7 +47,7 @@ public interface CarrierConnector {
      * existing behaviour.
      */
     default String getAccessToken(String clientId, String clientSecret, String accountNumber) {
-        return getAccessToken(clientId, clientSecret);
+            return getAccessToken(clientId, clientSecret);
     }
 
     /**

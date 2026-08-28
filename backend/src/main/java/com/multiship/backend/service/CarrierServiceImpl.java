@@ -1289,10 +1289,20 @@ public class CarrierServiceImpl implements CarrierService {
                         "USD");
                 customsReq.setCurrency(currencyForCustoms);
                 customsReq.setItems(lines);
+                // Runs in its own REQUIRES_NEW transaction — same reasoning as
+                // the ERROR-order persistence above. A flush failure inside
+                // upsertCustoms (e.g. a bad commodity row) must not poison
+                // this method's own transaction; without isolation the order
+                // being labeled here would fail its commit with an opaque
+                // UnexpectedRollbackException even though the label itself
+                // (and the order/tracking/batch rows already saved above)
+                // succeeded.
                 try {
-                    customsService.upsertCustoms(String.valueOf(orderNo), customsReq);
+                    requiresNewTransactionTemplate.executeWithoutResult(status ->
+                            customsService.upsertCustoms(String.valueOf(orderNo), customsReq));
                 } catch (Exception ex) {
-                    log.warn("Manual order {}: could not save commercial-invoice items: {}", orderNo, ex.getMessage());
+                    log.warn("Manual order {}: could not save commercial-invoice items: {}",
+                            orderNo, ex.getMessage(), ex);
                 }
             }
         }
@@ -1312,10 +1322,23 @@ public class CarrierServiceImpl implements CarrierService {
             // whose customs currency differed from the billing currency. Use the
             // client billing currency (Client.defaultCurrency) → USD; the customs
             // currency stays on the commercial invoice where it belongs.
-            markup = resolutionService.applyMarkup(
-                    hasClient ? resolvedClient : "",
-                    result.shippingCost(),
-                    firstNonBlank(tenantDefaultCurrency, "USD"));
+            //
+            // resolutionService.applyMarkup is @Transactional(readOnly=true) on
+            // a separate proxied bean — since it joins this method's own
+            // (writable) transaction, Spring's AOP marks the WHOLE ambient
+            // transaction rollback-only the instant it throws, before the
+            // exception ever reaches this catch block. Catching it here and
+            // returning normally then still blows up at commit with an opaque
+            // UnexpectedRollbackException — the order/tracking/label rows
+            // saved above (and the label already issued by the carrier) would
+            // be lost even though this method "handled" the error. Run it in
+            // its own REQUIRES_NEW transaction so a thrown
+            // ShipmentResolutionException only poisons that isolated
+            // transaction, not this one.
+            final String markupClientCode = hasClient ? resolvedClient : "";
+            final String markupCurrency = firstNonBlank(tenantDefaultCurrency, "USD");
+            markup = requiresNewTransactionTemplate.execute(status ->
+                    resolutionService.applyMarkup(markupClientCode, result.shippingCost(), markupCurrency));
         } catch (ShipmentResolutionException e) {
             return toResolutionFailure(e);
         }

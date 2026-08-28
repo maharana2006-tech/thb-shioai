@@ -47,7 +47,7 @@ import Select from './workspace/Select'
 // import ClientAllowlistTab from './modals/ClientAllowlistTab'
 // import ClientDestinationsTab from './modals/ClientDestinationsTab'
 // import ClientPolicyTab from './modals/ClientPolicyTab'
-// import ClientMarkupTab from './modals/ClientMarkupTab'
+import ClientMarkupTab from './modals/ClientMarkupTab'
 // import ClientOwnedPackagesPanel from './modals/ClientOwnedPackagesPanel'
 import CarrierConnections from './CarrierConnections'
 import WarehouseEditorModal from './modals/WarehouseEditorModal'
@@ -94,6 +94,7 @@ type StepKey =
   | 'return'
   | 'carriers'
   | 'mapping'
+  | 'markup'
   | 'importerBroker'
   | 'summary'
 
@@ -111,6 +112,7 @@ const STEP_DEFS: ReadonlyArray<{ key: StepKey; label: string; short: string; opt
   { key: 'return',         label: 'Return address',           short: 'Return' },
   { key: 'carriers',       label: 'Carrier accounts',         short: 'Carriers' },
   { key: 'mapping',        label: 'Shipping service mapping', short: 'Mapping' },
+  { key: 'markup',         label: 'Billing markup',           short: 'Markup',     optional: true },
   { key: 'importerBroker', label: 'Importer / Broker',        short: 'Importer',   optional: true },
   { key: 'summary',        label: 'Review & submit',          short: 'Summary' },
 ]
@@ -826,6 +828,7 @@ export default function ClientEditorPage() {
       case 'return':         return stepValid('return')
       case 'carriers':       return carriersStepComplete
       case 'mapping':        return mappingStepComplete
+      case 'markup':         return true
       case 'importerBroker': return importerBrokerDraftValid(importerBrokerDraft)
       case 'summary':
         return stepValid('identity')
@@ -858,6 +861,11 @@ export default function ClientEditorPage() {
         break
       case 'mapping':
         if (!mappingStepComplete) out.push('Add at least one shipping-service mapping.')
+        break
+      case 'markup':
+        // Optional in create mode — markup requires a persisted clientCode,
+        // so it's only settable after the client exists (see the deferred
+        // panel this step renders while !isEdit).
         break
       case 'importerBroker':
         if (!importerBrokerDraftValid(importerBrokerDraft))
@@ -1453,6 +1461,20 @@ export default function ClientEditorPage() {
             }}
             removeDraft={(id) => setMappingDrafts((cur) => cur.filter((d) => d.id !== id))}
           />
+        ))}
+
+        {/* Billing markup — optional, edit-mode only. The endpoint is keyed
+            by clientCode, so a not-yet-created client has nowhere to save
+            this to; create mode shows a placeholder pointing back here. */}
+        {activeStep === 'markup' && (client ? (
+          <ClientMarkupTab clientCode={client.clientCode} />
+        ) : (
+          <div className="flex-1 overflow-y-auto px-5 py-4" role="tabpanel" id="client-editor-panel-markup">
+            <h4 className="text-[12.5px] font-semibold text-slate-950">Billing markup</h4>
+            <p className="mt-2 rounded-xl border border-dashed border-slate-200 bg-white px-3 py-3 text-[11.5px] text-slate-500">
+              Save this client first — billing markup is set from this same Edit client page once the client exists.
+            </p>
+          </div>
         ))}
 
         {/* Importer / Broker — optional. Live editor in edit mode via the

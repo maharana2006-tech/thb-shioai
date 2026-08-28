@@ -21,7 +21,6 @@ public class ShipmentRequestDTO {
 
     private String accountNumber;
 
-    @NotBlank
     private String serviceType;
 
     @NotBlank
@@ -43,7 +42,6 @@ public class ShipmentRequestDTO {
     @NotBlank
     private String shipperName;
 
-    @NotBlank
     private String shipperPhone;
 
     @NotBlank
@@ -66,7 +64,6 @@ public class ShipmentRequestDTO {
     @NotBlank
     private String recipientName;
 
-    @NotBlank
     private String recipientPhone;
 
     @NotBlank
