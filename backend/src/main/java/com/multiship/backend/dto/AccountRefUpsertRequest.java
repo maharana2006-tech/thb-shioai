@@ -108,6 +108,35 @@ public class AccountRefUpsertRequest {
     private String labelImageFormat;
 
     /**
+     * FDX-H3 — per-account FedEx labelSpecification.imageType. Only FedEx
+     * maps this to the shipment envelope (UPS / DHL / SWSIM ignore).
+     * Constrained to the FedEx imageType enum values via regex; empty
+     * string clears the persisted value, null keeps it.
+     *
+     * <p>Values: PDF | PNG | ZPLII | EPL2 | DPL. NULL / unset → resolver
+     * falls back to {@code PDF} (matches the pre-FDX-H3 hardcode).
+     */
+    @jakarta.validation.constraints.Pattern(
+            regexp = "PDF|PNG|ZPLII|EPL2|DPL|",
+            message = "labelImageType must be one of PDF / PNG / ZPLII / EPL2 / DPL")
+    private String labelImageType;
+
+    /**
+     * FDX-H3 — per-account FedEx labelSpecification.labelStockType. Only
+     * FedEx maps this to the shipment envelope (UPS / DHL / SWSIM ignore).
+     * Constrained to the common FedEx labelStockType enum values via regex;
+     * empty string clears the persisted value, null keeps it.
+     *
+     * <p>NULL / unset → resolver falls back to {@code PAPER_4X6} (matches
+     * the pre-FDX-H3 hardcode).
+     */
+    @jakarta.validation.constraints.Pattern(
+            regexp = "PAPER_4X6|PAPER_4X6\\.75|PAPER_4X8|PAPER_4X9|PAPER_7X4\\.75|PAPER_LETTER|"
+                    + "STOCK_4X6|STOCK_4X6\\.75|STOCK_4X8|STOCK_4X9_LEADING_DOC_TAB|",
+            message = "labelStockType must be a supported FedEx label stock type")
+    private String labelStockType;
+
+    /**
      * Third-party billing address — captured against the account when
      * clearanceOption = THIRD_PARTY. All optional here (backend validates only
      * the max lengths); the frontend enforces "at least account number"

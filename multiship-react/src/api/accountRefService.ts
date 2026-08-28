@@ -39,6 +39,14 @@ export interface CarrierAccountRef {
    *  ignore). NULL means GIF (pre-UPS-4a hardcode). Values: GIF | PDF |
    *  PNG | ZPL | EPL. */
   labelImageFormat?: string | null
+  /** FDX-H3 — per-account FedEx labelSpecification.imageType (FedEx only;
+   *  other carriers ignore). NULL means PDF (pre-FDX-H3 hardcode). Values:
+   *  PDF | PNG | ZPLII | EPL2 | DPL. */
+  labelImageType?: string | null
+  /** FDX-H3 — per-account FedEx labelSpecification.labelStockType (FedEx
+   *  only; other carriers ignore). NULL means PAPER_4X6 (pre-FDX-H3
+   *  hardcode). */
+  labelStockType?: string | null
   /** Third-party billing default — only meaningful when clearanceOption is
    *  THIRD_PARTY. Nullable individually; per-shipment overrides live on the
    *  Shipment row (follow-up). */
@@ -104,6 +112,13 @@ export interface AccountRefUpsertPayload {
    *  persisted value; omitted keeps it. Value must be one of
    *  GIF / PDF / PNG / ZPL / EPL (pattern-constrained backend-side). */
   labelImageFormat?: string | null
+  /** FDX-H3 — per-account FedEx labelSpecification.imageType (FedEx only).
+   *  Null clears the persisted value; omitted keeps it. Value must be one
+   *  of PDF / PNG / ZPLII / EPL2 / DPL (pattern-constrained backend-side). */
+  labelImageType?: string | null
+  /** FDX-H3 — per-account FedEx labelSpecification.labelStockType (FedEx
+   *  only). Null clears the persisted value; omitted keeps it. */
+  labelStockType?: string | null
   /** Third-party billing default (only sent when clearance = THIRD_PARTY).
    *  Null on any field = clear the persisted value; omitting the field from
    *  the payload entirely = keep the persisted value. */

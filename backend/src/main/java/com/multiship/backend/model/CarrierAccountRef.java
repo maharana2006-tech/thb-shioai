@@ -161,6 +161,35 @@ public class CarrierAccountRef {
     private String labelImageFormat;
 
     /**
+     * FDX-H3 — per-account FedEx labelSpecification.imageType. Only FedEx
+     * consumes this; other connectors ignore it.
+     *
+     * <p>FedEx imageType enum: {@code PDF} | {@code PNG} | {@code ZPLII} |
+     * {@code EPL2} | {@code DPL}.
+     *
+     * <p>NULL → resolver falls back to {@code PDF} (matches the pre-FDX-H3
+     * hardcode). Deliberately not backfilled — see V28 migration.
+     */
+    @Column(name = "fedex_label_image_type", length = 10)
+    private String fedexLabelImageType;
+
+    /**
+     * FDX-H3 — per-account FedEx labelSpecification.labelStockType. Only
+     * FedEx consumes this; other connectors ignore it.
+     *
+     * <p>FedEx labelStockType enum (common values): {@code PAPER_4X6} |
+     * {@code PAPER_4X6.75} | {@code PAPER_4X8} | {@code PAPER_4X9} |
+     * {@code PAPER_7X4.75} | {@code PAPER_LETTER} | {@code STOCK_4X6} |
+     * {@code STOCK_4X6.75} | {@code STOCK_4X8} |
+     * {@code STOCK_4X9_LEADING_DOC_TAB}.
+     *
+     * <p>NULL → resolver falls back to {@code PAPER_4X6} (matches the
+     * pre-FDX-H3 hardcode). Deliberately not backfilled — see V28 migration.
+     */
+    @Column(name = "fedex_label_stock_type", length = 30)
+    private String fedexLabelStockType;
+
+    /**
      * Third-party billing party — used only when clearanceOption is THIRD_PARTY
      * (UPS / FedEx). Acts as the ACCOUNT-LEVEL DEFAULT for every shipment on
      * this account; per-shipment overrides live on the Shipment row (follow-up

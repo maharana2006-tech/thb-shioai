@@ -168,6 +168,14 @@ interface DrawerState {
    *  (resolver falls back to GIF). Only UPS rows render the picker;
    *  other carriers keep this null. */
   labelImageFormat: string | null
+  /** FDX-H3 — per-account FedEx labelSpecification.imageType. Null = no
+   *  override (resolver falls back to PDF). Only FEDEX rows render the
+   *  picker; other carriers keep this null. */
+  labelImageType: string | null
+  /** FDX-H3 — per-account FedEx labelSpecification.labelStockType. Null =
+   *  no override (resolver falls back to PAPER_4X6). Only FEDEX rows
+   *  render the picker; other carriers keep this null. */
+  labelStockType: string | null
   /** Third-party billing default. Only shown / persisted when the operator
    *  picked THIRD_PARTY for clearanceOption. All optional individually — a
    *  future per-shipment override on Shipment can fill in what's missing. */
@@ -196,6 +204,8 @@ const emptyDrawer: DrawerState = {
   currency: '',
   pickupType: null,
   labelImageFormat: null,
+  labelImageType: null,
+  labelStockType: null,
   thirdPartyAccount: '',
   thirdPartyName: '',
   thirdPartyAddress1: '',
@@ -489,6 +499,8 @@ export default function CarrierConnections({
         currency: account.currency || '',
         pickupType: account.pickupType ?? null,
         labelImageFormat: account.labelImageFormat ?? null,
+        labelImageType: account.labelImageType ?? null,
+        labelStockType: account.labelStockType ?? null,
         thirdPartyAccount:  account.thirdPartyAccount  || '',
         thirdPartyName:     account.thirdPartyName     || '',
         thirdPartyAddress1: account.thirdPartyAddress1 || '',
@@ -626,6 +638,10 @@ export default function CarrierConnections({
         // UPS-4a — per-account UPS LabelImageFormat. Only UPS rows render
         // the picker; non-UPS send null (no-op).
         labelImageFormat: drawer.carrierCode === 'UPS' ? (drawer.labelImageFormat || null) : null,
+        // FDX-H3 — per-account FedEx labelSpecification. Only FEDEX rows
+        // render the pickers; non-FedEx send null (no-op).
+        labelImageType: drawer.carrierCode === 'FEDEX' ? (drawer.labelImageType || null) : null,
+        labelStockType: drawer.carrierCode === 'FEDEX' ? (drawer.labelStockType || null) : null,
         // Third-party billing default. Only send the address when the picked
         // clearance is THIRD_PARTY — flipping to SENDER/RECIPIENT explicitly
         // clears the persisted third-party row (send empty strings so the
@@ -1499,6 +1515,57 @@ export default function CarrierConnections({
                         account. Blank = USE_SCHEDULED_PICKUP (assumes a
                         standing daily pickup). Return labels bypass this
                         setting and always use CONTACT_FEDEX_TO_SCHEDULE.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {/* FDX-H3 — per-account FedEx labelSpecification
+                      (imageType + labelStockType). FedEx rejects every
+                      createShipment call without this block
+                      (REQUESTEDSHIPMENT.LABELSPECIFICATION.REQUIRED); blank
+                      falls to PDF / PAPER_4X6 so existing accounts read
+                      exactly as before. */}
+                  {drawer.carrierCode === 'FEDEX' ? (
+                    <div className="mt-2">
+                      <Field label="Label image type (FedEx only)">
+                        <select
+                          value={drawer.labelImageType ?? ''}
+                          onChange={(e) => setDrawer((c) => ({ ...c, labelImageType: e.target.value || null }))}
+                          className={inputClassName}
+                        >
+                          <option value="">PDF (default)</option>
+                          <option value="PDF">PDF (vector, sharp)</option>
+                          <option value="PNG">PNG (raster)</option>
+                          <option value="ZPLII">ZPLII (Zebra)</option>
+                          <option value="EPL2">EPL2 (Eltron/legacy Zebra)</option>
+                          <option value="DPL">DPL (Datamax)</option>
+                        </select>
+                      </Field>
+                      <Field label="Label stock type (FedEx only)">
+                        <select
+                          value={drawer.labelStockType ?? ''}
+                          onChange={(e) => setDrawer((c) => ({ ...c, labelStockType: e.target.value || null }))}
+                          className={inputClassName}
+                        >
+                          <option value="">PAPER_4X6 (default)</option>
+                          <option value="PAPER_4X6">Paper 4x6</option>
+                          <option value="PAPER_4X6.75">Paper 4x6.75</option>
+                          <option value="PAPER_4X8">Paper 4x8</option>
+                          <option value="PAPER_4X9">Paper 4x9</option>
+                          <option value="PAPER_7X4.75">Paper 7x4.75</option>
+                          <option value="PAPER_LETTER">Paper letter</option>
+                          <option value="STOCK_4X6">Thermal stock 4x6</option>
+                          <option value="STOCK_4X6.75">Thermal stock 4x6.75</option>
+                          <option value="STOCK_4X8">Thermal stock 4x8</option>
+                          <option value="STOCK_4X9_LEADING_DOC_TAB">Thermal stock 4x9 (doc tab)</option>
+                        </select>
+                      </Field>
+                      <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
+                        File format + physical stock size FedEx returns the label
+                        as. Blank = PDF / PAPER_4X6 (thermal 4x6 label, matches
+                        the other carriers' default). FedEx rejects label
+                        requests entirely if this is misconfigured for your
+                        printer's actual stock.
                       </p>
                     </div>
                   ) : null}

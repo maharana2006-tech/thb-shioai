@@ -289,6 +289,35 @@ public class ShipmentRequestDTO {
     private String labelImageFormat;
 
     /**
+     * FDX-H3 — FedEx labelSpecification.imageType (drives the file format of
+     * the returned label). Populated by
+     * {@link com.multiship.backend.service.ShipmentDefaultsResolver} from
+     * the precedence chain (request → account → hardcoded {@code PDF}
+     * default). Only FedEx maps this to the wire; UPS / DHL / USPS ignore
+     * the field.
+     *
+     * <p>Values: {@code PDF} | {@code PNG} | {@code ZPLII} | {@code EPL2} |
+     * {@code DPL}.
+     *
+     * <p>Null (unset) → connectors fall back to {@code PDF} so legacy
+     * callers see no behavior change.
+     */
+    private String labelImageType;
+
+    /**
+     * FDX-H3 — FedEx labelSpecification.labelStockType (drives the physical
+     * label stock size). Populated by
+     * {@link com.multiship.backend.service.ShipmentDefaultsResolver} from
+     * the precedence chain (request → account → hardcoded
+     * {@code PAPER_4X6} default). Only FedEx maps this to the wire; UPS /
+     * DHL / USPS ignore the field.
+     *
+     * <p>Null (unset) → connectors fall back to {@code PAPER_4X6} so legacy
+     * callers see no behavior change.
+     */
+    private String labelStockType;
+
+    /**
      * Return the packages list connectors should iterate. Guarantees a
      * non-empty list so per-connector code doesn't have to fork on
      * null/empty:

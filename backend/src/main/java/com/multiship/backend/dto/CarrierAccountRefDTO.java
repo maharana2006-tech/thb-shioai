@@ -49,6 +49,14 @@ public class CarrierAccountRefDTO {
      *  ignore). NULL means GIF (pre-UPS-4a hardcode). Values: GIF | PDF |
      *  PNG | ZPL | EPL. */
     private String labelImageFormat;
+    /** FDX-H3 — per-account FedEx labelSpecification.imageType (FedEx only;
+     *  other carriers ignore). NULL means PDF (pre-FDX-H3 hardcode).
+     *  Values: PDF | PNG | ZPLII | EPL2 | DPL. */
+    private String labelImageType;
+    /** FDX-H3 — per-account FedEx labelSpecification.labelStockType (FedEx
+     *  only; other carriers ignore). NULL means PAPER_4X6 (pre-FDX-H3
+     *  hardcode). */
+    private String labelStockType;
     /** Third-party billing address (default, when clearanceOption=THIRD_PARTY).
      *  Nullable — per-shipment overrides live on the Shipment row. */
     private String thirdPartyAccount;

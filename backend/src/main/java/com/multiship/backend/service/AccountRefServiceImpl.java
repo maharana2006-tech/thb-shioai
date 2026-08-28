@@ -329,6 +329,21 @@ public class AccountRefServiceImpl implements AccountRefService {
             account.setLabelImageFormat(lf.isEmpty() ? null : lf.toUpperCase(Locale.ROOT));
         }
 
+        // FDX-H3 — per-account FedEx labelSpecification (imageType +
+        // labelStockType). Same null-vs-empty-string semantics. Uppercased
+        // on persist because the FedEx enums are strict. Only FedEx maps
+        // these to the wire; other connectors ignore both fields.
+        String labelImageType = request.getLabelImageType();
+        if (labelImageType != null) {
+            String lit = labelImageType.trim();
+            account.setFedexLabelImageType(lit.isEmpty() ? null : lit.toUpperCase(Locale.ROOT));
+        }
+        String labelStockType = request.getLabelStockType();
+        if (labelStockType != null) {
+            String lst = labelStockType.trim();
+            account.setFedexLabelStockType(lst.isEmpty() ? null : lst.toUpperCase(Locale.ROOT));
+        }
+
         // Third-party billing defaults. Same null-vs-empty-string semantics:
         // null in request = keep persisted; non-null (incl. empty) = write
         // through with empty normalized to null. Country is upper-cased to
@@ -472,6 +487,8 @@ public class AccountRefServiceImpl implements AccountRefService {
                 .currency(account.getCurrency())
                 .pickupType(account.getPickupType())
                 .labelImageFormat(account.getLabelImageFormat())
+                .labelImageType(account.getFedexLabelImageType())
+                .labelStockType(account.getFedexLabelStockType())
                 .thirdPartyAccount(account.getThirdPartyAccount())
                 .thirdPartyName(account.getThirdPartyName())
                 .thirdPartyAddress1(account.getThirdPartyAddress1())

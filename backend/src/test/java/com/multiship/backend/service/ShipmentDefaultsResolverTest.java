@@ -81,6 +81,8 @@ class ShipmentDefaultsResolverTest {
                 null, null, null, null, null, null,
                 null,   // FDX-H2 requestPickupType
                 null,   // UPS-4b requestLabelImageFormat
+                null,   // FDX-H3 requestLabelImageType
+                null,   // FDX-H3 requestLabelStockType
                 customs, client, account, intl);
     }
 
@@ -220,6 +222,8 @@ class ShipmentDefaultsResolverTest {
                 null,
                 null,   // FDX-H2 requestPickupType
                 null,   // UPS-4b requestLabelImageFormat
+                null,   // FDX-H3 requestLabelImageType
+                null,   // FDX-H3 requestLabelStockType
                 cu, null, a, false);
         var out = resolver.resolve(inputs);
         assertEquals("GIFT", out.shippingPurpose(),
@@ -314,6 +318,8 @@ class ShipmentDefaultsResolverTest {
                 null, null, null, null, null, null,
                 "REQUEST_COURIER",      // request-level override
                 null,                   // UPS-4b requestLabelImageFormat
+                null,                   // FDX-H3 requestLabelImageType
+                null,                   // FDX-H3 requestLabelStockType
                 null, null, a, false);
         assertEquals("REQUEST_COURIER", resolver.resolve(inputs).pickupType());
     }
@@ -362,6 +368,8 @@ class ShipmentDefaultsResolverTest {
                 null, null, null, null, null, null,
                 null,   // FDX-H2 requestPickupType
                 "ZPL",  // UPS-4b request-level override
+                null,   // FDX-H3 requestLabelImageType
+                null,   // FDX-H3 requestLabelStockType
                 null, null, a, false);
         assertEquals("ZPL", resolver.resolve(inputs).labelImageFormat());
     }

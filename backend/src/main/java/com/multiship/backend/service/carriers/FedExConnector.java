@@ -1627,11 +1627,14 @@ public class FedExConnector implements CarrierConnector {
 
         // FedEx requires labelSpecification on every createShipment call —
         // without it the API rejects with
-        // REQUESTEDSHIPMENT.LABELSPECIFICATION.REQUIRED. PDF/PAPER_4X6
-        // matches the thermal 4x6 format the other carriers default to.
+        // REQUESTEDSHIPMENT.LABELSPECIFICATION.REQUIRED. FDX-H3 — resolved
+        // per-account (account default → hardcoded PDF/PAPER_4X6, which
+        // matches the thermal 4x6 format the other carriers default to).
         requestedShipment.put("labelSpecification", Map.of(
-                "imageType", "PDF",
-                "labelStockType", "PAPER_4X6"));
+                "imageType", StringUtils.hasText(request.getLabelImageType())
+                        ? request.getLabelImageType() : "PDF",
+                "labelStockType", StringUtils.hasText(request.getLabelStockType())
+                        ? request.getLabelStockType() : "PAPER_4X6"));
 
         Map<String, Object> shipper = buildParty(
                 request.getShipperName(),

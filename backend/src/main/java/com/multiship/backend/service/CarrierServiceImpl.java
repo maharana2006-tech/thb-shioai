@@ -960,6 +960,11 @@ public class CarrierServiceImpl implements CarrierService {
                 // Multi-package boxes 2..N (box 1 is the top-level fields).
                 // Connectors' effectivePackages() prefers packages[] when set.
                 .packages(req.getPackages())
+                // FDX-H3 — per-account FedEx labelSpecification (account
+                // default → hardcoded PDF/PAPER_4X6 in the connector). Only
+                // FedEx maps this; other connectors ignore.
+                .labelImageType(account != null ? account.getFedexLabelImageType() : null)
+                .labelStockType(account != null ? account.getFedexLabelStockType() : null)
                 .build();
 
         // Resolve the carrier's MPS cap for this service/scope and split
@@ -2105,6 +2110,8 @@ public class CarrierServiceImpl implements CarrierService {
                         null,                                  // request-level clearance — none at this layer
                         null,                                  // FDX-H2 — request-level pickupType none at this layer
                         null,                                  // UPS-4b — request-level labelImageFormat none at this layer
+                        null,                                  // FDX-H3 — request-level labelImageType none at this layer
+                        null,                                  // FDX-H3 — request-level labelStockType none at this layer
                         customs,
                         clientRow,
                         accountRow,
@@ -2206,6 +2213,11 @@ public class CarrierServiceImpl implements CarrierService {
                 // hardcoded GIF). Only UPS maps this; other connectors
                 // ignore. Null-safe on the connector side.
                 .labelImageFormat(defaults.labelImageFormat())
+                // FDX-H3 — resolved FedEx labelSpecification (account
+                // default → hardcoded PDF/PAPER_4X6). Only FedEx maps this;
+                // other connectors ignore. Null-safe on the connector side.
+                .labelImageType(defaults.labelImageType())
+                .labelStockType(defaults.labelStockType())
                 .intl(intlBlock)
                 // Sprint 25 — thread the Order entity's isReturn flag so
                 // ERP-side return orders get the carrier return-label wire

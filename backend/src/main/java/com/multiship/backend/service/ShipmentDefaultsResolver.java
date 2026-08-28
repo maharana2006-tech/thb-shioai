@@ -74,6 +74,11 @@ public class ShipmentDefaultsResolver {
     /** UPS-4b — pre-fix UPS hardcode. GIF is the smallest wire size and
      *  UPS's own default; every other carrier ignores the field. */
     static final String DEFAULT_LABEL_IMAGE_FORMAT = "GIF";
+    /** FDX-H3 — pre-fix FedEx labelSpecification hardcode. PDF/PAPER_4X6
+     *  matches the thermal 4x6 format the other carriers default to; every
+     *  other carrier ignores these fields. */
+    static final String DEFAULT_LABEL_IMAGE_TYPE = "PDF";
+    static final String DEFAULT_LABEL_STOCK_TYPE = "PAPER_4X6";
 
     /**
      * Resolves defaults for a single shipment. Every {@code inputs} field is
@@ -98,7 +103,9 @@ public class ShipmentDefaultsResolver {
                 resolveShippingPurpose(inputs),
                 resolveClearanceOption(inputs),
                 resolvePickupType(inputs),
-                resolveLabelImageFormat(inputs));
+                resolveLabelImageFormat(inputs),
+                resolveLabelImageType(inputs),
+                resolveLabelStockType(inputs));
     }
 
     // ===== per-field resolvers =====
@@ -239,6 +246,34 @@ public class ShipmentDefaultsResolver {
         return DEFAULT_LABEL_IMAGE_FORMAT;
     }
 
+    /**
+     * FDX-H3 — labelImageType precedence: request → account → hardcoded PDF
+     * fallback. Only FedEx consumes this; other connectors ignore.
+     */
+    private String resolveLabelImageType(ResolveInputs inputs) {
+        String candidate = trimUpper(inputs.requestLabelImageType());
+        if (candidate != null) return candidate;
+        if (inputs.account() != null) {
+            candidate = trimUpper(inputs.account().getFedexLabelImageType());
+            if (candidate != null) return candidate;
+        }
+        return DEFAULT_LABEL_IMAGE_TYPE;
+    }
+
+    /**
+     * FDX-H3 — labelStockType precedence: request → account → hardcoded
+     * PAPER_4X6 fallback. Only FedEx consumes this; other connectors ignore.
+     */
+    private String resolveLabelStockType(ResolveInputs inputs) {
+        String candidate = trimUpper(inputs.requestLabelStockType());
+        if (candidate != null) return candidate;
+        if (inputs.account() != null) {
+            candidate = trimUpper(inputs.account().getFedexLabelStockType());
+            if (candidate != null) return candidate;
+        }
+        return DEFAULT_LABEL_STOCK_TYPE;
+    }
+
     // ===== helpers =====
 
     private static String trim(String s) {
@@ -268,6 +303,8 @@ public class ShipmentDefaultsResolver {
             String requestClearanceOption,
             String requestPickupType,
             String requestLabelImageFormat,
+            String requestLabelImageType,
+            String requestLabelStockType,
             OrderCustoms customs,
             Client client,
             CarrierAccountRef account,
@@ -283,7 +320,9 @@ public class ShipmentDefaultsResolver {
             String shippingPurpose,
             String clearanceOption,
             String pickupType,
-            String labelImageFormat) {}
+            String labelImageFormat,
+            String labelImageType,
+            String labelStockType) {}
 
     /** Thrown when a required field can't be resolved OR shippingPurpose
      *  is set to a value outside the enum. */
