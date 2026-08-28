@@ -73,23 +73,23 @@ export default function CarrierSyncMenuModal({
     [accounts, env],
   )
 
-  // Auto-pick the first eligible account when env changes so the operator
-  // can confirm with a single click. They can still override.
-  useEffect(() => {
-    if (!filtered.length) {
-      setPickedId(null)
-      return
-    }
-    if (!filtered.some((a) => a.id === pickedId)) {
-      setPickedId(filtered[0].id)
-    }
+  /**
+   * Effective picked account = the operator's manual pick when it's still
+   * in the filtered list, else the first eligible account. Derived at
+   * render time (not stored via useEffect) so switching env auto-picks
+   * with a single click without triggering the react-hooks/set-state-in-
+   * effect lint rule.
+   */
+  const effectivePickedId = useMemo<number | null>(() => {
+    if (pickedId != null && filtered.some((a) => a.id === pickedId)) return pickedId
+    return filtered[0]?.id ?? null
   }, [filtered, pickedId])
 
   const submit = async () => {
-    if (pickedId == null) return
+    if (effectivePickedId == null) return
     setSubmitting(true)
     try {
-      await onConfirm(pickedId, env)
+      await onConfirm(effectivePickedId, env)
       onClose()
     } catch (e) {
       notify.apiError(e, 'Sync failed.')
@@ -170,7 +170,7 @@ export default function CarrierSyncMenuModal({
               </div>
             ) : (
               <select
-                value={pickedId ?? ''}
+                value={effectivePickedId ?? ''}
                 onChange={(e) => setPickedId(Number(e.target.value))}
                 className="w-full rounded-lg border border-[#e3d9c4] bg-white px-3 py-2 text-[12px] font-medium text-[#412d15]"
               >
@@ -195,7 +195,7 @@ export default function CarrierSyncMenuModal({
           <button
             type="button"
             onClick={() => void submit()}
-            disabled={pickedId == null || submitting}
+            disabled={effectivePickedId == null || submitting}
             className="inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:opacity-40"
           >
             <FiDownloadCloud className="h-3 w-3" />
