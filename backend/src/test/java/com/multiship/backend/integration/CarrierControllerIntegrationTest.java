@@ -39,6 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -221,8 +222,13 @@ class CarrierControllerIntegrationTest extends AbstractIntegrationTest {
         assertEquals("UPS", body.getCarrierCode());
 
         // Anti-fallback proof: mocked connector was invoked EXACTLY once
-        // via the 4-arg getAccessToken (post F-MODE-4 handshake).
-        verify(upsMock, times(1)).getAccessToken(anyString(), anyString(), anyString(), anyString());
+        // via the 4-arg getAccessToken with THIS test's credentials.
+        // Scope by eq(clientId) so unrelated calls from sibling
+        // integration tests (which share the Spring context + mock) don't
+        // pollute the count. F-MODE-4 handshake path.
+        verify(upsMock, times(1)).getAccessToken(
+                eq("connect-client-id"), eq("connect-client-secret"),
+                eq("CONN-1"), eq("SANDBOX"));
 
         // DB round-trip: a CarrierConfig row must exist for our user.
         // Use the tenant-agnostic finder to avoid dereferencing the lazy
