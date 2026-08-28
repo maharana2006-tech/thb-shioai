@@ -711,12 +711,19 @@ export default function NewShipmentPage() {
       shipperCity: sender.city || undefined,
       shipperState: sender.state || undefined,
       shipperName: sender.name || undefined,
+      // Sprint 51 fix — backend ShipmentRequestDTO marks shipperPhone +
+      // recipientPhone as @NotBlank. Pre-fix the rate-shop request left
+      // these off entirely, so Compare rates always failed with
+      // "Recipient phone must not be blank." no matter what the
+      // operator typed in the phone field.
+      shipperPhone: sender.phone || undefined,
       shipperAddressLine1: sender.addressLine1 || undefined,
       recipientPostalCode: recipient.postalCode || '',
       recipientCountryCode: recipient.countryCode || 'US',
       recipientCity: recipient.city || undefined,
       recipientState: recipient.state || undefined,
       recipientName: recipient.name || undefined,
+      recipientPhone: recipient.phone || undefined,
       recipientAddressLine1: recipient.addressLine1 || undefined,
       recipientResidential: recipient.residential,
       declaredValue: declaredValue ? Number(declaredValue) : undefined,
