@@ -44,6 +44,7 @@ import { shipmentSchema, type ShipmentFormValues } from '../validation/yup/shipm
 import { dialCodeFor, postalPlaceholderFor } from '../utils/countryFormats'
 import { STATE_CODE_OPTIONS } from '../utils/stateCodes'
 import { decorateWithStateWarning } from '../utils/addressWarnings'
+import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddressFields'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -698,12 +699,29 @@ export default function NewShipmentPage() {
   const neededScope: 'DOMESTIC' | 'INTERNATIONAL' = isInternational ? 'INTERNATIONAL' : 'DOMESTIC'
   const scopeFits = (scope?: string | null) => !scope || scope === 'BOTH' || scope === neededScope
 
-  const originMatch = (o?: string | null) => (o ?? 'US').toUpperCase() === (sender.countryCode || 'US').toUpperCase()
+  // Compare a catalog row's origin country to the sender's selected country.
+  // Neither side falls back to a hardcoded 'US' — an unset origin on the
+  // row matches any sender (permissive), and an unset sender country
+  // matches nothing (until the operator picks one).
+  const originMatch = (o?: string | null) => {
+    const rowOrigin = (o || '').toUpperCase()
+    const senderOrigin = (sender.countryCode || '').toUpperCase()
+    if (!rowOrigin) return true         // row has no origin → available everywhere
+    if (!senderOrigin) return false     // sender hasn't picked yet → no rows match
+    return rowOrigin === senderOrigin
+  }
 
   // Sprint 22 — build a rate-shop request from the current form state.
   // Postal codes + weight are the minimum required set; the picker disables
   // its trigger button when they're missing.
   const rateShopRequest = useMemo<RateShopRequest>(() => ({
+    // Sprint 51 refactor — spread the whole sender / recipient objects
+    // via shipperFieldsFrom / recipientFieldsFrom rather than cherry-
+    // picking fields. Prevents the class of bug where a wire-required
+    // field silently gets omitted (#508 was shipperPhone / recipientPhone
+    // for the exact same reason — the builder was hand-mapping a subset).
+    // Country codes are NOT hardcoded — pass through what the operator
+    // picked; backend @NotBlank surfaces genuine misses.
     shipment: {
       carrierCode: carrier || undefined,
       accountNumber: accountNumber || undefined,
@@ -714,26 +732,8 @@ export default function NewShipmentPage() {
       width: width ? Number(width) : undefined,
       height: height ? Number(height) : undefined,
       dimUnit,
-      shipperPostalCode: sender.postalCode || '',
-      shipperCountryCode: sender.countryCode || 'US',
-      shipperCity: sender.city || undefined,
-      shipperState: sender.state || undefined,
-      shipperName: sender.name || undefined,
-      // Sprint 51 fix — backend ShipmentRequestDTO marks shipperPhone +
-      // recipientPhone as @NotBlank. Pre-fix the rate-shop request left
-      // these off entirely, so Compare rates always failed with
-      // "Recipient phone must not be blank." no matter what the
-      // operator typed in the phone field.
-      shipperPhone: sender.phone || undefined,
-      shipperAddressLine1: sender.addressLine1 || undefined,
-      recipientPostalCode: recipient.postalCode || '',
-      recipientCountryCode: recipient.countryCode || 'US',
-      recipientCity: recipient.city || undefined,
-      recipientState: recipient.state || undefined,
-      recipientName: recipient.name || undefined,
-      recipientPhone: recipient.phone || undefined,
-      recipientAddressLine1: recipient.addressLine1 || undefined,
-      recipientResidential: recipient.residential,
+      ...shipperFieldsFrom(sender),
+      ...recipientFieldsFrom(recipient),
       declaredValue: declaredValue ? Number(declaredValue) : undefined,
     },
     customerNo: clientCode || null,

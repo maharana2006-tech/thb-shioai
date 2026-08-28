@@ -70,13 +70,20 @@ export interface RateShopShipment {
   shipperName?: string
   shipperPhone?: string
   shipperAddressLine1?: string
+  shipperAddressLine2?: string
   shipperCity?: string
   shipperState?: string
   shipperPostalCode: string
   shipperCountryCode: string
   recipientName?: string
   recipientPhone?: string
+  /** ISO dial code without the plus; connectors prepend it to recipientPhone
+   *  at wire time. Match to backend ShipmentRequestDTO.recipientPhoneCountryCode. */
+  recipientPhoneCountryCode?: string
   recipientAddressLine1?: string
+  recipientAddressLine2?: string
+  /** Third street line — JP/CN/IN long addresses. Optional; carriers accept 3+. */
+  recipientAddressLine3?: string
   recipientCity?: string
   recipientState?: string
   recipientPostalCode: string
