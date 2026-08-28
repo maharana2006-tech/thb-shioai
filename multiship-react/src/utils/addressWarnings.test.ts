@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decorateWithStateWarning } from './NewShipmentPage'
+import { decorateWithStateWarning } from './addressWarnings'
 
 /**
  * Sprint 51 polish — client-side guard against FedEx / UPS / DHL Address
