@@ -864,16 +864,20 @@ public class FedExConnector implements CarrierConnector {
                     // are also missing, treat a resolved suggestion that
                     // differs from input as CORRECTED, or same-as-input as
                     // EXACT — anything else is genuinely unknown.
+                    // Sprint 51 polish — user-facing messages must not leak
+                    // FedEx wire-schema jargon (`attributes.Matched=true`).
+                    // The devtools crowd can still see the field name in the
+                    // raw response; the shipping operator sees plain English.
                     String matched = resolved.path("attributes").path("Matched").asText("");
                     String dpv = resolved.path("attributes").path("DPV").asText("");
                     if ("true".equalsIgnoreCase(matched) || "true".equalsIgnoreCase(dpv)) {
                         return new AddressValidationResult(true, "EXACT", classification, null,
                                 java.util.List.of(),
-                                "FedEx confirmed this address (attributes.Matched=true).", response);
+                                "FedEx confirmed this address.", response);
                     }
                     if ("false".equalsIgnoreCase(matched)) {
                         return new AddressValidationResult(false, "NOT_FOUND", classification, null,
-                                java.util.List.of("FedEx couldn't find this address (attributes.Matched=false)."),
+                                java.util.List.of("FedEx couldn't find this address."),
                                 "FedEx address not found.", response);
                     }
                     if (suggested != null) {

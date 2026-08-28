@@ -116,11 +116,29 @@ export const notify = {
    *
    *   catch (err) { notify.apiError(err) }
    *   catch (err) { notify.apiError(err, 'Failed to save shipping policy.') }
+   *
+   * <p>Sprint 51 polish — when the backend included a per-field
+   * {@code errors} object on the payload (bean validation on {@code @Valid}
+   * bodies does), enrich the toast body so the operator sees WHICH field
+   * failed instead of the generic top-line message. Example: title reads
+   * "Recipient phone must not be blank." and the body reads
+   * "shipment.recipientPhone — must not be blank".
    */
   apiError(err: unknown, fallback?: string): Promise<void> {
-    const anyErr = err as { errorCode?: string | null; message?: string | null }
+    const anyErr = err as {
+      errorCode?: string | null
+      message?: string | null
+      payload?: { errors?: { field?: string; message?: string } | null } | null
+    }
     const friendly = getFriendlyError(anyErr?.errorCode, anyErr?.message, fallback)
-    return toast('error', { title: friendly.title, body: friendly.message })
+    const fieldError = anyErr?.payload?.errors
+    const detail = fieldError?.field && fieldError?.message
+      ? `${fieldError.field} — ${fieldError.message}`
+      : undefined
+    const body = detail
+      ? (friendly.message ? `${friendly.message}\n${detail}` : detail)
+      : friendly.message
+    return toast('error', { title: friendly.title, body })
   },
   info(opts: OptionsOrString): Promise<void> {
     return toast('info', opts)

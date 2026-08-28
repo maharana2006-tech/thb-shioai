@@ -29,17 +29,18 @@ public class CarrierExceptionHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidationException(MethodArgumentNotValidException ex) {
-        FieldError fieldError = ex.getBindingResult().getFieldError();
-        ApiResponse.ErrorDetails errorDetails = fieldError == null
+        java.util.List<FieldError> fieldErrors = ex.getBindingResult().getFieldErrors();
+        FieldError first = fieldErrors.isEmpty() ? null : fieldErrors.get(0);
+        ApiResponse.ErrorDetails errorDetails = first == null
                 ? ApiResponse.ErrorDetails.builder()
                 .field("request")
                 .code("VALIDATION_ERROR")
                 .message("Invalid request payload.")
                 .build()
                 : ApiResponse.ErrorDetails.builder()
-                .field(fieldError.getField())
-                .code(fieldError.getCode())
-                .message(fieldError.getDefaultMessage())
+                .field(first.getField())
+                .code(first.getCode())
+                .message(first.getDefaultMessage())
                 .build();
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -47,7 +48,10 @@ public class CarrierExceptionHandler {
                         .status("error")
                         .code(HttpStatus.BAD_REQUEST.value())
                         .errorCode(ErrorCode.VALIDATION_ERROR.name())
-                        .message("Validation failed.")
+                        // Sprint 51 polish — reuse the humanised summary
+                        // from GlobalExceptionHandler so operators inside
+                        // carrier endpoints get the same friendly text.
+                        .message(GlobalExceptionHandler.buildFriendlyValidationSummary(fieldErrors))
                         .timestamp(LocalDateTime.now())
                         .errors(errorDetails)
                         .build());

@@ -43,6 +43,7 @@ import { useFormik, getIn } from 'formik'
 import { shipmentSchema, type ShipmentFormValues } from '../validation/yup/shipmentSchema'
 import { dialCodeFor, postalPlaceholderFor } from '../utils/countryFormats'
 import { STATE_CODE_OPTIONS } from '../utils/stateCodes'
+import { decorateWithStateWarning } from '../utils/addressWarnings'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -718,12 +719,19 @@ export default function NewShipmentPage() {
       shipperCity: sender.city || undefined,
       shipperState: sender.state || undefined,
       shipperName: sender.name || undefined,
+      // Sprint 51 fix — backend ShipmentRequestDTO marks shipperPhone +
+      // recipientPhone as @NotBlank. Pre-fix the rate-shop request left
+      // these off entirely, so Compare rates always failed with
+      // "Recipient phone must not be blank." no matter what the
+      // operator typed in the phone field.
+      shipperPhone: sender.phone || undefined,
       shipperAddressLine1: sender.addressLine1 || undefined,
       recipientPostalCode: recipient.postalCode || '',
       recipientCountryCode: recipient.countryCode || 'US',
       recipientCity: recipient.city || undefined,
       recipientState: recipient.state || undefined,
       recipientName: recipient.name || undefined,
+      recipientPhone: recipient.phone || undefined,
       recipientAddressLine1: recipient.addressLine1 || undefined,
       recipientResidential: recipient.residential,
       declaredValue: declaredValue ? Number(declaredValue) : undefined,
@@ -1092,11 +1100,17 @@ export default function NewShipmentPage() {
         countryCode: recipient.countryCode,
       })
       const d = res.data
-      setCarrierAddressResult(d ?? null)
-      if (d?.valid) {
-        notify.success(`${carrier}: ${d.matchLevel} match.`)
-      } else if (d) {
-        notify.error(`${carrier}: ${d.message}`)
+      // Sprint 51 polish — FedEx/UPS/DHL Address Validation is lenient about
+      // state names (accepts "Delaware" and reports Matched=true), but the
+      // subsequent Rate / Ship APIs need a 2-letter code. Detect the
+      // mismatch client-side and append it to the banner's warnings so the
+      // green banner doesn't give false confidence.
+      const decorated = decorateWithStateWarning(d ?? null, recipient.countryCode, recipient.state)
+      setCarrierAddressResult(decorated)
+      if (decorated?.valid) {
+        notify.success(`${carrier}: ${decorated.matchLevel} match.`)
+      } else if (decorated) {
+        notify.error(`${carrier}: ${decorated.message}`)
       }
     } catch (e) {
       notify.apiError(e, 'Carrier address validation failed.')

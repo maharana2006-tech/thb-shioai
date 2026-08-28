@@ -98,7 +98,10 @@ class CarrierExceptionHandlerTest {
                 "carrierCode", null, false, new String[]{"NotBlank"}, null,
                 "must not be blank");
         BindingResult binding = mock(BindingResult.class);
-        when(binding.getFieldError()).thenReturn(fe);
+        // Sprint 51 polish — handler now iterates getFieldErrors() to
+        // build the friendly summary; single-field lookups also flow
+        // through this list.
+        when(binding.getFieldErrors()).thenReturn(java.util.List.of(fe));
         MethodArgumentNotValidException ex =
                 new MethodArgumentNotValidException((org.springframework.core.MethodParameter) null, binding);
 
@@ -108,7 +111,9 @@ class CarrierExceptionHandlerTest {
         ApiResponse<Void> body = resp.getBody();
         assertNotNull(body);
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), body.getErrorCode());
-        assertEquals("Validation failed.", body.getMessage());
+        // Sprint 51 polish — top-level message is humanised from the
+        // first field error instead of the constant "Validation failed."
+        assertEquals("Carrier code must not be blank.", body.getMessage());
         ApiResponse.ErrorDetails details = body.getErrors();
         assertNotNull(details, "field-level details must be included when a FieldError is present");
         assertEquals("carrierCode", details.getField());
@@ -122,7 +127,7 @@ class CarrierExceptionHandlerTest {
         // handler uses the "request" fallback so the client still gets
         // a structured payload instead of a null body.
         BindingResult binding = mock(BindingResult.class);
-        when(binding.getFieldError()).thenReturn(null);
+        when(binding.getFieldErrors()).thenReturn(java.util.List.of());
         MethodArgumentNotValidException ex =
                 new MethodArgumentNotValidException((org.springframework.core.MethodParameter) null, binding);
 
@@ -134,23 +139,33 @@ class CarrierExceptionHandlerTest {
         assertEquals("request", details.getField());
         assertEquals("VALIDATION_ERROR", details.getCode());
         assertEquals("Invalid request payload.", details.getMessage());
+        // Sprint 51 polish — the empty-field-list branch also produces
+        // a friendly top-level message rather than the generic constant.
+        assertEquals("Invalid request payload.", resp.getBody().getMessage());
     }
 
     @Test
-    void validationException_topLevelMessageIsAlwaysValidationFailed_notTheDefaultMessage() {
-        // The nested `errors.message` carries the specific reason; the
-        // top-level `message` MUST stay a constant so client i18n keys
-        // don't have to key off per-field text.
-        FieldError fe = new FieldError("x", "clientId", "must not be blank");
+    void validationException_multipleFieldErrors_summarisesFirstAndCountsTheRest() {
+        // Sprint 51 polish — replaces the pre-polish test that pinned
+        // the constant "Validation failed.". Multiple field errors now
+        // roll up into "First field message. (and N more.)" so the
+        // operator sees the leading cause + a hint that more work is
+        // required.
+        FieldError first = new FieldError("carrierConnectRequest", "clientId", "must not be blank");
+        FieldError second = new FieldError("carrierConnectRequest", "clientSecret", "must not be blank");
+        FieldError third = new FieldError("carrierConnectRequest", "accountNumber", "must not be blank");
         BindingResult binding = mock(BindingResult.class);
-        when(binding.getFieldError()).thenReturn(fe);
+        when(binding.getFieldErrors()).thenReturn(java.util.List.of(first, second, third));
         MethodArgumentNotValidException ex =
                 new MethodArgumentNotValidException((org.springframework.core.MethodParameter) null, binding);
 
         ResponseEntity<ApiResponse<Void>> resp = handler.handleValidationException(ex);
 
-        assertEquals("Validation failed.", resp.getBody().getMessage(),
-                "top-level message must be the constant 'Validation failed.'");
+        assertEquals("Client id must not be blank. (and 2 more.)", resp.getBody().getMessage());
+        // The single-item errors object still reflects the FIRST field
+        // (backwards-compat with pre-Sprint-51 consumers that only
+        // read errors.field / errors.message).
+        assertEquals("clientId", resp.getBody().getErrors().getField());
     }
 
     // ==================================================================
