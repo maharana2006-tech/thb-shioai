@@ -361,7 +361,8 @@ class PickupTest {
                 new AddressToValidate(null, null, "1 A St", null, null,
                         "Denver", "CO", "80202", "US"),
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
-                "740561111", null);
+                "740561111", null,
+                null, null, null, null);
         PickupResult r = c.schedulePickup(noDate, "real-basic-auth-token", "SANDBOX");
         assertEquals("ERROR", r.status());
         assertTrue(r.message().contains("pickupDate"),
@@ -378,7 +379,8 @@ class PickupTest {
                 new AddressToValidate(null, null, "1 A St", null, null,
                         "Denver", "CO", "80202", "US"),
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
-                "740561111", null);
+                "740561111", null,
+                null, null, null, null);
         PickupResult r = c.schedulePickup(noStart, "real-basic-auth-token", "SANDBOX");
         assertEquals("ERROR", r.status());
         assertTrue(r.message().contains("pickupWindowStart"), "got: " + r.message());
@@ -394,7 +396,8 @@ class PickupTest {
                 new AddressToValidate(null, null, "1 A St", null, null,
                         "Denver", "CO", "80202", "US"),
                 "Contact", "5551234567", 1, new BigDecimal("5"), "LB", null,
-                "740561111", null);
+                "740561111", null,
+                null, null, null, null);
         PickupResult r = c.schedulePickup(noEnd, "real-basic-auth-token", "SANDBOX");
         assertEquals("ERROR", r.status());
         assertTrue(r.message().contains("pickupWindowEnd"), "got: " + r.message());
