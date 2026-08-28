@@ -10,6 +10,7 @@ import { canManageCarriers, normalizeRole } from '../utils/roles'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import Select from './workspace/Select'
 import TablePagination from './workspace/TablePagination'
+import CarrierSyncMenuModal from './modals/CarrierSyncMenuModal'
 
 const inputClass =
   'w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-950 outline-none transition focus:border-[#412d15] focus:ring-4 focus:ring-[#412d15]/10'
@@ -128,6 +129,10 @@ export default function PackagesPage() {
   /** Carrier filter: 'ALL' | 'CUSTOM' | a carrier code (UPS/FEDEX/USPS…). */
   const [carrierFilter, setCarrierFilter] = useState('ALL')
   const [syncing, setSyncing] = useState(false)
+  /** Carrier whose sync modal is open (env + account picker) — only used
+   *  when the operator has filtered to a specific carrier. ALL/CUSTOM
+   *  filters use the multi-carrier sweep with default accounts. */
+  const [syncMenuFor, setSyncMenuFor] = useState<string | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
 
@@ -328,14 +333,13 @@ export default function PackagesPage() {
     return [...merged].sort((a, b) => countryName(a).localeCompare(countryName(b)))
   }, [presets, origin])
 
-  const syncCarrierPackaging = async () => {
-    // Sync only the carrier the user is filtering on; when they're looking at
-    // ALL or CUSTOM, fall back to sweeping every supported carrier.
-    const targets =
-      carrierFilter && carrierFilter !== 'ALL' && carrierFilter !== 'CUSTOM'
-        ? [carrierFilter]
-        : ['UPS', 'FEDEX', 'USPS']
-
+  /**
+   * Multi-carrier sweep — invoked only for ALL / CUSTOM filters where no
+   * specific account can be picked. Falls back per-carrier to whichever
+   * platform account the backend picks by default.
+   */
+  const sweepAllCarriers = async () => {
+    const targets = ['UPS', 'FEDEX', 'USPS']
     setSyncing(true)
     try {
       let added = 0
@@ -366,6 +370,43 @@ export default function PackagesPage() {
       await load()
     } finally {
       setSyncing(false)
+    }
+  }
+
+  /**
+   * Single-carrier sync using the operator-picked account (from the sync
+   * menu modal). The chosen account's env routes the OAuth token to the
+   * matching carrier host.
+   */
+  const runSyncForCarrier = async (carrier: string, accountId: number) => {
+    setSyncing(true)
+    try {
+      const res = await shippingConfigService.syncPackages(carrier, origin, accountId)
+      const added = res.data?.added ?? 0
+      const updated = res.data?.updated ?? 0
+      if (added || updated) {
+        notify.success(`${carrier} packaging · ${countryName(origin)}: ${added} new, ${updated} refreshed.`)
+      } else {
+        notify.info(`${carrier}: nothing to sync from ${countryName(origin)}.`)
+      }
+      await load()
+    } catch (e) {
+      notify.apiError(e, `Failed to sync ${carrier} packaging.`)
+      throw e
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const startSync = () => {
+    const specific =
+      carrierFilter && carrierFilter !== 'ALL' && carrierFilter !== 'CUSTOM'
+        ? carrierFilter
+        : null
+    if (specific) {
+      setSyncMenuFor(specific)
+    } else {
+      void sweepAllCarriers()
     }
   }
 
@@ -416,7 +457,7 @@ export default function PackagesPage() {
         {canSync ? (
           <button
             type="button"
-            onClick={() => void syncCarrierPackaging()}
+            onClick={() => startSync()}
             disabled={syncing}
             title={
               carrierFilter && carrierFilter !== 'ALL' && carrierFilter !== 'CUSTOM'
@@ -823,6 +864,15 @@ export default function PackagesPage() {
             </div>
           </div>
         </div>
+      ) : null}
+      {syncMenuFor ? (
+        <CarrierSyncMenuModal
+          carrier={syncMenuFor}
+          originCountry={origin}
+          kind="packaging"
+          onClose={() => setSyncMenuFor(null)}
+          onConfirm={(accountId) => runSyncForCarrier(syncMenuFor, accountId)}
+        />
       ) : null}
     </div>
   )

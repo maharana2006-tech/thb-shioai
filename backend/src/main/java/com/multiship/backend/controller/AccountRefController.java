@@ -5,6 +5,7 @@ import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.CarrierAccountRefDTO;
 import com.multiship.backend.dto.CredentialCheckDTO;
 import com.multiship.backend.dto.PlatformCredentialsDTO;
+import com.multiship.backend.dto.SyncEligibleAccountDTO;
 import com.multiship.backend.dto.VerifyCredentialsRequest;
 import com.multiship.backend.service.AccountRefService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -96,6 +98,18 @@ public class AccountRefController {
     public ResponseEntity<ApiResponse<CredentialCheckDTO>> verifyCredentials(
             @Valid @RequestBody VerifyCredentialsRequest request) {
         ApiResponse<CredentialCheckDTO> response = accountRefService.verifyCredentials(request);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Sync-eligible accounts for a carrier",
+            description = "Active + verified accounts (platform + client) with credentials, "
+                    + "sorted platform-first-newest. Powers the /settings/shipping-catalog sync menu — "
+                    + "operator picks env + account before pulling the carrier's service or package catalog.")
+    @PreAuthorize("hasRole('ADMIN')")
+    @GetMapping("/sync-eligible")
+    public ResponseEntity<ApiResponse<List<SyncEligibleAccountDTO>>> listSyncEligible(
+            @RequestParam String carrier) {
+        ApiResponse<List<SyncEligibleAccountDTO>> response = accountRefService.listSyncEligibleAccounts(carrier);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 }

@@ -42,13 +42,18 @@ public class ShippingConfigController {
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
-    @Operation(summary = "Sync a carrier's available services for an origin country from its availability API")
+    @Operation(summary = "Sync a carrier's available services for an origin country from its availability API",
+            description = "Optional accountId pins the sync to a specific verified account (platform or client). "
+                    + "That account's environment (SANDBOX/PRODUCTION) routes the availability call to the "
+                    + "matching carrier host. When accountId is null the sync falls back to the first "
+                    + "platform account with credentials — matches pre-Sprint-51 behaviour.")
     @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/shipping-services/sync")
     public ResponseEntity<ApiResponse<Map<String, Object>>> sync(
             @RequestParam String carrier,
-            @RequestParam(name = "originCountry", required = false, defaultValue = "US") String originCountry) {
-        ApiResponse<Map<String, Object>> r = service.syncFromCarrier(carrier, originCountry);
+            @RequestParam(name = "originCountry", required = false, defaultValue = "US") String originCountry,
+            @RequestParam(name = "accountId", required = false) Long accountId) {
+        ApiResponse<Map<String, Object>> r = service.syncFromCarrier(carrier, originCountry, accountId);
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
@@ -106,13 +111,18 @@ public class ShippingConfigController {
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
-    @Operation(summary = "Sync a carrier's predefined packaging for an origin country")
+    @Operation(summary = "Sync a carrier's predefined packaging for an origin country",
+            description = "Optional accountId pins the sync to a specific verified account (platform or client). "
+                    + "That account's environment (SANDBOX/PRODUCTION) routes the packaging call to the "
+                    + "matching carrier host. When accountId is null the sync falls back to the first "
+                    + "platform account with credentials — matches pre-Sprint-51 behaviour.")
     @PreAuthorize("hasRole('ADMIN')")
     @PostMapping("/package-presets/sync")
     public ResponseEntity<ApiResponse<Map<String, Object>>> syncPackages(
             @RequestParam String carrier,
-            @RequestParam(name = "originCountry", required = false, defaultValue = "US") String originCountry) {
-        ApiResponse<Map<String, Object>> r = service.syncPackagesFromCarrier(carrier, originCountry);
+            @RequestParam(name = "originCountry", required = false, defaultValue = "US") String originCountry,
+            @RequestParam(name = "accountId", required = false) Long accountId) {
+        ApiResponse<Map<String, Object>> r = service.syncPackagesFromCarrier(carrier, originCountry, accountId);
         return ResponseEntity.status(r.getCode()).body(r);
     }
 

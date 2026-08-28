@@ -240,12 +240,21 @@ export const shippingConfigService = {
     }
   },
 
-  /** Pull a carrier's available services for an origin country from its availability API. */
-  syncServices: (carrier: string, originCountry: string) =>
-    apiClient.post<ApiResponse<SyncResult>>(
-      `/shipping-services/sync?carrier=${encodeURIComponent(carrier)}&originCountry=${encodeURIComponent(originCountry)}`,
+  /**
+   * Pull a carrier's available services for an origin country from its
+   * availability API. Optional accountId pins the sync to a specific
+   * verified account (platform or client) so its stored environment
+   * (SANDBOX/PRODUCTION) routes the call to the matching carrier host.
+   * When accountId is omitted, the backend falls back to the first
+   * platform account with credentials — matches pre-Sprint-51 behaviour.
+   */
+  syncServices: (carrier: string, originCountry: string, accountId?: number) => {
+    const acct = typeof accountId === 'number' ? `&accountId=${accountId}` : ''
+    return apiClient.post<ApiResponse<SyncResult>>(
+      `/shipping-services/sync?carrier=${encodeURIComponent(carrier)}&originCountry=${encodeURIComponent(originCountry)}${acct}`,
       {},
-    ),
+    )
+  },
 
   setServiceEnabled: (id: number, enabled: boolean) =>
     apiClient.patch<ApiResponse<ShippingServiceItem>>(`/shipping-services/${id}`, { enabled }),
@@ -277,10 +286,15 @@ export const shippingConfigService = {
 
   deletePreset: (id: number) => apiClient.delete<ApiResponse<void>>(`/package-presets/${id}`),
 
-  /** Pull a carrier's predefined packaging (fixed dims/weights/flat-rate) for an origin country. */
-  syncPackages: (carrier: string, originCountry: string) =>
-    apiClient.post<ApiResponse<SyncResult>>(
-      `/package-presets/sync?carrier=${encodeURIComponent(carrier)}&originCountry=${encodeURIComponent(originCountry)}`,
+  /**
+   * Pull a carrier's predefined packaging for an origin country. Same
+   * accountId semantics as {@link syncServices}.
+   */
+  syncPackages: (carrier: string, originCountry: string, accountId?: number) => {
+    const acct = typeof accountId === 'number' ? `&accountId=${accountId}` : ''
+    return apiClient.post<ApiResponse<SyncResult>>(
+      `/package-presets/sync?carrier=${encodeURIComponent(carrier)}&originCountry=${encodeURIComponent(originCountry)}${acct}`,
       {},
-    ),
+    )
+  },
 }

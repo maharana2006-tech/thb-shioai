@@ -59,6 +59,23 @@ export interface CredentialCheck {
   checkedAt: string | null
 }
 
+/**
+ * Lightweight projection of a carrier account for the
+ * `/settings/shipping-catalog` sync menu. Carries only fields the picker
+ * needs — no credentials, no third-party billing, no usage stats.
+ * Backend derives `isPlatform` from customerNo so the FE can group
+ * accounts without reimplementing the null-customerNo convention.
+ */
+export interface SyncEligibleAccount {
+  id: number
+  carrierCode: string
+  accountNumber: string
+  accountName: string | null
+  environment: string
+  isPlatform: boolean
+  customerNo: string | null
+}
+
 export interface AccountRefUpsertPayload {
   accountNumber: string
   carrierCode: string
@@ -193,6 +210,21 @@ export const accountRefService = {
     }>>(
       `/carrier-accounts/platform-credentials/${encodeURIComponent(carrierCode)}`
     )
+  },
+
+  /**
+   * Verified + active accounts (platform + client) for a carrier, sorted
+   * platform-first-newest. Powers the /settings/shipping-catalog sync
+   * menu — the operator picks env + account before pulling the carrier's
+   * service or package catalog. Returns [] when no verified accounts
+   * exist so the caller can show a "connect an account first" empty
+   * state instead of a network error.
+   */
+  listSyncEligible: async (carrier: string): Promise<SyncEligibleAccount[]> => {
+    const response = await apiClient.get<ApiResponse<SyncEligibleAccount[]>>(
+      `/carrier-accounts/sync-eligible?carrier=${encodeURIComponent(carrier)}`,
+    )
+    return Array.isArray(response.data) ? response.data : []
   },
 
   /** Bulk preview of the generation scenario for each order. */

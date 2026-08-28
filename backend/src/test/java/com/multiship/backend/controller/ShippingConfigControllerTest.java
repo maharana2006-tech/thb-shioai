@@ -167,25 +167,43 @@ class ShippingConfigControllerTest {
         // ShippingConfigService is the only injected dependency.
         Map<String, Object> data = new HashMap<>();
         data.put("added", 3);
-        when(service.syncFromCarrier("UPS", "US")).thenReturn(ok(data));
+        // Sprint 51 catalog sync — controller now calls the 3-arg overload
+        // with accountId (null when the operator hasn't picked one from
+        // the sync menu).
+        when(service.syncFromCarrier("UPS", "US", null)).thenReturn(ok(data));
 
-        ResponseEntity<ApiResponse<Map<String, Object>>> re = controller.sync("UPS", "US");
+        ResponseEntity<ApiResponse<Map<String, Object>>> re = controller.sync("UPS", "US", null);
 
         assertEquals(HttpStatus.OK, re.getStatusCode());
-        verify(service, times(1)).syncFromCarrier(eq("UPS"), eq("US"));
-        verify(service, never()).syncPackagesFromCarrier(any(), any());
+        verify(service, times(1)).syncFromCarrier(eq("UPS"), eq("US"), org.mockito.ArgumentMatchers.isNull());
+        verify(service, never()).syncPackagesFromCarrier(any(), any(), any());
     }
 
     @Test
     void sync_unknownCarrier_422IsEchoed() {
         ApiResponse<Map<String, Object>> resp =
                 err(422, ErrorCode.VALIDATION_ERROR, "unknown carrier");
-        when(service.syncFromCarrier("BOGUS", "US")).thenReturn(resp);
+        when(service.syncFromCarrier("BOGUS", "US", null)).thenReturn(resp);
 
-        ResponseEntity<ApiResponse<Map<String, Object>>> re = controller.sync("BOGUS", "US");
+        ResponseEntity<ApiResponse<Map<String, Object>>> re = controller.sync("BOGUS", "US", null);
 
         assertEquals(HttpStatus.UNPROCESSABLE_CONTENT, re.getStatusCode());
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), re.getBody().getErrorCode());
+    }
+
+    @Test
+    void sync_withAccountId_flowsThroughToService() {
+        // Sprint 51 — operator-picked account flows through to the service
+        // layer as-is; the connector-level env routing (SANDBOX vs PROD)
+        // happens inside syncFromCarrier by looking up the account.
+        Map<String, Object> data = new HashMap<>();
+        data.put("added", 1);
+        when(service.syncFromCarrier("UPS", "US", 42L)).thenReturn(ok(data));
+
+        ResponseEntity<ApiResponse<Map<String, Object>>> re = controller.sync("UPS", "US", 42L);
+
+        assertEquals(HttpStatus.OK, re.getStatusCode());
+        verify(service, times(1)).syncFromCarrier(eq("UPS"), eq("US"), eq(42L));
     }
 
     // ================ PATCH /shipping-services/{id} — setEnabled ================
@@ -351,25 +369,37 @@ class ShippingConfigControllerTest {
 
     @Test
     void syncPackages_returns200_andPassesCarrierAndOrigin() {
-        // Anti-fallback: only the mocked service is a collaborator — no
-        // CarrierConnector method can have been reached in this test.
-        when(service.syncPackagesFromCarrier("UPS", "US")).thenReturn(ok(Map.of("added", 5)));
+        // Sprint 51 catalog sync — controller now calls the 3-arg overload
+        // with accountId (null when the operator hasn't picked one).
+        when(service.syncPackagesFromCarrier("UPS", "US", null)).thenReturn(ok(Map.of("added", 5)));
 
-        ResponseEntity<ApiResponse<Map<String, Object>>> re = controller.syncPackages("UPS", "US");
+        ResponseEntity<ApiResponse<Map<String, Object>>> re = controller.syncPackages("UPS", "US", null);
 
         assertEquals(HttpStatus.OK, re.getStatusCode());
-        verify(service, times(1)).syncPackagesFromCarrier(eq("UPS"), eq("US"));
-        verify(service, never()).syncFromCarrier(any(), any());
+        verify(service, times(1)).syncPackagesFromCarrier(eq("UPS"), eq("US"), org.mockito.ArgumentMatchers.isNull());
+        verify(service, never()).syncFromCarrier(any(), any(), any());
     }
 
     @Test
     void syncPackages_unknownCarrier_422IsEchoed() {
-        when(service.syncPackagesFromCarrier("BOGUS", "US"))
+        when(service.syncPackagesFromCarrier("BOGUS", "US", null))
                 .thenReturn(err(422, ErrorCode.VALIDATION_ERROR, "unknown carrier"));
 
-        ResponseEntity<ApiResponse<Map<String, Object>>> re = controller.syncPackages("BOGUS", "US");
+        ResponseEntity<ApiResponse<Map<String, Object>>> re = controller.syncPackages("BOGUS", "US", null);
 
         assertEquals(HttpStatus.UNPROCESSABLE_CONTENT, re.getStatusCode());
+    }
+
+    @Test
+    void syncPackages_withAccountId_flowsThroughToService() {
+        // Sprint 51 — operator-picked account flows through to the service
+        // layer as-is.
+        when(service.syncPackagesFromCarrier("UPS", "US", 42L)).thenReturn(ok(Map.of("added", 1)));
+
+        ResponseEntity<ApiResponse<Map<String, Object>>> re = controller.syncPackages("UPS", "US", 42L);
+
+        assertEquals(HttpStatus.OK, re.getStatusCode());
+        verify(service, times(1)).syncPackagesFromCarrier(eq("UPS"), eq("US"), eq(42L));
     }
 
     // ================ POST /package-presets — createPreset ================
@@ -494,7 +524,9 @@ class ShippingConfigControllerTest {
 
     @Test
     void preAuthorize_sync_requiresAdminOnly() throws NoSuchMethodException {
-        assertEquals("hasRole('ADMIN')", preAuth("sync", String.class, String.class).value());
+        // Sprint 51 catalog sync — signature now includes accountId (Long).
+        assertEquals("hasRole('ADMIN')",
+                preAuth("sync", String.class, String.class, Long.class).value());
     }
 
     @Test
@@ -525,7 +557,9 @@ class ShippingConfigControllerTest {
 
     @Test
     void preAuthorize_syncPackages_requiresAdminOnly() throws NoSuchMethodException {
-        assertEquals("hasRole('ADMIN')", preAuth("syncPackages", String.class, String.class).value());
+        // Sprint 51 catalog sync — signature now includes accountId (Long).
+        assertEquals("hasRole('ADMIN')",
+                preAuth("syncPackages", String.class, String.class, Long.class).value());
     }
 
     @Test
@@ -563,7 +597,7 @@ class ShippingConfigControllerTest {
         // silently move an endpoint (which would break the FE).
         assertTrue(ShippingConfigController.class.getMethod("catalog", String.class)
                 .getAnnotation(GetMapping.class).value()[0].equals("/shipping-services"));
-        assertTrue(ShippingConfigController.class.getMethod("sync", String.class, String.class)
+        assertTrue(ShippingConfigController.class.getMethod("sync", String.class, String.class, Long.class)
                 .getAnnotation(PostMapping.class).value()[0].equals("/shipping-services/sync"));
         assertTrue(ShippingConfigController.class.getMethod("setEnabled", Long.class, Map.class)
                 .getAnnotation(PatchMapping.class).value()[0].equals("/shipping-services/{id}"));
@@ -575,7 +609,7 @@ class ShippingConfigControllerTest {
                 .getAnnotation(PutMapping.class).value()[0].equals("/shipping-services/{id}/packages"));
         assertTrue(ShippingConfigController.class.getMethod("listPresets")
                 .getAnnotation(GetMapping.class).value()[0].equals("/package-presets"));
-        assertTrue(ShippingConfigController.class.getMethod("syncPackages", String.class, String.class)
+        assertTrue(ShippingConfigController.class.getMethod("syncPackages", String.class, String.class, Long.class)
                 .getAnnotation(PostMapping.class).value()[0].equals("/package-presets/sync"));
         assertTrue(ShippingConfigController.class.getMethod("createPreset", PackagePreset.class)
                 .getAnnotation(PostMapping.class).value()[0].equals("/package-presets"));

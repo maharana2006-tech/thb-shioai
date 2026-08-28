@@ -56,6 +56,16 @@ vi.mock('../api/clientCatalogService', () => ({
   },
 }))
 
+// Sprint 51 — sync menu modal fetches verified accounts via
+// accountRefService.listSyncEligible. Stub it so the single-carrier
+// sync test can drive the modal → confirm flow.
+const listSyncEligibleMock = vi.fn()
+vi.mock('../api/accountRefService', () => ({
+  accountRefService: {
+    listSyncEligible: (...args: unknown[]) => listSyncEligibleMock(...args),
+  },
+}))
+
 const notifyConfirmMock = vi.fn()
 const notifySuccessMock = vi.fn()
 const notifyErrorMock = vi.fn()
@@ -94,9 +104,10 @@ beforeEach(() => {
   })
   ;[listPresetsMock, packagesUsageMock, savePresetMock, setDefaultPresetMock,
     deletePresetMock, syncPackagesMock, notifyConfirmMock, notifySuccessMock,
-    notifyErrorMock, notifyApiErrorMock].forEach((m) => m.mockReset())
+    notifyErrorMock, notifyApiErrorMock, listSyncEligibleMock].forEach((m) => m.mockReset())
   packagesUsageMock.mockResolvedValue({ data: [] })
   notifyConfirmMock.mockResolvedValue(true)
+  listSyncEligibleMock.mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -400,7 +411,7 @@ describe('PackagesPage — sync carrier packaging', () => {
     expect(calls).toEqual(expect.arrayContaining(['UPS', 'FEDEX', 'USPS']))
   })
 
-  it('specific carrier filter targets only that carrier', async () => {
+  it('specific carrier filter opens the sync menu, confirms with picked account', async () => {
     // Seed at least one CARRIER preset for UPS so it appears in the dropdown.
     listPresetsMock.mockResolvedValue([{
       id: 1, name: 'UPS Small Box', kind: 'CARRIER', carrier: 'UPS',
@@ -408,6 +419,11 @@ describe('PackagesPage — sync carrier packaging', () => {
       originCountry: 'US', length: 10, width: 8, height: 6,
       dimUnit: 'IN', weightUnit: 'LB', maxWeight: 5, enabled: true, default: false,
     }])
+    // Sprint 51 — the sync menu fetches verified accounts to pick from.
+    listSyncEligibleMock.mockResolvedValue([
+      { id: 42, carrierCode: 'UPS', accountNumber: 'A99999', accountName: 'Platform UPS',
+        environment: 'SANDBOX', isPlatform: true, customerNo: null },
+    ])
     syncPackagesMock.mockResolvedValue({ data: { added: 0, updated: 0 } })
     const Page = await loadPage()
     renderPage(Page)
@@ -417,16 +433,25 @@ describe('PackagesPage — sync carrier packaging', () => {
     const selects = screen.getAllByRole('combobox')
     await userEvent.selectOptions(selects[1], 'UPS')
 
+    // Click the top-level Sync button → opens the sync menu modal.
     await act(async () => {
       await userEvent.click(screen.getByRole('button', { name: /Sync carrier packaging/i }))
     })
 
-    // Only ONE call — for UPS.
+    // Modal fetches eligible accounts; wait for the account dropdown to appear.
+    await waitFor(() => expect(listSyncEligibleMock).toHaveBeenCalledWith('UPS'))
+    // The modal's "Sync" button is the second one on screen after the menu opens.
+    const modalSyncBtn = await screen.findByRole('button', { name: /^Sync$/i })
+    await act(async () => {
+      await userEvent.click(modalSyncBtn)
+    })
+
+    // Only ONE call — for UPS with the picked account id.
     await waitFor(() => expect(syncPackagesMock).toHaveBeenCalledTimes(1))
-    expect(syncPackagesMock).toHaveBeenCalledWith('UPS', 'US')
+    expect(syncPackagesMock).toHaveBeenCalledWith('UPS', 'US', 42)
     // FedEx / USPS never touched.
-    expect(syncPackagesMock).not.toHaveBeenCalledWith('FEDEX', 'US')
-    expect(syncPackagesMock).not.toHaveBeenCalledWith('USPS', 'US')
+    expect(syncPackagesMock).not.toHaveBeenCalledWith('FEDEX', 'US', expect.anything())
+    expect(syncPackagesMock).not.toHaveBeenCalledWith('USPS', 'US', expect.anything())
   })
 })
 

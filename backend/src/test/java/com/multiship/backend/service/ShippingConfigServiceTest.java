@@ -249,6 +249,64 @@ class ShippingConfigServiceTest {
         verify(fedexMock, never()).listServices(any(), any(), any());
     }
 
+    @Test
+    void syncFromCarrier_pickedAccountId_usesThatAccountsEnvironment() {
+        // Sprint 51 catalog sync — operator picks a specific verified
+        // account whose stored env (PRODUCTION here) routes the OAuth
+        // token to the matching carrier host. Falls back to platform
+        // lookup ONLY when accountId is null.
+        CarrierAccountRef picked = CarrierAccountRef.builder()
+                .id(77L).carrierCode("UPS")
+                .clientId("cid-prod").clientSecret("csecret-prod").accountNumber("ACCT-PROD")
+                .environment("PRODUCTION").active(true).build();
+        when(carrierAccountRefRepository.findById(77L)).thenReturn(java.util.Optional.of(picked));
+        when(upsMock.getAccessToken("cid-prod", "csecret-prod", "ACCT-PROD", "PRODUCTION"))
+                .thenReturn("prod-token");
+        when(upsMock.listServices("US", "prod-token", "PRODUCTION"))
+                .thenReturn(new CarrierConnector.ServiceAvailability(
+                        List.of(new CarrierConnector.ServiceOffering("GROUND", "UPS Ground", "DOMESTIC")),
+                        true, "UPS Rating API"));
+        when(serviceRepository.findByCarrierIgnoreCaseAndServiceCodeIgnoreCaseAndOriginCountryIgnoreCase(
+                "UPS", "GROUND", "US")).thenReturn(Optional.empty());
+        when(serviceRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ApiResponse<Map<String, Object>> r = service.syncFromCarrier("UPS", "US", 77L);
+
+        assertEquals("SUCCESS", r.getStatus());
+        assertEquals(true, r.getData().get("live"));
+        // findById 77 → picked account; findPlatformAccountsByCarrier NEVER
+        // called on the picked-account branch.
+        verify(carrierAccountRefRepository, times(1)).findById(77L);
+        verify(carrierAccountRefRepository, never()).findPlatformAccountsByCarrier(any());
+    }
+
+    @Test
+    void syncFromCarrier_pickedAccountForWrongCarrier_returnsNotLive() {
+        // Sprint 51 catalog sync — picked account whose carrier doesn't
+        // match the sync target is rejected server-side; the token
+        // resolution returns null and listServices is called without a
+        // token (built-in fallback path). The "not verified live" guard
+        // then blocks the write.
+        CarrierAccountRef wrongCarrier = CarrierAccountRef.builder()
+                .id(88L).carrierCode("FEDEX")
+                .clientId("cid").clientSecret("csec").accountNumber("ACCT-X")
+                .environment("SANDBOX").active(true).build();
+        when(carrierAccountRefRepository.findById(88L)).thenReturn(java.util.Optional.of(wrongCarrier));
+        // Real UPS connector would return a built-in-availability record
+        // when accessToken is null; mirror that so the not-live guard
+        // fires cleanly instead of NPE-ing on a null mock response.
+        when(upsMock.listServices(eq("US"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.isNull()))
+                .thenReturn(new CarrierConnector.ServiceAvailability(List.of(), false, "built-in"));
+
+        ApiResponse<Map<String, Object>> r = service.syncFromCarrier("UPS", "US", 88L);
+
+        assertEquals("ERROR", r.getStatus());
+        assertTrue(r.getMessage().contains("not verified live"));
+        // The rejected account never yielded a live token; getAccessToken
+        // must not have been called on the connector.
+        verify(upsMock, never()).getAccessToken(any(), any(), any(), any());
+    }
+
     // ================ setServiceEnabled() ================
 
     @Test

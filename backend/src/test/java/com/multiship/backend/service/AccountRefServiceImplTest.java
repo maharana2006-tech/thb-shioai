@@ -650,4 +650,60 @@ class AccountRefServiceImplTest {
         assertEquals("FEDEX", resp.getData().getCarrierCode());
         verify(accountRepo, times(1)).findPlatformAccountsByCarrier("FEDEX");
     }
+
+    /* -------------------------- listSyncEligibleAccounts -------------------------- */
+
+    @Test
+    void listSyncEligible_blankCarrier_isRejected422() {
+        ApiResponse<com.multiship.backend.dto.SyncEligibleAccountDTO> resp422 =
+                (ApiResponse) service.listSyncEligibleAccounts("");
+        assertEquals(422, resp422.getCode());
+        verify(accountRepo, never()).findVerifiedActiveByCarrier(any());
+    }
+
+    @Test
+    void listSyncEligible_returnsProjectedRowsWithPlatformFlag() {
+        // Sprint 51 catalog sync — one platform + one client account both
+        // survive the verified+active filter. isPlatform derived from
+        // customerNo null/blank.
+        CarrierAccountRef platform = accountWithTenant(11L, null);
+        platform.setAccountNumber("A-PLATFORM");
+        platform.setAccountName("Platform UPS");
+        platform.setVerified(true);
+        CarrierAccountRef client = accountWithTenant(12L, "ACME01");
+        client.setAccountNumber("A-CLIENT");
+        client.setAccountName("Acme UPS Prod");
+        client.setEnvironment("PRODUCTION");
+        client.setVerified(true);
+        when(accountRepo.findVerifiedActiveByCarrier("UPS"))
+                .thenReturn(List.of(platform, client));
+
+        ApiResponse<List<com.multiship.backend.dto.SyncEligibleAccountDTO>> resp =
+                service.listSyncEligibleAccounts("UPS");
+
+        assertEquals("success", resp.getStatus());
+        assertEquals(2, resp.getData().size());
+        var p = resp.getData().get(0);
+        assertEquals(11L, p.getId());
+        assertTrue(p.getIsPlatform());
+        assertNull(p.getCustomerNo(), "platform account exposes no customerNo");
+        assertEquals("SANDBOX", p.getEnvironment());
+        var c = resp.getData().get(1);
+        assertEquals(12L, c.getId());
+        assertFalse(c.getIsPlatform());
+        assertEquals("ACME01", c.getCustomerNo());
+        assertEquals("PRODUCTION", c.getEnvironment());
+    }
+
+    @Test
+    void listSyncEligible_emptyResult_returnsSuccessAndHint() {
+        when(accountRepo.findVerifiedActiveByCarrier("UPS")).thenReturn(List.of());
+
+        ApiResponse<List<com.multiship.backend.dto.SyncEligibleAccountDTO>> resp =
+                service.listSyncEligibleAccounts("UPS");
+
+        assertEquals("success", resp.getStatus());
+        assertTrue(resp.getData().isEmpty());
+        assertTrue(resp.getMessage().contains("No verified"));
+    }
 }

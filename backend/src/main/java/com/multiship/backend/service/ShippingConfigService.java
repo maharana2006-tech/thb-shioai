@@ -160,6 +160,20 @@ public class ShippingConfigService {
      */
     @Transactional
     public ApiResponse<Map<String, Object>> syncFromCarrier(String carrier, String originCountry) {
+        return syncFromCarrier(carrier, originCountry, null);
+    }
+
+    /**
+     * Operator-picked account overload. When {@code accountId} is provided,
+     * that specific carrier account (platform or client) mints the token
+     * and its {@code environment} routes the availability call to the
+     * matching sandbox/production host. Null {@code accountId} falls back
+     * to the historical first-platform-account behaviour so pre-Sprint-51
+     * FE builds keep working. Callers upstream ensure the picked account
+     * belongs to the requesting operator (ADMIN scope on the endpoint).
+     */
+    @Transactional
+    public ApiResponse<Map<String, Object>> syncFromCarrier(String carrier, String originCountry, Long accountId) {
         String canonical = canonicalCarrierFor(carrier);
         if (!StringUtils.hasText(canonical)) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "A carrier is required.");
@@ -174,8 +188,9 @@ public class ShippingConfigService {
                     "Unknown carrier: " + carrier + ".");
         }
 
-        // Authenticate with the platform account's real credentials (if any).
-        TokenAndEnv tokenAndEnv = platformAccessToken(connector, canonical);
+        // Authenticate with the picked account's credentials (or the first
+        // platform account when accountId is null).
+        TokenAndEnv tokenAndEnv = syncAccessToken(connector, canonical, accountId);
         String accessToken = tokenAndEnv == null ? null : tokenAndEnv.token();
         String environment = tokenAndEnv == null ? null : tokenAndEnv.environment();
         CarrierConnector.ServiceAvailability availability = connector.listServices(origin, accessToken, environment);
@@ -264,6 +279,15 @@ public class ShippingConfigService {
      */
     @Transactional
     public ApiResponse<Map<String, Object>> syncPackagesFromCarrier(String carrier, String originCountry) {
+        return syncPackagesFromCarrier(carrier, originCountry, null);
+    }
+
+    /**
+     * Operator-picked account overload for packaging sync. Same semantics
+     * as {@link #syncFromCarrier(String, String, Long)}.
+     */
+    @Transactional
+    public ApiResponse<Map<String, Object>> syncPackagesFromCarrier(String carrier, String originCountry, Long accountId) {
         String canonical = canonicalCarrierFor(carrier);
         if (!StringUtils.hasText(canonical)) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "A carrier is required.");
@@ -275,7 +299,7 @@ public class ShippingConfigService {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "Unknown carrier: " + carrier + ".");
         }
 
-        TokenAndEnv tokenAndEnv = platformAccessToken(connector, canonical);
+        TokenAndEnv tokenAndEnv = syncAccessToken(connector, canonical, accountId);
         String token = tokenAndEnv == null ? null : tokenAndEnv.token();
         String environment = tokenAndEnv == null ? null : tokenAndEnv.environment();
         CarrierConnector.PackageAvailability availability = connector.listPackages(origin, token, environment);
@@ -337,17 +361,28 @@ public class ShippingConfigService {
     }
 
     /**
-     * A real OAuth token for the carrier's platform account paired with the
-     * account's environment (SANDBOX / PRODUCTION), or null when no platform
-     * credentials are configured. Sprint 47 — connectors now need the caller's
-     * environment to route to sandbox vs production hosts, so this helper
-     * carries both so callers don't have to look the account up twice.
+     * A real OAuth token for the sync operation paired with the account's
+     * environment (SANDBOX / PRODUCTION), or null when no usable credentials
+     * are configured. Sprint 47 — connectors now need the caller's env to
+     * route to sandbox vs production hosts, so this helper carries both so
+     * callers don't have to look the account up twice.
+     *
+     * <p>Account resolution:
+     * <ul>
+     *   <li>{@code accountId} non-null → fetch that specific account,
+     *       verify it belongs to {@code canonicalCarrier} and has
+     *       credentials. Rejected mismatches return null so the caller
+     *       surfaces the same "not verified live" error as the fallback
+     *       path.</li>
+     *   <li>{@code accountId} null → fall back to the first PLATFORM
+     *       account (matches pre-Sprint-51 behaviour so old FE builds
+     *       and internal callers keep working).</li>
+     * </ul>
      */
-    private TokenAndEnv platformAccessToken(CarrierConnector connector, String canonicalCarrier) {
-        CarrierAccountRef account = carrierAccountRefRepository.findPlatformAccountsByCarrier(canonicalCarrier)
-                .stream()
-                .filter(a -> StringUtils.hasText(a.getClientId()) && StringUtils.hasText(a.getClientSecret()))
-                .findFirst().orElse(null);
+    private TokenAndEnv syncAccessToken(CarrierConnector connector,
+                                         String canonicalCarrier,
+                                         Long accountId) {
+        CarrierAccountRef account = resolveSyncAccount(canonicalCarrier, accountId);
         if (account == null) {
             return null;
         }
@@ -360,15 +395,42 @@ public class ShippingConfigService {
         } catch (Exception ex) {
             // Null return is the caller contract (STUB architecture — see
             // TrackingServiceImpl / RateShopServiceImpl). Log at WARN so
-            // operators can distinguish "no platform account configured"
-            // (early return above) from "OAuth call failed" (this branch).
-            log.warn("Platform OAuth token fetch failed for carrier={} env={}: {}",
-                    canonicalCarrier, account.getEnvironment(), ex.toString());
+            // operators can distinguish "no verified account" (early
+            // return above) from "OAuth call failed" (this branch).
+            log.warn("Sync OAuth token fetch failed for carrier={} env={} account={}: {}",
+                    canonicalCarrier, account.getEnvironment(), account.getAccountNumber(), ex.toString());
             return null;
         }
     }
 
-    /** Bundle a platform OAuth token with the account's environment label. */
+    /**
+     * Resolve the account to use for a sync — the operator-picked one
+     * (via {@code accountId}) if provided, or the first platform account
+     * with credentials as fallback. Rejects a picked account that doesn't
+     * match the requested carrier or is missing credentials so we never
+     * mint a token against the wrong shipper.
+     */
+    private CarrierAccountRef resolveSyncAccount(String canonicalCarrier, Long accountId) {
+        if (accountId != null) {
+            CarrierAccountRef picked = carrierAccountRefRepository.findById(accountId).orElse(null);
+            if (picked == null
+                    || !canonicalCarrier.equalsIgnoreCase(picked.getCarrierCode())
+                    || !Boolean.TRUE.equals(picked.getActive())
+                    || !StringUtils.hasText(picked.getClientId())
+                    || !StringUtils.hasText(picked.getClientSecret())) {
+                log.warn("Sync account id={} rejected for carrier={} (not found, wrong carrier, "
+                        + "inactive, or missing credentials).", accountId, canonicalCarrier);
+                return null;
+            }
+            return picked;
+        }
+        return carrierAccountRefRepository.findPlatformAccountsByCarrier(canonicalCarrier)
+                .stream()
+                .filter(a -> StringUtils.hasText(a.getClientId()) && StringUtils.hasText(a.getClientSecret()))
+                .findFirst().orElse(null);
+    }
+
+    /** Bundle an OAuth token with the account's environment label. */
     private record TokenAndEnv(String token, String environment) {
     }
 
