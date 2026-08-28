@@ -144,10 +144,39 @@ public class CarrierServiceImpl implements CarrierService {
         CarrierConnector connector = getCarrierConnector(canonicalCode);
         ShipVia shipVia = resolveShipVia(toShipViaCode(canonicalCode));
 
-        CarrierConnector.CarrierConnectionResult connectionResult = connector.connect(
+        // F-MODE-4 — resolve env FIRST from the incoming request so token
+        // minting routes to the matching OAuth host. Pre-fix, connect()
+        // took no env parameter and its FedEx impl silently minted the
+        // token against carrierProperties.getDefaultEnvironment() (the
+        // global default). The persisted config row's `environment` field
+        // then reflected the user's actual choice — so the stored token
+        // was minted against the WRONG host and 401'd on first use (or,
+        // more insidiously, fell back to a `-local-*` token that silently
+        // suppressed downstream errors).
+        //
+        // Option B fix: skip connector.connect() for token minting.
+        // Validate credentials, mint the token via the 4-arg
+        // getAccessToken() with the resolved env, and build the
+        // CarrierConnectionResult inline. UPS/Stamps already respect env
+        // on the 4-arg overload; DHL Basic-auth accepts but ignores env;
+        // FedEx now routes correctly (F-MODE-1).
+        String resolvedEnv = normalizeEnvironment(request.getEnvironment(), carrierProperties.getDefaultEnvironment());
+        connector.validateCredentials(request.getClientId(), request.getClientSecret());
+        String freshAccessToken = connector.getAccessToken(
                 request.getClientId(),
                 request.getClientSecret(),
-                request.getAccountNumber()
+                request.getAccountNumber(),
+                resolvedEnv);
+        LocalDateTime freshTokenExpiresAt = LocalDateTime.now(java.time.ZoneOffset.UTC).plusHours(1);
+        CarrierConnector.CarrierConnectionResult connectionResult = new CarrierConnector.CarrierConnectionResult(
+                connector.getCarrierCode(),
+                connector.getCarrierName(),
+                true,
+                request.getAccountNumber(),
+                resolvedEnv,
+                freshAccessToken,
+                freshTokenExpiresAt,
+                "Carrier connection established successfully."
         );
 
         LocalDateTime now = LocalDateTime.now();
@@ -177,7 +206,7 @@ public class CarrierServiceImpl implements CarrierService {
         carrierConfig.setAccountNumber(request.getAccountNumber());
         carrierConfig.setAccessToken(connectionResult.accessToken());
         carrierConfig.setTokenExpiresAt(connectionResult.tokenExpiresAt());
-        carrierConfig.setEnvironment(normalizeEnvironment(request.getEnvironment(), carrierProperties.getDefaultEnvironment()));
+        carrierConfig.setEnvironment(resolvedEnv);
         carrierConfig.setActive(true);
 
         if (tenantId != null) {
@@ -210,7 +239,7 @@ public class CarrierServiceImpl implements CarrierService {
                 connectionResult.tokenExpiresAt(),
                 true,
                 now,
-                normalizeEnvironment(request.getEnvironment(), carrierProperties.getDefaultEnvironment())
+                resolvedEnv
         );
 
         CarrierConnectResponse response = CarrierConnectResponse.builder()
@@ -219,7 +248,7 @@ public class CarrierServiceImpl implements CarrierService {
                 .connected(true)
                 .message(connectionResult.message())
                 .accountNumber(request.getAccountNumber())
-                .environment(normalizeEnvironment(request.getEnvironment(), carrierProperties.getDefaultEnvironment()))
+                .environment(resolvedEnv)
                 .connectedAt(now)
                 .tokenExpiresAt(connectionResult.tokenExpiresAt())
                 .tokenExpired(false)

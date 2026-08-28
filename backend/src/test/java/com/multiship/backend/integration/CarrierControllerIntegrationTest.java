@@ -203,12 +203,13 @@ class CarrierControllerIntegrationTest extends AbstractIntegrationTest {
                 .environment("SANDBOX")
                 .build();
 
-        // Mock the connector's connect() so no real UPS OAuth is attempted.
-        when(upsMock.connect(anyString(), anyString(), anyString()))
-                .thenReturn(new CarrierConnector.CarrierConnectionResult(
-                        "UPS", "UPS", true, "CONN-1", "SANDBOX",
-                        "live-access-token", LocalDateTime.now().plusHours(1),
-                        "Connected via mock."));
+        // F-MODE-4 — CarrierServiceImpl.connectToCarrier no longer calls
+        // connector.connect() for token minting. It resolves env first,
+        // validates credentials, then mints the token via 4-arg
+        // getAccessToken(). Mock both so the connect path succeeds.
+        when(upsMock.validateCredentials(anyString(), anyString())).thenReturn(true);
+        when(upsMock.getAccessToken(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("live-access-token");
 
         UserDetails principal = principal();
         ResponseEntity<ApiResponse<CarrierConnectResponse>> resp = controller.connectToCarrier(req, principal);
@@ -219,8 +220,9 @@ class CarrierControllerIntegrationTest extends AbstractIntegrationTest {
         assertTrue(body.getConnected(), "Response must flag connected=true.");
         assertEquals("UPS", body.getCarrierCode());
 
-        // Anti-fallback proof: mocked connector was invoked EXACTLY once.
-        verify(upsMock, times(1)).connect(anyString(), anyString(), anyString());
+        // Anti-fallback proof: mocked connector was invoked EXACTLY once
+        // via the 4-arg getAccessToken (post F-MODE-4 handshake).
+        verify(upsMock, times(1)).getAccessToken(anyString(), anyString(), anyString(), anyString());
 
         // DB round-trip: a CarrierConfig row must exist for our user.
         // Use the tenant-agnostic finder to avoid dereferencing the lazy

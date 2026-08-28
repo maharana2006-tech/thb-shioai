@@ -207,11 +207,11 @@ class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
 
     @Test
     void connect_withLegacyP80Code_resolvesToUpsAndInvokesUpsConnector() {
-        when(upsMock.connect(anyString(), anyString(), anyString()))
-                .thenReturn(new CarrierConnector.CarrierConnectionResult(
-                        "UPS", "UPS", true, "P80-1", "SANDBOX",
-                        "tok-legacy-p80", LocalDateTime.now().plusHours(1),
-                        "connected"));
+        // F-MODE-4 — connect flow now mints token via 4-arg getAccessToken;
+        // connector.connect() no longer runs.
+        when(upsMock.validateCredentials(anyString(), anyString())).thenReturn(true);
+        when(upsMock.getAccessToken(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("tok-legacy-p80");
 
         CarrierConnectRequest req = CarrierConnectRequest.builder()
                 .carrierCode("P80")
@@ -227,7 +227,7 @@ class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
         assertEquals("P80-1", resp.getBody().getData().getAccountNumber(),
                 "response must carry the original account number");
 
-        verify(upsMock, times(1)).connect(anyString(), anyString(), anyString());
+        verify(upsMock, times(1)).getAccessToken(anyString(), anyString(), anyString(), anyString());
     }
 
     // ==================================================================
@@ -236,11 +236,11 @@ class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
 
     @Test
     void connect_withTenantId_persistsUppercasedTenantScopedRow() {
-        when(fedExMock.connect(anyString(), anyString(), anyString()))
-                .thenReturn(new CarrierConnector.CarrierConnectionResult(
-                        "FEDEX", "FedEx", true, "TEN-1", "SANDBOX",
-                        "tok-tenant", LocalDateTime.now().plusHours(1),
-                        "connected"));
+        // F-MODE-4 — connect flow mints token via 4-arg getAccessToken;
+        // connector.connect() no longer runs.
+        when(fedExMock.validateCredentials(anyString(), anyString())).thenReturn(true);
+        when(fedExMock.getAccessToken(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("tok-tenant");
 
         CarrierConnectRequest req = CarrierConnectRequest.builder()
                 .carrierCode("FEDEX")
@@ -272,15 +272,13 @@ class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
 
     @Test
     void connect_twiceForSameUserAndCarrier_updatesExistingRow() {
-        when(upsMock.connect(anyString(), anyString(), anyString()))
-                .thenReturn(new CarrierConnector.CarrierConnectionResult(
-                        "UPS", "UPS", true, "UP-1", "SANDBOX",
-                        "tok-1", LocalDateTime.now().plusHours(1),
-                        "connected v1"))
-                .thenReturn(new CarrierConnector.CarrierConnectionResult(
-                        "UPS", "UPS", true, "UP-2", "PRODUCTION",
-                        "tok-2", LocalDateTime.now().plusHours(2),
-                        "connected v2"));
+        // F-MODE-4 — connect flow mints token via 4-arg getAccessToken;
+        // connector.connect() no longer runs. Return two different tokens
+        // to prove the second call minted a fresh one.
+        when(upsMock.validateCredentials(anyString(), anyString())).thenReturn(true);
+        when(upsMock.getAccessToken(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn("tok-1")
+                .thenReturn("tok-2");
 
         CarrierConnectRequest first = CarrierConnectRequest.builder()
                 .carrierCode("UPS").clientId("cid1").clientSecret("csec1")
@@ -294,7 +292,7 @@ class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
                 controller.connectToCarrier(second, principal());
 
         assertEquals(200, secondResp.getStatusCode().value());
-        verify(upsMock, times(2)).connect(anyString(), anyString(), anyString());
+        verify(upsMock, times(2)).getAccessToken(anyString(), anyString(), anyString(), anyString());
 
         // Filter by user id (avoids lazy user.username dereference).
         Long uid = userRepository.findByUsername(USERNAME).orElseThrow().getId();
@@ -314,7 +312,11 @@ class CarrierControllerNegativeIntegrationTest extends AbstractIntegrationTest {
 
     @Test
     void connect_whenConnectorThrows_bubblesRuntimeException() {
-        when(upsMock.connect(anyString(), anyString(), anyString()))
+        // F-MODE-4 — the connect handshake now throws via 4-arg
+        // getAccessToken instead of connect(). validateCredentials is
+        // called first; stub it to succeed so we reach the token call.
+        when(upsMock.validateCredentials(anyString(), anyString())).thenReturn(true);
+        when(upsMock.getAccessToken(anyString(), anyString(), anyString(), anyString()))
                 .thenThrow(new CarrierConnectionException("UPS OAuth rejected"));
 
         CarrierConnectRequest req = CarrierConnectRequest.builder()
