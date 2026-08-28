@@ -1686,6 +1686,18 @@ public class StampsConnector implements CarrierConnector {
             appendCustomsInfo(xml, request);
         }
 
+        // Per-account/per-shipment label file format override (request →
+        // account → SWSIM's own default). Pre-existing behavior omitted
+        // this element entirely, so a null/blank override preserves that
+        // exact behavior instead of forcing a specific format.
+        if (StringUtils.hasText(request.getLabelImageFormat())) {
+            String raw = request.getLabelImageFormat().trim().toUpperCase(java.util.Locale.ROOT);
+            // SWSIM's ImageType enum is PascalCase (Pdf, Png, Gif, Jpg) —
+            // capitalize just the first letter of the validated uppercase value.
+            String imageType = raw.substring(0, 1) + raw.substring(1).toLowerCase(java.util.Locale.ROOT);
+            xml.append("<ImageType>").append(imageType).append("</ImageType>");
+        }
+
         xml.append("</CreateIndicium>");
         xml.append("</soap:Body>");
         xml.append("</soap:Envelope>");

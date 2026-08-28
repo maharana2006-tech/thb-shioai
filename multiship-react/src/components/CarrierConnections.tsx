@@ -635,9 +635,10 @@ export default function CarrierConnections({
         // the picker, so non-FedEx carriers send null (no-op backend
         // side). Null on the wire = clear the override.
         pickupType: drawer.carrierCode === 'FEDEX' ? (drawer.pickupType || null) : null,
-        // UPS-4a — per-account UPS LabelImageFormat. Only UPS rows render
-        // the picker; non-UPS send null (no-op).
-        labelImageFormat: drawer.carrierCode === 'UPS' ? (drawer.labelImageFormat || null) : null,
+        // UPS-4a (widened) — per-account label format for UPS/DHL/USPS.
+        // Only those rows render a picker; FedEx/others send null (no-op).
+        labelImageFormat: ['UPS', 'DHL', 'USPS'].includes(drawer.carrierCode)
+          ? (drawer.labelImageFormat || null) : null,
         // FDX-H3 — per-account FedEx labelSpecification. Only FEDEX rows
         // render the pickers; non-FedEx send null (no-op).
         labelImageType: drawer.carrierCode === 'FEDEX' ? (drawer.labelImageType || null) : null,
@@ -1570,12 +1571,11 @@ export default function CarrierConnections({
                     </div>
                   ) : null}
 
-                  {/* UPS-4a — per-account UPS label format. Only UPS maps
-                      this to the shipment envelope; other carriers ignore.
-                      Blank falls to GIF (pre-UPS-4a hardcode) so existing
-                      rows read exactly as before. GIF is the smallest wire
-                      size but rasterises fuzzy on ZPL printers; PDF is
-                      sharpest, ZPL/EPL are native to Zebra label printers. */}
+                  {/* UPS-4a (widened) — per-account label file format for
+                      UPS, DHL, and USPS. FedEx uses the separate
+                      imageType/labelStockType pair above instead. Blank
+                      falls to each carrier's pre-existing hardcoded default
+                      so existing rows read exactly as before. */}
                   {drawer.carrierCode === 'UPS' ? (
                     <div className="mt-2">
                       <Field label="Label image format (UPS only)">
@@ -1597,6 +1597,48 @@ export default function CarrierConnections({
                         smallest wire size, fuzzy on ZPL printers). Pick PDF
                         for high-quality office printers, ZPL/EPL for label
                         printers that decode the format natively.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {drawer.carrierCode === 'DHL' ? (
+                    <div className="mt-2">
+                      <Field label="Label format (DHL only)">
+                        <select
+                          value={drawer.labelImageFormat ?? ''}
+                          onChange={(e) => setDrawer((c) => ({ ...c, labelImageFormat: e.target.value || null }))}
+                          className={inputClassName}
+                        >
+                          <option value="">PDF (default)</option>
+                          <option value="PDF">PDF (label + A4 doc)</option>
+                          <option value="ZPL">ZPL (thermal label only)</option>
+                        </select>
+                      </Field>
+                      <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
+                        Blank = PDF (label + A4 shipping-doc page). ZPL returns
+                        a thermal label-only file for label printers.
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {drawer.carrierCode === 'USPS' ? (
+                    <div className="mt-2">
+                      <Field label="Label image format (USPS only)">
+                        <select
+                          value={drawer.labelImageFormat ?? ''}
+                          onChange={(e) => setDrawer((c) => ({ ...c, labelImageFormat: e.target.value || null }))}
+                          className={inputClassName}
+                        >
+                          <option value="">Carrier default</option>
+                          <option value="PNG">PNG (raster)</option>
+                          <option value="PDF">PDF (vector, sharp)</option>
+                          <option value="GIF">GIF (raster)</option>
+                          <option value="JPG">JPG (raster)</option>
+                        </select>
+                      </Field>
+                      <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
+                        File format USPS/Stamps returns the label in. Blank
+                        leaves this to the carrier's own default.
                       </p>
                     </div>
                   ) : null}

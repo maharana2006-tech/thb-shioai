@@ -274,17 +274,24 @@ public class ShipmentRequestDTO {
     /**
      * UPS-4b — UPS LabelImageFormat (drives which file format UPS returns
      * the label as). Populated by
-     * {@link com.multiship.backend.service.ShipmentDefaultsResolver} from
-     * the precedence chain (request → account → hardcoded {@code GIF}
-     * default). Only UPS maps this to the wire; FedEx / DHL / USPS ignore
-     * the field.
+     * {@link com.multiship.backend.service.ShipmentDefaultsResolver} on the
+     * automatic order path, and directly from the account/request on the
+     * manual label path (see {@code CarrierServiceImpl.generateManualLabel}).
+     * Meaning is carrier-specific — UPS, DHL, and USPS map this to the
+     * wire; FedEx ignores it and uses {@link #labelImageType} /
+     * {@link #labelStockType} instead.
      *
-     * <p>Values: {@code GIF} | {@code PDF} | {@code PNG} | {@code ZPL} |
-     * {@code EPL}. GIF is the smallest wire size but rasterises fuzzy on
-     * ZPL printers; PDF is sharpest.
+     * <ul>
+     *   <li>UPS LabelImageFormat: {@code GIF} (default) | {@code PDF} |
+     *       {@code PNG} | {@code ZPL} | {@code EPL}.</li>
+     *   <li>DHL Express label encoding: {@code PDF} (default) | {@code ZPL}.</li>
+     *   <li>USPS/Stamps SWSIM ImageType: {@code PNG} | {@code PDF} |
+     *       {@code GIF} | {@code JPG}. Null leaves the element off the
+     *       envelope (SWSIM's own default applies).</li>
+     * </ul>
      *
-     * <p>Null (unset) → connectors fall back to {@code GIF} so legacy
-     * callers see no behavior change.
+     * <p>Null (unset) → each connector's pre-existing hardcoded default so
+     * legacy callers see no behavior change.
      */
     private String labelImageFormat;
 

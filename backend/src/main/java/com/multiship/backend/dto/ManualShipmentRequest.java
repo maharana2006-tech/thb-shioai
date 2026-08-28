@@ -1,5 +1,6 @@
 package com.multiship.backend.dto;
 
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -128,6 +129,45 @@ public class ManualShipmentRequest {
      * {@link #currency} on the wire, then to USD at the connector.
      */
     private String insuredValueCurrency;
+
+    /**
+     * Per-shipment override of the account's default label file format.
+     * Blank/null = use the account default (which itself falls back to
+     * each carrier's hardcoded default). Meaning is carrier-specific:
+     * <ul>
+     *   <li>UPS — LabelImageFormat: GIF | PDF | PNG | ZPL | EPL. Default GIF.</li>
+     *   <li>DHL Express — labelSpecification encoding: PDF | ZPL. Default PDF.</li>
+     *   <li>USPS/Stamps — SWSIM ImageType: PNG | PDF | GIF | JPG. Default PNG
+     *       (SWSIM's own default when unset).</li>
+     *   <li>FedEx — ignored; use {@link #labelImageType} instead (FedEx has
+     *       a second axis, {@link #labelStockType}, that these other
+     *       carriers don't).</li>
+     * </ul>
+     */
+    @Pattern(regexp = "GIF|PDF|PNG|ZPL|EPL|JPG|",
+            message = "labelImageFormat must be one of GIF / PDF / PNG / ZPL / EPL / JPG")
+    private String labelImageFormat;
+
+    /**
+     * FDX-H3 — per-shipment override of the FedEx account's default
+     * labelSpecification.imageType. Blank/null = use the account default
+     * (which itself falls back to PDF when unset). Only FedEx maps this;
+     * other carriers ignore the field.
+     */
+    @Pattern(regexp = "PDF|PNG|ZPLII|EPL2|DPL|",
+            message = "labelImageType must be one of PDF / PNG / ZPLII / EPL2 / DPL")
+    private String labelImageType;
+
+    /**
+     * FDX-H3 — per-shipment override of the FedEx account's default
+     * labelSpecification.labelStockType. Blank/null = use the account
+     * default (which itself falls back to PAPER_4X6 when unset). Only
+     * FedEx maps this; other carriers ignore the field.
+     */
+    @Pattern(regexp = "PAPER_4X6|PAPER_4X6\\.75|PAPER_4X8|PAPER_4X9|PAPER_7X4\\.75|PAPER_LETTER|"
+            + "STOCK_4X6|STOCK_4X6\\.75|STOCK_4X8|STOCK_4X9_LEADING_DOC_TAB|",
+            message = "labelStockType must be a supported FedEx label stock type")
+    private String labelStockType;
 
     @Data
     public static class Address {

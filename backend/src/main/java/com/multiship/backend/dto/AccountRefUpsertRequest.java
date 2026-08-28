@@ -94,17 +94,24 @@ public class AccountRefUpsertRequest {
     private String pickupType;
 
     /**
-     * UPS-4a — per-account UPS LabelImageFormat. Only UPS maps this to the
-     * shipment envelope (FedEx / DHL / SWSIM ignore). Constrained to the UPS
-     * LabelImageFormat enum values via regex; empty string clears the
-     * persisted value, null keeps it.
+     * UPS-4a — per-account label file format. Originally UPS-only; widened
+     * to also cover DHL Express and USPS/Stamps (FedEx uses the separate
+     * {@link #labelImageType} / {@link #labelStockType} pair instead, since
+     * FedEx has a second stock-size axis these carriers don't). Empty
+     * string clears the persisted value, null keeps it.
      *
-     * <p>Values: GIF | PDF | PNG | ZPL | EPL. NULL / unset → resolver
-     * falls back to {@code GIF} (matches the pre-UPS-4a hardcode).
+     * <ul>
+     *   <li>UPS — LabelImageFormat: GIF | PDF | PNG | ZPL | EPL. NULL / unset
+     *       → GIF (pre-UPS-4a hardcode).</li>
+     *   <li>DHL Express — label encoding: PDF | ZPL. NULL / unset → PDF
+     *       (pre-existing hardcode).</li>
+     *   <li>USPS/Stamps — SWSIM ImageType: PNG | PDF | GIF | JPG. NULL / unset
+     *       → SWSIM's own default (element omitted, pre-existing behavior).</li>
+     * </ul>
      */
     @jakarta.validation.constraints.Pattern(
-            regexp = "GIF|PDF|PNG|ZPL|EPL|",
-            message = "labelImageFormat must be one of GIF / PDF / PNG / ZPL / EPL")
+            regexp = "GIF|PDF|PNG|ZPL|EPL|JPG|",
+            message = "labelImageFormat must be one of GIF / PDF / PNG / ZPL / EPL / JPG")
     private String labelImageFormat;
 
     /**

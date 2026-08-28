@@ -1111,11 +1111,19 @@ public class DhlConnector implements CarrierConnector {
         // pickup.isRequested=true so DHL Express Global Return schedules
         // collection from the customer.
         payload.put("pickup", Map.of("isRequested", isReturn));
+        // Per-account/per-shipment label format override (request →
+        // account → hardcoded PDF, matching the pre-existing behavior).
+        // ZPL uses the label-only thermal template (no A4 doc page);
+        // everything else keeps the original label+doc A4 PDF template.
+        // NOTE: the ZPL template name below has not been validated against
+        // a live DHL sandbox — confirm before relying on it in production.
+        boolean zpl = "ZPL".equalsIgnoreCase(
+                StringUtils.hasText(request.getLabelImageFormat()) ? request.getLabelImageFormat().trim() : null);
         payload.put("outputImageProperties", Map.of(
-                "encodingFormat", "pdf",
+                "encodingFormat", zpl ? "zpl" : "pdf",
                 "imageOptions", List.of(Map.of(
                         "typeCode", "label",
-                        "templateName", "ECOM26_84_A4_001"))));
+                        "templateName", zpl ? "ECOM26_84_001" : "ECOM26_84_A4_001"))));
         payload.put("accounts", List.of(Map.of(
                 "typeCode", "shipper",
                 "number", firstNonBlank(request.getAccountNumber(), ""))));

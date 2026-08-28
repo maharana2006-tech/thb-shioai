@@ -960,11 +960,20 @@ public class CarrierServiceImpl implements CarrierService {
                 // Multi-package boxes 2..N (box 1 is the top-level fields).
                 // Connectors' effectivePackages() prefers packages[] when set.
                 .packages(req.getPackages())
-                // FDX-H3 — per-account FedEx labelSpecification (account
-                // default → hardcoded PDF/PAPER_4X6 in the connector). Only
-                // FedEx maps this; other connectors ignore.
-                .labelImageType(account != null ? account.getFedexLabelImageType() : null)
-                .labelStockType(account != null ? account.getFedexLabelStockType() : null)
+                // Per-shipment label file format override (request →
+                // account default → each connector's own hardcoded
+                // fallback). Meaning is carrier-specific — see
+                // ManualShipmentRequest.labelImageFormat javadoc.
+                .labelImageFormat(firstNonBlank(req.getLabelImageFormat(),
+                        account != null ? account.getLabelImageFormat() : null))
+                // FDX-H3 — per-shipment FedEx labelSpecification override
+                // (request → account default → hardcoded PDF/PAPER_4X6 in
+                // the connector). Only FedEx maps this; other connectors
+                // ignore.
+                .labelImageType(firstNonBlank(req.getLabelImageType(),
+                        account != null ? account.getFedexLabelImageType() : null))
+                .labelStockType(firstNonBlank(req.getLabelStockType(),
+                        account != null ? account.getFedexLabelStockType() : null))
                 .build();
 
         // Resolve the carrier's MPS cap for this service/scope and split

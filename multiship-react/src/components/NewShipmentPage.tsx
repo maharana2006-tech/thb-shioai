@@ -467,6 +467,14 @@ export default function NewShipmentPage() {
   // value is a separate money amount from declared/customs value.
   const [signatureOption, setSignatureOption] = useState<'NONE' | 'INDIRECT' | 'DIRECT' | 'ADULT'>('NONE')
   const [insuredValue, setInsuredValue] = useState('')
+  // FDX-H3 — per-shipment override of the FedEx account's default
+  // labelSpecification. Blank = use the account default.
+  const [labelImageType, setLabelImageType] = useState('')
+  const [labelStockType, setLabelStockType] = useState('')
+  // Per-shipment override of the account's default label file format —
+  // UPS/DHL/USPS only (FedEx uses labelImageType/labelStockType above).
+  // Blank = use the account default.
+  const [labelImageFormat, setLabelImageFormat] = useState('')
   // Sprint 22 — rate picker: opens the RatePickerModal with current form
   // state; on select we populate carrier + serviceId + accountNumber.
   const [ratePickerOpen, setRatePickerOpen] = useState(false)
@@ -1398,6 +1406,16 @@ export default function NewShipmentPage() {
       ...(insuredValue && Number(insuredValue) > 0
         ? { insuredValue: Number(insuredValue), insuredValueCurrency: currency }
         : {}),
+      // FDX-H3 — per-shipment FedEx labelSpecification override. Blank →
+      // omit so the backend falls back to the account default (which
+      // itself falls back to PDF/PAPER_4X6). Only meaningful for FEDEX.
+      ...(canon(carrier) === 'FEDEX' && labelImageType ? { labelImageType } : {}),
+      ...(canon(carrier) === 'FEDEX' && labelStockType ? { labelStockType } : {}),
+      // Per-shipment label format override — UPS/DHL/USPS only. Blank →
+      // omit so the backend falls back to the account default.
+      ...(['UPS', 'DHL', 'USPS'].includes(canon(carrier)) && labelImageFormat
+        ? { labelImageFormat }
+        : {}),
       // Sprint 29 — multi-package. When extra boxes are present, build
       // a packages[] array with box 1 mirroring the top-level fields and
       // boxes 2..N from extraPackages. Backend's effectivePackages() also
@@ -1620,6 +1638,45 @@ export default function NewShipmentPage() {
                     ))}
                   </select>
                 </Field>
+                {/* FDX-H3 — per-shipment override of the FedEx account's
+                    default labelSpecification. Blank = use the account
+                    default (which itself falls back to PDF/PAPER_4X6).
+                    Only shown for FedEx — other carriers ignore these. */}
+                {canon(carrier) === 'FEDEX' ? (
+                  <>
+                    <Field label="Label image type"
+                           hint="Blank = account default (PDF)">
+                      <select className={inputCls}
+                              value={labelImageType}
+                              onChange={(e) => setLabelImageType(e.target.value)}>
+                        <option value="">Account default</option>
+                        <option value="PDF">PDF (vector, sharp)</option>
+                        <option value="PNG">PNG (raster)</option>
+                        <option value="ZPLII">ZPLII (Zebra)</option>
+                        <option value="EPL2">EPL2 (Eltron/legacy Zebra)</option>
+                        <option value="DPL">DPL (Datamax)</option>
+                      </select>
+                    </Field>
+                    <Field label="Label stock type"
+                           hint="Blank = account default (PAPER_4X6)">
+                      <select className={inputCls}
+                              value={labelStockType}
+                              onChange={(e) => setLabelStockType(e.target.value)}>
+                        <option value="">Account default</option>
+                        <option value="PAPER_4X6">Paper 4x6</option>
+                        <option value="PAPER_4X6.75">Paper 4x6.75</option>
+                        <option value="PAPER_4X8">Paper 4x8</option>
+                        <option value="PAPER_4X9">Paper 4x9</option>
+                        <option value="PAPER_7X4.75">Paper 7x4.75</option>
+                        <option value="PAPER_LETTER">Paper letter</option>
+                        <option value="STOCK_4X6">Thermal stock 4x6</option>
+                        <option value="STOCK_4X6.75">Thermal stock 4x6.75</option>
+                        <option value="STOCK_4X8">Thermal stock 4x8</option>
+                        <option value="STOCK_4X9_LEADING_DOC_TAB">Thermal stock 4x9 (doc tab)</option>
+                      </select>
+                    </Field>
+                  </>
+                ) : null}
               </div>
             </SectionCard>
 
@@ -1965,6 +2022,44 @@ export default function NewShipmentPage() {
                            placeholder="0.00" />
                   </Field>
                 </div>
+                {/* Per-shipment override of the account's default label
+                    file format — UPS/DHL/USPS only. Blank = use the
+                    account default. */}
+                {['UPS', 'DHL', 'USPS'].includes(canon(carrier)) ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label={`Label format (${canon(carrier)} only)`}
+                           hint="Blank = account default">
+                      <select className={inputCls}
+                              value={labelImageFormat}
+                              onChange={(e) => setLabelImageFormat(e.target.value)}>
+                        <option value="">Account default</option>
+                        {canon(carrier) === 'UPS' ? (
+                          <>
+                            <option value="GIF">GIF (raster)</option>
+                            <option value="PDF">PDF (vector, sharp)</option>
+                            <option value="PNG">PNG (raster)</option>
+                            <option value="ZPL">ZPL (Zebra)</option>
+                            <option value="EPL">EPL (Eltron/legacy Zebra)</option>
+                          </>
+                        ) : null}
+                        {canon(carrier) === 'DHL' ? (
+                          <>
+                            <option value="PDF">PDF (label + A4 doc)</option>
+                            <option value="ZPL">ZPL (thermal label only)</option>
+                          </>
+                        ) : null}
+                        {canon(carrier) === 'USPS' ? (
+                          <>
+                            <option value="PNG">PNG (raster)</option>
+                            <option value="PDF">PDF (vector, sharp)</option>
+                            <option value="GIF">GIF (raster)</option>
+                            <option value="JPG">JPG (raster)</option>
+                          </>
+                        ) : null}
+                      </select>
+                    </Field>
+                  </div>
+                ) : null}
                 {isCustomPkg ? (
                   <div className="grid grid-cols-3 gap-3">
                     <Field label={`Length (${dimUnit.toLowerCase()})`} required error={errAt('length')}>

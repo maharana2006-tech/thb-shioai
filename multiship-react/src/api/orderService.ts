@@ -450,6 +450,18 @@ export interface ManualShipmentPayload {
    *  requested; the free tier still applies. */
   insuredValue?: number | null
   insuredValueCurrency?: string | null
+  /** Per-shipment override of the account's default label file format —
+   *  UPS/DHL/USPS only (FedEx uses labelImageType/labelStockType instead).
+   *  Null / omitted → use the account default. */
+  labelImageFormat?: string | null
+  /** FDX-H3 — per-shipment override of the FedEx account's default
+   *  labelSpecification.imageType. Null / omitted → use the account
+   *  default (which itself falls back to PDF). Only FedEx maps this. */
+  labelImageType?: string | null
+  /** FDX-H3 — per-shipment override of the FedEx account's default
+   *  labelSpecification.labelStockType. Null / omitted → use the account
+   *  default (which itself falls back to PAPER_4X6). Only FedEx maps this. */
+  labelStockType?: string | null
 }
 
 /** One box in a multi-package shipment — mirrors backend PackageDetailDTO. */

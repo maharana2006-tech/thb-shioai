@@ -140,22 +140,24 @@ public class CarrierAccountRef {
     private String pickupType;
 
     /**
-     * UPS-4a — per-account UPS LabelImageFormat. Only UPS currently maps
-     * this to the wire; FedEx / DHL / SWSIM connectors ignore the value.
+     * UPS-4a — per-account label file format. Originally UPS-only; widened
+     * to also drive DHL Express and USPS/Stamps (FedEx uses the separate
+     * {@link #fedexLabelImageType} / {@link #fedexLabelStockType} pair
+     * instead — FedEx has a second stock-size axis these carriers don't).
      *
-     * <p>UPS LabelImageFormat enum:
      * <ul>
-     *   <li>{@code GIF} — raster; smallest wire size; pre-UPS-4a default;
-     *       fuzzy on ZPL printers</li>
-     *   <li>{@code PDF} — vector; sharp on any printer; larger wire size</li>
-     *   <li>{@code PNG} — raster; similar quality to GIF</li>
-     *   <li>{@code ZPL} — Zebra printer language; text-only</li>
-     *   <li>{@code EPL} — Eltron printer language; legacy Zebra</li>
+     *   <li>UPS LabelImageFormat: {@code GIF} (default) | {@code PDF} |
+     *       {@code PNG} | {@code ZPL} | {@code EPL}.</li>
+     *   <li>DHL Express label encoding: {@code PDF} (default) | {@code ZPL}.</li>
+     *   <li>USPS/Stamps SWSIM ImageType: {@code PNG} | {@code PDF} |
+     *       {@code GIF} | {@code JPG}. NULL leaves the element off the
+     *       SOAP envelope entirely (SWSIM's own default applies).</li>
      * </ul>
      *
-     * <p>NULL → resolver falls back to {@code GIF} (matches the pre-UPS-4a
-     * hardcode). Deliberately not backfilled — silently flipping every
-     * UPS account would break operators tuned around GIF.
+     * <p>NULL → each connector's pre-existing hardcoded default (UPS GIF,
+     * DHL PDF, USPS unset/SWSIM-default). Deliberately not backfilled —
+     * silently flipping every account would break operators tuned around
+     * the existing format.
      */
     @Column(name = "label_image_format", length = 10)
     private String labelImageFormat;
