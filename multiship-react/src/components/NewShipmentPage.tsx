@@ -725,6 +725,13 @@ export default function NewShipmentPage() {
     shipment: {
       carrierCode: carrier || undefined,
       accountNumber: accountNumber || undefined,
+      // Sprint 51 rate-shop gap-fill — pre-fix the operator picked a
+      // service level but rate-shop still fanned out across every service
+      // in the account. Sending serviceType filters the fan-out so the
+      // quote reflects the operator's actual intent.
+      serviceType: serviceId !== ''
+        ? services.find((s) => s.id === Number(serviceId))?.serviceCode
+        : undefined,
       packageType: packageChoice || undefined,
       weight: Number(weight) || 0,
       weightUnit,
@@ -735,12 +742,30 @@ export default function NewShipmentPage() {
       ...shipperFieldsFrom(sender),
       ...recipientFieldsFrom(recipient),
       declaredValue: declaredValue ? Number(declaredValue) : undefined,
+      // Currency is always sent — quotes come back in the operator's
+      // billing currency instead of the carrier's home currency (which
+      // silently defaulted to USD for US carriers pre-fix).
+      declaredValueCurrency: currency || undefined,
+      // Surcharges that materially move the quoted price — none of these
+      // were sent pre-fix, so the picker consistently under-quoted.
+      // Only emit when set so the JSON body stays minimal.
+      ...(signatureOption !== 'NONE' ? { signatureOption } : {}),
+      ...(insuredValue && Number(insuredValue) > 0
+        ? {
+            insuredValue: Number(insuredValue),
+            insuredValueCurrency: currency || undefined,
+          }
+        : {}),
+      ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
+      // Return labels rate differently on FedEx SmartPost, UPS Returns.
+      isReturn,
     },
     customerNo: clientCode || null,
     // No carriers whitelist — let the backend fan out to every configured
     // carrier so the picker can compare across the tenant's full inventory.
-  }), [carrier, accountNumber, packageChoice, weight, weightUnit, length, width, height, dimUnit,
-        sender, recipient, declaredValue, clientCode])
+  }), [carrier, accountNumber, serviceId, services, packageChoice, weight, weightUnit,
+        length, width, height, dimUnit, sender, recipient, declaredValue, currency,
+        signatureOption, insuredValue, dgBlock, isReturn, clientCode])
 
   const canOpenRatePicker = Boolean(
     rateShopRequest.shipment.weight > 0
@@ -1409,6 +1434,11 @@ export default function NewShipmentPage() {
       clientCode: clientCode.trim() || undefined,
       warehouseCode: warehouseCode || undefined,
       declaredValue: declaredValue ? Number(declaredValue) : null,
+      // Sprint 51 — currency is now always sent (not just intl). A
+      // European tenant shipping GB→GB should see GBP; pre-fix the
+      // domestic branch dropped currency and the backend fell to the
+      // carrier's home currency (USD for US carriers, EUR for DHL).
+      currency,
       // Sprint 27 — attach the DG block when populated; backend threads
       // it into ShipmentRequestDTO.dangerousGoods and every connector's
       // hazmat wire format keys off it.
@@ -1461,7 +1491,9 @@ export default function NewShipmentPage() {
           })),
         ],
       } : {}),
-      ...(isInternational ? { items: cleanItems, reasonForExport, currency, incoterms } : {}),
+      // Currency moved to top-level (always sent). Intl still carries the
+      // customs-specific extras (items, reason for export, incoterms).
+      ...(isInternational ? { items: cleanItems, reasonForExport, incoterms } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
     }
 

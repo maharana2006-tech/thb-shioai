@@ -1,5 +1,6 @@
 import { apiClient } from './apiClient'
 import type { ApiResponse } from './orderService'
+import type { DangerousGoodsBlock } from './dgService'
 
 /**
  * One priced service option — mirrors backend
@@ -91,6 +92,21 @@ export interface RateShopShipment {
   recipientResidential?: boolean
   declaredValue?: number
   declaredValueCurrency?: string
+  /**
+   * Sprint 51 rate-shop gap-fill — surcharges that materially move the
+   * quoted price. Prior to this the FE sent none of them, so the picker
+   * consistently under-quoted anything with signature / insurance /
+   * hazmat by $5-60+ per shipment.
+   */
+  /** ADULT / DIRECT / INDIRECT / NONE. Undefined = carrier default. */
+  signatureOption?: 'NONE' | 'INDIRECT' | 'DIRECT' | 'ADULT'
+  /** Insurance amount + currency. Undefined = no insurance. */
+  insuredValue?: number
+  insuredValueCurrency?: string
+  /** Hazmat block. Undefined = no DG surcharge. */
+  dangerousGoods?: DangerousGoodsBlock
+  /** True when this is a return label — some carriers rate returns differently. */
+  isReturn?: boolean
 }
 
 export interface RateShopRequest {
