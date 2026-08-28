@@ -21,6 +21,7 @@ import {
 import { allowlistUsageService, type ClientAllowedService } from '../api/clientCatalogService'
 import { countryName } from '../utils/countries'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
+import CarrierSyncMenuModal from './modals/CarrierSyncMenuModal'
 
 const CARRIER_BADGE: Record<string, { bg: string; mono: string }> = {
   UPS: { bg: 'bg-[#351C15]', mono: 'UPS' },
@@ -96,6 +97,8 @@ export default function ShippingServicesPage() {
   const [originCountries, setOriginCountries] = useState<string[]>([])
   /** Carrier currently syncing (its Sync button spins). */
   const [syncing, setSyncing] = useState<string | null>(null)
+  /** Carrier whose sync menu modal is open (env + account picker). */
+  const [syncMenuFor, setSyncMenuFor] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -158,10 +161,11 @@ export default function ShippingServicesPage() {
   }, [assignments])
   const enabledCount = visibleServices.filter((s) => s.enabled).length
 
-  const syncCarrier = async (carrier: string) => {
+  /** Perform the sync after the modal picker chooses env + account. */
+  const runSync = async (carrier: string, accountId: number) => {
     setSyncing(carrier)
     try {
-      const res = await shippingConfigService.syncServices(carrier, origin)
+      const res = await shippingConfigService.syncServices(carrier, origin, accountId)
       const d = res.data
       if (d) {
         const head =
@@ -177,6 +181,7 @@ export default function ShippingServicesPage() {
       await load()
     } catch (e) {
       notify.apiError(e, 'Failed to sync from the carrier.')
+      throw e
     } finally {
       setSyncing(null)
     }
@@ -295,7 +300,7 @@ export default function ShippingServicesPage() {
                     ) : null}
                     <button
                       type="button"
-                      onClick={() => void syncCarrier(carrier)}
+                      onClick={() => setSyncMenuFor(carrier)}
                       disabled={isSyncing}
                       title={`Pull ${carrier}'s available services from ${countryName(origin)}`}
                       className="inline-flex items-center gap-1 rounded bg-[#e1dcc9]/15 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-[#e1dcc9] transition hover:bg-[#e1dcc9]/25 disabled:opacity-50"
@@ -329,7 +334,7 @@ export default function ShippingServicesPage() {
                     </p>
                     <button
                       type="button"
-                      onClick={() => void syncCarrier(carrier)}
+                      onClick={() => setSyncMenuFor(carrier)}
                       disabled={isSyncing}
                       className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[11.5px] font-semibold text-white transition hover:bg-[#412d15] disabled:opacity-50"
                     >
@@ -534,6 +539,15 @@ export default function ShippingServicesPage() {
             </div>
           </div>
         </div>
+      ) : null}
+      {syncMenuFor ? (
+        <CarrierSyncMenuModal
+          carrier={syncMenuFor}
+          originCountry={origin}
+          kind="services"
+          onClose={() => setSyncMenuFor(null)}
+          onConfirm={(accountId) => runSync(syncMenuFor, accountId)}
+        />
       ) : null}
     </div>
   )

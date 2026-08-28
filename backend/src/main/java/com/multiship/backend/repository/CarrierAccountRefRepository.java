@@ -24,6 +24,28 @@ public interface CarrierAccountRefRepository extends JpaRepository<CarrierAccoun
     """)
     List<CarrierAccountRef> findPlatformAccountsByCarrier(@Param("carrier") String carrier);
 
+    /**
+     * Sync-eligible accounts for a carrier — active + verified + credentials
+     * present, both platform (customerNo null) and client (customerNo set).
+     * Used by the /settings/shipping-catalog sync menu so the operator can
+     * pick which credentials (and by extension which environment) to pull
+     * the carrier's service + package catalog with. Platform accounts
+     * surface first within each env; newest updated first inside each
+     * scope. Callers filter by env FE-side.
+     */
+    @Query("""
+        SELECT r FROM CarrierAccountRef r
+        WHERE UPPER(r.carrierCode) = UPPER(:carrier)
+          AND r.active = true
+          AND r.verified = true
+          AND r.clientId IS NOT NULL AND TRIM(r.clientId) <> ''
+          AND r.clientSecret IS NOT NULL AND TRIM(r.clientSecret) <> ''
+        ORDER BY
+          CASE WHEN r.customerNo IS NULL OR TRIM(r.customerNo) = '' THEN 0 ELSE 1 END,
+          r.updatedAt DESC
+    """)
+    List<CarrierAccountRef> findVerifiedActiveByCarrier(@Param("carrier") String carrier);
+
     Optional<CarrierAccountRef> findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(String accountNumber);
 
     Optional<CarrierAccountRef> findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(String accountNumber, String carrierCode);

@@ -6,6 +6,7 @@ import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.CarrierAccountRefDTO;
 import com.multiship.backend.dto.CredentialCheckDTO;
 import com.multiship.backend.dto.PlatformCredentialsDTO;
+import com.multiship.backend.dto.SyncEligibleAccountDTO;
 import com.multiship.backend.dto.VerifyCredentialsRequest;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
@@ -86,6 +87,36 @@ public class AccountRefServiceImpl implements AccountRefService {
                 .toList();
 
         return success("Account reference book loaded successfully.", accounts);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<List<SyncEligibleAccountDTO>> listSyncEligibleAccounts(String carrierCode) {
+        if (!StringUtils.hasText(carrierCode)) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                    "A carrier code is required.");
+        }
+        String canonical = carrierCode.trim().toUpperCase(Locale.ROOT);
+        List<SyncEligibleAccountDTO> accounts = carrierAccountRefRepository
+                .findVerifiedActiveByCarrier(canonical)
+                .stream()
+                .map(a -> {
+                    boolean platform = !StringUtils.hasText(a.getCustomerNo());
+                    return SyncEligibleAccountDTO.builder()
+                            .id(a.getId())
+                            .carrierCode(a.getCarrierCode())
+                            .accountNumber(a.getAccountNumber())
+                            .accountName(a.getAccountName())
+                            .environment(a.getEnvironment())
+                            .isPlatform(platform)
+                            .customerNo(platform ? null : a.getCustomerNo())
+                            .build();
+                })
+                .toList();
+        return success(accounts.isEmpty()
+                ? "No verified " + canonical + " accounts."
+                : "Sync-eligible " + canonical + " accounts loaded.",
+                accounts);
     }
 
     @Override

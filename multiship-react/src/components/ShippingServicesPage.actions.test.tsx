@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
 import type { ComponentType } from 'react'
@@ -55,6 +55,16 @@ vi.mock('../api/clientCatalogService', () => ({
   },
 }))
 
+// Sprint 51 — sync now runs through CarrierSyncMenuModal which fetches
+// verified accounts via accountRefService.listSyncEligible. Stub it so
+// the sync flow tests can drive through the modal → confirm.
+const listSyncEligibleMock = vi.fn()
+vi.mock('../api/accountRefService', () => ({
+  accountRefService: {
+    listSyncEligible: (...args: unknown[]) => listSyncEligibleMock(...args),
+  },
+}))
+
 const notifySuccessMock = vi.fn()
 const notifyInfoMock = vi.fn()
 const notifyApiErrorMock = vi.fn()
@@ -92,8 +102,15 @@ beforeEach(() => {
   })
   ;[catalogMock, listPresetsMock, syncServicesMock, setServiceEnabledMock,
     setServicePackagesMock, servicesUsageMock, notifySuccessMock,
-    notifyInfoMock, notifyApiErrorMock].forEach((m) => m.mockReset())
+    notifyInfoMock, notifyApiErrorMock, listSyncEligibleMock].forEach((m) => m.mockReset())
   servicesUsageMock.mockResolvedValue({ data: [] })
+  // Default eligible-accounts stub: a single verified sandbox platform
+  // account so the modal auto-picks it and the operator's single click
+  // still fires the sync (same 1-click UX as pre-Sprint-51 for tests).
+  listSyncEligibleMock.mockResolvedValue([
+    { id: 42, carrierCode: 'UPS', accountNumber: 'A-42', accountName: 'Platform UPS',
+      environment: 'SANDBOX', isPlatform: true, customerNo: null },
+  ])
 })
 
 afterEach(() => {
@@ -133,6 +150,18 @@ function renderPage(Page: ComponentType) {
 
 // ===================== Sync per-carrier =====================
 
+/** Sprint 51 — open the sync menu for a carrier tile then confirm the
+ *  modal's Sync button. The default stub returns one eligible account so
+ *  the modal auto-picks and one click is enough. Scope the confirm to
+ *  within the dialog to avoid ambiguity with tile "Sync" buttons. */
+async function clickTileSyncThenConfirm() {
+  const openBtn = (await screen.findAllByRole('button', { name: /Sync from carrier/i }))[0]
+  await act(async () => { await userEvent.click(openBtn) })
+  const dialog = await screen.findByRole('dialog')
+  const modalSync = within(dialog).getByRole('button', { name: /^Sync$/i })
+  await act(async () => { await userEvent.click(modalSync) })
+}
+
 describe('ShippingServicesPage — syncCarrier (per-tile Sync button)', () => {
   it('live sync fires notify.success + refetch; only that carrier is called', async () => {
     catalogMock.mockResolvedValue(baseCatalog())
@@ -144,14 +173,10 @@ describe('ShippingServicesPage — syncCarrier (per-tile Sync button)', () => {
     const Page = await loadPage()
     renderPage(Page)
 
-    // Click UPS's tile Sync CTA (the button rendered inside the empty tile).
     await waitFor(() => expect(screen.getByText(/UPS · from US/i)).toBeInTheDocument())
-    // There are 3 Sync buttons (one per carrier tile). Grab the UPS one via
-    // its label text — the empty-tile CTA reads "Sync from carrier".
-    const upsSync = screen.getAllByRole('button', { name: /Sync from carrier/i })[0]
-    await act(async () => { await userEvent.click(upsSync) })
+    await clickTileSyncThenConfirm()
 
-    expect(syncServicesMock).toHaveBeenCalledWith('UPS', 'US')
+    expect(syncServicesMock).toHaveBeenCalledWith('UPS', 'US', 42)
     // Live → success (not info).
     expect(notifySuccessMock).toHaveBeenCalledTimes(1)
     expect(notifyInfoMock).not.toHaveBeenCalled()
@@ -169,8 +194,7 @@ describe('ShippingServicesPage — syncCarrier (per-tile Sync button)', () => {
     const Page = await loadPage()
     renderPage(Page)
 
-    const upsSync = (await screen.findAllByRole('button', { name: /Sync from carrier/i }))[0]
-    await act(async () => { await userEvent.click(upsSync) })
+    await clickTileSyncThenConfirm()
 
     expect(notifyInfoMock).toHaveBeenCalledTimes(1)
     expect(notifySuccessMock).not.toHaveBeenCalled()
@@ -185,8 +209,7 @@ describe('ShippingServicesPage — syncCarrier (per-tile Sync button)', () => {
     const Page = await loadPage()
     renderPage(Page)
 
-    const upsSync = (await screen.findAllByRole('button', { name: /Sync from carrier/i }))[0]
-    await act(async () => { await userEvent.click(upsSync) })
+    await clickTileSyncThenConfirm()
 
     await waitFor(() =>
       expect(notifyApiErrorMock).toHaveBeenCalledWith(expect.any(Error), 'Failed to sync from the carrier.'),
@@ -205,14 +228,13 @@ describe('ShippingServicesPage — syncCarrier (per-tile Sync button)', () => {
     const Page = await loadPage()
     renderPage(Page)
 
-    const upsSync = (await screen.findAllByRole('button', { name: /Sync from carrier/i }))[0]
-    await act(async () => { await userEvent.click(upsSync) })
+    await clickTileSyncThenConfirm()
 
-    // Only one call ever, and it's for UPS.
+    // Only one call ever, and it's for UPS with the picked account.
     expect(syncServicesMock).toHaveBeenCalledTimes(1)
-    expect(syncServicesMock).toHaveBeenCalledWith('UPS', 'US')
-    expect(syncServicesMock).not.toHaveBeenCalledWith('FEDEX', 'US')
-    expect(syncServicesMock).not.toHaveBeenCalledWith('USPS', 'US')
+    expect(syncServicesMock).toHaveBeenCalledWith('UPS', 'US', 42)
+    expect(syncServicesMock).not.toHaveBeenCalledWith('FEDEX', 'US', expect.anything())
+    expect(syncServicesMock).not.toHaveBeenCalledWith('USPS', 'US', expect.anything())
   })
 })
 
