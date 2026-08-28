@@ -1,19 +1,9 @@
 import * as Yup from 'yup'
 import { COUNTRIES } from '../../utils/countries'
+import { STATE_CODE_SETS } from '../../utils/stateCodes'
 
 /** Real ISO-3166 alpha-2 codes — so 'ZZ' fails membership, not just shape. */
 const VALID_COUNTRIES = new Set(COUNTRIES.map((c) => c.code.toUpperCase()))
-
-/** Valid state/province codes for the countries where carriers demand a real one. */
-const US_STATES = new Set([
-  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS',
-  'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY',
-  'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV',
-  'WI', 'WY', 'DC', 'PR', 'VI', 'GU', 'AS', 'MP',
-])
-const CA_PROVINCES = new Set(['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'])
-const AU_STATES = new Set(['ACT', 'NSW', 'NT', 'QLD', 'SA', 'TAS', 'VIC', 'WA'])
-const STATE_CODE_SETS: Record<string, Set<string>> = { US: US_STATES, CA: CA_PROVINCES, AU: AU_STATES }
 
 /**
  * Manual "New Shipment" validation. Mirrors what carriers (UPS/FedEx/USPS/DHL)

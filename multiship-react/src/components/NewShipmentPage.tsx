@@ -42,6 +42,7 @@ import { parseIntlValidationMessage } from '../utils/intlValidationErrors'
 import { useFormik, getIn } from 'formik'
 import { shipmentSchema, type ShipmentFormValues } from '../validation/yup/shipmentSchema'
 import { dialCodeFor, postalPlaceholderFor } from '../utils/countryFormats'
+import { STATE_CODE_OPTIONS } from '../utils/stateCodes'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -334,7 +335,34 @@ function AddressBlock({
           <input className={inputCls} value={value.city} onChange={(e) => onChange({ city: e.target.value })} placeholder="Buffalo" />
         </Field>
         <Field label="State / region" error={errors?.state}>
-          <input className={inputCls} value={value.state} onChange={(e) => onChange({ state: e.target.value })} placeholder="NY" />
+          {/* Sprint 51 — for countries where carriers demand a real code
+              (US / CA / AU), render a dropdown so operators can't type
+              'Delaware' and get downstream rate/label rejection. Free-text
+              input stays for every other country. */}
+          {(() => {
+            const options = STATE_CODE_OPTIONS[(value.countryCode || '').toUpperCase()]
+            return options ? (
+              <select
+                className={inputCls}
+                value={value.state}
+                onChange={(e) => onChange({ state: e.target.value })}
+              >
+                <option value="">Select…</option>
+                {options.map((s) => (
+                  <option key={s.code} value={s.code}>
+                    {s.code} — {s.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className={inputCls}
+                value={value.state}
+                onChange={(e) => onChange({ state: e.target.value })}
+                placeholder="NY"
+              />
+            )
+          })()}
         </Field>
         <Field label="Postal code" required error={errors?.postalCode}>
           <input className={inputCls} value={value.postalCode} onChange={(e) => onChange({ postalCode: e.target.value })} placeholder={postalPlaceholderFor(value.countryCode)} />
