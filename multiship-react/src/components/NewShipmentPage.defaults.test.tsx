@@ -500,3 +500,69 @@ describe('NewShipmentPage — unit-of-measure defaults', () => {
     })
   })
 })
+
+// ==================================================================
+// 6. State/region — dropdown for US/CA/AU, free-text elsewhere
+// ==================================================================
+
+describe('NewShipmentPage — state/region input', () => {
+  /** Sprint 51 — operators were typing full state names ("Delaware")
+   *  which failed downstream FedEx/UPS rate + label calls because the
+   *  wire needs a 2-letter code. The state field now renders as a
+   *  dropdown for US/CA/AU (whose carriers require real codes) and as
+   *  free text for every other country (which don't). */
+
+  it('US default renders state as a select with real US codes', async () => {
+    const Page = await loadPage()
+    renderWithProviders(<Page />)
+    await waitForClientSelect()
+
+    // Two state selects (sender + recipient) — both default to US.
+    // Filter to native <select> because the page also has custom-combobox
+    // inputs (country picker) that match getAllByRole('combobox').
+    const selects = (screen.getAllByRole('combobox') as HTMLElement[]).filter(
+      (el): el is HTMLSelectElement => el.tagName === 'SELECT',
+    )
+    // The state selects are the ones whose options include "DE — Delaware".
+    const stateSelects = selects.filter((s) =>
+      Array.from(s.options).some((o) => o.textContent?.includes('DE — Delaware')),
+    )
+    expect(stateSelects.length).toBeGreaterThanOrEqual(2)
+    // Free-text 'Delaware' is NOT an option — only the code 'DE'.
+    stateSelects.forEach((sel) => {
+      const optionTexts = Array.from(sel.options).map((o) => o.textContent ?? '')
+      expect(optionTexts).toContain('DE — Delaware')
+      expect(optionTexts).not.toContain('Delaware')  // no bare full-name option
+      // CA (California), not CA (Canada) — codes are US alpha-2 postal codes.
+      expect(optionTexts).toContain('CA — California')
+    })
+  })
+
+  it('CA (Canada) recipient renders province select, not US states', async () => {
+    const Page = await loadPage()
+    renderWithProviders(<Page />)
+    await waitForClientSelect()
+
+    // Flip recipient country to Canada.
+    const countryInputs = screen.getAllByPlaceholderText(/Search country/i) as HTMLInputElement[]
+    const recipientCountryInput = countryInputs[countryInputs.length - 1]
+    await userEvent.click(recipientCountryInput)
+    await userEvent.type(recipientCountryInput, 'Canada')
+    const canadaBtn = await screen.findByRole('button', { name: /Canada\s*CA/i })
+    await userEvent.click(canadaBtn)
+
+    await waitFor(() => {
+      const selects = (screen.getAllByRole('combobox') as HTMLElement[]).filter(
+        (el): el is HTMLSelectElement => el.tagName === 'SELECT',
+      )
+      const provinceSel = selects.find((s) =>
+        Array.from(s.options).some((o) => o.textContent === 'ON — Ontario'),
+      )
+      expect(provinceSel).toBeTruthy()
+      // BC yes, but no 'DE — Delaware' (that's a US-only option).
+      const optionTexts = Array.from(provinceSel!.options).map((o) => o.textContent ?? '')
+      expect(optionTexts).toContain('BC — British Columbia')
+      expect(optionTexts).not.toContain('DE — Delaware')
+    })
+  })
+})
