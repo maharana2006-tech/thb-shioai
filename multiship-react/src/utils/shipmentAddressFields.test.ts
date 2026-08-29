@@ -62,6 +62,8 @@ describe('shipperFieldsFrom', () => {
     expect(out).toEqual({
       shipperName: 'Jane Doe',
       shipperPhone: '+1 555-123-4567',
+      shipperCompany: 'Zymeworks',
+      shipperEmail: 'jane@acme.com',
       shipperAddressLine1: '108 Patriot Drive',
       shipperAddressLine2: 'Suite A',
       shipperCity: 'Middletown',
@@ -93,12 +95,21 @@ describe('shipperFieldsFrom', () => {
     expect(shipperFieldsFrom(blank()).shipperPostalCode).toBe('')
   })
 
-  it('does NOT emit company or email — those keys are FE-only metadata', () => {
+  it('emits company + email as shipper* keys (Sprint 51 email+company)', () => {
     const out = shipperFieldsFrom(filled()) as Record<string, unknown>
-    expect('shipperCompany' in out).toBe(false)
+    expect(out.shipperCompany).toBe('Zymeworks')
+    expect(out.shipperEmail).toBe('jane@acme.com')
+    // FE-native keys are still stripped — the DTO uses the shipper*
+    // prefix; the raw "company" / "email" would be silently ignored
+    // by the backend.
     expect('company' in out).toBe(false)
     expect('email' in out).toBe(false)
-    expect('shipperEmail' in out).toBe(false)
+  })
+
+  it('empty company/email coerce to undefined (not empty string on wire)', () => {
+    const out = shipperFieldsFrom(blank({ postalCode: '19709', countryCode: 'US' }))
+    expect(out.shipperCompany).toBeUndefined()
+    expect(out.shipperEmail).toBeUndefined()
   })
 
   it('trims whitespace-only fields to undefined', () => {
@@ -114,6 +125,8 @@ describe('recipientFieldsFrom', () => {
     expect(out).toEqual({
       recipientName: 'Jane Doe',
       recipientPhone: '+1 555-123-4567',
+      recipientCompany: 'Zymeworks',
+      recipientEmail: 'jane@acme.com',
       recipientPhoneCountryCode: '1',
       recipientAddressLine1: '108 Patriot Drive',
       recipientAddressLine2: 'Suite A',
@@ -141,6 +154,8 @@ describe('recipientFieldsFrom', () => {
     const out = recipientFieldsFrom(blank({ postalCode: '19709', countryCode: 'US' }))
     expect(out.recipientName).toBeUndefined()
     expect(out.recipientPhone).toBeUndefined()
+    expect(out.recipientCompany).toBeUndefined()
+    expect(out.recipientEmail).toBeUndefined()
     expect(out.recipientPhoneCountryCode).toBeUndefined()
     expect(out.recipientAddressLine1).toBeUndefined()
     expect(out.recipientAddressLine2).toBeUndefined()

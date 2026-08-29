@@ -438,4 +438,54 @@ class FedExConnectorPayloadTest {
         assertEquals(1, brokers.size());
         assertEquals("IMPORT", brokers.get(0).get("type"));
     }
+
+    // ===================================================================
+    // Sprint 51 — email + company on shipper / recipient contact block
+    // ===================================================================
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shipperContactCarriesCompanyAndEmail_whenSet() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setShipperCompany("Acme Fulfillment");
+        r.setShipperEmail("ops@acme.example");
+
+        Map<String, Object> shipper = (Map<String, Object>) requestedShipment(r).get("shipper");
+        Map<String, Object> contact = (Map<String, Object>) shipper.get("contact");
+        assertEquals("Acme Warehouse", contact.get("personName"));
+        assertEquals("Acme Fulfillment", contact.get("companyName"));
+        assertEquals("ops@acme.example", contact.get("emailAddress"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void recipientContactCarriesCompanyAndEmail_whenSet() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientCompany("Zymeworks");
+        r.setRecipientEmail("jane@acme.example");
+
+        // FedEx wire key is "recipients" (plural, array) even for a
+        // single recipient — see FedExConnector.java:1700.
+        Object[] recipients = (Object[]) requestedShipment(r).get("recipients");
+        Map<String, Object> recipient = (Map<String, Object>) recipients[0];
+        Map<String, Object> contact = (Map<String, Object>) recipient.get("contact");
+        assertEquals("Jane Doe", contact.get("personName"));
+        assertEquals("Zymeworks", contact.get("companyName"));
+        assertEquals("jane@acme.example", contact.get("emailAddress"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void companyAndEmailOmittedWhenBlank_backwardsCompatContactShape() throws Exception {
+        // Pre-Sprint-51 the contact block was Map.of(personName, phoneNumber)
+        // with no company / email keys at all. This test pins that the
+        // "no company / no email" default shape matches the old behaviour
+        // exactly — no extra empty-string keys on the wire.
+        Map<String, Object> shipper = (Map<String, Object>) requestedShipment(baseRequest()).get("shipper");
+        Map<String, Object> contact = (Map<String, Object>) shipper.get("contact");
+        assertNull(contact.get("companyName"),
+                "blank shipperCompany must NOT add a companyName key on the wire");
+        assertNull(contact.get("emailAddress"),
+                "blank shipperEmail must NOT add an emailAddress key on the wire");
+    }
 }

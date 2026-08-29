@@ -70,6 +70,13 @@ export interface RateShopShipment {
   dimUnit?: 'IN' | 'CM'
   shipperName?: string
   shipperPhone?: string
+  /** Sprint 51 — business/company name (FedEx contact.companyName,
+   *  UPS Shipper.Name, DHL companyName, USPS SWSIM <Company>). */
+  shipperCompany?: string
+  /** Sprint 51 — email for delivery notifications (FedEx
+   *  contact.emailAddress, UPS EMailAddress, DHL email, USPS
+   *  <EmailAddress>). */
+  shipperEmail?: string
   shipperAddressLine1?: string
   shipperAddressLine2?: string
   shipperCity?: string
@@ -78,6 +85,10 @@ export interface RateShopShipment {
   shipperCountryCode: string
   recipientName?: string
   recipientPhone?: string
+  /** Sprint 51 — see shipperCompany. */
+  recipientCompany?: string
+  /** Sprint 51 — see shipperEmail. */
+  recipientEmail?: string
   /** ISO dial code without the plus; connectors prepend it to recipientPhone
    *  at wire time. Match to backend ShipmentRequestDTO.recipientPhoneCountryCode. */
   recipientPhoneCountryCode?: string

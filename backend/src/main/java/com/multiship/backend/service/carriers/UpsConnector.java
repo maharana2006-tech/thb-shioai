@@ -1435,6 +1435,8 @@ public class UpsConnector implements CarrierConnector {
         shipment.put("Shipper", buildParty(
                 request.getShipperName(),
                 request.getShipperPhone(),
+                request.getShipperCompany(),
+                request.getShipperEmail(),
                 request.getShipperAddressLine1(), request.getShipperAddressLine2(),
                 request.getShipperCity(), request.getShipperState(),
                 request.getShipperPostalCode(), request.getShipperCountryCode(),
@@ -1447,6 +1449,8 @@ public class UpsConnector implements CarrierConnector {
         Map<String, Object> shipTo = buildParty(
                 request.getRecipientName(),
                 recipientPhone,
+                request.getRecipientCompany(),
+                request.getRecipientEmail(),
                 request.getRecipientAddressLine1(), request.getRecipientAddressLine2(),
                 request.getRecipientCity(), request.getRecipientState(),
                 request.getRecipientPostalCode(), request.getRecipientCountryCode(),
@@ -1650,18 +1654,52 @@ public class UpsConnector implements CarrierConnector {
      * shipments even when it duplicates Name. Tax id is only relevant on
      * Shipper (EORI/VAT for the exporter).
      */
+    /** Backwards-compat overload — no company / email. Kept for callers
+     *  that predate Sprint 51 (rate-shop payload builder + tests). */
     private Map<String, Object> buildParty(String name, String phone,
                                             String line1, String line2,
                                             String city, String state,
                                             String postal, String country,
                                             String shipperNumber, String taxId) {
+        return buildParty(name, phone, null, null, line1, line2,
+                city, state, postal, country, shipperNumber, taxId);
+    }
+
+    /**
+     * Sprint 51 — company + email overload for the shipper / recipient
+     * party. UPS's semantics differ from FedEx / DHL:
+     *
+     * <ul>
+     *   <li>{@code Name} is the business/company name printed on the
+     *       label as the party's identifier. Backwards-compat: when no
+     *       {@code company} is supplied we use the person's {@code name}
+     *       (matches pre-Sprint-51 behaviour verbatim).</li>
+     *   <li>{@code AttentionName} is the personal name to route to.
+     *       Always the person's {@code name}.</li>
+     *   <li>{@code EMailAddress} at party level triggers UPS's optional
+     *       delivery notification email when the account has it enabled.
+     *       Blank = element omitted.</li>
+     * </ul>
+     */
+    private Map<String, Object> buildParty(String name, String phone,
+                                            String company, String email,
+                                            String line1, String line2,
+                                            String city, String state,
+                                            String postal, String country,
+                                            String shipperNumber, String taxId) {
         Map<String, Object> party = new LinkedHashMap<>();
-        party.put("Name", firstNonBlank(name, ""));
+        // Name = company when set (matches UPS's business-name convention);
+        // fall back to person's name for backwards-compat.
+        String partyName = StringUtils.hasText(company) ? company : firstNonBlank(name, "");
+        party.put("Name", partyName);
         party.put("AttentionName", firstNonBlank(name, ""));
         if (StringUtils.hasText(shipperNumber)) party.put("ShipperNumber", shipperNumber);
         if (StringUtils.hasText(taxId)) party.put("TaxIdentificationNumber", taxId);
         if (StringUtils.hasText(phone)) {
             party.put("Phone", Map.of("Number", phone));
+        }
+        if (StringUtils.hasText(email)) {
+            party.put("EMailAddress", email);
         }
         Map<String, Object> address = new LinkedHashMap<>();
         java.util.List<String> lines = new java.util.ArrayList<>();

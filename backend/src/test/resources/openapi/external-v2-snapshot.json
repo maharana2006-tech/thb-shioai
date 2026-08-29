@@ -1980,8 +1980,7 @@
             "type" : "string"
           },
           "serviceType" : {
-            "type" : "string",
-            "minLength" : 1
+            "type" : "string"
           },
           "packageType" : {
             "type" : "string",
@@ -2004,8 +2003,13 @@
             "minLength" : 1
           },
           "shipperPhone" : {
-            "type" : "string",
-            "minLength" : 1
+            "type" : "string"
+          },
+          "shipperCompany" : {
+            "type" : "string"
+          },
+          "shipperEmail" : {
+            "type" : "string"
           },
           "shipperAddressLine1" : {
             "type" : "string",
@@ -2035,8 +2039,13 @@
             "minLength" : 1
           },
           "recipientPhone" : {
-            "type" : "string",
-            "minLength" : 1
+            "type" : "string"
+          },
+          "recipientCompany" : {
+            "type" : "string"
+          },
+          "recipientEmail" : {
+            "type" : "string"
           },
           "recipientAddressLine1" : {
             "type" : "string",
@@ -2120,9 +2129,15 @@
           },
           "labelImageFormat" : {
             "type" : "string"
+          },
+          "labelImageType" : {
+            "type" : "string"
+          },
+          "labelStockType" : {
+            "type" : "string"
           }
         },
-        "required" : [ "carrierCode", "packageType", "recipientAddressLine1", "recipientCity", "recipientCountryCode", "recipientName", "recipientPhone", "recipientPostalCode", "recipientState", "serviceType", "shipperAddressLine1", "shipperCity", "shipperCountryCode", "shipperName", "shipperPhone", "shipperPostalCode", "shipperState", "weight" ]
+        "required" : [ "carrierCode", "packageType", "recipientAddressLine1", "recipientCity", "recipientCountryCode", "recipientName", "recipientPostalCode", "recipientState", "shipperAddressLine1", "shipperCity", "shipperCountryCode", "shipperName", "shipperPostalCode", "shipperState", "weight" ]
       },
       "ApiResponseRateShopResponseDTO" : {
         "type" : "object",
