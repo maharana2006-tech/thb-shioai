@@ -128,6 +128,10 @@ export default function LabelDocumentPage() {
   const [tab, setTab] = useState<DocumentTab>('label')
   const [trackingOpen, setTrackingOpen] = useState(false)
   const [zplBusy, setZplBusy] = useState(false)
+  const [pdfBusy, setPdfBusy] = useState(false)
+  // Sprint 52 PR A — same re-entrancy guard as the ZPL flow. Ref
+  // checked synchronously so a fast double-click can't fire two fetches.
+  const pdfInFlightRef = useRef(false)
   /** Audit R2 #390 — re-entrancy guard. The disabled={zplBusy} attribute
    *  on the two buttons stops a click after React commits the state update,
    *  but a fast double-click can fire twice before the first setZplBusy(true)
@@ -170,6 +174,29 @@ export default function LabelDocumentPage() {
     link.click()
     URL.revokeObjectURL(url)
     notify.success(`${link.download} downloaded — send it straight to a Zebra printer.`)
+  }
+
+  const downloadPdf = async () => {
+    if (pdfInFlightRef.current) return
+    pdfInFlightRef.current = true
+    setPdfBusy(true)
+    try {
+      const blob = await orderService.getLabelPdf(orderNo, pkgIndex)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = pkgCount > 1
+        ? `label-${orderNo}-pkg${pkgIndex}of${pkgCount}.pdf`
+        : `label-${orderNo}.pdf`
+      link.click()
+      URL.revokeObjectURL(url)
+      notify.success(`${link.download} downloaded.`)
+    } catch (err) {
+      notify.apiError(err, 'Failed to fetch the label PDF.')
+    } finally {
+      pdfInFlightRef.current = false
+      setPdfBusy(false)
+    }
   }
 
   const copyZpl = async () => {
@@ -445,6 +472,19 @@ export default function LabelDocumentPage() {
 
           {tab === 'label' ? (
             <>
+              <button
+                type="button"
+                onClick={() => {
+                  void downloadPdf()
+                }}
+                disabled={loading || Boolean(error) || tenantBlocked || pdfBusy}
+                title="4x6 PDF facsimile of the shipping label (Sprint 52 PR A)"
+                data-testid="download-pdf-btn"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiDownload className="h-3.5 w-3.5" />
+                {pdfBusy ? 'Fetching…' : 'Download PDF'}
+              </button>
               <button
                 type="button"
                 onClick={() => {

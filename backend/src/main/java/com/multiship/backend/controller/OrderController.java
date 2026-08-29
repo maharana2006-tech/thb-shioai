@@ -38,6 +38,9 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.ZplLabelService zplLabelService;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.multiship.backend.service.PdfLabelService pdfLabelService;
+
     @Autowired
     private CarrierProperties carrierProperties;
 
@@ -576,6 +579,75 @@ public class OrderController {
                 .header("Content-Disposition", "attachment; filename=label-" + orderNo
                         + filenameSuffix + ".zpl")
                 .body(zplOut.toString());
+    }
+
+    /**
+     * Sprint 52 PR A — 4x6" PDF facsimile of the shipping label, sibling
+     * of the ZPL endpoint above. Same {@code ?pkg} semantics: omitted on a
+     * multi-box shipment returns all boxes as one PDF with N pages;
+     * {@code ?pkg=N} returns only that box.
+     *
+     * <p>PR B will layer in carrier-artifact passthrough — return the
+     * carrier's real PDF bytes when they exist for this order in PDF
+     * format, and only fall back to this facsimile otherwise.
+     */
+    @Operation(summary = "PDF facsimile of the 4x6\" shipping label (application/pdf)",
+            description = "Sprint 52 PR A — sibling of /label/zpl. Renders a 4x6\" PDF from the "
+                    + "same order data as the ZPL endpoint. This is a FACSIMILE for preview / "
+                    + "review — not the carrier's canonical label. Carrier-artifact passthrough "
+                    + "ships in a follow-up PR.")
+    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
+    @GetMapping(value = "/{orderNo}/label/pdf",
+            produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> getLabelPdf(@PathVariable Integer orderNo,
+            @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex) {
+        ApiResponse<OrderWithLinesDTO> orderResponse = orderService.getOrderWithLines(orderNo);
+        if (!"SUCCESS".equalsIgnoreCase(orderResponse.getStatus()) || orderResponse.getData() == null) {
+            return ResponseEntity.status(orderResponse.getCode()).build();
+        }
+
+        OrderAccountResolutionDTO resolution = asShippedResolution(orderNo);
+        if (resolution == null) {
+            ApiResponse<List<OrderAccountResolutionDTO>> resolutionResponse =
+                    carrierService.resolveOrderAccounts(List.of(orderNo));
+            resolution = resolutionResponse.getData() != null && !resolutionResponse.getData().isEmpty()
+                    ? resolutionResponse.getData().get(0)
+                    : null;
+        }
+
+        ApiResponse<OrderResponseDTO> trackingResponse = orderService.getOrderWithTracking(orderNo);
+        OrderResponseDTO.LabelDetails labelDetails = trackingResponse.getData() != null
+                ? trackingResponse.getData().getLabelDetails()
+                : null;
+
+        Integer pkgCountBoxed = orderResponse.getData().getPackageCount();
+        int totalPkgs = pkgCountBoxed == null || pkgCountBoxed < 1 ? 1 : pkgCountBoxed;
+        java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =
+                orderResponse.getData().getPackages() == null
+                        ? java.util.List.of()
+                        : orderResponse.getData().getPackages();
+
+        boolean allPkgs = (pkgIndex == null) && totalPkgs > 1;
+        int firstPkg = allPkgs ? 1 : (pkgIndex == null || pkgIndex < 1 ? 1 : Math.min(pkgIndex, totalPkgs));
+        int lastPkg = allPkgs ? totalPkgs : firstPkg;
+
+        byte[] pdf = pdfLabelService.buildMultiPagePdf(
+                orderResponse.getData(), resolution, labelDetails,
+                firstPkg, lastPkg, totalPkgs, allPackages);
+
+        String filenameSuffix;
+        if (totalPkgs <= 1) {
+            filenameSuffix = "";
+        } else if (allPkgs) {
+            filenameSuffix = "-all" + totalPkgs;
+        } else {
+            filenameSuffix = "-pkg" + firstPkg;
+        }
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=label-" + orderNo
+                        + filenameSuffix + ".pdf")
+                .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+                .body(pdf);
     }
 
     @Operation(
