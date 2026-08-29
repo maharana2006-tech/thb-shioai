@@ -14,7 +14,7 @@ import { accountRefService, type CarrierAccountRef } from '../api/accountRefServ
 import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
 import { shippingConfigService, type ShippingServiceItem, type PackagePreset, type ServicePackageLink } from '../api/shippingConfigService'
-import { addressValidationService, type AddressValidationResponse } from '../api/addressValidationService'
+import { type AddressValidationResponse } from '../api/addressValidationService'
 import { recipientBookService, type SavedRecipient } from '../api/recipientBookService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
 import {
@@ -43,9 +43,9 @@ import { useFormik, getIn } from 'formik'
 import { shipmentSchema, type ShipmentFormValues } from '../validation/yup/shipmentSchema'
 import { dialCodeFor, postalPlaceholderFor } from '../utils/countryFormats'
 import { STATE_CODE_OPTIONS } from '../utils/stateCodes'
-import { decorateWithStateWarning } from '../utils/addressWarnings'
 import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddressFields'
 import { compatiblePresetIds } from '../utils/servicePackageCompatibility'
+import { shipmentValidationService, type ShipmentValidationResult } from '../api/shipmentValidationService'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -534,9 +534,15 @@ export default function NewShipmentPage() {
 
   // Recipient address validation result (from the Validate button).
   const [recipientCheck, setRecipientCheck] = useState<{ valid: boolean; issues: string[] } | null>(null)
-  // Sprint 31 — carrier-side address validation result (from the Validate with carrier button).
+  // Sprint 31 — carrier-side address validation result (from the "Validate
+  // shipment" button, formerly "Validate with Carrier").
   const [carrierAddressResult, setCarrierAddressResult] = useState<AddressValidationResponse | null>(null)
   const [carrierValidating, setCarrierValidating] = useState(false)
+  // Sprint 52 — full shipment-validation result. Drives the new local-
+  // errors / local-warnings sections above the existing carrier-address
+  // banner. carrierAddressResult stays alongside so the pre-existing
+  // "apply suggested address" flow keeps working unchanged.
+  const [shipmentValidationResult, setShipmentValidationResult] = useState<ShipmentValidationResult | null>(null)
   // Sprint 38 — saved recipients: address-book search + save UI.
   const [recipientSearch, setRecipientSearch] = useState('')
   const [recipientSuggestions, setRecipientSuggestions] = useState<SavedRecipient[]>([])
@@ -699,7 +705,16 @@ export default function NewShipmentPage() {
     'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT',
     'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE',
   ])
-  const sameTerritory = (a: string, b: string) => a === b || (EU.has(a) && EU.has(b))
+  // Sprint 52 — US and its outlying territories. US → PR / VI / GU / AS / MP
+  // is intranational customs-wise (no customs form, no duties, no HS codes).
+  const US_FAMILY = new Set(['US', 'PR', 'VI', 'GU', 'AS', 'MP'])
+  // Sprint 52 — US and its outlying territories treated as one territory
+  // (matches the backend ShipmentValidationService.US_FAMILY rule + the
+  // FE UX pick that "US→PR is domestic" — no customs UI, no incoterms).
+  const sameTerritory = (a: string, b: string) =>
+    a === b
+    || (EU.has(a) && EU.has(b))
+    || (US_FAMILY.has(a) && US_FAMILY.has(b))
   const isInternational =
     !!sender.countryCode &&
     !!recipient.countryCode &&
@@ -1129,40 +1144,88 @@ export default function NewShipmentPage() {
    * carrier can actually deliver the parcel + returning residential/commercial
    * classification.
    */
-  const validateRecipientWithCarrier = async () => {
+  const validateShipment = async () => {
     if (!carrier) {
       notify.error('Pick a carrier first — validation is carrier-specific.')
       return
     }
     setCarrierValidating(true)
     try {
-      const res = await addressValidationService.validate({
+      // Sprint 52 — send the full form (matching the /orders/manual-label
+      // payload shape) so the backend runs packaging compatibility, markup
+      // required, customs (intl only), DG, and allowlists. Previously this
+      // button sent only recipient address fields and hit
+      // /addresses/validate/carrier — see the deep-dive in the PR body for
+      // the field-gap table.
+      const matched = accounts.find(
+        (a) => canon(a.carrierCode) === carrier
+          && (a.accountNumber || '').toLowerCase() === accountNumber.trim().toLowerCase(),
+      )
+      const cleanItems = items
+        .filter((it) => it.description.trim())
+        .map((it) => ({
+          description: it.description.trim(),
+          sku: it.sku.trim() || undefined,
+          hsCode: it.hsCode.trim() || undefined,
+          countryOfOrigin: it.countryOfOrigin.trim().toUpperCase() || undefined,
+          quantity: it.quantity ? Number(it.quantity) : null,
+          unitValue: it.unitValue ? Number(it.unitValue) : null,
+        }))
+      const isCustom = packageChoice === CUSTOM_PKG
+      const payload = {
+        sender,
+        recipient,
+        isReturn,
         carrierCode: carrier,
-        customerNo: clientCode.trim() || null,
-        name: recipient.name || undefined,
-        addressLine1: recipient.addressLine1,
-        addressLine2: recipient.addressLine2 || undefined,
-        addressLine3: recipient.addressLine3 || undefined,
-        city: recipient.city,
-        state: recipient.state || undefined,
-        postalCode: recipient.postalCode,
-        countryCode: recipient.countryCode,
-      })
-      const d = res.data
-      // Sprint 51 polish — FedEx/UPS/DHL Address Validation is lenient about
-      // state names (accepts "Delaware" and reports Matched=true), but the
-      // subsequent Rate / Ship APIs need a 2-letter code. Detect the
-      // mismatch client-side and append it to the banner's warnings so the
-      // green banner doesn't give false confidence.
-      const decorated = decorateWithStateWarning(d ?? null, recipient.countryCode, recipient.state)
-      setCarrierAddressResult(decorated)
-      if (decorated?.valid) {
-        notify.success(`${carrier}: ${decorated.matchLevel} match.`)
-      } else if (decorated) {
-        notify.error(`${carrier}: ${decorated.message}`)
+        accountNumber: accountNumber.trim(),
+        accountId: matched?.id ?? null,
+        serviceId: serviceId === '' ? null : Number(serviceId),
+        packagePresetId: isCustom ? null : Number(packageChoice),
+        length: isCustom ? Number(length) : null,
+        width: isCustom ? Number(width) : null,
+        height: isCustom ? Number(height) : null,
+        dimUnit,
+        weight: weight ? Number(weight) : null,
+        weightUnit,
+        clientCode: clientCode.trim() || undefined,
+        warehouseCode: warehouseCode || undefined,
+        declaredValue: declaredValue ? Number(declaredValue) : null,
+        currency,
+        // Only send the intl / customs block on actual international
+        // shipments — server also runs the sameTerritory rule and skips
+        // customs when domestic, but sending less data on domestic is
+        // just neater.
+        ...(isInternational ? {
+          items: cleanItems,
+          incoterms: incoterms || undefined,
+          reasonForExport: reasonForExport || undefined,
+        } : {}),
+        ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
+        ...(signatureOption !== 'NONE' ? { signatureOption } : {}),
+        ...(Number(insuredValue) > 0 ? {
+          insuredValue: Number(insuredValue),
+          insuredValueCurrency: currency,
+        } : {}),
+      }
+      const res = await shipmentValidationService.validate(payload)
+      const result = res.data ?? null
+      setShipmentValidationResult(result)
+      // Sprint 52 — pre-flight is strictly server-side (no carrier calls).
+      // Address subresult stays null; the existing suggested-address
+      // banner (fed by carrierAddressResult) simply doesn't render here
+      // — clear it so a stale banner from a prior click doesn't linger.
+      setCarrierAddressResult(null)
+      // Toast summary — one line per verdict so the operator gets
+      // feedback without having to visually scan the banner.
+      if (result?.overall === 'PASS') {
+        notify.success(result.message)
+      } else if (result?.overall === 'WARN') {
+        notify.info(result.message)
+      } else if (result?.overall === 'FAIL') {
+        notify.error(result.message)
       }
     } catch (e) {
-      notify.apiError(e, 'Carrier address validation failed.')
+      notify.apiError(e, 'Shipment validation failed.')
     } finally {
       setCarrierValidating(false)
     }
@@ -1828,11 +1891,12 @@ export default function NewShipmentPage() {
                 <div className="mt-3 flex justify-end">
                   <button
                     type="button"
-                    onClick={() => void validateRecipientWithCarrier()}
+                    onClick={() => void validateShipment()}
                     disabled={carrierValidating || !carrier}
                     title={carrier
-                      ? `Carrier-side check — ask ${carrier} whether they can deliver here + residential/commercial classification`
+                      ? 'Server-side pre-flight — runs all label-time guards (packaging compatibility, markup, customs, DG, allowlists) on the full form before generating the label'
                       : 'Pick a carrier first'}
+                    data-testid="validate-shipment-btn"
                     className="inline-flex items-center gap-1.5 rounded-lg border border-[#1f150c] bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {carrierValidating ? (
@@ -1840,7 +1904,7 @@ export default function NewShipmentPage() {
                     ) : (
                       <FiCheckCircle className="h-3.5 w-3.5" />
                     )}
-                    Validate with Carrier
+                    Validate shipment
                   </button>
                 </div>
                 {!destAllowed && destRules?.mode && recipient.countryCode ? (
@@ -1881,6 +1945,65 @@ export default function NewShipmentPage() {
                     onApply={applyCarrierSuggestion}
                     onDismiss={() => setCarrierAddressResult(null)}
                   />
+                ) : null}
+                {/* Sprint 52 — shipment validation result banner. Renders
+                    the local pre-flight verdict + errors + warnings from
+                    the new /shipments/validate endpoint. Separate from
+                    the address banner above because this is a whole-
+                    shipment check, not an address-only one. */}
+                {shipmentValidationResult ? (
+                  <div
+                    data-testid="shipment-validation-banner"
+                    className={`mt-3 rounded-xl border px-3 py-2.5 text-[12px] ${
+                      shipmentValidationResult.overall === 'PASS'
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                        : shipmentValidationResult.overall === 'WARN'
+                          ? 'border-amber-200 bg-amber-50 text-amber-800'
+                          : 'border-rose-200 bg-rose-50 text-rose-800'
+                    }`}
+                  >
+                    <p className="flex items-center gap-2 font-semibold">
+                      {shipmentValidationResult.overall === 'PASS' ? (
+                        <FiCheckCircle className="h-4 w-4 shrink-0" />
+                      ) : (
+                        <FiAlertTriangle className="h-4 w-4 shrink-0" />
+                      )}
+                      {shipmentValidationResult.message}
+                    </p>
+                    {shipmentValidationResult.localErrors.length ? (
+                      <ul className="mt-1.5 list-disc space-y-0.5 pl-6">
+                        {shipmentValidationResult.localErrors.map((e, idx) => (
+                          <li key={`err-${idx}`}>
+                            {e.message}
+                            {e.field ? (
+                              <span className="ml-1 font-mono text-[10.5px] text-rose-600">
+                                [{e.field}]
+                              </span>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {shipmentValidationResult.localWarnings.length ? (
+                      <>
+                        <p className="mt-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-amber-700">
+                          Suggestions
+                        </p>
+                        <ul className="mt-1 list-disc space-y-0.5 pl-6">
+                          {shipmentValidationResult.localWarnings.map((w, idx) => (
+                            <li key={`warn-${idx}`}>
+                              {w.message}
+                              {w.field ? (
+                                <span className="ml-1 font-mono text-[10.5px] text-amber-700">
+                                  [{w.field}]
+                                </span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+                  </div>
                 ) : null}
               </SectionCard>
               <SectionCard
