@@ -38,8 +38,14 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.ZplLabelService zplLabelService;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     private com.multiship.backend.service.PdfLabelService pdfLabelService;
+
+    // Sprint 52 PR B — passthrough for carrier's real label bytes when
+    // the stored artifact matches the requested format. See
+    // LabelArtifactResolver javadoc.
+    @Autowired
+    private com.multiship.backend.service.LabelArtifactResolver labelArtifactResolver;
 
     @Autowired
     private CarrierProperties carrierProperties;
@@ -524,6 +530,20 @@ public class OrderController {
     @GetMapping(value = "/{orderNo}/label/zpl", produces = org.springframework.http.MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> getLabelZpl(@PathVariable Integer orderNo,
             @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex) {
+        // Sprint 52 PR B — carrier passthrough. When order_label_tracking.
+        // label_file_path holds the carrier's real ZPL bytes (raw ^XA...^XZ
+        // or base64-encoded), return them verbatim. On mismatch (stored
+        // artifact is PDF/GIF/URL-with-non-ZPL) fall through to the
+        // facsimile below. pkgIndex is deliberately NOT threaded through
+        // to the resolver — carriers return one artifact per shipment;
+        // per-package artifacts aren't persisted separately today.
+        java.util.Optional<byte[]> passthrough = labelArtifactResolver.resolveAsBytes(orderNo, "ZPL");
+        if (passthrough.isPresent()) {
+            return ResponseEntity.ok()
+                    .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".zpl")
+                    .body(new String(passthrough.get()));
+        }
+
         ApiResponse<OrderWithLinesDTO> orderResponse = orderService.getOrderWithLines(orderNo);
         if (!"SUCCESS".equalsIgnoreCase(orderResponse.getStatus()) || orderResponse.getData() == null) {
             return ResponseEntity.status(orderResponse.getCode()).body("Order " + orderNo + " was not found.");
@@ -601,6 +621,17 @@ public class OrderController {
             produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
     public ResponseEntity<byte[]> getLabelPdf(@PathVariable Integer orderNo,
             @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex) {
+        // Sprint 52 PR B — carrier passthrough. When the stored
+        // label_file_path is a real carrier PDF, return those bytes
+        // verbatim. Mirror of the /label/zpl passthrough block above.
+        java.util.Optional<byte[]> passthrough = labelArtifactResolver.resolveAsBytes(orderNo, "PDF");
+        if (passthrough.isPresent()) {
+            return ResponseEntity.ok()
+                    .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".pdf")
+                    .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+                    .body(passthrough.get());
+        }
+
         ApiResponse<OrderWithLinesDTO> orderResponse = orderService.getOrderWithLines(orderNo);
         if (!"SUCCESS".equalsIgnoreCase(orderResponse.getStatus()) || orderResponse.getData() == null) {
             return ResponseEntity.status(orderResponse.getCode()).build();
