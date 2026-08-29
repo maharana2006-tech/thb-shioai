@@ -214,6 +214,23 @@ public enum ErrorCode {
     /** Service is allowed for the client, but not from this warehouse. */
     SERVICE_NOT_ALLOWED_FOR_WAREHOUSE,
 
+    // ===== Service ↔ package compatibility (Sprint 52) =====
+    /**
+     * Sprint 52 — the picked (service, carrier-package) pair is not in
+     * {@code service_package}. E.g. FEDEX_GROUND + FEDEX_ENVELOPE (FedEx
+     * only accepts envelopes on Express services). Prevents the mysterious
+     * carrier-side 400 (PACKAGINGTYPE.VALIDATION.ERROR from FedEx) that
+     * used to reach the wire before this guard. CUSTOM presets are exempt.
+     */
+    PACKAGE_NOT_ALLOWED_FOR_SERVICE,
+    /**
+     * Sprint 52 — the picked service has zero rows in {@code service_package}
+     * and the picked preset is a CARRIER preset. Same "config incomplete"
+     * shape auto-pick has always thrown; hoisted to an explicit ErrorCode
+     * so the FE can route the operator to /settings/shipping-catalog.
+     */
+    SERVICE_HAS_NO_LINKED_PACKAGES,
+
     // ===== Split-shipment groups (Sprint 47) =====
     SHIPMENT_GROUP_NOT_FOUND,
 
