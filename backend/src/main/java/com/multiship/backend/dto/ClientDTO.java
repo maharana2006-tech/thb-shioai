@@ -43,4 +43,17 @@ public class ClientDTO {
 
     /** How many orders reference this client's code. */
     private Long orderCount;
+
+    /**
+     * Sprint 52 — true when a client_billing_markup row exists for this
+     * client. False = MARKUP_REQUIRED_FOR_CLIENT will fire on every
+     * label call for a shipment naming this client (ad-hoc/manual
+     * shipments with a blank clientCode are exempt). Consumed by:
+     *   · ClientsPage (list-level warning badge)
+     *   · ClientEditorPage (⚠ badge on the "Billing markup" step nav)
+     *   · ClientMarkupTab (amber banner + save-toast nudge)
+     * See ShipmentResolutionServiceImpl.applyMarkup for the enforcement
+     * point (Sprint 50 Tier 1 finding #11).
+     */
+    private Boolean hasBillingMarkup;
 }

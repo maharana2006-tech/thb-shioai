@@ -10,4 +10,12 @@ import java.util.Optional;
 public interface ClientBillingMarkupRepository extends JpaRepository<ClientBillingMarkup, String> {
 
     Optional<ClientBillingMarkup> findByClientCodeIgnoreCase(String clientCode);
+
+    /**
+     * Sprint 52 — used by ClientServiceImpl.toDTO to compute
+     * hasBillingMarkup on every client list/get response. Cheaper than
+     * findByClientCodeIgnoreCase since we only need the boolean; JPA
+     * translates this to SELECT 1 FROM ... WHERE ... LIMIT 1.
+     */
+    boolean existsByClientCodeIgnoreCase(String clientCode);
 }

@@ -985,6 +985,17 @@ export default function ClientEditorPage() {
       }
       const response = await clientService.createClient(payload)
       notify.success(`Client ${response.data.clientCode} created.`)
+      // Sprint 52 — nudge the operator toward the Billing markup tab
+      // immediately after creation when no row was seeded. Same predicate
+      // as the step-nav amber badge / MarkupTab banner so all four
+      // surfaces agree. New clients always land here (create path
+      // doesn't seed markup) but we guard on hasBillingMarkup=false so a
+      // future default-seeder wouldn't false-fire this toast.
+      if (response.data.hasBillingMarkup === false) {
+        notify.info(
+          `Set a billing markup for ${response.data.clientCode} on the Markup tab before generating labels — MARKUP_REQUIRED_FOR_CLIENT will otherwise reject every label call for this client.`,
+        )
+      }
 
       // ===== Commit draft carrier accounts + mapping rules =====
       // Best-effort per row; a single failure surfaces as a toast but doesn't
@@ -1295,7 +1306,13 @@ export default function ClientEditorPage() {
             (s.key === 'shipFrom' && (touched['shipFrom.line1'] || visited)) ||
             (s.key === 'return' && !form.returnSameAsShipFrom && touched['returnAddress.line1'])
           )) || draftIncomplete
-          const done = !invalid && (isEdit
+          // Sprint 52 — amber warning on the "Billing markup" step when
+          // the client is loaded but has no client_billing_markup row.
+          // Not "invalid" (nothing was mis-entered), not "done" (row
+          // doesn't exist yet) — a fourth "warn" state signals a fixable
+          // production gap without escalating to the rose/red palette.
+          const warn = s.key === 'markup' && isEdit && client != null && client.hasBillingMarkup === false
+          const done = !invalid && !warn && (isEdit
             ? true
             : validating
               ? stepValid(s.key) && visited
@@ -1313,7 +1330,9 @@ export default function ClientEditorPage() {
             : null
           const pillTitle = locked && firstIncomplete
             ? `Complete "${firstIncomplete.label}" before opening this step.`
-            : s.label
+            : warn
+              ? 'No billing markup saved — labels for this client will be refused until you Save one on this tab.'
+              : s.label
           return (
             <button
               key={s.key}
@@ -1324,14 +1343,17 @@ export default function ClientEditorPage() {
               onClick={() => goStep(s.key)}
               disabled={locked}
               title={pillTitle}
+              data-testid={`step-pill-${s.key}`}
               className={`group inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] font-semibold transition ${
                 active
                   ? 'border-[#1f150c] bg-[#1f150c] text-white'
                   : invalid
                     ? 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100'
-                    : done
-                      ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    : warn
+                      ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                      : done
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
               } ${locked ? 'cursor-not-allowed opacity-45 hover:bg-white' : ''}`}
             >
               <span
@@ -1340,12 +1362,14 @@ export default function ClientEditorPage() {
                     ? 'bg-white text-[#1f150c]'
                     : invalid
                       ? 'bg-rose-600 text-white'
-                      : done
-                        ? 'bg-emerald-500 text-white'
-                        : 'bg-slate-100 text-slate-500'
+                      : warn
+                        ? 'bg-amber-500 text-white'
+                        : done
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-slate-100 text-slate-500'
                 }`}
               >
-                {invalid ? '!' : done && !active ? <FiCheck className="h-2.5 w-2.5" /> : i + 1}
+                {invalid ? '!' : warn ? '⚠' : done && !active ? <FiCheck className="h-2.5 w-2.5" /> : i + 1}
               </span>
               <span className="whitespace-nowrap">{s.short}</span>
             </button>
