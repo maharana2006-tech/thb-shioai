@@ -55,15 +55,13 @@ export interface ShipmentValidationResult {
 /**
  * Payload matches the backend ManualShipmentRequest shape (sender +
  * recipient + service + package + weight + optional intl block + DG +
- * signature / insurance). Untyped here because it's built dynamically
- * from NewShipmentPage state; the backend @RequestBody deserialiser is
- * the source of truth for accepted fields.
+ * signature / insurance). Typed as `Record<string, unknown>` because
+ * it's built dynamically from NewShipmentPage state via spread + the
+ * backend @RequestBody deserialiser is the source of truth for
+ * accepted fields — there's no static ManualShipmentPayload interface
+ * on the FE that captures the intl / DG / signature conditional spread.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- payload
-// is the same dynamic shape as the /orders/manual-label body; there's
-// no static ManualShipmentPayload interface that carries the intl /
-// DG / signature spread on the FE.
-export type ShipmentValidationPayload = any
+export type ShipmentValidationPayload = Record<string, unknown>
 
 export const shipmentValidationService = {
   validate: (payload: ShipmentValidationPayload) =>
