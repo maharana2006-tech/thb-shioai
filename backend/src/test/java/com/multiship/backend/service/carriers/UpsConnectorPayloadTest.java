@@ -333,4 +333,58 @@ class UpsConnectorPayloadTest {
         Map<String, Object> format = (Map<String, Object>) labelSpec.get("LabelImageFormat");
         assertEquals("ZPL", format.get("Code"));
     }
+
+    // ===================================================================
+    // Sprint 51 — email + company on Shipper / ShipTo party block
+    // ===================================================================
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shipperName_isCompany_whenCompanySet_attentionNameIsPerson() throws Exception {
+        // UPS's Name field is the business identifier printed on the label
+        // (matches the "carrier's business-name convention"); AttentionName
+        // routes the parcel to the person. When shipperCompany is populated,
+        // Name = company + AttentionName = personal name — matches how
+        // UPS's own portal builds the label.
+        ShipmentRequestDTO r = domesticRequest();
+        r.setShipperCompany("Acme Fulfillment");
+        r.setShipperEmail("ops@acme.example");
+
+        Map<String, Object> shipment = (Map<String, Object>) ((Map<String, Object>)
+                build(r).get("ShipmentRequest")).get("Shipment");
+        Map<String, Object> shipper = (Map<String, Object>) shipment.get("Shipper");
+        assertEquals("Acme Fulfillment", shipper.get("Name"));
+        assertEquals("Acme Warehouse", shipper.get("AttentionName"));
+        assertEquals("ops@acme.example", shipper.get("EMailAddress"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shipperName_fallsBackToPersonName_whenCompanyBlank() throws Exception {
+        // Backwards-compat: pre-Sprint-51 both Name and AttentionName held
+        // the personal name (no separate company). No company on the DTO
+        // must preserve that verbatim so existing labels don't change.
+        Map<String, Object> shipment = (Map<String, Object>) ((Map<String, Object>)
+                build(domesticRequest()).get("ShipmentRequest")).get("Shipment");
+        Map<String, Object> shipper = (Map<String, Object>) shipment.get("Shipper");
+        assertEquals("Acme Warehouse", shipper.get("Name"));
+        assertEquals("Acme Warehouse", shipper.get("AttentionName"));
+        assertNull(shipper.get("EMailAddress"),
+                "blank shipperEmail must NOT add EMailAddress to the wire");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void recipientName_carriesCompanyAndEmail_whenSet() throws Exception {
+        ShipmentRequestDTO r = domesticRequest();
+        r.setRecipientCompany("Zymeworks");
+        r.setRecipientEmail("jane@acme.example");
+
+        Map<String, Object> shipment = (Map<String, Object>) ((Map<String, Object>)
+                build(r).get("ShipmentRequest")).get("Shipment");
+        Map<String, Object> shipTo = (Map<String, Object>) shipment.get("ShipTo");
+        assertEquals("Zymeworks", shipTo.get("Name"));
+        assertEquals("Jane Doe", shipTo.get("AttentionName"));
+        assertEquals("jane@acme.example", shipTo.get("EMailAddress"));
+    }
 }

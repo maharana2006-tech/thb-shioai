@@ -360,4 +360,51 @@ class DhlConnectorPayloadTest {
             assertTrue(ex.getMessage().toLowerCase().contains("api secret") || ex.getMessage().toLowerCase().contains("required"));
         }
     }
+
+    // ===================================================================
+    // Sprint 51 — email + company on shipper / receiver contactInformation
+    // ===================================================================
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void shipperContactInformation_carriesCompanyAndEmail_whenSet() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setShipperCompany("Acme Fulfillment");
+        r.setShipperEmail("ops@acme.example");
+        Map<String, Object> details = (Map<String, Object>) build(r).get("customerDetails");
+        Map<String, Object> shipper = (Map<String, Object>) details.get("shipperDetails");
+        Map<String, Object> contact = (Map<String, Object>) shipper.get("contactInformation");
+        assertEquals("Acme Fulfillment", contact.get("companyName"));
+        assertEquals("Acme Warehouse", contact.get("fullName"));
+        assertEquals("ops@acme.example", contact.get("email"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void shipperContactCompanyName_fallsBackToName_whenCompanyBlank() throws Exception {
+        // Backwards-compat: pre-Sprint-51 companyName was populated with
+        // the personal `name` (no separate company field). Unchanged
+        // callers must see the same wire — otherwise DHL labels shift
+        // for tenants that never set a company.
+        Map<String, Object> details = (Map<String, Object>) build(baseRequest()).get("customerDetails");
+        Map<String, Object> shipper = (Map<String, Object>) details.get("shipperDetails");
+        Map<String, Object> contact = (Map<String, Object>) shipper.get("contactInformation");
+        assertEquals("Acme Warehouse", contact.get("companyName"));
+        assertEquals("Acme Warehouse", contact.get("fullName"));
+        assertNull(contact.get("email"), "blank shipperEmail must NOT add an email key on the wire");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void receiverContactInformation_carriesCompanyAndEmail_whenSet() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientCompany("Zymeworks");
+        r.setRecipientEmail("jane@acme.example");
+        Map<String, Object> details = (Map<String, Object>) build(r).get("customerDetails");
+        Map<String, Object> receiver = (Map<String, Object>) details.get("receiverDetails");
+        Map<String, Object> contact = (Map<String, Object>) receiver.get("contactInformation");
+        assertEquals("Zymeworks", contact.get("companyName"));
+        assertEquals("Jane Doe", contact.get("fullName"));
+        assertEquals("jane@acme.example", contact.get("email"));
+    }
 }

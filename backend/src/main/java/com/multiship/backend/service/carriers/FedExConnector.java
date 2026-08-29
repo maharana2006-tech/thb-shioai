@@ -1643,6 +1643,8 @@ public class FedExConnector implements CarrierConnector {
         Map<String, Object> shipper = buildParty(
                 request.getShipperName(),
                 request.getShipperPhone(),
+                request.getShipperCompany(),
+                request.getShipperEmail(),
                 request.getShipperAddressLine1(),
                 request.getShipperAddressLine2(),
                 request.getShipperCity(),
@@ -1662,6 +1664,8 @@ public class FedExConnector implements CarrierConnector {
         Map<String, Object> recipientParty = buildParty(
                 request.getRecipientName(),
                 recipientPhone,
+                request.getRecipientCompany(),
+                request.getRecipientEmail(),
                 request.getRecipientAddressLine1(),
                 request.getRecipientAddressLine2(),
                 request.getRecipientCity(),
@@ -2221,11 +2225,39 @@ public class FedExConnector implements CarrierConnector {
             String postalCode,
             String countryCode
     ) {
+        return buildParty(name, phone, null, null, line1, line2, city, state, postalCode, countryCode);
+    }
+
+    /**
+     * Sprint 51 — company + email overload. Emitted on FedEx's
+     * {@code contact} block: {@code companyName} shows on the printed
+     * label under the person name; {@code emailAddress} is used by
+     * FedEx's delivery-status email opt-in (only fires when the account
+     * has notifications enabled).
+     *
+     * <p>Both fields are optional. Blank company falls back to no
+     * companyName on the wire; blank email is omitted entirely. Backwards-
+     * compat 8-arg overload above preserves every existing caller.
+     */
+    private Map<String, Object> buildParty(
+            String name,
+            String phone,
+            String company,
+            String email,
+            String line1,
+            String line2,
+            String city,
+            String state,
+            String postalCode,
+            String countryCode
+    ) {
         Map<String, Object> party = new LinkedHashMap<>();
-        party.put("contact", Map.of(
-                "personName", name,
-                "phoneNumber", phone
-        ));
+        Map<String, Object> contact = new LinkedHashMap<>();
+        contact.put("personName", name);
+        contact.put("phoneNumber", phone);
+        if (StringUtils.hasText(company)) contact.put("companyName", company);
+        if (StringUtils.hasText(email)) contact.put("emailAddress", email);
+        party.put("contact", contact);
 
         Map<String, Object> address = new LinkedHashMap<>();
         address.put("streetLines", line2 == null || line2.isBlank()

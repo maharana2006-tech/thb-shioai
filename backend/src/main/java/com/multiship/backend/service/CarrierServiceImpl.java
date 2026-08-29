@@ -911,6 +911,12 @@ public class CarrierServiceImpl implements CarrierService {
                 .weight(req.getWeight())
                 .shipperName(firstNonBlank(from != null ? from.getName() : null, dflt.getName()))
                 .shipperPhone(firstNonBlank(from != null ? from.getPhone() : null, dflt.getPhone()))
+                // Sprint 51 — company + email pass through from the manual-label
+                // caller. No platform default (ShipperDefaults has no company /
+                // email) so a null sender or null field ends up null on the DTO;
+                // each connector's buildParty overload treats null as "omit".
+                .shipperCompany(from != null ? from.getCompany() : null)
+                .shipperEmail(from != null ? from.getEmail() : null)
                 .shipperAddressLine1(firstNonBlank(from != null ? from.getAddressLine1() : null, dflt.getAddressLine1()))
                 .shipperAddressLine2(firstNonBlank(from != null ? from.getAddressLine2() : null, dflt.getAddressLine2()))
                 .shipperCity(firstNonBlank(from != null ? from.getCity() : null, dflt.getCity()))
@@ -926,6 +932,10 @@ public class CarrierServiceImpl implements CarrierService {
                 // notification systems — fake-data anti-pattern the codebase
                 // actively hunts (silent-fallback audit, PRs #410-#414).
                 .recipientPhone(to.getPhone())
+                // Sprint 51 — recipient company + email. Same null-pass-through
+                // semantics as the shipper block above.
+                .recipientCompany(to.getCompany())
+                .recipientEmail(to.getEmail())
                 .recipientAddressLine1(to.getAddressLine1())
                 .recipientAddressLine2(to.getAddressLine2())
                 .recipientAddressLine3(to.getAddressLine3())

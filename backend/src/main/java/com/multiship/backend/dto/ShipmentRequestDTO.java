@@ -44,6 +44,24 @@ public class ShipmentRequestDTO {
 
     private String shipperPhone;
 
+    /**
+     * Sprint 51 — business/company name of the shipping party. Emitted on
+     * every connector's shipper block: FedEx {@code contact.companyName},
+     * UPS {@code Shipper.Name} (with {@code AttentionName} carrying
+     * personal name), DHL {@code contactInformation.companyName}, USPS
+     * SWSIM {@code <Company>}. Null / blank = fall back to the personal
+     * name (backwards-compat behaviour on all connectors).
+     */
+    private String shipperCompany;
+
+    /**
+     * Sprint 51 — email for delivery notifications. Emitted on every
+     * connector that supports it: FedEx {@code contact.emailAddress},
+     * UPS {@code Shipper.EMailAddress}, DHL {@code contactInformation.email},
+     * USPS SWSIM {@code <EmailAddress>}. Null / blank = field omitted.
+     */
+    private String shipperEmail;
+
     @NotBlank
     private String shipperAddressLine1;
 
@@ -65,6 +83,21 @@ public class ShipmentRequestDTO {
     private String recipientName;
 
     private String recipientPhone;
+
+    /**
+     * Sprint 51 — business/company name of the receiving party. Same
+     * mapping as {@link #shipperCompany} but on the recipient block.
+     * Null / blank = fall back to the personal name.
+     */
+    private String recipientCompany;
+
+    /**
+     * Sprint 51 — recipient email. Same mapping as {@link #shipperEmail}
+     * but on the recipient block. Null / blank = field omitted.
+     * Carriers use this for delivery-status email notifications when
+     * the operator opts in on the account level.
+     */
+    private String recipientEmail;
 
     @NotBlank
     private String recipientAddressLine1;

@@ -13,10 +13,10 @@ import type { RateShopShipment } from '../api/rateShopService'
  *
  * <p>Spreading the whole address prevents that class of bug: adding a new
  * field to {@link ManualShipmentAddress} + {@link RateShopShipment} makes
- * it flow through automatically. Fields that don't map to the shipment
- * DTO (currently {@code company}, {@code email}) are intentionally dropped
- * because the backend doesn't accept them yet — add them here if / when
- * the DTO catches up.
+ * it flow through automatically. Sprint 51 — {@code company} and
+ * {@code email} now flow to the wire (FedEx contact.companyName /
+ * emailAddress, UPS Shipper.Name / EMailAddress, DHL contactInformation.
+ * companyName / email, USPS SWSIM &lt;Company&gt; / &lt;EmailAddress&gt;).
  *
  * <p>Empty strings coerce to {@code undefined} so the JSON body doesn't
  * carry {@code "phone": ""} (which would satisfy any FE-side "is defined"
@@ -39,12 +39,14 @@ const emptyToUndef = (v?: string | null): string | undefined =>
 
 /** Sender/shipper fields of a rate-shop or shipment request body. */
 export type ShipperFields = Pick<RateShopShipment,
-  'shipperName' | 'shipperPhone' | 'shipperAddressLine1' | 'shipperAddressLine2'
+  'shipperName' | 'shipperPhone' | 'shipperCompany' | 'shipperEmail'
+  | 'shipperAddressLine1' | 'shipperAddressLine2'
   | 'shipperCity' | 'shipperState' | 'shipperPostalCode' | 'shipperCountryCode'>
 
 /** Recipient fields of a rate-shop or shipment request body. */
 export type RecipientFields = Pick<RateShopShipment,
-  'recipientName' | 'recipientPhone' | 'recipientPhoneCountryCode'
+  'recipientName' | 'recipientPhone' | 'recipientCompany' | 'recipientEmail'
+  | 'recipientPhoneCountryCode'
   | 'recipientAddressLine1' | 'recipientAddressLine2' | 'recipientAddressLine3'
   | 'recipientCity' | 'recipientState' | 'recipientPostalCode' | 'recipientCountryCode'
   | 'recipientResidential'>
@@ -59,6 +61,8 @@ export function shipperFieldsFrom(addr: ManualShipmentAddress): ShipperFields {
   return {
     shipperName: emptyToUndef(addr.name),
     shipperPhone: emptyToUndef(addr.phone),
+    shipperCompany: emptyToUndef(addr.company),
+    shipperEmail: emptyToUndef(addr.email),
     shipperAddressLine1: emptyToUndef(addr.addressLine1),
     shipperAddressLine2: emptyToUndef(addr.addressLine2),
     shipperCity: emptyToUndef(addr.city),
@@ -78,6 +82,8 @@ export function recipientFieldsFrom(addr: ManualShipmentAddress): RecipientField
   return {
     recipientName: emptyToUndef(addr.name),
     recipientPhone: emptyToUndef(addr.phone),
+    recipientCompany: emptyToUndef(addr.company),
+    recipientEmail: emptyToUndef(addr.email),
     recipientPhoneCountryCode: emptyToUndef(addr.phoneCountryCode),
     recipientAddressLine1: emptyToUndef(addr.addressLine1),
     recipientAddressLine2: emptyToUndef(addr.addressLine2),
