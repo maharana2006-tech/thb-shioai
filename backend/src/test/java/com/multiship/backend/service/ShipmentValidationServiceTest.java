@@ -1,0 +1,344 @@
+package com.multiship.backend.service;
+
+import com.multiship.backend.dto.ApiResponse;
+import com.multiship.backend.dto.ErrorCode;
+import com.multiship.backend.dto.ManualShipmentRequest;
+import com.multiship.backend.dto.ShipmentValidationResult;
+import com.multiship.backend.model.PackagePreset;
+import com.multiship.backend.model.ShippingService;
+import com.multiship.backend.repository.PackagePresetRepository;
+import com.multiship.backend.repository.ShippingServiceRepository;
+import com.multiship.backend.service.resolution.PackagingCompatibilityGuard;
+import com.multiship.backend.service.resolution.ShipmentResolutionException;
+import com.multiship.backend.service.resolution.ShipmentResolutionService;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.math.BigDecimal;
+import java.util.Optional;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+/**
+ * Sprint 52 — ShipmentValidationService pre-flight tests. Verifies the
+ * server-side pre-flight runs comprehensive missing-field checks
+ * (recipient / sender / shipment), integrates PackagingCompatibilityGuard
+ * + markup + IntlShipmentValidator + DangerousGoodsValidator, and does
+ * NOT call any carrier APIs — this is a strictly local pre-flight per
+ * the Sprint 52 design pick "don't apply any fallback".
+ */
+class ShipmentValidationServiceTest {
+
+    private PackagingCompatibilityGuard packagingCompatibilityGuard;
+    private ShipmentResolutionService resolutionService;
+    private ShippingServiceRepository shippingServiceRepository;
+    private PackagePresetRepository packagePresetRepository;
+
+    private ShipmentValidationService service;
+
+    @BeforeEach
+    void setUp() {
+        packagingCompatibilityGuard = mock(PackagingCompatibilityGuard.class);
+        resolutionService = mock(ShipmentResolutionService.class);
+        shippingServiceRepository = mock(ShippingServiceRepository.class);
+        packagePresetRepository = mock(PackagePresetRepository.class);
+
+        service = new ShipmentValidationService(
+                packagingCompatibilityGuard, resolutionService,
+                shippingServiceRepository, packagePresetRepository);
+    }
+
+    // ─── Happy path ─────────────────────────────────────────────────────
+
+    @Test
+    void domesticFullyPopulated_returnsPassWithNoErrors() {
+        // Full-form domestic ad-hoc shipment with all required fields set.
+        // Every intl / customs / DG / markup / allowlist check is either
+        // skipped (ad-hoc, domestic) or passes silently.
+        ManualShipmentRequest req = fullDomesticRequest();
+        // Preset lookup returns a CUSTOM box so PackagingCompatibilityGuard
+        // short-circuits without a mock stub.
+        when(shippingServiceRepository.findById(1L)).thenReturn(Optional.of(fedexGround()));
+        when(packagePresetRepository.findById(7L)).thenReturn(Optional.of(customBox()));
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        ShipmentValidationResult r = res.getData();
+        assertNotNull(r);
+        assertEquals("PASS", r.getOverall(),
+                "fully populated domestic ad-hoc shipment must pass — got errors: " + r.getLocalErrors());
+        assertNull(r.getAddress(),
+                "no carrier calls in server-side pre-flight — address subresult must always be null");
+    }
+
+    // ─── Missing recipient fields (comprehensive) ──────────────────────
+
+    @Test
+    void blankRecipientAddressLine1_errorsWithField() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setAddressLine1("");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> "recipient.addressLine1".equals(e.getField())));
+    }
+
+    @Test
+    void blankRecipientState_errorsForUS_MX_CA_AU_BR() {
+        // Sprint 52 — state is required for these countries; the DTO
+        // allows blank but the carrier's label call rejects it.
+        for (String country : java.util.List.of("US", "CA", "AU", "MX", "BR")) {
+            ManualShipmentRequest req = fullDomesticRequest();
+            req.getRecipient().setCountryCode(country);
+            req.getRecipient().setState("");
+            req.getSender().setCountryCode(country);
+            stubServiceAndPreset();
+
+            ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+            assertTrue(res.getData().getLocalErrors().stream()
+                            .anyMatch(e -> "recipient.state".equals(e.getField())),
+                    "state must be required for " + country + " but wasn't flagged");
+        }
+    }
+
+    @Test
+    void blankRecipientPhone_warnsButDoesNotError() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setPhone("");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                .noneMatch(e -> "recipient.phone".equals(e.getField())),
+                "phone missing is a suggestion, not an error");
+        assertTrue(res.getData().getLocalWarnings().stream()
+                .anyMatch(e -> "recipient.phone".equals(e.getField())),
+                "phone missing must produce a warning so the operator sees it");
+    }
+
+    // ─── Missing sender fields ─────────────────────────────────────────
+
+    @Test
+    void nullSender_withoutWarehouseCode_errors() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setSender(null);
+        req.setWarehouseCode(null);
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> "sender".equals(e.getField())));
+    }
+
+    @Test
+    void nullSender_withWarehouseCode_ok_becauseWarehouseWillFillIn() {
+        // The label pipeline resolves the warehouseCode into a sender
+        // block. Pre-flight can't do the resolution itself; when the
+        // caller signals a warehouse, we trust that the resolution will
+        // fill in the sender (label call will error if it doesn't).
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setSender(null);
+        req.setWarehouseCode("WH1");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                .noneMatch(e -> "sender".equals(e.getField())),
+                "warehouse-code set → sender resolution is deferred; not a pre-flight error");
+    }
+
+    // ─── Missing shipment fields ───────────────────────────────────────
+
+    @Test
+    void missingWeight_errors() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setWeight(null);
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> "weight".equals(e.getField())));
+    }
+
+    @Test
+    void missingService_errors() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setServiceId(null);
+        when(packagePresetRepository.findById(7L)).thenReturn(Optional.of(customBox()));
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> "serviceId".equals(e.getField())));
+    }
+
+    @Test
+    void missingPackageAndDims_errors() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setPackagePresetId(null);
+        req.setLength(null);
+        req.setWidth(null);
+        req.setHeight(null);
+        when(shippingServiceRepository.findById(1L)).thenReturn(Optional.of(fedexGround()));
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> "packagePresetId".equals(e.getField())
+                        && e.getMessage().contains("length")
+                        && e.getMessage().contains("width")
+                        && e.getMessage().contains("height")),
+                "custom-dims path must list every missing dim in one error");
+    }
+
+    // ─── International routing + customs ───────────────────────────────
+
+    @Test
+    void usToUk_classifiedInternational_customsCheckRuns() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setCountryCode("GB");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(res.getData().isInternational());
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> e.getCode().contains("commodities")),
+                "intl shipment without commodities must fail with customs.commodities.empty");
+    }
+
+    @Test
+    void usToPR_sameFamilyTerritory_classifiedDomestic_customsSkipped() {
+        // Sprint 52 design pick — US → PR/VI/GU/AS/MP is domestic.
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setCountryCode("PR");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(!res.getData().isInternational(),
+                "US → PR must be domestic under the US-family sameTerritory rule");
+        assertTrue(res.getData().getSkipped().stream()
+                .anyMatch(s -> "customs".equals(s.getName())));
+    }
+
+    // ─── Markup required (Sprint 50 Tier 1 finding #11) ───────────────
+
+    @Test
+    void clientWithoutMarkup_errorsWithMarkupErrorCode() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setClientCode("THB000");
+        stubServiceAndPreset();
+        doThrow(new ShipmentResolutionException(ErrorCode.MARKUP_REQUIRED_FOR_CLIENT,
+                "Client THB000 has no billing markup configured."))
+                .when(resolutionService).applyMarkup(anyString(), any(), anyString());
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> ErrorCode.MARKUP_REQUIRED_FOR_CLIENT.name().equals(e.getCode())));
+    }
+
+    // ─── Packaging compatibility (Sprint 52 PR 1 integration) ─────────
+
+    @Test
+    void fedexGround_withFedexEnvelope_errorsWithPackageNotAllowedForService() {
+        // Regression pin for order-900003-class errors.
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.setPackagePresetId(9L);
+        ShippingService svc = fedexGround();
+        PackagePreset envelope = PackagePreset.builder()
+                .id(9L).name("FedEx Envelope").kind("CARRIER")
+                .carrierPackageCode("FEDEX_ENVELOPE")
+                .ownerType(PackagePreset.OWNER_PLATFORM).build();
+        when(shippingServiceRepository.findById(1L)).thenReturn(Optional.of(svc));
+        when(packagePresetRepository.findById(9L)).thenReturn(Optional.of(envelope));
+        doThrow(new ShipmentResolutionException(ErrorCode.PACKAGE_NOT_ALLOWED_FOR_SERVICE,
+                "Package FEDEX_ENVELOPE is not allowed for service FEDEX FEDEX_GROUND."))
+                .when(packagingCompatibilityGuard).assertCompatible(svc, envelope);
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertEquals("FAIL", res.getData().getOverall());
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> ErrorCode.PACKAGE_NOT_ALLOWED_FOR_SERVICE.name().equals(e.getCode())));
+    }
+
+    // ─── Null-body handling ────────────────────────────────────────────
+
+    @Test
+    void nullRequest_returnsBadRequest() {
+        ApiResponse<ShipmentValidationResult> res = service.validate(null);
+        assertEquals(400, res.getCode());
+        assertEquals(ErrorCode.VALIDATION_ERROR.name(), res.getErrorCode());
+    }
+
+    // ─── Helpers ───────────────────────────────────────────────────────
+
+    private ManualShipmentRequest fullDomesticRequest() {
+        ManualShipmentRequest r = new ManualShipmentRequest();
+        r.setCarrierCode("FEDEX");
+        r.setAccountNumber("ACC1");
+        r.setServiceId(1L);
+        r.setPackagePresetId(7L);
+        r.setWeight(new BigDecimal("2.5"));
+        r.setWeightUnit("LB");
+
+        ManualShipmentRequest.Address sender = new ManualShipmentRequest.Address();
+        sender.setName("Acme Warehouse");
+        sender.setAddressLine1("100 Main St");
+        sender.setCity("Denver");
+        sender.setState("CO");
+        sender.setPostalCode("80202");
+        sender.setCountryCode("US");
+        sender.setPhone("+15551234567");
+        r.setSender(sender);
+
+        ManualShipmentRequest.Address recipient = new ManualShipmentRequest.Address();
+        recipient.setName("Jane Doe");
+        recipient.setAddressLine1("1 Market St");
+        recipient.setCity("San Francisco");
+        recipient.setState("CA");
+        recipient.setPostalCode("94105");
+        recipient.setCountryCode("US");
+        recipient.setPhone("+15559876543");
+        r.setRecipient(recipient);
+
+        return r;
+    }
+
+    private void stubServiceAndPreset() {
+        when(shippingServiceRepository.findById(1L)).thenReturn(Optional.of(fedexGround()));
+        when(packagePresetRepository.findById(7L)).thenReturn(Optional.of(customBox()));
+    }
+
+    private ShippingService fedexGround() {
+        return ShippingService.builder()
+                .id(1L).carrier("FEDEX").serviceCode("FEDEX_GROUND")
+                .name("FedEx Ground").scope("DOMESTIC").originCountry("US").build();
+    }
+
+    private PackagePreset customBox() {
+        return PackagePreset.builder()
+                .id(7L).name("My Box").kind("CUSTOM")
+                .ownerType(PackagePreset.OWNER_PLATFORM).build();
+    }
+}
