@@ -116,6 +116,10 @@ public class CarrierServiceImpl implements CarrierService {
     private final ShippingConfigService shippingConfigService;
     private final CustomsService customsService;
     private final ShipmentResolutionService resolutionService;
+    /** Sprint 52 — service↔packaging compatibility guard for the manual-pick
+     *  label path. Prevents carrier-side PACKAGINGTYPE.VALIDATION.ERROR
+     *  (order 900003 hit this via FEDEX_GROUND + FEDEX_ENVELOPE). */
+    private final com.multiship.backend.service.resolution.PackagingCompatibilityGuard packagingCompatibilityGuard;
 
     /** Sprint 44 — optional so existing tests that build CarrierServiceImpl
      *  without Spring don't have to plumb another dep. When null, routing
@@ -888,6 +892,17 @@ public class CarrierServiceImpl implements CarrierService {
             } catch (ShipmentResolutionException e) {
                 return toResolutionFailure(e);
             }
+        }
+
+        // Sprint 52 — service↔packaging compatibility. Runs on every
+        // manual-pick (client or ad-hoc), because carrier-side rejects the
+        // combination regardless of tenant. Skips when either side isn't
+        // resolved (connector defaults kick in later). CUSTOM presets are
+        // implicit-allowed inside the guard.
+        try {
+            packagingCompatibilityGuard.assertCompatible(service, preset);
+        } catch (ShipmentResolutionException e) {
+            return toResolutionFailure(e);
         }
 
         String serviceType = service != null ? service.getServiceCode()
