@@ -45,6 +45,11 @@ public interface CarrierService {
     /** One-shot manual shipment: purchase a label from explicit operator input and record it as a manual order. */
     ApiResponse<LabelGenerationResponse> generateManualLabel(com.multiship.backend.dto.ManualShipmentRequest request, UserDetails user);
 
+    /** Fix-and-regenerate: apply corrected operator input to {@code existingOrderNo}
+     *  and re-label it in place (same order number). Used to recover failed orders. */
+    ApiResponse<LabelGenerationResponse> generateManualLabel(com.multiship.backend.dto.ManualShipmentRequest request,
+            UserDetails user, Integer existingOrderNo);
+
     ApiResponse<List<OrderAccountResolutionDTO>> resolveOrderAccounts(List<Integer> orderNos);
 
     CarrierConnector getCarrierConnector(String carrierCode);

@@ -1744,7 +1744,12 @@ public class FedExConnector implements CarrierConnector {
                 java.math.BigDecimal fromItems = dvCtx.perPackage().get(pkgIdx);
                 if (fromItems != null && fromItems.signum() > 0) declared = fromItems;
             }
-            if (declared == null && p.getDeclaredValue() != null) declared = p.getDeclaredValue();
+            // Intl MPS carries declared value ONLY at the shipment level
+            // (totalDeclaredValue below). A per-package declaredValue here —
+            // uncapped at the shipment's declared value — trips FedEx's
+            // package-level CARRIAGEVALUE.EXCEEDS.CUSTOMVALUE when it is higher
+            // than the customs value, so it must be skipped for intl too.
+            if (declared == null && !fedexIntl && p.getDeclaredValue() != null) declared = p.getDeclaredValue();
             if (declared == null && !fedexIntl && request.getInsuredValue() != null
                     && request.getInsuredValue().signum() > 0) {
                 declared = request.getInsuredValue();
@@ -1779,8 +1784,19 @@ public class FedExConnector implements CarrierConnector {
         // above. Carriage-liability total = sum of per-box CI-derived
         // amounts (customs total is set on commodities separately below).
         if (fedexIntl && dvCtx.shipmentTotal() != null && dvCtx.shipmentTotal().signum() > 0) {
+            // FedEx rejects a carriage (declared) value that EXCEEDS the customs
+            // value (TOTALCARRIAGEVALUE.EXCEEDS.CUSTOMSVALUE) — the goods can't be
+            // insured for more than they're declared worth at customs. Cap the
+            // carriage value at the customs total (same fallback the customs
+            // block uses) so the two are always consistent.
+            BigDecimal carriage = dvCtx.shipmentTotal();
+            BigDecimal customsVal = request.getIntl().getCustomsTotalValue();
+            if (customsVal == null || customsVal.signum() == 0) customsVal = request.getDeclaredValue();
+            if (customsVal != null && customsVal.signum() > 0 && carriage.compareTo(customsVal) > 0) {
+                carriage = customsVal;
+            }
             requestedShipment.put("totalDeclaredValue", Map.of(
-                    "amount", dvCtx.shipmentTotal(),
+                    "amount", carriage,
                     "currency", declaredCurrency));
         }
 
@@ -1897,8 +1913,12 @@ public class FedExConnector implements CarrierConnector {
         detail.put("documentContent", documentsOnly ? "DOCUMENTS" : "NON_DOCUMENTS");
         detail.put("dutiesPayment", buildDutiesPayment(intl, request));
 
-        BigDecimal total = intl.getCustomsTotalValue() != null
-                ? intl.getCustomsTotalValue() : BigDecimal.ZERO;
+        // Customs total value — FedEx rejects an international shipment with a
+        // zero/blank value (TOTALCUSTOMSVALUE.REQUIRED). Prefer the intl block's
+        // total (commodity sum), fall back to the shipment's declared value.
+        BigDecimal total = intl.getCustomsTotalValue();
+        if (total == null || total.signum() == 0) total = request.getDeclaredValue();
+        if (total == null) total = BigDecimal.ZERO;
         String currency = StringUtils.hasText(intl.getCustomsCurrency())
                 ? intl.getCustomsCurrency().toUpperCase() : "USD";
         detail.put("customsValue", Map.of("amount", total, "currency", currency));

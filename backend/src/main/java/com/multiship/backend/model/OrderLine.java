@@ -35,7 +35,12 @@ public class OrderLine {
     private Integer orderNo;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "order_no", referencedColumnName = "order_no", insertable = false, updatable = false)
+    // No DB-level FK: label_batch is LIST-partitioned by order_source, so its
+    // primary key is composite (order_no, order_source) and a foreign key on
+    // order_no alone can't reference it. The relationship is enforced in the
+    // app (order_no is globally unique via the shared sequence).
+    @JoinColumn(name = "order_no", referencedColumnName = "order_no", insertable = false, updatable = false,
+            foreignKey = @jakarta.persistence.ForeignKey(value = jakarta.persistence.ConstraintMode.NO_CONSTRAINT))
     @ToString.Exclude
     @EqualsAndHashCode.Exclude
     private Order order;

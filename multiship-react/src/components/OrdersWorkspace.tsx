@@ -51,6 +51,11 @@ const OrderImportModal = lazy(() => import('./modals/OrderImportModal'))
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
 
+/** "City, State" for the destination column — omits a blank/null state so an
+ *  international address with no province doesn't render "City, null". */
+const formatDestination = (city?: string | null, state?: string | null): string =>
+  [city, state].map((v) => (v ?? '').trim()).filter(Boolean).join(', ')
+
 /** Server-side query behind each view of the workspace. */
 const VIEW_QUERY: Record<View, { status?: string; resolution?: string; defaultDirection: 'ASC' | 'DESC' }> = {
   all: { defaultDirection: 'DESC' },
@@ -872,10 +877,10 @@ export default function OrdersWorkspace() {
 
     defs.push({
       id: 'city',
-      accessorFn: (o) => `${o.shippingDetails.city}, ${o.shippingDetails.state}`,
+      accessorFn: (o) => formatDestination(o.shippingDetails.city, o.shippingDetails.state),
       header: 'Destination',
       cell: ({ row }) => {
-        const dest = `${row.original.shippingDetails.city}, ${row.original.shippingDetails.state}`
+        const dest = formatDestination(row.original.shippingDetails.city, row.original.shippingDetails.state)
         return (
           <span className="block truncate text-[12.5px] text-[#3f3527]" title={dest}>
             {dest}
@@ -884,7 +889,7 @@ export default function OrdersWorkspace() {
       },
       meta: {
         headerLabel: 'Destination',
-        exportValue: (o: Order) => `${o.shippingDetails.city}, ${o.shippingDetails.state}`,
+        exportValue: (o: Order) => formatDestination(o.shippingDetails.city, o.shippingDetails.state),
       },
     })
 
@@ -1016,6 +1021,17 @@ export default function OrdersWorkspace() {
                 ) : (
                   <FiXCircle className="h-3.5 w-3.5" />
                 )}
+              </button>
+            ) : null}
+            {(order.labelDetails.status || '').toUpperCase() === 'ERROR' ? (
+              <button
+                type="button"
+                onClick={() => navigate(`/orders/new?fixOrder=${orderNo}`)}
+                title="Fix the error and regenerate this label"
+                aria-label={`Fix and regenerate order ${orderNo}`}
+                className="rounded-lg border border-amber-300 bg-amber-50 p-1.5 text-amber-700 transition hover:border-amber-400 hover:bg-amber-100"
+              >
+                <FiRotateCw className="h-3.5 w-3.5" />
               </button>
             ) : null}
             <button

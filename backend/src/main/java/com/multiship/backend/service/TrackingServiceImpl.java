@@ -191,13 +191,13 @@ public class TrackingServiceImpl implements TrackingService {
      */
     static String canonicalizeCarrierCode(String shipViaCd) {
         if (!StringUtils.hasText(shipViaCd)) return null;
-        String v = shipViaCd.trim().toUpperCase(Locale.ROOT);
-        return switch (v) {
-            case "P80" -> "UPS";
-            case "F77" -> "FEDEX";
-            case "L01" -> "USPS";
-            default -> v;
-        };
+        // Delegate to the shared canonicalizer so carrier-prefixed SERVICE codes
+        // resolve too — a manual shipment stores its service code (e.g.
+        // FEDEX_2_DAY, FEDEX_GROUND) in ship_via_cd, and the old local map
+        // passed those through unchanged, so getCarrierConnector("FEDEX_2_DAY")
+        // failed with "carrier isn't configured" and no order could be tracked.
+        String canonical = ShippingConfigService.canonicalCarrierFor(shipViaCd);
+        return StringUtils.hasText(canonical) ? canonical : null;
     }
 
     /** Copy a connector TrackingResult onto the wire-shape DTO. */

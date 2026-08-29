@@ -110,6 +110,15 @@ public class IndexInitializer implements CommandLineRunner {
                 skipped++;
                 continue;
             }
+            // Skip indexes that already exist (e.g. created by a schema
+            // migration). CREATE INDEX CONCURRENTLY is rejected outright on a
+            // partitioned table — regardless of IF NOT EXISTS — so a pre-check
+            // avoids a failed statement and log noise for label_batch, which is
+            // now LIST-partitioned by order_source.
+            if (indexExists(spec.name())) {
+                skipped++;
+                continue;
+            }
             try (Connection conn = dataSource.getConnection()) {
                 // CONCURRENTLY cannot run inside a transaction — need autoCommit.
                 boolean prevAutoCommit = conn.getAutoCommit();
@@ -132,6 +141,21 @@ public class IndexInitializer implements CommandLineRunner {
         }
         log.info("IndexInitializer: {} ensured, {} skipped (pg_trgm unavailable), {} failed.",
                 created, skipped, failed);
+    }
+
+    /** True when an index (plain or partitioned) with this name already exists. */
+    private boolean indexExists(String indexName) {
+        try (Connection conn = dataSource.getConnection();
+             java.sql.PreparedStatement ps = conn.prepareStatement(
+                     "SELECT 1 FROM pg_class WHERE relname = ? AND relkind IN ('i', 'I')")) {
+            ps.setString(1, indexName);
+            try (java.sql.ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException ex) {
+            // On probe failure, fall through and let the CREATE attempt decide.
+            return false;
+        }
     }
 
     /** Best-effort {@code CREATE EXTENSION IF NOT EXISTS pg_trgm}.

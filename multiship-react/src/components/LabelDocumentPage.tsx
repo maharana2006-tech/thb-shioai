@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import { FiActivity, FiArrowLeft, FiCopy, FiDownload, FiExternalLink, FiFileText, FiPrinter, FiTag } from 'react-icons/fi'
@@ -39,6 +39,41 @@ const labelDate = (value?: string | null) => {
 }
 
 const money = (value: number | null | undefined) => (typeof value === 'number' ? value.toFixed(2) : '0.00')
+
+/** Commercial-invoice date style: 05/18/2026 (US numeric, as FedEx prints). */
+const ciDate = (value?: string | null) => {
+  const parsed = value ? new Date(value) : new Date()
+  const d = Number.isNaN(parsed.getTime()) ? new Date() : parsed
+  return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`
+}
+
+/** Reason-for-export code → the human "Purpose" a customs invoice prints. */
+const PURPOSE_LABELS: Record<string, string> = {
+  SOLD: 'Commercial / Sold',
+  COMMERCIAL: 'Commercial / Sold',
+  SALE: 'Commercial / Sold',
+  NOT_SOLD: 'Commercial / Not Sold',
+  GIFT: 'Gift / Personal',
+  PERSONAL: 'Gift / Personal',
+  PERSONAL_EFFECTS: 'Personal Effects',
+  SAMPLE: 'Commercial Sample',
+  REPAIR: 'Repair / Return',
+  RETURN: 'Repair / Return',
+  REPAIR_AND_RETURN: 'Repair / Return',
+  INTERCOMPANY: 'Intercompany Data',
+}
+const purposeLabel = (reason?: string | null) => {
+  const key = (reason || '').trim().toUpperCase().replace(/[\s-]+/g, '_')
+  return PURPOSE_LABELS[key] || (reason ? reason.trim() : 'Commercial / Sold')
+}
+
+/** A titled label:value line as the FedEx commercial invoice lays them out. */
+const KV = ({ label, value }: { label: string; value?: ReactNode }) => (
+  <div className="flex gap-1">
+    <span className="shrink-0 font-semibold text-slate-500">{label} :</span>
+    <span className="min-w-0 break-words text-slate-900">{value ?? ''}</span>
+  </div>
+)
 
 /** Real Code 128B barcode rendered as SVG — same symbology carriers print. */
 function Barcode128({ value, height = 64 }: { value: string; height?: number }) {
@@ -238,7 +273,6 @@ export default function LabelDocumentPage() {
   // Account details from the cascade resolution (falls back to legacy payloads).
   const accountCarrierCode = resolution?.carrierCode || legacyAccount?.carrierCode || order?.shipviaCd || null
   const accountNumber = resolution?.accountNumber || legacyAccount?.accountNumber || null
-  const accountName = resolution?.accountName || legacyAccount?.carrierName || null
   const environment = (resolution?.environment || legacyAccount?.environment || 'SANDBOX').toUpperCase()
   const isSandbox = environment !== 'PRODUCTION'
 
@@ -250,11 +284,25 @@ export default function LabelDocumentPage() {
   // Commercial-invoice lines: prefer the per-order customs items entered against
   // the order (manual/international shipments); fall back to the ERP order lines.
   const customsItems = payload?.customs?.items ?? []
+  // Total shipped units — used to distribute the parcel weight across lines
+  // when the commodities carry no explicit per-item weight of their own.
+  const totalItemQty = customsItems.reduce((s, it) => s + (it.quantity ?? 1), 0)
   const lines =
     customsItems.length > 0
       ? customsItems.map((it, i) => {
           const qty = it.quantity ?? 1
           const unit = it.unitValue ?? 0
+          // Per-line net weight. Prefer an explicit per-item weight (× qty);
+          // otherwise apportion the parcel's total weight by this line's share
+          // of the shipped units, so NET/GROSS populate and still sum to the
+          // parcel weight. Pack weight is 0 and gross = net (single weight per
+          // commodity), matching the FedEx CI commodity layout.
+          const netWeight =
+            it.weight != null
+              ? it.weight * qty
+              : order?.weight != null && totalItemQty > 0
+                ? (order.weight * qty) / totalItemQty
+                : null
           return {
             id: i,
             lineNo: i + 1,
@@ -267,12 +315,11 @@ export default function LabelDocumentPage() {
             unitPrice: unit,
             totalPrice: qty * unit,
             customsDeclValue: qty * unit,
+            netWeight,
           }
         })
       : order?.orderLines || []
-  const invoiceTotal = lines.reduce((sum, line) => sum + (line.totalPrice ?? 0), 0)
   const customsTotal = lines.reduce((sum, line) => sum + (line.customsDeclValue ?? 0), 0)
-  const totalQty = lines.reduce((sum, line) => sum + (line.qtyShipped ?? 0), 0)
 
   // Some order feeds put a bare sequence digit in ship_name; prefer a plausible name.
   // Never falls back to custNo (client code) — that would render the tenant
@@ -281,9 +328,6 @@ export default function LabelDocumentPage() {
   const rawShipName = order?.shipName?.trim()
   const recipientName =
     (rawShipName && rawShipName.length > 2 ? rawShipName : order?.shipAttn) || '-'
-  const recipientCityLine = order
-    ? `${order.shiptoCity || ''}, ${order.shiptoState || ''} ${order.shiptoZip || ''}`.trim()
-    : ''
   const destCountry = (order?.shiptoCountryCd || 'US').toUpperCase()
   // Sprint 48 B10 - customer-facing order number. Backend now sends
   // displayOrderNo pre-formatted (e.g. "MAN900001" for manual shipments,
@@ -295,6 +339,11 @@ export default function LabelDocumentPage() {
   // intra-EU are treated as domestic). Domestic shipments suppress
   // incoterms, EEI text, and the destination-country tag on the label.
   const isInternational = Boolean(payload?.international)
+  // The commercial invoice is international-only. `activeTab` collapses to the
+  // label for domestic shipments so a domestic parcel never renders the empty
+  // customs document even if `tab` state is 'invoice' (the tab button that sets
+  // it is itself hidden when domestic).
+  const activeTab: DocumentTab = isInternational ? tab : 'label'
   const originCountry = (shipper?.countryCode || '').toUpperCase()
   const isUsExport = isInternational && originCountry === 'US'
   // Multi-package: total M comes from the order's package_count column;
@@ -323,6 +372,21 @@ export default function LabelDocumentPage() {
   const perPkgWeight = perPkg?.weight ?? null
   const perPkgWeightUnit = perPkg?.weightUnit || null
 
+  // ---- commercial-invoice header + totals ----------------------------------
+  const ciWeightUnit = (payload?.customs?.weightUnit || order?.weightUnit || 'LB').toLowerCase()
+  const ciCurrency = (payload?.charges?.currency || customsDefaults?.currency || payload?.customs?.currency || 'USD').toUpperCase()
+  const purpose = purposeLabel(customsDefaults?.reasonForExport || payload?.customs?.reasonForExport)
+  const termsOfSale = customsDefaults?.incoterms || payload?.customs?.incoterms || (receiverIsImporter ? 'DAP' : 'DDP')
+  const freightAmount = payload?.charges?.freight ?? 0
+  const insuranceAmount = 0
+  const otherAmount = 0
+  const totalInvoice = customsTotal + freightAmount + insuranceAmount + otherAmount
+  // Gross shipment weight sums each line's net (single weight per line);
+  // falls back to the order's own weight when no per-item weights were entered.
+  const lineWeightSum = lines.reduce((sum, line) => sum + ((line as { netWeight?: number | null }).netWeight ?? 0), 0)
+  const totalShipmentWeight = lineWeightSum > 0 ? lineWeightSum : (order?.weight ?? 0)
+  const invoiceRef = `${accountNumber ? `${accountNumber}` : 'AC'}-${trackingNumber || orderDisplay}`
+
   // ---- carrier-form codes, derived deterministically like the real label carries ----
   const formCode = `${hash36(`${orderNo}${order?.shiptoZip || ''}`, 5)}/${hash36(`${order?.shiptoZip || ''}${orderNo}`, 4)}/${hash36(`${order?.custNo || ''}${orderNo}`, 4)}`
   const meterCode = `J${String(orderNo).padStart(9, '0')}${(order?.shiptoZip || '000').slice(0, 3)}uv`
@@ -349,7 +413,7 @@ export default function LabelDocumentPage() {
   return (
     <div className="space-y-4">
       {/* Per-document page size: 4x6 for the label, Letter for the invoice. */}
-      <style>{tab === 'label'
+      <style>{activeTab === 'label'
         ? '@page { size: 4in 6in; margin: 0.12in; }'
         : '@page { size: letter; margin: 0.5in; }'}</style>
 
@@ -389,16 +453,20 @@ export default function LabelDocumentPage() {
               <FiTag className="h-3 w-3" />
               Shipping Label
             </button>
-            <button
-              type="button"
-              onClick={() => setTab('invoice')}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-semibold transition ${
-                tab === 'invoice' ? 'bg-slate-950 text-white' : 'text-slate-600 hover:text-slate-950'
-              }`}
-            >
-              <FiFileText className="h-3 w-3" />
-              Commercial Invoice
-            </button>
+            {/* Commercial invoice is international-only — a domestic parcel
+                crosses no customs border, so there's nothing to declare. */}
+            {isInternational ? (
+              <button
+                type="button"
+                onClick={() => setTab('invoice')}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-semibold transition ${
+                  tab === 'invoice' ? 'bg-slate-950 text-white' : 'text-slate-600 hover:text-slate-950'
+                }`}
+              >
+                <FiFileText className="h-3 w-3" />
+                Commercial Invoice
+              </button>
+            ) : null}
           </div>
 
           {/* Multi-package picker — only shown when the shipment has >1 box. */}
@@ -443,7 +511,7 @@ export default function LabelDocumentPage() {
             </a>
           ) : null}
 
-          {tab === 'label' ? (
+          {activeTab === 'label' ? (
             <>
               <button
                 type="button"
@@ -479,7 +547,7 @@ export default function LabelDocumentPage() {
             className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3.5 py-1.5 text-[13px] font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             <FiPrinter className="h-3.5 w-3.5" />
-            Print {tab === 'label' ? 'Label' : 'Invoice'}
+            Print {activeTab === 'label' ? 'Label' : 'Invoice'}
           </button>
         </div>
       </div>
@@ -498,7 +566,7 @@ export default function LabelDocumentPage() {
         </div>
       ) : order ? (
         <div className="flex justify-center rounded-[26px] border border-slate-200/80 bg-slate-100/70 p-6 shadow-inner print:border-0 print:bg-white print:p-0 print:shadow-none">
-          {tab === 'label' ? (
+          {activeTab === 'label' ? (
             /* ==================== 4x6 SHIPPING LABEL (real carrier anatomy) ==================== */
             <div
               className="print-doc relative w-[430px] shrink-0 border border-slate-300 bg-white text-black shadow-xl print:w-[3.76in] print:border-0 print:shadow-none"
@@ -698,214 +766,181 @@ export default function LabelDocumentPage() {
             </div>
           ) : (
             /* ==================== COMMERCIAL INVOICE (Letter) ==================== */
-            <div className="print-doc w-full max-w-[820px] bg-white p-8 text-slate-900 shadow-xl print:max-w-none print:p-0 print:shadow-none">
-              <div className="flex items-start justify-between border-b-2 border-slate-900 pb-4">
+            <div className="print-doc w-full max-w-[820px] bg-white p-8 text-[11px] leading-5 text-slate-900 shadow-xl print:max-w-none print:p-0 print:shadow-none">
+              {/* Header — title + shipment meta, as the FedEx CI lays it out. */}
+              <div className="flex items-start justify-between gap-6 border-b-2 border-slate-900 pb-3">
                 <div>
-                  <h1 className="text-2xl font-black tracking-tight">COMMERCIAL INVOICE</h1>
-                  <p className="mt-1 text-xs text-slate-500">International shipping document — customs declaration</p>
-                  {accountNumber ? (
-                    <p className="mt-1 font-mono text-[11px] text-slate-600">
-                      {accountName || carrierDisplay} — {trackingNumber || `ORDER ${orderDisplay}`}
-                    </p>
-                  ) : null}
+                  <h1 className="text-2xl font-black tracking-tight">Commercial Invoice</h1>
+                  <p className="mt-0.5 text-[11px] text-slate-500">International shipping document — customs declaration</p>
+                  <p className="mt-1 font-mono text-[11px] font-semibold text-slate-600">{invoiceRef}</p>
                 </div>
-                <div className="text-right text-xs leading-5">
-                  <p><span className="font-semibold">Ship Date:</span> {formatDate(shipDate)}</p>
-                  <p><span className="font-semibold">International Tracking#:</span> {trackingNumber || 'Pending'}</p>
-                  <p><span className="font-semibold">Purpose:</span> {(customsDefaults?.reasonForExport || 'COMMERCIAL / SOLD').toUpperCase()}</p>
-                  <p><span className="font-semibold">Nbr pkgs:</span> 1</p>
-                  <p><span className="font-semibold">Invoice #:</span> INV-{orderDisplay}</p>
+                <div className="w-64 shrink-0 space-y-0.5">
+                  <KV label="Ship Date" value={ciDate(shipDate)} />
+                  <KV label="International Tracking#" value={trackingNumber || 'Pending'} />
+                  <KV label="Purpose" value={purpose} />
+                  <KV label="Nbr pkgs" value={pkgCount} />
+                  <KV label="Invoice #" value={`INV-${orderDisplay}`} />
                 </div>
               </div>
 
-              <div className="mt-4 grid grid-cols-2 gap-4 text-xs">
+              {/* Parties: Shipper + Consignee, then Broker + Importer. */}
+              <div className="mt-3 grid grid-cols-2 gap-3">
                 <div className="border border-slate-300 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Shipper / Exporter</p>
-                  <p className="mt-1.5 font-bold">{shipper?.name}</p>
-                  <p>{shipper?.addressLine1}</p>
-                  <p>
-                    {shipper?.city}, {shipper?.state} {shipper?.postalCode}, {shipper?.countryCode}
-                  </p>
-                  <p>PH: {shipper?.phone}</p>
+                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Shipper</p>
+                  <p className="font-bold">{shipper?.name || '—'}</p>
+                  {shipper?.addressLine1 ? <p>{shipper.addressLine1}</p> : null}
+                  {shipper?.addressLine2 ? <p>{shipper.addressLine2}</p> : null}
+                  <p>{[shipper?.city, shipper?.postalCode, shipper?.state, shipper?.countryCode].filter(Boolean).join(', ')}</p>
+                  <div className="mt-1"><KV label="PH" value={shipper?.phone} /></div>
                 </div>
                 <div className="border border-slate-300 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Consignee</p>
-                  <p className="mt-1.5 font-bold">{recipientName}</p>
+                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Consignee</p>
+                  <p className="font-bold">{order.shipAttn || recipientName}</p>
+                  {order.shipAttn && order.shipAttn !== recipientName ? <p>{recipientName}</p> : null}
                   {order.shipAddr1 ? <p>{order.shipAddr1}</p> : null}
-                  <p>{recipientCityLine}, {destCountry}</p>
-                  {order.phone ? <p>PH: {order.phone}</p> : null}
-                  <p className="mt-1 text-[10px] text-slate-500">Customer {order.custNo}</p>
-                </div>
-              </div>
-
-              {/* Importer of record + customs broker — resolved from the
-                  client's Importer/Broker profile, never hardcoded. */}
-              <div className="mt-3 grid grid-cols-2 gap-4 text-xs">
-                <div className="border border-slate-300 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Importer of Record</p>
-                  {receiverIsImporter ? (
-                    <p className="mt-1.5 text-slate-700">
-                      <span className="font-bold">Same as consignee</span> (DAP — receiver imports; carrier collects
-                      identity documents at destination)
-                    </p>
-                  ) : (
-                    <>
-                      <p className="mt-1.5 font-bold">{importer?.name}</p>
-                      {importer?.addressLine1 ? <p>{importer.addressLine1}{importer.addressLine2 ? `, ${importer.addressLine2}` : ''}</p> : null}
-                      <p>
-                        {[importer?.city, importer?.state, importer?.postalCode].filter(Boolean).join(', ')}
-                        {importer?.countryCode ? `, ${importer.countryCode}` : ''}
-                      </p>
-                      {importer?.phone ? <p>PH: {importer.phone}</p> : null}
-                      <p className="mt-1 text-[10px] text-slate-500">
-                        {[
-                          importer?.taxId ? `${importer.taxIdType || 'Tax ID'}: ${importer.taxId}` : null,
-                          importer?.eori ? `EORI: ${importer.eori}` : null,
-                          importer?.ioss ? `IOSS: ${importer.ioss}` : null,
-                          importer?.iec ? `IEC: ${importer.iec}` : null,
-                          importer?.gstin ? `GSTIN: ${importer.gstin}` : null,
-                          importer?.companyReg ? `Reg: ${importer.companyReg}` : null,
-                        ]
-                          .filter(Boolean)
-                          .join(' · ') || 'No tax identifiers on file'}
-                      </p>
-                    </>
-                  )}
+                  <p>{[order.shiptoCity, order.shiptoZip, order.shiptoState, destCountry].filter(Boolean).join(', ')}</p>
+                  <div className="mt-1 space-y-0.5">
+                    <KV label="PH" value={order.phone} />
+                    <KV label="GSTIN" value={importer?.gstin} />
+                    <KV label="IRS/EIN" value={importer?.taxIdType === 'EIN' ? importer?.taxId : undefined} />
+                    <KV label="Food Shipment" value="N" />
+                    <KV label="PN/KN" value="" />
+                  </div>
                 </div>
                 <div className="border border-slate-300 p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Customs Broker</p>
+                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Broker</p>
                   {brokerage === 'BROKER_SELECT' && broker ? (
                     <>
-                      <p className="mt-1.5 font-bold">{broker.name}</p>
-                      {broker.company ? <p>{broker.company}</p> : null}
+                      <p className="font-bold">{broker.name || broker.company || '—'}</p>
+                      {broker.company && broker.name ? <p>{broker.company}</p> : null}
                       {broker.addressLine1 ? <p>{broker.addressLine1}{broker.addressLine2 ? `, ${broker.addressLine2}` : ''}</p> : null}
-                      <p>
-                        {[broker.city, broker.state, broker.postalCode].filter(Boolean).join(', ')}
-                        {broker.countryCode ? `, ${broker.countryCode}` : ''}
-                      </p>
-                      <p className="mt-1 text-[10px] text-slate-500">
-                        {[
-                          broker.brokerId ? `Broker ID: ${broker.brokerId}` : null,
-                          broker.license ? `License: ${broker.license}` : null,
-                          broker.phone ? `PH: ${broker.phone}` : null,
-                        ]
-                          .filter(Boolean)
-                          .join(' · ') || 'Broker Select Option'}
-                      </p>
+                      <p>{[broker.city, broker.postalCode, broker.state, broker.countryCode].filter(Boolean).join(', ')}</p>
+                      <div className="mt-1 space-y-0.5">
+                        <KV label="PH" value={broker.phone} />
+                        {broker.brokerId ? <KV label="Broker ID" value={broker.brokerId} /> : null}
+                        {broker.license ? <KV label="License" value={broker.license} /> : null}
+                      </div>
                     </>
                   ) : (
-                    <p className="mt-1.5 text-slate-700">
-                      <span className="font-bold">{carrierDisplay} brokerage</span> (included with international
-                      service — no third-party broker designated)
+                    <p className="text-slate-700">
+                      <span className="font-bold">{carrierDisplay} brokerage</span> — included with the international
+                      service; no third-party broker designated.
                     </p>
+                  )}
+                </div>
+                <div className="border border-slate-300 p-3">
+                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Importer</p>
+                  {receiverIsImporter ? (
+                    <p className="text-slate-700">
+                      <span className="font-bold">Same as consignee</span> — DAP: the receiver is the importer of
+                      record; the carrier collects identity documents at destination.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="font-bold">{importer?.name || '—'}</p>
+                      {importer?.contact ? <p>{importer.contact}</p> : null}
+                      {importer?.addressLine1 ? <p>{importer.addressLine1}{importer.addressLine2 ? `, ${importer.addressLine2}` : ''}</p> : null}
+                      <p>{[importer?.city, importer?.postalCode, importer?.state, importer?.countryCode].filter(Boolean).join(', ')}</p>
+                      <div className="mt-1 space-y-0.5">
+                        <KV label="PH" value={importer?.phone} />
+                        {importer?.taxId ? <KV label={importer?.taxIdType || 'Tax ID'} value={importer.taxId} /> : null}
+                        {importer?.eori ? <KV label="EORI" value={importer.eori} /> : null}
+                        {importer?.ioss ? <KV label="IOSS" value={importer.ioss} /> : null}
+                        {importer?.iec ? <KV label="IEC" value={importer.iec} /> : null}
+                        {importer?.gstin ? <KV label="GSTIN" value={importer.gstin} /> : null}
+                      </div>
+                    </>
                   )}
                 </div>
               </div>
 
-              <div className="mt-3 grid grid-cols-4 gap-2 text-center text-[11px]">
-                {[
-                  ['Carrier', carrierDisplay],
-                  ['Carrier Account', accountNumber ? `${accountNumber}`.slice(0, 14) : '—'],
-                  ['Terms of Sale', customsDefaults?.incoterms || (receiverIsImporter ? 'DAP' : 'DDP')],
-                  ['Currency', customsDefaults?.currency || 'USD'],
-                ].map(([k, v]) => (
-                  <div key={k} className="border border-slate-300 p-2">
-                    <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">{k}</p>
-                    <p className="mt-0.5 truncate font-semibold">{v}</p>
+              {/* Commodities — one detailed block per line, FedEx CI layout. */}
+              <div className="mt-3 border border-slate-300">
+                <div className="bg-slate-900 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-white">
+                  Commodities
+                </div>
+                {lines.length ? (
+                  lines.map((line, i) => {
+                    const net = (line as { netWeight?: number | null }).netWeight
+                    return (
+                      <div key={line.id} className={`px-3 py-2 ${i > 0 ? 'border-t border-slate-200' : ''}`}>
+                        <div className="grid grid-cols-3 gap-x-4 gap-y-0.5">
+                          <KV label="MARK/NBRS" value={line.itemNo} />
+                          <KV label="HS CODE" value={line.hsCode} />
+                          <KV label="CTRY MFG" value={line.countryOfOrigin} />
+                          <KV label="NET WT" value={net != null ? `${money(net)} ${ciWeightUnit}` : ''} />
+                          <KV label="PACK WT" value={`${money(0)} ${ciWeightUnit}`} />
+                          <KV label="GROSS WT" value={net != null ? `${money(net)} ${ciWeightUnit}` : ''} />
+                          <KV label="UNIT QTY" value={`${line.qtyShipped ?? 0} EA`} />
+                          <KV label="UNIT VALUE" value={`$${money(line.unitPrice)}`} />
+                          <KV label="COMMODITY VALUE" value={`$${money(line.totalPrice)} ${ciCurrency}`} />
+                          <KV label="LICENSE" value="" />
+                          <KV label="EX DATE" value="" />
+                        </div>
+                        <div className="mt-0.5"><KV label="DESCRIPTION" value={line.itemDescription || line.description || order.goodsDesc} /></div>
+                      </div>
+                    )
+                  })
+                ) : (
+                  <div className="px-3 py-6 text-center text-slate-500">
+                    No line items recorded — declared as {order.goodsDesc || 'general merchandise'}.
                   </div>
-                ))}
+                )}
               </div>
 
-              <table className="mt-4 w-full border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-900 text-left text-white">
-                    <th className="border border-slate-900 px-2 py-1.5">#</th>
-                    <th className="border border-slate-900 px-2 py-1.5">Item</th>
-                    <th className="border border-slate-900 px-2 py-1.5">Description</th>
-                    <th className="border border-slate-900 px-2 py-1.5">HS Code</th>
-                    <th className="border border-slate-900 px-2 py-1.5">Ctry Mfg</th>
-                    <th className="border border-slate-900 px-2 py-1.5 text-right">Unit Qty</th>
-                    <th className="border border-slate-900 px-2 py-1.5 text-right">Unit Value</th>
-                    <th className="border border-slate-900 px-2 py-1.5 text-right">Commodity Value</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map((line) => (
-                    <tr key={line.id}>
-                      <td className="border border-slate-300 px-2 py-1.5">{line.lineNo}</td>
-                      <td className="border border-slate-300 px-2 py-1.5">{line.itemNo || '—'}</td>
-                      <td className="border border-slate-300 px-2 py-1.5">
-                        {line.itemDescription || line.description || order.goodsDesc || '—'}
-                      </td>
-                      <td className="border border-slate-300 px-2 py-1.5">{line.hsCode || '—'}</td>
-                      <td className="border border-slate-300 px-2 py-1.5">{line.countryOfOrigin || '—'}</td>
-                      <td className="border border-slate-300 px-2 py-1.5 text-right">{line.qtyShipped ?? '—'} EA</td>
-                      <td className="border border-slate-300 px-2 py-1.5 text-right">${money(line.unitPrice)}</td>
-                      <td className="border border-slate-300 px-2 py-1.5 text-right font-semibold">${money(line.totalPrice)}</td>
-                    </tr>
-                  ))}
-                  {!lines.length ? (
-                    <tr>
-                      <td colSpan={8} className="border border-slate-300 px-2 py-6 text-center text-slate-500">
-                        No line items recorded — declared as {order.goodsDesc || 'general merchandise'}.
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-
+              {/* Totals. */}
               <div className="mt-3 flex justify-end">
-                <div className="w-72 text-xs">
-                  <div className="flex justify-between border-b border-slate-300 py-1">
-                    <span>Total shipment weight</span>
-                    <span className="font-semibold">{order.weight ?? '—'} kg</span>
+                <div className="w-80 space-y-0.5">
+                  <div className="flex justify-between border-b border-slate-200 py-0.5">
+                    <span className="font-semibold text-slate-500">TOTAL SHIPMENT WEIGHT :</span>
+                    <span className="font-semibold tabular-nums">{money(totalShipmentWeight)} {ciWeightUnit}</span>
                   </div>
-                  <div className="flex justify-between border-b border-slate-300 py-1">
-                    <span>Total quantity</span>
-                    <span className="font-semibold">{totalQty} EA</span>
+                  <div className="flex justify-between border-b border-slate-200 py-0.5">
+                    <span className="font-semibold text-slate-500">TOTAL COMMODITY VALUE :</span>
+                    <span className="font-semibold tabular-nums">${money(customsTotal)}</span>
                   </div>
-                  <div className="flex justify-between border-b border-slate-300 py-1">
-                    <span>Declared customs value</span>
-                    <span className="font-semibold">${money(customsTotal)}</span>
+                  <div className="flex justify-between border-b border-slate-200 py-0.5">
+                    <span className="font-semibold text-slate-500">FREIGHT AMOUNT :</span>
+                    <span className="font-semibold tabular-nums">${money(freightAmount)}</span>
                   </div>
-                  <div className="flex justify-between border-b border-slate-300 py-1">
-                    <span>Total commodity value</span>
-                    <span className="font-semibold">${money(invoiceTotal)}</span>
+                  <div className="flex justify-between border-b border-slate-200 py-0.5">
+                    <span className="font-semibold text-slate-500">INSURANCE AMOUNT :</span>
+                    <span className="font-semibold tabular-nums">${money(insuranceAmount)}</span>
                   </div>
-                  <div className="flex justify-between border-b border-slate-300 py-1">
-                    <span>Freight amount</span>
-                    <span className="font-semibold">$0.00</span>
-                  </div>
-                  <div className="flex justify-between border-b border-slate-300 py-1">
-                    <span>Insurance / other</span>
-                    <span className="font-semibold">$0.00</span>
+                  <div className="flex justify-between border-b border-slate-200 py-0.5">
+                    <span className="font-semibold text-slate-500">OTHER AMOUNT :</span>
+                    <span className="font-semibold tabular-nums">${money(otherAmount)}</span>
                   </div>
                   <div className="mt-1 flex justify-between bg-slate-900 px-2 py-1.5 text-white">
-                    <span className="font-bold">TOTAL INVOICE</span>
-                    <span className="font-bold">${money(invoiceTotal)} USD</span>
+                    <span className="font-bold">TOTAL INVOICE :</span>
+                    <span className="font-bold tabular-nums">${money(totalInvoice)} {ciCurrency}</span>
+                  </div>
+                  <div className="flex justify-between py-0.5">
+                    <span className="font-semibold text-slate-500">TERMS OF SALE :</span>
+                    <span className="font-bold">{termsOfSale}</span>
                   </div>
                 </div>
               </div>
 
-              <div className="mt-6 border-t border-slate-300 pt-4 text-[11px] leading-5 text-slate-600">
+              {/* Legal + declaration + signature. */}
+              <div className="mt-5 border-t border-slate-300 pt-3 text-slate-600">
                 <p>
-                  These items are authorized for export only to the country of ultimate destination for use by the
-                  ultimate consignee herein identified. They may not be resold, transferred, or otherwise disposed of
-                  to any other country or person other than the authorized ultimate consignee.
+                  {isUsExport
+                    ? 'These items are controlled by the U.S. Government and authorized for export only to the country of ultimate destination for use by the ultimate consignee or end-user(s) herein identified. They may not be resold, transferred, or otherwise disposed of, to any other country or to any person other than the authorized ultimate consignee or end-user(s), either in their original form or after being incorporated into other items, without first obtaining approval from the U.S. Government or as otherwise authorized by U.S. law and regulations.'
+                    : 'These items are authorized for export only to the country of ultimate destination for use by the ultimate consignee herein identified. They may not be resold, transferred, or otherwise disposed of to any other country or person other than the authorized ultimate consignee.'}
                 </p>
-                <p className="mt-2 font-semibold text-slate-800">
-                  I declare all information contained in this invoice to be true and correct.
-                </p>
-                <div className="mt-8 grid grid-cols-3 gap-6">
-                  <div>
-                    <p className="pb-1 font-semibold text-slate-800">{shipper?.name || ''}</p>
-                    <div className="border-t border-slate-900 pt-1">Signature of broker / company</div>
+                <div className="mt-2"><KV label="COMMENTS" value={payload?.customs?.notes} /></div>
+                <p className="mt-2 font-semibold text-slate-800">I declare all information in this invoice to be true and correct.</p>
+                <div className="mt-6 flex items-end justify-between gap-6">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-slate-800">{shipper?.name || ''}</p>
+                    <p className="text-slate-600">{ciDate(shipDate)}</p>
+                    <div className="mt-1 w-56 border-t border-slate-900 pt-1 text-[10px]">Signature of shipper / company</div>
                   </div>
-                  <div>
-                    <p className="pb-1 font-semibold text-slate-800">{formatDate(shipDate)}</p>
-                    <div className="border-t border-slate-900 pt-1">Date</div>
+                  <div className="shrink-0 text-right">
+                    <KV label="Date" value={ciDate(shipDate)} />
+                    <KV label="Page Number" value="1" />
                   </div>
-                  <div className="self-end text-right text-[10px] text-slate-400">Page 1 of 1</div>
                 </div>
               </div>
             </div>

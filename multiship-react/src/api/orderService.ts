@@ -138,9 +138,26 @@ export interface OrderWithLines {
   weight: number | null
   /** LB | KG — unit for the top-level `weight` field. Falls back per label renderer. */
   weightUnit?: string | null
+  /** Declared / customs value entered for the shipment. */
+  declaredValue?: number | null
   goodsDesc: string | null
   createdDate: string | null
   orderLines: OrderLine[]
+  // Ship-FROM (origin) captured on manual shipments; null on ERP/WMS orders.
+  shipFromName?: string | null
+  shipFromCompany?: string | null
+  shipFromAddr1?: string | null
+  shipFromAddr2?: string | null
+  shipFromCity?: string | null
+  shipFromState?: string | null
+  shipFromZip?: string | null
+  shipFromCountryCd?: string | null
+  shipFromPhone?: string | null
+  /** True when ship-from came from the client warehouse / platform default
+   *  rather than a sender entered on the order (bulk/ERP orders). */
+  shipFromResolved?: boolean | null
+  /** 'Y'|'N' — cross-border classification recorded at label time. */
+  intlYn?: string | null
   /** Sprint 29 — multi-package count column on the order (1 for legacy single-box). */
   packageCount?: number | null
   /** Sprint 29 — per-package rows (tracking / weight / dims) when this is a multi-package shipment. */
@@ -250,6 +267,14 @@ export interface LabelDocumentPayload {
     currency?: string | null
     weightUnit?: string | null
     notes?: string | null
+  } | null
+  /** What the shipment was billed — freight for the commercial invoice.
+   *  0.00 in sandbox until a production rate is captured. */
+  charges?: {
+    freight?: number | null
+    carrierAmount?: number | null
+    billableAmount?: number | null
+    currency?: string | null
   } | null
   /** Service level resolved from the ERP ship-via mapping (Settings → Shipping Services). */
   service?: { carrier: string; code: string; name: string; scope?: string } | null
@@ -690,6 +715,12 @@ export const orderService = {
   /** One-shot manual shipment: create + purchase the label in a single call. */
   generateManualLabel: (payload: ManualShipmentPayload) =>
     apiClient.post<ApiResponse<LabelGenerationResponse>>('/orders/manual-label', payload),
+
+  /** Fix a failed order and regenerate its label in place (same order number).
+   *  Same payload shape as generateManualLabel; the order flips ERROR → GENERATED
+   *  on success, or stays ERROR with the new carrier message on failure. */
+  regenerateOrder: (orderNo: number, payload: ManualShipmentPayload) =>
+    apiClient.post<ApiResponse<LabelGenerationResponse>>(`/orders/${orderNo}/regenerate`, payload),
 
   /**
    * Live tracking for an order — status, events, estimated delivery. Backend

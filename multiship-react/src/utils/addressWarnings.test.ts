@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decorateWithStateWarning } from './addressWarnings'
+import { decorateWithStateWarning, decoratePostalWarning } from './addressWarnings'
 
 /**
  * Sprint 51 polish — client-side guard against FedEx / UPS / DHL Address
@@ -79,5 +79,47 @@ describe('decorateWithStateWarning', () => {
     expect(decorated?.warnings).toHaveLength(2)
     expect(decorated!.warnings![0]).toContain('apartment')
     expect(decorated!.warnings![1]).toContain('"Delaware"')
+  })
+})
+
+describe('decoratePostalWarning', () => {
+  const base = () => ({
+    carrierCode: 'FEDEX',
+    valid: true,
+    matchLevel: 'EXACT' as const,
+    classification: 'BUSINESS' as const,
+    suggested: null,
+    message: 'FedEx confirmed this address.',
+    warnings: [] as string[],
+  })
+
+  it('null result is passed through unchanged', () => {
+    expect(decoratePostalWarning(null, 'US', 'M5H 2N2')).toBeNull()
+  })
+
+  it('valid US ZIP does NOT change the result', () => {
+    const d = decoratePostalWarning(base(), 'US', '94043')
+    expect(d.valid).toBe(true)
+    expect(d.matchLevel).toBe('EXACT')
+    expect(d.warnings).toHaveLength(0)
+  })
+
+  it('Canadian postal under US → downgrades EXACT to AMBIGUOUS, valid=false, warns', () => {
+    const d = decoratePostalWarning(base(), 'US', 'M5H 2N2')
+    expect(d.valid).toBe(false)
+    expect(d.matchLevel).toBe('AMBIGUOUS')
+    expect(d.warnings.some((w) => /valid US postal-code format/i.test(w))).toBe(true)
+    expect(d.message).toMatch(/valid US postal-code format/i)
+  })
+
+  it('valid Canadian postal under CA is accepted', () => {
+    const d = decoratePostalWarning(base(), 'CA', 'M5H 2N2')
+    expect(d.valid).toBe(true)
+    expect(d.warnings).toHaveLength(0)
+  })
+
+  it('country with no rule (blank) is passed through', () => {
+    const d = decoratePostalWarning(base(), '', '12345')
+    expect(d.valid).toBe(true)
   })
 })

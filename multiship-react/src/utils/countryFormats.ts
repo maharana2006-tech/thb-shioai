@@ -41,9 +41,66 @@ export const POSTAL_EXAMPLES: Record<string, string> = {
 
 const GENERIC_POSTAL_PLACEHOLDER = 'Postal / ZIP code'
 
+/**
+ * Expected NATIONAL phone-number digit count per country as [min, max] — i.e.
+ * the digits WITHOUT the country/dial code (which lives in its own field).
+ * Countries not listed fall back to a generic 7–15 digit rule. These are the
+ * national-significant-number lengths (e.g. US/CA = 10, IN = 10, GB = 9–10).
+ */
+export const PHONE_DIGITS: Record<string, [number, number]> = {
+  US: [10, 10], CA: [10, 10], GB: [9, 10], IE: [7, 9], IN: [10, 10],
+  AU: [9, 9], NZ: [8, 10], DE: [6, 11], FR: [9, 9], ES: [9, 9],
+  IT: [9, 11], NL: [9, 9], BE: [8, 9], CH: [9, 9], AT: [10, 11],
+  SE: [7, 9], NO: [8, 8], DK: [8, 8], FI: [9, 10], PL: [9, 9],
+  PT: [9, 9], JP: [9, 10], CN: [11, 11], KR: [9, 10], SG: [8, 8],
+  MY: [9, 10], TH: [9, 9], VN: [9, 10], PH: [10, 10], ID: [9, 12],
+  AE: [8, 9], SA: [9, 9], BR: [10, 11], MX: [10, 10], AR: [10, 11],
+  ZA: [9, 9], TR: [10, 10], RU: [10, 10],
+}
+
+const GENERIC_PHONE_DIGITS: [number, number] = [7, 15]
+
 /** Dial code for a country, or '' when unknown. */
 export function dialCodeFor(code?: string | null): string {
   return DIAL_CODES[(code || '').toUpperCase()] ?? ''
+}
+
+/** Short hint of the expected phone length for a country (''=no rule). */
+export function phoneHintFor(code?: string | null): string {
+  const r = PHONE_DIGITS[(code || '').toUpperCase()]
+  if (!r) return ''
+  const [min, max] = r
+  return min === max ? `${min} digits` : `${min}–${max} digits`
+}
+
+/**
+ * Validate a phone number's NATIONAL digit count against the destination
+ * country's expected length. Returns `null` when the number is acceptable (or
+ * blank), or a human-readable message when the digit count is wrong for the
+ * country. If the operator pasted the country code inline (e.g. "1 650 555
+ * 0123"), it is stripped before counting so the national number is measured.
+ */
+export function phoneErrorFor(code?: string | null, phone?: string | null): string | null {
+  const raw = (phone ?? '').trim()
+  if (!raw) return null // blank is handled by required() where the field is mandatory
+  const country = (code || '').toUpperCase()
+  let national = raw.replace(/\D/g, '')
+  if (!national) return 'Enter a phone number'
+  const [min, max] = PHONE_DIGITS[country] ?? GENERIC_PHONE_DIGITS
+  // Strip an inline dial code only when doing so brings an over-long number
+  // into range — never turn a valid national number invalid.
+  const dial = dialCodeFor(country)
+  if (dial && national.length > max && national.startsWith(dial)) {
+    const stripped = national.slice(dial.length)
+    if (stripped.length >= min && stripped.length <= max) national = stripped
+  }
+  if (national.length < min || national.length > max) {
+    const label = country || 'This country'
+    return min === max
+      ? `${label} phone numbers are ${min} digits (you entered ${national.length}).`
+      : `${label} phone numbers are ${min}–${max} digits (you entered ${national.length}).`
+  }
+  return null
 }
 
 /**

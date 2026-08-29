@@ -285,7 +285,24 @@ public class OrderController {
 
         Map<String, Object> shipper;
         Map<String, Object> returnTo;
-        if (client != null && client.getShipFrom() != null && client.getShipFrom().hasValue()) {
+        if (order.getShipFromCountryCd() != null && !order.getShipFromCountryCd().isBlank()) {
+            // Manual shipment carried its own ship-from — the authoritative
+            // origin the operator entered. Use it verbatim so a domestic
+            // shipment is not re-classified international against the platform
+            // warehouse default (which lives in a different country).
+            shipper = new LinkedHashMap<>();
+            shipper.put("name", org.springframework.util.StringUtils.hasText(order.getShipFromName())
+                    ? order.getShipFromName() : order.getShipFromCompany());
+            shipper.put("company", order.getShipFromCompany());
+            shipper.put("phone", order.getShipFromPhone());
+            shipper.put("addressLine1", order.getShipFromAddr1());
+            shipper.put("addressLine2", order.getShipFromAddr2());
+            shipper.put("city", order.getShipFromCity());
+            shipper.put("state", order.getShipFromState());
+            shipper.put("postalCode", order.getShipFromZip());
+            shipper.put("countryCode", order.getShipFromCountryCd());
+            returnTo = shipper;
+        } else if (client != null && client.getShipFrom() != null && client.getShipFrom().hasValue()) {
             shipper = addressMap(client.getShipFrom(), client.getName());
             returnTo = addressMap(client.effectiveReturnAddress(), client.getName());
         } else {
@@ -326,11 +343,19 @@ public class OrderController {
         // Service scope uses COUNTRY inequality, not customs territory.
         boolean serviceIntl = !shipToCountry.isEmpty() && !shipperCountry.isEmpty()
                 && !shipToCountry.equalsIgnoreCase(shipperCountry);
+        // Prefer the EXACT service the order shipped on (its ship_via_cd is a
+        // real service code for manual/catalog shipments) so the label prints
+        // the purchased service — e.g. "FedEx 2Day", not the lane's default
+        // "FedEx Ground". Only legacy ERP codes (P80/F77/L01) or unknown codes
+        // fall through to the rule/scope re-resolution.
+        String svcCarrier = com.multiship.backend.service.ShippingConfigService
+                .canonicalCarrierFor(order.getShipviaCd());
         com.multiship.backend.model.ShippingService ruledService = shippingConfigService
-                .resolveService(
-                        com.multiship.backend.service.ShippingConfigService.canonicalCarrierFor(order.getShipviaCd()),
-                        clientCode, order.getShipviaCd(), shipToCountry, serviceIntl, shipperCountry)
-                .orElse(null);
+                .serviceByCode(svcCarrier, order.getShipviaCd())
+                .orElseGet(() -> shippingConfigService
+                        .resolveService(svcCarrier, clientCode, order.getShipviaCd(),
+                                shipToCountry, serviceIntl, shipperCountry)
+                        .orElse(null));
         if (ruledService != null) {
             Map<String, Object> serviceMap = new LinkedHashMap<>();
             serviceMap.put("carrier", ruledService.getCarrier());
@@ -498,6 +523,23 @@ public class OrderController {
                 return m;
             }).toList());
             payload.put("customs", customs);
+        });
+
+        // ===== charges (what the shipment was billed) =====
+        // Freight on the commercial invoice = the carrier's charge for this
+        // shipment (billable = carrier + markup; falls back to the raw carrier
+        // amount). Currency mirrors the markup currency. Sandbox rates come
+        // back as 0.00, so the invoice shows a real freight figure only once a
+        // production rate has been captured.
+        orderTrackingRepository.findByOrderNo(orderNo).ifPresent(t -> {
+            Map<String, Object> charges = new LinkedHashMap<>();
+            java.math.BigDecimal freight = t.getBillableAmount() != null
+                    ? t.getBillableAmount() : t.getCarrierAmount();
+            charges.put("freight", freight);
+            charges.put("carrierAmount", t.getCarrierAmount());
+            charges.put("billableAmount", t.getBillableAmount());
+            charges.put("currency", t.getMarkupCurrency());
+            payload.put("charges", charges);
         });
 
         ApiResponse<Map<String, Object>> response = ApiResponse.<Map<String, Object>>builder()
@@ -690,6 +732,45 @@ public class OrderController {
                 () -> {
                     ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> response =
                             carrierService.generateManualLabel(request, userDetails);
+                    return ResponseEntity.status(response.getCode()).body(response);
+                }, true);
+    }
+
+    /** Fix-and-regenerate a failed order in place: apply the operator's corrected
+     *  input to the existing order and re-purchase its label, keeping the same
+     *  order number and flipping ERROR → GENERATED on success. */
+    @Operation(summary = "Fix a failed order and regenerate its label in place",
+            description = "Applies corrected ship-from/ship-to/package/service/customs input to an existing "
+                    + "order and re-purchases the label on the SAME order number. Rejected (409) when the order "
+                    + "already has a generated label — regenerate never silently re-bills a shipped order.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Label generated — order flipped to GENERATED")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "Order already has a generated label")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "errorCode CARRIER_FAILURE — the carrier rejected the corrected shipment")
+    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
+    @PostMapping("/{orderNo}/regenerate")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>> regenerateOrder(
+            @PathVariable Integer orderNo,
+            @jakarta.validation.Valid @org.springframework.web.bind.annotation.RequestBody com.multiship.backend.dto.ManualShipmentRequest request,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
+        // Guard: never regenerate (re-bill) an order that already shipped.
+        com.multiship.backend.dto.OrderResponseDTO.LabelDetails existing =
+                orderService.getOrderWithTracking(orderNo).getData() != null
+                        ? orderService.getOrderWithTracking(orderNo).getData().getLabelDetails() : null;
+        if (existing != null && Boolean.TRUE.equals(existing.getIsGenerated())
+                && "GENERATED".equalsIgnoreCase(existing.getStatus())) {
+            return ResponseEntity.status(409).body(ApiResponse.<com.multiship.backend.dto.LabelGenerationResponse>builder()
+                    .status("error").code(409).message("Order " + orderNo + " already has a generated label; "
+                            + "regenerate is only for failed/pending orders.")
+                    .errorCode(com.multiship.backend.dto.ErrorCode.LABEL_ALREADY_GENERATED.name())
+                    .timestamp(java.time.LocalDateTime.now()).build());
+        }
+        String callerId = userDetails != null ? "user:" + userDetails.getUsername() : null;
+        return idempotency.executeOrReplay(callerId, idempotencyKey,
+                new com.fasterxml.jackson.core.type.TypeReference<ApiResponse<com.multiship.backend.dto.LabelGenerationResponse>>() {},
+                () -> {
+                    ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> response =
+                            carrierService.generateManualLabel(request, userDetails, orderNo);
                     return ResponseEntity.status(response.getCode()).body(response);
                 }, true);
     }

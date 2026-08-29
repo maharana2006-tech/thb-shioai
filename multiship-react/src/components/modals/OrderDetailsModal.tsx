@@ -6,8 +6,10 @@ import { notify } from '../../utils/notify'
 import {
   orderService,
   type LabelDetails,
+  type OrderLine,
   type OrderWithLinesPayload,
 } from '../../api/orderService'
+import { customsService, type OrderCustoms } from '../../api/customsService'
 import { formatCarrierName } from '../../utils/carrierUtils'
 import CarrierLogo from '../workspace/CarrierLogo'
 import OrderStatusBadge from '../workspace/OrderStatusBadge'
@@ -60,6 +62,7 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [customsOpen, setCustomsOpen] = useState(false)
+  const [customs, setCustoms] = useState<OrderCustoms | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -73,11 +76,15 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
         notify.apiError(e, 'Order loaded, but the label details fetch failed. Label / tracking info may be missing below.')
         return null
       }),
+      // Manual/international orders carry their goods as customs commodities,
+      // not ERP order_lines. Best-effort: a 422 (no customs) just leaves it null.
+      customsService.getCustoms(orderNo).catch(() => null),
     ])
-      .then(([withLines, byId]) => {
+      .then(([withLines, byId, customsData]) => {
         if (cancelled) return
         setPayload(withLines.data)
         setLabel(byId?.data?.labelDetails ?? null)
+        setCustoms(customsData)
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load order details.')
@@ -101,8 +108,31 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
 
   const order = payload?.order
   const account = payload?.carrierAccount
-  // Stable ref for empty-lines case so the totals memo doesn't recompute on every render.
-  const lines = useMemo(() => order?.orderLines ?? [], [order?.orderLines])
+  // Line items: ERP order_lines when present; otherwise the customs commodities
+  // (manual/international orders record goods there, not as order_lines) mapped
+  // into the same shape so the table renders them instead of "0 items".
+  const lines = useMemo<OrderLine[]>(() => {
+    if (order?.orderLines?.length) return order.orderLines
+    const items = customs?.items ?? []
+    return items.map((it, i) => {
+      const qty = it.quantity ?? 1
+      const unit = it.unitValue ?? 0
+      return {
+        id: it.id ?? i,
+        lineNo: i + 1,
+        itemNo: it.sku ?? null,
+        itemDescription: it.description ?? null,
+        description: it.description ?? null,
+        hsDesc: null,
+        hsCode: it.hsCode ?? null,
+        countryOfOrigin: it.countryOfOrigin ?? null,
+        qtyShipped: qty,
+        unitPrice: unit,
+        totalPrice: qty * unit,
+        customsDeclValue: qty * unit,
+      }
+    })
+  }, [order?.orderLines, customs?.items])
 
   const totals = useMemo(
     () => ({
@@ -255,8 +285,38 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
                 </div>
               ) : null}
 
-              {/* ship-to + account + order-meta */}
+              {/* ship-from + ship-to + account + order-meta */}
               <div className="grid gap-2.5 md:grid-cols-2">
+                {order.shipFromCountryCd?.trim() ? (
+                  <Card label="Ship from" icon={<FiMapPin className="h-3.5 w-3.5" />}>
+                    <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-950">
+                      {order.shipFromName || order.shipFromCompany || '—'}
+                      {order.shipFromResolved ? (
+                        <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500">
+                          Warehouse
+                        </span>
+                      ) : null}
+                    </p>
+                    {order.shipFromCompany && order.shipFromCompany !== order.shipFromName ? (
+                      <p className="text-xs text-slate-500">{order.shipFromCompany}</p>
+                    ) : null}
+                    {order.shipFromAddr1?.trim() ? (
+                      <p className="mt-1 text-[13px] text-slate-700">{order.shipFromAddr1.trim()}</p>
+                    ) : null}
+                    <p className="text-[13px] font-medium text-slate-800">
+                      {[order.shipFromCity, order.shipFromState, order.shipFromZip].filter(Boolean).join(', ')}
+                    </p>
+                    {order.shipFromCountryCd ? (
+                      <p className="text-[13px] text-slate-700">{order.shipFromCountryCd}</p>
+                    ) : null}
+                    {order.shipFromPhone?.trim() ? (
+                      <p className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-slate-500">
+                        <FiPhone className="h-3 w-3" />
+                        {order.shipFromPhone.trim()}
+                      </p>
+                    ) : null}
+                  </Card>
+                ) : null}
                 <Card label="Ship to" icon={<FiMapPin className="h-3.5 w-3.5" />}>
                   <p className="text-sm font-semibold text-slate-950">{recipient}</p>
                   {attnDiffers ? <p className="text-xs text-slate-500">ATTN: {order.shipAttn}</p> : null}
@@ -309,11 +369,13 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
                     <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[12.5px]">
                       <Meta k="Customer" v={order.custNo} />
                       <Meta k="Ship via" v={order.shipviaCd} />
-                      <Meta k="Weight" v={order.weight != null ? `${order.weight} kg` : '—'} />
+                      <Meta k="Weight" v={order.weight != null ? `${order.weight} ${(order.weightUnit || 'LB').toLowerCase()}` : '—'} />
+                      <Meta k="Declared value" v={order.declaredValue != null ? `$${Number(order.declaredValue).toFixed(2)}` : '—'} />
                       <Meta k="Created" v={formatDate(order.createdDate)} />
                     </dl>
                     {order.goodsDesc ? (
                       <p className="mt-1.5 border-t border-slate-200 pt-1.5 text-xs text-slate-600">
+                        <span className="font-semibold text-slate-500">Goods: </span>
                         {order.goodsDesc}
                       </p>
                     ) : null}

@@ -1,6 +1,7 @@
 import * as Yup from 'yup'
 import { COUNTRIES } from '../../utils/countries'
 import { STATE_CODE_SETS } from '../../utils/stateCodes'
+import { phoneErrorFor } from '../../utils/countryFormats'
 
 /** Real ISO-3166 alpha-2 codes — so 'ZZ' fails membership, not just shape. */
 const VALID_COUNTRIES = new Set(COUNTRIES.map((c) => c.code.toUpperCase()))
@@ -112,7 +113,15 @@ export const addressSchema = Yup.object({
     .matches(/^\d{1,4}$/, { excludeEmptyString: true, message: 'Digits only, no +' }),
   phone: Yup.string()
     .nullable()
-    .matches(PHONE_RE, { excludeEmptyString: true, message: 'Enter a valid phone number' }),
+    .matches(PHONE_RE, { excludeEmptyString: true, message: 'Enter a valid phone number' })
+    // Country-aware length: the national number's digit count must match the
+    // destination country (e.g. US = 10, IN = 10, GB = 9–10). Carriers reject a
+    // wrong-length phone on the rate/label call, so catch it up front.
+    .test('phone-country-length', 'Phone length does not match the country', function (value) {
+      const country = (this.parent as { countryCode?: string }).countryCode || ''
+      const err = phoneErrorFor(country, value)
+      return err ? this.createError({ message: err }) : true
+    }),
   email: Yup.string().nullable().email('Enter a valid email').max(100, 'Max 100 characters'),
 })
 
