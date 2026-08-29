@@ -13,7 +13,7 @@ import {
 import { accountRefService, type CarrierAccountRef } from '../api/accountRefService'
 import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
-import { shippingConfigService, type ShippingServiceItem, type PackagePreset } from '../api/shippingConfigService'
+import { shippingConfigService, type ShippingServiceItem, type PackagePreset, type ServicePackageLink } from '../api/shippingConfigService'
 import { addressValidationService, type AddressValidationResponse } from '../api/addressValidationService'
 import { recipientBookService, type SavedRecipient } from '../api/recipientBookService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
@@ -45,6 +45,7 @@ import { dialCodeFor, postalPlaceholderFor } from '../utils/countryFormats'
 import { STATE_CODE_OPTIONS } from '../utils/stateCodes'
 import { decorateWithStateWarning } from '../utils/addressWarnings'
 import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddressFields'
+import { compatiblePresetIds } from '../utils/servicePackageCompatibility'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -437,6 +438,12 @@ export default function NewShipmentPage() {
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
   const [services, setServices] = useState<ShippingServiceItem[]>([])
   const [packages, setPackages] = useState<PackagePreset[]>([])
+  // Sprint 52 PR 2 — service_package many-to-many. Populated from
+  // shippingConfigService.catalog().links. Drives the packaging dropdown
+  // filter: only CARRIER-kind presets linked to the picked service show.
+  // Mirrors the backend PackagingCompatibilityGuard (Sprint 52 PR 1) so
+  // the operator can't pick a combo the server would reject.
+  const [servicePackageLinks, setServicePackageLinks] = useState<ServicePackageLink[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [profiles, setProfiles] = useState<CustomsProfile[]>([])
   // Per-shipment importer/broker override (null = use the client's saved profile).
@@ -573,6 +580,7 @@ export default function NewShipmentPage() {
         setAccounts(accs.filter((a) => a.active))
         setServices(catalog.services.filter((s) => s.enabled))
         setPackages(presets)
+        setServicePackageLinks(catalog.links)
         setClients(clientPage.data?.content ?? [])
       } catch (e) {
         notify.apiError(e, 'Failed to load shipment options.')
@@ -843,13 +851,29 @@ export default function NewShipmentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [services, carrier, sender.countryCode, neededScope, allowedServiceIds],
   )
+  // Sprint 52 PR 2 — service_package compatibility. Empty set for a
+  // service means "admin hasn't linked any preset to this service yet"
+  // — leave the pool alone rather than hide every CARRIER preset, so
+  // the operator sees the same choices they used to (server-side guard
+  // still throws SERVICE_HAS_NO_LINKED_PACKAGES with the fix path).
+  // Ready-to-use set exists → filter to only linked presets.
+  const compatiblePresetIdsForService = useMemo<Set<number> | null>(
+    () => compatiblePresetIds(servicePackageLinks, serviceId),
+    [serviceId, servicePackageLinks],
+  )
+
   const packagesForCarrier = useMemo(
     () =>
       packages
         .filter((p) => p.kind === 'CARRIER' && canon(p.carrier) === carrier && originMatch(p.originCountry) && scopeFits(p.scope))
-        .filter((p) => !allowedPackageIds || p.id == null || allowedPackageIds.has(p.id)),
+        .filter((p) => !allowedPackageIds || p.id == null || allowedPackageIds.has(p.id))
+        // Sprint 52 PR 2 — hide CARRIER presets not linked to the picked
+        // service. CUSTOM presets ("Your boxes") are in a separate memo
+        // and stay unfiltered (server guard treats them as always-allowed
+        // via the kind=CUSTOM short-circuit). Null set = no filter.
+        .filter((p) => !compatiblePresetIdsForService || p.id == null || compatiblePresetIdsForService.has(p.id)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [packages, carrier, sender.countryCode, neededScope, allowedPackageIds],
+    [packages, carrier, sender.countryCode, neededScope, allowedPackageIds, compatiblePresetIdsForService],
   )
   const customBoxes = useMemo(
     () =>
