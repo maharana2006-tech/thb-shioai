@@ -238,6 +238,11 @@ beforeEach(() => {
       { id: 2, carrier: 'FEDEX', code: 'FDX_HD', name: 'Home Delivery', scope: 'DOMESTIC', enabled: true },
     ],
     carriers: [],
+    // Sprint 52 PR 2 — the compat-filter useMemo reads catalog.links.
+    // Mock must include the field even when empty; missing key crashes
+    // the memo (safeguarded by `?? []` but keeping the mock complete
+    // matches the real API shape).
+    links: [],
     rulePackages: [],
     ruleWarehouses: [],
     originCountries: ['US'],
