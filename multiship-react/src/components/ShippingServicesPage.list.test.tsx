@@ -130,6 +130,7 @@ const svc = (
     originCountry: string
     source: string
     syncedAt: string
+    brandedPackagingAllowed: boolean
   }> = {},
 ) => ({
   id,
@@ -141,6 +142,7 @@ const svc = (
   source: overrides.source ?? 'CARRIER_API',
   syncedAt: overrides.syncedAt ?? new Date().toISOString(),
   enabled: overrides.enabled ?? true,
+  brandedPackagingAllowed: overrides.brandedPackagingAllowed ?? true,
 })
 
 async function loadPage(): Promise<ComponentType> {
@@ -508,5 +510,56 @@ describe('ShippingServicesPage — unlinked-package warning polish', () => {
 
     await waitFor(() => expect(screen.getByText(/UPS · from US/i)).toBeInTheDocument())
     expect(screen.queryByTestId('carrier-needs-packages-UPS')).toBeNull()
+  })
+})
+
+// ===================== Sprint 52 PR X — brandedPackagingAllowed=false =====================
+
+describe('ShippingServicesPage — CUSTOM-only badge (Sprint 52 PR X)', () => {
+  it('renders grey "CUSTOM" badge for services with brandedPackagingAllowed=false', async () => {
+    // FEDEX_GROUND is Ground-family — V30 sets branded_packaging_allowed=
+    // false. Pre-PR-X the row showed the amber "⚠ 0" warning because it
+    // had zero linked packages; that's misleading (nothing to fix). Now
+    // it shows a neutral "CUSTOM" badge.
+    catalogMock.mockResolvedValue({
+      services: [svc(1, 'FEDEX', 'FEDEX_GROUND', { enabled: true, brandedPackagingAllowed: false })],
+      links: [], // empty pool by design for Ground-family
+      rules: [], rulePackages: [], ruleWarehouses: [],
+      originCountries: ['US'],
+    })
+    listPresetsMock.mockResolvedValue([])
+
+    const Page = await loadPage()
+    renderPage(Page)
+
+    const badge = await waitFor(() => screen.getByTestId('pkg-count-1'))
+    expect(badge.textContent).toContain('CUSTOM')
+    // Not the amber-warning palette.
+    expect(badge.className).not.toContain('amber')
+    // Title hints at the "by design" nature so admins don't misread it as unconfigured.
+    expect(badge.getAttribute('title')).toContain('CUSTOM-packaging-only')
+  })
+
+  it('CUSTOM-only services are NOT counted in the carrier "need packages" chip', async () => {
+    // Even though FEDEX_GROUND has zero links + is enabled, it must not
+    // inflate the aggregate warning count — its empty state is by design.
+    catalogMock.mockResolvedValue({
+      services: [
+        svc(1, 'FEDEX', 'FEDEX_GROUND', { enabled: true, brandedPackagingAllowed: false }),
+        svc(2, 'FEDEX', 'FEDEX_2_DAY', { enabled: true }), // this one WOULD trigger the chip
+      ],
+      links: [], // both zero
+      rules: [], rulePackages: [], ruleWarehouses: [],
+      originCountries: ['US'],
+    })
+    listPresetsMock.mockResolvedValue([])
+
+    const Page = await loadPage()
+    renderPage(Page)
+
+    const headerChip = await waitFor(() => screen.getByTestId('carrier-needs-packages-FEDEX'))
+    // Only service 2 (FEDEX_2_DAY) counts — Ground is excluded by the flag.
+    expect(headerChip.textContent).toContain('1')
+    expect(headerChip.textContent).not.toContain('2 ')
   })
 })

@@ -449,6 +449,27 @@ public class ShippingConfigService {
         return success((enabled ? "Enabled " : "Disabled ") + svc.getName() + ".", svc);
     }
 
+    /**
+     * Sprint 52 PR X — toggle whether this service accepts carrier-branded
+     * packaging. When false, the ShippingServicesPage renders a grey
+     * "CUSTOM only" badge (not the amber "config incomplete" warning),
+     * the link modal filters out branded (kind=CARRIER) presets, and
+     * {@link #setServicePackages} refuses to save branded links as a
+     * defense-in-depth net.
+     */
+    @Transactional
+    public ApiResponse<ShippingService> setBrandedPackagingAllowed(Long id, boolean allowed) {
+        ShippingService svc = serviceRepository.findById(id).orElse(null);
+        if (svc == null) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.VALIDATION_ERROR, "Service not found.");
+        }
+        svc.setBrandedPackagingAllowed(allowed);
+        serviceRepository.save(svc);
+        return success(
+                (allowed ? "Branded packaging enabled for " : "Branded packaging restricted (CUSTOM only) for ")
+                        + svc.getName() + ".", svc);
+    }
+
     // ===== Ship-method rules =====
 
     @Transactional
@@ -620,8 +641,27 @@ public class ShippingConfigService {
     /** Replace one service's allowed-package list (presetId + optional discount %). */
     @Transactional
     public ApiResponse<List<ServicePackage>> setServicePackages(Long serviceId, List<ServicePackage> links) {
-        if (serviceRepository.findById(serviceId).isEmpty()) {
+        ShippingService svc = serviceRepository.findById(serviceId).orElse(null);
+        if (svc == null) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.VALIDATION_ERROR, "Service not found.");
+        }
+        // Sprint 52 PR X — defense-in-depth: when the service is marked
+        // CUSTOM-only (branded_packaging_allowed=false), refuse to save
+        // links to branded (kind=CARRIER) presets. The link modal filters
+        // these out client-side, but a rogue PUT could still land a
+        // branded row without this guard.
+        if (!svc.isBrandedPackagingAllowed()) {
+            for (ServicePackage link : links) {
+                if (link.getPresetId() == null) continue;
+                PackagePreset p = presetRepository.findById(link.getPresetId()).orElse(null);
+                if (p != null && "CARRIER".equalsIgnoreCase(p.getKind())) {
+                    return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                            "Cannot link branded preset " + firstNonBlankOrName(p)
+                                    + " to " + svc.getName() + " — this service is marked as "
+                                    + "CUSTOM-packaging-only. Toggle 'Allow branded packaging' on "
+                                    + "the service first, or link a CUSTOM preset instead.");
+                }
+            }
         }
         servicePackageRepository.deleteByServiceId(serviceId);
         // Hibernate flushes INSERTs before DELETEs — force the delete out first
@@ -633,6 +673,13 @@ public class ShippingConfigService {
                         .serviceId(serviceId).presetId(l.getPresetId()).build()))
                 .toList();
         return success("Allowed packages saved (" + saved.size() + ").", saved);
+    }
+
+    private static String firstNonBlankOrName(PackagePreset p) {
+        if (p.getCarrierPackageCode() != null && !p.getCarrierPackageCode().isBlank()) {
+            return p.getCarrierPackageCode();
+        }
+        return p.getName() != null ? p.getName() : String.valueOf(p.getId());
     }
 
     // ===== Package presets (unchanged CRUD) =====
