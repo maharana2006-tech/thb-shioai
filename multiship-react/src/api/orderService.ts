@@ -625,6 +625,26 @@ export const orderService = {
   },
 
   /**
+   * Sprint 52 PR A — 4x6" PDF facsimile of the shipping label. Same
+   * ?pkg semantics as getLabelZpl: omitted on a multi-box shipment
+   * returns all packages as one PDF with N pages. Returns a Blob so
+   * the caller can trigger a download or preview inline.
+   *
+   * PR B will layer in carrier-artifact passthrough (return the real
+   * PDF bytes when the carrier's stored artifact is PDF format).
+   */
+  getLabelPdf: async (orderNo: number, pkgIndex?: number): Promise<Blob> => {
+    const qs = pkgIndex && pkgIndex > 1 ? `?pkg=${pkgIndex}` : ''
+    const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/pdf${qs}`, {
+      credentials: 'include',
+    })
+    if (!response.ok) {
+      throw new Error(`Label PDF is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`)
+    }
+    return response.blob()
+  },
+
+  /**
    * The order's commercial invoice as a PDF blob (Sprint 51). The platform's
    * own copy, rendered from the persisted customs data and available on
    * demand for any international order. 422 means the order has no customs
