@@ -278,6 +278,14 @@ export default function ShippingServicesPage() {
           byCarrier.map(([carrier, list]) => {
             const badge = CARRIER_BADGE[carrier] ?? { bg: 'bg-slate-700', mono: carrier.slice(0, 3) }
             const on = list.filter((s) => s.enabled).length
+            // Sprint 52 PR 3 — aggregate the "enabled but zero linked
+            // packages" count for the carrier header chip. Same predicate
+            // as the per-row needsPackages badge; disabled services with
+            // 0 links don't count (turning a service ON is when the guard
+            // begins to matter).
+            const needsPackagesCount = list.filter(
+              (s) => s.enabled && (linksByService.get(s.id) ?? []).length === 0,
+            ).length
             const prov = groupProvenance(list)
             const isSyncing = syncing === carrier
             return (
@@ -296,6 +304,15 @@ export default function ShippingServicesPage() {
                     {list.length ? (
                       <span className="rounded bg-[#e1dcc9]/15 px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums text-[#e1dcc9]">
                         {on}/{list.length} ON
+                      </span>
+                    ) : null}
+                    {needsPackagesCount > 0 ? (
+                      <span
+                        title={`${needsPackagesCount} enabled ${needsPackagesCount === 1 ? 'service has' : 'services have'} zero linked packages — manual-label will fail with SERVICE_HAS_NO_LINKED_PACKAGES until at least one preset is linked.`}
+                        data-testid={`carrier-needs-packages-${carrier}`}
+                        className="inline-flex items-center gap-1 rounded bg-amber-200/30 px-2 py-0.5 font-mono text-[10px] font-bold tabular-nums text-amber-100"
+                      >
+                        ⚠ {needsPackagesCount} need packages
                       </span>
                     ) : null}
                     <button
@@ -346,6 +363,13 @@ export default function ShippingServicesPage() {
                 <ul className="divide-y divide-dashed divide-slate-200">
                   {list.map((s, i) => {
                     const pkgCount = (linksByService.get(s.id) ?? []).length
+                    // Sprint 52 PR 3 — enabled service with zero linked
+                    // packages will hard-fail every manual-label attempt
+                    // with SERVICE_HAS_NO_LINKED_PACKAGES (guard in PR 1,
+                    // PR #512). Surface that as an amber warning rather
+                    // than the neutral grey used for disabled/unconfigured
+                    // rows so admins can see the gap at a glance.
+                    const needsPackages = s.enabled && pkgCount === 0
                     const clientRows = assignmentsByService.get(s.id) ?? []
                     const clientCount = clientRows.length
                     const clientTooltip = clientRows.length
@@ -375,12 +399,23 @@ export default function ShippingServicesPage() {
                         <button
                           type="button"
                           onClick={() => openPackages(s)}
-                          title="Allowed packages"
+                          title={
+                            needsPackages
+                              ? `${s.serviceCode} is enabled but has zero linked packages — manual-label will fail with SERVICE_HAS_NO_LINKED_PACKAGES. Click to link at least one preset.`
+                              : pkgCount
+                                ? `${pkgCount} linked package${pkgCount === 1 ? '' : 's'} — click to edit`
+                                : 'No linked packages (service disabled) — click to link'
+                          }
+                          data-testid={`pkg-count-${s.id}`}
                           className={`inline-flex items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
-                            pkgCount ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50'
+                            needsPackages
+                              ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                              : pkgCount
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50'
                           }`}
                         >
-                          <FiBox className="h-3 w-3" /> {pkgCount || '+'}
+                          <FiBox className="h-3 w-3" /> {needsPackages ? '⚠ 0' : pkgCount || '+'}
                         </button>
                         <span
                           title={`Assigned to: ${clientTooltip}`}

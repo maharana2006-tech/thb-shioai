@@ -309,7 +309,7 @@ describe('ShippingServicesPage — allowed packages modal', () => {
 
     await waitFor(() => expect(screen.getByText('UPS Ground')).toBeInTheDocument())
     // The per-row package-count pill opens the modal; count is "1" for our seeded link.
-    const pill = screen.getByTitle('Allowed packages')
+    const pill = screen.getByTestId('pkg-count-1')
     await act(async () => { await userEvent.click(pill) })
 
     // Modal renders both presets so the operator can toggle selection.
@@ -329,7 +329,7 @@ describe('ShippingServicesPage — allowed packages modal', () => {
     renderPage(Page)
 
     await waitFor(() => expect(screen.getByText('UPS Ground')).toBeInTheDocument())
-    await act(async () => { await userEvent.click(screen.getByTitle('Allowed packages')) })
+    await act(async () => { await userEvent.click(screen.getByTestId('pkg-count-1')) })
     await waitFor(() => expect(screen.getByText('Small Box')).toBeInTheDocument())
 
     // Save
@@ -353,7 +353,7 @@ describe('ShippingServicesPage — allowed packages modal', () => {
     renderPage(Page)
 
     await waitFor(() => expect(screen.getByText('UPS Ground')).toBeInTheDocument())
-    await act(async () => { await userEvent.click(screen.getByTitle('Allowed packages')) })
+    await act(async () => { await userEvent.click(screen.getByTestId('pkg-count-1')) })
     await waitFor(() => expect(screen.getByText('Small Box')).toBeInTheDocument())
     await act(async () => { await userEvent.click(screen.getByRole('button', { name: /Save packages/i })) })
 
@@ -383,7 +383,7 @@ describe('ShippingServicesPage — action buttons render for every role', () => 
 
       await waitFor(() => expect(screen.getByText('UPS Ground')).toBeInTheDocument())
       expect(screen.getByRole('switch')).toBeInTheDocument()
-      expect(screen.getByTitle('Allowed packages')).toBeInTheDocument()
+      expect(screen.getByTestId('pkg-count-1')).toBeInTheDocument()
     },
   )
 })

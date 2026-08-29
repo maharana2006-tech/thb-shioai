@@ -402,3 +402,111 @@ describe('ShippingServicesPage — role parity (no page-level gate)', () => {
     },
   )
 })
+
+// ===================== Sprint 52 PR 3 — unlinked-package warnings =====================
+
+describe('ShippingServicesPage — unlinked-package warning polish', () => {
+  it('renders amber "⚠ 0" badge on an ENABLED service with zero linked packages', async () => {
+    catalogMock.mockResolvedValue({
+      services: [svc(1, 'UPS', '03', { name: 'UPS Ground', enabled: true })],
+      links: [], // zero links for service 1
+      rules: [], rulePackages: [], ruleWarehouses: [],
+      originCountries: ['US'],
+    })
+    listPresetsMock.mockResolvedValue([])
+
+    const Page = await loadPage()
+    renderPage(Page)
+
+    await waitFor(() => expect(screen.getByText('UPS Ground')).toBeInTheDocument())
+    const badge = screen.getByTestId('pkg-count-1')
+    // Warning glyph + explicit "0" (not the neutral "+" used for disabled rows).
+    expect(badge.textContent).toContain('⚠ 0')
+    // Amber palette classes drive the visual; check one anchor.
+    expect(badge.className).toContain('amber')
+    // Title is the actionable message — names the exact production error
+    // the admin will see in prod if they don't act.
+    expect(badge.getAttribute('title')).toContain('SERVICE_HAS_NO_LINKED_PACKAGES')
+  })
+
+  it('renders neutral "+" badge on a DISABLED service with zero links (no warning)', async () => {
+    catalogMock.mockResolvedValue({
+      services: [svc(1, 'UPS', '03', { name: 'UPS Ground', enabled: false })],
+      links: [],
+      rules: [], rulePackages: [], ruleWarehouses: [],
+      originCountries: ['US'],
+    })
+    listPresetsMock.mockResolvedValue([])
+
+    const Page = await loadPage()
+    renderPage(Page)
+
+    await waitFor(() => expect(screen.getByText('UPS Ground')).toBeInTheDocument())
+    const badge = screen.getByTestId('pkg-count-1')
+    // Disabled → no warning; neutral "+" glyph as before.
+    expect(badge.textContent?.trim()).toBe('+')
+    expect(badge.className).not.toContain('amber')
+  })
+
+  it('renders emerald "N" badge on an enabled service that IS linked (no warning)', async () => {
+    catalogMock.mockResolvedValue({
+      services: [svc(1, 'FEDEX', 'FEDEX_2_DAY', { enabled: true })],
+      links: [
+        { serviceId: 1, presetId: 100 },
+        { serviceId: 1, presetId: 101 },
+      ],
+      rules: [], rulePackages: [], ruleWarehouses: [],
+      originCountries: ['US'],
+    })
+    listPresetsMock.mockResolvedValue([])
+
+    const Page = await loadPage()
+    renderPage(Page)
+
+    const badge = await waitFor(() => screen.getByTestId('pkg-count-1'))
+    expect(badge.textContent).toContain('2')
+    expect(badge.className).toContain('emerald')
+    expect(badge.className).not.toContain('amber')
+  })
+
+  it('renders "⚠ N need packages" chip on the carrier header when any enabled service is unlinked', async () => {
+    catalogMock.mockResolvedValue({
+      services: [
+        svc(1, 'FEDEX', 'FEDEX_GROUND', { enabled: true }), // needs
+        svc(2, 'FEDEX', 'FEDEX_2_DAY', { enabled: true }),  // linked
+        svc(3, 'FEDEX', 'FEDEX_HD', { enabled: false }),    // disabled, excluded
+      ],
+      links: [{ serviceId: 2, presetId: 100 }],
+      rules: [], rulePackages: [], ruleWarehouses: [],
+      originCountries: ['US'],
+    })
+    listPresetsMock.mockResolvedValue([])
+
+    const Page = await loadPage()
+    renderPage(Page)
+
+    const headerChip = await waitFor(() => screen.getByTestId('carrier-needs-packages-FEDEX'))
+    // Only service 1 counts (2 has a link, 3 is disabled).
+    expect(headerChip.textContent).toContain('1')
+    expect(headerChip.textContent).toContain('need packages')
+    // UPS and USPS don't render the chip at all — no enabled unlinked services.
+    expect(screen.queryByTestId('carrier-needs-packages-UPS')).toBeNull()
+    expect(screen.queryByTestId('carrier-needs-packages-USPS')).toBeNull()
+  })
+
+  it('does NOT render the carrier header chip when every enabled service has ≥1 link', async () => {
+    catalogMock.mockResolvedValue({
+      services: [svc(1, 'UPS', '03', { enabled: true })],
+      links: [{ serviceId: 1, presetId: 100 }],
+      rules: [], rulePackages: [], ruleWarehouses: [],
+      originCountries: ['US'],
+    })
+    listPresetsMock.mockResolvedValue([])
+
+    const Page = await loadPage()
+    renderPage(Page)
+
+    await waitFor(() => expect(screen.getByText(/UPS · from US/i)).toBeInTheDocument())
+    expect(screen.queryByTestId('carrier-needs-packages-UPS')).toBeNull()
+  })
+})
