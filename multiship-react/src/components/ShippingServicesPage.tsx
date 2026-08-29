@@ -92,6 +92,10 @@ export default function ShippingServicesPage() {
   /** Service whose allowed-packages modal is open. */
   const [pkgService, setPkgService] = useState<ShippingServiceItem | null>(null)
   const [pkgDraft, setPkgDraft] = useState<Set<number>>(new Set())
+  // Sprint 52 PR X — modal-local editable copy of pkgService.brandedPackaging
+  // Allowed. Flipping OFF filters the preset list to CUSTOM-only + the save
+  // handler PATCHes the flag before saving links.
+  const [pkgBrandedAllowed, setPkgBrandedAllowed] = useState<boolean>(true)
   /** The origin country whose services are shown — carrier availability is lane-specific. */
   const [origin, setOrigin] = useState('US')
   const [originCountries, setOriginCountries] = useState<string[]>([])
@@ -202,12 +206,36 @@ export default function ShippingServicesPage() {
   const openPackages = (svc: ShippingServiceItem) => {
     const current = linksByService.get(svc.id) ?? []
     setPkgDraft(new Set(current.map((l) => l.presetId)))
+    // Default true when the field is missing (pre-Sprint-52 responses).
+    setPkgBrandedAllowed(svc.brandedPackagingAllowed !== false)
     setPkgService(svc)
   }
 
   const savePackages = async () => {
     if (!pkgService) return
-    const payload = [...pkgDraft].map((presetId) => ({ presetId }))
+    // Sprint 52 PR X — flip branded_packaging_allowed BEFORE saving the
+    // preset links. Ordering matters: if the flag went false and we
+    // saved links first, the backend defense-in-depth in
+    // setServicePackages would reject any surviving branded links.
+    // Flipping first + then filtering the draft keeps them in lockstep.
+    const initialAllowed = pkgService.brandedPackagingAllowed !== false
+    if (initialAllowed !== pkgBrandedAllowed) {
+      try {
+        await shippingConfigService.setBrandedPackagingAllowed(pkgService.id, pkgBrandedAllowed)
+      } catch (e) {
+        notify.apiError(e, 'Failed to update branded-packaging flag.')
+        return
+      }
+    }
+    // When branded packaging is disabled, drop any branded (kind=CARRIER)
+    // preset IDs from the draft — backend would reject them otherwise.
+    const filteredDraft = pkgBrandedAllowed
+      ? pkgDraft
+      : new Set([...pkgDraft].filter((id) => {
+          const p = presets.find((x) => x.id === id)
+          return p ? p.kind !== 'CARRIER' : false
+        }))
+    const payload = [...filteredDraft].map((presetId) => ({ presetId }))
     try {
       await shippingConfigService.setServicePackages(pkgService.id, payload)
       notify.success(`Allowed packages saved for ${pkgService.name}.`)
@@ -283,8 +311,15 @@ export default function ShippingServicesPage() {
             // as the per-row needsPackages badge; disabled services with
             // 0 links don't count (turning a service ON is when the guard
             // begins to matter).
+            // Sprint 52 PR X — a service marked branded_packaging_allowed=
+            // false is CUSTOM-only by design; empty pool is correct config,
+            // NOT a "needs packages" state. Excluded from the aggregate
+            // count so ground-family services don't inflate the warning
+            // chip on the carrier header.
             const needsPackagesCount = list.filter(
-              (s) => s.enabled && (linksByService.get(s.id) ?? []).length === 0,
+              (s) => s.enabled
+                  && s.brandedPackagingAllowed !== false
+                  && (linksByService.get(s.id) ?? []).length === 0,
             ).length
             const prov = groupProvenance(list)
             const isSyncing = syncing === carrier
@@ -363,13 +398,19 @@ export default function ShippingServicesPage() {
                 <ul className="divide-y divide-dashed divide-slate-200">
                   {list.map((s, i) => {
                     const pkgCount = (linksByService.get(s.id) ?? []).length
+                    // Sprint 52 PR X — CUSTOM-only services (Ground-family)
+                    // have brandedPackagingAllowed=false. Empty pool is
+                    // correct config for them, not a warning state.
+                    const customOnly = s.brandedPackagingAllowed === false
                     // Sprint 52 PR 3 — enabled service with zero linked
                     // packages will hard-fail every manual-label attempt
                     // with SERVICE_HAS_NO_LINKED_PACKAGES (guard in PR 1,
                     // PR #512). Surface that as an amber warning rather
                     // than the neutral grey used for disabled/unconfigured
                     // rows so admins can see the gap at a glance.
-                    const needsPackages = s.enabled && pkgCount === 0
+                    // Sprint 52 PR X — carve out customOnly services from
+                    // the warning: their empty pool is by design, not a gap.
+                    const needsPackages = s.enabled && pkgCount === 0 && !customOnly
                     const clientRows = assignmentsByService.get(s.id) ?? []
                     const clientCount = clientRows.length
                     const clientTooltip = clientRows.length
@@ -400,22 +441,26 @@ export default function ShippingServicesPage() {
                           type="button"
                           onClick={() => openPackages(s)}
                           title={
-                            needsPackages
-                              ? `${s.serviceCode} is enabled but has zero linked packages — manual-label will fail with SERVICE_HAS_NO_LINKED_PACKAGES. Click to link at least one preset.`
-                              : pkgCount
-                                ? `${pkgCount} linked package${pkgCount === 1 ? '' : 's'} — click to edit`
-                                : 'No linked packages (service disabled) — click to link'
+                            customOnly
+                              ? `${s.serviceCode} is marked CUSTOM-packaging-only — no branded packaging by design (Ground-family default). Click to edit / flip the flag.`
+                              : needsPackages
+                                ? `${s.serviceCode} is enabled but has zero linked packages — manual-label will fail with SERVICE_HAS_NO_LINKED_PACKAGES. Click to link at least one preset.`
+                                : pkgCount
+                                  ? `${pkgCount} linked package${pkgCount === 1 ? '' : 's'} — click to edit`
+                                  : 'No linked packages (service disabled) — click to link'
                           }
                           data-testid={`pkg-count-${s.id}`}
                           className={`inline-flex items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-bold transition ${
-                            needsPackages
-                              ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
-                              : pkgCount
-                                ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                                : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50'
+                            customOnly
+                              ? 'border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200'
+                              : needsPackages
+                                ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                : pkgCount
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                  : 'border-slate-200 bg-white text-slate-400 hover:bg-slate-50'
                           }`}
                         >
-                          <FiBox className="h-3 w-3" /> {needsPackages ? '⚠ 0' : pkgCount || '+'}
+                          <FiBox className="h-3 w-3" /> {customOnly ? 'CUSTOM' : needsPackages ? '⚠ 0' : pkgCount || '+'}
                         </button>
                         <span
                           title={`Assigned to: ${clientTooltip}`}
@@ -476,6 +521,29 @@ export default function ShippingServicesPage() {
               packages this service may ship in. The smallest box whose max weight fits the order is auto-picked; none
               ticked = the global default package.
             </p>
+
+            {/* Sprint 52 PR X — Allow branded packaging toggle. OFF hides
+                every kind=CARRIER preset from the list AND persists
+                branded_packaging_allowed=false so the manual-shipment
+                dropdown + guard treat this service as CUSTOM-only. */}
+            <label
+              className="mt-3 flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12px]"
+              title="Ground-family services (FEDEX_GROUND, UPS 03, USPS Ground Advantage) typically don't accept carrier-branded packaging. Turning this OFF hides FEDEX_ENVELOPE / UPS boxes / etc from the list and prevents operators from picking them on a shipment."
+            >
+              <input
+                type="checkbox"
+                checked={pkgBrandedAllowed}
+                onChange={(e) => setPkgBrandedAllowed(e.target.checked)}
+                data-testid="branded-packaging-toggle"
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-300"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold text-slate-900">Allow branded packaging</p>
+                <p className="text-[10.5px] text-slate-500">
+                  When off, only custom boxes are shown below — matches the FedEx / UPS / USPS rule that ground-family services don't accept branded packaging. Manual shipment will filter branded options out for this service too.
+                </p>
+              </div>
+            </label>
             {(() => {
               const lim = limitsOf(pkgService)
               return (
@@ -499,6 +567,10 @@ export default function ShippingServicesPage() {
             <ul className="mt-3 max-h-[300px] divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200">
               {presets
                 .filter((p) => packageFitsService(p, pkgService))
+                // Sprint 52 PR X — when branded packaging is disabled for
+                // this service, hide all CARRIER (branded) presets. Admin
+                // can flip the toggle back on to reveal them.
+                .filter((p) => pkgBrandedAllowed || p.kind !== 'CARRIER')
                 .map((p) => {
                   const on = pkgDraft.has(p.id!)
                   const fit = fitAgainstService(p, pkgService)
