@@ -71,6 +71,7 @@ class ClientServiceImplTest {
     private AuditService auditService;
     private AuditLogRepository auditLogRepo;
     private TenantScopeEnforcer tenantScope;
+    private com.multiship.backend.repository.ClientBillingMarkupRepository billingMarkupRepo;
 
     private ClientServiceImpl service;
 
@@ -85,11 +86,15 @@ class ClientServiceImplTest {
         auditService = mock(AuditService.class);
         auditLogRepo = mock(AuditLogRepository.class);
         tenantScope = mock(TenantScopeEnforcer.class);
+        billingMarkupRepo = mock(com.multiship.backend.repository.ClientBillingMarkupRepository.class);
 
+        // Constructor arg order matches the @RequiredArgsConstructor
+        // field declaration order in ClientServiceImpl — billingMarkup
+        // Repo is declared right after orderRepository (Sprint 52).
         service = new ClientServiceImpl(
-                clientRepo, accountRepo, orderRepo, customsProfileRepo,
-                warehouseRepo, clientWarehouseRepo, auditService,
-                auditLogRepo, tenantScope);
+                clientRepo, accountRepo, orderRepo, billingMarkupRepo,
+                customsProfileRepo, warehouseRepo, clientWarehouseRepo,
+                auditService, auditLogRepo, tenantScope);
 
         // Platform-mode default: tenant-scope pass-through. Individual
         // tests override when they need to exercise the clamp branch.
@@ -209,6 +214,40 @@ class ClientServiceImplTest {
 
         assertEquals(1, res.getData().getContent().size());
         assertEquals("ACME", res.getData().getContent().get(0).getClientCode());
+    }
+
+    // ===== hasBillingMarkup (Sprint 52) — DTO carries the flag =====
+
+    @Test
+    void toDTO_setsHasBillingMarkupTrue_whenMarkupRowExists() {
+        // Setup: one client, markup row exists for it. DTO must reflect
+        // true so the FE ClientsPage/Editor/MarkupTab hide the amber
+        // "No billing markup saved" warnings.
+        when(clientRepo.findByClientCodeIgnoreCase("ACME"))
+                .thenReturn(Optional.of(sampleClient("ACME")));
+        when(accountRepo.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc("ACME"))
+                .thenReturn(List.of());
+        when(billingMarkupRepo.existsByClientCodeIgnoreCase("ACME")).thenReturn(true);
+
+        ApiResponse<ClientDTO> res = service.getClient("ACME");
+        assertEquals(Boolean.TRUE, res.getData().getHasBillingMarkup());
+    }
+
+    @Test
+    void toDTO_setsHasBillingMarkupFalse_whenMarkupRowMissing_thbRegressionPin() {
+        // Setup: THB000-shaped scenario — client exists, no
+        // client_billing_markup row. DTO carries hasBillingMarkup=false
+        // so the FE surfaces "No billing markup saved" on the tab / step
+        // nav / list / save toast BEFORE a label attempt hits
+        // MARKUP_REQUIRED_FOR_CLIENT at the wire.
+        when(clientRepo.findByClientCodeIgnoreCase("THB000"))
+                .thenReturn(Optional.of(sampleClient("THB000")));
+        when(accountRepo.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc("THB000"))
+                .thenReturn(List.of());
+        when(billingMarkupRepo.existsByClientCodeIgnoreCase("THB000")).thenReturn(false);
+
+        ApiResponse<ClientDTO> res = service.getClient("THB000");
+        assertEquals(Boolean.FALSE, res.getData().getHasBillingMarkup());
     }
 
     // ===== getClient =====

@@ -41,6 +41,11 @@ public class ClientServiceImpl implements ClientService {
     private final ClientRepository clientRepository;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
     private final OrderRepository orderRepository;
+    /** Sprint 52 — used by toDTO to compute hasBillingMarkup so every
+     *  client list/get response carries the flag. Enforcement point for
+     *  the missing-markup guard is ShipmentResolutionServiceImpl.apply
+     *  Markup (Sprint 50 Tier 1 finding #11). */
+    private final com.multiship.backend.repository.ClientBillingMarkupRepository billingMarkupRepository;
     private final com.multiship.backend.repository.ClientCustomsProfileRepository customsProfileRepository;
     private final WarehouseRepository warehouseRepository;
     private final ClientWarehouseRepository clientWarehouseRepository;
@@ -586,6 +591,11 @@ public class ClientServiceImpl implements ClientService {
                 .updatedAt(client.getUpdatedAt())
                 .carrierAccounts(accounts)
                 .orderCount(orderRepository.countOrdersUnified("", client.getClientCode().toUpperCase(Locale.ROOT), "", "", "", "", "", "", "", "", ""))
+                // Sprint 52 — per-client flag; false triggers the
+                // "No billing markup saved" warnings in ClientsPage,
+                // ClientEditorPage step nav, ClientMarkupTab banner, and
+                // the create-toast nudge.
+                .hasBillingMarkup(billingMarkupRepository.existsByClientCodeIgnoreCase(client.getClientCode()))
                 .build();
     }
 

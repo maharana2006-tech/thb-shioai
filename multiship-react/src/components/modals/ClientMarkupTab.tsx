@@ -21,6 +21,14 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
   const [kind, setKind] = useState<MarkupKind>('PERCENT')
   const [valueStr, setValueStr] = useState('0')
   const [currency, setCurrency] = useState('USD')
+  // Sprint 52 — tracks whether a client_billing_markup row exists for
+  // this client. Pre-Sprint-52 the tab rendered FE defaults (kind=
+  // PERCENT/value=0/USD) indistinguishably whether an admin had saved
+  // a 0% row or simply never visited. Now: unsaved → amber banner
+  // pointing at the fix; saved → banner gone. Set inside load() so it
+  // matches whatever the server returns (belt-and-braces vs the
+  // parent's hasBillingMarkup prop which may be stale after save).
+  const [hasSavedRow, setHasSavedRow] = useState<boolean>(true)
 
   const load = async () => {
     setLoading(true)
@@ -33,6 +41,9 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
         // don't fight the numeric parse.
         setValueStr(m.value != null ? String(m.value) : '0')
         setCurrency(m.currency || 'USD')
+        setHasSavedRow(true)
+      } else {
+        setHasSavedRow(false)
       }
     } catch (error) {
       notify.apiError(error, 'Failed to load billing markup.')
@@ -107,6 +118,26 @@ export default function ClientMarkupTab({ clientCode }: { clientCode: string }) 
         </p>
       ) : (
         <>
+          {/* Sprint 52 — amber banner when no row is saved yet. Reads
+              "saved" not "configured" per the user's terminology pick;
+              subtext calls out that value=0 is a valid explicit choice
+              so admins with pass-through clients still know to Save. */}
+          {!hasSavedRow ? (
+            <div
+              data-testid="markup-not-saved-banner"
+              className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5 text-[11.5px] text-amber-800"
+            >
+              <p className="font-semibold">
+                ⚠ No billing markup saved
+              </p>
+              <p className="mt-0.5 text-amber-700">
+                Labels for this client will be refused until you Save a markup below.
+                A value of <span className="font-mono">0</span> is a valid explicit choice
+                (backend distinguishes "row saved with 0" from "no row" —
+                only the latter blocks label generation).
+              </p>
+            </div>
+          ) : null}
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {(['PERCENT', 'FLAT'] as const).map((k) => (
               <label

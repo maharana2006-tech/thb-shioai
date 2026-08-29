@@ -38,6 +38,20 @@ export interface Client {
   updatedAt: string | null
   carrierAccounts: CarrierAccountRef[]
   orderCount: number
+  /**
+   * Sprint 52 — true when a client_billing_markup row exists for this
+   * client. False triggers the "No billing markup saved" amber warnings
+   * on ClientsPage / ClientEditorPage step nav / ClientMarkupTab / the
+   * client-save success toast. Backend enforcement point is
+   * ShipmentResolutionServiceImpl.applyMarkup (Sprint 50 Tier 1
+   * finding #11) — a label call for a shipment naming a markup-less
+   * client throws MARKUP_REQUIRED_FOR_CLIENT.
+   *
+   * Optional in the type because older cached responses (pre-Sprint-52)
+   * won't carry it — consumers treat undefined the same as true (no
+   * warning) to avoid false alarms on stale data.
+   */
+  hasBillingMarkup?: boolean
 }
 
 export interface ClientUpsertPayload {

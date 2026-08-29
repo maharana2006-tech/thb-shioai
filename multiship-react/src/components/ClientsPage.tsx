@@ -268,9 +268,28 @@ export default function ClientsPage() {
         id: 'code',
         accessorFn: (c) => c.clientCode,
         header: 'Code',
-        cell: ({ row }) => (
-          <span className="font-semibold text-slate-950">{row.original.clientCode}</span>
-        ),
+        cell: ({ row }) => {
+          // Sprint 52 — inline amber ⚠ next to the code when this
+          // client has no client_billing_markup row. Same predicate as
+          // the ClientEditorPage step-nav badge / MarkupTab banner.
+          // Undefined (pre-Sprint-52 stale cache) is treated as OK to
+          // avoid false alarms on old responses.
+          const needsMarkup = row.original.hasBillingMarkup === false
+          return (
+            <span className="inline-flex items-center gap-1">
+              <span className="font-semibold text-slate-950">{row.original.clientCode}</span>
+              {needsMarkup ? (
+                <span
+                  title={`${row.original.clientCode} has no billing markup saved — labels for this client will be refused until an admin sets one on Clients → Edit → Billing markup.`}
+                  data-testid={`client-needs-markup-${row.original.clientCode}`}
+                  className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0 text-[9.5px] font-bold text-amber-700"
+                >
+                  ⚠
+                </span>
+              ) : null}
+            </span>
+          )
+        },
         meta: {
           headerLabel: 'Code',
           exportValue: (c: Client) => c.clientCode,
