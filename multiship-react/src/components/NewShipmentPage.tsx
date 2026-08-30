@@ -599,12 +599,43 @@ export default function NewShipmentPage() {
     }
   }, [])
 
-  // Only offer carriers you can actually ship with: an active account AND a live service.
-  const carrierOptions = useMemo(() => {
-    const acctCarriers = new Set(accounts.map((a) => canon(a.carrierCode)))
-    const svcCarriers = new Set(services.map((s) => canon(s.carrier)))
-    return [...acctCarriers].filter((c) => svcCarriers.has(c)).sort()
-  }, [accounts, services])
+  // Carrier options split into two pools so the dropdown can render
+  // the client's own carrier accounts first, verified platform
+  // accounts underneath:
+  //   - `clientCarriers` — accounts whose `customerNo` matches the
+  //     picked client. Empty when no client is picked or the client
+  //     has no accounts. NOT verification-filtered — client-owned
+  //     accounts are the operator's own credentials.
+  //   - `platformCarriers` — accounts with null `customerNo` (shared
+  //     across all clients) AND `verified === true` (last credential
+  //     check succeeded). Unverified platform accounts are hidden to
+  //     prevent operators picking a carrier the platform can't
+  //     actually ship on.
+  // Both are further intersected with `services` (a carrier with no
+  // live service can't ship regardless of account state).
+  const svcCarrierSet = useMemo(
+    () => new Set(services.map((s) => canon(s.carrier))),
+    [services],
+  )
+  const clientCarriers = useMemo(() => {
+    if (!clientCode) return [] as string[]
+    const own = accounts.filter(
+      (a) => (a.customerNo || '').toUpperCase() === clientCode.toUpperCase(),
+    )
+    return [...new Set(own.map((a) => canon(a.carrierCode)))]
+      .filter((c) => svcCarrierSet.has(c))
+      .sort()
+  }, [accounts, clientCode, svcCarrierSet])
+  const platformCarriers = useMemo(() => {
+    const plat = accounts.filter((a) => !a.customerNo && a.verified === true)
+    return [...new Set(plat.map((a) => canon(a.carrierCode)))]
+      .filter((c) => svcCarrierSet.has(c) && !clientCarriers.includes(c))
+      .sort()
+  }, [accounts, svcCarrierSet, clientCarriers])
+  const carrierOptions = useMemo(
+    () => [...clientCarriers, ...platformCarriers],
+    [clientCarriers, platformCarriers],
+  )
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot default carrier pick when options first populate; deriving at render would fight explicit user picks
@@ -1044,6 +1075,14 @@ export default function NewShipmentPage() {
           `${client.name || client.clientCode}'s default carrier ${canonical} isn't connected in this workspace — pick a carrier manually.`,
         )
       }
+    }
+    // Currency prefill from the client's default; falls through to
+    // the sticky last-used when null (per PR #527 — no force-pick on
+    // currency, unlike Label Type / Size where the account NULL is
+    // rare enough to warrant blocking). Overwrites the operator's
+    // prior manual pick, same semantic as the carrier prefill above.
+    if (client.defaultCurrency) {
+      setCurrency(client.defaultCurrency)
     }
   }
 
@@ -1835,9 +1874,20 @@ export default function NewShipmentPage() {
                 </Field>
                 <Field label="Carrier" required error={errAt('carrier')}>
                   <select className={inputCls} value={carrier} onChange={(e) => setCarrier(e.target.value)}>
-                    {carrierOptions.map((c) => (
-                      <option key={c} value={c}>{CARRIER_LABEL[c] || c}</option>
-                    ))}
+                    {clientCarriers.length > 0 ? (
+                      <optgroup label={`${clientCode || 'Client'} accounts`}>
+                        {clientCarriers.map((c) => (
+                          <option key={c} value={c}>{CARRIER_LABEL[c] || c}</option>
+                        ))}
+                      </optgroup>
+                    ) : null}
+                    {platformCarriers.length > 0 ? (
+                      <optgroup label="Platform (verified)">
+                        {platformCarriers.map((c) => (
+                          <option key={c} value={c}>{CARRIER_LABEL[c] || c}</option>
+                        ))}
+                      </optgroup>
+                    ) : null}
                   </select>
                 </Field>
                 {isInternational ? (
