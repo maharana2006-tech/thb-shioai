@@ -151,6 +151,17 @@ export default function LabelDocumentPage() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<DocumentTab>('label')
   const [trackingOpen, setTrackingOpen] = useState(false)
+  // PR #538 — carrier-ZPL PNG preview state. Three-way:
+  //   'unknown' — haven't tried; renders the JSX facsimile
+  //   'ready'   — backend served the PNG; render <img> in place of the facsimile
+  //   'unavailable' — backend returned 404/502 (flag off, or ZPL passthrough failed);
+  //                   silently fall back to the JSX facsimile
+  // Probing done via a HEAD request on mount + on pkgIndex change; no
+  // extra render burden when the endpoint 404s. Kept inline (no
+  // separate hook) so a stale bundle without the endpoint just picks
+  // the 'unavailable' branch cleanly.
+  const [carrierPreviewState, setCarrierPreviewState] =
+    useState<'unknown' | 'ready' | 'unavailable'>('unknown')
   const [zplBusy, setZplBusy] = useState(false)
   const [pdfBusy, setPdfBusy] = useState(false)
   // Sprint 52 PR A — same re-entrancy guard as the ZPL flow. Ref
@@ -268,6 +279,28 @@ export default function LabelDocumentPage() {
     return () => {
       cancelled = true
     }
+  }, [orderNo])
+
+  // PR #538 — probe /label/preview.png with a HEAD request. When the
+  // backend feature flag label.render-carrier-zpl is on AND the
+  // carrier stored parseable ZPL bytes, the endpoint returns 200 and
+  // we swap the JSX facsimile for an <img>. 404 (flag off / not ZPL)
+  // or 502 (renderer failed) → keep the facsimile. Silent probe so a
+  // stale bundle against a backend without the endpoint still renders
+  // cleanly.
+  useEffect(() => {
+    if (!Number.isFinite(orderNo)) return
+    let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset probe state on order change; HEAD result below transitions to ready/unavailable
+    setCarrierPreviewState('unknown')
+    orderService.headLabelPreviewPng(orderNo)
+      .then((available) => {
+        if (!cancelled) setCarrierPreviewState(available ? 'ready' : 'unavailable')
+      })
+      .catch(() => {
+        if (!cancelled) setCarrierPreviewState('unavailable')
+      })
+    return () => { cancelled = true }
   }, [orderNo])
 
   const order = payload?.order
@@ -570,8 +603,31 @@ export default function LabelDocumentPage() {
         </div>
       ) : order ? (
         <div className="flex justify-center rounded-[26px] border border-slate-200/80 bg-slate-100/70 p-6 shadow-inner print:border-0 print:bg-white print:p-0 print:shadow-none">
-          {tab === 'label' ? (
-            /* ==================== 4x6 SHIPPING LABEL (real carrier anatomy) ==================== */
+          {tab === 'label' && carrierPreviewState === 'ready' ? (
+            /* ==================== PR #538 — CARRIER-CANONICAL PNG (from backend zebrash render) ==================== */
+            /* When the backend feature flag label.render-carrier-zpl is on
+               AND the carrier stored parseable ZPL, backend renders the
+               canonical thermal label to PNG server-side. This <img> is
+               byte-for-byte what will print — no facsimile approximation.
+               onError falls back to the facsimile (rare — HEAD probe
+               already checked, but a mid-session backend restart could
+               invalidate). */
+            <div className="print-doc relative w-[430px] shrink-0 border border-slate-300 bg-white shadow-xl print:w-[3.76in] print:border-0 print:shadow-none">
+              <img
+                src={orderService.labelPreviewPngUrl(orderNo)}
+                alt={`Shipping label for order ${orderNo}`}
+                className="block h-auto w-full"
+                onError={() => setCarrierPreviewState('unavailable')}
+                data-testid="label-preview-png"
+              />
+            </div>
+          ) : tab === 'label' ? (
+            /* ==================== 4x6 SHIPPING LABEL (JSX facsimile fallback) ==================== */
+            /* Rendered when the carrier PNG isn't available (flag off,
+               non-ZPL artifact, or backend renderer error). Approximates
+               the carrier layout from DB fields; see
+               project_label_preview_audit.md for the known-divergence
+               taxonomy this eliminates when carrierPreviewState=ready. */
             <div
               className="print-doc relative w-[430px] shrink-0 border border-slate-300 bg-white text-black shadow-xl print:w-[3.76in] print:border-0 print:shadow-none"
               style={{ fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif' }}

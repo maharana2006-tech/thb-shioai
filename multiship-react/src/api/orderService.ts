@@ -660,6 +660,35 @@ export const orderService = {
   },
 
   /**
+   * PR #538 — probe for the carrier-ZPL PNG preview endpoint. Returns
+   * true iff the backend has label.render-carrier-zpl=true AND the
+   * carrier stored parseable ZPL bytes for the order. 404 (flag off /
+   * not ZPL) or 502 (renderer failed) → false. Silent — the FE keeps
+   * its JSX facsimile visible when this returns false, no error toast.
+   *
+   * Uses HEAD to avoid downloading the PNG until we know we want it;
+   * the actual <img> renders the same URL with a fresh GET which the
+   * browser caches per Cache-Control: private, max-age=60.
+   */
+  headLabelPreviewPng: async (orderNo: number): Promise<boolean> => {
+    try {
+      const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/preview.png`, {
+        method: 'HEAD',
+        credentials: 'include',
+      })
+      return response.ok
+    } catch {
+      return false
+    }
+  },
+
+  /** PR #538 — URL builder for the <img src=> tag once the HEAD probe
+   *  above confirms the PNG endpoint is live. Kept as a helper so
+   *  LabelDocumentPage doesn't hardcode the path. */
+  labelPreviewPngUrl: (orderNo: number): string =>
+    `${BASE_URL}/orders/${orderNo}/label/preview.png`,
+
+  /**
    * The order's commercial invoice as a PDF blob (Sprint 51). The platform's
    * own copy, rendered from the persisted customs data and available on
    * demand for any international order. 422 means the order has no customs
