@@ -426,6 +426,11 @@ export interface ManualShipmentPayload {
   items?: ManualShipmentItem[]
   incoterms?: string
   reasonForExport?: string
+  /** F6-C — per-carrier customs clearance option. Values differ per
+   *  carrier (UPS SENDER/RECEIVER/THIRD_PARTY vs FedEx SENDER/RECIPIENT/
+   *  THIRD_PARTY vs USPS DDU/DDP vs DHL DAP/DDP/EXW). Null / omitted →
+   *  connector applies its own carrier default. */
+  clearanceOption?: string | null
   /** Per-shipment importer/broker override (does not touch the client's saved profile). */
   importer?: Record<string, string>
   broker?: Record<string, string>
