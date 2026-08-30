@@ -46,6 +46,7 @@ import { STATE_CODE_OPTIONS } from '../utils/stateCodes'
 import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddressFields'
 import { compatiblePresetIds } from '../utils/servicePackageCompatibility'
 import { shipmentValidationService, type ShipmentValidationResult } from '../api/shipmentValidationService'
+import { SHIPPING_PURPOSES } from '../utils/customsOptions'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -71,8 +72,12 @@ const COUNTRIES: [string, string][] = [
 ]
 const COUNTRY_NAME: Record<string, string> = Object.fromEntries(COUNTRIES)
 
-/** Reason-for-export choices, shown at the top of the shipment. */
-const EXPORT_REASONS = ['SALE', 'GIFT', 'SAMPLE', 'RETURN', 'REPAIR', 'PERSONAL']
+// Reason of export choices come from the canonical SHIPPING_PURPOSES
+// list (customsOptions.ts) so what the operator picks matches the
+// backend's SHIPPING_PURPOSE_ENUM byte-for-byte. Prior 6-value
+// hardcode (SALE|GIFT|SAMPLE|RETURN|REPAIR|PERSONAL) sent invalid
+// enum values (REPAIR / PERSONAL not accepted; DOCUMENTS /
+// MERCHANDISE / REPAIR_AND_RETURN / PERSONAL_USE missing).
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'INR', 'AUD', 'SGD', 'JPY', 'CNY', 'AED']
 
 /** Persist the last-used value for a field so it prefills next time (sticky default). */
@@ -570,8 +575,12 @@ export default function NewShipmentPage() {
   type ItemRow = NewShipmentItemRow
   const blankItem = (): ItemRow => ({ description: '', sku: '', hsCode: '', countryOfOrigin: '', quantity: '1', unitValue: '', boxSeq: '' })
   const [items, setItems] = useState<ItemRow[]>([blankItem()])
-  // Reason of export + currency are sticky — they prefill from the last shipment.
-  const [reasonForExport, setReasonForExport] = useState(() => readSticky('ms:lastReason', 'SALE'))
+  // Reason of export prefills from `CarrierAccountRef.shippingPurpose`
+  // (see prefill useEffect below). Sticky read removed — force-pick
+  // semantic per PR #529: blank + account-NULL + international blocks
+  // submit, so the operator explicitly picks. Sticky-writes retained
+  // as a no-op for legacy readers.
+  const [reasonForExport, setReasonForExport] = useState('')
   const [currency, setCurrency] = useState(() => readSticky('ms:lastCurrency', 'USD'))
 
   // Optional guided-wizard for the customs section. Off by default; users
@@ -1023,6 +1032,14 @@ export default function NewShipmentPage() {
     // fallback.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
     setPickupType(matchedAccount?.pickupType ?? 'USE_SCHEDULED_PICKUP')
+    // Reason of export prefills from account.shippingPurpose; NULL
+    // leaves the field blank and the guard in submit/validate blocks
+    // international shipments until the operator picks. Applied
+    // regardless of isInternational so the value is ready if the
+    // operator flips domestic→international mid-form; the guard only
+    // fires on international.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
+    setReasonForExport(matchedAccount?.shippingPurpose ?? '')
   }, [matchedAccount])
 
   /**
@@ -1041,8 +1058,13 @@ export default function NewShipmentPage() {
     } else if (['UPS', 'DHL', 'USPS'].includes(cc)) {
       if (!labelImageFormat) missing.push('Label Type')
     }
+    // Reason of export is required on international shipments — same
+    // force-pick pattern as label fields (see prefill useEffect above).
+    // Not label-scoped but the guard hook is the same one used by
+    // submit()/validateShipment() so we co-locate.
+    if (isInternational && !reasonForExport) missing.push('Reason of export')
     return missing
-  }, [carrier, labelImageType, labelStockType, labelImageFormat])
+  }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport])
 
   /**
    * Select a client: fill YOUR address on the correct side and auto-pick its
@@ -1106,7 +1128,10 @@ export default function NewShipmentPage() {
     if (next === mode) return
     setSender(recipient)
     setRecipient(sender)
-    setReasonForExport(next === 'RETURN' ? 'RETURN' : 'SALE')
+    // Return mode always ships as RETURN reason. Shipment mode
+    // defers to the account.shippingPurpose prefill / user pick /
+    // force-pick guard — don't overwrite with a hardcoded 'SALE'.
+    if (next === 'RETURN') setReasonForExport('RETURN')
     setMode(next)
   }
 
@@ -1598,13 +1623,13 @@ export default function NewShipmentPage() {
   const submit = async () => {
     // Yup + Formik gate — validate the mirrored form values before anything else.
     setSubmitAttempted(true)
-    // Required-when-null label guard runs BEFORE yup so we surface a
-    // targeted toast; yup doesn't know about the label fields (they're
-    // not in the form schema).
+    // Required-when-null guard runs BEFORE yup so we surface a
+    // targeted toast; yup doesn't know about the label / shipping-
+    // purpose fields (they're not in the form schema).
     if (missingLabelFields.length > 0) {
       showToast(
-        `Pick ${missingLabelFields.join(' + ')} — the selected account has no saved default.`,
-        `${missingLabelFields.length} label field${missingLabelFields.length === 1 ? '' : 's'} need attention`,
+        `Pick ${missingLabelFields.join(' + ')} — no saved default for this client / account.`,
+        `${missingLabelFields.length} field${missingLabelFields.length === 1 ? '' : 's'} need attention`,
       )
       scrollToFirstError()
       return
@@ -1916,10 +1941,12 @@ export default function NewShipmentPage() {
                   </select>
                 </Field>
                 {isInternational ? (
-                  <Field label="Reason of export" error={errAt('reasonForExport')}>
+                  <Field label="Reason of export" required
+                         error={submitAttempted && !reasonForExport ? 'Required — pick a reason.' : errAt('reasonForExport')}>
                     <select className={inputCls} value={reasonForExport} onChange={(e) => setReasonForExport(e.target.value)}>
-                      {EXPORT_REASONS.map((r) => (
-                        <option key={r} value={r}>{r.charAt(0) + r.slice(1).toLowerCase()}</option>
+                      <option value="">-- Select --</option>
+                      {SHIPPING_PURPOSES.map((p) => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
                       ))}
                     </select>
                   </Field>
