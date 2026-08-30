@@ -1704,13 +1704,20 @@ export default function NewShipmentPage() {
               </button>
             </div>
 
-            {/* ── Top: client · reason of export · currency ── */}
+            {/* ── Top: client · reason of export · currency ──
+                Compact single-row layout for both Shipment + Return
+                modes: flex-wrap row so fields sit inline on lg+ and
+                only wrap on narrower viewports. Note text moved to
+                the title's hover tooltip so the section takes one
+                horizontal band. */}
             <SectionCard
               icon={<FiUsers className="h-3.5 w-3.5" />}
               title="Shipment"
-              note="Choosing a client fills its ship-from and auto-selects its default carrier account. Reason & currency remember your last choice."
             >
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <div
+                className="flex flex-wrap items-end gap-3 [&>*]:min-w-[160px] [&>*]:flex-1"
+                title="Choosing a client fills its ship-from and auto-selects its default carrier account. Reason & currency remember your last choice."
+              >
                 <Field label="Client">
                   <select className={inputCls} value={clientCode} onChange={(e) => applyClient(e.target.value)}>
                     <option value="">No client — ad-hoc</option>
