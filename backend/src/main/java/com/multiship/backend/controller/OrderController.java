@@ -47,6 +47,17 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.LabelArtifactResolver labelArtifactResolver;
 
+    // PR #536 — carrier ZPL → PNG/PDF via bundled zebrash-cli. Feature-
+    // flagged; when off, falls back to the pre-existing facsimile
+    // renderers (ZplLabelService + PdfLabelService).
+    @Autowired
+    private com.multiship.backend.service.ZebrashRenderer zebrashRenderer;
+    @Autowired
+    private com.multiship.backend.service.ZebrashPdfService zebrashPdfService;
+
+    @org.springframework.beans.factory.annotation.Value("${label.render-carrier-zpl:false}")
+    private boolean renderCarrierZplEnabled;
+
     @Autowired
     private CarrierProperties carrierProperties;
 
@@ -645,6 +656,36 @@ public class OrderController {
                     .body(passthrough.get());
         }
 
+        // PR #536 — when the flag is on AND the carrier stored ZPL bytes
+        // (not a PDF), render those bytes to PNG via bundled zebrash and
+        // wrap into a single-page PDF. Preferred over the JSX-facsimile
+        // path below because the ZPL is the carrier's canonical label —
+        // eliminates the "preview looks nothing like the printed label"
+        // gap documented in project_label_preview_audit.md. Fall back to
+        // the facsimile if the renderer isn't ready or the ZPL fails to
+        // parse (e.g. carrier stored a URL that returned unexpected
+        // bytes).
+        if (renderCarrierZplEnabled) {
+            java.util.Optional<byte[]> zpl = labelArtifactResolver.resolveAsBytes(orderNo, "ZPL");
+            if (zpl.isPresent()) {
+                try {
+                    byte[] pdf = zebrashPdfService.renderZplToPdf(zpl.get());
+                    return ResponseEntity.ok()
+                            .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".pdf")
+                            .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+                            .body(pdf);
+                } catch (RuntimeException ex) {
+                    // ZebrashRenderer.RendererUnavailableException,
+                    // ZplParseException, ZplRenderException — all
+                    // recoverable via the facsimile path below.
+                    // Warn-log for observability but don't 500.
+                    org.slf4j.LoggerFactory.getLogger(OrderController.class)
+                            .warn("zebrash PDF render failed for order {}, falling back to facsimile: {}",
+                                    orderNo, ex.getMessage());
+                }
+            }
+        }
+
         ApiResponse<OrderWithLinesDTO> orderResponse = orderService.getOrderWithLines(orderNo);
         if (!"SUCCESS".equalsIgnoreCase(orderResponse.getStatus()) || orderResponse.getData() == null) {
             return ResponseEntity.status(orderResponse.getCode()).build();
@@ -692,6 +733,46 @@ public class OrderController {
                         + filenameSuffix + ".pdf")
                 .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
                 .body(pdf);
+    }
+
+    /**
+     * PR #536 — PNG preview of the shipping label. Renders the
+     * carrier's actual ZPL bytes via bundled zebrash (Go binary)
+     * when {@code label.render-carrier-zpl=true}; otherwise 404
+     * (FE falls back to the JSX facsimile that already renders on
+     * {@code /label/{orderNo}}).
+     *
+     * <p>Serves as the {@code <img src=…>} source when the FE swaps
+     * its facsimile div for a canonical PNG view. Only fires when
+     * ZPL passthrough succeeds — carrier stored URL/PDF/other
+     * formats return 404 so the FE keeps the facsimile visible.
+     */
+    @Operation(summary = "PNG rendering of the carrier's ZPL label",
+            description = "PR #536 — carrier-canonical PNG via bundled zebrash. "
+                    + "Returns 404 when the feature flag is off or the carrier "
+                    + "artifact isn't ZPL; FE falls back to its JSX facsimile.")
+    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
+    @GetMapping(value = "/{orderNo}/label/preview.png",
+            produces = org.springframework.http.MediaType.IMAGE_PNG_VALUE)
+    public ResponseEntity<byte[]> getLabelPreviewPng(@PathVariable Integer orderNo) {
+        if (!renderCarrierZplEnabled) {
+            return ResponseEntity.status(404).build();
+        }
+        java.util.Optional<byte[]> zpl = labelArtifactResolver.resolveAsBytes(orderNo, "ZPL");
+        if (zpl.isEmpty()) {
+            return ResponseEntity.status(404).build();
+        }
+        try {
+            byte[] png = zebrashRenderer.renderPng(zpl.get());
+            return ResponseEntity.ok()
+                    .header("Cache-Control", "private, max-age=60")
+                    .header("Content-Type", org.springframework.http.MediaType.IMAGE_PNG_VALUE)
+                    .body(png);
+        } catch (RuntimeException ex) {
+            org.slf4j.LoggerFactory.getLogger(OrderController.class)
+                    .warn("zebrash PNG render failed for order {}: {}", orderNo, ex.getMessage());
+            return ResponseEntity.status(502).build();
+        }
     }
 
     @Operation(
