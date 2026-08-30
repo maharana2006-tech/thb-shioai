@@ -96,6 +96,20 @@ public class ShipmentValidationService {
         checkSenderRequired(from, req, errors);
         checkShipmentRequired(req, errors);
 
+        // ─── Sprint 52 PR β — format checks (postal + state per country).
+        // Fast-fail on typos like "Delaware" instead of "DE" or ZIP
+        // "abcde" before any downstream check runs. Runs even when
+        // presence checks flagged errors — one call covers both blocks
+        // so the operator sees every fixable format issue in a single
+        // pass. Countries without rules (see AddressFormatValidator's
+        // per-country maps) fall through as unvalidated.
+        errors.addAll(AddressFormatValidator.validate(
+                to.getCountryCode(), to.getPostalCode(), to.getState(), "recipient"));
+        if (from != null) {
+            errors.addAll(AddressFormatValidator.validate(
+                    from.getCountryCode(), from.getPostalCode(), from.getState(), "sender"));
+        }
+
         String senderCountry = from != null ? normCountry(from.getCountryCode()) : null;
         String recipientCountry = normCountry(to.getCountryCode());
         boolean international = isInternational(senderCountry, recipientCountry);
