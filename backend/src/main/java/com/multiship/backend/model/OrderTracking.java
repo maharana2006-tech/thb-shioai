@@ -24,7 +24,9 @@ public class OrderTracking {
     @Column(name = "tracking_number")
     private String trackingNumber;
 
-    @Column(name = "tracking_url")
+    /** Sprint 52 — TEXT (was default varchar 255). Carrier tracking deep-
+     *  links carry tokens + query params that regularly push over 255. */
+    @Column(name = "tracking_url", columnDefinition = "text")
     private String trackingUrl;
 
     @Column(name = "ship_via_cd")
@@ -36,7 +38,11 @@ public class OrderTracking {
     @Column(name = "label_generated_at")
     private LocalDateTime labelGeneratedAt;
 
-    @Column(name = "label_file_path")
+    /** Sprint 52 — TEXT (was default varchar 255). Holds either a signed
+     *  carrier URL (up to 2 KB on FedEx) OR the base64-encoded label
+     *  bytes (10–200 KB). Sprint 52 PR B (#518) established this column
+     *  carries both content types depending on what the carrier returned. */
+    @Column(name = "label_file_path", columnDefinition = "text")
     private String labelFilePath;
 
     @Column(name = "status")
