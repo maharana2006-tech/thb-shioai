@@ -484,6 +484,14 @@ export default function NewShipmentPage() {
   // UPS/DHL/USPS only (FedEx uses labelImageType/labelStockType above).
   // Blank = use the account default.
   const [labelImageFormat, setLabelImageFormat] = useState('')
+  // FDX-H1 — per-shipment override of the FedEx account's default
+  // pickupType. Prefills from CarrierAccountRef.pickupType on account
+  // change; falls back to USE_SCHEDULED_PICKUP when the account has
+  // NULL (matches the backend's hardcoded default so the operator
+  // sees the effective value in the UI). FedEx-only; hidden in
+  // Return mode (connector always emits CONTACT_FEDEX_TO_SCHEDULE
+  // for returns regardless).
+  const [pickupType, setPickupType] = useState('USE_SCHEDULED_PICKUP')
   // Sprint 22 — rate picker: opens the RatePickerModal with current form
   // state; on select we populate carrier + serviceId + accountNumber.
   const [ratePickerOpen, setRatePickerOpen] = useState(false)
@@ -1008,6 +1016,13 @@ export default function NewShipmentPage() {
     setLabelStockType(matchedAccount?.labelStockType ?? '')
     // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
     setLabelImageFormat(matchedAccount?.labelImageFormat ?? '')
+    // Unlike the label fields, pickupType falls back to the backend's
+    // hardcoded default (USE_SCHEDULED_PICKUP) when the account has
+    // NULL — no force-pick, per operator call. Showing the effective
+    // value in the UI still beats hiding it behind a silent backend
+    // fallback.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
+    setPickupType(matchedAccount?.pickupType ?? 'USE_SCHEDULED_PICKUP')
   }, [matchedAccount])
 
   /**
@@ -1320,6 +1335,11 @@ export default function NewShipmentPage() {
         ...(canon(carrier) === 'FEDEX' && labelStockType ? { labelStockType } : {}),
         ...(['UPS', 'DHL', 'USPS'].includes(canon(carrier)) && labelImageFormat
           ? { labelImageFormat }
+          : {}),
+        // FDX-H1 — per-shipment pickupType. FedEx-only; skipped in
+        // Return mode (connector overrides to CONTACT_FEDEX_TO_SCHEDULE).
+        ...(canon(carrier) === 'FEDEX' && !isReturn && pickupType
+          ? { pickupType }
           : {}),
       }
       const res = await shipmentValidationService.validate(payload)
@@ -1673,6 +1693,11 @@ export default function NewShipmentPage() {
       ...(['UPS', 'DHL', 'USPS'].includes(canon(carrier)) && labelImageFormat
         ? { labelImageFormat }
         : {}),
+      // FDX-H1 — per-shipment pickupType. FedEx-only; skipped in
+      // Return mode (connector overrides to CONTACT_FEDEX_TO_SCHEDULE).
+      ...(canon(carrier) === 'FEDEX' && !isReturn && pickupType
+        ? { pickupType }
+        : {}),
       // Sprint 29 — multi-package. When extra boxes are present, build
       // a packages[] array with box 1 mirroring the top-level fields and
       // boxes 2..N from extraPackages. Backend's effectivePackages() also
@@ -1946,6 +1971,25 @@ export default function NewShipmentPage() {
                         <option value="STOCK_4X9_LEADING_DOC_TAB">Thermal stock 4x9 (doc tab)</option>
                       </select>
                     </Field>
+                    {/* FDX-H1 — Pickup Type. Hidden in Return mode
+                        because the connector always emits
+                        CONTACT_FEDEX_TO_SCHEDULE for isReturn=true;
+                        showing the field would imply the operator's
+                        pick matters when it doesn't. */}
+                    {!isReturn ? (
+                      <Field label="Pickup Type">
+                        <select className={inputCls}
+                                value={pickupType}
+                                onChange={(e) => setPickupType(e.target.value)}>
+                          <option value="USE_SCHEDULED_PICKUP">Use scheduled pickup</option>
+                          <option value="REGULAR_PICKUP">Regular pickup</option>
+                          <option value="REQUEST_COURIER">Request courier</option>
+                          <option value="DROP_BOX">Drop box</option>
+                          <option value="BUSINESS_SERVICE_CENTER">Business service center</option>
+                          <option value="STATION">Station</option>
+                        </select>
+                      </Field>
+                    ) : null}
                   </>
                 ) : null}
                 {['UPS', 'DHL', 'USPS'].includes(canon(carrier)) ? (

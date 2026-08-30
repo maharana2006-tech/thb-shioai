@@ -462,6 +462,12 @@ export interface ManualShipmentPayload {
    *  labelSpecification.labelStockType. Null / omitted → use the account
    *  default (which itself falls back to PAPER_4X6). Only FedEx maps this. */
   labelStockType?: string | null
+  /** FDX-H1 — per-shipment override of the FedEx account's default
+   *  pickupType. Null / omitted → use the account default (which itself
+   *  falls back to USE_SCHEDULED_PICKUP). Only FedEx maps this; UPS /
+   *  DHL / USPS ignore. Return labels bypass this and always emit
+   *  CONTACT_FEDEX_TO_SCHEDULE. */
+  pickupType?: string | null
 }
 
 /** One box in a multi-package shipment — mirrors backend PackageDetailDTO. */
