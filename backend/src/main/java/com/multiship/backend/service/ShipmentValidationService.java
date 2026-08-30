@@ -16,6 +16,8 @@ import com.multiship.backend.service.resolution.PackagingCompatibilityGuard;
 import com.multiship.backend.service.resolution.ShipmentResolutionException;
 import com.multiship.backend.service.resolution.ShipmentResolutionService;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,6 +50,8 @@ import java.util.Set;
 @Service
 @RequiredArgsConstructor
 public class ShipmentValidationService {
+
+    private static final Logger log = LoggerFactory.getLogger(ShipmentValidationService.class);
 
     /** US and its outlying territories — treated as one territory per
      *  the "US → PR is domestic" UX rule (Sprint 52 shipment-validation
@@ -196,6 +200,37 @@ public class ShipmentValidationService {
             skipped.add(check("dangerous_goods", "no DG block on the request"));
         }
 
+        // Sprint 52 diagnostic — one INFO line per validate call so future
+        // "validate said PASS but shouldn't have" reports can be triaged
+        // from log alone. Captures the exact inputs the guard saw + the
+        // membership answer service_package returned. Verbose on purpose:
+        // shipment payloads are typically small and this log is high-signal
+        // on the exact class of bug the operator complained about.
+        boolean existsInSvcPkg = (service != null && preset != null)
+                && packagingCompatibilityGuard.isCompatible(service, preset);
+        String overallForLog;
+        if (!errors.isEmpty()) overallForLog = "FAIL";
+        else if (!warnings.isEmpty()) overallForLog = "WARN";
+        else overallForLog = "PASS";
+        log.info(
+                "ShipmentValidation: verdict={}, service.id={}, service.code={}, "
+                        + "preset.id={}, preset.kind={}, preset.code={}, "
+                        + "existsInServicePackage={}, brandedAllowed={}, "
+                        + "clientCode={}, intl={}, errors={}, warnings={}, skipped={}",
+                overallForLog,
+                req.getServiceId(),
+                service != null ? service.getServiceCode() : null,
+                req.getPackagePresetId(),
+                preset != null ? preset.getKind() : null,
+                preset != null ? preset.getCarrierPackageCode() : null,
+                existsInSvcPkg,
+                service != null ? service.isBrandedPackagingAllowed() : null,
+                clientCode,
+                international,
+                errors.size(),
+                warnings.size(),
+                skipped.stream().map(ValidationCheckStatus::getName).toList()
+        );
         return ok(buildResult(errors, warnings, skipped, international));
     }
 
