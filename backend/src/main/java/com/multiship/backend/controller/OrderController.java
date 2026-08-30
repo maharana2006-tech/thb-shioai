@@ -93,7 +93,20 @@ public class OrderController {
     /** Map a client Address value object into the label payload shape. */
     private Map<String, Object> addressMap(com.multiship.backend.model.Address a, String fallbackName) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("name", a.getName() != null && !a.getName().isBlank() ? a.getName() : fallbackName);
+        String resolvedName = a.getName() != null && !a.getName().isBlank() ? a.getName() : fallbackName;
+        m.put("name", resolvedName);
+        // PR #535 — company line. Carriers print recipient + shipper
+        // COMPANY as a distinct label line whenever the wire request
+        // carried a separate company field. Address VO has no company
+        // slot today, so we synthesise: when the address has its own
+        // name (typically a warehouse alias like "Central Warehouse")
+        // AND the client's registered name is different, expose the
+        // client name as the company. When name == fallbackName (no
+        // warehouse alias) leave company null so the FE doesn't print
+        // a duplicate line.
+        if (fallbackName != null && !fallbackName.isBlank() && !fallbackName.equalsIgnoreCase(resolvedName)) {
+            m.put("company", fallbackName);
+        }
         m.put("phone", a.getPhone());
         m.put("addressLine1", a.getLine1());
         m.put("addressLine2", a.getLine2());

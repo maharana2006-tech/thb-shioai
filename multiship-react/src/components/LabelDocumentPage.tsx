@@ -40,6 +40,30 @@ const labelDate = (value?: string | null) => {
 
 const money = (value: number | null | undefined) => (typeof value === 'number' ? value.toFixed(2) : '0.00')
 
+/**
+ * PR #535 — E.164-style label phone formatting. Carriers prefix the
+ * country dial code (`1` for US, `44` for GB, `91` for IN, …) when
+ * emitting the printed label. Preview mirrors that behavior so
+ * on-screen matches the printed form. Country code table covers the
+ * common ones; unknown countries fall through to raw digits. Blank
+ * dial codes (VA, etc.) stay bare.
+ */
+const DIAL_CODE_BY_COUNTRY: Record<string, string> = {
+  US: '1', CA: '1', GB: '44', IN: '91', AU: '61', DE: '49', FR: '33',
+  IT: '39', ES: '34', NL: '31', BE: '32', CH: '41', SE: '46', NO: '47',
+  DK: '45', FI: '358', JP: '81', CN: '86', KR: '82', SG: '65', HK: '852',
+  MX: '52', BR: '55', AR: '54', CL: '56', CO: '57', PE: '51',
+  AE: '971', ZA: '27', NZ: '64', IE: '353', PT: '351', AT: '43',
+}
+const formatPhoneForLabel = (phone: string | null | undefined, country: string | null | undefined): string => {
+  if (!phone) return ''
+  const digits = phone.replace(/[^0-9]/g, '')
+  if (!digits) return phone
+  const cc = DIAL_CODE_BY_COUNTRY[(country || '').toUpperCase()]
+  if (!cc) return digits
+  return digits.startsWith(cc) ? digits : cc + digits
+}
+
 /** Real Code 128B barcode rendered as SVG — same symbology carriers print. */
 function Barcode128({ value, height = 64 }: { value: string; height?: number }) {
   const encoded = useMemo(() => encodeCode128B(value), [value])
@@ -306,8 +330,16 @@ export default function LabelDocumentPage() {
   // identifier as the parcel's addressee. Placeholder is a literal '-' so
   // mis-populated shipments are visibly broken.
   const rawShipName = order?.shipName?.trim()
+  const rawShipAttn = order?.shipAttn?.trim()
   const recipientName =
-    (rawShipName && rawShipName.length > 2 ? rawShipName : order?.shipAttn) || '-'
+    (rawShipName && rawShipName.length > 2 ? rawShipName : rawShipAttn) || '-'
+  // PR #535 — recipient company as its own line. Previously ship_attn
+  // was only rendered when it was used AS the name fallback (short
+  // shipName), so a company entered alongside a full recipient name
+  // was invisible on-screen — but carriers print it as a distinct
+  // COMPANY line on the actual label. Skip when it duplicates the
+  // rendered name (avoids double-printing).
+  const recipientCompany = rawShipAttn && rawShipAttn !== recipientName ? rawShipAttn : null
   const recipientCityLine = order
     ? `${order.shiptoCity || ''}, ${order.shiptoState || ''} ${order.shiptoZip || ''}`.trim()
     : ''
@@ -565,6 +597,12 @@ export default function LabelDocumentPage() {
                   <div className="pr-2 uppercase">
                     <p>ORIGIN ID:{(shipper?.state || 'XX').toUpperCase()}{(shipper?.postalCode || '').slice(0, 2)}A&nbsp;&nbsp;{(shipper?.phone || '').replace(/\s+/g, '')}</p>
                     <p>{shipper?.name}</p>
+                    {/* PR #535 — shipper COMPANY line. Backend
+                        addressMap emits `company` when the address's
+                        own name (warehouse alias) differs from the
+                        client's registered name; otherwise null and
+                        this line is suppressed. */}
+                    {shipper?.company ? <p>{shipper.company}</p> : null}
                     <p>{shipper?.addressLine1}</p>
                     <p>&nbsp;</p>
                     <p>{shipper?.city}, {shipper?.state} {shipper?.postalCode} {shipper?.countryCode}</p>
@@ -583,7 +621,18 @@ export default function LabelDocumentPage() {
                           ?? (payload?.packagePreset as { billableWeight?: number | null } | null | undefined)?.billableWeight
                           ?? order.weight
                         return typeof w === 'number' ? w.toFixed(2) : '—'
-                      })()} {(perPkgWeightUnit || 'KG').toUpperCase()}
+                      })()} {(() => {
+                        // PR #535 — weight-unit fallback now shipper-country
+                        // aware. Prior 'KG' hardcode showed the wrong unit on
+                        // every US shipment where label_package rows didn't
+                        // persist (legacy orders + some intl paths). US
+                        // shipper defaults to LB (matches backend
+                        // ShipmentDefaultsResolver.DEFAULT_WEIGHT_UNIT); every
+                        // other origin defaults to KG.
+                        const unit = perPkgWeightUnit || (payload?.order as { weightUnit?: string | null } | null | undefined)?.weightUnit
+                        if (unit) return unit.toUpperCase()
+                        return (shipper?.countryCode || '').toUpperCase() === 'US' ? 'LB' : 'KG'
+                      })()}
                     </p>
                     <p>CAD: {orderDisplay}{pkgCount > 1 ? `-${pkgIndex}` : ''}/MSHIP1</p>
                     <p>&nbsp;</p>
@@ -609,6 +658,13 @@ export default function LabelDocumentPage() {
                   <span className="pt-1 text-[10px] font-black">TO</span>
                   <div className="min-w-0">
                     <p className="truncate text-[21px] font-black uppercase leading-[24px] tracking-tight">{recipientName}</p>
+                    {/* PR #535 — recipient COMPANY (ship_attn) as its own
+                        line between name and street. Carriers print this
+                        distinct line whenever the caller sent both a
+                        recipient.name and recipient.company. */}
+                    {recipientCompany ? (
+                      <p className="text-[18px] font-black uppercase leading-[22px]">{recipientCompany}</p>
+                    ) : null}
                     {/* custNo used to render here as a big uppercase line — read as part
                         of the address. Moved to the warehouse footer below the label. */}
                     {order.shipAddr1 ? (
@@ -631,7 +687,15 @@ export default function LabelDocumentPage() {
                     </div>
                   </div>
                 </div>
-                <p className="mt-0.5 text-[11px] font-bold leading-[13px]">{order.phone || ''}</p>
+                {/* PR #535 — recipient phone with country code. FedEx /
+                    UPS / DHL wire their carrier-side E.164 rewrite
+                    (prepend country dial code) so the printed label
+                    shows the prefixed form; preview should mirror.
+                    Uses shiptoCountryCd to derive the prefix (+1 for
+                    US, blank when unknown). */}
+                {order.phone ? (
+                  <p className="mt-0.5 text-[11px] font-bold leading-[13px]">{formatPhoneForLabel(order.phone, destCountry)}</p>
+                ) : null}
                 <div className="grid grid-cols-2 pr-8 text-[9px] font-bold leading-[12px]">
                   <span>INV:</span>
                   <span>REF: {orderDisplay}</span>
@@ -706,7 +770,7 @@ export default function LabelDocumentPage() {
                 </p>
                 <p>
                   SVC: {serviceTier} ({order.shipviaCd || '-'}) · WT:{' '}
-                  {(perPkgWeight ?? order.weight) ?? '-'} {(perPkgWeightUnit || order.weightUnit || 'KG').toUpperCase()}
+                  {(perPkgWeight ?? order.weight) ?? '-'} {(perPkgWeightUnit || order.weightUnit || ((shipper?.countryCode || '').toUpperCase() === 'US' ? 'LB' : 'KG')).toUpperCase()}
                   {order.tenantId ? ` · TENANT: ${order.tenantId}` : ''}
                 </p>
               </div>
