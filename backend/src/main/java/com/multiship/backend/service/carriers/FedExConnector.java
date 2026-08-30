@@ -333,9 +333,19 @@ public class FedExConnector implements CarrierConnector {
             log.warn("FedEx validateShipment rejected (HTTP {}): {}",
                     ex.getStatusCode().value(), body);
             java.util.List<String> errors = extractFedExErrors(body);
-            String msg = errors.isEmpty()
-                    ? "FedEx validateShipment rejected: HTTP " + ex.getStatusCode().value()
-                    : "FedEx rejected the shipment: " + String.join("; ", errors);
+            // PR #533 — human summary. When parameterList expanded to
+            // multiple per-field messages, use "flagged N issues" so
+            // the operator sees a count + a bulleted list rather than
+            // a single joined string. Falls back to first-error text
+            // for the single-error case (still surfaced on the banner).
+            String msg;
+            if (errors.isEmpty()) {
+                msg = "FedEx validateShipment rejected: HTTP " + ex.getStatusCode().value();
+            } else if (errors.size() == 1) {
+                msg = "FedEx rejected the shipment: " + errors.get(0);
+            } else {
+                msg = "FedEx flagged " + errors.size() + " issues with the shipment.";
+            }
             return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
                     java.util.List.of(), errors, msg, body);
         } catch (Exception ex) {
@@ -396,7 +406,16 @@ public class FedExConnector implements CarrierConnector {
 
     /**
      * Extract operator-facing messages from a FedEx 4xx/5xx error body.
-     * Shape: {@code errors: [{ code, message, parameterList }]}.
+     * Shape: {@code errors: [{ code, message, parameterList: [{key, value}] }]}.
+     *
+     * <p>PR #533 — when {@code parameterList} is populated (e.g.
+     * {@code INVALID.INPUT.EXCEPTION} + "Error count: 5"), expand each
+     * parameter into its own row with a humanized field path so operators
+     * see the actual field-level details instead of one wire-y wrapper
+     * message. Prior behavior surfaced just the top-level
+     * {@code "INVALID.INPUT.EXCEPTION: Validation failed for
+     * object='verifyShipmentInputVO'. Error count: 5"} which was
+     * unactionable.
      */
     private java.util.List<String> extractFedExErrors(String body) {
         if (!StringUtils.hasText(body)) return java.util.List.of();
@@ -406,15 +425,110 @@ public class FedExConnector implements CarrierConnector {
             if (!arr.isArray()) return java.util.List.of();
             java.util.List<String> out = new java.util.ArrayList<>();
             for (JsonNode e : arr) {
-                String code = e.path("code").asText("");
-                String message = e.path("message").asText("");
-                out.add(StringUtils.hasText(code) ? code + ": " + message : message);
+                JsonNode params = e.path("parameterList");
+                if (params.isArray() && params.size() > 0) {
+                    // Expand per-field details — skip the wrapper code +
+                    // "Validation failed" wire text, it's not actionable.
+                    for (JsonNode p : params) {
+                        String key = p.path("key").asText("");
+                        String value = p.path("value").asText("");
+                        String field = humanizeFedExFieldPath(key);
+                        if (StringUtils.hasText(field) && StringUtils.hasText(value)) {
+                            out.add(field + " — " + value);
+                        } else if (StringUtils.hasText(value)) {
+                            out.add(value);
+                        } else if (StringUtils.hasText(field)) {
+                            out.add(field);
+                        }
+                    }
+                } else {
+                    // No parameterList — fall back to top-level code + message.
+                    String code = e.path("code").asText("");
+                    String message = e.path("message").asText("");
+                    out.add(StringUtils.hasText(code) ? code + ": " + message : message);
+                }
             }
             return out;
         } catch (Exception ignore) {
             return java.util.List.of();
         }
     }
+
+    /**
+     * Translate a FedEx wire field path (e.g.
+     * {@code requestedShipment.recipient.address.postalCode}) into a
+     * concise operator-facing label (e.g. {@code "Recipient postal code"}).
+     * Falls through to the raw leaf name (with array indices simplified)
+     * when the path isn't in the mapping table — better a slightly wire-y
+     * label than a mysterious hidden field.
+     *
+     * <p>Package-visible for tests.
+     */
+    static String humanizeFedExFieldPath(String path) {
+        if (!StringUtils.hasText(path)) return "";
+        // Strip common request-envelope prefixes.
+        String p = path.trim();
+        if (p.startsWith("requestedShipment.")) p = p.substring("requestedShipment.".length());
+        if (p.startsWith("accountNumber.")) p = "Account number " + p.substring("accountNumber.".length());
+        // Normalise array indices — "requestedPackageLineItems[0].weight.value"
+        // → "package.weight.value" so a single lookup covers all boxes; the
+        // per-box index is preserved in the returned label ("Package 1 …").
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("requestedPackageLineItems\\[(\\d+)\\]\\.(.+)").matcher(p);
+        if (m.matches()) {
+            int idx = Integer.parseInt(m.group(1)) + 1;
+            String rest = m.group(2);
+            String friendly = FEDEX_PACKAGE_FIELDS.getOrDefault(rest, rest);
+            return "Package " + idx + " " + friendly;
+        }
+        return FEDEX_FIELD_LABELS.getOrDefault(p, p);
+    }
+
+    /** Path → human label for shipment-level fields. */
+    private static final java.util.Map<String, String> FEDEX_FIELD_LABELS = java.util.Map.ofEntries(
+            java.util.Map.entry("serviceType", "Service type"),
+            java.util.Map.entry("packagingType", "Packaging type"),
+            java.util.Map.entry("pickupType", "Pickup type"),
+            java.util.Map.entry("shipDatestamp", "Ship date"),
+            java.util.Map.entry("shipper.contact.personName", "Shipper name"),
+            java.util.Map.entry("shipper.contact.phoneNumber", "Shipper phone"),
+            java.util.Map.entry("shipper.contact.companyName", "Shipper company"),
+            java.util.Map.entry("shipper.contact.emailAddress", "Shipper email"),
+            java.util.Map.entry("shipper.address.streetLines", "Shipper street address"),
+            java.util.Map.entry("shipper.address.city", "Shipper city"),
+            java.util.Map.entry("shipper.address.stateOrProvinceCode", "Shipper state"),
+            java.util.Map.entry("shipper.address.postalCode", "Shipper postal code"),
+            java.util.Map.entry("shipper.address.countryCode", "Shipper country"),
+            java.util.Map.entry("recipients[0].contact.personName", "Recipient name"),
+            java.util.Map.entry("recipients[0].contact.phoneNumber", "Recipient phone"),
+            java.util.Map.entry("recipients[0].contact.companyName", "Recipient company"),
+            java.util.Map.entry("recipients[0].contact.emailAddress", "Recipient email"),
+            java.util.Map.entry("recipients[0].address.streetLines", "Recipient street address"),
+            java.util.Map.entry("recipients[0].address.city", "Recipient city"),
+            java.util.Map.entry("recipients[0].address.stateOrProvinceCode", "Recipient state"),
+            java.util.Map.entry("recipients[0].address.postalCode", "Recipient postal code"),
+            java.util.Map.entry("recipients[0].address.countryCode", "Recipient country"),
+            java.util.Map.entry("labelSpecification.imageType", "Label image type"),
+            java.util.Map.entry("labelSpecification.labelStockType", "Label stock type"),
+            java.util.Map.entry("customsClearanceDetail.dutiesPayment.paymentType", "Duties payment type"),
+            java.util.Map.entry("customsClearanceDetail.commercialInvoice.termsOfSale", "Incoterms"),
+            java.util.Map.entry("customsClearanceDetail.commercialInvoice.purpose", "Reason of export"),
+            java.util.Map.entry("customsClearanceDetail.totalCustomsValue.amount", "Customs total value"),
+            java.util.Map.entry("customsClearanceDetail.totalCustomsValue.currency", "Customs currency")
+    );
+
+    /** Path (after {@code requestedPackageLineItems[N].} strip) → label. */
+    private static final java.util.Map<String, String> FEDEX_PACKAGE_FIELDS = java.util.Map.ofEntries(
+            java.util.Map.entry("weight.units", "weight units"),
+            java.util.Map.entry("weight.value", "weight"),
+            java.util.Map.entry("dimensions.length", "length"),
+            java.util.Map.entry("dimensions.width", "width"),
+            java.util.Map.entry("dimensions.height", "height"),
+            java.util.Map.entry("dimensions.units", "dimension units"),
+            java.util.Map.entry("declaredValue.amount", "declared value"),
+            java.util.Map.entry("declaredValue.currency", "declared value currency"),
+            java.util.Map.entry("customerReferences", "reference")
+    );
 
     /**
      * FedEx Rate API v1 — {@code POST /rate/v1/rates/quotes} with the OAuth

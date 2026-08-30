@@ -100,4 +100,48 @@ class FedExConnectorValidateShipmentTest {
         assertFalse(r.valid());
         assertEquals("ERROR", r.matchLevel());
     }
+
+    // PR #533 — humanizeFedExFieldPath golden values covering the main
+    // envelope prefixes + per-package indexing.
+
+    @Test
+    void humanize_recipientPostalCode() {
+        assertEquals("Recipient postal code",
+                FedExConnector.humanizeFedExFieldPath(
+                        "requestedShipment.recipients[0].address.postalCode"));
+    }
+
+    @Test
+    void humanize_shipperState() {
+        assertEquals("Shipper state",
+                FedExConnector.humanizeFedExFieldPath(
+                        "requestedShipment.shipper.address.stateOrProvinceCode"));
+    }
+
+    @Test
+    void humanize_serviceType() {
+        assertEquals("Service type",
+                FedExConnector.humanizeFedExFieldPath(
+                        "requestedShipment.serviceType"));
+    }
+
+    @Test
+    void humanize_packageWeightWithIndex() {
+        assertEquals("Package 2 weight",
+                FedExConnector.humanizeFedExFieldPath(
+                        "requestedShipment.requestedPackageLineItems[1].weight.value"));
+    }
+
+    @Test
+    void humanize_unknownPathFallsThrough() {
+        assertEquals("someObscureField",
+                FedExConnector.humanizeFedExFieldPath(
+                        "requestedShipment.someObscureField"));
+    }
+
+    @Test
+    void humanize_blankIsBlank() {
+        assertEquals("", FedExConnector.humanizeFedExFieldPath(""));
+        assertEquals("", FedExConnector.humanizeFedExFieldPath(null));
+    }
 }
