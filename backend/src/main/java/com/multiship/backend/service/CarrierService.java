@@ -48,4 +48,27 @@ public interface CarrierService {
     ApiResponse<List<OrderAccountResolutionDTO>> resolveOrderAccounts(List<Integer> orderNos);
 
     CarrierConnector getCarrierConnector(String carrierCode);
+
+    /**
+     * PR #534 — full {@link com.multiship.backend.dto.ShipmentRequestDTO}
+     * population from a {@link com.multiship.backend.dto.ManualShipmentRequest}.
+     * Extracted from {@link CarrierServiceImpl#generateManualLabel} so
+     * {@code ShipmentValidationService.callCarrierValidateShipment}
+     * can produce a byte-for-byte identical DTO for the carrier-native
+     * validate hop. See implementation javadoc for the resolved-input
+     * contract.
+     */
+    com.multiship.backend.dto.ShipmentRequestDTO buildManualShipmentRequestDto(
+            com.multiship.backend.dto.ManualShipmentRequest req,
+            com.multiship.backend.dto.ManualShipmentRequest.Address from,
+            com.multiship.backend.dto.ManualShipmentRequest.Address to,
+            String carrier,
+            String billToNumber,
+            String serviceType,
+            String packageType,
+            java.math.BigDecimal length,
+            java.math.BigDecimal width,
+            java.math.BigDecimal height,
+            String fromCountry,
+            com.multiship.backend.model.CarrierAccountRef account);
 }

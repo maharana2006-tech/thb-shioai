@@ -323,21 +323,61 @@ public class ShipmentValidationService {
             return null;
         }
 
-        // Populate the adapted request with the fields validateShipment
-        // consumers (validateAddress delegate + future native impls)
-        // read: carrier + recipient block + account number. The intl /
-        // customs / DG sub-block is already set by adaptForValidators.
-        adaptedRequest.setCarrierCode(carrier);
-        adaptedRequest.setAccountNumber(account.getAccountNumber());
-        adaptedRequest.setRecipientName(req.getRecipient().getName());
-        adaptedRequest.setRecipientCompany(req.getRecipient().getCompany());
-        adaptedRequest.setRecipientAddressLine1(req.getRecipient().getAddressLine1());
-        adaptedRequest.setRecipientAddressLine2(req.getRecipient().getAddressLine2());
-        adaptedRequest.setRecipientAddressLine3(req.getRecipient().getAddressLine3());
-        adaptedRequest.setRecipientCity(req.getRecipient().getCity());
-        adaptedRequest.setRecipientState(req.getRecipient().getState());
-        adaptedRequest.setRecipientPostalCode(req.getRecipient().getPostalCode());
-        adaptedRequest.setRecipientCountryCode(req.getRecipient().getCountryCode());
+        // PR #534 — resolve the same inputs generateManualLabel does
+        // (service, preset, defaults) and hand them to the shared
+        // CarrierService.buildManualShipmentRequestDto so the DTO the
+        // native validate hop sends is byte-for-byte identical to the
+        // one Generate Label sends. Prior to this the adapted DTO only
+        // had recipient + accountNumber + intl block, so FedEx
+        // rejected with 5+ NotNull errors on shipper phone / city /
+        // country / serviceType / packagingType.
+        com.multiship.backend.model.ShippingService service = req.getServiceId() != null
+                ? shippingServiceRepository.findById(req.getServiceId()).orElse(null)
+                : null;
+        com.multiship.backend.model.PackagePreset preset = req.getPackagePresetId() != null
+                ? packagePresetRepository.findById(req.getPackagePresetId()).orElse(null)
+                : null;
+        String serviceType = service != null ? service.getServiceCode()
+                : blankTo(connector.getConfiguration().defaultServiceType(), "GROUND");
+        String packageType = preset != null
+                ? ("CARRIER".equalsIgnoreCase(preset.getKind()) ? preset.getCarrierPackageCode() : "YOUR_PACKAGING")
+                : blankTo(connector.getConfiguration().defaultPackageType(), "YOUR_PACKAGING");
+        java.math.BigDecimal length = req.getLength() != null ? req.getLength()
+                : (preset != null ? preset.getLength() : null);
+        java.math.BigDecimal width = req.getWidth() != null ? req.getWidth()
+                : (preset != null ? preset.getWidth() : null);
+        java.math.BigDecimal height = req.getHeight() != null ? req.getHeight()
+                : (preset != null ? preset.getHeight() : null);
+        String fromCountry = req.getSender() != null && StringUtils.hasText(req.getSender().getCountryCode())
+                ? req.getSender().getCountryCode()
+                : null;
+        // Rebuild adaptedRequest — replace the sparse builder-shell
+        // from adaptForValidators with the full-population DTO.
+        adaptedRequest = carrierService.buildManualShipmentRequestDto(
+                req,
+                req.getSender(),
+                req.getRecipient(),
+                carrier,
+                account.getAccountNumber(),
+                serviceType,
+                packageType,
+                length, width, height,
+                fromCountry,
+                account);
+        // adaptForValidators pre-populated intl + DG on the shell DTO;
+        // the new builder also sets DG but not the customs-block DTO.
+        // Re-attach the intl block so IntlShipmentValidator's earlier
+        // pass (via localErrors) can share state with any downstream
+        // logic that reads adaptedRequest.getIntl().
+        if (req.getRecipient() != null && StringUtils.hasText(req.getRecipient().getCountryCode())) {
+            // Reuse the same intl block adaptForValidators computed —
+            // avoids duplicating the commodities mapping.
+            String senderCountry = req.getSender() != null ? req.getSender().getCountryCode() : null;
+            String recipientCountry = req.getRecipient().getCountryCode();
+            com.multiship.backend.dto.ShipmentRequestDTO withIntl = adaptForValidators(
+                    req, isInternational(senderCountry, recipientCountry));
+            adaptedRequest.setIntl(withIntl.getIntl());
+        }
 
         String accessToken;
         try {
@@ -526,6 +566,15 @@ public class ShipmentValidationService {
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
+
+    /**
+     * PR #534 — local helper mirroring CarrierServiceImpl.firstNonBlank.
+     * Kept as a private static so we don't reach across service
+     * boundaries for a 3-line utility.
+     */
+    private static String blankTo(String primary, String fallback) {
+        return StringUtils.hasText(primary) ? primary : fallback;
+    }
 
     private boolean isInternational(String sender, String recipient) {
         if (sender == null || recipient == null) return false;
