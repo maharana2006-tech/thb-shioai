@@ -76,12 +76,18 @@ jobs:
       - name: Resolve modules
         working-directory: native/zebrash-cli
         shell: bash
+        env:
+          # -mod=mod so `go mod tidy` can actually write go.sum;
+          # the Go 1.16+ default is -mod=readonly for the main
+          # module which silently refuses to add missing sums.
+          GOFLAGS: -mod=mod
         run: |
-          # go mod download produces go.sum in-place; go build below
-          # then has everything it needs. `go mod tidy -e` won't ship
-          # go.sum back to the repo (workflow can't push in this
-          # trigger), but that's fine — every build resolves fresh.
-          go mod download
+          # `go mod tidy` writes both go.mod (idempotent when
+          # already correct) and go.sum. `go mod download` +
+          # verify was insufficient — download in readonly mode
+          # doesn't populate sums when none exist, and verify on
+          # an empty sum trivially passes.
+          go mod tidy
           go mod verify
 
       - name: Build
