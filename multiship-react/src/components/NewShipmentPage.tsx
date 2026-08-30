@@ -943,6 +943,62 @@ export default function NewShipmentPage() {
   }, [carrier, clientCode, accountsForCarrier, servicesForCarrier, packagesForCarrier, defaultServiceId, defaultPackagePresetId])
 
   /**
+   * The CarrierAccountRef row matching the currently-picked carrier +
+   * accountNumber. Drives the Label Type / Label Size prefill below.
+   * Nullable: an ad-hoc / typed accountNumber that doesn't match any
+   * saved account leaves this null, and the label dropdowns fall back
+   * to the "please select" required state.
+   */
+  const matchedAccount = useMemo(() => {
+    if (!accountNumber.trim()) return null
+    return accounts.find(
+      (a) => canon(a.carrierCode) === canon(carrier)
+        && (a.accountNumber || '').toLowerCase() === accountNumber.trim().toLowerCase(),
+    ) ?? null
+  }, [accounts, carrier, accountNumber])
+
+  /**
+   * Prefill Label Type / Label Size / Label format from the selected
+   * carrier account. Fires whenever the resolved account changes
+   * (client swap → carrier reset → accountNumber reset → matched
+   * account changes, or a manual account swap). User overrides made
+   * AFTER this fire are preserved until the NEXT account change.
+   *
+   * Null on the account leaves the field blank — combined with the
+   * required-when-null guard in `submit()` this forces the operator
+   * to pick a value before generating a label, closing the
+   * "silently defaulted to PDF/PAPER_4X6/GIF" surprise the old
+   * account-null branch produced.
+   */
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prefill label fields when the resolved account changes; hard-overwrite by design so switching accounts always shows the new account's saved defaults, not stale user overrides from the previous account.
+    setLabelImageType(matchedAccount?.labelImageType ?? '')
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
+    setLabelStockType(matchedAccount?.labelStockType ?? '')
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
+    setLabelImageFormat(matchedAccount?.labelImageFormat ?? '')
+  }, [matchedAccount])
+
+  /**
+   * Which label fields are required-but-blank for the currently-picked
+   * carrier. FedEx needs both labelImageType + labelStockType; UPS /
+   * DHL / USPS need labelImageFormat. The `submit()` and
+   * `validateShipment()` guards use this to block with an operator
+   * message; the UI marks the missing fields required.
+   */
+  const missingLabelFields = useMemo(() => {
+    const missing: string[] = []
+    const cc = canon(carrier)
+    if (cc === 'FEDEX') {
+      if (!labelImageType) missing.push('Label Type')
+      if (!labelStockType) missing.push('Label Size')
+    } else if (['UPS', 'DHL', 'USPS'].includes(cc)) {
+      if (!labelImageFormat) missing.push('Label Type')
+    }
+    return missing
+  }, [carrier, labelImageType, labelStockType, labelImageFormat])
+
+  /**
    * Select a client: fill YOUR address on the correct side and auto-pick its
    * default carrier + account. For a shipment your address is the origin (sender);
    * for a return it's the destination (recipient), taken from the return address.
@@ -1149,6 +1205,17 @@ export default function NewShipmentPage() {
       notify.error('Pick a carrier first — validation is carrier-specific.')
       return
     }
+    // Required-when-null guard: block until every label field the
+    // carrier needs has a pick. Fires here (Validate) AND in submit()
+    // (Generate) so operators see the same message on both buttons.
+    if (missingLabelFields.length > 0) {
+      setSubmitAttempted(true)
+      notify.error(
+        `Pick ${missingLabelFields.join(' + ')} before validating — the selected account has no saved default.`,
+      )
+      scrollToFirstError()
+      return
+    }
     setCarrierValidating(true)
     try {
       // Sprint 52 — send the full form (matching the /orders/manual-label
@@ -1206,6 +1273,15 @@ export default function NewShipmentPage() {
           insuredValue: Number(insuredValue),
           insuredValueCurrency: currency,
         } : {}),
+        // Label spec — mirror the generate-label payload so a green
+        // validate is a strong guarantee the label call will succeed
+        // on the same request. Guard above ensures these are non-blank
+        // when the carrier requires them.
+        ...(canon(carrier) === 'FEDEX' && labelImageType ? { labelImageType } : {}),
+        ...(canon(carrier) === 'FEDEX' && labelStockType ? { labelStockType } : {}),
+        ...(['UPS', 'DHL', 'USPS'].includes(canon(carrier)) && labelImageFormat
+          ? { labelImageFormat }
+          : {}),
       }
       const res = await shipmentValidationService.validate(payload)
       const result = res.data ?? null
@@ -1463,6 +1539,17 @@ export default function NewShipmentPage() {
   const submit = async () => {
     // Yup + Formik gate — validate the mirrored form values before anything else.
     setSubmitAttempted(true)
+    // Required-when-null label guard runs BEFORE yup so we surface a
+    // targeted toast; yup doesn't know about the label fields (they're
+    // not in the form schema).
+    if (missingLabelFields.length > 0) {
+      showToast(
+        `Pick ${missingLabelFields.join(' + ')} — the selected account has no saved default.`,
+        `${missingLabelFields.length} label field${missingLabelFields.length === 1 ? '' : 's'} need attention`,
+      )
+      scrollToFirstError()
+      return
+    }
     const errs = await formik.validateForm(formValues as unknown as ShipmentFormValues)
     const msgs = flattenErrors(errs)
     if (msgs.length > 0) {
@@ -1728,16 +1815,7 @@ export default function NewShipmentPage() {
                     ))}
                   </select>
                 </Field>
-                <Field
-                  label={`Ship from${clientWarehouses.length ? ` · ${clientWarehouses.length}` : ''}`}
-                  hint={
-                    !clientCode
-                      ? 'Pick a client to load warehouses.'
-                      : clientWarehouses.length === 0
-                        ? 'No warehouses attached — the sender block below is manual.'
-                        : undefined
-                  }
-                >
+                <Field label={`Ship from${clientWarehouses.length ? ` · ${clientWarehouses.length}` : ''}`}>
                   <select
                     className={inputCls}
                     value={warehouseCode}
@@ -1778,18 +1856,21 @@ export default function NewShipmentPage() {
                     ))}
                   </select>
                 </Field>
-                {/* FDX-H3 — per-shipment override of the FedEx account's
-                    default labelSpecification. Blank = use the account
-                    default (which itself falls back to PDF/PAPER_4X6).
-                    Only shown for FedEx — other carriers ignore these. */}
+                {/* Per-shipment label spec — prefilled from the picked
+                    carrier account (matchedAccount above). Required
+                    when the account has no saved default so operators
+                    can't silently ship on the backend hardcoded
+                    fallback. FedEx renders Label Type + Label Size;
+                    UPS/DHL/USPS render Label Type only (they don't
+                    have a stock-type concept). */}
                 {canon(carrier) === 'FEDEX' ? (
                   <>
-                    <Field label="Label image type"
-                           hint="Blank = account default (PDF)">
+                    <Field label="Label Type" required
+                           error={submitAttempted && !labelImageType ? 'Required — pick a label type.' : undefined}>
                       <select className={inputCls}
                               value={labelImageType}
                               onChange={(e) => setLabelImageType(e.target.value)}>
-                        <option value="">Account default</option>
+                        <option value="">-- Select --</option>
                         <option value="PDF">PDF (vector, sharp)</option>
                         <option value="PNG">PNG (raster)</option>
                         <option value="ZPLII">ZPLII (Zebra)</option>
@@ -1797,12 +1878,12 @@ export default function NewShipmentPage() {
                         <option value="DPL">DPL (Datamax)</option>
                       </select>
                     </Field>
-                    <Field label="Label stock type"
-                           hint="Blank = account default (PAPER_4X6)">
+                    <Field label="Label Size" required
+                           error={submitAttempted && !labelStockType ? 'Required — pick a label size.' : undefined}>
                       <select className={inputCls}
                               value={labelStockType}
                               onChange={(e) => setLabelStockType(e.target.value)}>
-                        <option value="">Account default</option>
+                        <option value="">-- Select --</option>
                         <option value="PAPER_4X6">Paper 4x6</option>
                         <option value="PAPER_4X6.75">Paper 4x6.75</option>
                         <option value="PAPER_4X8">Paper 4x8</option>
@@ -1816,6 +1897,39 @@ export default function NewShipmentPage() {
                       </select>
                     </Field>
                   </>
+                ) : null}
+                {['UPS', 'DHL', 'USPS'].includes(canon(carrier)) ? (
+                  <Field label="Label Type" required
+                         error={submitAttempted && !labelImageFormat ? 'Required — pick a label type.' : undefined}>
+                    <select className={inputCls}
+                            value={labelImageFormat}
+                            onChange={(e) => setLabelImageFormat(e.target.value)}>
+                      <option value="">-- Select --</option>
+                      {canon(carrier) === 'UPS' ? (
+                        <>
+                          <option value="GIF">GIF (raster)</option>
+                          <option value="PDF">PDF (vector, sharp)</option>
+                          <option value="PNG">PNG (raster)</option>
+                          <option value="ZPL">ZPL (Zebra)</option>
+                          <option value="EPL">EPL (Eltron/legacy Zebra)</option>
+                        </>
+                      ) : null}
+                      {canon(carrier) === 'DHL' ? (
+                        <>
+                          <option value="PDF">PDF (label + A4 doc)</option>
+                          <option value="ZPL">ZPL (thermal label only)</option>
+                        </>
+                      ) : null}
+                      {canon(carrier) === 'USPS' ? (
+                        <>
+                          <option value="PNG">PNG (raster)</option>
+                          <option value="PDF">PDF (vector, sharp)</option>
+                          <option value="GIF">GIF (raster)</option>
+                          <option value="JPG">JPG (raster)</option>
+                        </>
+                      ) : null}
+                    </select>
+                  </Field>
                 ) : null}
               </div>
             </SectionCard>
@@ -2259,44 +2373,10 @@ export default function NewShipmentPage() {
                            placeholder="0.00" />
                   </Field>
                 </div>
-                {/* Per-shipment override of the account's default label
-                    file format — UPS/DHL/USPS only. Blank = use the
-                    account default. */}
-                {['UPS', 'DHL', 'USPS'].includes(canon(carrier)) ? (
-                  <div className="grid grid-cols-2 gap-3">
-                    <Field label={`Label format (${canon(carrier)} only)`}
-                           hint="Blank = account default">
-                      <select className={inputCls}
-                              value={labelImageFormat}
-                              onChange={(e) => setLabelImageFormat(e.target.value)}>
-                        <option value="">Account default</option>
-                        {canon(carrier) === 'UPS' ? (
-                          <>
-                            <option value="GIF">GIF (raster)</option>
-                            <option value="PDF">PDF (vector, sharp)</option>
-                            <option value="PNG">PNG (raster)</option>
-                            <option value="ZPL">ZPL (Zebra)</option>
-                            <option value="EPL">EPL (Eltron/legacy Zebra)</option>
-                          </>
-                        ) : null}
-                        {canon(carrier) === 'DHL' ? (
-                          <>
-                            <option value="PDF">PDF (label + A4 doc)</option>
-                            <option value="ZPL">ZPL (thermal label only)</option>
-                          </>
-                        ) : null}
-                        {canon(carrier) === 'USPS' ? (
-                          <>
-                            <option value="PNG">PNG (raster)</option>
-                            <option value="PDF">PDF (vector, sharp)</option>
-                            <option value="GIF">GIF (raster)</option>
-                            <option value="JPG">JPG (raster)</option>
-                          </>
-                        ) : null}
-                      </select>
-                    </Field>
-                  </div>
-                ) : null}
+                {/* UPS/DHL/USPS Label format moved to the compact top
+                    "Shipment" row (rendered next to FedEx's Label Type
+                    + Label Size). Removed from this section to avoid
+                    two controls bound to the same labelImageFormat. */}
                 {isCustomPkg ? (
                   <div className="grid grid-cols-3 gap-3">
                     <Field label={`Length (${dimUnit.toLowerCase()})`} required error={errAt('length')}>
