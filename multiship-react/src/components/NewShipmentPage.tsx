@@ -2003,6 +2003,43 @@ export default function NewShipmentPage() {
                         </ul>
                       </>
                     ) : null}
+                    {/* Sprint 52 PR δ — carrier subresult section. Rendered
+                        below local errors/warnings so the operator sees
+                        "server-side gaps first, then what the carrier
+                        thinks." Only shown when carrier was actually
+                        called (skipped when local errors present or
+                        carrier isn't configured). */}
+                    {shipmentValidationResult.carrier ? (
+                      <>
+                        <p className="mt-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-600">
+                          {shipmentValidationResult.carrier.carrierCode} check
+                          {shipmentValidationResult.carrier.kind === 'ADDRESS_ONLY' ? ' (address only)' : ''}
+                        </p>
+                        <p className={`mt-0.5 text-[11.5px] ${
+                          shipmentValidationResult.carrier.valid
+                            ? 'text-emerald-700'
+                            : shipmentValidationResult.carrier.matchLevel === 'NOT_SUPPORTED'
+                              ? 'text-slate-500'
+                              : 'text-rose-700'
+                        }`}>
+                          {shipmentValidationResult.carrier.matchLevel}: {shipmentValidationResult.carrier.message}
+                        </p>
+                        {shipmentValidationResult.carrier.warnings.length ? (
+                          <ul className="mt-1 list-disc space-y-0.5 pl-6 text-amber-800">
+                            {shipmentValidationResult.carrier.warnings.map((w, idx) => (
+                              <li key={`cw-${idx}`}>{w}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {shipmentValidationResult.carrier.errors.length ? (
+                          <ul className="mt-1 list-disc space-y-0.5 pl-6 text-rose-700">
+                            {shipmentValidationResult.carrier.errors.map((e, idx) => (
+                              <li key={`ce-${idx}`}>{e}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </SectionCard>

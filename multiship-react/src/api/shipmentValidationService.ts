@@ -34,21 +34,41 @@ export interface ShipmentValidationCheckStatus {
   reason: string
 }
 
+export interface CarrierValidationSubResult {
+  /** FEDEX | UPS | DHL | USPS. */
+  carrierCode: string
+  /** True when the carrier confirmed the shipment / address is deliverable. */
+  valid: boolean
+  /** EXACT | CORRECTED | AMBIGUOUS | NOT_FOUND | NOT_SUPPORTED | ERROR. */
+  matchLevel: string
+  /** SHIPMENT (carrier-native validate endpoint) | ADDRESS_ONLY
+   *  (connector delegated to its address validator). MVP: all 4
+   *  carriers are ADDRESS_ONLY; PR δ.1 upgrades FedEx + UPS. */
+  kind: 'SHIPMENT' | 'ADDRESS_ONLY' | string
+  warnings: string[]
+  errors: string[]
+  message: string
+}
+
 export interface ShipmentValidationResult {
   /** Top-level UX signal:
-   *    PASS — no errors, address (if called) is EXACT or not applicable.
-   *    WARN — no local errors but address is CORRECTED / AMBIGUOUS or
+   *    PASS — no errors, carrier (if called) is EXACT or not applicable.
+   *    WARN — no local errors but carrier is CORRECTED / AMBIGUOUS or
    *           local warnings are present.
-   *    FAIL — at least one local error, or address is NOT_FOUND / ERROR. */
+   *    FAIL — at least one local error, or carrier is NOT_FOUND / ERROR. */
   overall: 'PASS' | 'WARN' | 'FAIL'
   message: string
   localErrors: ShipmentValidationIssue[]
   localWarnings: ShipmentValidationIssue[]
   skipped: ShipmentValidationCheckStatus[]
-  /** Present when the carrier supports validateAddress AND local checks
-   *  passed. Reuses the existing AddressValidationResponse type so the
-   *  suggested-address apply flow keeps working unchanged. */
+  /** @deprecated Sprint 52 PR δ — replaced by {@link carrier}. Always
+   *  null on new backend responses; kept for stale-bundle back-compat. */
   address: AddressValidationResponse | null
+  /** Sprint 52 PR δ — carrier's own opinion on the shipment. Null when
+   *  local pre-flight failed (carrier hop skipped), when carrier isn't
+   *  configured (no credentials), or when connector returns NOT_SUPPORTED.
+   *  Drives the new secondary "Carrier check" section on the banner. */
+  carrier: CarrierValidationSubResult | null
   international: boolean
 }
 
