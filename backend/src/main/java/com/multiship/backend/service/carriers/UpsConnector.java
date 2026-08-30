@@ -462,9 +462,17 @@ public class UpsConnector implements CarrierConnector {
             log.warn("UPS validateShipment rejected (HTTP {}): {}",
                     ex.getStatusCode().value(), body);
             java.util.List<String> errors = extractUpsErrors(body);
-            String msg = errors.isEmpty()
-                    ? "UPS validateShipment rejected: HTTP " + ex.getStatusCode().value()
-                    : "UPS rejected the shipment: " + String.join("; ", errors);
+            // PR #533 — human summary. Same pattern as FedEx: on a
+            // multi-error rejection, show the count + bulleted details;
+            // single error surfaced inline.
+            String msg;
+            if (errors.isEmpty()) {
+                msg = "UPS validateShipment rejected: HTTP " + ex.getStatusCode().value();
+            } else if (errors.size() == 1) {
+                msg = "UPS rejected the shipment: " + errors.get(0);
+            } else {
+                msg = "UPS flagged " + errors.size() + " issues with the shipment.";
+            }
             return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
                     java.util.List.of(), errors, msg, body);
         } catch (Exception ex) {
