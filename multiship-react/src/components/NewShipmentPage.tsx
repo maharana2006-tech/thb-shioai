@@ -1280,6 +1280,12 @@ export default function NewShipmentPage() {
    * classification.
    */
   const validateShipment = async () => {
+    // PR #530 — zero shippable carriers: block early with a targeted
+    // link to Settings instead of the generic "pick a carrier" toast.
+    if (noCarriersAtAll) {
+      notify.error('No carriers connected in this workspace. Add + verify a carrier in Settings before validating.')
+      return
+    }
     if (!carrier) {
       notify.error('Pick a carrier first — validation is carrier-specific.')
       return
@@ -1623,6 +1629,17 @@ export default function NewShipmentPage() {
   const submit = async () => {
     // Yup + Formik gate — validate the mirrored form values before anything else.
     setSubmitAttempted(true)
+    // PR #530 — zero shippable carriers: block early with a
+    // Settings-link toast rather than the yup / label-guard errors
+    // that would fire on downstream blank fields (carrier === '',
+    // no label defaults, etc.).
+    if (noCarriersAtAll) {
+      showToast(
+        'Add + verify a carrier account in Settings before generating a label.',
+        'No carriers connected',
+      )
+      return
+    }
     // Required-when-null guard runs BEFORE yup so we surface a
     // targeted toast; yup doesn't know about the label / shipping-
     // purpose fields (they're not in the form schema).
@@ -1800,7 +1817,17 @@ export default function NewShipmentPage() {
     }
   }
 
-  const noCarriers = !loading && carrierOptions.length === 0
+  // PR #530 — replaced the full-page "No shippable carrier yet" empty
+  // state with an inline banner + force-block on submit, so operators
+  // can lay out the shipment (addresses, package, items) while
+  // Settings is missing a carrier. Two cases:
+  //   - tenant-wide: zero carriers across all clients + platform.
+  //   - client-scoped: client picked has no own carriers assigned,
+  //     but platform (verified) accounts exist as a fallback. Soft
+  //     warning; shipping is still allowed via platform.
+  const noCarriersAtAll = !loading && carrierOptions.length === 0
+  const clientHasNoOwnCarriers = !loading && !!clientCode
+    && clientCarriers.length === 0 && platformCarriers.length > 0
 
   return (
     <div className="pb-6">
@@ -1836,16 +1863,57 @@ export default function NewShipmentPage() {
           <section className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-[#8a7959] shadow-sm">
             Loading carriers, services and packaging…
           </section>
-        ) : noCarriers ? (
-          <section className="rounded-2xl border border-dashed border-[#e3d9c4] bg-[#faf7f0] p-10 text-center shadow-sm">
-            <p className="text-sm font-semibold text-[#412d15]">No shippable carrier yet</p>
-            <p className="mx-auto mt-1 max-w-md text-[13px] text-[#8a7959]">
-              A carrier needs an active account <em>and</em> synced live services. Verify a carrier and sync its
-              services in Settings first.
-            </p>
-          </section>
         ) : (
           <>
+            {/* PR #530 — No-carrier banners. Tenant-wide (red, blocks
+                Generate) vs client-scoped (amber, soft warning; can
+                still ship via a platform carrier). */}
+            {noCarriersAtAll ? (
+              <section role="alert" className="rounded-2xl border border-rose-300 bg-rose-50 p-4 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+                    <FiAlertTriangle className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-bold text-rose-900">No carriers connected in this workspace</p>
+                    <p className="mt-0.5 text-[12px] text-rose-800">
+                      A carrier needs an active account <em>and</em> synced live services before you can generate a label. Fill in the shipment details below, then add + verify a carrier in Settings.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/settings/carriers')}
+                    className="shrink-0 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-[12px] font-semibold text-rose-900 shadow-sm transition hover:border-rose-400 hover:bg-rose-100"
+                  >
+                    Add carrier account
+                  </button>
+                </div>
+              </section>
+            ) : clientHasNoOwnCarriers ? (
+              <section role="status" className="rounded-2xl border border-amber-300 bg-amber-50 p-4 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+                    <FiAlertTriangle className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-bold text-amber-900">
+                      Client {clientCode} has no carriers assigned
+                    </p>
+                    <p className="mt-0.5 text-[12px] text-amber-800">
+                      Shipping via a platform (verified) carrier. Pick a different client or assign a carrier account to {clientCode} in Settings.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/settings/carriers')}
+                    className="shrink-0 rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-[12px] font-semibold text-amber-900 shadow-sm transition hover:border-amber-400 hover:bg-amber-100"
+                  >
+                    Assign carrier account
+                  </button>
+                </div>
+              </section>
+            ) : null}
+
             {/* ── Shipment / Return toggle ── */}
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
@@ -2134,7 +2202,7 @@ export default function NewShipmentPage() {
                   <button
                     type="button"
                     onClick={() => void validateShipment()}
-                    disabled={carrierValidating || !carrier}
+                    disabled={carrierValidating || !carrier || noCarriersAtAll}
                     title={carrier
                       ? 'Server-side pre-flight — runs all label-time guards (packaging compatibility, markup, customs, DG, allowlists) on the full form before generating the label'
                       : 'Pick a carrier first'}
@@ -2786,7 +2854,7 @@ export default function NewShipmentPage() {
 
       {/* Sprint 43 — Custom fields (tenant-defined metadata). Panel
        *  self-hides when the tenant has no applicable fields. */}
-      {!loading && !noCarriers ? (
+      {!loading ? (
         <CustomFieldsSection
           tenantId={clientCode || null}
           values={customFieldValues}
@@ -2798,7 +2866,7 @@ export default function NewShipmentPage() {
       {/* sticky footer action bar — stays within the content column.
           `!mt-6` beats the parent space-y-4 so there's a clear gap between the
           form cards and the action bar. */}
-      {!loading && !noCarriers ? (
+      {!loading ? (
         <div className="sticky bottom-4 z-30 !mt-6 space-y-2">
           {reviewWarnings ? (
             <div className="rounded-2xl border border-[#e3d9c4] bg-white p-3.5 shadow-[0_18px_50px_rgba(31,21,12,0.14)]">
@@ -2868,7 +2936,7 @@ export default function NewShipmentPage() {
               <button
                 type="button"
                 onClick={() => void submit()}
-                disabled={submitting}
+                disabled={submitting || noCarriersAtAll}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none"
               >
                 {submitting ? (

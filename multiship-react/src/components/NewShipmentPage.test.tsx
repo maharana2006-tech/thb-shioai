@@ -74,10 +74,11 @@ describe('NewShipmentPage', () => {
     const { default: NewShipmentPage } = await import('./NewShipmentPage')
     renderWithProviders(<NewShipmentPage />)
 
-    // With all account/carrier services stubbed empty, the page shows its
-    // empty-state ("No shippable carrier yet"). That's fine — the smoke
-    // test just proves the module boots and renders the outer shell.
-    const emptyState = await screen.findByText(/No shippable carrier yet/i)
-    expect(emptyState).toBeInTheDocument()
+    // PR #530 — replaced the full-page empty state with an inline
+    // banner + full form. With all account/carrier services stubbed
+    // empty, the page renders the tenant-wide no-carrier banner
+    // alongside the shipment form.
+    const banner = await screen.findByText(/No carriers connected in this workspace/i)
+    expect(banner).toBeInTheDocument()
   })
 })
