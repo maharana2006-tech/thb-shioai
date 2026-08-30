@@ -1,0 +1,119 @@
+name: native-zebrash
+
+# Cross-compile the zebrash-cli helper for the 4 platforms the Java
+# backend supports. Produces per-platform binaries as artifacts, and on
+# a tag push publishes them as a GitHub release the Maven
+# download-maven-plugin can pull from at build time.
+#
+# Triggers deliberately narrow — only when the native/zebrash-cli/ dir
+# changes (source or Makefile) or the workflow itself is edited. Full
+# tag-based release still fires on `v*` tags.
+
+on:
+  push:
+    paths:
+      - 'native/zebrash-cli/**'
+      - '.github/workflows/native-zebrash.yml'
+    tags:
+      - 'zebrash-cli-v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # release + artifact upload
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            slug: linux-amd64
+            ext: ''
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            slug: linux-arm64
+            ext: ''
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            slug: darwin-arm64
+            ext: ''
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            slug: windows-amd64
+            ext: '.exe'
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: native/zebrash-cli/go.sum
+
+      - name: Build
+        working-directory: native/zebrash-cli
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist/${{ matrix.slug }}
+          go build -trimpath -ldflags='-s -w' \
+            -o "dist/${{ matrix.slug }}/zebrash-cli${{ matrix.ext }}" .
+          ls -lh "dist/${{ matrix.slug }}/"
+
+      - name: Smoke test (native runners only)
+        if: matrix.goos == runner.os || (matrix.goos == 'linux' && runner.os == 'Linux')
+        working-directory: native/zebrash-cli
+        shell: bash
+        run: |
+          printf '^XA^FO50,50^ADN,36,20^FDHello ZPL^FS^XZ' \
+            | "./dist/${{ matrix.slug }}/zebrash-cli${{ matrix.ext }}" \
+                --width 2 --height 1 --dpmm 8 > /tmp/smoke.png
+          # PNG magic bytes = 89 50 4E 47
+          xxd -l 4 /tmp/smoke.png | grep -q "8950 4e47" || { echo "not a PNG"; exit 1; }
+          echo "smoke test passed"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zebrash-cli-${{ matrix.slug }}
+          path: native/zebrash-cli/dist/${{ matrix.slug }}/*
+          retention-days: 30
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/zebrash-cli-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Bundle release assets
+        run: |
+          mkdir -p release
+          for slug in linux-amd64 linux-arm64 darwin-arm64 windows-amd64; do
+            src="artifacts/zebrash-cli-${slug}"
+            if [ ! -d "$src" ]; then
+              echo "missing artifact for $slug"; exit 1
+            fi
+            ( cd "$src" && zip -r "../../release/zebrash-cli-${slug}.zip" . )
+          done
+          ls -lh release/
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.zip
+          generate_release_notes: true
