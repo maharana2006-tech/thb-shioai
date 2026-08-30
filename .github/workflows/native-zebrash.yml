@@ -10,12 +10,22 @@ name: native-zebrash
 # tag-based release still fires on `v*` tags.
 
 on:
+  # Split into two push triggers because GH Actions treats
+  # `on.push.tags:` as restrictive — a `push` block with `tags:`
+  # but no `branches:` filter runs ONLY on tag pushes and ignores
+  # branch pushes entirely (docs: "Excluding branches and tags").
+  # First block: any branch push that touches the source. Second
+  # block: any zebrash-cli-v* tag push (fires the release job).
+  # YAML doesn't allow duplicate keys, so we combine via a single
+  # push key with branches+tags+paths — GH ORs refs, ANDs paths.
   push:
+    branches:
+      - '**'
+    tags:
+      - 'zebrash-cli-v*'
     paths:
       - 'native/zebrash-cli/**'
       - '.github/workflows/native-zebrash.yml'
-    tags:
-      - 'zebrash-cli-v*'
   workflow_dispatch: {}
 
 permissions:
