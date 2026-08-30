@@ -70,8 +70,32 @@ public class ShipmentValidationResult {
      * supports it and local checks passed. Null when local checks
      * failed (skipped the carrier hop) or when the carrier's
      * validateAddress returned NOT_SUPPORTED.
+     *
+     * @deprecated Sprint 52 PR δ — superseded by {@link #carrier} which
+     * carries the richer ValidateShipmentResult shape. Kept as-is (null
+     * on new responses) for pre-PR-δ FE bundle back-compat.
      */
+    @Deprecated
     private AddressValidationResponseDTO address;
+
+    /**
+     * Sprint 52 PR δ — carrier-native shipment validation result. When
+     * local pre-flight passes AND the picked carrier is resolvable
+     * (credentials available), the connector's validateShipment is
+     * called and its result lands here. Null when local failed (skipped
+     * carrier hop), when the carrier couldn't be resolved (no
+     * credentials on file), or when the connector returned NOT_SUPPORTED.
+     *
+     * <p>{@code matchLevel} drives the UI:
+     * EXACT (green), CORRECTED / AMBIGUOUS (amber), NOT_FOUND / ERROR
+     * (red), NOT_SUPPORTED (grey — no call made).
+     *
+     * <p>{@code kind} tells the operator whether the carrier ran a
+     * shipment-level check (SHIPMENT) or the connector fell back to its
+     * address-only validator (ADDRESS_ONLY). MVP: all 4 connectors are
+     * ADDRESS_ONLY. Follow-up PR δ.1 upgrades FedEx + UPS to SHIPMENT.
+     */
+    private CarrierValidationSubResult carrier;
 
     /**
      * True when the shipment was classified as international by the
@@ -80,6 +104,27 @@ public class ShipmentValidationResult {
      * server's view for consistency.
      */
     private boolean international;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class CarrierValidationSubResult {
+        /** Which carrier ran the check (FEDEX / UPS / DHL / USPS). */
+        private String carrierCode;
+        /** True when the carrier confirmed the shipment / address is deliverable. */
+        private boolean valid;
+        /** EXACT | CORRECTED | AMBIGUOUS | NOT_FOUND | NOT_SUPPORTED | ERROR. */
+        private String matchLevel;
+        /** SHIPMENT (native validate) | ADDRESS_ONLY (delegated to validateAddress). */
+        private String kind;
+        /** Carrier-flagged warnings (unusual state format, missing suite, etc.). */
+        private List<String> warnings;
+        /** Carrier-flagged errors (invalid ZIP, service not available on lane, etc.). */
+        private List<String> errors;
+        /** Operator-facing summary — one sentence. */
+        private String message;
+    }
 
     @Data
     @Builder

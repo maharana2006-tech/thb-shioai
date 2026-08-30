@@ -75,6 +75,13 @@ public class ShipmentValidationService {
     private final ShipmentResolutionService resolutionService;
     private final ShippingServiceRepository shippingServiceRepository;
     private final PackagePresetRepository packagePresetRepository;
+    /** Sprint 52 PR δ — carrier-native shipment validation dispatch.
+     *  Resolves the connector for the picked carrier then calls its
+     *  validateShipment (default: delegates to validateAddress; MVP
+     *  behaviour for all 4 carriers, follow-up PR δ.1 overrides FedEx +
+     *  UPS with native validate endpoints). */
+    private final CarrierService carrierService;
+    private final com.multiship.backend.repository.CarrierAccountRefRepository carrierAccountRefRepository;
 
     @Transactional(readOnly = true)
     public ApiResponse<ShipmentValidationResult> validate(ManualShipmentRequest req) {
@@ -214,6 +221,35 @@ public class ShipmentValidationService {
             skipped.add(check("dangerous_goods", "no DG block on the request"));
         }
 
+        // ─── Sprint 52 PR δ — carrier-native shipment validation ───────────
+        // Per user's "always call both" scope pick — carrier is invoked
+        // even when local flagged errors. Rationale: carrier catches
+        // orthogonal issues (ZIP-in-wrong-state, account contract
+        // limits, lane availability) the local pass doesn't. Aggregated
+        // response carries both sub-results so operator sees everything
+        // fixable in one pass.
+        //
+        // MVP: default validateShipment on CarrierConnector delegates to
+        // validateAddress with the recipient block — every carrier gets
+        // free address-level truth. Follow-up PR δ.1 overrides in
+        // FedEx + UPS with native validate endpoints.
+        ShipmentValidationResult.CarrierValidationSubResult carrierResult =
+                callCarrierValidateShipment(req, adapted, skipped);
+        if (carrierResult != null && Boolean.FALSE.equals(carrierResult.isValid())) {
+            // Carrier flagged a hard failure — surface as a top-level
+            // localError so the aggregated verdict flips to FAIL. The
+            // detailed carrier sub-result stays on .carrier for the FE
+            // banner's secondary section.
+            if ("NOT_FOUND".equals(carrierResult.getMatchLevel())
+                    || "ERROR".equals(carrierResult.getMatchLevel())) {
+                errors.add(ValidationIssue.builder()
+                        .code(ErrorCode.VALIDATION_ERROR.name())
+                        .message(carrierResult.getCarrierCode() + ": " + carrierResult.getMessage())
+                        .field(null)
+                        .build());
+            }
+        }
+
         // Sprint 52 diagnostic — one INFO line per validate call so future
         // "validate said PASS but shouldn't have" reports can be triaged
         // from log alone. Captures the exact inputs the guard saw + the
@@ -245,7 +281,135 @@ public class ShipmentValidationService {
                 warnings.size(),
                 skipped.stream().map(ValidationCheckStatus::getName).toList()
         );
-        return ok(buildResult(errors, warnings, skipped, international));
+        return ok(buildResult(errors, warnings, skipped, carrierResult, international));
+    }
+
+    /**
+     * Sprint 52 PR δ — resolve credentials + call the connector's
+     * validateShipment. Mirrors {@link AddressValidationServiceImpl}'s
+     * resolution pattern (client's default account first, platform
+     * fallback). Never throws — connector failures come back as a
+     * subresult with matchLevel=ERROR / NOT_SUPPORTED so the operator
+     * still gets local pre-flight results.
+     */
+    private ShipmentValidationResult.CarrierValidationSubResult callCarrierValidateShipment(
+            ManualShipmentRequest req,
+            ShipmentRequestDTO adaptedRequest,
+            List<ValidationCheckStatus> skipped) {
+        String carrierCode = req.getCarrierCode();
+        if (!StringUtils.hasText(carrierCode)) {
+            skipped.add(check("carrier_validate_shipment", "no carrierCode picked"));
+            return null;
+        }
+        String carrier = carrierCode.trim().toUpperCase(Locale.ROOT);
+
+        com.multiship.backend.service.carriers.CarrierConnector connector;
+        try {
+            connector = carrierService.getCarrierConnector(carrier);
+        } catch (Exception ex) {
+            skipped.add(check("carrier_validate_shipment",
+                    "carrier " + carrier + " not configured on this instance"));
+            return null;
+        }
+
+        // Credential resolution — mirror AddressValidationServiceImpl:
+        // client-default first, then any client-owned active account,
+        // then platform fallback.
+        com.multiship.backend.model.CarrierAccountRef account = resolveAccount(carrier, req.getClientCode());
+        if (account == null || !StringUtils.hasText(account.getClientId())
+                || !StringUtils.hasText(account.getClientSecret())) {
+            skipped.add(check("carrier_validate_shipment",
+                    "no live " + carrier + " credentials — cannot call carrier validate"));
+            return null;
+        }
+
+        // Populate the adapted request with the fields validateShipment
+        // consumers (validateAddress delegate + future native impls)
+        // read: carrier + recipient block + account number. The intl /
+        // customs / DG sub-block is already set by adaptForValidators.
+        adaptedRequest.setCarrierCode(carrier);
+        adaptedRequest.setAccountNumber(account.getAccountNumber());
+        adaptedRequest.setRecipientName(req.getRecipient().getName());
+        adaptedRequest.setRecipientCompany(req.getRecipient().getCompany());
+        adaptedRequest.setRecipientAddressLine1(req.getRecipient().getAddressLine1());
+        adaptedRequest.setRecipientAddressLine2(req.getRecipient().getAddressLine2());
+        adaptedRequest.setRecipientAddressLine3(req.getRecipient().getAddressLine3());
+        adaptedRequest.setRecipientCity(req.getRecipient().getCity());
+        adaptedRequest.setRecipientState(req.getRecipient().getState());
+        adaptedRequest.setRecipientPostalCode(req.getRecipient().getPostalCode());
+        adaptedRequest.setRecipientCountryCode(req.getRecipient().getCountryCode());
+
+        String accessToken;
+        try {
+            accessToken = connector.getAccessToken(
+                    account.getClientId(),
+                    account.getClientSecret(),
+                    account.getAccountNumber(),
+                    account.getEnvironment());
+        } catch (Exception ex) {
+            log.warn("Shipment validation — {} token acquisition failed: {}", carrier, ex.getMessage());
+            return ShipmentValidationResult.CarrierValidationSubResult.builder()
+                    .carrierCode(carrier)
+                    .valid(false)
+                    .matchLevel("ERROR")
+                    .kind("ADDRESS_ONLY")
+                    .warnings(List.of())
+                    .errors(List.of("Token acquisition failed: " + ex.getMessage()))
+                    .message(carrier + " token acquisition failed")
+                    .build();
+        }
+
+        com.multiship.backend.service.carriers.CarrierConnector.ValidateShipmentResult result;
+        try {
+            result = connector.validateShipment(adaptedRequest, accessToken, account.getEnvironment());
+        } catch (Exception ex) {
+            log.warn("Shipment validation — {} validateShipment failed: {}", carrier, ex.getMessage());
+            return ShipmentValidationResult.CarrierValidationSubResult.builder()
+                    .carrierCode(carrier)
+                    .valid(false)
+                    .matchLevel("ERROR")
+                    .kind("ADDRESS_ONLY")
+                    .warnings(List.of())
+                    .errors(List.of(ex.getMessage()))
+                    .message(carrier + " validateShipment call failed")
+                    .build();
+        }
+
+        return ShipmentValidationResult.CarrierValidationSubResult.builder()
+                .carrierCode(carrier)
+                .valid(result.valid())
+                .matchLevel(result.matchLevel())
+                .kind(result.kind())
+                .warnings(result.warnings() != null ? result.warnings() : List.of())
+                .errors(result.errors() != null ? result.errors() : List.of())
+                .message(result.message())
+                .build();
+    }
+
+    /** 3-tier credential resolution — mirrors AddressValidationServiceImpl. */
+    private com.multiship.backend.model.CarrierAccountRef resolveAccount(String carrierCode, String customerNo) {
+        if (StringUtils.hasText(customerNo)) {
+            java.util.List<com.multiship.backend.model.CarrierAccountRef> ownedDefaults =
+                    carrierAccountRefRepository.findByCustomerNoIgnoreCaseAndClientDefaultTrue(customerNo);
+            for (com.multiship.backend.model.CarrierAccountRef ref : ownedDefaults) {
+                if (matchesCarrierWithCreds(ref, carrierCode)) return ref;
+            }
+            java.util.List<com.multiship.backend.model.CarrierAccountRef> allOwned =
+                    carrierAccountRefRepository.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(customerNo);
+            for (com.multiship.backend.model.CarrierAccountRef ref : allOwned) {
+                if (Boolean.FALSE.equals(ref.getActive())) continue;
+                if (matchesCarrierWithCreds(ref, carrierCode)) return ref;
+            }
+        }
+        java.util.List<com.multiship.backend.model.CarrierAccountRef> platform =
+                carrierAccountRefRepository.findPlatformAccountsByCarrier(carrierCode);
+        return platform.isEmpty() ? null : platform.get(0);
+    }
+
+    private static boolean matchesCarrierWithCreds(com.multiship.backend.model.CarrierAccountRef ref, String carrierCode) {
+        return carrierCode.equalsIgnoreCase(ref.getCarrierCode())
+                && StringUtils.hasText(ref.getClientId())
+                && StringUtils.hasText(ref.getClientSecret());
     }
 
     // ─── Field checks (comprehensive — every missing field errors) ──────────
@@ -429,6 +593,7 @@ public class ShipmentValidationService {
     private ShipmentValidationResult buildResult(List<ValidationIssue> errors,
                                                   List<ValidationIssue> warnings,
                                                   List<ValidationCheckStatus> skipped,
+                                                  ShipmentValidationResult.CarrierValidationSubResult carrier,
                                                   boolean international) {
         String overall;
         String message;
@@ -437,14 +602,20 @@ public class ShipmentValidationService {
             message = errors.size() == 1
                     ? errors.get(0).getMessage()
                     : errors.size() + " issues must be fixed before this shipment can be generated.";
-        } else if (!warnings.isEmpty()) {
+        } else if (!warnings.isEmpty()
+                || (carrier != null && ("CORRECTED".equals(carrier.getMatchLevel())
+                        || "AMBIGUOUS".equals(carrier.getMatchLevel())))) {
             overall = "WARN";
-            message = warnings.size() == 1
-                    ? "Ready to ship — review 1 suggestion."
-                    : "Ready to ship — review " + warnings.size() + " suggestions.";
+            message = carrier != null && "CORRECTED".equals(carrier.getMatchLevel())
+                    ? carrier.getCarrierCode() + " suggests a corrected address."
+                    : warnings.size() == 1
+                        ? "Ready to ship — review 1 suggestion."
+                        : "Ready to ship — review " + warnings.size() + " suggestions.";
         } else {
             overall = "PASS";
-            message = "All server-side checks passed. Ready to generate the label.";
+            message = carrier != null && carrier.isValid()
+                    ? "Local + " + carrier.getCarrierCode() + " checks passed. Ready to generate the label."
+                    : "All server-side checks passed. Ready to generate the label.";
         }
 
         return ShipmentValidationResult.builder()
@@ -453,7 +624,8 @@ public class ShipmentValidationService {
                 .localErrors(errors)
                 .localWarnings(warnings)
                 .skipped(skipped)
-                .address(null) // no carrier calls in this pre-flight; field kept for future
+                .address(null) // Sprint 52 PR δ — deprecated; carrier subresult moved to .carrier
+                .carrier(carrier)
                 .international(international)
                 .build();
     }

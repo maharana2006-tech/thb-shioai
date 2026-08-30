@@ -234,6 +234,74 @@ public interface CarrierConnector {
     }
 
     /**
+     * Sprint 52 PR δ — carrier-native shipment validation. Called by
+     * {@link com.multiship.backend.service.ShipmentValidationService}
+     * after local pre-flight passes, so the operator gets the carrier's
+     * own opinion (ZIP-in-wrong-state, service+account contract
+     * mismatches, packaging code the account isn't enabled for, weight
+     * over service cap, lane not available, …) BEFORE Generate Label
+     * fires the same call for real and burns an idempotency-key slot.
+     *
+     * <p>Default implementation delegates to {@link #validateAddress}
+     * with the recipient block extracted from the request. Every
+     * connector inherits at least this address-only validation without
+     * per-carrier code. Follow-up PR δ.1 will override in FedEx + UPS
+     * with their native validate endpoints (FedEx
+     * {@code /ship/v1/shipments/packages/validate}, UPS
+     * {@code ShipConfirm} with {@code RequestOption=validate}) for the
+     * richer package + service + weight checks those APIs run.
+     *
+     * <p>Never throws — returns {@code matchLevel=ERROR} + a message
+     * when the carrier call fails. Callers aggregate the result into
+     * {@link com.multiship.backend.dto.ShipmentValidationResult}.
+     */
+    default ValidateShipmentResult validateShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        // Delegate to address-only validation with the recipient block —
+        // preserves 100% backwards-compat for connectors that predate
+        // the shipment-level check while giving them free carrier-side
+        // coverage of the address subset today.
+        AddressToValidate recipient = new AddressToValidate(
+                request.getRecipientName(),
+                request.getRecipientCompany(),
+                request.getRecipientAddressLine1(),
+                request.getRecipientAddressLine2(),
+                request.getRecipientAddressLine3(),
+                request.getRecipientCity(),
+                request.getRecipientState(),
+                request.getRecipientPostalCode(),
+                request.getRecipientCountryCode()
+        );
+        AddressValidationResult addr = validateAddress(recipient, accessToken, environment);
+        return new ValidateShipmentResult(
+                addr.valid(),
+                addr.matchLevel(),
+                "ADDRESS_ONLY",
+                addr.warnings(),
+                List.of(),
+                addr.message(),
+                addr.rawResponse()
+        );
+    }
+
+    /**
+     * Result of a shipment-level validation call. Mirrors the
+     * {@link AddressValidationResult} shape but names its coverage
+     * scope ({@code kind}: ADDRESS_ONLY when the connector delegates
+     * to its address validator; SHIPMENT when a native validate
+     * endpoint checked the whole request).
+     */
+    record ValidateShipmentResult(
+            boolean valid,
+            String matchLevel,
+            String kind,
+            List<String> warnings,
+            List<String> errors,
+            String message,
+            String rawResponse
+    ) {
+    }
+
+    /**
      * Estimate landed cost — duties + taxes + fees on top of freight — for
      * a cross-border shipment. Sprint 32. Every carrier that ships
      * internationally exposes some form of duties/taxes estimator:

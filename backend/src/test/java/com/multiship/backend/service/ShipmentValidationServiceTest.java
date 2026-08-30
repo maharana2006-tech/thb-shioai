@@ -41,6 +41,8 @@ class ShipmentValidationServiceTest {
     private ShipmentResolutionService resolutionService;
     private ShippingServiceRepository shippingServiceRepository;
     private PackagePresetRepository packagePresetRepository;
+    private com.multiship.backend.service.CarrierService carrierService;
+    private com.multiship.backend.repository.CarrierAccountRefRepository carrierAccountRefRepository;
 
     private ShipmentValidationService service;
 
@@ -50,10 +52,16 @@ class ShipmentValidationServiceTest {
         resolutionService = mock(ShipmentResolutionService.class);
         shippingServiceRepository = mock(ShippingServiceRepository.class);
         packagePresetRepository = mock(PackagePresetRepository.class);
+        // Sprint 52 PR δ — new deps for carrier-native validateShipment.
+        // Constructor arg order matches @RequiredArgsConstructor field
+        // declaration order in ShipmentValidationService.
+        carrierService = mock(com.multiship.backend.service.CarrierService.class);
+        carrierAccountRefRepository = mock(com.multiship.backend.repository.CarrierAccountRefRepository.class);
 
         service = new ShipmentValidationService(
                 packagingCompatibilityGuard, resolutionService,
-                shippingServiceRepository, packagePresetRepository);
+                shippingServiceRepository, packagePresetRepository,
+                carrierService, carrierAccountRefRepository);
     }
 
     // ─── Happy path ─────────────────────────────────────────────────────
