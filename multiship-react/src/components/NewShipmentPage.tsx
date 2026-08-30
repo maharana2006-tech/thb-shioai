@@ -46,7 +46,7 @@ import { STATE_CODE_OPTIONS } from '../utils/stateCodes'
 import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddressFields'
 import { compatiblePresetIds } from '../utils/servicePackageCompatibility'
 import { shipmentValidationService, type ShipmentValidationResult } from '../api/shipmentValidationService'
-import { SHIPPING_PURPOSES } from '../utils/customsOptions'
+import { SHIPPING_PURPOSES, clearanceOptionsForCarrier } from '../utils/customsOptions'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -467,6 +467,13 @@ export default function NewShipmentPage() {
   const [accountNumber, setAccountNumber] = useState('') // bill-to account, manually editable
   const [serviceId, setServiceId] = useState<number | ''>('')
   const [incoterms, setIncoterms] = useState('DDP') // DAP | DDP — who pays duties/taxes
+  // F6-C — per-carrier customs clearance option. Prefills from
+  // CarrierAccountRef.clearanceOption when the value is in the current
+  // carrier's vocabulary (UPS SENDER/RECEIVER/THIRD_PARTY vs FedEx
+  // SENDER/RECIPIENT/THIRD_PARTY vs USPS DDU/DDP vs DHL DAP/DDP/EXW).
+  // Blank = backend connector picks its own default (usually sender-
+  // pays / DAP). International-only; hidden on domestic.
+  const [clearanceOption, setClearanceOption] = useState('')
   const [packageChoice, setPackageChoice] = useState<string>('') // preset id as string, or CUSTOM_PKG
   const [length, setLength] = useState('')
   const [width, setWidth] = useState('')
@@ -1040,7 +1047,17 @@ export default function NewShipmentPage() {
     // fires on international.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
     setReasonForExport(matchedAccount?.shippingPurpose ?? '')
-  }, [matchedAccount])
+    // Clearance option (customs duties): prefill from account only when
+    // the saved value is in the current carrier's vocabulary. Guards
+    // against admin misconfiguration (e.g. UPS account with a FedEx-
+    // only 'RECIPIENT' value) and the carrier-swap case (account's
+    // saved value from prior carrier still cached). NULL / not-in-list
+    // → blank; backend connector applies its own default.
+    const saved = matchedAccount?.clearanceOption
+    const allowed = clearanceOptionsForCarrier(canon(carrier))
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
+    setClearanceOption(saved && allowed.some((o) => o.value === saved) ? saved : '')
+  }, [matchedAccount, carrier])
 
   /**
    * Which label fields are required-but-blank for the currently-picked
@@ -1351,6 +1368,7 @@ export default function NewShipmentPage() {
           items: cleanItems,
           incoterms: incoterms || undefined,
           reasonForExport: reasonForExport || undefined,
+          clearanceOption: clearanceOption || undefined,
         } : {}),
         ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
         ...(signatureOption !== 'NONE' ? { signatureOption } : {}),
@@ -1773,7 +1791,12 @@ export default function NewShipmentPage() {
       } : {}),
       // Currency moved to top-level (always sent). Intl still carries the
       // customs-specific extras (items, reason for export, incoterms).
-      ...(isInternational ? { items: cleanItems, reasonForExport, incoterms } : {}),
+      ...(isInternational ? {
+        items: cleanItems,
+        reasonForExport,
+        incoterms,
+        ...(clearanceOption ? { clearanceOption } : {}),
+      } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
     }
 
@@ -2448,6 +2471,23 @@ export default function NewShipmentPage() {
                       <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
                         <option value="DDP">DDP — sender pays duties</option>
                         <option value="DAP">DAP — receiver pays duties</option>
+                      </select>
+                    </Field>
+                  ) : null}
+                  {/* F6-C — clearanceOption dropdown. Per-carrier
+                      vocabulary (customsOptions.ts). Blank = backend
+                      connector picks its own default. Hidden when the
+                      carrier isn't recognised (no options). */}
+                  {isInternational && clearanceOptionsForCarrier(canon(carrier)).length > 0 ? (
+                    <Field label="Duties paid by"
+                           hint={clearanceOption ? undefined : 'Blank = carrier default'}>
+                      <select className={inputCls}
+                              value={clearanceOption}
+                              onChange={(e) => setClearanceOption(e.target.value)}>
+                        <option value="">-- Carrier default --</option>
+                        {clearanceOptionsForCarrier(canon(carrier)).map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
                       </select>
                     </Field>
                   ) : null}
