@@ -279,6 +279,144 @@ public class FedExConnector implements CarrierConnector {
     }
 
     /**
+     * PR δ.1 — native FedEx shipment-level validation via
+     * {@code POST /ship/v1/shipments/packages/validate}. Reuses the same
+     * {@link #buildShipmentPayload} the label call uses so what the
+     * operator sees during "Validate shipment" is byte-for-byte the
+     * request Generate Label would fire; a green validate is a
+     * strong guarantee the label call will succeed.
+     *
+     * <p>Response shape (200):
+     * <pre>
+     * output.alerts[] { code, alertType (WARNING|ERROR|NOTE), message }
+     * </pre>
+     * Response shape (400 rejection):
+     * <pre>
+     * errors[] { code, message, parameterList[] }
+     * </pre>
+     *
+     * <p>Verdict mapping:
+     * <ul>
+     *   <li>200 + no ERROR-level alerts → EXACT / valid=true.</li>
+     *   <li>200 + at least one WARNING → CORRECTED / valid=true, warnings populated.</li>
+     *   <li>200 + at least one ERROR alert → NOT_FOUND / valid=false.</li>
+     *   <li>4xx / 5xx → ERROR / valid=false, errors carry FedEx's message.</li>
+     * </ul>
+     */
+    @Override
+    public ValidateShipmentResult validateShipment(ShipmentRequestDTO request,
+                                                    String accessToken,
+                                                    String environment) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new ValidateShipmentResult(false, "NOT_SUPPORTED", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(),
+                    "FedEx validateShipment needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        try {
+            String validateUrl = getShipmentUrl(environment) + "/packages/validate";
+            Map<String, Object> payload = buildShipmentPayload(request);
+            byte[] raw = HttpClients.newBuilder().baseUrl(validateUrl).build()
+                    .post()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("X-locale", "en_US")
+                    .body(payload)
+                    .retrieve()
+                    .body(byte[].class);
+            String response = raw == null ? "{}" : new String(raw, java.nio.charset.StandardCharsets.UTF_8);
+            log.debug("FedEx validateShipment response: {}", response);
+            return parseFedExValidateShipmentResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            String body = ex.getResponseBodyAsString();
+            log.warn("FedEx validateShipment rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), body);
+            java.util.List<String> errors = extractFedExErrors(body);
+            String msg = errors.isEmpty()
+                    ? "FedEx validateShipment rejected: HTTP " + ex.getStatusCode().value()
+                    : "FedEx rejected the shipment: " + String.join("; ", errors);
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(), errors, msg, body);
+        } catch (Exception ex) {
+            log.warn("FedEx validateShipment call failed: {}", ex.getMessage());
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(ex.getMessage()),
+                    "FedEx validateShipment call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse a FedEx {@code /ship/v1/shipments/packages/validate} 200
+     * response. Package-visible so tests can exercise the alert-split
+     * logic without live credentials.
+     */
+    ValidateShipmentResult parseFedExValidateShipmentResponse(String response) {
+        try {
+            JsonNode root = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
+            JsonNode alerts = root.at("/output/alerts");
+            java.util.List<String> warnings = new java.util.ArrayList<>();
+            java.util.List<String> errors = new java.util.ArrayList<>();
+            if (alerts.isArray()) {
+                for (JsonNode a : alerts) {
+                    String type = a.path("alertType").asText("").toUpperCase(Locale.ROOT);
+                    String code = a.path("code").asText("");
+                    String message = a.path("message").asText("");
+                    String display = StringUtils.hasText(code)
+                            ? code + ": " + message
+                            : message;
+                    if ("ERROR".equals(type)) {
+                        errors.add(display);
+                    } else if (!"NOTE".equals(type)) {
+                        warnings.add(display);
+                    }
+                }
+            }
+            if (!errors.isEmpty()) {
+                return new ValidateShipmentResult(false, "NOT_FOUND", "SHIPMENT",
+                        warnings, errors,
+                        "FedEx flagged " + errors.size() + " shipment error(s).",
+                        response);
+            }
+            if (!warnings.isEmpty()) {
+                return new ValidateShipmentResult(true, "CORRECTED", "SHIPMENT",
+                        warnings, java.util.List.of(),
+                        "FedEx accepted the shipment with " + warnings.size() + " warning(s).",
+                        response);
+            }
+            return new ValidateShipmentResult(true, "EXACT", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(),
+                    "FedEx confirmed the shipment is valid.", response);
+        } catch (Exception ex) {
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(ex.getMessage()),
+                    "FedEx validateShipment parse failed: " + ex.getMessage(), response);
+        }
+    }
+
+    /**
+     * Extract operator-facing messages from a FedEx 4xx/5xx error body.
+     * Shape: {@code errors: [{ code, message, parameterList }]}.
+     */
+    private java.util.List<String> extractFedExErrors(String body) {
+        if (!StringUtils.hasText(body)) return java.util.List.of();
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode arr = root.path("errors");
+            if (!arr.isArray()) return java.util.List.of();
+            java.util.List<String> out = new java.util.ArrayList<>();
+            for (JsonNode e : arr) {
+                String code = e.path("code").asText("");
+                String message = e.path("message").asText("");
+                out.add(StringUtils.hasText(code) ? code + ": " + message : message);
+            }
+            return out;
+        } catch (Exception ignore) {
+            return java.util.List.of();
+        }
+    }
+
+    /**
      * FedEx Rate API v1 — {@code POST /rate/v1/rates/quotes} with the OAuth
      * Bearer token. Body carries the shipper + recipient postal codes,
      * pickupType, and a single package weight; response includes one
