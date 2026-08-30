@@ -8,20 +8,19 @@
 // Exit codes:
 //
 //	0 — PNG written to stdout
-//	1 — invalid CLI flags
+//	1 — invalid CLI flags or stdin read failure
 //	2 — ZPL parse failure (parser error text on stderr)
 //	3 — draw / encode failure (details on stderr)
 //
 // Kept intentionally small (~60 LoC) so the Java caller can trust the
 // binary contract and the maintenance surface is minimal. Upstream
 // ingridhq/zebrash provides the parser + drawer; we're only wiring
-// I/O and one geometry conversion.
+// I/O and one unit conversion (inches → mm — the drawer takes mm).
 package main
 
 import (
 	"flag"
 	"fmt"
-	"image/png"
 	"io"
 	"os"
 
@@ -57,27 +56,20 @@ func main() {
 		os.Exit(2)
 	}
 
-	// dpmm × mm/in = dots per inch; times physical inches = pixel dims.
-	// Zebra convention: 8 dpmm ≈ 203 dpi → 4×6" = 812×1218 px.
+	// zebrash's DrawerOptions takes label size in millimetres +
+	// density in dots per mm. Convert from the caller's inches.
 	const mmPerInch = 25.4
-	widthPx := int(*widthIn * mmPerInch * float64(*dpmm))
-	heightPx := int(*heightIn * mmPerInch * float64(*dpmm))
-
-	drawer := drawers.NewDrawer()
+	drawer := zebrash.NewDrawer()
 	// Render only the first label — carriers return one ^XA…^XZ per
 	// package; multi-package labels are handled at the Java layer by
 	// concatenating multiple renders into a multi-page PDF.
-	img, err := drawer.DrawLabelAsImage(labels[0], drawers.DrawerOptions{
-		LabelWidthPixels:  widthPx,
-		LabelHeightPixels: heightPx,
+	err = drawer.DrawLabelAsPng(labels[0], os.Stdout, drawers.DrawerOptions{
+		LabelWidthMm:  *widthIn * mmPerInch,
+		LabelHeightMm: *heightIn * mmPerInch,
+		Dpmm:          *dpmm,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "draw: %v\n", err)
-		os.Exit(3)
-	}
-
-	if err := png.Encode(os.Stdout, img); err != nil {
-		fmt.Fprintf(os.Stderr, "png encode: %v\n", err)
 		os.Exit(3)
 	}
 }
