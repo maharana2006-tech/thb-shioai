@@ -57,7 +57,22 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
-          cache-dependency-path: native/zebrash-cli/go.sum
+          # go.sum is not committed (no Go tooling on the maintainer
+          # workstation); resolve+cache modules from go.mod at build
+          # time. setup-go tolerates this when cache-dependency-path
+          # is go.mod.
+          cache-dependency-path: native/zebrash-cli/go.mod
+
+      - name: Resolve modules
+        working-directory: native/zebrash-cli
+        shell: bash
+        run: |
+          # go mod download produces go.sum in-place; go build below
+          # then has everything it needs. `go mod tidy -e` won't ship
+          # go.sum back to the repo (workflow can't push in this
+          # trigger), but that's fine — every build resolves fresh.
+          go mod download
+          go mod verify
 
       - name: Build
         working-directory: native/zebrash-cli
@@ -72,16 +87,23 @@ jobs:
             -o "dist/${{ matrix.slug }}/zebrash-cli${{ matrix.ext }}" .
           ls -lh "dist/${{ matrix.slug }}/"
 
-      - name: Smoke test (native runners only)
-        if: matrix.goos == runner.os || (matrix.goos == 'linux' && runner.os == 'Linux')
+      - name: Smoke test (native combos only)
+        # Only run for combos where GOOS+GOARCH match the runner:
+        # linux/amd64 on ubuntu-latest, darwin/arm64 on macos-latest
+        # (Apple Silicon), windows/amd64 on windows-latest. linux/arm64
+        # is cross-compiled on ubuntu-amd64 and can't execute here.
+        if: |
+          (matrix.slug == 'linux-amd64' && runner.os == 'Linux') ||
+          (matrix.slug == 'darwin-arm64' && runner.os == 'macOS') ||
+          (matrix.slug == 'windows-amd64' && runner.os == 'Windows')
         working-directory: native/zebrash-cli
         shell: bash
         run: |
           printf '^XA^FO50,50^ADN,36,20^FDHello ZPL^FS^XZ' \
             | "./dist/${{ matrix.slug }}/zebrash-cli${{ matrix.ext }}" \
-                --width 2 --height 1 --dpmm 8 > /tmp/smoke.png
+                --width 2 --height 1 --dpmm 8 > "$RUNNER_TEMP/smoke.png"
           # PNG magic bytes = 89 50 4E 47
-          xxd -l 4 /tmp/smoke.png | grep -q "8950 4e47" || { echo "not a PNG"; exit 1; }
+          xxd -l 4 "$RUNNER_TEMP/smoke.png" | grep -q "8950 4e47" || { echo "not a PNG"; exit 1; }
           echo "smoke test passed"
 
       - name: Upload artifact
