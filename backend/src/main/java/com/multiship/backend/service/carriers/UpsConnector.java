@@ -384,6 +384,175 @@ public class UpsConnector implements CarrierConnector {
     }
 
     /**
+     * PR δ.1 — native UPS shipment-level validation via ShipConfirm with
+     * {@code Request.RequestOption = "validate"}. UPS runs the same
+     * routing / rating / service-availability / packaging checks as a
+     * real ShipConfirm and returns any {@code Response.Alert[]} without
+     * actually generating a label. The wire payload is the same shape
+     * {@link #createShipment} sends so what the operator sees during
+     * "Validate shipment" mirrors what Generate Label would send.
+     *
+     * <p>Response shape (200):
+     * <pre>
+     * ShipmentResponse.Response.ResponseStatus { Code (1=success), Description }
+     * ShipmentResponse.Response.Alert[] { Code, Description }
+     * </pre>
+     * Error shape (4xx / 5xx):
+     * <pre>
+     * response.errors[] { code, message }
+     * </pre>
+     *
+     * <p>Verdict mapping:
+     * <ul>
+     *   <li>ResponseStatus.Code = 1 + no Alert → EXACT / valid=true.</li>
+     *   <li>ResponseStatus.Code = 1 + Alert[] present → CORRECTED / valid=true, warnings populated.</li>
+     *   <li>ResponseStatus.Code != 1 → NOT_FOUND / valid=false.</li>
+     *   <li>4xx / 5xx → ERROR / valid=false.</li>
+     * </ul>
+     */
+    @Override
+    public ValidateShipmentResult validateShipment(ShipmentRequestDTO request,
+                                                    String accessToken,
+                                                    String environment) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new ValidateShipmentResult(false, "NOT_SUPPORTED", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(),
+                    "UPS validateShipment needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        // Same boundary guards as createShipment — a validate call with
+        // blank country / account is guaranteed to fail on the wire, so
+        // fail here with the actionable message the operator can act on.
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(),
+                    java.util.List.of("recipient country code is required"),
+                    "UPS validateShipment requires a recipient country code (order "
+                            + request.getReferenceNumber() + ").",
+                    null);
+        }
+        if (!StringUtils.hasText(request.getAccountNumber())
+                || "ACCOUNT".equalsIgnoreCase(request.getAccountNumber().trim())) {
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(),
+                    java.util.List.of("shipper account number is required"),
+                    "UPS validateShipment requires the shipper account number that owns the label "
+                            + "(order " + request.getReferenceNumber() + ").",
+                    null);
+        }
+        try {
+            Map<String, Object> payload = buildShipmentPayload(request, "validate");
+            String baseUrl = isSandbox(environment)
+                    ? carrierProperties.getUps().getSandboxUrl()
+                    : carrierProperties.getUps().getApiBaseUrl();
+            String response = HttpClients.newBuilder()
+                    .baseUrl(baseUrl)
+                    .build()
+                    .post()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .body(payload)
+                    .retrieve()
+                    .body(String.class);
+            log.debug("UPS validateShipment response: {}", response);
+            return parseUpsValidateShipmentResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            String body = ex.getResponseBodyAsString();
+            log.warn("UPS validateShipment rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), body);
+            java.util.List<String> errors = extractUpsErrors(body);
+            String msg = errors.isEmpty()
+                    ? "UPS validateShipment rejected: HTTP " + ex.getStatusCode().value()
+                    : "UPS rejected the shipment: " + String.join("; ", errors);
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(), errors, msg, body);
+        } catch (Exception ex) {
+            log.warn("UPS validateShipment call failed: {}", ex.getMessage());
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(ex.getMessage()),
+                    "UPS validateShipment call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse a UPS ShipConfirm-with-validate 200 response. Package-visible
+     * for tests. UPS wraps everything under {@code ShipmentResponse};
+     * {@code Response.ResponseStatus.Code = 1} means the validate call
+     * succeeded, {@code Response.Alert} carries any advisory notices
+     * ("this ZIP is served but delivery is delayed", etc.).
+     */
+    ValidateShipmentResult parseUpsValidateShipmentResponse(String response) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(
+                    Optional.ofNullable(response).orElse("{}"));
+            com.fasterxml.jackson.databind.JsonNode resp = root.at("/ShipmentResponse/Response");
+            String code = resp.at("/ResponseStatus/Code").asText("");
+            String description = resp.at("/ResponseStatus/Description").asText("");
+
+            java.util.List<String> warnings = new java.util.ArrayList<>();
+            com.fasterxml.jackson.databind.JsonNode alert = resp.path("Alert");
+            if (alert.isArray()) {
+                for (com.fasterxml.jackson.databind.JsonNode a : alert) {
+                    warnings.add(formatUpsAlert(a));
+                }
+            } else if (alert.isObject()) {
+                warnings.add(formatUpsAlert(alert));
+            }
+
+            if (!"1".equals(code)) {
+                return new ValidateShipmentResult(false, "NOT_FOUND", "SHIPMENT",
+                        warnings, java.util.List.of(),
+                        StringUtils.hasText(description)
+                                ? "UPS rejected the shipment: " + description
+                                : "UPS returned a non-success ResponseStatus.",
+                        response);
+            }
+            if (!warnings.isEmpty()) {
+                return new ValidateShipmentResult(true, "CORRECTED", "SHIPMENT",
+                        warnings, java.util.List.of(),
+                        "UPS accepted the shipment with " + warnings.size() + " alert(s).",
+                        response);
+            }
+            return new ValidateShipmentResult(true, "EXACT", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(),
+                    "UPS confirmed the shipment is valid.", response);
+        } catch (Exception ex) {
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(ex.getMessage()),
+                    "UPS validateShipment parse failed: " + ex.getMessage(), response);
+        }
+    }
+
+    private String formatUpsAlert(com.fasterxml.jackson.databind.JsonNode a) {
+        String code = a.path("Code").asText("");
+        String description = a.path("Description").asText("");
+        return StringUtils.hasText(code) ? code + ": " + description : description;
+    }
+
+    /**
+     * Extract operator-facing messages from a UPS 4xx/5xx error body.
+     * UPS OAuth Ship API errors: {@code response.errors[]{code, message}}.
+     */
+    private java.util.List<String> extractUpsErrors(String body) {
+        if (!StringUtils.hasText(body)) return java.util.List.of();
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(body);
+            com.fasterxml.jackson.databind.JsonNode arr = root.at("/response/errors");
+            if (!arr.isArray()) return java.util.List.of();
+            java.util.List<String> out = new java.util.ArrayList<>();
+            for (com.fasterxml.jackson.databind.JsonNode e : arr) {
+                String code = e.path("code").asText("");
+                String message = e.path("message").asText("");
+                out.add(StringUtils.hasText(code) ? code + ": " + message : message);
+            }
+            return out;
+        } catch (Exception ignore) {
+            return java.util.List.of();
+        }
+    }
+
+    /**
      * URL-only tracking. UPS's Track API requires OAuth so this 1-arg
      * variant only returns a public tracking link (like FedEx in Sprint 12).
      * The authenticated variant below does the real work.
@@ -1430,6 +1599,18 @@ public class UpsConnector implements CarrierConnector {
      * Information" for the full type matrix.
      */
     private Map<String, Object> buildShipmentPayload(ShipmentRequestDTO request) {
+        return buildShipmentPayload(request, "nonvalidate");
+    }
+
+    /**
+     * PR δ.1 — {@code requestOption} lets the same payload builder feed
+     * both {@link #createShipment} ({@code "nonvalidate"} — UPS creates
+     * the label and returns tracking) and {@link #validateShipment}
+     * ({@code "validate"} — UPS runs the same shipment-level checks but
+     * returns no label). Keeps the two call sites in lockstep so a
+     * green validate is a strong guarantee the label call will succeed.
+     */
+    private Map<String, Object> buildShipmentPayload(ShipmentRequestDTO request, String requestOption) {
         Map<String, Object> shipment = new LinkedHashMap<>();
         shipment.put("Description", firstNonBlank(request.getSpecialInstructions(), "Shipment"));
         shipment.put("Shipper", buildParty(
@@ -1531,7 +1712,7 @@ public class UpsConnector implements CarrierConnector {
         Map<String, Object> shipmentRequest = new LinkedHashMap<>();
         shipmentRequest.put("Request", Map.of(
                 "SubVersion", "2205",
-                "RequestOption", "nonvalidate",
+                "RequestOption", requestOption,
                 "TransactionReference", Map.of(
                         "CustomerContext", firstNonBlank(request.getReferenceNumber(), ""))));
         shipmentRequest.put("Shipment", shipment);
