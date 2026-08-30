@@ -466,7 +466,13 @@ export default function NewShipmentPage() {
   const [carrier, setCarrier] = useState('')
   const [accountNumber, setAccountNumber] = useState('') // bill-to account, manually editable
   const [serviceId, setServiceId] = useState<number | ''>('')
-  const [incoterms, setIncoterms] = useState('DDP') // DAP | DDP — who pays duties/taxes
+  // Incoterms prefills from ClientCustomsProfile.incoterms via the
+  // resolved importerProfile (per client + destination country). NULL
+  // profile / NULL value → blank + force-pick guard blocks
+  // international shipments until the operator picks. Default was
+  // 'DDP' pre-PR #532 — swapped for force-pick per operator call
+  // (getting incoterms wrong = surprise fees at destination).
+  const [incoterms, setIncoterms] = useState('')
   // F6-C — per-carrier customs clearance option. Prefills from
   // CarrierAccountRef.clearanceOption when the value is in the current
   // carrier's vocabulary (UPS SENDER/RECEIVER/THIRD_PARTY vs FedEx
@@ -1080,8 +1086,12 @@ export default function NewShipmentPage() {
     // Not label-scoped but the guard hook is the same one used by
     // submit()/validateShipment() so we co-locate.
     if (isInternational && !reasonForExport) missing.push('Reason of export')
+    // Incoterms same pattern as Reason of export — prefill from
+    // ClientCustomsProfile via importerProfile; NULL profile / value
+    // blocks with a targeted toast.
+    if (isInternational && !incoterms) missing.push('Incoterms')
     return missing
-  }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport])
+  }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport, incoterms])
 
   /**
    * Select a client: fill YOUR address on the correct side and auto-pick its
@@ -1247,6 +1257,24 @@ export default function NewShipmentPage() {
         : null,
     [profiles, isInternational, clientCode, destCountry],
   )
+
+  /**
+   * Incoterms prefill from the resolved ClientCustomsProfile. Fires
+   * on client OR destination-country change (importerProfile is a
+   * memo over both). Force-pick semantic: NULL profile / NULL value
+   * leaves the field blank and the guard in submit()/validate()
+   * blocks international shipments until picked. User's manual pick
+   * AFTER prefill is preserved until the next importerProfile change.
+   *
+   * <p>Only mutates state when isInternational — on domestic
+   * shipments the field isn't rendered so leaving stale value is
+   * fine (and switching back to intl re-runs this effect via
+   * importerProfile change).
+   */
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prefill incoterms from resolved customs profile; hard-overwrite on lane change is by design (matches accountNumber / label-field reset semantic).
+    if (isInternational) setIncoterms(importerProfile?.incoterms ?? '')
+  }, [importerProfile, isInternational])
 
   /** Map a saved profile into the flat importer/broker shape (label-document keys). */
   const partiesFromProfile = (p: CustomsProfile): { importer: Party; broker: Party } => ({
@@ -2467,10 +2495,13 @@ export default function NewShipmentPage() {
                     ) : null}
                   </Field>
                   {isInternational ? (
-                    <Field label="Incoterms" error={errAt('incoterms')}>
+                    <Field label="Incoterms" required
+                           error={submitAttempted && !incoterms ? 'Required — pick an incoterm.' : errAt('incoterms')}>
                       <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
+                        <option value="">-- Select --</option>
                         <option value="DDP">DDP — sender pays duties</option>
                         <option value="DAP">DAP — receiver pays duties</option>
+                        <option value="DDU">DDU — receiver pays duties only</option>
                       </select>
                     </Field>
                   ) : null}
