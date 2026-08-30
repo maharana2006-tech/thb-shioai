@@ -150,6 +150,10 @@ export interface OrderWithLines {
 /** Configured ship-from address exposed by /orders/{orderNo}/label. */
 export interface ShipperInfo {
   name: string | null
+  /** PR #535 — separate COMPANY line when the shipper's Address has its
+   *  own name (warehouse alias) that differs from the client's
+   *  registered name. Backend populates via OrderController.addressMap. */
+  company?: string | null
   phone: string | null
   addressLine1: string | null
   addressLine2: string | null
