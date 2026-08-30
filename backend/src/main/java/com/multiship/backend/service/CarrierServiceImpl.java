@@ -917,89 +917,16 @@ public class CarrierServiceImpl implements CarrierService {
         CarrierProperties.ShipperDefaults dflt = carrierProperties.getShipper();
         String fromCountry = firstNonBlank(from != null ? from.getCountryCode() : null, dflt.getCountryCode());
 
-        ShipmentRequestDTO shipmentRequest = ShipmentRequestDTO.builder()
-                .carrierCode(carrier)
-                .accountNumber(billToNumber)
-                .serviceType(serviceType)
-                .packageType(packageType)
-                .length(length).width(width).height(height)
-                .weight(req.getWeight())
-                .shipperName(firstNonBlank(from != null ? from.getName() : null, dflt.getName()))
-                .shipperPhone(firstNonBlank(from != null ? from.getPhone() : null, dflt.getPhone()))
-                // Sprint 51 — company + email pass through from the manual-label
-                // caller. No platform default (ShipperDefaults has no company /
-                // email) so a null sender or null field ends up null on the DTO;
-                // each connector's buildParty overload treats null as "omit".
-                .shipperCompany(from != null ? from.getCompany() : null)
-                .shipperEmail(from != null ? from.getEmail() : null)
-                .shipperAddressLine1(firstNonBlank(from != null ? from.getAddressLine1() : null, dflt.getAddressLine1()))
-                .shipperAddressLine2(firstNonBlank(from != null ? from.getAddressLine2() : null, dflt.getAddressLine2()))
-                .shipperCity(firstNonBlank(from != null ? from.getCity() : null, dflt.getCity()))
-                .shipperState(firstNonBlank(from != null ? from.getState() : null, dflt.getState()))
-                .shipperPostalCode(firstNonBlank(from != null ? from.getPostalCode() : null, dflt.getPostalCode()))
-                .shipperCountryCode(fromCountry)
-                .recipientName(to.getName())
-                // Pass null through when the recipient phone is blank. Every
-                // connector's appendAddress helper already guards with
-                // StringUtils.hasText(phone) and omits the element from the
-                // envelope when absent. Pre-fix substituted the literal string
-                // "0000000000" which then printed on labels + went to USPS
-                // notification systems — fake-data anti-pattern the codebase
-                // actively hunts (silent-fallback audit, PRs #410-#414).
-                .recipientPhone(to.getPhone())
-                // Sprint 51 — recipient company + email. Same null-pass-through
-                // semantics as the shipper block above.
-                .recipientCompany(to.getCompany())
-                .recipientEmail(to.getEmail())
-                .recipientAddressLine1(to.getAddressLine1())
-                .recipientAddressLine2(to.getAddressLine2())
-                .recipientAddressLine3(to.getAddressLine3())
-                .recipientCity(to.getCity())
-                .recipientState(firstNonBlank(to.getState(), ""))
-                .recipientPostalCode(to.getPostalCode())
-                .recipientCountryCode(to.getCountryCode())
-                .recipientResidential(to.getResidential())
-                .recipientPhoneCountryCode(to.getPhoneCountryCode())
-                .referenceNumber(firstNonBlank(req.getReference(), "MANUAL"))
-                .specialInstructions(req.getGoodsDescription())
-                .declaredValue(req.getDeclaredValue())
-                // Sprint 25 — thread the RETURN mode into the ShipmentRequestDTO
-                // so connectors emit each carrier's return-label wire flag
-                // (UPS ReturnService.Code=8, FedEx returnedShipmentDetail,
-                // SWSIM IsReturnLabel=true, DHL pickup.isRequested=true).
-                .isReturn(req.getIsReturn())
-                // Sprint 27 — thread the DG block so connectors emit their
-                // hazmat wire format (UPS HazMatPackageInformation, FedEx
-                // dangerousGoodsDetail, DHL content.dangerousGoods, SWSIM
-                // HazardousMaterials).
-                .dangerousGoods(req.getDangerousGoods())
-                // Sprint 35 — signature + insurance. Each connector
-                // normalises the enum and emits its carrier-specific wire
-                // format (UPS DeliveryConfirmation.DCISType, FedEx
-                // packageSpecialServices.signatureOptionType, DHL
-                // valueAddedServices SF/SI/II, SWSIM SignatureConfirmation
-                // / AdultSignatureRequired + InsuredValue).
-                .signatureOption(req.getSignatureOption())
-                .insuredValue(req.getInsuredValue())
-                .insuredValueCurrency(req.getInsuredValueCurrency())
-                // Multi-package boxes 2..N (box 1 is the top-level fields).
-                // Connectors' effectivePackages() prefers packages[] when set.
-                .packages(req.getPackages())
-                // Per-shipment label file format override (request →
-                // account default → each connector's own hardcoded
-                // fallback). Meaning is carrier-specific — see
-                // ManualShipmentRequest.labelImageFormat javadoc.
-                .labelImageFormat(firstNonBlank(req.getLabelImageFormat(),
-                        account != null ? account.getLabelImageFormat() : null))
-                // FDX-H3 — per-shipment FedEx labelSpecification override
-                // (request → account default → hardcoded PDF/PAPER_4X6 in
-                // the connector). Only FedEx maps this; other connectors
-                // ignore.
-                .labelImageType(firstNonBlank(req.getLabelImageType(),
-                        account != null ? account.getFedexLabelImageType() : null))
-                .labelStockType(firstNonBlank(req.getLabelStockType(),
-                        account != null ? account.getFedexLabelStockType() : null))
-                .build();
+        // PR #534 — DTO build extracted to buildManualShipmentRequestDto
+        // so ShipmentValidationService.callCarrierValidateShipment can
+        // reuse it and produce a byte-for-byte identical DTO. Prior to
+        // this extraction the validate hop built a mostly-empty DTO
+        // (only intl + DG), so FedEx/UPS native validateShipment saw
+        // null shipper/service/package fields and rejected with 5+
+        // NotNull bean-validation errors.
+        ShipmentRequestDTO shipmentRequest = buildManualShipmentRequestDto(
+                req, from, to, carrier, billToNumber, serviceType, packageType,
+                length, width, height, fromCountry, account);
 
         // Resolve the carrier's MPS cap for this service/scope and split
         // the shipment into sub-requests when we're over the cap. Every
@@ -2035,6 +1962,95 @@ public class CarrierServiceImpl implements CarrierService {
 
     private ShipmentRequestDTO buildShipmentRequest(Order order, CarrierConfig config, CarrierConnector connector) {
         return buildShipmentRequest(order, config.getAccountNumber(), connector);
+    }
+
+    /**
+     * PR #534 — full ShipmentRequestDTO population from a
+     * {@link com.multiship.backend.dto.ManualShipmentRequest}. Extracted
+     * from {@link #generateManualLabel} so
+     * {@code ShipmentValidationService.callCarrierValidateShipment} can
+     * produce a byte-for-byte identical DTO for the carrier-native
+     * validate hop (FedEx {@code /packages/validate}, UPS ShipConfirm
+     * {@code RequestOption=validate}).
+     *
+     * <p>Prior to this extraction, the validate hop built a mostly-empty
+     * DTO (only {@code declaredValueCurrency} + {@code intl} +
+     * {@code dangerousGoods}) and FedEx rejected the request with 5+
+     * NotNull bean-validation errors on shipper phone / city / country /
+     * serviceType / packagingType.
+     *
+     * <p>Callers must have already resolved:
+     * <ul>
+     *   <li>{@code from} — sender address (possibly warehouse-overridden)</li>
+     *   <li>{@code to} — recipient address</li>
+     *   <li>{@code carrier} — canonical carrier code</li>
+     *   <li>{@code billToNumber} — bill-to account (typed → account default)</li>
+     *   <li>{@code serviceType} / {@code packageType} — from service/preset or connector defaults</li>
+     *   <li>{@code length} / {@code width} / {@code height} — from req or preset</li>
+     *   <li>{@code fromCountry} — from.country or ShipperDefaults.country</li>
+     *   <li>{@code account} — the {@link CarrierAccountRef} that owns the credentials (may be null; used for per-account label defaults)</li>
+     * </ul>
+     */
+    public ShipmentRequestDTO buildManualShipmentRequestDto(
+            com.multiship.backend.dto.ManualShipmentRequest req,
+            com.multiship.backend.dto.ManualShipmentRequest.Address from,
+            com.multiship.backend.dto.ManualShipmentRequest.Address to,
+            String carrier,
+            String billToNumber,
+            String serviceType,
+            String packageType,
+            BigDecimal length,
+            BigDecimal width,
+            BigDecimal height,
+            String fromCountry,
+            CarrierAccountRef account) {
+        CarrierProperties.ShipperDefaults dflt = carrierProperties.getShipper();
+        return ShipmentRequestDTO.builder()
+                .carrierCode(carrier)
+                .accountNumber(billToNumber)
+                .serviceType(serviceType)
+                .packageType(packageType)
+                .length(length).width(width).height(height)
+                .weight(req.getWeight())
+                .shipperName(firstNonBlank(from != null ? from.getName() : null, dflt.getName()))
+                .shipperPhone(firstNonBlank(from != null ? from.getPhone() : null, dflt.getPhone()))
+                .shipperCompany(from != null ? from.getCompany() : null)
+                .shipperEmail(from != null ? from.getEmail() : null)
+                .shipperAddressLine1(firstNonBlank(from != null ? from.getAddressLine1() : null, dflt.getAddressLine1()))
+                .shipperAddressLine2(firstNonBlank(from != null ? from.getAddressLine2() : null, dflt.getAddressLine2()))
+                .shipperCity(firstNonBlank(from != null ? from.getCity() : null, dflt.getCity()))
+                .shipperState(firstNonBlank(from != null ? from.getState() : null, dflt.getState()))
+                .shipperPostalCode(firstNonBlank(from != null ? from.getPostalCode() : null, dflt.getPostalCode()))
+                .shipperCountryCode(fromCountry)
+                .recipientName(to.getName())
+                .recipientPhone(to.getPhone())
+                .recipientCompany(to.getCompany())
+                .recipientEmail(to.getEmail())
+                .recipientAddressLine1(to.getAddressLine1())
+                .recipientAddressLine2(to.getAddressLine2())
+                .recipientAddressLine3(to.getAddressLine3())
+                .recipientCity(to.getCity())
+                .recipientState(firstNonBlank(to.getState(), ""))
+                .recipientPostalCode(to.getPostalCode())
+                .recipientCountryCode(to.getCountryCode())
+                .recipientResidential(to.getResidential())
+                .recipientPhoneCountryCode(to.getPhoneCountryCode())
+                .referenceNumber(firstNonBlank(req.getReference(), "MANUAL"))
+                .specialInstructions(req.getGoodsDescription())
+                .declaredValue(req.getDeclaredValue())
+                .isReturn(req.getIsReturn())
+                .dangerousGoods(req.getDangerousGoods())
+                .signatureOption(req.getSignatureOption())
+                .insuredValue(req.getInsuredValue())
+                .insuredValueCurrency(req.getInsuredValueCurrency())
+                .packages(req.getPackages())
+                .labelImageFormat(firstNonBlank(req.getLabelImageFormat(),
+                        account != null ? account.getLabelImageFormat() : null))
+                .labelImageType(firstNonBlank(req.getLabelImageType(),
+                        account != null ? account.getFedexLabelImageType() : null))
+                .labelStockType(firstNonBlank(req.getLabelStockType(),
+                        account != null ? account.getFedexLabelStockType() : null))
+                .build();
     }
 
     private ShipmentRequestDTO buildShipmentRequest(Order order, String accountNumber, CarrierConnector connector) {
