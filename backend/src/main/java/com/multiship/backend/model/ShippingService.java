@@ -126,7 +126,7 @@ public class ShippingService {
      * <p>Consumed by: FE dropdown filter (compatiblePresetIds), guard,
      * ShippingServicesPage per-row badge, link modal preset filter.
      */
-    @Column(name = "branded_packaging_allowed", nullable = false)
+    @Column(name = "branded_packaging_allowed", nullable = false, columnDefinition = "boolean not null default true")
     @Builder.Default
     private boolean brandedPackagingAllowed = true;
 
