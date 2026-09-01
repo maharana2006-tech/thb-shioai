@@ -117,9 +117,18 @@ export function GridCell({
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
+        // Select-all on focus, deterministically — the effect's select() can
+        // race the mount and leave the caret at position 0, so typing INSERTED
+        // before the old value ("FEDEX" over "UPS" → "FEDEXUPS"). onFocus fires
+        // after the browser settles focus, so the old value is always replaced
+        // by the first keystroke.
+        onFocus={(e) => e.currentTarget.select()}
         onKeyDown={(e) => {
           if (e.key === 'Enter') { e.preventDefault(); commit() }
           else if (e.key === 'Escape') { e.preventDefault(); cancel() }
+          // Keep ⌘/Ctrl+A inside the editor (browser-native select-all) —
+          // don't let ancestor key handlers see it.
+          else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') { e.stopPropagation() }
         }}
         className={`w-full rounded-[5px] border border-[#412d15] bg-white px-1.5 py-0.5 text-[10.5px] text-[#1f150c] outline-none ring-1 ring-[#412d15] ${mono ? 'font-mono' : ''}`}
       />

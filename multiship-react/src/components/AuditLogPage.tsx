@@ -14,6 +14,7 @@ import {
 } from '../api/auditLogService'
 import type { SettingsOutletContext } from './layout/SettingsLayout'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
+import { summarizeCarrierError } from '../utils/carrierErrorMap'
 import Select from './workspace/Select'
 import { notify } from '../utils/notify'
 
@@ -249,9 +250,20 @@ export default function AuditLogPage() {
         accessorFn: (r) => r.notes ?? '',
         header: 'Notes',
         enableSorting: false,
-        cell: ({ row }) => (
-          <span className="text-[11.5px] text-slate-600">{row.original.notes ?? '—'}</span>
-        ),
+        cell: ({ row }) => {
+          const raw = row.original.notes
+          if (!raw) return <span className="text-[11.5px] text-slate-600">—</span>
+          // Safety net for legacy rows persisted BEFORE the server-side
+          // humanizer: a raw carrier payload ("… HTTP 400: {json}") renders
+          // as a clean sentence, with the raw text kept in the tooltip.
+          const looksRaw = /HTTP\s*\d{3}/.test(raw) || raw.includes('{')
+          const shown = looksRaw ? summarizeCarrierError(raw) : raw
+          return (
+            <span className="text-[11.5px] text-slate-600" title={looksRaw ? raw : undefined}>
+              {shown}
+            </span>
+          )
+        },
       },
     ],
     [expanded],
@@ -460,7 +472,11 @@ export default function AuditLogPage() {
 function formatTime(iso: string): string {
   if (!iso) return '—'
   try {
-    return new Date(iso).toLocaleString()
+    // Explicit en-US — the bare toLocaleString() rendered 01/09/2026 (DD/MM)
+    // on some machines while the rest of the app prints "Sep 1, 2026".
+    return new Date(iso).toLocaleString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+    })
   } catch {
     return iso
   }

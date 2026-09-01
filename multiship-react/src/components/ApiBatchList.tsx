@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { FiDownloadCloud, FiRefreshCw, FiZap } from 'react-icons/fi'
 import { wmsService } from '../api/wmsService'
 import { orderImportService } from '../api/orderImportService'
@@ -15,14 +15,11 @@ import { BTN_PRIMARY, BTN_GHOST, BTN_PRIMARY_SM } from './ui/buttons'
  * CSV/XLSX import. Generated orders are stamped source = API.
  */
 
-// The columns worth editing for a WMS shipment (customs/item columns are left
-// to the CSV importer). Order mirrors DH_COLUMNS so validation keys line up.
-const API_KEYS = new Set([
-  'orderRef', 'clientCode', 'recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail',
-  'addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode',
-  'carrierCode', 'accountNumber', 'serviceType', 'weight', 'weightUnit', 'reference',
-])
-const API_COLUMNS: DhColumn[] = DH_COLUMNS.filter((c) => API_KEYS.has(c.key))
+// Full column set — identical to the Import-history grid. A trimmed subset
+// used to hide billTo/packageType/currency and every customs column, which
+// made international WMS rows UNFIXABLE: validation demanded hsCode /
+// countryOfOrigin / item fields the grid gave you no way to enter.
+const API_COLUMNS: DhColumn[] = DH_COLUMNS
 
 const fmtDateTime = (v?: string | null) =>
   v
@@ -346,23 +343,32 @@ export default function ApiBatchList() {
                           <tbody>
                             {rows.map((r) => {
                               const ok = (r.errors?.length ?? 0) === 0
-                              const generated = (r.generatedStatus ?? '').toUpperCase() === 'GENERATED'
+                              const gen = (r.generatedStatus ?? '').toUpperCase()
+                              const generated = gen === 'GENERATED'
+                              // A row the carrier rejected must NOT read "Ready" —
+                              // that hid real failures behind a green badge.
+                              const failed = gen === 'FAILED'
                               const rowKey = `${b.id}-${r.rowNumber}`
                               const rowBusy = genRowKey === rowKey
-                              const { byField } = bucketRowErrors(r.errors ?? [])
+                              const { byField, rowLevel } = bucketRowErrors(r.errors ?? [])
                               const statusTitle = (r.errors ?? []).map((m) => '✗ ' + m).join('\n') || undefined
+                              const warnings = r.warnings ?? []
+                              const hasExplain = !ok || (failed && !!r.generatedMessage) || warnings.length > 0
                               return (
-                                <tr key={r.rowNumber} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
-                                  <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
+                                <Fragment key={r.rowNumber}>
+                                <tr className={ok && !failed ? 'bg-white' : 'bg-rose-50/40'}>
+                                  <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok && !failed ? 'bg-white' : 'bg-rose-50'}`}>
                                     <div className="flex items-center gap-1.5">
                                       <span className="font-mono text-[10px] font-bold text-[#8a7959]">{r.rowNumber}</span>
                                       {generated ? (
                                         <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Generated</span>
+                                      ) : failed ? (
+                                        <span title={r.generatedMessage || 'The carrier rejected this shipment'} className="cursor-help rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800">Failed</span>
                                       ) : ok ? (
                                         <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Ready</span>
                                       ) : (
                                         <span title={statusTitle} className="cursor-help rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800">
-                                          {r.errors!.length} err
+                                          {r.errors!.length} error{r.errors!.length === 1 ? '' : 's'}
                                         </span>
                                       )}
                                     </div>
@@ -391,25 +397,67 @@ export default function ApiBatchList() {
                                       ) : (
                                         <span className="text-[9.5px] text-[#8a7959]">—</span>
                                       )
-                                    ) : ok ? (
+                                    ) : (ok || failed) ? (
                                       <button
                                         type="button"
                                         onClick={() => void generateRow(b.id, r.rowNumber)}
                                         disabled={rowBusy}
-                                        className={BTN_PRIMARY_SM}
+                                        title={failed ? 'Retry — re-sends this same order to the carrier (no duplicate order is created)' : 'Generate a carrier label for this row'}
+                                        className={failed
+                                          ? 'inline-flex items-center gap-1 rounded-lg bg-rose-700 px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-[#dcd4c4]'
+                                          : BTN_PRIMARY_SM}
                                       >
                                         {rowBusy ? (
                                           <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
                                         ) : (
                                           <FiZap className="h-3 w-3" />
                                         )}
-                                        {rowBusy ? 'Generating…' : 'Generate label'}
+                                        {rowBusy ? 'Generating…' : failed ? 'Retry label' : 'Generate label'}
                                       </button>
                                     ) : (
                                       <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
                                     )}
                                   </td>
                                 </tr>
+                                {hasExplain ? (
+                                  /* WHY strip — same treatment as Import history:
+                                     every problem spelled out under the row, keyed
+                                     to its field, visible without hover. Sticky so
+                                     it stays readable during horizontal scroll. */
+                                  <tr className={failed || !ok ? 'bg-rose-50/70' : 'bg-amber-50/70'}>
+                                    <td colSpan={API_COLUMNS.length + 2} className="border-b border-[#f2ecdf] px-2 pb-1.5 pt-0.5">
+                                      <div className="sticky left-2 w-fit max-w-[820px] space-y-0.5">
+                                        {Object.entries(byField).flatMap(([field, msgs]) =>
+                                          msgs.map((m, i) => (
+                                            <p key={`${field}-${i}`} className="flex items-start gap-1.5 text-[10px] leading-snug text-rose-700">
+                                              <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">{field}</span>
+                                              <span>{m}</span>
+                                            </p>
+                                          )),
+                                        )}
+                                        {rowLevel.map((m, i) => (
+                                          <p key={`row-${i}`} className="flex items-start gap-1.5 text-[10px] leading-snug text-rose-700">
+                                            <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">row</span>
+                                            <span>{m}</span>
+                                          </p>
+                                        ))}
+                                        {failed && r.generatedMessage ? (
+                                          <p className="flex items-start gap-1.5 text-[10px] leading-snug text-rose-700">
+                                            <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">carrier</span>
+                                            <span>{r.generatedMessage}</span>
+                                          </p>
+                                        ) : null}
+                                        {warnings.map((w, i) => (
+                                          <p key={`warn-${i}`} className="flex items-start gap-1.5 text-[10px] leading-snug text-amber-700">
+                                            <span className="mt-[1px] shrink-0 rounded bg-amber-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-amber-800 ring-1 ring-amber-200">note</span>
+                                            <span>{w}</span>
+                                          </p>
+                                        ))}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ) : null}
+                                </Fragment>
                               )
                             })}
                           </tbody>
