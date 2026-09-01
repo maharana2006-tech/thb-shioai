@@ -984,8 +984,11 @@ export default function DataHistoryPage() {
         <OrderImportModal
           inline
           onImported={() => {
-            // After a save, jump to the batch history and refresh it.
-            setDhView('imports')
+            // The importer auto-saves a draft at upload and calls this again
+            // after generation — refresh the history list quietly WITHOUT
+            // switching views, so the operator isn't yanked out of the
+            // review/fix step mid-flow. The result step tells them where
+            // the batch lives.
             void load()
           }}
         />

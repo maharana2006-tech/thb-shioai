@@ -7,13 +7,15 @@ import {
   FiCheckCircle,
   FiDownload,
   FiFile,
+  FiHome,
   FiLoader,
-  FiSave,
   FiUploadCloud,
   FiX,
+  FiZap,
 } from 'react-icons/fi'
 import {
   orderImportService,
+  type ImportBatchDetail,
   type OrderImportPreview,
   type OrderImportRow,
 } from '../../api/orderImportService'
@@ -32,10 +34,13 @@ function importErrorDisplay(e: unknown, fallback: string): { title: string; body
 }
 
 /**
- * Sprint 40 — CSV / XLSX order import modal. Three steps:
- *   1. Upload  — drag-and-drop / pick a file, download the template.
- *   2. Review  — preview table with per-row status + validation actions.
- *   3. Done    — commit summary (generated / failed labels).
+ * CSV / XLSX order import. Restructured to one linear flow with one primary
+ * action per state — no draft-vs-save fork:
+ *   1. Upload   — pick a file; on parse the batch is AUTO-SAVED as a draft
+ *                 (closing the tab loses nothing).
+ *   2. Review   — fix rows in place; every cell edit persists to the draft
+ *                 and re-validates server-side. One button: Generate.
+ *   3. Result   — generation outcome with what remains in the draft.
  * Espresso/cream palette to match the rest of the workspace.
  */
 export interface OrderImportModalProps {
@@ -44,7 +49,7 @@ export interface OrderImportModalProps {
   /** Render the flow inline on a page (no modal overlay / focus trap) instead
    *  of as a popup. Used by the Order Intake page's "Import" tab. */
   inline?: boolean
-  /** Called after a successful save so the host can switch to the history view. */
+  /** Called after the batch is saved / generated so the host can refresh the history view. */
   onImported?: () => void
 }
 
@@ -53,56 +58,58 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(!inline, dialogRef)
   const [file, setFile] = useState<File | null>(null)
+  /** The auto-saved draft under review (rows + counts). Non-null = step 2. */
   const [preview, setPreview] = useState<OrderImportPreview | null>(null)
-  const [committedSummary, setCommittedSummary] = useState<OrderImportPreview | null>(null)
+  /** The draft's Import-history id — minted by the auto-save at upload. */
+  const [batchId, setBatchId] = useState<number | null>(null)
+  /** Generation outcome. Non-null = step 3. */
+  const [result, setResult] = useState<ImportBatchDetail | null>(null)
   const [uploading, setUploading] = useState(false)
-  const [committing, setCommitting] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [genProgress, setGenProgress] = useState<{ done: number; total: number } | null>(null)
+  /** Bill-to for the whole batch; PLATFORM needs an explicit confirm click. */
+  const [billing, setBilling] = useState<'AUTO' | 'PLATFORM'>('AUTO')
+  const [confirmPlatform, setConfirmPlatform] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [downloadingXlsx, setDownloadingXlsx] = useState(false)
-  /** True while the debounced background re-validation is in flight. */
-  const [autoValidating, setAutoValidating] = useState(false)
-  /** Debounce timer + request sequence for edit-triggered validation. A
-   *  stale response (operator kept typing) is dropped by seq mismatch. */
-  const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const autoSeq = useRef(0)
+  /** True while a cell edit is being persisted + re-validated server-side. */
+  const [savingCell, setSavingCell] = useState(false)
+  /** Serialize cell PUTs — a second edit waits for the first (the backend
+   *  re-validates the whole batch per PUT, so order matters). */
+  const putChain = useRef<Promise<void>>(Promise.resolve())
 
-  const step: 1 | 2 | 3 = committedSummary ? 3 : preview ? 2 : 1
+  const step: 1 | 2 | 3 = result ? 3 : preview ? 2 : 1
 
-  useEffect(() => () => {
-    if (autoTimer.current) clearTimeout(autoTimer.current)
-  }, [])
+  /** Map a saved-batch detail onto the review state's preview shape. */
+  const applyBatch = (d: ImportBatchDetail) => {
+    const rows = d.rows ?? []
+    const invalid = rows.filter((r) => (r.errors?.length ?? 0) > 0).length
+    setPreview({ totalRows: rows.length, validRows: rows.length - invalid, invalidRows: invalid, rows, batchId: d.id })
+  }
 
   /**
-   * Inline-edit hook for the review table. Applies the patch immediately
-   * (so typing feels instant), then schedules a debounced call to the
-   * backend /validate endpoint — the single source of truth for the
-   * dynamic rules (client/warehouse/account/catalog checks). Errors and
-   * warnings on every row refresh from the response.
+   * Inline-edit hook for the review table. Applies the patch locally (typing
+   * feels instant), then persists the row to the SAVED DRAFT — the backend
+   * re-validates the whole batch and returns fresh rows + counts, so errors
+   * clear/appear with server truth and nothing is lost on close.
    */
   const updateRow = (rowNumber: number, patch: Partial<OrderImportRow>) => {
-    setPreview((p) => {
-      if (!p) return p
-      const rows = p.rows.map((r) => (r.rowNumber === rowNumber ? { ...r, ...patch } : r))
-      const next = { ...p, rows }
-      if (autoTimer.current) clearTimeout(autoTimer.current)
-      const seq = ++autoSeq.current
-      autoTimer.current = setTimeout(() => {
-        setAutoValidating(true)
-        orderImportService
-          .validate(rows)
-          .then((response) => {
-            if (seq !== autoSeq.current) return // superseded by a newer edit
-            if (response.status === 'success' && response.data) setPreview(response.data)
-          })
-          .catch(() => {
-            /* silent — the manual Re-validate button surfaces failures */
-          })
-          .finally(() => {
-            if (seq === autoSeq.current) setAutoValidating(false)
-          })
-      }, 700)
-      return next
-    })
+    if (!preview || batchId == null) return
+    const target = preview.rows.find((r) => r.rowNumber === rowNumber)
+    if (!target) return
+    const patched = { ...target, ...patch }
+    // Optimistic local apply.
+    setPreview((p) => p ? { ...p, rows: p.rows.map((r) => (r.rowNumber === rowNumber ? patched : r)) } : p)
+    setSavingCell(true)
+    putChain.current = putChain.current
+      .then(() => orderImportService.updateRow(batchId, rowNumber, patched))
+      .then((res) => {
+        if (res.status?.toLowerCase() === 'success' && res.data) applyBatch(res.data)
+      })
+      .catch((e) => {
+        notify.apiError(e, 'Could not save the edit — it will retry on your next change.')
+      })
+      .finally(() => setSavingCell(false))
   }
 
   const downloadXlsx = async () => {
@@ -117,17 +124,32 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     }
   }
 
+  /**
+   * Upload = parse + validate + AUTO-SAVE as a draft in one motion. The old
+   * flow made "save" a separate decision ("Save as draft" vs "Fix N rows to
+   * save") over data the backend had effectively already accepted — now the
+   * draft simply exists from the moment the file parses, and the only real
+   * decision left (generate now or fix first) belongs to step 2.
+   */
   const submitPreview = async () => {
     if (!file) return
     setUploading(true)
     setError(null)
     try {
-      const response = await orderImportService.preview(file)
-      if (response.status === 'success' && response.data) {
-        setPreview(response.data)
+      const previewRes = await orderImportService.preview(file)
+      if (previewRes.status !== 'success' || !previewRes.data) {
+        setError(previewRes.message ?? 'Preview failed.')
+        notify.error(previewRes.message ?? 'Preview failed.')
+        return
+      }
+      const saveRes = await orderImportService.save(previewRes.data.rows, file.name, true)
+      if (saveRes.status === 'success' && saveRes.data) {
+        setPreview(saveRes.data)
+        setBatchId(saveRes.data.batchId ?? null)
+        onImported?.()
       } else {
-        setError(response.message ?? 'Preview failed.')
-        notify.error(response.message ?? 'Preview failed.')
+        setError(saveRes.message ?? 'Import failed.')
+        notify.error(saveRes.message ?? 'Import failed.')
       }
     } catch (e) {
       const { title, body } = importErrorDisplay(e, 'Upload failed.')
@@ -138,35 +160,56 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     }
   }
 
-  // `draft=true` parks the batch (errors and all) as a work-in-progress; the
-  // default final save is server-rejected unless every row is valid.
-  const submitCommit = async (draft = false) => {
-    if (!preview) return
-    setCommitting(true)
+  /** Generate labels for every ready row; error rows stay behind in the draft. */
+  const generate = async () => {
+    if (batchId == null) return
+    setGenerating(true)
+    setGenProgress(null)
+    setConfirmPlatform(false)
+    // Live X-of-N progress, polled alongside the generate POST.
+    let polling = true
+    const poll = async () => {
+      while (polling) {
+        try {
+          const pr = await orderImportService.generationProgress(batchId)
+          const d = pr.data
+          if (polling && d?.running && d.total > 0) setGenProgress({ done: d.done, total: d.total })
+        } catch { /* transient — the POST result is authoritative */ }
+        await new Promise((r) => setTimeout(r, 400))
+      }
+    }
+    void poll()
     try {
-      // Save the imported data to Data History — does NOT generate labels.
-      const response = await orderImportService.save(preview.rows, file?.name, draft)
-      if (response.status === 'success' && response.data) {
-        setCommittedSummary(response.data)
-        notify.success(response.message ?? 'Saved.')
+      const res = await orderImportService.generateLabels(batchId, {
+        usePlatformAccount: billing === 'PLATFORM',
+      })
+      if (res.data) {
+        setResult(res.data)
+        const gen = (res.data.rows ?? []).filter((r) => (r.generatedStatus ?? '').toUpperCase() === 'GENERATED').length
+        if (gen > 0) notify.success(res.message ?? `${gen} label(s) generated.`)
+        else notify.error(res.message ?? 'No labels were generated.')
         onImported?.()
       } else {
-        notify.error(response.message ?? 'Save failed.')
+        notify.error(res.message ?? 'Label generation failed.')
       }
     } catch (e) {
-      const { title, body } = importErrorDisplay(e, 'Save failed.')
-      setError(body)
+      const { title, body } = importErrorDisplay(e, 'Label generation failed.')
       notify.error({ title, body })
     } finally {
-      setCommitting(false)
+      polling = false
+      setGenerating(false)
+      setGenProgress(null)
     }
   }
 
   const startOver = () => {
     setFile(null)
     setPreview(null)
-    setCommittedSummary(null)
+    setBatchId(null)
+    setResult(null)
     setError(null)
+    setBilling('AUTO')
+    setConfirmPlatform(false)
   }
 
   const panel = (
@@ -189,7 +232,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#b6a684]">Bulk import</p>
               <h3 className="text-[16px] font-semibold text-[#1f150c]">Import orders from CSV / Excel</h3>
               <p className="mt-0.5 text-[11.5px] text-[#8a7959]">
-                One order per row — upload, review the preview, then commit.
+                One order per row — upload (saved automatically), fix what needs fixing, generate.
               </p>
             </div>
           </div>
@@ -224,9 +267,9 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
             />
           ) : null}
           {step === 2 && preview ? (
-            <PreviewStep preview={preview} onEdit={updateRow} autoValidating={autoValidating} />
+            <PreviewStep preview={preview} onEdit={updateRow} savingCell={savingCell} batchId={batchId} />
           ) : null}
-          {step === 3 && committedSummary ? <CommittedStep summary={committedSummary} /> : null}
+          {step === 3 && result ? <ResultStep result={result} /> : null}
 
           {error ? (
             <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-[12px] text-rose-800">
@@ -236,10 +279,23 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
           ) : null}
         </div>
 
-        {/* ── Footer ── */}
+        {/* ── Footer — one primary action per state ── */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#eee6d6] bg-white px-6 py-3.5">
           <div className="text-[11px] text-[#b6a684]">
-            {step === 2 && preview ? `${preview.totalRows} rows loaded` : step === 3 ? 'Import complete' : 'Step 1 of 3'}
+            {step === 2 && preview ? (
+              <span>
+                {batchId != null ? (
+                  <span className="font-semibold text-[#8a7959]">Draft #{batchId} saved automatically</span>
+                ) : null}
+                {preview.invalidRows > 0
+                  ? ` · ${preview.invalidRows} row(s) need fixes — they stay in the draft until fixed`
+                  : ' · safe to close and finish later'}
+              </span>
+            ) : step === 3 ? (
+              'Generation finished'
+            ) : (
+              'Step 1 of 3'
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -251,48 +307,98 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
 
             {onClose ? (
               <button type="button" onClick={onClose} className={GHOST_BTN}>
-                {step === 3 ? 'Done' : 'Cancel'}
+                {step === 3 ? 'Done' : step === 2 ? 'Close — draft is saved' : 'Cancel'}
               </button>
             ) : null}
 
             {step === 2 && preview ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => void submitCommit(true)}
-                  disabled={committing || preview.totalRows === 0 || autoValidating}
-                  className={GHOST_BTN}
-                  title="Park this import in Data History as a draft — rows with errors are held until you fix them."
+              generating ? (
+                /* Live X-of-N progress while the labels are bought. */
+                <div
+                  className="flex min-w-[190px] flex-col gap-1 rounded-xl bg-[#1f150c] px-3.5 py-1.5 text-[#f4eede]"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={genProgress?.total || undefined}
+                  aria-valuenow={genProgress ? Math.min(genProgress.done, genProgress.total) : undefined}
                 >
-                  {committing ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiSave className="h-3.5 w-3.5" />}
-                  Save as draft
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void submitCommit(false)}
-                  disabled={
-                    committing ||
-                    preview.totalRows === 0 ||
-                    preview.invalidRows > 0 ||
-                    autoValidating
-                  }
-                  className={PRIMARY_BTN}
-                  title={
-                    autoValidating
-                      ? 'Waiting for validation of your edits…'
-                      : preview.invalidRows > 0
-                        ? `Fix ${preview.invalidRows} row(s) with errors, or use "Save as draft".`
-                        : undefined
-                  }
-                >
-                  {committing ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiCheckCircle className="h-3.5 w-3.5" />}
-                  {committing
-                    ? 'Saving…'
-                    : preview.invalidRows > 0
-                      ? `Fix ${preview.invalidRows} row(s) to save`
-                      : `Save all ${preview.totalRows} row(s)`}
-                </button>
-              </>
+                  <div className="flex items-center justify-between text-[11px] font-semibold">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                      Generating…
+                    </span>
+                    {genProgress ? (
+                      <span className="tabular-nums">{Math.min(genProgress.done, genProgress.total)}/{genProgress.total}</span>
+                    ) : null}
+                  </div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#f4eede]/20">
+                    {genProgress && genProgress.total > 0 ? (
+                      <div
+                        className="h-full rounded-full bg-[#f4eede] transition-[width] duration-300 ease-out"
+                        style={{ width: `${Math.round((Math.min(genProgress.done, genProgress.total) / genProgress.total) * 100)}%` }}
+                      />
+                    ) : (
+                      <div className="h-full w-1/3 animate-pulse rounded-full bg-[#f4eede]/70" />
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Bill-to for the whole batch. Platform = house account,
+                      rebilled with markup — needs an explicit confirm. */}
+                  <span
+                    title="Which carrier account this batch bills to. Platform bills the house account and rebills the client with markup."
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526]"
+                  >
+                    <FiHome className="h-3.5 w-3.5 shrink-0" />
+                    <span className="hidden sm:inline text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>
+                    <select
+                      value={billing}
+                      onChange={(e) => {
+                        setBilling(e.target.value as 'AUTO' | 'PLATFORM')
+                        setConfirmPlatform(false)
+                      }}
+                      className="cursor-pointer border-0 bg-transparent pr-1 text-[11px] font-semibold text-inherit focus:outline-none"
+                    >
+                      <option value="AUTO">Client account</option>
+                      <option value="PLATFORM">Platform account</option>
+                    </select>
+                  </span>
+                  {billing === 'PLATFORM' && confirmPlatform ? (
+                    <>
+                      <button type="button" onClick={() => void generate()} className={PRIMARY_BTN}>
+                        <FiHome className="h-3.5 w-3.5" />
+                        Confirm — bill to platform
+                      </button>
+                      <button type="button" onClick={() => setConfirmPlatform(false)} className={GHOST_BTN}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => (billing === 'PLATFORM' ? setConfirmPlatform(true) : void generate())}
+                      disabled={preview.validRows === 0 || savingCell}
+                      className={PRIMARY_BTN}
+                      title={
+                        savingCell
+                          ? 'Saving your edit…'
+                          : preview.validRows === 0
+                            ? 'Fix at least one row to generate.'
+                            : preview.invalidRows > 0
+                              ? `Generates the ${preview.validRows} ready row(s); the ${preview.invalidRows} with errors stay in the draft to fix later.`
+                              : undefined
+                      }
+                    >
+                      <FiZap className="h-3.5 w-3.5" />
+                      {preview.validRows === 0
+                        ? 'Fix rows to generate'
+                        : preview.invalidRows > 0
+                          ? `Generate ${preview.validRows} ready label(s)`
+                          : `Generate all ${preview.validRows} label(s)`}
+                    </button>
+                  )}
+                </>
+              )
             ) : null}
           </div>
         </div>
@@ -322,8 +428,8 @@ const PRIMARY_BTN =
 function Stepper({ current }: { current: 1 | 2 | 3 }) {
   const steps = [
     { n: 1, label: 'Upload file' },
-    { n: 2, label: 'Review & validate' },
-    { n: 3, label: 'Save' },
+    { n: 2, label: 'Review & fix' },
+    { n: 3, label: 'Generate labels' },
   ]
   return (
     <ol className="flex w-full items-center gap-1">
@@ -443,7 +549,7 @@ function UploadStep({
             </button>
             <button type="button" onClick={onSubmit} disabled={uploading} className={PRIMARY_BTN}>
               {uploading ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiArrowRight className="h-3.5 w-3.5" />}
-              {uploading ? 'Reading…' : 'Preview rows'}
+              {uploading ? 'Validating…' : 'Upload & validate'}
             </button>
           </div>
         </div>
@@ -682,11 +788,13 @@ const CARD_GROUPS: { title: string; keys: string[] }[] = [
 function PreviewStep({
   preview,
   onEdit,
-  autoValidating,
+  savingCell,
+  batchId,
 }: {
   preview: OrderImportPreview
   onEdit: (rowNumber: number, patch: Partial<OrderImportRow>) => void
-  autoValidating: boolean
+  savingCell: boolean
+  batchId: number | null
 }) {
   const warned = preview.rows.filter((r) => (r.warnings?.length ?? 0) > 0).length
   // Union of tenant custom-field keys across the batch → stable extra columns.
@@ -733,13 +841,13 @@ function PreviewStep({
           ))}
         </div>
         <span className="ml-auto inline-flex items-center gap-1.5 text-[10.5px] text-[#b6a684]">
-          {autoValidating ? (
+          {savingCell ? (
             <>
               <FiLoader className="h-3 w-3 animate-spin text-[#5a4526]" />
-              <span className="font-semibold text-[#5a4526]">Validating edits…</span>
+              <span className="font-semibold text-[#5a4526]">Saving to draft{batchId != null ? ` #${batchId}` : ''}…</span>
             </>
           ) : (
-            'Click any cell to edit — rows re-validate automatically. Scroll right for more columns.'
+            'Click any cell to edit — every change saves to the draft and re-validates. Scroll right for more columns.'
           )}
         </span>
       </div>
@@ -973,50 +1081,70 @@ function PreviewStep({
   )
 }
 
-function CommittedStep({ summary }: { summary: OrderImportPreview }) {
-  const saved = summary.rows.filter((r) => (r.errors?.length ?? 0) === 0)
-  const held = summary.rows.filter((r) => (r.errors?.length ?? 0) > 0)
+/**
+ * Step 3 — generation outcome. Three buckets from the batch's rows:
+ * generated (tracking numbers), failed at the carrier (humanized reason), and
+ * rows still held in the draft by validation errors. The user never has to
+ * discover Import history on their own — but the batch lives there for later.
+ */
+function ResultStep({ result }: { result: ImportBatchDetail }) {
+  const rows = result.rows ?? []
+  const generated = rows.filter((r) => (r.generatedStatus ?? '').toUpperCase() === 'GENERATED')
+  const failed = rows.filter((r) => (r.generatedStatus ?? '').toUpperCase() === 'FAILED')
+  const held = rows.filter(
+    (r) => (r.errors?.length ?? 0) > 0 && (r.generatedStatus ?? '').toUpperCase() !== 'GENERATED',
+  )
+  const allDone = generated.length === rows.length && rows.length > 0
   return (
     <div className="space-y-3">
-      <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-6 text-center">
-        <span className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-600 text-white">
-          <FiCheck className="h-6 w-6" />
+      <div
+        className={`rounded-2xl border p-6 text-center ${
+          allDone ? 'border-emerald-200 bg-emerald-50/60' : 'border-[#e3d9c4] bg-[#faf7f0]'
+        }`}
+      >
+        <span
+          className={`mx-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl text-white ${
+            allDone ? 'bg-emerald-600' : generated.length > 0 ? 'bg-[#412d15]' : 'bg-rose-600'
+          }`}
+        >
+          {generated.length > 0 ? <FiCheck className="h-6 w-6" /> : <FiAlertCircle className="h-6 w-6" />}
         </span>
-        <p className="mt-3 text-[14px] font-semibold text-[#1f150c]">{summary.totalRows} row(s) saved to history</p>
-        <p className="mt-1 text-[11.5px] text-[#5a4526]">
-          Saved to <span className="font-semibold">Data history</span> — no labels were generated.{' '}
-          <span className="font-semibold text-emerald-700">All {summary.validRows} rows ready to generate</span>.
+        <p className="mt-3 text-[14px] font-semibold text-[#1f150c]">
+          {generated.length} of {rows.length} label(s) generated
         </p>
-        {summary.batchId != null ? (
-          <p className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-1 text-[10.5px] font-bold uppercase tracking-[0.1em] text-emerald-800">
-            Import #{summary.batchId}
-          </p>
-        ) : null}
+        <p className="mt-1 text-[11.5px] text-[#5a4526]">
+          {failed.length > 0 ? `${failed.length} rejected by the carrier — retry from Import history. ` : ''}
+          {held.length > 0 ? `${held.length} still need fixes — the draft keeps them. ` : ''}
+          {allDone ? 'Find the orders in All Orders (grouped by this label batch).' : ''}
+        </p>
+        <p className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-[#efe7d4] px-2.5 py-1 text-[10.5px] font-bold uppercase tracking-[0.1em] text-[#5a4526]">
+          Import #{result.id}{result.labelBatchId != null ? ` · label batch ${result.labelBatchId}` : ''}
+        </p>
       </div>
 
-      {held.length > 0 ? (
-        <div className="overflow-hidden rounded-xl border border-amber-300">
-          <p className="bg-amber-50 px-3 py-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-amber-800">
-            Held — reopen from Data history to fix ({held.length})
+      {generated.length > 0 ? (
+        <div className="overflow-hidden rounded-xl border border-emerald-200">
+          <p className="bg-emerald-50 px-3 py-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-emerald-800">
+            Generated ({generated.length})
           </p>
           <table className="w-full text-left text-[11.5px] text-[#3f3527]">
-            <thead className="border-t border-amber-100 bg-amber-50/60 text-[9.5px] uppercase tracking-[0.14em] text-amber-700">
+            <thead className="border-t border-emerald-100 bg-emerald-50/60 text-[9.5px] uppercase tracking-[0.14em] text-emerald-700">
               <tr>
                 <th className="p-2.5">#</th>
                 <th className="p-2.5">Recipient</th>
                 <th className="p-2.5">Destination</th>
-                <th className="p-2.5">What needs fixing</th>
+                <th className="p-2.5">Order</th>
+                <th className="p-2.5">Tracking</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-amber-100">
-              {held.map((r) => (
+            <tbody className="divide-y divide-emerald-100">
+              {generated.map((r) => (
                 <tr key={r.rowNumber}>
-                  <td className="p-2.5 font-mono text-[10.5px] text-amber-700">{r.rowNumber}</td>
+                  <td className="p-2.5 font-mono text-[10.5px] text-emerald-700">{r.rowNumber}</td>
                   <td className="p-2.5 font-semibold text-[#1f150c]">{r.recipientName ?? '—'}</td>
-                  <td className="p-2.5">
-                    {r.city ?? '—'} {r.countryCode ? `· ${r.countryCode}` : ''}
-                  </td>
-                  <td className="p-2.5 text-amber-700">{r.errors.length} error{r.errors.length === 1 ? '' : 's'}</td>
+                  <td className="p-2.5">{r.city ?? '—'} {r.countryCode ? `· ${r.countryCode}` : ''}</td>
+                  <td className="p-2.5 font-mono text-[10.5px]">{r.generatedOrderNo ?? '—'}</td>
+                  <td className="p-2.5 font-mono text-[10.5px]">{r.generatedTrackingNumber ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -1024,31 +1152,39 @@ function CommittedStep({ summary }: { summary: OrderImportPreview }) {
         </div>
       ) : null}
 
-      {saved.length > 0 ? (
-        <div className="overflow-hidden rounded-xl border border-[#e3d9c4]">
-          <p className="bg-[#faf7f0] px-3 py-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
-            Ready to generate
+      {failed.length > 0 ? (
+        <div className="overflow-hidden rounded-xl border border-rose-300">
+          <p className="bg-rose-50 px-3 py-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-rose-800">
+            Rejected by the carrier ({failed.length}) — retry from Import history
           </p>
           <table className="w-full text-left text-[11.5px] text-[#3f3527]">
-            <thead className="border-t border-[#eee6d6] bg-[#faf7f0]/60 text-[9.5px] uppercase tracking-[0.14em] text-[#8a7959]">
-              <tr>
-                <th className="p-2.5">#</th>
-                <th className="p-2.5">Recipient</th>
-                <th className="p-2.5">Destination</th>
-                <th className="p-2.5">Carrier</th>
-                <th className="p-2.5 text-right">Weight</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#eee6d6]">
-              {saved.map((r) => (
+            <tbody className="divide-y divide-rose-100">
+              {failed.map((r) => (
                 <tr key={r.rowNumber}>
-                  <td className="p-2.5 font-mono text-[10.5px] text-[#8a7959]">{r.rowNumber}</td>
+                  <td className="w-10 p-2.5 font-mono text-[10.5px] text-rose-700">{r.rowNumber}</td>
                   <td className="p-2.5 font-semibold text-[#1f150c]">{r.recipientName ?? '—'}</td>
-                  <td className="p-2.5">
-                    {r.city ?? '—'} {r.countryCode ? `· ${r.countryCode}` : ''}
+                  <td className="p-2.5 text-rose-700">{r.generatedMessage ?? 'The carrier rejected this shipment.'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {held.length > 0 ? (
+        <div className="overflow-hidden rounded-xl border border-amber-300">
+          <p className="bg-amber-50 px-3 py-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-amber-800">
+            Still in the draft — fix from Import history ({held.length})
+          </p>
+          <table className="w-full text-left text-[11.5px] text-[#3f3527]">
+            <tbody className="divide-y divide-amber-100">
+              {held.map((r) => (
+                <tr key={r.rowNumber}>
+                  <td className="w-10 p-2.5 font-mono text-[10.5px] text-amber-700">{r.rowNumber}</td>
+                  <td className="p-2.5 font-semibold text-[#1f150c]">{r.recipientName ?? '—'}</td>
+                  <td className="p-2.5 text-amber-700">
+                    {(r.errors ?? []).slice(0, 2).join('; ')}{(r.errors?.length ?? 0) > 2 ? ` (+${r.errors!.length - 2} more)` : ''}
                   </td>
-                  <td className="p-2.5">{r.carrierCode ?? '—'}</td>
-                  <td className="p-2.5 text-right">{r.weight ?? '—'} {r.weightUnit ?? ''}</td>
                 </tr>
               ))}
             </tbody>
