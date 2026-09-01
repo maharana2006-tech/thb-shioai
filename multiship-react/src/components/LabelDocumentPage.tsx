@@ -323,12 +323,18 @@ export default function LabelDocumentPage() {
   // or 502 (renderer failed) → keep the facsimile. Silent probe so a
   // stale bundle against a backend without the endpoint still renders
   // cleanly.
+  // PR #544 — probe uses pkgIndex (declared below via payload +
+  // searchParams). Effect deps include pkgIndex so package-picker
+  // changes re-fire the HEAD probe for that specific package's ZPL.
+  // pkgIndex references a variable declared below in this function
+  // — hoisting works because useEffect closures capture at render
+  // time, not at hoist time.
   useEffect(() => {
     if (!Number.isFinite(orderNo)) return
     let cancelled = false
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset probe state on order change; HEAD result below transitions to ready/unavailable
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset probe state on order/pkg change; HEAD result below transitions to ready/unavailable
     setCarrierPreviewState('unknown')
-    orderService.headLabelPreviewPng(orderNo)
+    orderService.headLabelPreviewPng(orderNo, pkgIndex)
       .then((available) => {
         if (!cancelled) setCarrierPreviewState(available ? 'ready' : 'unavailable')
       })
@@ -336,7 +342,7 @@ export default function LabelDocumentPage() {
         if (!cancelled) setCarrierPreviewState('unavailable')
       })
     return () => { cancelled = true }
-  }, [orderNo])
+  }, [orderNo, pkgIndex])
 
   const order = payload?.order
   const label = payload?.label
@@ -685,7 +691,7 @@ export default function LabelDocumentPage() {
                invalidate). */
             <div className="print-doc relative w-[430px] shrink-0 border border-slate-300 bg-white shadow-xl print:w-[3.76in] print:border-0 print:shadow-none">
               <img
-                src={orderService.labelPreviewPngUrl(orderNo)}
+                src={orderService.labelPreviewPngUrl(orderNo, pkgIndex)}
                 alt={`Shipping label for order ${orderNo}`}
                 className="block h-auto w-full"
                 onError={() => setCarrierPreviewState('unavailable')}

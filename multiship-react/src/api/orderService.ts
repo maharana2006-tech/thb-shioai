@@ -701,13 +701,19 @@ export const orderService = {
    * not ZPL) or 502 (renderer failed) → false. Silent — the FE keeps
    * its JSX facsimile visible when this returns false, no error toast.
    *
+   * PR #544 — optional pkgIndex threads to backend's ?pkg=N. Passing a
+   * specific package targets its individual ZPL; omitted returns a
+   * vertically-stacked composite on multi-pkg orders. HEAD probe fires
+   * per pkg so the picker's package-change re-probes for that package.
+   *
    * Uses HEAD to avoid downloading the PNG until we know we want it;
    * the actual <img> renders the same URL with a fresh GET which the
    * browser caches per Cache-Control: private, max-age=60.
    */
-  headLabelPreviewPng: async (orderNo: number): Promise<boolean> => {
+  headLabelPreviewPng: async (orderNo: number, pkgIndex?: number): Promise<boolean> => {
     try {
-      const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/preview.png`, {
+      const qs = pkgIndex && pkgIndex > 0 ? `?pkg=${pkgIndex}` : ''
+      const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/preview.png${qs}`, {
         method: 'HEAD',
         credentials: 'include',
       })
@@ -719,9 +725,12 @@ export const orderService = {
 
   /** PR #538 — URL builder for the <img src=> tag once the HEAD probe
    *  above confirms the PNG endpoint is live. Kept as a helper so
-   *  LabelDocumentPage doesn't hardcode the path. */
-  labelPreviewPngUrl: (orderNo: number): string =>
-    `${BASE_URL}/orders/${orderNo}/label/preview.png`,
+   *  LabelDocumentPage doesn't hardcode the path.
+   *  PR #544 — optional pkgIndex forwards as ?pkg=N. */
+  labelPreviewPngUrl: (orderNo: number, pkgIndex?: number): string => {
+    const qs = pkgIndex && pkgIndex > 0 ? `?pkg=${pkgIndex}` : ''
+    return `${BASE_URL}/orders/${orderNo}/label/preview.png${qs}`
+  },
 
   /**
    * The order's commercial invoice as a PDF blob (Sprint 51). The platform's

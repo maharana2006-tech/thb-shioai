@@ -64,26 +64,59 @@ public class LabelArtifactResolver {
     private static final byte[] MAGIC_PDF = new byte[]{'%', 'P', 'D', 'F', '-'};
 
     private final OrderTrackingRepository orderTrackingRepository;
+    private final com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
 
     private final RestClient http = RestClient.builder()
             .requestFactory(defaultRequestFactory())
             .build();
 
     /**
-     * Returns the carrier's stored artifact when it matches the caller's
-     * desired format. Empty otherwise — the caller falls back to a
-     * facsimile render.
+     * Single-package (or shipment-level) lookup — back-compat wrapper for
+     * callers that don't (or can't) supply a package index.
+     */
+    public Optional<byte[]> resolveAsBytes(Integer orderNo, String desiredFormat) {
+        return resolveAsBytes(orderNo, desiredFormat, null);
+    }
+
+    /**
+     * PR #544 — Returns the carrier's stored artifact when it matches the
+     * caller's desired format. Empty otherwise — the caller falls back to
+     * a facsimile render.
+     *
+     * <p>When {@code pkgIndex} is supplied, reads per-package label from
+     * {@link com.multiship.backend.model.LabelPackage} keyed by
+     * {@code sequence_number}. When null, falls back to shipment-level
+     * {@link OrderTracking} for backward-compat with single-package
+     * orders (where {@code order_label_tracking} carries the only
+     * label). Pre-PR-#544 this method was pkg-agnostic and always
+     * returned pkg 1 on multi-package orders — pkg 2..N labels persisted
+     * in {@code label_package} were unreachable via the endpoint.
      *
      * @param orderNo       the order whose label to look up
      * @param desiredFormat one of {@code "ZPL"} or {@code "PDF"}
+     * @param pkgIndex      1-based package sequence; null for shipment-level
      */
-    public Optional<byte[]> resolveAsBytes(Integer orderNo, String desiredFormat) {
+    public Optional<byte[]> resolveAsBytes(Integer orderNo, String desiredFormat, Integer pkgIndex) {
         if (orderNo == null || !StringUtils.hasText(desiredFormat)) return Optional.empty();
         String normalized = desiredFormat.trim().toUpperCase(Locale.ROOT);
 
-        Optional<OrderTracking> row = orderTrackingRepository.findByOrderNo(orderNo);
-        if (row.isEmpty()) return Optional.empty();
-        String stored = row.get().getLabelFilePath();
+        String stored;
+        if (pkgIndex != null && pkgIndex > 0) {
+            // Per-package path: read the specific label_package row.
+            // Returns empty when the pkg index doesn't exist (e.g. asking
+            // for pkg 3 on a 2-pkg order) so callers 404 cleanly rather
+            // than silently falling back to shipment-level (which would
+            // return pkg 1 and mislead the operator).
+            Optional<com.multiship.backend.model.LabelPackage> pkg =
+                    labelPackageRepository.findByOrderNoAndSequenceNumber(orderNo, pkgIndex);
+            if (pkg.isEmpty()) return Optional.empty();
+            stored = pkg.get().getLabelFilePath();
+        } else {
+            // Back-compat shipment-level path (single-package orders).
+            Optional<OrderTracking> row = orderTrackingRepository.findByOrderNo(orderNo);
+            if (row.isEmpty()) return Optional.empty();
+            stored = row.get().getLabelFilePath();
+        }
         if (!StringUtils.hasText(stored)) return Optional.empty();
 
         byte[] bytes = fetchBytes(stored);
