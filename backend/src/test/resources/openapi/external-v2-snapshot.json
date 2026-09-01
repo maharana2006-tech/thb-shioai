@@ -2076,6 +2076,12 @@
           "referenceNumber" : {
             "type" : "string"
           },
+          "poNumber" : {
+            "type" : "string"
+          },
+          "departmentNumber" : {
+            "type" : "string"
+          },
           "specialInstructions" : {
             "type" : "string"
           },

@@ -126,6 +126,25 @@ public class ShipmentRequestDTO {
     private String recipientCountryCode;
 
     private String referenceNumber;
+    /**
+     * PR #543 — printed on the carrier label's PO slot.
+     * Manual shipments: "MAN{orderNo}" (e.g. "MAN900010").
+     * WMS orders:     `Order.wmsExternalId` when set, else `orderNo`.
+     * API/ERP/BULK:   `orderNo` as a bare string.
+     * Populated by CarrierServiceImpl before the connector call;
+     * connectors emit into per-carrier reference slots (FedEx
+     * customerReferences P_O_NUMBER, UPS Package.ReferenceNumber code
+     * "PO", DHL/USPS via customer-reference passthrough).
+     */
+    private String poNumber;
+    /**
+     * PR #543 — printed on the carrier label's DEPT slot.
+     * Populated with `Order.custNo` (the client code, e.g. "THB000").
+     * FedEx maps to customerReferences DEPARTMENT_NUMBER; UPS to
+     * Package.ReferenceNumber code "DP"; DHL/USPS pass through with
+     * DEPT= prefix concatenated onto their single-string ref field.
+     */
+    private String departmentNumber;
     private String specialInstructions;
     private BigDecimal declaredValue;
 

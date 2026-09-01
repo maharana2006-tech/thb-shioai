@@ -235,6 +235,28 @@ public class ShipmentValidationService {
         // FedEx + UPS with native validate endpoints.
         ShipmentValidationResult.CarrierValidationSubResult carrierResult =
                 callCarrierValidateShipment(req, adapted, skipped);
+        // PR #542 Fix 1 — suppress positive carrier verdict when local
+        // validators flagged hard errors. Prior behavior: local says
+        // "Recipient name is required" but carrier hop still shows
+        // "EXACT: FedEx confirmed the shipment is valid." (because the
+        // sandbox /packages/validate endpoint is lenient on null
+        // personName). Operator sees conflicting banners and ignores
+        // the local red error. Fix: when local errors exist AND
+        // carrier returned a positive verdict (EXACT/CORRECTED),
+        // downgrade to NOT_SUPPORTED (renders grey on the FE, not
+        // green) with a bypass message. Negative carrier verdicts
+        // (NOT_FOUND/ERROR) are informative and stay untouched.
+        if (carrierResult != null && !errors.isEmpty()
+                && ("EXACT".equals(carrierResult.getMatchLevel())
+                    || "CORRECTED".equals(carrierResult.getMatchLevel()))) {
+            carrierResult = carrierResult.toBuilder()
+                    .valid(false)
+                    .matchLevel("NOT_SUPPORTED")
+                    .message("Carrier check bypassed — resolve local errors first.")
+                    .warnings(List.of())
+                    .errors(List.of())
+                    .build();
+        }
         if (carrierResult != null && Boolean.FALSE.equals(carrierResult.isValid())) {
             // Carrier flagged a hard failure — surface as a top-level
             // localError so the aggregated verdict flips to FAIL. The
@@ -363,7 +385,11 @@ public class ShipmentValidationService {
                 packageType,
                 length, width, height,
                 fromCountry,
-                account);
+                account,
+                // PR #543 — validate hop has no persisted orderNo (label
+                // hasn't been generated). Passing null lets the builder
+                // fall through to req.getReference() for the PO slot.
+                null);
         // adaptForValidators pre-populated intl + DG on the shell DTO;
         // the new builder also sets DG but not the customs-block DTO.
         // Re-attach the intl block so IntlShipmentValidator's earlier
@@ -415,15 +441,65 @@ public class ShipmentValidationService {
                     .build();
         }
 
+        // PR #542 Fix 2 — defensive post-response check. FedEx sandbox's
+        // /packages/validate endpoint accepts a payload with a null
+        // recipient.contact.personName and returns EXACT (production
+        // /shipments would reject with NotNull.verifyShipmentInputVO.
+        // requestedShipment.recipients[0].contact.personName). Never
+        // trust a positive carrier verdict on a payload where WE know
+        // required wire fields are missing — override to ERROR with
+        // an explicit "sandbox lenience" message so the operator
+        // doesn't see conflicting local-FAIL / carrier-EXACT banners.
+        String matchLevel = result.matchLevel();
+        boolean valid = result.valid();
+        String message = result.message();
+        java.util.List<String> errorsList = result.errors() != null ? result.errors() : List.of();
+        if (("EXACT".equals(matchLevel) || "CORRECTED".equals(matchLevel))) {
+            java.util.List<String> missing = missingWireRequiredFields(adaptedRequest);
+            if (!missing.isEmpty()) {
+                matchLevel = "ERROR";
+                valid = false;
+                errorsList = java.util.List.of(
+                        "Sandbox lenience: " + carrier
+                                + " returned success on a payload missing required wire fields ("
+                                + String.join(", ", missing)
+                                + "). Production would reject.");
+                message = carrier + " accepted a payload with missing required fields — sandbox lenience.";
+            }
+        }
         return ShipmentValidationResult.CarrierValidationSubResult.builder()
                 .carrierCode(carrier)
-                .valid(result.valid())
-                .matchLevel(result.matchLevel())
+                .valid(valid)
+                .matchLevel(matchLevel)
                 .kind(result.kind())
                 .warnings(result.warnings() != null ? result.warnings() : List.of())
-                .errors(result.errors() != null ? result.errors() : List.of())
-                .message(result.message())
+                .errors(errorsList)
+                .message(message)
                 .build();
+    }
+
+    /**
+     * PR #542 — wire-level required-field check for the ShipmentRequestDTO
+     * we hand to a connector. When a positive validate verdict lands
+     * back on a payload with any of these blank, sandbox lenience
+     * masked a real production-blocker; override to ERROR.
+     */
+    private java.util.List<String> missingWireRequiredFields(
+            com.multiship.backend.dto.ShipmentRequestDTO dto) {
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        if (!StringUtils.hasText(dto.getRecipientName())) missing.add("recipient.name");
+        if (!StringUtils.hasText(dto.getRecipientAddressLine1())) missing.add("recipient.addressLine1");
+        if (!StringUtils.hasText(dto.getRecipientCity())) missing.add("recipient.city");
+        if (!StringUtils.hasText(dto.getRecipientPostalCode())) missing.add("recipient.postalCode");
+        if (!StringUtils.hasText(dto.getRecipientCountryCode())) missing.add("recipient.countryCode");
+        if (!StringUtils.hasText(dto.getShipperName())) missing.add("shipper.name");
+        if (!StringUtils.hasText(dto.getShipperAddressLine1())) missing.add("shipper.addressLine1");
+        if (!StringUtils.hasText(dto.getShipperCity())) missing.add("shipper.city");
+        if (!StringUtils.hasText(dto.getShipperPostalCode())) missing.add("shipper.postalCode");
+        if (!StringUtils.hasText(dto.getShipperCountryCode())) missing.add("shipper.countryCode");
+        if (!StringUtils.hasText(dto.getServiceType())) missing.add("serviceType");
+        if (!StringUtils.hasText(dto.getPackageType())) missing.add("packageType");
+        return missing;
     }
 
     /** 3-tier credential resolution — mirrors AddressValidationServiceImpl. */

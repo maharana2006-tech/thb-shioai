@@ -70,5 +70,9 @@ public interface CarrierService {
             java.math.BigDecimal width,
             java.math.BigDecimal height,
             String fromCountry,
-            com.multiship.backend.model.CarrierAccountRef account);
+            com.multiship.backend.model.CarrierAccountRef account,
+            /** PR #543 — pre-allocated for the manual path so the label's
+             *  PO field can be stamped MAN{orderNo}. Null when validate
+             *  hop calls this (no persisted orderNo yet). */
+            Integer orderNoForPo);
 }

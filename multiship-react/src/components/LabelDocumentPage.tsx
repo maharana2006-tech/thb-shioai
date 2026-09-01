@@ -755,9 +755,23 @@ export default function LabelDocumentPage() {
                 <div className="grid grid-cols-2 pr-8 text-[9px] font-bold leading-[12px]">
                   <span>INV:</span>
                   <span>REF: {orderDisplay}</span>
-                  {/* PO/DEPT row removed — PO isn't captured on the order yet, and
-                      DEPT was re-rendering the client code inside the TO block.
-                      Client code now lives in the warehouse footer below. */}
+                  {/* PR #543 — PO / DEPT rows re-added. PO derives from the
+                      order source: manual/bulk → "MAN{orderNo}"; WMS →
+                      wmsExternalId when present else orderNo; other sources
+                      → orderNo bare. Matches the backend wire logic in
+                      CarrierServiceImpl.computeOrderPoNumber so the JSX
+                      facsimile fallback (used when carrier ZPL isn't
+                      available) prints the same value the real carrier
+                      label would. */}
+                  <span>PO: {(() => {
+                    const src = (order.source || '').toUpperCase()
+                    const orderNoStr = order.orderNo != null ? String(order.orderNo) : ''
+                    if (!orderNoStr) return ''
+                    if (src === 'MANUAL' || src === 'BULK') return 'MAN' + orderNoStr
+                    if (src === 'WMS') return (order as { wmsExternalId?: string | null }).wmsExternalId || orderNoStr
+                    return orderNoStr
+                  })()}</span>
+                  <span>DEPT: {order.custNo || ''}</span>
                 </div>
               </div>
               <div className="mx-1 h-px bg-black" />
