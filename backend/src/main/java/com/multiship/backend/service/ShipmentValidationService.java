@@ -385,7 +385,11 @@ public class ShipmentValidationService {
                 packageType,
                 length, width, height,
                 fromCountry,
-                account);
+                account,
+                // PR #543 — validate hop has no persisted orderNo (label
+                // hasn't been generated). Passing null lets the builder
+                // fall through to req.getReference() for the PO slot.
+                null);
         // adaptForValidators pre-populated intl + DG on the shell DTO;
         // the new builder also sets DG but not the customs-block DTO.
         // Re-attach the intl block so IntlShipmentValidator's earlier

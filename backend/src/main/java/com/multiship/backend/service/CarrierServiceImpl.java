@@ -924,9 +924,18 @@ public class CarrierServiceImpl implements CarrierService {
         // (only intl + DG), so FedEx/UPS native validateShipment saw
         // null shipper/service/package fields and rejected with 5+
         // NotNull bean-validation errors.
+        //
+        // PR #543 — allocate the manual orderNo BEFORE the DTO build so
+        // buildManualShipmentRequestDto can compute PO = "MAN{orderNo}"
+        // and stamp it into the wire payload the connector prints on
+        // the label. Prior sequence: DTO built → carrier called →
+        // orderNo allocated at persist. That meant we could never send
+        // MAN{n} on the wire (didn't know n yet). Now allocated up
+        // front; persisted with the same value later at line ~1099.
+        int allocatedOrderNo = orderRepository.nextManualOrderNo();
         ShipmentRequestDTO shipmentRequest = buildManualShipmentRequestDto(
                 req, from, to, carrier, billToNumber, serviceType, packageType,
-                length, width, height, fromCountry, account);
+                length, width, height, fromCountry, account, allocatedOrderNo);
 
         // Resolve the carrier's MPS cap for this service/scope and split
         // the shipment into sub-requests when we're over the cap. Every
@@ -1090,7 +1099,9 @@ public class CarrierServiceImpl implements CarrierService {
         // MAX(order_no) + 1. Bulletproof under concurrency; the sequence
         // is created + seeded above the current MAX on startup by
         // OrderNoSequenceInitializer.
-        int orderNo = orderRepository.nextManualOrderNo();
+        // PR #543 — reuse the orderNo allocated pre-carrier so the value
+        // stamped on the label (MAN{orderNo}) matches the persisted row.
+        int orderNo = allocatedOrderNo;
         boolean intl = to.getCountryCode() != null && fromCountry != null
                 && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
 
@@ -2003,8 +2014,23 @@ public class CarrierServiceImpl implements CarrierService {
             BigDecimal width,
             BigDecimal height,
             String fromCountry,
-            CarrierAccountRef account) {
+            CarrierAccountRef account,
+            Integer orderNoForPo) {
         CarrierProperties.ShipperDefaults dflt = carrierProperties.getShipper();
+        // PR #543 — PO / DEPT for label printing. Manual shipments always
+        // resolve here via `generateManualLabel` with req.source in
+        // {null, MANUAL} → prefix MAN{orderNo}. Non-manual sources
+        // (BULK/API/etc.) also use this builder when they enter through
+        // the manual endpoint; fall through to orderNo bare when set.
+        // DEPT is the client code (custNo on the ERP-side, clientCode
+        // on the request DTO).
+        String source = firstNonBlank(req.getSource(), "MANUAL").toUpperCase();
+        String poNumber = orderNoForPo != null
+                ? ("MANUAL".equals(source) || "BULK".equals(source)
+                        ? "MAN" + orderNoForPo
+                        : String.valueOf(orderNoForPo))
+                : firstNonBlank(req.getReference(), null);
+        String deptNumber = firstNonBlank(req.getClientCode(), null);
         return ShipmentRequestDTO.builder()
                 .carrierCode(carrier)
                 .accountNumber(billToNumber)
@@ -2036,6 +2062,8 @@ public class CarrierServiceImpl implements CarrierService {
                 .recipientResidential(to.getResidential())
                 .recipientPhoneCountryCode(to.getPhoneCountryCode())
                 .referenceNumber(firstNonBlank(req.getReference(), "MANUAL"))
+                .poNumber(poNumber)
+                .departmentNumber(deptNumber)
                 .specialInstructions(req.getGoodsDescription())
                 .declaredValue(req.getDeclaredValue())
                 .isReturn(req.getIsReturn())
@@ -2051,6 +2079,26 @@ public class CarrierServiceImpl implements CarrierService {
                 .labelStockType(firstNonBlank(req.getLabelStockType(),
                         account != null ? account.getFedexLabelStockType() : null))
                 .build();
+    }
+
+    /**
+     * PR #543 — PO field for the printed label, computed from Order.source.
+     *   MANUAL / BULK  → "MAN{orderNo}"
+     *   WMS            → order.wmsExternalId (or orderNo if blank)
+     *   API / ERP / etc. → orderNo bare
+     *   null orderNo   → null (unlabeled; carrier renders blank PO slot)
+     */
+    private String computeOrderPoNumber(Order order) {
+        if (order == null || order.getOrderNo() == null) return null;
+        String source = firstNonBlank(order.getSource(), "").toUpperCase();
+        String orderNoStr = String.valueOf(order.getOrderNo());
+        if ("MANUAL".equals(source) || "BULK".equals(source)) {
+            return "MAN" + orderNoStr;
+        }
+        if ("WMS".equals(source)) {
+            return firstNonBlank(order.getWmsExternalId(), orderNoStr);
+        }
+        return orderNoStr;
     }
 
     private ShipmentRequestDTO buildShipmentRequest(Order order, String accountNumber, CarrierConnector connector) {
@@ -2246,6 +2294,13 @@ public class CarrierServiceImpl implements CarrierService {
                 // fallback that used to ship international parcels as US.
                 .recipientCountryCode(order.getShiptoCountryCd())
                 .referenceNumber(order.getOrderNo() != null ? String.valueOf(order.getOrderNo()) : null)
+                // PR #543 — PO / DEPT slots on the printed label. Manual
+                // orders here (rare — Order-based path is mainly for
+                // ERP-imported orders re-generating labels) prefix MAN;
+                // WMS uses the external ref when present; everything else
+                // uses the bare orderNo. DEPT is always the custNo.
+                .poNumber(computeOrderPoNumber(order))
+                .departmentNumber(firstNonBlank(order.getCustNo(), null))
                 .specialInstructions(firstNonBlank(order.getGoodsDesc(), order.getShipVia()))
                 .declaredValue(order.getPrice())
                 .declaredValueCurrency(declaredValueCurrency)

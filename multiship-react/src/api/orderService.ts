@@ -145,6 +145,16 @@ export interface OrderWithLines {
   packageCount?: number | null
   /** Sprint 29 — per-package rows (tracking / weight / dims) when this is a multi-package shipment. */
   packages?: OrderPackage[] | null
+  /** PR #543 — order source (`MANUAL | BULK | WMS | API | ERP`) drives
+   *  the PO field on the JSX label facsimile:
+   *    - `MANUAL` / `BULK`  → `MAN{orderNo}`
+   *    - `WMS`              → `wmsExternalId` when set, else `orderNo`
+   *    - other (`API` / `ERP` / null) → orderNo bare
+   *  Null on legacy rows — facsimile falls through to orderNo bare. */
+  source?: string | null
+  /** PR #543 — external order id from a WMS pull, used as PO when
+   *  `source === 'WMS'`. Null for non-WMS orders. */
+  wmsExternalId?: string | null
 }
 
 /** Configured ship-from address exposed by /orders/{orderNo}/label. */

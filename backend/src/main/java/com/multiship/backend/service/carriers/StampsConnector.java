@@ -1700,6 +1700,22 @@ public class StampsConnector implements CarrierConnector {
             xml.append("<ImageType>").append(imageType).append("</ImageType>");
         }
 
+        // PR #543 — SWSIM prints <CustomerID> on the label's "Reference"
+        // slot. USPS has no separate PO / DEPT fields, so concat both
+        // values with prefixes (matches the DHL treatment above). Empty
+        // string omitted so the label doesn't print a literal "PO= DEPT=".
+        StringBuilder ref = new StringBuilder();
+        if (StringUtils.hasText(request.getPoNumber())) {
+            ref.append("PO=").append(request.getPoNumber());
+        }
+        if (StringUtils.hasText(request.getDepartmentNumber())) {
+            if (ref.length() > 0) ref.append(' ');
+            ref.append("DEPT=").append(request.getDepartmentNumber());
+        }
+        if (ref.length() > 0) {
+            xml.append("<CustomerID>").append(xmlEscape(ref.toString())).append("</CustomerID>");
+        }
+
         xml.append("</CreateIndicium>");
         xml.append("</soap:Body>");
         xml.append("</soap:Envelope>");
