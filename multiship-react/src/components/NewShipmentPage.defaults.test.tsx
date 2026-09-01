@@ -262,10 +262,12 @@ beforeEach(() => {
 
 /** Wait for the page's client dropdown to populate, then return it.
  *  Field wraps inputs in a plain <label> with a text-only <span>; jsdom's
- *  role+name matcher doesn't find these, so we use getByLabelText. */
+ *  role+name matcher doesn't find these, so we use getByLabelText.
+ *  Regex allows an optional trailing "*" so the required-client marker
+ *  (added when dev's layout change made Client required) still matches. */
 const waitForClientSelect = async (): Promise<HTMLSelectElement> => {
   const dropdown = await waitFor(() => {
-    const el = screen.getByLabelText(/^Client$/i)
+    const el = screen.getByLabelText(/^Client\s*\*?$/i)
     if (!el) throw new Error('client select not found')
     return el as HTMLSelectElement
   })
