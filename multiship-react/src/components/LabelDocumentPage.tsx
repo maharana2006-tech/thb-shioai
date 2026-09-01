@@ -316,33 +316,11 @@ export default function LabelDocumentPage() {
     }
   }, [orderNo])
 
-  // PR #538 — probe /label/preview.png with a HEAD request. When the
-  // backend feature flag label.render-carrier-zpl is on AND the
-  // carrier stored parseable ZPL bytes, the endpoint returns 200 and
-  // we swap the JSX facsimile for an <img>. 404 (flag off / not ZPL)
-  // or 502 (renderer failed) → keep the facsimile. Silent probe so a
-  // stale bundle against a backend without the endpoint still renders
-  // cleanly.
-  // PR #544 — probe uses pkgIndex (declared below via payload +
-  // searchParams). Effect deps include pkgIndex so package-picker
-  // changes re-fire the HEAD probe for that specific package's ZPL.
-  // pkgIndex references a variable declared below in this function
-  // — hoisting works because useEffect closures capture at render
-  // time, not at hoist time.
-  useEffect(() => {
-    if (!Number.isFinite(orderNo)) return
-    let cancelled = false
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset probe state on order/pkg change; HEAD result below transitions to ready/unavailable
-    setCarrierPreviewState('unknown')
-    orderService.headLabelPreviewPng(orderNo, pkgIndex)
-      .then((available) => {
-        if (!cancelled) setCarrierPreviewState(available ? 'ready' : 'unavailable')
-      })
-      .catch(() => {
-        if (!cancelled) setCarrierPreviewState('unavailable')
-      })
-    return () => { cancelled = true }
-  }, [orderNo, pkgIndex])
+  // PR #544 — HEAD-probe useEffect moved BELOW the pkgIndex
+  // declaration (originally lived here). eslint no-use-before-define
+  // won't allow the effect to reference pkgIndex when the const is
+  // declared later in the same scope; keeping the effect adjacent to
+  // pkgIndex reads more clearly anyway.
 
   const order = payload?.order
   const label = payload?.label
@@ -461,6 +439,31 @@ export default function LabelDocumentPage() {
     packagesArrayLen > 0 ? packagesArrayLen : (Number(order?.packageCount) || 1))
   const rawPkg = Number(searchParams.get('pkg')) || 1
   const pkgIndex = Math.min(Math.max(1, rawPkg), pkgCount)
+
+  // PR #538/544 — HEAD probe for /label/preview.png. When the backend
+  // feature flag label.render-carrier-zpl is on AND the carrier stored
+  // parseable ZPL bytes for this order + package, the endpoint returns
+  // 200 and we swap the JSX facsimile for an <img>. 404 (flag off /
+  // not ZPL) or 502 (renderer failed) → keep the facsimile. Silent
+  // probe so a stale bundle against a backend without the endpoint
+  // still renders cleanly.
+  // Deps include pkgIndex so the package-picker's package change
+  // re-fires the probe for that specific package's ZPL.
+  useEffect(() => {
+    if (!Number.isFinite(orderNo)) return
+    let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset probe state on order/pkg change; HEAD result below transitions to ready/unavailable
+    setCarrierPreviewState('unknown')
+    orderService.headLabelPreviewPng(orderNo, pkgIndex)
+      .then((available) => {
+        if (!cancelled) setCarrierPreviewState(available ? 'ready' : 'unavailable')
+      })
+      .catch(() => {
+        if (!cancelled) setCarrierPreviewState('unavailable')
+      })
+    return () => { cancelled = true }
+  }, [orderNo, pkgIndex])
+
   // Per-package row for the currently-selected box (drives per-pkg tracking,
   // weight, dims). Null / undefined when the order predates label_package
   // persistence — every downstream read falls back to the shipment-level
