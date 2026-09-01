@@ -515,7 +515,12 @@ public class CarrierServiceImpl implements CarrierService {
         }
 
         CarrierConnector connector;
-        CarrierConnector.ShipmentResult shipmentResult;
+        // V32 — swapped from bare ShipmentResult to AutoShipmentAttempt so
+        // the persistence block below can iterate sub-requests + results
+        // (mirrors generateManualLabel). The .master() accessor returns
+        // the first-batch ShipmentResult that OrderTracking has always
+        // tracked, so no external contract change.
+        AutoShipmentAttempt attempt;
         // The account actually used — may switch to the platform account below.
         AccountResolution used = resolution;
 
@@ -534,7 +539,7 @@ public class CarrierServiceImpl implements CarrierService {
                 || AccountResolution.SCENARIO_MANUAL.equals(resolution.scenario());
         try {
             connector = getCarrierConnector(resolution.carrierCode());
-            shipmentResult = attemptShipment(order, resolution, connector);
+            attempt = attemptShipment(order, resolution, connector);
         } catch (CarrierRateLimitException rle) {
             // Sprint 50 Tier 1 finding #5 — 429 from the carrier. Do NOT retry
             // synchronously on the Tomcat thread; surface Retry-After to the
@@ -573,6 +578,8 @@ public class CarrierServiceImpl implements CarrierService {
             return failure(HttpStatus.BAD_GATEWAY, errorCode, msg, errorResponse);
         }
 
+        CarrierConnector.ShipmentResult shipmentResult = attempt.master();
+
         OrderTracking tracking = orderTrackingRepository.findByOrderNo(order.getOrderNo()).orElseGet(OrderTracking::new);
         tracking.setOrderNo(order.getOrderNo());
         tracking.setOrderSuffix(order.getOrderSuffix());
@@ -589,6 +596,15 @@ public class CarrierServiceImpl implements CarrierService {
         tracking.setCreatedAt(tracking.getCreatedAt() != null ? tracking.getCreatedAt() : LocalDateTime.now());
         tracking.setUpdatedAt(LocalDateTime.now());
         orderTrackingRepository.save(tracking);
+
+        // V32 (issue #545) — persist per-piece label_package + per-batch
+        // shipment_batch rows so the auto path reaches feature-parity with
+        // generateManualLabel. Without this, a 2-pkg regenerate via the
+        // auto path would carrier-side succeed but the FE would still see
+        // only 1 label because label_package stays empty. Also reconciles
+        // Order.packageCount to the actual carrier response count.
+        persistPerPieceAutoLabels(order, connector.getCarrierCode(),
+                attempt.subRequests(), attempt.results());
 
         boolean usedFallback = used != resolution;
         LabelGenerationResponse response = LabelGenerationResponse.builder()
@@ -611,6 +627,118 @@ public class CarrierServiceImpl implements CarrierService {
                 .build();
 
         return success("Label generated successfully.", response);
+    }
+
+    /**
+     * V32 — per-piece label + per-batch shipment persistence for the auto
+     * (Order-based) label path. Mirrors the block in
+     * {@link #generateManualLabel} at ~line 1358-1428; extracted so both
+     * paths stay in sync going forward. No-op when the request was truly
+     * single-package (no packages[] on shipmentRequest AND response has
+     * no per-piece entries) — that's back-compat with pre-V32 shape and
+     * avoids creating a spurious 1-row label_package for orders that
+     * genuinely have nothing per-box to say.
+     */
+    private void persistPerPieceAutoLabels(Order order, String carrierCode,
+            java.util.List<ShipmentRequestDTO> subRequests,
+            java.util.List<CarrierConnector.ShipmentResult> results) {
+        // Fast bail: no split, no packages[] on the request, no per-piece
+        // response → nothing multi-box to persist. Keeps the single-box
+        // legacy shape untouched.
+        int totalPieces = 0;
+        for (ShipmentRequestDTO sub : subRequests) {
+            totalPieces += sub.effectivePackages().size();
+        }
+        boolean anyMultiPieceResponse = results.stream()
+                .anyMatch(r -> r.packages() != null && !r.packages().isEmpty());
+        if (totalPieces <= 1 && !anyMultiPieceResponse) return;
+
+        Integer orderNo = order.getOrderNo();
+        // Regenerate: any prior batches / labels are stale — the fresh
+        // carrier call has its own tracking numbers + labels. Delete-then-
+        // insert mirrors generateManualLabel line 1349-1351.
+        shipmentBatchRepository.deleteByOrderNo(orderNo);
+        labelPackageRepository.deleteByOrderNo(orderNo);
+
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        int actualPkgCount = 0;
+        for (int batchIdx = 0; batchIdx < subRequests.size(); batchIdx++) {
+            ShipmentRequestDTO subReq = subRequests.get(batchIdx);
+            CarrierConnector.ShipmentResult batchResult = results.get(batchIdx);
+            java.util.List<com.multiship.backend.dto.PackageDetailDTO> pkgList = subReq.effectivePackages();
+            java.util.List<CarrierConnector.PackageTracking> resultPackages =
+                    batchResult.packages() == null ? java.util.List.of() : batchResult.packages();
+
+            com.multiship.backend.model.ShipmentBatch batch = com.multiship.backend.model.ShipmentBatch.builder()
+                    .orderNo(orderNo)
+                    .batchSeq(batchIdx + 1)
+                    .carrierCode(carrierCode)
+                    .masterTrackingNumber(batchResult.trackingNumber())
+                    .masterTrackingUrl(batchResult.trackingUrl())
+                    .masterLabelUrl(batchResult.labelUrl())
+                    .masterLabelPdf(batchResult.labelPdf())
+                    .packageCountInBatch(pkgList.size())
+                    .shippingCost(batchResult.shippingCost())
+                    .rawResponse(batchResult.rawResponse())
+                    .createdAt(now)
+                    .build();
+            shipmentBatchRepository.save(batch);
+
+            java.util.List<com.multiship.backend.model.LabelPackage> pieceRows =
+                    new java.util.ArrayList<>(pkgList.size());
+            for (int i = 0; i < pkgList.size(); i++) {
+                com.multiship.backend.dto.PackageDetailDTO p = pkgList.get(i);
+                int seq = p.getSequenceNumber() != null ? p.getSequenceNumber() : (batchIdx * 1000 + i + 1);
+                final int seqFinal = seq;
+                CarrierConnector.PackageTracking pieceMatch = resultPackages.stream()
+                        .filter(pt -> pt.sequenceNumber() == seqFinal)
+                        .findFirst()
+                        .orElse(null);
+                if (pieceMatch == null && i < resultPackages.size()) {
+                    pieceMatch = resultPackages.get(i);
+                }
+                String pieceLabel = pieceMatch != null ? pieceMatch.labelUrl() : null;
+                if (!StringUtils.hasText(pieceLabel) && pieceMatch != null) pieceLabel = pieceMatch.labelPdf();
+                if (!StringUtils.hasText(pieceLabel)) pieceLabel = batchResult.labelUrl();
+                String pieceTracking = pieceMatch != null ? pieceMatch.trackingNumber() : null;
+                if (!StringUtils.hasText(pieceTracking)) pieceTracking = batchResult.trackingNumber();
+                String pieceTrackingUrl = pieceMatch != null ? pieceMatch.trackingUrl() : null;
+                if (!StringUtils.hasText(pieceTrackingUrl)) pieceTrackingUrl = batchResult.trackingUrl();
+
+                pieceRows.add(com.multiship.backend.model.LabelPackage.builder()
+                        .orderNo(orderNo)
+                        .batchId(batch.getId())
+                        .sequenceNumber(seq)
+                        .trackingNumber(pieceTracking)
+                        .trackingUrl(pieceTrackingUrl)
+                        .labelFilePath(pieceLabel)
+                        .weight(p.getWeight())
+                        .weightUnit(p.getWeightUnit())
+                        .length(p.getLength())
+                        .width(p.getWidth())
+                        .height(p.getHeight())
+                        .dimUnit(p.getDimUnit())
+                        .packageType(p.getPackageType())
+                        .declaredValue(p.getDeclaredValue())
+                        .reference(p.getReference())
+                        .description(p.getDescription())
+                        .createdAt(now)
+                        .updatedAt(now)
+                        .build());
+                actualPkgCount++;
+            }
+            labelPackageRepository.saveAll(pieceRows);
+        }
+
+        // Reconcile Order.packageCount to the actual persisted count. Pre-
+        // V32 this was frozen at whatever generateManualLabel wrote at
+        // order-creation time; the auto path never updated it even when the
+        // regenerated shipment differed. Now the FE picker + composite
+        // loop bound (OrderController.effectivePkgCount) both see truth.
+        if (actualPkgCount > 0) {
+            order.setPackageCount(actualPkgCount);
+            orderRepository.save(order);
+        }
     }
 
     /**
@@ -1185,7 +1313,24 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setPrice(req.getDeclaredValue());
                     errOrder.setIntlYn(intlErr ? "Y" : "N");
                     errOrder.setCreatedDate(java.time.LocalDate.now());
-                    errOrder.setPackageCount(1);
+                    // Preserve the intended package count so a subsequent
+                    // retry / regenerate knows the shipment was multi-box.
+                    // Pre-fix hardcoded 1, which is why 2-pkg orders that
+                    // failed at the carrier came back as 1-pkg on the auto
+                    // path (POST /orders/{n}/label reads Order.packageCount
+                    // to size shipmentRequest). Fallback = 1 when there's
+                    // no packages[] on the request (single-box legacy).
+                    errOrder.setPackageCount(shipmentRequest != null
+                            && shipmentRequest.getPackages() != null
+                            ? Math.max(1, shipmentRequest.getPackages().size())
+                            : 1);
+                    // V32 — persist the intended packages payload on the
+                    // failed row too, so the auto path's retry has the
+                    // per-box dims/weights it needs to rebuild a
+                    // multi-package request.
+                    errOrder.setPackagesJson(shipmentRequest != null
+                            ? serializePackagesJson(shipmentRequest.getPackages())
+                            : null);
                     orderRepository.save(errOrder);
                     // Record the carrier error on the tracking row for the detail view.
                     OrderTracking errTracking = orderTrackingRepository.findByOrderNo(failedOrderNo)
@@ -1343,6 +1488,11 @@ public class CarrierServiceImpl implements CarrierService {
         order.setPackageCount(shipmentRequest.getPackages() != null
                 ? Math.max(1, shipmentRequest.getPackages().size())
                 : 1);
+        // V32 — persist the intended packages payload so the auto path
+        // (POST /orders/{n}/label) can reconstruct the multi-box
+        // shipment on retry / regenerate. Null on single-box legacy
+        // (matches the pre-V32 shape).
+        order.setPackagesJson(serializePackagesJson(shipmentRequest.getPackages()));
         // Per-shipment importer/broker override (does NOT touch the client's saved profile).
         if (req.getImporter() != null || req.getBroker() != null) {
             try {
@@ -1608,7 +1758,25 @@ public class CarrierServiceImpl implements CarrierService {
     }
 
     /** One shipment attempt against a resolved account; throws on carrier failure. */
-    private CarrierConnector.ShipmentResult attemptShipment(Order order, AccountResolution res, CarrierConnector connector) {
+    /**
+     * V32 — attempt result carries both the sub-request list and their
+     * results so the caller ({@link #generateLabel}) can persist per-batch +
+     * per-piece rows in the same shape {@link #generateManualLabel} already
+     * uses. {@code shipmentRequest} is the FULL request pre-split (needed
+     * for downstream Order-level bookkeeping); {@code subRequests} +
+     * {@code results} are 1-length in the common single-batch case.
+     */
+    record AutoShipmentAttempt(
+            ShipmentRequestDTO shipmentRequest,
+            java.util.List<ShipmentRequestDTO> subRequests,
+            java.util.List<CarrierConnector.ShipmentResult> results) {
+        /** The master (first-batch) result — what OrderTracking has always tracked. */
+        CarrierConnector.ShipmentResult master() {
+            return results.get(0);
+        }
+    }
+
+    private AutoShipmentAttempt attemptShipment(Order order, AccountResolution res, CarrierConnector connector) {
         connector.validateCredentials(res.clientId(), res.clientSecret());
         // F-MODE-3 — pass the resolved account's env so FedEx routes the
         // OAuth token URL to the matching host (sandbox vs prod).
@@ -1723,8 +1891,43 @@ public class CarrierServiceImpl implements CarrierService {
             }
         }
 
-        return connector.createShipment(shipmentRequest, accessToken,
-                firstNonBlank(res.environment(), carrierProperties.getDefaultEnvironment()));
+        // V32 (issue #545) — mirror generateManualLabel's split-and-loop
+        // shape so the auto path handles multi-box orders that exceed the
+        // per-request carrier cap. Common case (pkg count fits in one
+        // carrier call) resolves to a 1-element sub-request list and
+        // carrier is called exactly once — no behavior change vs pre-V32
+        // for single-box orders. The multi-pkg case now works because
+        // shipmentRequest.packages is populated from label_batch.
+        // packages_json (see buildShipmentRequest / issue #545).
+        java.math.BigDecimal totalWeightLb = shipmentSplitter.totalWeightLb(shipmentRequest);
+        boolean overCap = autoSplitEnabled && carrierLimitService.requiresSplit(
+                commodityLimit, shipmentRequest.effectivePackages().size(), totalWeightLb);
+        java.util.List<ShipmentRequestDTO> subRequests = overCap
+                ? shipmentSplitter.split(shipmentRequest, commodityLimit)
+                : java.util.List.of(shipmentRequest);
+        if (subRequests.size() > 1) {
+            log.info("Auto path: splitting order {} ({}-pkg) into {} carrier calls (cap={} for {}/{})",
+                    order.getOrderNo(),
+                    shipmentRequest.effectivePackages().size(), subRequests.size(),
+                    commodityLimit.getMaxPackages(),
+                    connector.getCarrierCode(), serviceTypeForOrder);
+        }
+
+        String envForShipment = firstNonBlank(res.environment(), carrierProperties.getDefaultEnvironment());
+        java.util.List<CarrierConnector.ShipmentResult> results = new java.util.ArrayList<>(subRequests.size());
+        // Auth-retry per sub-request (sprint 49 tier 2, mirroring
+        // generateManualLabel line 1093-1099) so a token that expires mid-
+        // batch refreshes once and only the affected sub retries.
+        final AccountResolution fRes = res;
+        final CarrierConnector fConnector = connector;
+        for (ShipmentRequestDTO sub : subRequests) {
+            results.add(com.multiship.backend.service.carriers.AuthRetry.withAuthRetry(
+                    accessToken,
+                    () -> fConnector.getAccessToken(fRes.clientId(), fRes.clientSecret(),
+                            fRes.accountNumber(), envForShipment),
+                    t -> fConnector.createShipment(sub, t, envForShipment)));
+        }
+        return new AutoShipmentAttempt(shipmentRequest, subRequests, results);
     }
 
     /** True when the order's ship-to country differs from the platform shipper's origin. */
@@ -2193,6 +2396,49 @@ public class CarrierServiceImpl implements CarrierService {
         return value.substring(0, maxLength);
     }
 
+    /** Shared for packages_json round-trip. Reuse instead of allocating per call. */
+    private static final com.fasterxml.jackson.databind.ObjectMapper PACKAGES_JSON_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * V32 — serialise the intended packages payload for {@code label_batch.
+     * packages_json}. Returns {@code null} for null/empty input so the
+     * column stays NULL on single-box legacy orders (matching pre-V32
+     * behavior). Serialisation failures degrade to null with a warn log
+     * rather than blowing up the label call — the auto-path fallback
+     * still works from Order-scalar fields.
+     */
+    static String serializePackagesJson(
+            java.util.List<com.multiship.backend.dto.PackageDetailDTO> packages) {
+        if (packages == null || packages.isEmpty()) return null;
+        try {
+            return PACKAGES_JSON_MAPPER.writeValueAsString(packages);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            log.warn("packages_json serialise failed ({} pkgs): {}", packages.size(), ex.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * V32 — deserialise {@code label_batch.packages_json} back into per-box
+     * DTOs for the auto label path. Returns an empty list for null/blank
+     * (auto path treats that as "no per-box data; use Order scalars").
+     * Malformed JSON is logged and returned as empty rather than
+     * propagated so a data-corruption event doesn't hard-fail every
+     * subsequent label request for the order.
+     */
+    static java.util.List<com.multiship.backend.dto.PackageDetailDTO> deserializePackagesJson(String json) {
+        if (!StringUtils.hasText(json)) return java.util.List.of();
+        try {
+            return PACKAGES_JSON_MAPPER.readValue(json,
+                    new com.fasterxml.jackson.core.type.TypeReference<
+                            java.util.List<com.multiship.backend.dto.PackageDetailDTO>>() {});
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            log.warn("packages_json deserialise failed: {}", ex.getMessage());
+            return java.util.List.of();
+        }
+    }
+
     private CarrierListResponse toCarrierListResponse(CarrierConnector connector) {
         CarrierConnector.CarrierConfiguration configuration = connector.getConfiguration();
         return CarrierListResponse.builder()
@@ -2566,6 +2812,18 @@ public class CarrierServiceImpl implements CarrierService {
                 .labelImageType(defaults.labelImageType())
                 .labelStockType(defaults.labelStockType())
                 .intl(intlBlock)
+                // V32 (issue #545) — thread the intended per-box packages
+                // when the order was created as multi-box. Read from
+                // label_batch.packages_json, populated by
+                // generateManualLabel (both success + error paths). Null
+                // when the order was single-box, in which case the connector
+                // uses the top-level weight/length/width/height instead.
+                // This is what lets a retry of a failed 2-pkg attempt
+                // actually retry as 2 pkgs on the auto path, instead of
+                // silently collapsing to 1.
+                .packages(deserializePackagesJson(order.getPackagesJson()).isEmpty()
+                        ? null
+                        : deserializePackagesJson(order.getPackagesJson()))
                 // Sprint 25 — thread the Order entity's isReturn flag so
                 // ERP-side return orders get the carrier return-label wire
                 // format on the automatic label path too (not just manual).
