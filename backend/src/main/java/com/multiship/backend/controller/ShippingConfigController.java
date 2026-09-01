@@ -66,6 +66,24 @@ public class ShippingConfigController {
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
+    /**
+     * Sprint 52 PR X — toggle whether this service accepts carrier-branded
+     * packaging. Body: {@code {"brandedPackagingAllowed": true|false}}.
+     * When false, the settings UI filters branded presets out of the link
+     * modal and the ShippingServicesPage badge shifts from amber warning
+     * to a neutral "CUSTOM only" marker. See ShippingService.branded
+     * PackagingAllowed javadoc for the full contract.
+     */
+    @Operation(summary = "Toggle whether a service accepts carrier-branded packaging (Sprint 52 PR X)")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PatchMapping("/shipping-services/{id}/branded-packaging")
+    public ResponseEntity<ApiResponse<ShippingService>> setBrandedPackagingAllowed(
+            @PathVariable Long id, @RequestBody Map<String, Boolean> body) {
+        ApiResponse<ShippingService> r = service.setBrandedPackagingAllowed(
+                id, Boolean.TRUE.equals(body.get("brandedPackagingAllowed")));
+        return ResponseEntity.status(r.getCode()).body(r);
+    }
+
     @Operation(summary = "Create/update a ship-method rule (client + destination aware)",
             description = "Optional allowedPresetIds sets the rule's default package options; empty = unrestricted at the rule level.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")

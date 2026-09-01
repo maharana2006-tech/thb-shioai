@@ -1654,6 +1654,7 @@ public class StampsConnector implements CarrierConnector {
         // Rate, once here) — that's the SWSIM shape.
         xml.append("<From>");
         appendAddress(xml, "FullName", request.getShipperName(),
+                request.getShipperCompany(), request.getShipperEmail(),
                 request.getShipperAddressLine1(), request.getShipperAddressLine2(), null,
                 request.getShipperCity(), request.getShipperState(),
                 request.getShipperPostalCode(), request.getShipperCountryCode(),
@@ -1661,6 +1662,7 @@ public class StampsConnector implements CarrierConnector {
         xml.append("</From>");
         xml.append("<To>");
         appendAddress(xml, "FullName", request.getRecipientName(),
+                request.getRecipientCompany(), request.getRecipientEmail(),
                 request.getRecipientAddressLine1(), request.getRecipientAddressLine2(),
                 request.getRecipientAddressLine3(),
                 request.getRecipientCity(), request.getRecipientState(),
@@ -1696,6 +1698,22 @@ public class StampsConnector implements CarrierConnector {
             // capitalize just the first letter of the validated uppercase value.
             String imageType = raw.substring(0, 1) + raw.substring(1).toLowerCase(java.util.Locale.ROOT);
             xml.append("<ImageType>").append(imageType).append("</ImageType>");
+        }
+
+        // PR #543 — SWSIM prints <CustomerID> on the label's "Reference"
+        // slot. USPS has no separate PO / DEPT fields, so concat both
+        // values with prefixes (matches the DHL treatment above). Empty
+        // string omitted so the label doesn't print a literal "PO= DEPT=".
+        StringBuilder ref = new StringBuilder();
+        if (StringUtils.hasText(request.getPoNumber())) {
+            ref.append("PO=").append(request.getPoNumber());
+        }
+        if (StringUtils.hasText(request.getDepartmentNumber())) {
+            if (ref.length() > 0) ref.append(' ');
+            ref.append("DEPT=").append(request.getDepartmentNumber());
+        }
+        if (ref.length() > 0) {
+            xml.append("<CustomerID>").append(xmlEscape(ref.toString())).append("</CustomerID>");
         }
 
         xml.append("</CreateIndicium>");
@@ -1804,7 +1822,23 @@ public class StampsConnector implements CarrierConnector {
      * workaround; USPS delivery agents parse the compound line just fine.
      * A non-blank line3 with a blank line2 goes into Address2 by itself.
      */
+    /** Backwards-compat overload without company / email. */
     private void appendAddress(StringBuilder xml, String nameField, String name,
+                                String line1, String line2, String line3,
+                                String city, String state, String postal, String country,
+                                String phone) {
+        appendAddress(xml, nameField, name, null, null,
+                line1, line2, line3, city, state, postal, country, phone);
+    }
+
+    /**
+     * Sprint 51 — company + email overload. SWSIM v135 accepts
+     * {@code <Company>} + {@code <EmailAddress>} inside From / To
+     * address blocks. Blank company or email = element omitted (matches
+     * the pre-Sprint-51 pattern for optional address fields).
+     */
+    private void appendAddress(StringBuilder xml, String nameField, String name,
+                                String company, String email,
                                 String line1, String line2, String line3,
                                 String city, String state, String postal, String country,
                                 String phone) {
@@ -1812,6 +1846,9 @@ public class StampsConnector implements CarrierConnector {
             xml.append("<").append(nameField).append(">")
                     .append(xmlEscape(name))
                     .append("</").append(nameField).append(">");
+        }
+        if (StringUtils.hasText(company)) {
+            xml.append("<Company>").append(xmlEscape(company)).append("</Company>");
         }
         if (StringUtils.hasText(line1)) xml.append("<Address1>").append(xmlEscape(line1)).append("</Address1>");
         String address2 = joinSwsimAddress2(line2, line3);
@@ -1824,6 +1861,7 @@ public class StampsConnector implements CarrierConnector {
             xml.append("<Country>").append(xmlEscape(c)).append("</Country>");
         }
         if (StringUtils.hasText(phone)) xml.append("<PhoneNumber>").append(xmlEscape(phone)).append("</PhoneNumber>");
+        if (StringUtils.hasText(email)) xml.append("<EmailAddress>").append(xmlEscape(email)).append("</EmailAddress>");
     }
 
     /**

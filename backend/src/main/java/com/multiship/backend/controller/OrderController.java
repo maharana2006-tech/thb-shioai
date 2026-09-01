@@ -39,6 +39,26 @@ public class OrderController {
     private com.multiship.backend.service.ZplLabelService zplLabelService;
 
     @Autowired
+    private com.multiship.backend.service.PdfLabelService pdfLabelService;
+
+    // Sprint 52 PR B — passthrough for carrier's real label bytes when
+    // the stored artifact matches the requested format. See
+    // LabelArtifactResolver javadoc.
+    @Autowired
+    private com.multiship.backend.service.LabelArtifactResolver labelArtifactResolver;
+
+    // PR #536 — carrier ZPL → PNG/PDF via bundled zebrash-cli. Feature-
+    // flagged; when off, falls back to the pre-existing facsimile
+    // renderers (ZplLabelService + PdfLabelService).
+    @Autowired
+    private com.multiship.backend.service.ZebrashRenderer zebrashRenderer;
+    @Autowired
+    private com.multiship.backend.service.ZebrashPdfService zebrashPdfService;
+
+    @org.springframework.beans.factory.annotation.Value("${label.render-carrier-zpl:false}")
+    private boolean renderCarrierZplEnabled;
+
+    @Autowired
     private CarrierProperties carrierProperties;
 
     @Autowired
@@ -84,7 +104,20 @@ public class OrderController {
     /** Map a client Address value object into the label payload shape. */
     private Map<String, Object> addressMap(com.multiship.backend.model.Address a, String fallbackName) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("name", a.getName() != null && !a.getName().isBlank() ? a.getName() : fallbackName);
+        String resolvedName = a.getName() != null && !a.getName().isBlank() ? a.getName() : fallbackName;
+        m.put("name", resolvedName);
+        // PR #535 — company line. Carriers print recipient + shipper
+        // COMPANY as a distinct label line whenever the wire request
+        // carried a separate company field. Address VO has no company
+        // slot today, so we synthesise: when the address has its own
+        // name (typically a warehouse alias like "Central Warehouse")
+        // AND the client's registered name is different, expose the
+        // client name as the company. When name == fallbackName (no
+        // warehouse alias) leave company null so the FE doesn't print
+        // a duplicate line.
+        if (fallbackName != null && !fallbackName.isBlank() && !fallbackName.equalsIgnoreCase(resolvedName)) {
+            m.put("company", fallbackName);
+        }
         m.put("phone", a.getPhone());
         m.put("addressLine1", a.getLine1());
         m.put("addressLine2", a.getLine2());
@@ -563,6 +596,20 @@ public class OrderController {
     @GetMapping(value = "/{orderNo}/label/zpl", produces = org.springframework.http.MediaType.TEXT_PLAIN_VALUE)
     public ResponseEntity<String> getLabelZpl(@PathVariable Integer orderNo,
             @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex) {
+        // Sprint 52 PR B — carrier passthrough. When order_label_tracking.
+        // label_file_path holds the carrier's real ZPL bytes (raw ^XA...^XZ
+        // or base64-encoded), return them verbatim. On mismatch (stored
+        // artifact is PDF/GIF/URL-with-non-ZPL) fall through to the
+        // facsimile below. pkgIndex is deliberately NOT threaded through
+        // to the resolver — carriers return one artifact per shipment;
+        // per-package artifacts aren't persisted separately today.
+        java.util.Optional<byte[]> passthrough = labelArtifactResolver.resolveAsBytes(orderNo, "ZPL");
+        if (passthrough.isPresent()) {
+            return ResponseEntity.ok()
+                    .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".zpl")
+                    .body(new String(passthrough.get()));
+        }
+
         ApiResponse<OrderWithLinesDTO> orderResponse = orderService.getOrderWithLines(orderNo);
         if (!"SUCCESS".equalsIgnoreCase(orderResponse.getStatus()) || orderResponse.getData() == null) {
             return ResponseEntity.status(orderResponse.getCode()).body("Order " + orderNo + " was not found.");
@@ -618,6 +665,156 @@ public class OrderController {
                 .header("Content-Disposition", "attachment; filename=label-" + orderNo
                         + filenameSuffix + ".zpl")
                 .body(zplOut.toString());
+    }
+
+    /**
+     * Sprint 52 PR A — 4x6" PDF facsimile of the shipping label, sibling
+     * of the ZPL endpoint above. Same {@code ?pkg} semantics: omitted on a
+     * multi-box shipment returns all boxes as one PDF with N pages;
+     * {@code ?pkg=N} returns only that box.
+     *
+     * <p>PR B will layer in carrier-artifact passthrough — return the
+     * carrier's real PDF bytes when they exist for this order in PDF
+     * format, and only fall back to this facsimile otherwise.
+     */
+    @Operation(summary = "PDF facsimile of the 4x6\" shipping label (application/pdf)",
+            description = "Sprint 52 PR A — sibling of /label/zpl. Renders a 4x6\" PDF from the "
+                    + "same order data as the ZPL endpoint. This is a FACSIMILE for preview / "
+                    + "review — not the carrier's canonical label. Carrier-artifact passthrough "
+                    + "ships in a follow-up PR.")
+    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
+    @GetMapping(value = "/{orderNo}/label/pdf",
+            produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> getLabelPdf(@PathVariable Integer orderNo,
+            @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex) {
+        // Sprint 52 PR B — carrier passthrough. When the stored
+        // label_file_path is a real carrier PDF, return those bytes
+        // verbatim. Mirror of the /label/zpl passthrough block above.
+        java.util.Optional<byte[]> passthrough = labelArtifactResolver.resolveAsBytes(orderNo, "PDF");
+        if (passthrough.isPresent()) {
+            return ResponseEntity.ok()
+                    .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".pdf")
+                    .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+                    .body(passthrough.get());
+        }
+
+        // PR #536 — when the flag is on AND the carrier stored ZPL bytes
+        // (not a PDF), render those bytes to PNG via bundled zebrash and
+        // wrap into a single-page PDF. Preferred over the JSX-facsimile
+        // path below because the ZPL is the carrier's canonical label —
+        // eliminates the "preview looks nothing like the printed label"
+        // gap documented in project_label_preview_audit.md. Fall back to
+        // the facsimile if the renderer isn't ready or the ZPL fails to
+        // parse (e.g. carrier stored a URL that returned unexpected
+        // bytes).
+        if (renderCarrierZplEnabled) {
+            java.util.Optional<byte[]> zpl = labelArtifactResolver.resolveAsBytes(orderNo, "ZPL");
+            if (zpl.isPresent()) {
+                try {
+                    byte[] pdf = zebrashPdfService.renderZplToPdf(zpl.get());
+                    return ResponseEntity.ok()
+                            .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".pdf")
+                            .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+                            .body(pdf);
+                } catch (RuntimeException ex) {
+                    // ZebrashRenderer.RendererUnavailableException,
+                    // ZplParseException, ZplRenderException — all
+                    // recoverable via the facsimile path below.
+                    // Warn-log for observability but don't 500.
+                    org.slf4j.LoggerFactory.getLogger(OrderController.class)
+                            .warn("zebrash PDF render failed for order {}, falling back to facsimile: {}",
+                                    orderNo, ex.getMessage());
+                }
+            }
+        }
+
+        ApiResponse<OrderWithLinesDTO> orderResponse = orderService.getOrderWithLines(orderNo);
+        if (!"SUCCESS".equalsIgnoreCase(orderResponse.getStatus()) || orderResponse.getData() == null) {
+            return ResponseEntity.status(orderResponse.getCode()).build();
+        }
+
+        OrderAccountResolutionDTO resolution = asShippedResolution(orderNo);
+        if (resolution == null) {
+            ApiResponse<List<OrderAccountResolutionDTO>> resolutionResponse =
+                    carrierService.resolveOrderAccounts(List.of(orderNo));
+            resolution = resolutionResponse.getData() != null && !resolutionResponse.getData().isEmpty()
+                    ? resolutionResponse.getData().get(0)
+                    : null;
+        }
+
+        ApiResponse<OrderResponseDTO> trackingResponse = orderService.getOrderWithTracking(orderNo);
+        OrderResponseDTO.LabelDetails labelDetails = trackingResponse.getData() != null
+                ? trackingResponse.getData().getLabelDetails()
+                : null;
+
+        Integer pkgCountBoxed = orderResponse.getData().getPackageCount();
+        int totalPkgs = pkgCountBoxed == null || pkgCountBoxed < 1 ? 1 : pkgCountBoxed;
+        java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =
+                orderResponse.getData().getPackages() == null
+                        ? java.util.List.of()
+                        : orderResponse.getData().getPackages();
+
+        boolean allPkgs = (pkgIndex == null) && totalPkgs > 1;
+        int firstPkg = allPkgs ? 1 : (pkgIndex == null || pkgIndex < 1 ? 1 : Math.min(pkgIndex, totalPkgs));
+        int lastPkg = allPkgs ? totalPkgs : firstPkg;
+
+        byte[] pdf = pdfLabelService.buildMultiPagePdf(
+                orderResponse.getData(), resolution, labelDetails,
+                firstPkg, lastPkg, totalPkgs, allPackages);
+
+        String filenameSuffix;
+        if (totalPkgs <= 1) {
+            filenameSuffix = "";
+        } else if (allPkgs) {
+            filenameSuffix = "-all" + totalPkgs;
+        } else {
+            filenameSuffix = "-pkg" + firstPkg;
+        }
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=label-" + orderNo
+                        + filenameSuffix + ".pdf")
+                .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+                .body(pdf);
+    }
+
+    /**
+     * PR #536 — PNG preview of the shipping label. Renders the
+     * carrier's actual ZPL bytes via bundled zebrash (Go binary)
+     * when {@code label.render-carrier-zpl=true}; otherwise 404
+     * (FE falls back to the JSX facsimile that already renders on
+     * {@code /label/{orderNo}}).
+     *
+     * <p>Serves as the {@code <img src=…>} source when the FE swaps
+     * its facsimile div for a canonical PNG view. Only fires when
+     * ZPL passthrough succeeds — carrier stored URL/PDF/other
+     * formats return 404 so the FE keeps the facsimile visible.
+     */
+    @Operation(summary = "PNG rendering of the carrier's ZPL label",
+            description = "PR #536 — carrier-canonical PNG via bundled zebrash. "
+                    + "Returns 404 when the feature flag is off or the carrier "
+                    + "artifact isn't ZPL; FE falls back to its JSX facsimile.")
+    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
+    @GetMapping(value = "/{orderNo}/label/preview.png",
+            produces = org.springframework.http.MediaType.IMAGE_PNG_VALUE)
+    public ResponseEntity<byte[]> getLabelPreviewPng(@PathVariable Integer orderNo) {
+        if (!renderCarrierZplEnabled) {
+            return ResponseEntity.status(404).build();
+        }
+        java.util.Optional<byte[]> zpl = labelArtifactResolver.resolveAsBytes(orderNo, "ZPL");
+        if (zpl.isEmpty()) {
+            return ResponseEntity.status(404).build();
+        }
+        try {
+            byte[] png = zebrashRenderer.renderPng(zpl.get());
+            return ResponseEntity.ok()
+                    .header("Cache-Control", "private, max-age=60")
+                    .header("Content-Type", org.springframework.http.MediaType.IMAGE_PNG_VALUE)
+                    .body(png);
+        } catch (RuntimeException ex) {
+            org.slf4j.LoggerFactory.getLogger(OrderController.class)
+                    .warn("zebrash PNG render failed for order {}: {}", orderNo, ex.getMessage());
+            return ResponseEntity.status(502).build();
+        }
     }
 
     @Operation(

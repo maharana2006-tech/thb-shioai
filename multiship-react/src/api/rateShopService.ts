@@ -1,5 +1,6 @@
 import { apiClient } from './apiClient'
 import type { ApiResponse } from './orderService'
+import type { DangerousGoodsBlock } from './dgService'
 
 /**
  * One priced service option — mirrors backend
@@ -69,6 +70,13 @@ export interface RateShopShipment {
   dimUnit?: 'IN' | 'CM'
   shipperName?: string
   shipperPhone?: string
+  /** Sprint 51 — business/company name (FedEx contact.companyName,
+   *  UPS Shipper.Name, DHL companyName, USPS SWSIM <Company>). */
+  shipperCompany?: string
+  /** Sprint 51 — email for delivery notifications (FedEx
+   *  contact.emailAddress, UPS EMailAddress, DHL email, USPS
+   *  <EmailAddress>). */
+  shipperEmail?: string
   shipperAddressLine1?: string
   shipperAddressLine2?: string
   shipperCity?: string
@@ -77,6 +85,10 @@ export interface RateShopShipment {
   shipperCountryCode: string
   recipientName?: string
   recipientPhone?: string
+  /** Sprint 51 — see shipperCompany. */
+  recipientCompany?: string
+  /** Sprint 51 — see shipperEmail. */
+  recipientEmail?: string
   /** ISO dial code without the plus; connectors prepend it to recipientPhone
    *  at wire time. Match to backend ShipmentRequestDTO.recipientPhoneCountryCode. */
   recipientPhoneCountryCode?: string
@@ -91,6 +103,21 @@ export interface RateShopShipment {
   recipientResidential?: boolean
   declaredValue?: number
   declaredValueCurrency?: string
+  /**
+   * Sprint 51 rate-shop gap-fill — surcharges that materially move the
+   * quoted price. Prior to this the FE sent none of them, so the picker
+   * consistently under-quoted anything with signature / insurance /
+   * hazmat by $5-60+ per shipment.
+   */
+  /** ADULT / DIRECT / INDIRECT / NONE. Undefined = carrier default. */
+  signatureOption?: 'NONE' | 'INDIRECT' | 'DIRECT' | 'ADULT'
+  /** Insurance amount + currency. Undefined = no insurance. */
+  insuredValue?: number
+  insuredValueCurrency?: string
+  /** Hazmat block. Undefined = no DG surcharge. */
+  dangerousGoods?: DangerousGoodsBlock
+  /** True when this is a return label — some carriers rate returns differently. */
+  isReturn?: boolean
 }
 
 export interface RateShopRequest {

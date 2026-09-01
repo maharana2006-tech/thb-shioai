@@ -21,6 +21,17 @@ export interface ShippingServiceItem {
   maxLengthIn?: number | null
   maxLengthGirthIn?: number | null
   surchargeLengthGirthIn?: number | null
+  /**
+   * Sprint 52 PR X — false when this service intentionally accepts only
+   * YOUR_PACKAGING (CUSTOM presets), no carrier-branded packaging.
+   * Ground-family services default to false via V30 seed. Distinguishes
+   * "admin hasn't linked yet" (true + empty pool = config incomplete)
+   * from "CUSTOM-only by design" (false = grey badge, branded presets
+   * filtered from the link modal). Admin toggles via the link modal.
+   * Optional in the type because pre-Sprint-52 cached responses won't
+   * carry it — treat undefined as true (backwards-compat).
+   */
+  brandedPackagingAllowed?: boolean
 }
 
 /**
@@ -258,6 +269,18 @@ export const shippingConfigService = {
 
   setServiceEnabled: (id: number, enabled: boolean) =>
     apiClient.patch<ApiResponse<ShippingServiceItem>>(`/shipping-services/${id}`, { enabled }),
+
+  /**
+   * Sprint 52 PR X — flip branded_packaging_allowed on a service. False
+   * marks the service as CUSTOM-packaging-only (Ground-family default);
+   * the settings page filters branded presets out of the link modal and
+   * the backend refuses to save branded links as defense-in-depth.
+   */
+  setBrandedPackagingAllowed: (id: number, brandedPackagingAllowed: boolean) =>
+    apiClient.patch<ApiResponse<ShippingServiceItem>>(
+      `/shipping-services/${id}/branded-packaging`,
+      { brandedPackagingAllowed },
+    ),
 
   saveRule: (rule: ShipMethodRule) => apiClient.put<ApiResponse<ShipMethodRule>>('/ship-method-rules', rule),
 

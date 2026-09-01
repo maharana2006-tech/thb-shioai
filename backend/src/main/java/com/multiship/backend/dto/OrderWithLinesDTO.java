@@ -54,6 +54,13 @@ public class OrderWithLinesDTO {
     private String intlYn;
     /** 'Y' when this is a reverse/return label. */
     private String isReturn;
+    /** PR #543 — order source (`MANUAL | BULK | WMS | API | ERP`). Drives
+     *  the PO field on the JSX label facsimile. Null on legacy rows —
+     *  FE facsimile falls through to orderNo bare. */
+    private String source;
+    /** PR #543 — external order id from a WMS pull. Used as the PO value
+     *  when `source === 'WMS'`. Null for non-WMS orders. */
+    private String wmsExternalId;
     /** Per-shipment importer/broker override (JSON), or null to use the client profile. */
     private String importerBrokerOverride;
     /** Total number of packages in this shipment; null / 1 for single-box orders. */

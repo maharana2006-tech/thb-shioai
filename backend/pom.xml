@@ -28,6 +28,14 @@
 	</scm>
 	<properties>
 		<java.version>21</java.version>
+		<!-- PR #539 — zebrash-cli release binaries. Bump the tag to pull
+		     a new build; the base-url composes to the GitHub release
+		     asset root. Skip toggle lets offline builds pass without
+		     the network hop (runtime ZebrashRenderer warns but doesn't
+		     fail boot when the binary is missing). -->
+		<zebrash.release.tag>zebrash-cli-v0.1.0</zebrash.release.tag>
+		<zebrash.release.base-url>https://github.com/maharana2006-tech/thb-shioai/releases/download/${zebrash.release.tag}</zebrash.release.base-url>
+		<zebrash.skip>false</zebrash.skip>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -209,6 +217,24 @@
 	</dependencies>
 
 	<build>
+		<!-- PR #539 — bundle zebrash-cli release binaries into the JAR under
+		     native/{os}-{arch}/zebrash-cli[.exe]. The download-maven-plugin
+		     block below fetches per-platform zips from the
+		     zebrash-cli-v0.1.0 GitHub release into
+		     target/generated-resources/zebrash/{slug}/; this extra
+		     <resource> tells maven-resources-plugin to copy them into the
+		     JAR at native/{slug}/. Runtime ZebrashRenderer extracts from
+		     the classpath resource on first use. -->
+		<resources>
+			<resource>
+				<directory>src/main/resources</directory>
+			</resource>
+			<resource>
+				<directory>${project.build.directory}/generated-resources/zebrash</directory>
+				<targetPath>native</targetPath>
+				<filtering>false</filtering>
+			</resource>
+		</resources>
 		<plugins>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
@@ -274,6 +300,70 @@
 									<artifactId>lombok</artifactId>
 								</path>
 							</annotationProcessorPaths>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+			<!-- PR #539 — fetch per-platform zebrash-cli binaries from the
+			     GitHub release into target/generated-resources/zebrash/{slug}/.
+			     Bound to generate-resources (fires before the resources copy).
+			     Caches by default so repeat clean-builds skip the network hop
+			     if the artifact is already in ~/.m2/repository/.cache/. Version
+			     bump = flip <zebrash.release.tag> below to pull new binaries.
+			     Skip toggle: -Dzebrash.skip=true (e.g. offline builds; the
+			     runtime service still boots, just logs the missing-binary
+			     warning until the flag is enabled). -->
+			<plugin>
+				<groupId>com.googlecode.maven-download-plugin</groupId>
+				<artifactId>download-maven-plugin</artifactId>
+				<version>1.9.0</version>
+				<executions>
+					<execution>
+						<id>zebrash-linux-amd64</id>
+						<phase>generate-resources</phase>
+						<goals><goal>wget</goal></goals>
+						<configuration>
+							<skip>${zebrash.skip}</skip>
+							<url>${zebrash.release.base-url}/zebrash-cli-linux-amd64.zip</url>
+							<outputDirectory>${project.build.directory}/generated-resources/zebrash/linux-amd64</outputDirectory>
+							<unpack>true</unpack>
+							<overwrite>false</overwrite>
+						</configuration>
+					</execution>
+					<execution>
+						<id>zebrash-linux-arm64</id>
+						<phase>generate-resources</phase>
+						<goals><goal>wget</goal></goals>
+						<configuration>
+							<skip>${zebrash.skip}</skip>
+							<url>${zebrash.release.base-url}/zebrash-cli-linux-arm64.zip</url>
+							<outputDirectory>${project.build.directory}/generated-resources/zebrash/linux-arm64</outputDirectory>
+							<unpack>true</unpack>
+							<overwrite>false</overwrite>
+						</configuration>
+					</execution>
+					<execution>
+						<id>zebrash-darwin-arm64</id>
+						<phase>generate-resources</phase>
+						<goals><goal>wget</goal></goals>
+						<configuration>
+							<skip>${zebrash.skip}</skip>
+							<url>${zebrash.release.base-url}/zebrash-cli-darwin-arm64.zip</url>
+							<outputDirectory>${project.build.directory}/generated-resources/zebrash/darwin-arm64</outputDirectory>
+							<unpack>true</unpack>
+							<overwrite>false</overwrite>
+						</configuration>
+					</execution>
+					<execution>
+						<id>zebrash-windows-amd64</id>
+						<phase>generate-resources</phase>
+						<goals><goal>wget</goal></goals>
+						<configuration>
+							<skip>${zebrash.skip}</skip>
+							<url>${zebrash.release.base-url}/zebrash-cli-windows-amd64.zip</url>
+							<outputDirectory>${project.build.directory}/generated-resources/zebrash/windows-amd64</outputDirectory>
+							<unpack>true</unpack>
+							<overwrite>false</overwrite>
 						</configuration>
 					</execution>
 				</executions>

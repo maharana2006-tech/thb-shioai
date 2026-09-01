@@ -162,11 +162,25 @@ export interface OrderWithLines {
   packageCount?: number | null
   /** Sprint 29 — per-package rows (tracking / weight / dims) when this is a multi-package shipment. */
   packages?: OrderPackage[] | null
+  /** PR #543 — order source (`MANUAL | BULK | WMS | API | ERP`) drives
+   *  the PO field on the JSX label facsimile:
+   *    - `MANUAL` / `BULK`  → `MAN{orderNo}`
+   *    - `WMS`              → `wmsExternalId` when set, else `orderNo`
+   *    - other (`API` / `ERP` / null) → orderNo bare
+   *  Null on legacy rows — facsimile falls through to orderNo bare. */
+  source?: string | null
+  /** PR #543 — external order id from a WMS pull, used as PO when
+   *  `source === 'WMS'`. Null for non-WMS orders. */
+  wmsExternalId?: string | null
 }
 
 /** Configured ship-from address exposed by /orders/{orderNo}/label. */
 export interface ShipperInfo {
   name: string | null
+  /** PR #535 — separate COMPANY line when the shipper's Address has its
+   *  own name (warehouse alias) that differs from the client's
+   *  registered name. Backend populates via OrderController.addressMap. */
+  company?: string | null
   phone: string | null
   addressLine1: string | null
   addressLine2: string | null
@@ -451,6 +465,11 @@ export interface ManualShipmentPayload {
   items?: ManualShipmentItem[]
   incoterms?: string
   reasonForExport?: string
+  /** F6-C — per-carrier customs clearance option. Values differ per
+   *  carrier (UPS SENDER/RECEIVER/THIRD_PARTY vs FedEx SENDER/RECIPIENT/
+   *  THIRD_PARTY vs USPS DDU/DDP vs DHL DAP/DDP/EXW). Null / omitted →
+   *  connector applies its own carrier default. */
+  clearanceOption?: string | null
   /** Per-shipment importer/broker override (does not touch the client's saved profile). */
   importer?: Record<string, string>
   broker?: Record<string, string>
@@ -487,6 +506,12 @@ export interface ManualShipmentPayload {
    *  labelSpecification.labelStockType. Null / omitted → use the account
    *  default (which itself falls back to PAPER_4X6). Only FedEx maps this. */
   labelStockType?: string | null
+  /** FDX-H1 — per-shipment override of the FedEx account's default
+   *  pickupType. Null / omitted → use the account default (which itself
+   *  falls back to USE_SCHEDULED_PICKUP). Only FedEx maps this; UPS /
+   *  DHL / USPS ignore. Return labels bypass this and always emit
+   *  CONTACT_FEDEX_TO_SCHEDULE. */
+  pickupType?: string | null
 }
 
 /** One box in a multi-package shipment — mirrors backend PackageDetailDTO. */
@@ -648,6 +673,55 @@ export const orderService = {
 
     return response.text()
   },
+
+  /**
+   * Sprint 52 PR A — 4x6" PDF facsimile of the shipping label. Same
+   * ?pkg semantics as getLabelZpl: omitted on a multi-box shipment
+   * returns all packages as one PDF with N pages. Returns a Blob so
+   * the caller can trigger a download or preview inline.
+   *
+   * PR B will layer in carrier-artifact passthrough (return the real
+   * PDF bytes when the carrier's stored artifact is PDF format).
+   */
+  getLabelPdf: async (orderNo: number, pkgIndex?: number): Promise<Blob> => {
+    const qs = pkgIndex && pkgIndex > 1 ? `?pkg=${pkgIndex}` : ''
+    const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/pdf${qs}`, {
+      credentials: 'include',
+    })
+    if (!response.ok) {
+      throw new Error(`Label PDF is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`)
+    }
+    return response.blob()
+  },
+
+  /**
+   * PR #538 — probe for the carrier-ZPL PNG preview endpoint. Returns
+   * true iff the backend has label.render-carrier-zpl=true AND the
+   * carrier stored parseable ZPL bytes for the order. 404 (flag off /
+   * not ZPL) or 502 (renderer failed) → false. Silent — the FE keeps
+   * its JSX facsimile visible when this returns false, no error toast.
+   *
+   * Uses HEAD to avoid downloading the PNG until we know we want it;
+   * the actual <img> renders the same URL with a fresh GET which the
+   * browser caches per Cache-Control: private, max-age=60.
+   */
+  headLabelPreviewPng: async (orderNo: number): Promise<boolean> => {
+    try {
+      const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/preview.png`, {
+        method: 'HEAD',
+        credentials: 'include',
+      })
+      return response.ok
+    } catch {
+      return false
+    }
+  },
+
+  /** PR #538 — URL builder for the <img src=> tag once the HEAD probe
+   *  above confirms the PNG endpoint is live. Kept as a helper so
+   *  LabelDocumentPage doesn't hardcode the path. */
+  labelPreviewPngUrl: (orderNo: number): string =>
+    `${BASE_URL}/orders/${orderNo}/label/preview.png`,
 
   /**
    * The order's commercial invoice as a PDF blob (Sprint 51). The platform's

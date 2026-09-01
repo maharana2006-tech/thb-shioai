@@ -254,4 +254,44 @@ class StampsConnectorPayloadTest {
         }
         return count;
     }
+
+    // ===================================================================
+    // Sprint 51 — email + company on <From> / <To> address blocks
+    // ===================================================================
+
+    @Test
+    void fromAddress_carriesCompanyAndEmail_whenSet() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setShipperCompany("Acme Fulfillment");
+        r.setShipperEmail("ops@acme.example");
+        String soap = build(r, "T");
+        assertTrue(soap.contains("<Company>Acme Fulfillment</Company>"),
+                "SWSIM <Company> must appear when shipperCompany is set");
+        assertTrue(soap.contains("<EmailAddress>ops@acme.example</EmailAddress>"),
+                "SWSIM <EmailAddress> must appear when shipperEmail is set");
+    }
+
+    @Test
+    void toAddress_carriesCompanyAndEmail_whenSet() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientCompany("Zymeworks");
+        r.setRecipientEmail("jane@acme.example");
+        String soap = build(r, "T");
+        assertTrue(soap.contains("<Company>Zymeworks</Company>"),
+                "SWSIM <Company> must appear when recipientCompany is set");
+        assertTrue(soap.contains("<EmailAddress>jane@acme.example</EmailAddress>"),
+                "SWSIM <EmailAddress> must appear when recipientEmail is set");
+    }
+
+    @Test
+    void companyAndEmail_omittedWhenBlank_backwardsCompatWireShape() throws Exception {
+        // Pre-Sprint-51 there were no <Company> or <EmailAddress> elements
+        // in the SWSIM envelope. Unchanged callers must NOT gain empty
+        // elements — that would be a wire regression.
+        String soap = build(baseRequest(), "T");
+        assertFalse(soap.contains("<Company>"),
+                "no shipperCompany / recipientCompany → no <Company> element");
+        assertFalse(soap.contains("<EmailAddress>"),
+                "no shipperEmail / recipientEmail → no <EmailAddress> element");
+    }
 }

@@ -1131,6 +1131,7 @@ public class DhlConnector implements CarrierConnector {
         payload.put("customerDetails", Map.of(
                 "shipperDetails", buildParty(
                         request.getShipperName(), request.getShipperPhone(),
+                        request.getShipperCompany(), request.getShipperEmail(),
                         request.getShipperAddressLine1(), request.getShipperAddressLine2(), null,
                         request.getShipperCity(), request.getShipperState(),
                         request.getShipperPostalCode(), request.getShipperCountryCode(), null),
@@ -1138,6 +1139,7 @@ public class DhlConnector implements CarrierConnector {
                         request.getRecipientName(),
                         com.multiship.backend.service.carriers.UpsConnector.joinPhone(
                                 request.getRecipientPhoneCountryCode(), request.getRecipientPhone()),
+                        request.getRecipientCompany(), request.getRecipientEmail(),
                         request.getRecipientAddressLine1(), request.getRecipientAddressLine2(),
                         request.getRecipientAddressLine3(),
                         request.getRecipientCity(), request.getRecipientState(),
@@ -1162,6 +1164,25 @@ public class DhlConnector implements CarrierConnector {
                                             String city, String state,
                                             String postal, String country,
                                             Boolean residential) {
+        return buildParty(name, phone, null, null, line1, line2, line3,
+                city, state, postal, country, residential);
+    }
+
+    /**
+     * Sprint 51 — company + email overload. DHL's
+     * {@code contactInformation} block carries {@code companyName} +
+     * {@code fullName} + {@code email}. Pre-Sprint-51 we used
+     * {@code name} for both {@code companyName} and {@code fullName}
+     * (backwards-compat behaviour) — now they can be different values.
+     * Blank company falls back to {@code name} to preserve existing
+     * behaviour on unchanged call sites; blank email is omitted entirely.
+     */
+    private Map<String, Object> buildParty(String name, String phone,
+                                            String company, String email,
+                                            String line1, String line2, String line3,
+                                            String city, String state,
+                                            String postal, String country,
+                                            Boolean residential) {
         Map<String, Object> address = new LinkedHashMap<>();
         address.put("cityName", firstNonBlank(city, ""));
         address.put("countryCode", firstNonBlank(country, "US"));
@@ -1178,8 +1199,11 @@ public class DhlConnector implements CarrierConnector {
 
         Map<String, Object> contact = new LinkedHashMap<>();
         contact.put("phone", firstNonBlank(phone, ""));
-        contact.put("companyName", firstNonBlank(name, ""));
+        // companyName = company when set (matches DHL's business-name
+        // convention); fall back to name for backwards-compat.
+        contact.put("companyName", StringUtils.hasText(company) ? company : firstNonBlank(name, ""));
         contact.put("fullName", firstNonBlank(name, ""));
+        if (StringUtils.hasText(email)) contact.put("email", email);
 
         Map<String, Object> party = new LinkedHashMap<>();
         party.put("postalAddress", address);
@@ -1229,6 +1253,22 @@ public class DhlConnector implements CarrierConnector {
         content.put("description", firstNonBlank(request.getSpecialInstructions(), "General merchandise"));
         content.put("incoterm", firstNonBlank(
                 isIntl ? request.getIntl().getIncoterms() : null, "DAP").toUpperCase());
+        // PR #543 — customerReferences carry PO / DEPT onto the DHL
+        // shipping label. DHL Express accepts multiple entries with
+        // typeCode CU (customer reference). We prefix "PO=" and
+        // "DEPT=" so the operator can distinguish them on the printed
+        // label — DHL doesn't have separate PO / DEPT slot codes the
+        // way FedEx (customerReferenceType) and UPS (Code) do.
+        java.util.List<Map<String, Object>> dhlRefs = new java.util.ArrayList<>();
+        if (StringUtils.hasText(request.getPoNumber())) {
+            dhlRefs.add(Map.of("value", "PO=" + request.getPoNumber(), "typeCode", "CU"));
+        }
+        if (StringUtils.hasText(request.getDepartmentNumber())) {
+            dhlRefs.add(Map.of("value", "DEPT=" + request.getDepartmentNumber(), "typeCode", "CU"));
+        }
+        if (!dhlRefs.isEmpty()) {
+            content.put("customerReferences", dhlRefs);
+        }
         if (isIntl) {
             content.put("exportDeclaration", buildExportDeclaration(request));
         }

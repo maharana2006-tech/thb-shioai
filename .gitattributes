@@ -1,0 +1,11 @@
+# PR #540 — force LF line endings for shell scripts so Docker builds
+# don't hit the bash "pipefail: invalid option name" trap on line 2
+# of a script that Windows-native git checked out with CRLF. Applies
+# to any *.sh across the repo (backend/scripts/, native/zebrash-cli/,
+# etc.) — none of them should ever ship with \r\n.
+*.sh text eol=lf
+
+# Same story for Go source and Makefiles — LF everywhere to keep
+# Linux/macOS runners happy regardless of who committed from what OS.
+*.go text eol=lf
+Makefile text eol=lf

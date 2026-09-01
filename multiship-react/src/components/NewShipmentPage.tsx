@@ -13,10 +13,10 @@ import {
 import { accountRefService, type CarrierAccountRef } from '../api/accountRefService'
 import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
-import { shippingConfigService, type ShippingServiceItem, type PackagePreset } from '../api/shippingConfigService'
+import { shippingConfigService, type ShippingServiceItem, type PackagePreset, type ServicePackageLink } from '../api/shippingConfigService'
 import { customsService } from '../api/customsService'
 import { mapCarrierErrorToFields, summarizeCarrierError } from '../utils/carrierErrorMap'
-import { addressValidationService, type AddressValidationResponse } from '../api/addressValidationService'
+import { type AddressValidationResponse } from '../api/addressValidationService'
 import { recipientBookService, type SavedRecipient } from '../api/recipientBookService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
 import {
@@ -45,8 +45,10 @@ import { useFormik, getIn } from 'formik'
 import { shipmentSchema, type ShipmentFormValues } from '../validation/yup/shipmentSchema'
 import { dialCodeFor, postalPlaceholderFor, phoneHintFor } from '../utils/countryFormats'
 import { STATE_CODE_OPTIONS } from '../utils/stateCodes'
-import { decorateWithStateWarning, decoratePostalWarning } from '../utils/addressWarnings'
 import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddressFields'
+import { compatiblePresetIds } from '../utils/servicePackageCompatibility'
+import { shipmentValidationService, type ShipmentValidationResult } from '../api/shipmentValidationService'
+import { SHIPPING_PURPOSES, clearanceOptionsForCarrier } from '../utils/customsOptions'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -82,8 +84,12 @@ const COUNTRIES: [string, string][] = [
 ]
 const COUNTRY_NAME: Record<string, string> = Object.fromEntries(COUNTRIES)
 
-/** Reason-for-export choices, shown at the top of the shipment. */
-const EXPORT_REASONS = ['SALE', 'GIFT', 'SAMPLE', 'RETURN', 'REPAIR', 'PERSONAL']
+// Reason of export choices come from the canonical SHIPPING_PURPOSES
+// list (customsOptions.ts) so what the operator picks matches the
+// backend's SHIPPING_PURPOSE_ENUM byte-for-byte. Prior 6-value
+// hardcode (SALE|GIFT|SAMPLE|RETURN|REPAIR|PERSONAL) sent invalid
+// enum values (REPAIR / PERSONAL not accepted; DOCUMENTS /
+// MERCHANDISE / REPAIR_AND_RETURN / PERSONAL_USE missing).
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'INR', 'AUD', 'SGD', 'JPY', 'CNY', 'AED']
 
 /** Persist the last-used value for a field so it prefills next time (sticky default). */
@@ -464,6 +470,12 @@ export default function NewShipmentPage() {
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
   const [services, setServices] = useState<ShippingServiceItem[]>([])
   const [packages, setPackages] = useState<PackagePreset[]>([])
+  // Sprint 52 PR 2 — service_package many-to-many. Populated from
+  // shippingConfigService.catalog().links. Drives the packaging dropdown
+  // filter: only CARRIER-kind presets linked to the picked service show.
+  // Mirrors the backend PackagingCompatibilityGuard (Sprint 52 PR 1) so
+  // the operator can't pick a combo the server would reject.
+  const [servicePackageLinks, setServicePackageLinks] = useState<ServicePackageLink[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [profiles, setProfiles] = useState<CustomsProfile[]>([])
   // Per-shipment importer/broker override (null = use the client's saved profile).
@@ -481,7 +493,20 @@ export default function NewShipmentPage() {
   const [carrier, setCarrier] = useState('')
   const [accountNumber, setAccountNumber] = useState('') // bill-to account, manually editable
   const [serviceId, setServiceId] = useState<number | ''>('')
-  const [incoterms, setIncoterms] = useState('DDP') // DAP | DDP — who pays duties/taxes
+  // Incoterms prefills from ClientCustomsProfile.incoterms via the
+  // resolved importerProfile (per client + destination country). NULL
+  // profile / NULL value → blank + force-pick guard blocks
+  // international shipments until the operator picks. Default was
+  // 'DDP' pre-PR #532 — swapped for force-pick per operator call
+  // (getting incoterms wrong = surprise fees at destination).
+  const [incoterms, setIncoterms] = useState('')
+  // F6-C — per-carrier customs clearance option. Prefills from
+  // CarrierAccountRef.clearanceOption when the value is in the current
+  // carrier's vocabulary (UPS SENDER/RECEIVER/THIRD_PARTY vs FedEx
+  // SENDER/RECIPIENT/THIRD_PARTY vs USPS DDU/DDP vs DHL DAP/DDP/EXW).
+  // Blank = backend connector picks its own default (usually sender-
+  // pays / DAP). International-only; hidden on domestic.
+  const [clearanceOption, setClearanceOption] = useState('')
   const [packageChoice, setPackageChoice] = useState<string>('') // preset id as string, or CUSTOM_PKG
   const [length, setLength] = useState('')
   const [width, setWidth] = useState('')
@@ -504,6 +529,14 @@ export default function NewShipmentPage() {
   // UPS/DHL/USPS only (FedEx uses labelImageType/labelStockType above).
   // Blank = use the account default.
   const [labelImageFormat, setLabelImageFormat] = useState('')
+  // FDX-H1 — per-shipment override of the FedEx account's default
+  // pickupType. Prefills from CarrierAccountRef.pickupType on account
+  // change; falls back to USE_SCHEDULED_PICKUP when the account has
+  // NULL (matches the backend's hardcoded default so the operator
+  // sees the effective value in the UI). FedEx-only; hidden in
+  // Return mode (connector always emits CONTACT_FEDEX_TO_SCHEDULE
+  // for returns regardless).
+  const [pickupType, setPickupType] = useState('USE_SCHEDULED_PICKUP')
   // Sprint 22 — rate picker: opens the RatePickerModal with current form
   // state; on select we populate carrier + serviceId + accountNumber.
   const [ratePickerOpen, setRatePickerOpen] = useState(false)
@@ -554,9 +587,15 @@ export default function NewShipmentPage() {
 
   // Recipient address validation result (from the Validate button).
   const [recipientCheck, setRecipientCheck] = useState<{ valid: boolean; issues: string[] } | null>(null)
-  // Sprint 31 — carrier-side address validation result (from the Validate with carrier button).
+  // Sprint 31 — carrier-side address validation result (from the "Validate
+  // shipment" button, formerly "Validate with Carrier").
   const [carrierAddressResult, setCarrierAddressResult] = useState<AddressValidationResponse | null>(null)
   const [carrierValidating, setCarrierValidating] = useState(false)
+  // Sprint 52 — full shipment-validation result. Drives the new local-
+  // errors / local-warnings sections above the existing carrier-address
+  // banner. carrierAddressResult stays alongside so the pre-existing
+  // "apply suggested address" flow keeps working unchanged.
+  const [shipmentValidationResult, setShipmentValidationResult] = useState<ShipmentValidationResult | null>(null)
   // Sprint 38 — saved recipients: address-book search + save UI.
   const [recipientSearch, setRecipientSearch] = useState('')
   const [recipientSuggestions, setRecipientSuggestions] = useState<SavedRecipient[]>([])
@@ -576,8 +615,12 @@ export default function NewShipmentPage() {
   type ItemRow = NewShipmentItemRow
   const blankItem = (): ItemRow => ({ description: '', sku: '', hsCode: '', countryOfOrigin: '', quantity: '1', unitValue: '', boxSeq: '' })
   const [items, setItems] = useState<ItemRow[]>([blankItem()])
-  // Reason of export + currency are sticky — they prefill from the last shipment.
-  const [reasonForExport, setReasonForExport] = useState(() => readSticky('ms:lastReason', 'SALE'))
+  // Reason of export prefills from `CarrierAccountRef.shippingPurpose`
+  // (see prefill useEffect below). Sticky read removed — force-pick
+  // semantic per PR #529: blank + account-NULL + international blocks
+  // submit, so the operator explicitly picks. Sticky-writes retained
+  // as a no-op for legacy readers.
+  const [reasonForExport, setReasonForExport] = useState('')
   const [currency, setCurrency] = useState(() => readSticky('ms:lastCurrency', 'USD'))
 
   // Optional guided-wizard for the customs section. Off by default; users
@@ -600,6 +643,7 @@ export default function NewShipmentPage() {
         setAccounts(accs.filter((a) => a.active))
         setServices(catalog.services.filter((s) => s.enabled))
         setPackages(presets)
+        setServicePackageLinks(catalog.links)
         setClients(clientPage.data?.content ?? [])
       } catch (e) {
         notify.apiError(e, 'Failed to load shipment options.')
@@ -612,12 +656,43 @@ export default function NewShipmentPage() {
     }
   }, [])
 
-  // Only offer carriers you can actually ship with: an active account AND a live service.
-  const carrierOptions = useMemo(() => {
-    const acctCarriers = new Set(accounts.map((a) => canon(a.carrierCode)))
-    const svcCarriers = new Set(services.map((s) => canon(s.carrier)))
-    return [...acctCarriers].filter((c) => svcCarriers.has(c)).sort()
-  }, [accounts, services])
+  // Carrier options split into two pools so the dropdown can render
+  // the client's own carrier accounts first, verified platform
+  // accounts underneath:
+  //   - `clientCarriers` — accounts whose `customerNo` matches the
+  //     picked client. Empty when no client is picked or the client
+  //     has no accounts. NOT verification-filtered — client-owned
+  //     accounts are the operator's own credentials.
+  //   - `platformCarriers` — accounts with null `customerNo` (shared
+  //     across all clients) AND `verified === true` (last credential
+  //     check succeeded). Unverified platform accounts are hidden to
+  //     prevent operators picking a carrier the platform can't
+  //     actually ship on.
+  // Both are further intersected with `services` (a carrier with no
+  // live service can't ship regardless of account state).
+  const svcCarrierSet = useMemo(
+    () => new Set(services.map((s) => canon(s.carrier))),
+    [services],
+  )
+  const clientCarriers = useMemo(() => {
+    if (!clientCode) return [] as string[]
+    const own = accounts.filter(
+      (a) => (a.customerNo || '').toUpperCase() === clientCode.toUpperCase(),
+    )
+    return [...new Set(own.map((a) => canon(a.carrierCode)))]
+      .filter((c) => svcCarrierSet.has(c))
+      .sort()
+  }, [accounts, clientCode, svcCarrierSet])
+  const platformCarriers = useMemo(() => {
+    const plat = accounts.filter((a) => !a.customerNo && a.verified === true)
+    return [...new Set(plat.map((a) => canon(a.carrierCode)))]
+      .filter((c) => svcCarrierSet.has(c) && !clientCarriers.includes(c))
+      .sort()
+  }, [accounts, svcCarrierSet, clientCarriers])
+  const carrierOptions = useMemo(
+    () => [...clientCarriers, ...platformCarriers],
+    [clientCarriers, platformCarriers],
+  )
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot default carrier pick when options first populate; deriving at render would fight explicit user picks
@@ -718,7 +793,16 @@ export default function NewShipmentPage() {
     'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT',
     'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE',
   ])
-  const sameTerritory = (a: string, b: string) => a === b || (EU.has(a) && EU.has(b))
+  // Sprint 52 — US and its outlying territories. US → PR / VI / GU / AS / MP
+  // is intranational customs-wise (no customs form, no duties, no HS codes).
+  const US_FAMILY = new Set(['US', 'PR', 'VI', 'GU', 'AS', 'MP'])
+  // Sprint 52 — US and its outlying territories treated as one territory
+  // (matches the backend ShipmentValidationService.US_FAMILY rule + the
+  // FE UX pick that "US→PR is domestic" — no customs UI, no incoterms).
+  const sameTerritory = (a: string, b: string) =>
+    a === b
+    || (EU.has(a) && EU.has(b))
+    || (US_FAMILY.has(a) && US_FAMILY.has(b))
   const isInternational =
     !!sender.countryCode &&
     !!recipient.countryCode &&
@@ -752,6 +836,13 @@ export default function NewShipmentPage() {
     shipment: {
       carrierCode: carrier || undefined,
       accountNumber: accountNumber || undefined,
+      // Sprint 51 rate-shop gap-fill — pre-fix the operator picked a
+      // service level but rate-shop still fanned out across every service
+      // in the account. Sending serviceType filters the fan-out so the
+      // quote reflects the operator's actual intent.
+      serviceType: serviceId !== ''
+        ? services.find((s) => s.id === Number(serviceId))?.serviceCode
+        : undefined,
       packageType: packageChoice || undefined,
       weight: Number(weight) || 0,
       weightUnit,
@@ -762,12 +853,30 @@ export default function NewShipmentPage() {
       ...shipperFieldsFrom(sender),
       ...recipientFieldsFrom(recipient),
       declaredValue: declaredValue ? Number(declaredValue) : undefined,
+      // Currency is always sent — quotes come back in the operator's
+      // billing currency instead of the carrier's home currency (which
+      // silently defaulted to USD for US carriers pre-fix).
+      declaredValueCurrency: currency || undefined,
+      // Surcharges that materially move the quoted price — none of these
+      // were sent pre-fix, so the picker consistently under-quoted.
+      // Only emit when set so the JSON body stays minimal.
+      ...(signatureOption !== 'NONE' ? { signatureOption } : {}),
+      ...(insuredValue && Number(insuredValue) > 0
+        ? {
+            insuredValue: Number(insuredValue),
+            insuredValueCurrency: currency || undefined,
+          }
+        : {}),
+      ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
+      // Return labels rate differently on FedEx SmartPost, UPS Returns.
+      isReturn,
     },
     customerNo: clientCode || null,
     // No carriers whitelist — let the backend fan out to every configured
     // carrier so the picker can compare across the tenant's full inventory.
-  }), [carrier, accountNumber, packageChoice, weight, weightUnit, length, width, height, dimUnit,
-        sender, recipient, declaredValue, clientCode])
+  }), [carrier, accountNumber, serviceId, services, packageChoice, weight, weightUnit,
+        length, width, height, dimUnit, sender, recipient, declaredValue, currency,
+        signatureOption, insuredValue, dgBlock, isReturn, clientCode])
 
   const canOpenRatePicker = Boolean(
     rateShopRequest.shipment.weight > 0
@@ -845,13 +954,29 @@ export default function NewShipmentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [services, carrier, sender.countryCode, neededScope, allowedServiceIds],
   )
+  // Sprint 52 PR 2 — service_package compatibility. Empty set for a
+  // service means "admin hasn't linked any preset to this service yet"
+  // — leave the pool alone rather than hide every CARRIER preset, so
+  // the operator sees the same choices they used to (server-side guard
+  // still throws SERVICE_HAS_NO_LINKED_PACKAGES with the fix path).
+  // Ready-to-use set exists → filter to only linked presets.
+  const compatiblePresetIdsForService = useMemo<Set<number> | null>(
+    () => compatiblePresetIds(servicePackageLinks, serviceId),
+    [serviceId, servicePackageLinks],
+  )
+
   const packagesForCarrier = useMemo(
     () =>
       packages
         .filter((p) => p.kind === 'CARRIER' && canon(p.carrier) === carrier && originMatch(p.originCountry) && scopeFits(p.scope))
-        .filter((p) => !allowedPackageIds || p.id == null || allowedPackageIds.has(p.id)),
+        .filter((p) => !allowedPackageIds || p.id == null || allowedPackageIds.has(p.id))
+        // Sprint 52 PR 2 — hide CARRIER presets not linked to the picked
+        // service. CUSTOM presets ("Your boxes") are in a separate memo
+        // and stay unfiltered (server guard treats them as always-allowed
+        // via the kind=CUSTOM short-circuit). Null set = no filter.
+        .filter((p) => !compatiblePresetIdsForService || p.id == null || compatiblePresetIdsForService.has(p.id)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [packages, carrier, sender.countryCode, neededScope, allowedPackageIds],
+    [packages, carrier, sender.countryCode, neededScope, allowedPackageIds, compatiblePresetIdsForService],
   )
   const customBoxes = useMemo(
     () =>
@@ -979,6 +1104,96 @@ export default function NewShipmentPage() {
   }, [servicesForCarrier])
 
   /**
+   * The CarrierAccountRef row matching the currently-picked carrier +
+   * accountNumber. Drives the Label Type / Label Size prefill below.
+   * Nullable: an ad-hoc / typed accountNumber that doesn't match any
+   * saved account leaves this null, and the label dropdowns fall back
+   * to the "please select" required state.
+   */
+  const matchedAccount = useMemo(() => {
+    if (!accountNumber.trim()) return null
+    return accounts.find(
+      (a) => canon(a.carrierCode) === canon(carrier)
+        && (a.accountNumber || '').toLowerCase() === accountNumber.trim().toLowerCase(),
+    ) ?? null
+  }, [accounts, carrier, accountNumber])
+
+  /**
+   * Prefill Label Type / Label Size / Label format from the selected
+   * carrier account. Fires whenever the resolved account changes
+   * (client swap → carrier reset → accountNumber reset → matched
+   * account changes, or a manual account swap). User overrides made
+   * AFTER this fire are preserved until the NEXT account change.
+   *
+   * Null on the account leaves the field blank — combined with the
+   * required-when-null guard in `submit()` this forces the operator
+   * to pick a value before generating a label, closing the
+   * "silently defaulted to PDF/PAPER_4X6/GIF" surprise the old
+   * account-null branch produced.
+   */
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prefill label fields when the resolved account changes; hard-overwrite by design so switching accounts always shows the new account's saved defaults, not stale user overrides from the previous account.
+    setLabelImageType(matchedAccount?.labelImageType ?? '')
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
+    setLabelStockType(matchedAccount?.labelStockType ?? '')
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
+    setLabelImageFormat(matchedAccount?.labelImageFormat ?? '')
+    // Unlike the label fields, pickupType falls back to the backend's
+    // hardcoded default (USE_SCHEDULED_PICKUP) when the account has
+    // NULL — no force-pick, per operator call. Showing the effective
+    // value in the UI still beats hiding it behind a silent backend
+    // fallback.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
+    setPickupType(matchedAccount?.pickupType ?? 'USE_SCHEDULED_PICKUP')
+    // Reason of export prefills from account.shippingPurpose; NULL
+    // leaves the field blank and the guard in submit/validate blocks
+    // international shipments until the operator picks. Applied
+    // regardless of isInternational so the value is ready if the
+    // operator flips domestic→international mid-form; the guard only
+    // fires on international.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
+    setReasonForExport(matchedAccount?.shippingPurpose ?? '')
+    // Clearance option (customs duties): prefill from account only when
+    // the saved value is in the current carrier's vocabulary. Guards
+    // against admin misconfiguration (e.g. UPS account with a FedEx-
+    // only 'RECIPIENT' value) and the carrier-swap case (account's
+    // saved value from prior carrier still cached). NULL / not-in-list
+    // → blank; backend connector applies its own default.
+    const saved = matchedAccount?.clearanceOption
+    const allowed = clearanceOptionsForCarrier(canon(carrier))
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- same rationale as labelImageType above.
+    setClearanceOption(saved && allowed.some((o) => o.value === saved) ? saved : '')
+  }, [matchedAccount, carrier])
+
+  /**
+   * Which label fields are required-but-blank for the currently-picked
+   * carrier. FedEx needs both labelImageType + labelStockType; UPS /
+   * DHL / USPS need labelImageFormat. The `submit()` and
+   * `validateShipment()` guards use this to block with an operator
+   * message; the UI marks the missing fields required.
+   */
+  const missingLabelFields = useMemo(() => {
+    const missing: string[] = []
+    const cc = canon(carrier)
+    if (cc === 'FEDEX') {
+      if (!labelImageType) missing.push('Label Type')
+      if (!labelStockType) missing.push('Label Size')
+    } else if (['UPS', 'DHL', 'USPS'].includes(cc)) {
+      if (!labelImageFormat) missing.push('Label Type')
+    }
+    // Reason of export is required on international shipments — same
+    // force-pick pattern as label fields (see prefill useEffect above).
+    // Not label-scoped but the guard hook is the same one used by
+    // submit()/validateShipment() so we co-locate.
+    if (isInternational && !reasonForExport) missing.push('Reason of export')
+    // Incoterms same pattern as Reason of export — prefill from
+    // ClientCustomsProfile via importerProfile; NULL profile / value
+    // blocks with a targeted toast.
+    if (isInternational && !incoterms) missing.push('Incoterms')
+    return missing
+  }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport, incoterms])
+
+  /**
    * Select a client: fill YOUR address on the correct side and auto-pick its
    * default carrier + account. For a shipment your address is the origin (sender);
    * for a return it's the destination (recipient), taken from the return address.
@@ -1025,6 +1240,14 @@ export default function NewShipmentPage() {
         )
       }
     }
+    // Currency prefill from the client's default; falls through to
+    // the sticky last-used when null (per PR #527 — no force-pick on
+    // currency, unlike Label Type / Size where the account NULL is
+    // rare enough to warrant blocking). Overwrites the operator's
+    // prior manual pick, same semantic as the carrier prefill above.
+    if (client.defaultCurrency) {
+      setCurrency(client.defaultCurrency)
+    }
   }
 
   /** Toggle Shipment ⇆ Return. A return is the swapped shipment, so flip the two parties. */
@@ -1032,7 +1255,10 @@ export default function NewShipmentPage() {
     if (next === mode) return
     setSender(recipient)
     setRecipient(sender)
-    setReasonForExport(next === 'RETURN' ? 'RETURN' : 'SALE')
+    // Return mode always ships as RETURN reason. Shipment mode
+    // defers to the account.shippingPurpose prefill / user pick /
+    // force-pick guard — don't overwrite with a hardcoded 'SALE'.
+    if (next === 'RETURN') setReasonForExport('RETURN')
     setMode(next)
   }
 
@@ -1195,6 +1421,24 @@ export default function NewShipmentPage() {
     [profiles, isInternational, clientCode, destCountry],
   )
 
+  /**
+   * Incoterms prefill from the resolved ClientCustomsProfile. Fires
+   * on client OR destination-country change (importerProfile is a
+   * memo over both). Force-pick semantic: NULL profile / NULL value
+   * leaves the field blank and the guard in submit()/validate()
+   * blocks international shipments until picked. User's manual pick
+   * AFTER prefill is preserved until the next importerProfile change.
+   *
+   * <p>Only mutates state when isInternational — on domestic
+   * shipments the field isn't rendered so leaving stale value is
+   * fine (and switching back to intl re-runs this effect via
+   * importerProfile change).
+   */
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prefill incoterms from resolved customs profile; hard-overwrite on lane change is by design (matches accountNumber / label-field reset semantic).
+    if (isInternational) setIncoterms(importerProfile?.incoterms ?? '')
+  }, [importerProfile, isInternational])
+
   /** Map a saved profile into the flat importer/broker shape (label-document keys). */
   const partiesFromProfile = (p: CustomsProfile): { importer: Party; broker: Party } => ({
     importer: {
@@ -1243,47 +1487,120 @@ export default function NewShipmentPage() {
    * carrier can actually deliver the parcel + returning residential/commercial
    * classification.
    */
-  const validateRecipientWithCarrier = async () => {
+  const validateShipment = async () => {
+    // PR #530 — zero shippable carriers: block early with a targeted
+    // link to Settings instead of the generic "pick a carrier" toast.
+    if (noCarriersAtAll) {
+      notify.error('No carriers connected in this workspace. Add + verify a carrier in Settings before validating.')
+      return
+    }
     if (!carrier) {
       notify.error('Pick a carrier first — validation is carrier-specific.')
       return
     }
+    // Required-when-null guard: block until every label field the
+    // carrier needs has a pick. Fires here (Validate) AND in submit()
+    // (Generate) so operators see the same message on both buttons.
+    if (missingLabelFields.length > 0) {
+      setSubmitAttempted(true)
+      notify.error(
+        `Pick ${missingLabelFields.join(' + ')} before validating — the selected account has no saved default.`,
+      )
+      scrollToFirstError()
+      return
+    }
     setCarrierValidating(true)
     try {
-      const res = await addressValidationService.validate({
+      // Sprint 52 — send the full form (matching the /orders/manual-label
+      // payload shape) so the backend runs packaging compatibility, markup
+      // required, customs (intl only), DG, and allowlists. Previously this
+      // button sent only recipient address fields and hit
+      // /addresses/validate/carrier — see the deep-dive in the PR body for
+      // the field-gap table.
+      const matched = accounts.find(
+        (a) => canon(a.carrierCode) === carrier
+          && (a.accountNumber || '').toLowerCase() === accountNumber.trim().toLowerCase(),
+      )
+      const cleanItems = items
+        .filter((it) => it.description.trim())
+        .map((it) => ({
+          description: it.description.trim(),
+          sku: it.sku.trim() || undefined,
+          hsCode: it.hsCode.trim() || undefined,
+          countryOfOrigin: it.countryOfOrigin.trim().toUpperCase() || undefined,
+          quantity: it.quantity ? Number(it.quantity) : null,
+          unitValue: it.unitValue ? Number(it.unitValue) : null,
+        }))
+      const isCustom = packageChoice === CUSTOM_PKG
+      const payload = {
+        sender,
+        recipient,
+        isReturn,
         carrierCode: carrier,
-        customerNo: clientCode.trim() || null,
-        name: recipient.name || undefined,
-        addressLine1: recipient.addressLine1,
-        addressLine2: recipient.addressLine2 || undefined,
-        addressLine3: recipient.addressLine3 || undefined,
-        city: recipient.city,
-        state: recipient.state || undefined,
-        postalCode: recipient.postalCode,
-        countryCode: recipient.countryCode,
-      })
-      const d = res.data
-      // Sprint 51 polish — FedEx/UPS/DHL Address Validation is lenient about
-      // state names (accepts "Delaware" and reports Matched=true), but the
-      // subsequent Rate / Ship APIs need a 2-letter code. Detect the
-      // mismatch client-side and append it to the banner's warnings so the
-      // green banner doesn't give false confidence.
-      // Two deterministic client-side gates on top of the carrier's answer,
-      // because carrier AV is a deliverability/standardization service — it is
-      // NOT a guarantee the state/postal actually belong to the country (the
-      // FedEx sandbox will "match" a US address with a Canadian postal). State
-      // shape is a soft warning; a postal that can't fit the country downgrades
-      // the banner off green.
-      let decorated = decorateWithStateWarning(d ?? null, recipient.countryCode, recipient.state)
-      decorated = decoratePostalWarning(decorated, recipient.countryCode, recipient.postalCode)
-      setCarrierAddressResult(decorated)
-      if (decorated?.valid) {
-        notify.success(`${carrier}: ${decorated.matchLevel} match.`)
-      } else if (decorated) {
-        notify.error(`${carrier}: ${decorated.message}`)
+        accountNumber: accountNumber.trim(),
+        accountId: matched?.id ?? null,
+        serviceId: serviceId === '' ? null : Number(serviceId),
+        packagePresetId: isCustom ? null : Number(packageChoice),
+        length: isCustom ? Number(length) : null,
+        width: isCustom ? Number(width) : null,
+        height: isCustom ? Number(height) : null,
+        dimUnit,
+        weight: weight ? Number(weight) : null,
+        weightUnit,
+        clientCode: clientCode.trim() || undefined,
+        warehouseCode: warehouseCode || undefined,
+        declaredValue: declaredValue ? Number(declaredValue) : null,
+        currency,
+        // Only send the intl / customs block on actual international
+        // shipments — server also runs the sameTerritory rule and skips
+        // customs when domestic, but sending less data on domestic is
+        // just neater.
+        ...(isInternational ? {
+          items: cleanItems,
+          incoterms: incoterms || undefined,
+          reasonForExport: reasonForExport || undefined,
+          clearanceOption: clearanceOption || undefined,
+        } : {}),
+        ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
+        ...(signatureOption !== 'NONE' ? { signatureOption } : {}),
+        ...(Number(insuredValue) > 0 ? {
+          insuredValue: Number(insuredValue),
+          insuredValueCurrency: currency,
+        } : {}),
+        // Label spec — mirror the generate-label payload so a green
+        // validate is a strong guarantee the label call will succeed
+        // on the same request. Guard above ensures these are non-blank
+        // when the carrier requires them.
+        ...(canon(carrier) === 'FEDEX' && labelImageType ? { labelImageType } : {}),
+        ...(canon(carrier) === 'FEDEX' && labelStockType ? { labelStockType } : {}),
+        ...(['UPS', 'DHL', 'USPS'].includes(canon(carrier)) && labelImageFormat
+          ? { labelImageFormat }
+          : {}),
+        // FDX-H1 — per-shipment pickupType. FedEx-only; skipped in
+        // Return mode (connector overrides to CONTACT_FEDEX_TO_SCHEDULE).
+        ...(canon(carrier) === 'FEDEX' && !isReturn && pickupType
+          ? { pickupType }
+          : {}),
+      }
+      const res = await shipmentValidationService.validate(payload)
+      const result = res.data ?? null
+      setShipmentValidationResult(result)
+      // Sprint 52 — pre-flight is strictly server-side (no carrier calls).
+      // Address subresult stays null; the existing suggested-address
+      // banner (fed by carrierAddressResult) simply doesn't render here
+      // — clear it so a stale banner from a prior click doesn't linger.
+      setCarrierAddressResult(null)
+      // Toast summary — one line per verdict so the operator gets
+      // feedback without having to visually scan the banner.
+      if (result?.overall === 'PASS') {
+        notify.success(result.message)
+      } else if (result?.overall === 'WARN') {
+        notify.info(result.message)
+      } else if (result?.overall === 'FAIL') {
+        notify.error(result.message)
       }
     } catch (e) {
-      notify.apiError(e, 'Carrier address validation failed.')
+      notify.apiError(e, 'Shipment validation failed.')
     } finally {
       setCarrierValidating(false)
     }
@@ -1521,6 +1838,28 @@ export default function NewShipmentPage() {
   const submit = async () => {
     // Yup + Formik gate — validate the mirrored form values before anything else.
     setSubmitAttempted(true)
+    // PR #530 — zero shippable carriers: block early with a
+    // Settings-link toast rather than the yup / label-guard errors
+    // that would fire on downstream blank fields (carrier === '',
+    // no label defaults, etc.).
+    if (noCarriersAtAll) {
+      showToast(
+        'Add + verify a carrier account in Settings before generating a label.',
+        'No carriers connected',
+      )
+      return
+    }
+    // Required-when-null guard runs BEFORE yup so we surface a
+    // targeted toast; yup doesn't know about the label / shipping-
+    // purpose fields (they're not in the form schema).
+    if (missingLabelFields.length > 0) {
+      showToast(
+        `Pick ${missingLabelFields.join(' + ')} — no saved default for this client / account.`,
+        `${missingLabelFields.length} field${missingLabelFields.length === 1 ? '' : 's'} need attention`,
+      )
+      scrollToFirstError()
+      return
+    }
     const errs = await formik.validateForm(formValues as unknown as ShipmentFormValues)
     const msgs = flattenErrors(errs)
     if (msgs.length > 0) {
@@ -1585,6 +1924,11 @@ export default function NewShipmentPage() {
       clientCode: clientCode.trim() || undefined,
       warehouseCode: warehouseCode || undefined,
       declaredValue: declaredValue ? Number(declaredValue) : null,
+      // Sprint 51 — currency is now always sent (not just intl). A
+      // European tenant shipping GB→GB should see GBP; pre-fix the
+      // domestic branch dropped currency and the backend fell to the
+      // carrier's home currency (USD for US carriers, EUR for DHL).
+      currency,
       // Sprint 27 — attach the DG block when populated; backend threads
       // it into ShipmentRequestDTO.dangerousGoods and every connector's
       // hazmat wire format keys off it.
@@ -1605,6 +1949,11 @@ export default function NewShipmentPage() {
       // omit so the backend falls back to the account default.
       ...(['UPS', 'DHL', 'USPS'].includes(canon(carrier)) && labelImageFormat
         ? { labelImageFormat }
+        : {}),
+      // FDX-H1 — per-shipment pickupType. FedEx-only; skipped in
+      // Return mode (connector overrides to CONTACT_FEDEX_TO_SCHEDULE).
+      ...(canon(carrier) === 'FEDEX' && !isReturn && pickupType
+        ? { pickupType }
         : {}),
       // Sprint 29 — multi-package. When extra boxes are present, build
       // a packages[] array with box 1 mirroring the top-level fields and
@@ -1637,7 +1986,14 @@ export default function NewShipmentPage() {
           })),
         ],
       } : {}),
-      ...(isInternational ? { items: cleanItems, reasonForExport, currency, incoterms } : {}),
+      // Currency moved to top-level (always sent). Intl still carries the
+      // customs-specific extras (items, reason for export, incoterms).
+      ...(isInternational ? {
+        items: cleanItems,
+        reasonForExport,
+        incoterms,
+        ...(clearanceOption ? { clearanceOption } : {}),
+      } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
     }
 
@@ -1683,7 +2039,17 @@ export default function NewShipmentPage() {
     }
   }
 
-  const noCarriers = !loading && carrierOptions.length === 0
+  // PR #530 — replaced the full-page "No shippable carrier yet" empty
+  // state with an inline banner + force-block on submit, so operators
+  // can lay out the shipment (addresses, package, items) while
+  // Settings is missing a carrier. Two cases:
+  //   - tenant-wide: zero carriers across all clients + platform.
+  //   - client-scoped: client picked has no own carriers assigned,
+  //     but platform (verified) accounts exist as a fallback. Soft
+  //     warning; shipping is still allowed via platform.
+  const noCarriersAtAll = !loading && carrierOptions.length === 0
+  const clientHasNoOwnCarriers = !loading && !!clientCode
+    && clientCarriers.length === 0 && platformCarriers.length > 0
 
   return (
     <div className="pb-6">
@@ -1719,16 +2085,57 @@ export default function NewShipmentPage() {
           <section className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-[#8a7959] shadow-sm">
             Loading carriers, services and packaging…
           </section>
-        ) : noCarriers ? (
-          <section className="rounded-2xl border border-dashed border-[#e3d9c4] bg-[#faf7f0] p-10 text-center shadow-sm">
-            <p className="text-sm font-semibold text-[#412d15]">No shippable carrier yet</p>
-            <p className="mx-auto mt-1 max-w-md text-[13px] text-[#8a7959]">
-              A carrier needs an active account <em>and</em> synced live services. Verify a carrier and sync its
-              services in Settings first.
-            </p>
-          </section>
         ) : (
           <>
+            {/* PR #530 — No-carrier banners. Tenant-wide (red, blocks
+                Generate) vs client-scoped (amber, soft warning; can
+                still ship via a platform carrier). */}
+            {noCarriersAtAll ? (
+              <section role="alert" className="rounded-2xl border border-rose-300 bg-rose-50 p-4 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+                    <FiAlertTriangle className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-bold text-rose-900">No carriers connected in this workspace</p>
+                    <p className="mt-0.5 text-[12px] text-rose-800">
+                      A carrier needs an active account <em>and</em> synced live services before you can generate a label. Fill in the shipment details below, then add + verify a carrier in Settings.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/settings/carriers')}
+                    className="shrink-0 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-[12px] font-semibold text-rose-900 shadow-sm transition hover:border-rose-400 hover:bg-rose-100"
+                  >
+                    Add carrier account
+                  </button>
+                </div>
+              </section>
+            ) : clientHasNoOwnCarriers ? (
+              <section role="status" className="rounded-2xl border border-amber-300 bg-amber-50 p-4 shadow-sm">
+                <div className="flex items-start gap-3">
+                  <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+                    <FiAlertTriangle className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-bold text-amber-900">
+                      Client {clientCode} has no carriers assigned
+                    </p>
+                    <p className="mt-0.5 text-[12px] text-amber-800">
+                      Shipping via a platform (verified) carrier. Pick a different client or assign a carrier account to {clientCode} in Settings.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/settings/carriers')}
+                    className="shrink-0 rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-[12px] font-semibold text-amber-900 shadow-sm transition hover:border-amber-400 hover:bg-amber-100"
+                  >
+                    Assign carrier account
+                  </button>
+                </div>
+              </section>
+            ) : null}
+
             {/* ── Shipment / Return toggle ── */}
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
@@ -1787,13 +2194,22 @@ export default function NewShipmentPage() {
               </div>
             ) : null}
 
-            {/* ── Top: client · reason of export · currency ── */}
+            {/* ── Top: client · reason of export · currency ──
+                Compact single-row layout for both Shipment + Return
+                modes: flex-wrap row so fields sit inline on lg+ and
+                only wrap on narrower viewports. Note text moved to
+                the title's hover tooltip so the section takes one
+                horizontal band. */}
             <SectionCard
               icon={<FiUsers className="h-3.5 w-3.5" />}
               title="Shipment"
-              note="Choosing a client fills its ship-from and auto-selects its default carrier account. Reason & currency remember your last choice."
             >
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <div
+                className="flex flex-wrap items-end gap-3 [&>*]:min-w-[160px] [&>*]:flex-1"
+                title="Choosing a client fills its ship-from and auto-selects its default carrier account. Reason & currency remember your last choice."
+              >
+                {/* Client stays REQUIRED (validation under the field) — dev's
+                    layout change and this branch's required-client rule merge. */}
                 <Field label="Client" required error={errAt('clientCode')}>
                   <select className={inputCls} value={clientCode} onChange={(e) => applyClient(e.target.value)}>
                     <option value="">Select a client…</option>
@@ -1804,16 +2220,7 @@ export default function NewShipmentPage() {
                     ))}
                   </select>
                 </Field>
-                <Field
-                  label={`Ship from${clientWarehouses.length ? ` · ${clientWarehouses.length}` : ''}`}
-                  hint={
-                    !clientCode
-                      ? 'Pick a client to load warehouses.'
-                      : clientWarehouses.length === 0
-                        ? 'No warehouses attached — the sender block below is manual.'
-                        : undefined
-                  }
-                >
+                <Field label={`Ship from${clientWarehouses.length ? ` · ${clientWarehouses.length}` : ''}`}>
                   <select
                     className={inputCls}
                     value={warehouseCode}
@@ -1833,16 +2240,29 @@ export default function NewShipmentPage() {
                 </Field>
                 <Field label="Carrier" required error={errAt('carrier')}>
                   <select className={inputCls} value={carrier} onChange={(e) => setCarrier(e.target.value)}>
-                    {carrierOptions.map((c) => (
-                      <option key={c} value={c}>{CARRIER_LABEL[c] || c}</option>
-                    ))}
+                    {clientCarriers.length > 0 ? (
+                      <optgroup label={`${clientCode || 'Client'} accounts`}>
+                        {clientCarriers.map((c) => (
+                          <option key={c} value={c}>{CARRIER_LABEL[c] || c}</option>
+                        ))}
+                      </optgroup>
+                    ) : null}
+                    {platformCarriers.length > 0 ? (
+                      <optgroup label="Platform (verified)">
+                        {platformCarriers.map((c) => (
+                          <option key={c} value={c}>{CARRIER_LABEL[c] || c}</option>
+                        ))}
+                      </optgroup>
+                    ) : null}
                   </select>
                 </Field>
                 {isInternational ? (
-                  <Field label="Reason of export" error={errAt('reasonForExport')}>
+                  <Field label="Reason of export" required
+                         error={submitAttempted && !reasonForExport ? 'Required — pick a reason.' : errAt('reasonForExport')}>
                     <select className={inputCls} value={reasonForExport} onChange={(e) => setReasonForExport(e.target.value)}>
-                      {EXPORT_REASONS.map((r) => (
-                        <option key={r} value={r}>{r.charAt(0) + r.slice(1).toLowerCase()}</option>
+                      <option value="">-- Select --</option>
+                      {SHIPPING_PURPOSES.map((p) => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
                       ))}
                     </select>
                   </Field>
@@ -1854,18 +2274,21 @@ export default function NewShipmentPage() {
                     ))}
                   </select>
                 </Field>
-                {/* FDX-H3 — per-shipment override of the FedEx account's
-                    default labelSpecification. Blank = use the account
-                    default (which itself falls back to PDF/PAPER_4X6).
-                    Only shown for FedEx — other carriers ignore these. */}
+                {/* Per-shipment label spec — prefilled from the picked
+                    carrier account (matchedAccount above). Required
+                    when the account has no saved default so operators
+                    can't silently ship on the backend hardcoded
+                    fallback. FedEx renders Label Type + Label Size;
+                    UPS/DHL/USPS render Label Type only (they don't
+                    have a stock-type concept). */}
                 {canon(carrier) === 'FEDEX' ? (
                   <>
-                    <Field label="Label image type"
-                           hint="Blank = account default (PDF)">
+                    <Field label="Label Type" required
+                           error={submitAttempted && !labelImageType ? 'Required — pick a label type.' : undefined}>
                       <select className={inputCls}
                               value={labelImageType}
                               onChange={(e) => setLabelImageType(e.target.value)}>
-                        <option value="">Account default</option>
+                        <option value="">-- Select --</option>
                         <option value="PDF">PDF (vector, sharp)</option>
                         <option value="PNG">PNG (raster)</option>
                         <option value="ZPLII">ZPLII (Zebra)</option>
@@ -1873,12 +2296,12 @@ export default function NewShipmentPage() {
                         <option value="DPL">DPL (Datamax)</option>
                       </select>
                     </Field>
-                    <Field label="Label stock type"
-                           hint="Blank = account default (PAPER_4X6)">
+                    <Field label="Label Size" required
+                           error={submitAttempted && !labelStockType ? 'Required — pick a label size.' : undefined}>
                       <select className={inputCls}
                               value={labelStockType}
                               onChange={(e) => setLabelStockType(e.target.value)}>
-                        <option value="">Account default</option>
+                        <option value="">-- Select --</option>
                         <option value="PAPER_4X6">Paper 4x6</option>
                         <option value="PAPER_4X6.75">Paper 4x6.75</option>
                         <option value="PAPER_4X8">Paper 4x8</option>
@@ -1891,7 +2314,59 @@ export default function NewShipmentPage() {
                         <option value="STOCK_4X9_LEADING_DOC_TAB">Thermal stock 4x9 (doc tab)</option>
                       </select>
                     </Field>
+                    {/* FDX-H1 — Pickup Type. Hidden in Return mode
+                        because the connector always emits
+                        CONTACT_FEDEX_TO_SCHEDULE for isReturn=true;
+                        showing the field would imply the operator's
+                        pick matters when it doesn't. */}
+                    {!isReturn ? (
+                      <Field label="Pickup Type">
+                        <select className={inputCls}
+                                value={pickupType}
+                                onChange={(e) => setPickupType(e.target.value)}>
+                          <option value="USE_SCHEDULED_PICKUP">Use scheduled pickup</option>
+                          <option value="REGULAR_PICKUP">Regular pickup</option>
+                          <option value="REQUEST_COURIER">Request courier</option>
+                          <option value="DROP_BOX">Drop box</option>
+                          <option value="BUSINESS_SERVICE_CENTER">Business service center</option>
+                          <option value="STATION">Station</option>
+                        </select>
+                      </Field>
+                    ) : null}
                   </>
+                ) : null}
+                {['UPS', 'DHL', 'USPS'].includes(canon(carrier)) ? (
+                  <Field label="Label Type" required
+                         error={submitAttempted && !labelImageFormat ? 'Required — pick a label type.' : undefined}>
+                    <select className={inputCls}
+                            value={labelImageFormat}
+                            onChange={(e) => setLabelImageFormat(e.target.value)}>
+                      <option value="">-- Select --</option>
+                      {canon(carrier) === 'UPS' ? (
+                        <>
+                          <option value="GIF">GIF (raster)</option>
+                          <option value="PDF">PDF (vector, sharp)</option>
+                          <option value="PNG">PNG (raster)</option>
+                          <option value="ZPL">ZPL (Zebra)</option>
+                          <option value="EPL">EPL (Eltron/legacy Zebra)</option>
+                        </>
+                      ) : null}
+                      {canon(carrier) === 'DHL' ? (
+                        <>
+                          <option value="PDF">PDF (label + A4 doc)</option>
+                          <option value="ZPL">ZPL (thermal label only)</option>
+                        </>
+                      ) : null}
+                      {canon(carrier) === 'USPS' ? (
+                        <>
+                          <option value="PNG">PNG (raster)</option>
+                          <option value="PDF">PDF (vector, sharp)</option>
+                          <option value="GIF">GIF (raster)</option>
+                          <option value="JPG">JPG (raster)</option>
+                        </>
+                      ) : null}
+                    </select>
+                  </Field>
                 ) : null}
               </div>
             </SectionCard>
@@ -1975,11 +2450,12 @@ export default function NewShipmentPage() {
                 <div className="mt-3 flex justify-end">
                   <button
                     type="button"
-                    onClick={() => void validateRecipientWithCarrier()}
-                    disabled={carrierValidating || !carrier}
+                    onClick={() => void validateShipment()}
+                    disabled={carrierValidating || !carrier || noCarriersAtAll}
                     title={carrier
-                      ? `Carrier-side check — ask ${carrier} whether they can deliver here + residential/commercial classification`
+                      ? 'Server-side pre-flight — runs all label-time guards (packaging compatibility, markup, customs, DG, allowlists) on the full form before generating the label'
                       : 'Pick a carrier first'}
+                    data-testid="validate-shipment-btn"
                     className="inline-flex items-center gap-1.5 rounded-lg border border-[#1f150c] bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {carrierValidating ? (
@@ -1987,7 +2463,7 @@ export default function NewShipmentPage() {
                     ) : (
                       <FiCheckCircle className="h-3.5 w-3.5" />
                     )}
-                    Validate with Carrier
+                    Validate shipment
                   </button>
                 </div>
                 {!destAllowed && destRules?.mode && recipient.countryCode ? (
@@ -2028,6 +2504,102 @@ export default function NewShipmentPage() {
                     onApply={applyCarrierSuggestion}
                     onDismiss={() => setCarrierAddressResult(null)}
                   />
+                ) : null}
+                {/* Sprint 52 — shipment validation result banner. Renders
+                    the local pre-flight verdict + errors + warnings from
+                    the new /shipments/validate endpoint. Separate from
+                    the address banner above because this is a whole-
+                    shipment check, not an address-only one. */}
+                {shipmentValidationResult ? (
+                  <div
+                    data-testid="shipment-validation-banner"
+                    className={`mt-3 rounded-xl border px-3 py-2.5 text-[12px] ${
+                      shipmentValidationResult.overall === 'PASS'
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                        : shipmentValidationResult.overall === 'WARN'
+                          ? 'border-amber-200 bg-amber-50 text-amber-800'
+                          : 'border-rose-200 bg-rose-50 text-rose-800'
+                    }`}
+                  >
+                    <p className="flex items-center gap-2 font-semibold">
+                      {shipmentValidationResult.overall === 'PASS' ? (
+                        <FiCheckCircle className="h-4 w-4 shrink-0" />
+                      ) : (
+                        <FiAlertTriangle className="h-4 w-4 shrink-0" />
+                      )}
+                      {shipmentValidationResult.message}
+                    </p>
+                    {shipmentValidationResult.localErrors.length ? (
+                      <ul className="mt-1.5 list-disc space-y-0.5 pl-6">
+                        {shipmentValidationResult.localErrors.map((e, idx) => (
+                          <li key={`err-${idx}`}>
+                            {e.message}
+                            {e.field ? (
+                              <span className="ml-1 font-mono text-[10.5px] text-rose-600">
+                                [{e.field}]
+                              </span>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {shipmentValidationResult.localWarnings.length ? (
+                      <>
+                        <p className="mt-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-amber-700">
+                          Suggestions
+                        </p>
+                        <ul className="mt-1 list-disc space-y-0.5 pl-6">
+                          {shipmentValidationResult.localWarnings.map((w, idx) => (
+                            <li key={`warn-${idx}`}>
+                              {w.message}
+                              {w.field ? (
+                                <span className="ml-1 font-mono text-[10.5px] text-amber-700">
+                                  [{w.field}]
+                                </span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+                    {/* Sprint 52 PR δ — carrier subresult section. Rendered
+                        below local errors/warnings so the operator sees
+                        "server-side gaps first, then what the carrier
+                        thinks." Only shown when carrier was actually
+                        called (skipped when local errors present or
+                        carrier isn't configured). */}
+                    {shipmentValidationResult.carrier ? (
+                      <>
+                        <p className="mt-2 text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-600">
+                          {shipmentValidationResult.carrier.carrierCode} check
+                          {shipmentValidationResult.carrier.kind === 'ADDRESS_ONLY' ? ' (address only)' : ''}
+                        </p>
+                        <p className={`mt-0.5 text-[11.5px] ${
+                          shipmentValidationResult.carrier.valid
+                            ? 'text-emerald-700'
+                            : shipmentValidationResult.carrier.matchLevel === 'NOT_SUPPORTED'
+                              ? 'text-slate-500'
+                              : 'text-rose-700'
+                        }`}>
+                          {shipmentValidationResult.carrier.matchLevel}: {shipmentValidationResult.carrier.message}
+                        </p>
+                        {shipmentValidationResult.carrier.warnings.length ? (
+                          <ul className="mt-1 list-disc space-y-0.5 pl-6 text-amber-800">
+                            {shipmentValidationResult.carrier.warnings.map((w, idx) => (
+                              <li key={`cw-${idx}`}>{w}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {shipmentValidationResult.carrier.errors.length ? (
+                          <ul className="mt-1 list-disc space-y-0.5 pl-6 text-rose-700">
+                            {shipmentValidationResult.carrier.errors.map((e, idx) => (
+                              <li key={`ce-${idx}`}>{e}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </div>
                 ) : null}
               </SectionCard>
               <SectionCard
@@ -2121,10 +2693,30 @@ export default function NewShipmentPage() {
                     ) : null}
                   </Field>
                   {isInternational ? (
-                    <Field label="Incoterms" error={errAt('incoterms')}>
+                    <Field label="Incoterms" required
+                           error={submitAttempted && !incoterms ? 'Required — pick an incoterm.' : errAt('incoterms')}>
                       <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
+                        <option value="">-- Select --</option>
                         <option value="DDP">DDP — sender pays duties</option>
                         <option value="DAP">DAP — receiver pays duties</option>
+                        <option value="DDU">DDU — receiver pays duties only</option>
+                      </select>
+                    </Field>
+                  ) : null}
+                  {/* F6-C — clearanceOption dropdown. Per-carrier
+                      vocabulary (customsOptions.ts). Blank = backend
+                      connector picks its own default. Hidden when the
+                      carrier isn't recognised (no options). */}
+                  {isInternational && clearanceOptionsForCarrier(canon(carrier)).length > 0 ? (
+                    <Field label="Duties paid by"
+                           hint={clearanceOption ? undefined : 'Blank = carrier default'}>
+                      <select className={inputCls}
+                              value={clearanceOption}
+                              onChange={(e) => setClearanceOption(e.target.value)}>
+                        <option value="">-- Carrier default --</option>
+                        {clearanceOptionsForCarrier(canon(carrier)).map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
                       </select>
                     </Field>
                   ) : null}
@@ -2245,44 +2837,10 @@ export default function NewShipmentPage() {
                            placeholder="0.00" />
                   </Field>
                 </div>
-                {/* Per-shipment override of the account's default label
-                    file format — UPS/DHL/USPS only. Blank = use the
-                    account default. */}
-                {['UPS', 'DHL', 'USPS'].includes(canon(carrier)) ? (
-                  <div className="grid grid-cols-2 gap-3">
-                    <Field label={`Label format (${canon(carrier)} only)`}
-                           hint="Blank = account default">
-                      <select className={inputCls}
-                              value={labelImageFormat}
-                              onChange={(e) => setLabelImageFormat(e.target.value)}>
-                        <option value="">Account default</option>
-                        {canon(carrier) === 'UPS' ? (
-                          <>
-                            <option value="GIF">GIF (raster)</option>
-                            <option value="PDF">PDF (vector, sharp)</option>
-                            <option value="PNG">PNG (raster)</option>
-                            <option value="ZPL">ZPL (Zebra)</option>
-                            <option value="EPL">EPL (Eltron/legacy Zebra)</option>
-                          </>
-                        ) : null}
-                        {canon(carrier) === 'DHL' ? (
-                          <>
-                            <option value="PDF">PDF (label + A4 doc)</option>
-                            <option value="ZPL">ZPL (thermal label only)</option>
-                          </>
-                        ) : null}
-                        {canon(carrier) === 'USPS' ? (
-                          <>
-                            <option value="PNG">PNG (raster)</option>
-                            <option value="PDF">PDF (vector, sharp)</option>
-                            <option value="GIF">GIF (raster)</option>
-                            <option value="JPG">JPG (raster)</option>
-                          </>
-                        ) : null}
-                      </select>
-                    </Field>
-                  </div>
-                ) : null}
+                {/* UPS/DHL/USPS Label format moved to the compact top
+                    "Shipment" row (rendered next to FedEx's Label Type
+                    + Label Size). Removed from this section to avoid
+                    two controls bound to the same labelImageFormat. */}
                 {isCustomPkg ? (
                   <div className="grid grid-cols-3 gap-3">
                     <Field label={`Length (${dimUnit.toLowerCase()})`} required error={errAt('length')}>
@@ -2577,7 +3135,7 @@ export default function NewShipmentPage() {
 
       {/* Sprint 43 — Custom fields (tenant-defined metadata). Panel
        *  self-hides when the tenant has no applicable fields. */}
-      {!loading && !noCarriers ? (
+      {!loading ? (
         <CustomFieldsSection
           tenantId={clientCode || null}
           values={customFieldValues}
@@ -2589,7 +3147,7 @@ export default function NewShipmentPage() {
       {/* sticky footer action bar — stays within the content column.
           `!mt-6` beats the parent space-y-4 so there's a clear gap between the
           form cards and the action bar. */}
-      {!loading && !noCarriers ? (
+      {!loading ? (
         <div className="sticky bottom-4 z-30 !mt-6 space-y-2">
           {reviewWarnings ? (
             <div className="rounded-2xl border border-[#e3d9c4] bg-white p-3.5 shadow-[0_18px_50px_rgba(31,21,12,0.14)]">
@@ -2659,7 +3217,7 @@ export default function NewShipmentPage() {
               <button
                 type="button"
                 onClick={() => void submit()}
-                disabled={submitting}
+                disabled={submitting || noCarriersAtAll}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none"
               >
                 {submitting ? (

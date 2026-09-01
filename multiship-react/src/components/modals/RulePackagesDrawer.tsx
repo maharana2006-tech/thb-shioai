@@ -4,6 +4,7 @@ import { notify } from '../../utils/notify'
 import {
   shippingConfigService,
   type PackagePreset,
+  type ServicePackageLink,
   type ShipMethodRule,
   type ShippingServiceItem,
 } from '../../api/shippingConfigService'
@@ -36,6 +37,7 @@ export default function RulePackagesDrawer({
   originCountries,
   initialPresetIds,
   currentWarehouseIds,
+  serviceLinks,
   requirePick,
   requirePickReason,
   onClose,
@@ -54,6 +56,12 @@ export default function RulePackagesDrawer({
    *  through the payload here prevents the save from silently wiping every
    *  warehouse row on the rule (deleteAllByRuleId + empty insert). */
   currentWarehouseIds?: number[]
+  /** Sprint 52 — service_package rows from shippingConfigService.catalog().
+   *  Filters the CARRIER preset pool to what Service Catalog links to
+   *  this rule's service. Omit / empty = no additional filter (backwards
+   *  compat with callers that predate this prop). CUSTOM presets bypass
+   *  the filter (carrier-agnostic — always visible). */
+  serviceLinks?: ServicePackageLink[]
   /** When true, the operator MUST pick at least one package before Save is
    *  enabled — used by the carrier-switch flow that dropped the previous
    *  package set. */
@@ -91,30 +99,62 @@ export default function RulePackagesDrawer({
     return s
   }, [originCountries])
 
+  /** Sprint 52 — preset IDs linked to THIS rule's service in Service
+   *  Catalog. Only used for kind=CARRIER presets; CUSTOM boxes always
+   *  bypass. When serviceLinks is omitted (legacy callers) the filter
+   *  step is skipped entirely, preserving pre-Sprint-52 behaviour. When
+   *  serviceLinks is passed but yields zero matches (empty pool OR
+   *  service marked branded_packaging_allowed=false), CARRIER presets
+   *  are hidden — matching the strict rule the user picked ("empty pool
+   *  → zero branded allowed"). */
+  const catalogLinkedPresetIds = useMemo<Set<number> | null>(() => {
+    if (serviceLinks == null) return null
+    return new Set(
+      serviceLinks
+        .filter((l) => l.serviceId === service.id)
+        .map((l) => l.presetId),
+    )
+  }, [serviceLinks, service.id])
+
   /**
-   * Preset eligibility narrowed by three constraints:
+   * Preset eligibility narrowed by four constraints:
    *   1) enabled + persisted (has an id),
    *   2) carrier fit for the rule's service (same carrier or carrier-agnostic
    *      CUSTOM box),
    *   3) origin fit — CARRIER presets must have originCountry inside the
    *      rule's origin footprint. CUSTOM boxes have no origin, so they pass
    *      through as long as the origin filter isn't the only intent.
+   *   4) Sprint 52 — Service Catalog fit: CARRIER presets must be linked
+   *      to this service in service_package (or the caller may omit
+   *      serviceLinks to skip this step). CUSTOM presets always bypass
+   *      — they mirror the backend PackagingCompatibilityGuard's kind=
+   *      CUSTOM short-circuit. Empty pool + branded_packaging_allowed=
+   *      false naturally collapse into "no CARRIER preset passes" here.
    */
   const eligible = useMemo(
     () => presets.filter((p) => {
       if (!p.enabled || p.id == null) return false
       if (!packageFits(p, carrier)) return false
-      if (originSet.size === 0) return true
-      // Origin filter is on. CUSTOM (no origin pinned) always passes — it
-      // ships from anywhere. CARRIER must match one of the picked origins.
-      if (p.kind !== 'CARRIER') return true
-      const svcOrigin = (p.originCountry || '').toUpperCase()
-      // Presets without an origin column (legacy) fall through as eligible so
-      // hand-added CARRIER boxes aren't hidden by a filter they predate.
-      if (!svcOrigin) return true
-      return originSet.has(svcOrigin)
+      // Origin fit — only relevant when the filter is active.
+      if (originSet.size > 0) {
+        // Origin filter is on. CUSTOM (no origin pinned) always passes — it
+        // ships from anywhere. CARRIER must match one of the picked origins.
+        if (p.kind === 'CARRIER') {
+          const svcOrigin = (p.originCountry || '').toUpperCase()
+          // Presets without an origin column (legacy) fall through as eligible
+          // so hand-added CARRIER boxes aren't hidden by a filter they predate.
+          if (svcOrigin && !originSet.has(svcOrigin)) return false
+        }
+      }
+      // Sprint 52 — Service Catalog scope. CUSTOM bypasses; CARRIER must
+      // be linked. Null catalogLinkedPresetIds means the caller didn't
+      // pass serviceLinks (legacy) — skip this step.
+      if (catalogLinkedPresetIds != null && p.kind === 'CARRIER') {
+        if (!catalogLinkedPresetIds.has(p.id)) return false
+      }
+      return true
     }),
-    [presets, carrier, originSet],
+    [presets, carrier, originSet, catalogLinkedPresetIds],
   )
 
   /**

@@ -75,6 +75,30 @@ const KV = ({ label, value }: { label: string; value?: ReactNode }) => (
   </div>
 )
 
+/**
+ * PR #535 — E.164-style label phone formatting. Carriers prefix the
+ * country dial code (`1` for US, `44` for GB, `91` for IN, …) when
+ * emitting the printed label. Preview mirrors that behavior so
+ * on-screen matches the printed form. Country code table covers the
+ * common ones; unknown countries fall through to raw digits. Blank
+ * dial codes (VA, etc.) stay bare.
+ */
+const DIAL_CODE_BY_COUNTRY: Record<string, string> = {
+  US: '1', CA: '1', GB: '44', IN: '91', AU: '61', DE: '49', FR: '33',
+  IT: '39', ES: '34', NL: '31', BE: '32', CH: '41', SE: '46', NO: '47',
+  DK: '45', FI: '358', JP: '81', CN: '86', KR: '82', SG: '65', HK: '852',
+  MX: '52', BR: '55', AR: '54', CL: '56', CO: '57', PE: '51',
+  AE: '971', ZA: '27', NZ: '64', IE: '353', PT: '351', AT: '43',
+}
+const formatPhoneForLabel = (phone: string | null | undefined, country: string | null | undefined): string => {
+  if (!phone) return ''
+  const digits = phone.replace(/[^0-9]/g, '')
+  if (!digits) return phone
+  const cc = DIAL_CODE_BY_COUNTRY[(country || '').toUpperCase()]
+  if (!cc) return digits
+  return digits.startsWith(cc) ? digits : cc + digits
+}
+
 /** Real Code 128B barcode rendered as SVG — same symbology carriers print. */
 function Barcode128({ value, height = 64 }: { value: string; height?: number }) {
   const encoded = useMemo(() => encodeCode128B(value), [value])
@@ -162,7 +186,22 @@ export default function LabelDocumentPage() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<DocumentTab>('label')
   const [trackingOpen, setTrackingOpen] = useState(false)
+  // PR #538 — carrier-ZPL PNG preview state. Three-way:
+  //   'unknown' — haven't tried; renders the JSX facsimile
+  //   'ready'   — backend served the PNG; render <img> in place of the facsimile
+  //   'unavailable' — backend returned 404/502 (flag off, or ZPL passthrough failed);
+  //                   silently fall back to the JSX facsimile
+  // Probing done via a HEAD request on mount + on pkgIndex change; no
+  // extra render burden when the endpoint 404s. Kept inline (no
+  // separate hook) so a stale bundle without the endpoint just picks
+  // the 'unavailable' branch cleanly.
+  const [carrierPreviewState, setCarrierPreviewState] =
+    useState<'unknown' | 'ready' | 'unavailable'>('unknown')
   const [zplBusy, setZplBusy] = useState(false)
+  const [pdfBusy, setPdfBusy] = useState(false)
+  // Sprint 52 PR A — same re-entrancy guard as the ZPL flow. Ref
+  // checked synchronously so a fast double-click can't fire two fetches.
+  const pdfInFlightRef = useRef(false)
   /** Audit R2 #390 — re-entrancy guard. The disabled={zplBusy} attribute
    *  on the two buttons stops a click after React commits the state update,
    *  but a fast double-click can fire twice before the first setZplBusy(true)
@@ -205,6 +244,29 @@ export default function LabelDocumentPage() {
     link.click()
     URL.revokeObjectURL(url)
     notify.success(`${link.download} downloaded — send it straight to a Zebra printer.`)
+  }
+
+  const downloadPdf = async () => {
+    if (pdfInFlightRef.current) return
+    pdfInFlightRef.current = true
+    setPdfBusy(true)
+    try {
+      const blob = await orderService.getLabelPdf(orderNo, pkgIndex)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = pkgCount > 1
+        ? `label-${orderNo}-pkg${pkgIndex}of${pkgCount}.pdf`
+        : `label-${orderNo}.pdf`
+      link.click()
+      URL.revokeObjectURL(url)
+      notify.success(`${link.download} downloaded.`)
+    } catch (err) {
+      notify.apiError(err, 'Failed to fetch the label PDF.')
+    } finally {
+      pdfInFlightRef.current = false
+      setPdfBusy(false)
+    }
   }
 
   const copyZpl = async () => {
@@ -252,6 +314,28 @@ export default function LabelDocumentPage() {
     return () => {
       cancelled = true
     }
+  }, [orderNo])
+
+  // PR #538 — probe /label/preview.png with a HEAD request. When the
+  // backend feature flag label.render-carrier-zpl is on AND the
+  // carrier stored parseable ZPL bytes, the endpoint returns 200 and
+  // we swap the JSX facsimile for an <img>. 404 (flag off / not ZPL)
+  // or 502 (renderer failed) → keep the facsimile. Silent probe so a
+  // stale bundle against a backend without the endpoint still renders
+  // cleanly.
+  useEffect(() => {
+    if (!Number.isFinite(orderNo)) return
+    let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset probe state on order change; HEAD result below transitions to ready/unavailable
+    setCarrierPreviewState('unknown')
+    orderService.headLabelPreviewPng(orderNo)
+      .then((available) => {
+        if (!cancelled) setCarrierPreviewState(available ? 'ready' : 'unavailable')
+      })
+      .catch(() => {
+        if (!cancelled) setCarrierPreviewState('unavailable')
+      })
+    return () => { cancelled = true }
   }, [orderNo])
 
   const order = payload?.order
@@ -326,8 +410,19 @@ export default function LabelDocumentPage() {
   // identifier as the parcel's addressee. Placeholder is a literal '-' so
   // mis-populated shipments are visibly broken.
   const rawShipName = order?.shipName?.trim()
+  const rawShipAttn = order?.shipAttn?.trim()
   const recipientName =
-    (rawShipName && rawShipName.length > 2 ? rawShipName : order?.shipAttn) || '-'
+    (rawShipName && rawShipName.length > 2 ? rawShipName : rawShipAttn) || '-'
+  // PR #535 — recipient company as its own line. Previously ship_attn
+  // was only rendered when it was used AS the name fallback (short
+  // shipName), so a company entered alongside a full recipient name
+  // was invisible on-screen — but carriers print it as a distinct
+  // COMPANY line on the actual label. Skip when it duplicates the
+  // rendered name (avoids double-printing).
+  const recipientCompany = rawShipAttn && rawShipAttn !== recipientName ? rawShipAttn : null
+  const recipientCityLine = order
+    ? `${order.shiptoCity || ''}, ${order.shiptoState || ''} ${order.shiptoZip || ''}`.trim()
+    : ''
   const destCountry = (order?.shiptoCountryCd || 'US').toUpperCase()
   // Sprint 48 B10 - customer-facing order number. Backend now sends
   // displayOrderNo pre-formatted (e.g. "MAN900001" for manual shipments,
@@ -516,6 +611,19 @@ export default function LabelDocumentPage() {
               <button
                 type="button"
                 onClick={() => {
+                  void downloadPdf()
+                }}
+                disabled={loading || Boolean(error) || tenantBlocked || pdfBusy}
+                title="4x6 PDF facsimile of the shipping label (Sprint 52 PR A)"
+                data-testid="download-pdf-btn"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiDownload className="h-3.5 w-3.5" />
+                {pdfBusy ? 'Fetching…' : 'Download PDF'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
                   void downloadZpl()
                 }}
                 disabled={loading || Boolean(error) || tenantBlocked || zplBusy}
@@ -566,8 +674,31 @@ export default function LabelDocumentPage() {
         </div>
       ) : order ? (
         <div className="flex justify-center rounded-[26px] border border-slate-200/80 bg-slate-100/70 p-6 shadow-inner print:border-0 print:bg-white print:p-0 print:shadow-none">
-          {activeTab === 'label' ? (
-            /* ==================== 4x6 SHIPPING LABEL (real carrier anatomy) ==================== */
+          {activeTab === 'label' && carrierPreviewState === 'ready' ? (
+            /* ==================== PR #538 — CARRIER-CANONICAL PNG (from backend zebrash render) ==================== */
+            /* When the backend feature flag label.render-carrier-zpl is on
+               AND the carrier stored parseable ZPL, backend renders the
+               canonical thermal label to PNG server-side. This <img> is
+               byte-for-byte what will print — no facsimile approximation.
+               onError falls back to the facsimile (rare — HEAD probe
+               already checked, but a mid-session backend restart could
+               invalidate). */
+            <div className="print-doc relative w-[430px] shrink-0 border border-slate-300 bg-white shadow-xl print:w-[3.76in] print:border-0 print:shadow-none">
+              <img
+                src={orderService.labelPreviewPngUrl(orderNo)}
+                alt={`Shipping label for order ${orderNo}`}
+                className="block h-auto w-full"
+                onError={() => setCarrierPreviewState('unavailable')}
+                data-testid="label-preview-png"
+              />
+            </div>
+          ) : activeTab === 'label' ? (
+            /* ==================== 4x6 SHIPPING LABEL (JSX facsimile fallback) ==================== */
+            /* Rendered when the carrier PNG isn't available (flag off,
+               non-ZPL artifact, or backend renderer error). Approximates
+               the carrier layout from DB fields; see
+               project_label_preview_audit.md for the known-divergence
+               taxonomy this eliminates when carrierPreviewState=ready. */
             <div
               className="print-doc relative w-[430px] shrink-0 border border-slate-300 bg-white text-black shadow-xl print:w-[3.76in] print:border-0 print:shadow-none"
               style={{ fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif' }}
@@ -593,6 +724,12 @@ export default function LabelDocumentPage() {
                   <div className="pr-2 uppercase">
                     <p>ORIGIN ID:{(shipper?.state || 'XX').toUpperCase()}{(shipper?.postalCode || '').slice(0, 2)}A&nbsp;&nbsp;{(shipper?.phone || '').replace(/\s+/g, '')}</p>
                     <p>{shipper?.name}</p>
+                    {/* PR #535 — shipper COMPANY line. Backend
+                        addressMap emits `company` when the address's
+                        own name (warehouse alias) differs from the
+                        client's registered name; otherwise null and
+                        this line is suppressed. */}
+                    {shipper?.company ? <p>{shipper.company}</p> : null}
                     <p>{shipper?.addressLine1}</p>
                     <p>&nbsp;</p>
                     <p>{shipper?.city}, {shipper?.state} {shipper?.postalCode} {shipper?.countryCode}</p>
@@ -611,7 +748,18 @@ export default function LabelDocumentPage() {
                           ?? (payload?.packagePreset as { billableWeight?: number | null } | null | undefined)?.billableWeight
                           ?? order.weight
                         return typeof w === 'number' ? w.toFixed(2) : '—'
-                      })()} {(perPkgWeightUnit || 'KG').toUpperCase()}
+                      })()} {(() => {
+                        // PR #535 — weight-unit fallback now shipper-country
+                        // aware. Prior 'KG' hardcode showed the wrong unit on
+                        // every US shipment where label_package rows didn't
+                        // persist (legacy orders + some intl paths). US
+                        // shipper defaults to LB (matches backend
+                        // ShipmentDefaultsResolver.DEFAULT_WEIGHT_UNIT); every
+                        // other origin defaults to KG.
+                        const unit = perPkgWeightUnit || (payload?.order as { weightUnit?: string | null } | null | undefined)?.weightUnit
+                        if (unit) return unit.toUpperCase()
+                        return (shipper?.countryCode || '').toUpperCase() === 'US' ? 'LB' : 'KG'
+                      })()}
                     </p>
                     <p>CAD: {orderDisplay}{pkgCount > 1 ? `-${pkgIndex}` : ''}/MSHIP1</p>
                     <p>&nbsp;</p>
@@ -637,6 +785,13 @@ export default function LabelDocumentPage() {
                   <span className="pt-1 text-[10px] font-black">TO</span>
                   <div className="min-w-0">
                     <p className="truncate text-[21px] font-black uppercase leading-[24px] tracking-tight">{recipientName}</p>
+                    {/* PR #535 — recipient COMPANY (ship_attn) as its own
+                        line between name and street. Carriers print this
+                        distinct line whenever the caller sent both a
+                        recipient.name and recipient.company. */}
+                    {recipientCompany ? (
+                      <p className="text-[18px] font-black uppercase leading-[22px]">{recipientCompany}</p>
+                    ) : null}
                     {/* custNo used to render here as a big uppercase line — read as part
                         of the address. Moved to the warehouse footer below the label. */}
                     {order.shipAddr1 ? (
@@ -659,13 +814,35 @@ export default function LabelDocumentPage() {
                     </div>
                   </div>
                 </div>
-                <p className="mt-0.5 text-[11px] font-bold leading-[13px]">{order.phone || ''}</p>
+                {/* PR #535 — recipient phone with country code. FedEx /
+                    UPS / DHL wire their carrier-side E.164 rewrite
+                    (prepend country dial code) so the printed label
+                    shows the prefixed form; preview should mirror.
+                    Uses shiptoCountryCd to derive the prefix (+1 for
+                    US, blank when unknown). */}
+                {order.phone ? (
+                  <p className="mt-0.5 text-[11px] font-bold leading-[13px]">{formatPhoneForLabel(order.phone, destCountry)}</p>
+                ) : null}
                 <div className="grid grid-cols-2 pr-8 text-[9px] font-bold leading-[12px]">
                   <span>INV:</span>
                   <span>REF: {orderDisplay}</span>
-                  {/* PO/DEPT row removed — PO isn't captured on the order yet, and
-                      DEPT was re-rendering the client code inside the TO block.
-                      Client code now lives in the warehouse footer below. */}
+                  {/* PR #543 — PO / DEPT rows re-added. PO derives from the
+                      order source: manual/bulk → "MAN{orderNo}"; WMS →
+                      wmsExternalId when present else orderNo; other sources
+                      → orderNo bare. Matches the backend wire logic in
+                      CarrierServiceImpl.computeOrderPoNumber so the JSX
+                      facsimile fallback (used when carrier ZPL isn't
+                      available) prints the same value the real carrier
+                      label would. */}
+                  <span>PO: {(() => {
+                    const src = (order.source || '').toUpperCase()
+                    const orderNoStr = order.orderNo != null ? String(order.orderNo) : ''
+                    if (!orderNoStr) return ''
+                    if (src === 'MANUAL' || src === 'BULK') return 'MAN' + orderNoStr
+                    if (src === 'WMS') return (order as { wmsExternalId?: string | null }).wmsExternalId || orderNoStr
+                    return orderNoStr
+                  })()}</span>
+                  <span>DEPT: {order.custNo || ''}</span>
                 </div>
               </div>
               <div className="mx-1 h-px bg-black" />
@@ -734,7 +911,7 @@ export default function LabelDocumentPage() {
                 </p>
                 <p>
                   SVC: {serviceTier} ({order.shipviaCd || '-'}) · WT:{' '}
-                  {(perPkgWeight ?? order.weight) ?? '-'} {(perPkgWeightUnit || order.weightUnit || 'KG').toUpperCase()}
+                  {(perPkgWeight ?? order.weight) ?? '-'} {(perPkgWeightUnit || order.weightUnit || ((shipper?.countryCode || '').toUpperCase() === 'US' ? 'LB' : 'KG')).toUpperCase()}
                   {order.tenantId ? ` · TENANT: ${order.tenantId}` : ''}
                 </p>
               </div>

@@ -41,6 +41,17 @@ target/
 /nbbuild/
 /dist/
 /nbdist/
+
+### PR #536 — zebrash-cli locally-built binaries + resource copies ###
+# Local `make all` output; per-platform binaries land here. CI matrix
+# (native-zebrash workflow) produces release artifacts consumed by the
+# Maven download-plugin at backend build time.
+native/zebrash-cli/dist/
+native/zebrash-cli/*.exe
+# When the Maven build extracts binaries into resources/native/, keep
+# them out of git — they belong to release artifacts, not source.
+backend/src/main/resources/native/*/zebrash-cli
+backend/src/main/resources/native/*/zebrash-cli.exe
 /.nb-gradle/
 build/
 !**/src/main/**/build/

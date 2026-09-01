@@ -295,6 +295,14 @@ export default function ShippingServiceMappingPage() {
   const [zoneCodes, setZoneCodes] = useState<string[]>([])
   /** Phase 6: allowed presets per rule id — read from catalog.rulePackages. */
   const [ruleIdToPresets, setRuleIdToPresets] = useState<Map<number, number[]>>(new Map())
+  /** Sprint 52 — flat service_package rows from catalog.links. Passed into
+   *  RulePackagesDrawer so its picker mirrors Service Catalog: only
+   *  presets explicitly linked to the rule's service are pickable (CUSTOM
+   *  presets bypass — carrier-agnostic). Empty pool + branded_packaging_
+   *  allowed=false collapse into the same 'no CARRIER visible' behaviour. */
+  const [serviceLinks, setServiceLinks] = useState<
+    { serviceId: number; presetId: number }[]
+  >([])
   /** Warehouse restrictions per rule id — read from catalog.ruleWarehouses. */
   const [ruleWarehouseMap, setRuleWarehouseMap] = useState<Map<number, number[]>>(new Map())
   /** Packages drawer target — the rule whose allowed set is being edited. */
@@ -378,6 +386,10 @@ export default function ShippingServiceMappingPage() {
       setWarehouses(whPage.data?.content ?? [])
       setPresets(presetList)
       setAccounts(accountList)
+      // Sprint 52 — capture service_package many-to-many for the rule
+      // drawer's picker filter. Same data-source as ShippingServicesPage's
+      // linksByService; using it here scopes the drawer to Service Catalog.
+      setServiceLinks(catalog.links ?? [])
       // Phase 6 — group flat rulePackages by ruleId for chip rendering.
       const grouped = new Map<number, number[]>()
       for (const l of catalog.rulePackages ?? []) {
@@ -1491,6 +1503,7 @@ export default function ShippingServiceMappingPage() {
             originCountries={[...origins]}
             currentWarehouseIds={whIds}
             initialPresetIds={ruleIdToPresets.get(pkgFor.id) ?? []}
+            serviceLinks={serviceLinks}
             requirePick={requirePick}
             requirePickReason={
               requirePick

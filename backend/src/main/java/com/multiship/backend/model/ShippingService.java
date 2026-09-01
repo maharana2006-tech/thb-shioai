@@ -112,6 +112,24 @@ public class ShippingService {
     @Builder.Default
     private int sortOrder = 0;
 
+    /**
+     * Sprint 52 PR X — false when this service intentionally accepts only
+     * YOUR_PACKAGING (CUSTOM presets) and no carrier-branded packaging.
+     * Ground-family services (FEDEX_GROUND, GROUND_HOME_DELIVERY, UPS 03,
+     * USPS Ground Advantage) fall in this bucket per V30 seed. Distinguishes
+     * "admin hasn't linked any presets" (flag=true, empty service_package
+     * pool → 'config incomplete') from "this service is CUSTOM-only by
+     * design" (flag=false, empty pool by design → no warning; branded
+     * presets hidden from the link modal). Admin can flip either way via
+     * the ShippingServicesPage per-service toggle.
+     *
+     * <p>Consumed by: FE dropdown filter (compatiblePresetIds), guard,
+     * ShippingServicesPage per-row badge, link modal preset filter.
+     */
+    @Column(name = "branded_packaging_allowed", nullable = false)
+    @Builder.Default
+    private boolean brandedPackagingAllowed = true;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;

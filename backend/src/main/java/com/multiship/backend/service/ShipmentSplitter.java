@@ -178,6 +178,12 @@ public class ShipmentSplitter {
                 .dimUnit(src.getDimUnit())
                 .shipperName(src.getShipperName())
                 .shipperPhone(src.getShipperPhone())
+                // Sprint 51 — carry company + email through MPS split so each
+                // sub-request emits them on the wire. Dropped fields would
+                // silently disappear on any shipment over the carrier's MPS
+                // cap (11+ boxes on UPS/FedEx).
+                .shipperCompany(src.getShipperCompany())
+                .shipperEmail(src.getShipperEmail())
                 .shipperAddressLine1(src.getShipperAddressLine1())
                 .shipperAddressLine2(src.getShipperAddressLine2())
                 .shipperCity(src.getShipperCity())
@@ -186,6 +192,9 @@ public class ShipmentSplitter {
                 .shipperCountryCode(src.getShipperCountryCode())
                 .recipientName(src.getRecipientName())
                 .recipientPhone(src.getRecipientPhone())
+                // Sprint 51 — same rationale as shipperCompany above.
+                .recipientCompany(src.getRecipientCompany())
+                .recipientEmail(src.getRecipientEmail())
                 .recipientAddressLine1(src.getRecipientAddressLine1())
                 .recipientAddressLine2(src.getRecipientAddressLine2())
                 .recipientAddressLine3(src.getRecipientAddressLine3())

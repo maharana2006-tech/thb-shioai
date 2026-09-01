@@ -396,6 +396,11 @@ public class OrderServiceImpl implements OrderService {
                 .shipFromResolved(shipFrom.resolved())
                 .intlYn(entity.getIntlYn())
                 .isReturn(entity.getIsReturn())
+                // PR #543 — expose source + wmsExternalId so the FE label
+                // facsimile can derive PO (MAN{n} for manual/bulk,
+                // wmsExternalId for WMS, else orderNo bare).
+                .source(entity.getSource())
+                .wmsExternalId(entity.getWmsExternalId())
                 .importerBrokerOverride(entity.getImporterBrokerOverride())
                 .packageCount(entity.getPackageCount())
                 .packages(labelPackageRepository

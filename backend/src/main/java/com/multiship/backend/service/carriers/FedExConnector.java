@@ -279,6 +279,258 @@ public class FedExConnector implements CarrierConnector {
     }
 
     /**
+     * PR δ.1 — native FedEx shipment-level validation via
+     * {@code POST /ship/v1/shipments/packages/validate}. Reuses the same
+     * {@link #buildShipmentPayload} the label call uses so what the
+     * operator sees during "Validate shipment" is byte-for-byte the
+     * request Generate Label would fire; a green validate is a
+     * strong guarantee the label call will succeed.
+     *
+     * <p>Response shape (200):
+     * <pre>
+     * output.alerts[] { code, alertType (WARNING|ERROR|NOTE), message }
+     * </pre>
+     * Response shape (400 rejection):
+     * <pre>
+     * errors[] { code, message, parameterList[] }
+     * </pre>
+     *
+     * <p>Verdict mapping:
+     * <ul>
+     *   <li>200 + no ERROR-level alerts → EXACT / valid=true.</li>
+     *   <li>200 + at least one WARNING → CORRECTED / valid=true, warnings populated.</li>
+     *   <li>200 + at least one ERROR alert → NOT_FOUND / valid=false.</li>
+     *   <li>4xx / 5xx → ERROR / valid=false, errors carry FedEx's message.</li>
+     * </ul>
+     */
+    @Override
+    public ValidateShipmentResult validateShipment(ShipmentRequestDTO request,
+                                                    String accessToken,
+                                                    String environment) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new ValidateShipmentResult(false, "NOT_SUPPORTED", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(),
+                    "FedEx validateShipment needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        try {
+            String validateUrl = getShipmentUrl(environment) + "/packages/validate";
+            Map<String, Object> payload = buildShipmentPayload(request);
+            byte[] raw = HttpClients.newBuilder().baseUrl(validateUrl).build()
+                    .post()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("X-locale", "en_US")
+                    .body(payload)
+                    .retrieve()
+                    .body(byte[].class);
+            String response = raw == null ? "{}" : new String(raw, java.nio.charset.StandardCharsets.UTF_8);
+            log.debug("FedEx validateShipment response: {}", response);
+            return parseFedExValidateShipmentResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            String body = ex.getResponseBodyAsString();
+            log.warn("FedEx validateShipment rejected (HTTP {}): {}",
+                    ex.getStatusCode().value(), body);
+            java.util.List<String> errors = extractFedExErrors(body);
+            // PR #533 — human summary. When parameterList expanded to
+            // multiple per-field messages, use "flagged N issues" so
+            // the operator sees a count + a bulleted list rather than
+            // a single joined string. Falls back to first-error text
+            // for the single-error case (still surfaced on the banner).
+            String msg;
+            if (errors.isEmpty()) {
+                msg = "FedEx validateShipment rejected: HTTP " + ex.getStatusCode().value();
+            } else if (errors.size() == 1) {
+                msg = "FedEx rejected the shipment: " + errors.get(0);
+            } else {
+                msg = "FedEx flagged " + errors.size() + " issues with the shipment.";
+            }
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(), errors, msg, body);
+        } catch (Exception ex) {
+            log.warn("FedEx validateShipment call failed: {}", ex.getMessage());
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(ex.getMessage()),
+                    "FedEx validateShipment call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse a FedEx {@code /ship/v1/shipments/packages/validate} 200
+     * response. Package-visible so tests can exercise the alert-split
+     * logic without live credentials.
+     */
+    ValidateShipmentResult parseFedExValidateShipmentResponse(String response) {
+        try {
+            JsonNode root = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
+            JsonNode alerts = root.at("/output/alerts");
+            java.util.List<String> warnings = new java.util.ArrayList<>();
+            java.util.List<String> errors = new java.util.ArrayList<>();
+            if (alerts.isArray()) {
+                for (JsonNode a : alerts) {
+                    String type = a.path("alertType").asText("").toUpperCase(Locale.ROOT);
+                    String code = a.path("code").asText("");
+                    String message = a.path("message").asText("");
+                    String display = StringUtils.hasText(code)
+                            ? code + ": " + message
+                            : message;
+                    if ("ERROR".equals(type)) {
+                        errors.add(display);
+                    } else if (!"NOTE".equals(type)) {
+                        warnings.add(display);
+                    }
+                }
+            }
+            if (!errors.isEmpty()) {
+                return new ValidateShipmentResult(false, "NOT_FOUND", "SHIPMENT",
+                        warnings, errors,
+                        "FedEx flagged " + errors.size() + " shipment error(s).",
+                        response);
+            }
+            if (!warnings.isEmpty()) {
+                return new ValidateShipmentResult(true, "CORRECTED", "SHIPMENT",
+                        warnings, java.util.List.of(),
+                        "FedEx accepted the shipment with " + warnings.size() + " warning(s).",
+                        response);
+            }
+            return new ValidateShipmentResult(true, "EXACT", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(),
+                    "FedEx confirmed the shipment is valid.", response);
+        } catch (Exception ex) {
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(), java.util.List.of(ex.getMessage()),
+                    "FedEx validateShipment parse failed: " + ex.getMessage(), response);
+        }
+    }
+
+    /**
+     * Extract operator-facing messages from a FedEx 4xx/5xx error body.
+     * Shape: {@code errors: [{ code, message, parameterList: [{key, value}] }]}.
+     *
+     * <p>PR #533 — when {@code parameterList} is populated (e.g.
+     * {@code INVALID.INPUT.EXCEPTION} + "Error count: 5"), expand each
+     * parameter into its own row with a humanized field path so operators
+     * see the actual field-level details instead of one wire-y wrapper
+     * message. Prior behavior surfaced just the top-level
+     * {@code "INVALID.INPUT.EXCEPTION: Validation failed for
+     * object='verifyShipmentInputVO'. Error count: 5"} which was
+     * unactionable.
+     */
+    private java.util.List<String> extractFedExErrors(String body) {
+        if (!StringUtils.hasText(body)) return java.util.List.of();
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode arr = root.path("errors");
+            if (!arr.isArray()) return java.util.List.of();
+            java.util.List<String> out = new java.util.ArrayList<>();
+            for (JsonNode e : arr) {
+                JsonNode params = e.path("parameterList");
+                if (params.isArray() && params.size() > 0) {
+                    // Expand per-field details — skip the wrapper code +
+                    // "Validation failed" wire text, it's not actionable.
+                    for (JsonNode p : params) {
+                        String key = p.path("key").asText("");
+                        String value = p.path("value").asText("");
+                        String field = humanizeFedExFieldPath(key);
+                        if (StringUtils.hasText(field) && StringUtils.hasText(value)) {
+                            out.add(field + " — " + value);
+                        } else if (StringUtils.hasText(value)) {
+                            out.add(value);
+                        } else if (StringUtils.hasText(field)) {
+                            out.add(field);
+                        }
+                    }
+                } else {
+                    // No parameterList — fall back to top-level code + message.
+                    String code = e.path("code").asText("");
+                    String message = e.path("message").asText("");
+                    out.add(StringUtils.hasText(code) ? code + ": " + message : message);
+                }
+            }
+            return out;
+        } catch (Exception ignore) {
+            return java.util.List.of();
+        }
+    }
+
+    /**
+     * Translate a FedEx wire field path (e.g.
+     * {@code requestedShipment.recipient.address.postalCode}) into a
+     * concise operator-facing label (e.g. {@code "Recipient postal code"}).
+     * Falls through to the raw leaf name (with array indices simplified)
+     * when the path isn't in the mapping table — better a slightly wire-y
+     * label than a mysterious hidden field.
+     *
+     * <p>Package-visible for tests.
+     */
+    static String humanizeFedExFieldPath(String path) {
+        if (!StringUtils.hasText(path)) return "";
+        // Strip common request-envelope prefixes.
+        String p = path.trim();
+        if (p.startsWith("requestedShipment.")) p = p.substring("requestedShipment.".length());
+        if (p.startsWith("accountNumber.")) p = "Account number " + p.substring("accountNumber.".length());
+        // Normalise array indices — "requestedPackageLineItems[0].weight.value"
+        // → "package.weight.value" so a single lookup covers all boxes; the
+        // per-box index is preserved in the returned label ("Package 1 …").
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("requestedPackageLineItems\\[(\\d+)\\]\\.(.+)").matcher(p);
+        if (m.matches()) {
+            int idx = Integer.parseInt(m.group(1)) + 1;
+            String rest = m.group(2);
+            String friendly = FEDEX_PACKAGE_FIELDS.getOrDefault(rest, rest);
+            return "Package " + idx + " " + friendly;
+        }
+        return FEDEX_FIELD_LABELS.getOrDefault(p, p);
+    }
+
+    /** Path → human label for shipment-level fields. */
+    private static final java.util.Map<String, String> FEDEX_FIELD_LABELS = java.util.Map.ofEntries(
+            java.util.Map.entry("serviceType", "Service type"),
+            java.util.Map.entry("packagingType", "Packaging type"),
+            java.util.Map.entry("pickupType", "Pickup type"),
+            java.util.Map.entry("shipDatestamp", "Ship date"),
+            java.util.Map.entry("shipper.contact.personName", "Shipper name"),
+            java.util.Map.entry("shipper.contact.phoneNumber", "Shipper phone"),
+            java.util.Map.entry("shipper.contact.companyName", "Shipper company"),
+            java.util.Map.entry("shipper.contact.emailAddress", "Shipper email"),
+            java.util.Map.entry("shipper.address.streetLines", "Shipper street address"),
+            java.util.Map.entry("shipper.address.city", "Shipper city"),
+            java.util.Map.entry("shipper.address.stateOrProvinceCode", "Shipper state"),
+            java.util.Map.entry("shipper.address.postalCode", "Shipper postal code"),
+            java.util.Map.entry("shipper.address.countryCode", "Shipper country"),
+            java.util.Map.entry("recipients[0].contact.personName", "Recipient name"),
+            java.util.Map.entry("recipients[0].contact.phoneNumber", "Recipient phone"),
+            java.util.Map.entry("recipients[0].contact.companyName", "Recipient company"),
+            java.util.Map.entry("recipients[0].contact.emailAddress", "Recipient email"),
+            java.util.Map.entry("recipients[0].address.streetLines", "Recipient street address"),
+            java.util.Map.entry("recipients[0].address.city", "Recipient city"),
+            java.util.Map.entry("recipients[0].address.stateOrProvinceCode", "Recipient state"),
+            java.util.Map.entry("recipients[0].address.postalCode", "Recipient postal code"),
+            java.util.Map.entry("recipients[0].address.countryCode", "Recipient country"),
+            java.util.Map.entry("labelSpecification.imageType", "Label image type"),
+            java.util.Map.entry("labelSpecification.labelStockType", "Label stock type"),
+            java.util.Map.entry("customsClearanceDetail.dutiesPayment.paymentType", "Duties payment type"),
+            java.util.Map.entry("customsClearanceDetail.commercialInvoice.termsOfSale", "Incoterms"),
+            java.util.Map.entry("customsClearanceDetail.commercialInvoice.purpose", "Reason of export"),
+            java.util.Map.entry("customsClearanceDetail.totalCustomsValue.amount", "Customs total value"),
+            java.util.Map.entry("customsClearanceDetail.totalCustomsValue.currency", "Customs currency")
+    );
+
+    /** Path (after {@code requestedPackageLineItems[N].} strip) → label. */
+    private static final java.util.Map<String, String> FEDEX_PACKAGE_FIELDS = java.util.Map.ofEntries(
+            java.util.Map.entry("weight.units", "weight units"),
+            java.util.Map.entry("weight.value", "weight"),
+            java.util.Map.entry("dimensions.length", "length"),
+            java.util.Map.entry("dimensions.width", "width"),
+            java.util.Map.entry("dimensions.height", "height"),
+            java.util.Map.entry("dimensions.units", "dimension units"),
+            java.util.Map.entry("declaredValue.amount", "declared value"),
+            java.util.Map.entry("declaredValue.currency", "declared value currency"),
+            java.util.Map.entry("customerReferences", "reference")
+    );
+
+    /**
      * FedEx Rate API v1 — {@code POST /rate/v1/rates/quotes} with the OAuth
      * Bearer token. Body carries the shipper + recipient postal codes,
      * pickupType, and a single package weight; response includes one
@@ -1643,6 +1895,8 @@ public class FedExConnector implements CarrierConnector {
         Map<String, Object> shipper = buildParty(
                 request.getShipperName(),
                 request.getShipperPhone(),
+                request.getShipperCompany(),
+                request.getShipperEmail(),
                 request.getShipperAddressLine1(),
                 request.getShipperAddressLine2(),
                 request.getShipperCity(),
@@ -1662,6 +1916,8 @@ public class FedExConnector implements CarrierConnector {
         Map<String, Object> recipientParty = buildParty(
                 request.getRecipientName(),
                 recipientPhone,
+                request.getRecipientCompany(),
+                request.getRecipientEmail(),
                 request.getRecipientAddressLine1(),
                 request.getRecipientAddressLine2(),
                 request.getRecipientCity(),
@@ -1762,10 +2018,30 @@ public class FedExConnector implements CarrierConnector {
                         "amount", declared,
                         "currency", currencyForLine.trim().toUpperCase()));
             }
+            // PR #543 — populate PO/DEPT slots on the printed label. FedEx
+            // renders customerReferences[] into named ZPL fields keyed by
+            // customerReferenceType (P_O_NUMBER → PO slot,
+            // DEPARTMENT_NUMBER → DEPT slot, CUSTOMER_REFERENCE → REF).
+            // Multiple entries are additive — the pre-PR-#543 code only
+            // sent CUSTOMER_REFERENCE so those slots printed empty.
+            java.util.List<Map<String, Object>> refs = new java.util.ArrayList<>();
             if (StringUtils.hasText(p.getReference())) {
-                item.put("customerReferences", java.util.List.of(Map.of(
+                refs.add(Map.of(
                         "customerReferenceType", "CUSTOMER_REFERENCE",
-                        "value", p.getReference())));
+                        "value", p.getReference()));
+            }
+            if (StringUtils.hasText(request.getPoNumber())) {
+                refs.add(Map.of(
+                        "customerReferenceType", "P_O_NUMBER",
+                        "value", request.getPoNumber()));
+            }
+            if (StringUtils.hasText(request.getDepartmentNumber())) {
+                refs.add(Map.of(
+                        "customerReferenceType", "DEPARTMENT_NUMBER",
+                        "value", request.getDepartmentNumber()));
+            }
+            if (!refs.isEmpty()) {
+                item.put("customerReferences", refs);
             }
             // Sprint 35 — signature + insurance are per-package on FedEx.
             Map<String, Object> packageSpecialServices = buildFedExPackageSpecialServices(request);
@@ -2241,11 +2517,39 @@ public class FedExConnector implements CarrierConnector {
             String postalCode,
             String countryCode
     ) {
+        return buildParty(name, phone, null, null, line1, line2, city, state, postalCode, countryCode);
+    }
+
+    /**
+     * Sprint 51 — company + email overload. Emitted on FedEx's
+     * {@code contact} block: {@code companyName} shows on the printed
+     * label under the person name; {@code emailAddress} is used by
+     * FedEx's delivery-status email opt-in (only fires when the account
+     * has notifications enabled).
+     *
+     * <p>Both fields are optional. Blank company falls back to no
+     * companyName on the wire; blank email is omitted entirely. Backwards-
+     * compat 8-arg overload above preserves every existing caller.
+     */
+    private Map<String, Object> buildParty(
+            String name,
+            String phone,
+            String company,
+            String email,
+            String line1,
+            String line2,
+            String city,
+            String state,
+            String postalCode,
+            String countryCode
+    ) {
         Map<String, Object> party = new LinkedHashMap<>();
-        party.put("contact", Map.of(
-                "personName", name,
-                "phoneNumber", phone
-        ));
+        Map<String, Object> contact = new LinkedHashMap<>();
+        contact.put("personName", name);
+        contact.put("phoneNumber", phone);
+        if (StringUtils.hasText(company)) contact.put("companyName", company);
+        if (StringUtils.hasText(email)) contact.put("emailAddress", email);
+        party.put("contact", contact);
 
         Map<String, Object> address = new LinkedHashMap<>();
         address.put("streetLines", line2 == null || line2.isBlank()
