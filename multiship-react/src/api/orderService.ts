@@ -612,7 +612,48 @@ export interface QueueStats {
   generated: number
 }
 
+/** One row of the unified Documents table (GET /orders/documents). */
+export interface OrderDocumentRow {
+  orderNo: number
+  custNo: string | null
+  recipientName: string | null
+  city: string | null
+  countryCode: string | null
+  carrier: string | null
+  trackingNumber: string | null
+  generatedAt: string | null
+  /** true → customs data exists → /orders/{n}/commercial-invoice renders. */
+  hasInvoice: boolean
+  packageCount: number | null
+  accountNumber: string | null
+  carrierAmount: number | null
+  billableAmount: number | null
+  markupKind: string | null
+  markupValue: number | null
+  markupCurrency: string | null
+}
+
 export const orderService = {
+  /** Unified documents table — one row per labelled order: tracking, label,
+   *  invoice availability, and the billing-statement figures. */
+  getDocuments: (limit = 200) =>
+    apiClient.get<ApiResponse<OrderDocumentRow[]>>(`/orders/documents?limit=${limit}`),
+
+  /** Commercial-invoice PDF blob for an international order. */
+  getCommercialInvoicePdf: async (orderNo: number): Promise<Blob> => {
+    const response = await fetch(`${BASE_URL}/orders/${orderNo}/commercial-invoice`, {
+      credentials: 'include',
+    })
+    if (!response.ok) {
+      throw new Error(
+        response.status === 422
+          ? 'This order has no customs data — the commercial invoice only exists for international shipments.'
+          : `Commercial invoice unavailable (HTTP ${response.status}).`,
+      )
+    }
+    return response.blob()
+  },
+
   /**
    * THE order list: one server-side paginated, sorted, filtered endpoint
    * behind every order table in the app.

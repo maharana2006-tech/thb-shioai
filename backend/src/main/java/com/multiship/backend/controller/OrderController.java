@@ -89,6 +89,11 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.CommercialInvoiceService commercialInvoiceService;
 
+    // Unified documents table — one row per labelled order (tracking + label
+    // + invoice + statement figures together).
+    @Autowired
+    private com.multiship.backend.service.OrderDocumentSummaryService orderDocumentSummaryService;
+
     @Autowired
     private com.multiship.backend.service.shipment.MultiWarehouseLabelService multiWarehouseLabelService;
 
@@ -983,6 +988,27 @@ public class OrderController {
         } catch (IllegalStateException noCustoms) {
             return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY).build();
         }
+    }
+
+    @Operation(summary = "Unified documents table — one row per labelled order",
+            description = "Everything label generation produced, in one common table: tracking "
+                    + "number, label availability (PDF/ZPL via /orders/{n}/label/*), commercial "
+                    + "invoice availability (/orders/{n}/commercial-invoice, when customs data "
+                    + "exists), and the billing-statement figures (carrier cost / markup / "
+                    + "billable). Newest first; tenant-scoped for client users.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/documents")
+    public ResponseEntity<ApiResponse<java.util.List<
+            com.multiship.backend.service.OrderDocumentSummaryService.DocumentRow>>> listDocuments(
+            @org.springframework.web.bind.annotation.RequestParam(defaultValue = "200") int limit) {
+        java.util.List<com.multiship.backend.service.OrderDocumentSummaryService.DocumentRow> rows =
+                orderDocumentSummaryService.list(limit);
+        return ResponseEntity.ok(ApiResponse.<java.util.List<
+                        com.multiship.backend.service.OrderDocumentSummaryService.DocumentRow>>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .message(rows.size() + " labelled order(s).")
+                .data(rows)
+                .build());
     }
 
     @Operation(

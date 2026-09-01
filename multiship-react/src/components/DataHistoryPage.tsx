@@ -19,6 +19,7 @@ import PageSectionHeader from './workspace/PageSectionHeader'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import AllOrdersHistory from './AllOrdersHistory'
 import OrderImportModal from './modals/OrderImportModal'
+import OrderDocumentsTable from './OrderDocumentsTable'
 import { GridCell, DH_COLUMNS, bucketRowErrors, type DhColumn } from './batchGrid'
 import { notify } from '../utils/notify'
 import {
@@ -77,7 +78,7 @@ export default function DataHistoryPage() {
   // Order Intake has three views: "orders" (unified per-order list across
   // Bulk / Manual / API / WMS), "import" (inline CSV/Excel upload + validation),
   // and "imports" (history of bulk import batches).
-  const [dhView, setDhView] = useState<'orders' | 'import' | 'imports'>('orders')
+  const [dhView, setDhView] = useState<'orders' | 'import' | 'imports' | 'docs'>('orders')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [createdBy, setCreatedBy] = useState('')
@@ -1021,7 +1022,8 @@ export default function DataHistoryPage() {
           { key: 'orders', label: 'All orders', hint: 'Bulk · Manual · API · WMS' },
           { key: 'import', label: 'Import CSV/Excel', hint: 'Upload & validate' },
           { key: 'imports', label: 'Import history', hint: 'Saved batches' },
-        ] as { key: 'orders' | 'import' | 'imports'; label: string; hint: string }[]).map((t) => {
+          { key: 'docs', label: 'Documents', hint: 'Tracking · label · invoice · statement' },
+        ] as { key: 'orders' | 'import' | 'imports' | 'docs'; label: string; hint: string }[]).map((t) => {
           const active = dhView === t.key
           return (
             <button
@@ -1045,6 +1047,8 @@ export default function DataHistoryPage() {
 
       {dhView === 'orders' ? (
         <AllOrdersHistory />
+      ) : dhView === 'docs' ? (
+        <OrderDocumentsTable />
       ) : dhView === 'import' ? (
         <OrderImportModal
           inline

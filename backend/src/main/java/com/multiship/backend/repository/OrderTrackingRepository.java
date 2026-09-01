@@ -49,5 +49,11 @@ public interface OrderTrackingRepository extends JpaRepository<OrderTracking, Lo
 
     List<OrderTracking> findByIsLabelGeneratedFalse();
 
+    /** Newest generated labels first — feeds the unified Documents table
+     *  (one row per labelled order: tracking + label + invoice + statement). */
+    @Query("SELECT t FROM OrderTracking t WHERE t.isLabelGenerated = true "
+            + "ORDER BY t.labelGeneratedAt DESC, t.orderNo DESC")
+    List<OrderTracking> findGeneratedNewestFirst(org.springframework.data.domain.Pageable pageable);
+
     Optional<OrderTracking> findByTrackingNumberIgnoreCase(String trackingNumber);
 }
