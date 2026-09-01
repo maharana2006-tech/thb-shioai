@@ -2013,10 +2013,30 @@ public class FedExConnector implements CarrierConnector {
                         "amount", declared,
                         "currency", currencyForLine.trim().toUpperCase()));
             }
+            // PR #543 — populate PO/DEPT slots on the printed label. FedEx
+            // renders customerReferences[] into named ZPL fields keyed by
+            // customerReferenceType (P_O_NUMBER → PO slot,
+            // DEPARTMENT_NUMBER → DEPT slot, CUSTOMER_REFERENCE → REF).
+            // Multiple entries are additive — the pre-PR-#543 code only
+            // sent CUSTOMER_REFERENCE so those slots printed empty.
+            java.util.List<Map<String, Object>> refs = new java.util.ArrayList<>();
             if (StringUtils.hasText(p.getReference())) {
-                item.put("customerReferences", java.util.List.of(Map.of(
+                refs.add(Map.of(
                         "customerReferenceType", "CUSTOMER_REFERENCE",
-                        "value", p.getReference())));
+                        "value", p.getReference()));
+            }
+            if (StringUtils.hasText(request.getPoNumber())) {
+                refs.add(Map.of(
+                        "customerReferenceType", "P_O_NUMBER",
+                        "value", request.getPoNumber()));
+            }
+            if (StringUtils.hasText(request.getDepartmentNumber())) {
+                refs.add(Map.of(
+                        "customerReferenceType", "DEPARTMENT_NUMBER",
+                        "value", request.getDepartmentNumber()));
+            }
+            if (!refs.isEmpty()) {
+                item.put("customerReferences", refs);
             }
             // Sprint 35 — signature + insurance are per-package on FedEx.
             Map<String, Object> packageSpecialServices = buildFedExPackageSpecialServices(request);

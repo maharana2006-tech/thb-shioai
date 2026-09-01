@@ -1253,6 +1253,22 @@ public class DhlConnector implements CarrierConnector {
         content.put("description", firstNonBlank(request.getSpecialInstructions(), "General merchandise"));
         content.put("incoterm", firstNonBlank(
                 isIntl ? request.getIntl().getIncoterms() : null, "DAP").toUpperCase());
+        // PR #543 — customerReferences carry PO / DEPT onto the DHL
+        // shipping label. DHL Express accepts multiple entries with
+        // typeCode CU (customer reference). We prefix "PO=" and
+        // "DEPT=" so the operator can distinguish them on the printed
+        // label — DHL doesn't have separate PO / DEPT slot codes the
+        // way FedEx (customerReferenceType) and UPS (Code) do.
+        java.util.List<Map<String, Object>> dhlRefs = new java.util.ArrayList<>();
+        if (StringUtils.hasText(request.getPoNumber())) {
+            dhlRefs.add(Map.of("value", "PO=" + request.getPoNumber(), "typeCode", "CU"));
+        }
+        if (StringUtils.hasText(request.getDepartmentNumber())) {
+            dhlRefs.add(Map.of("value", "DEPT=" + request.getDepartmentNumber(), "typeCode", "CU"));
+        }
+        if (!dhlRefs.isEmpty()) {
+            content.put("customerReferences", dhlRefs);
+        }
         if (isIntl) {
             content.put("exportDeclaration", buildExportDeclaration(request));
         }

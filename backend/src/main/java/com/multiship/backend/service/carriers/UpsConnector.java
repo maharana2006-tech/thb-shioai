@@ -1975,6 +1975,21 @@ public class UpsConnector implements CarrierConnector {
         if (!serviceOptions.isEmpty()) {
             pkg.put("PackageServiceOptions", serviceOptions);
         }
+        // PR #543 — populate PO/DEPT slots on the printed label. UPS's
+        // Package.ReferenceNumber[] accepts type-code entries; the label
+        // prints them in the small "Reference" band at the top of the
+        // shipping label. Standard codes: "PO" = Purchase Order,
+        // "DP" = Department Number. Up to 3 refs per package.
+        java.util.List<Map<String, Object>> refs = new java.util.ArrayList<>();
+        if (StringUtils.hasText(request.getPoNumber())) {
+            refs.add(Map.of("Code", "PO", "Value", request.getPoNumber()));
+        }
+        if (StringUtils.hasText(request.getDepartmentNumber())) {
+            refs.add(Map.of("Code", "DP", "Value", request.getDepartmentNumber()));
+        }
+        if (!refs.isEmpty()) {
+            pkg.put("ReferenceNumber", refs);
+        }
         return pkg;
     }
 
