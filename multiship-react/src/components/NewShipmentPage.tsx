@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch, FiX } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
@@ -14,6 +14,8 @@ import { accountRefService, type CarrierAccountRef } from '../api/accountRefServ
 import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
 import { shippingConfigService, type ShippingServiceItem, type PackagePreset, type ServicePackageLink } from '../api/shippingConfigService'
+import { customsService } from '../api/customsService'
+import { mapCarrierErrorToFields, summarizeCarrierError } from '../utils/carrierErrorMap'
 import { type AddressValidationResponse } from '../api/addressValidationService'
 import { recipientBookService, type SavedRecipient } from '../api/recipientBookService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
@@ -41,7 +43,7 @@ import type { CustomsItem, OrderCustomsPayload } from '../api/customsService'
 import { parseIntlValidationMessage } from '../utils/intlValidationErrors'
 import { useFormik, getIn } from 'formik'
 import { shipmentSchema, type ShipmentFormValues } from '../validation/yup/shipmentSchema'
-import { dialCodeFor, postalPlaceholderFor } from '../utils/countryFormats'
+import { dialCodeFor, postalPlaceholderFor, phoneHintFor } from '../utils/countryFormats'
 import { STATE_CODE_OPTIONS } from '../utils/stateCodes'
 import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddressFields'
 import { compatiblePresetIds } from '../utils/servicePackageCompatibility'
@@ -54,6 +56,16 @@ const canon = (c?: string | null) => {
   if (v === 'P80') return 'UPS'
   if (v === 'F77') return 'FEDEX'
   if (v === 'L01') return 'USPS'
+  if (['UPS', 'FEDEX', 'USPS', 'DHL'].includes(v)) return v
+  if (v === 'STAMPS') return 'USPS'
+  // Carrier-prefixed SERVICE codes (e.g. INTERNATIONAL_ECONOMY, FEDEX_2_DAY)
+  // map back to their carrier — the fix/edit form derives the carrier from the
+  // order's ship-via code, which is a service code, not a carrier code.
+  if (v.startsWith('FEDEX') || v.startsWith('INTERNATIONAL_') || v.includes('OVERNIGHT')
+      || v.includes('GROUND_HOME') || v.includes('SMART_POST')) return 'FEDEX'
+  if (v.startsWith('UPS') || v.includes('WORLDWIDE') || v.includes('NEXT_DAY_AIR')) return 'UPS'
+  if (v.startsWith('USPS')) return 'USPS'
+  if (v.startsWith('DHL')) return 'DHL'
   return v
 }
 
@@ -338,44 +350,10 @@ function AddressBlock({
           />
         </Field>
       ) : null}
-      <div className="col-span-2 grid grid-cols-3 gap-3">
-        <Field label="City" required error={errors?.city}>
-          <input className={inputCls} value={value.city} onChange={(e) => onChange({ city: e.target.value })} placeholder="Buffalo" />
-        </Field>
-        <Field label="State / region" error={errors?.state}>
-          {/* Sprint 51 — for countries where carriers demand a real code
-              (US / CA / AU), render a dropdown so operators can't type
-              'Delaware' and get downstream rate/label rejection. Free-text
-              input stays for every other country. */}
-          {(() => {
-            const options = STATE_CODE_OPTIONS[(value.countryCode || '').toUpperCase()]
-            return options ? (
-              <select
-                className={inputCls}
-                value={value.state}
-                onChange={(e) => onChange({ state: e.target.value })}
-              >
-                <option value="">Select…</option>
-                {options.map((s) => (
-                  <option key={s.code} value={s.code}>
-                    {s.code} — {s.label}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                className={inputCls}
-                value={value.state}
-                onChange={(e) => onChange({ state: e.target.value })}
-                placeholder="NY"
-              />
-            )
-          })()}
-        </Field>
-        <Field label="Postal code" required error={errors?.postalCode}>
-          <input className={inputCls} value={value.postalCode} onChange={(e) => onChange({ postalCode: e.target.value })} placeholder={postalPlaceholderFor(value.countryCode)} />
-        </Field>
-      </div>
+      {/* Country FIRST — the state list and postal-code format both depend on
+          it, so choosing the country up front makes those fields correct and
+          prevents US/CA mismatches (e.g. a Canadian postal code under a US
+          state). Order: Country → State → City → Postal. */}
       <div className="col-span-2 grid grid-cols-3 gap-3">
         <Field label="Country" required error={errors?.countryCode}>
           <CountrySelect
@@ -403,8 +381,47 @@ function AddressBlock({
             maxLength={4}
           />
         </Field>
-        <Field label="Phone" error={errors?.phone}>
+        <Field label="Phone" error={errors?.phone} hint={phoneHintFor(value.countryCode) || undefined}>
           <input className={inputCls} value={value.phone} onChange={(e) => onChange({ phone: e.target.value })} placeholder="2125550100" />
+        </Field>
+      </div>
+      <div className="col-span-2 grid grid-cols-3 gap-3">
+        <Field label="State / region" error={errors?.state}>
+          {/* Sprint 51 — for countries where carriers demand a real code
+              (US / CA / AU), render a dropdown so operators can't type
+              'Delaware' and get downstream rate/label rejection. Free-text
+              input stays for every other country. The list keys off the
+              country picked above, so pick the country first. */}
+          {(() => {
+            const options = STATE_CODE_OPTIONS[(value.countryCode || '').toUpperCase()]
+            return options ? (
+              <select
+                className={inputCls}
+                value={value.state}
+                onChange={(e) => onChange({ state: e.target.value })}
+              >
+                <option value="">Select…</option>
+                {options.map((s) => (
+                  <option key={s.code} value={s.code}>
+                    {s.code} — {s.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className={inputCls}
+                value={value.state}
+                onChange={(e) => onChange({ state: e.target.value })}
+                placeholder="NY"
+              />
+            )
+          })()}
+        </Field>
+        <Field label="City" required error={errors?.city}>
+          <input className={inputCls} value={value.city} onChange={(e) => onChange({ city: e.target.value })} placeholder="Buffalo" />
+        </Field>
+        <Field label="Postal code" required error={errors?.postalCode}>
+          <input className={inputCls} value={value.postalCode} onChange={(e) => onChange({ postalCode: e.target.value })} placeholder={postalPlaceholderFor(value.countryCode)} />
         </Field>
       </div>
       <div className="col-span-2 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:items-end">
@@ -439,6 +456,16 @@ const joinParts = (parts: (string | null | undefined)[], sep = ', ') =>
 
 export default function NewShipmentPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  // Fix-a-failed-order mode: /orders/new?fixOrder=900046 pre-fills this form
+  // with the failed order's data + carrier error, and submitting regenerates
+  // that same order in place instead of creating a new one.
+  const fixOrderNo = (() => {
+    const n = Number(searchParams.get('fixOrder'))
+    return Number.isInteger(n) && n > 0 ? n : null
+  })()
+  const [fixError, setFixError] = useState<string | null>(null)
+  const [fixLoading, setFixLoading] = useState<boolean>(!!fixOrderNo)
 
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
   const [services, setServices] = useState<ShippingServiceItem[]>([])
@@ -1003,6 +1030,79 @@ export default function NewShipmentPage() {
     // Re-validate account/service/package whenever the carrier, client, or route changes.
   }, [carrier, clientCode, accountsForCarrier, servicesForCarrier, packagesForCarrier, defaultServiceId, defaultPackagePresetId])
 
+  // Fix-a-failed-order: load the order's data + carrier error and pre-fill the
+  // form. The service/account are stashed here and applied once the catalog for
+  // the carrier has loaded (below), so the auto-select effect above doesn't
+  // clobber them.
+  const pendingFixRef = useRef<{ serviceCode?: string | null; accountNumber?: string | null } | null>(null)
+  useEffect(() => {
+    if (!fixOrderNo) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [details, byId, customs] = await Promise.all([
+          orderService.getOrderWithLines(fixOrderNo),
+          orderService.getOrderById(fixOrderNo).catch(() => null),
+          customsService.getCustoms(fixOrderNo).catch(() => null),
+        ])
+        if (cancelled) return
+        const o = details.data.order
+        setRecipient({
+          name: o.shipName ?? '', company: o.shipAttn ?? '', phone: o.phone ?? '', email: '',
+          addressLine1: o.shipAddr1 ?? '', addressLine2: '', city: o.shiptoCity ?? '',
+          state: o.shiptoState ?? '', postalCode: o.shiptoZip ?? '', countryCode: o.shiptoCountryCd ?? 'US',
+        })
+        if (o.shipFromCountryCd) {
+          setSender({
+            name: o.shipFromName ?? '', company: o.shipFromCompany ?? '', phone: o.shipFromPhone ?? '', email: '',
+            addressLine1: o.shipFromAddr1 ?? '', addressLine2: o.shipFromAddr2 ?? '', city: o.shipFromCity ?? '',
+            state: o.shipFromState ?? '', postalCode: o.shipFromZip ?? '', countryCode: o.shipFromCountryCd ?? 'US',
+          })
+        }
+        if (o.weight != null) setWeight(String(o.weight))
+        if (o.weightUnit === 'LB' || o.weightUnit === 'KG') setWeightUnit(o.weightUnit)
+        if (o.declaredValue != null) setDeclaredValue(String(o.declaredValue))
+        const carrierCanon = canon(String(o.shipviaCd ?? ''))
+        if (carrierCanon) setCarrier(carrierCanon)
+        if (customs) {
+          if (customs.currency) setCurrency(customs.currency)
+          if (customs.incoterms) setIncoterms(customs.incoterms)
+          if (customs.reasonForExport) setReasonForExport(customs.reasonForExport)
+          if (customs.items?.length) {
+            setItems(customs.items.map((it) => ({
+              description: it.description ?? '', sku: it.sku ?? '', hsCode: it.hsCode ?? '',
+              countryOfOrigin: it.countryOfOrigin ?? '', quantity: String(it.quantity ?? 1),
+              unitValue: it.unitValue != null ? String(it.unitValue) : '', boxSeq: '',
+            })))
+          }
+        }
+        pendingFixRef.current = {
+          serviceCode: o.shipviaCd,
+          accountNumber: details.data.carrierAccount?.accountNumber ?? null,
+        }
+        setFixError(byId?.data?.errorDetails?.errorMessage ?? null)
+      } catch (err) {
+        if (!cancelled) notify.apiError(err, `Could not load order ${fixOrderNo} to fix.`)
+      } finally {
+        if (!cancelled) setFixLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [fixOrderNo])
+
+  // Apply the stashed service/account once the carrier's catalog is loaded.
+  useEffect(() => {
+    const pending = pendingFixRef.current
+    if (!pending) return
+    if (pending.accountNumber) setAccountNumber(pending.accountNumber)
+    if (pending.serviceCode) {
+      const match = servicesForCarrier.find((s) => s.serviceCode === pending.serviceCode)
+      if (match) { setServiceId(match.id); pendingFixRef.current = null }
+    } else {
+      pendingFixRef.current = null
+    }
+  }, [servicesForCarrier])
+
   /**
    * The CarrierAccountRef row matching the currently-picked carrier +
    * accountNumber. Drives the Label Type / Label Size prefill below.
@@ -1164,6 +1264,27 @@ export default function NewShipmentPage() {
 
   const isCustomPkg = packageChoice === CUSTOM_PKG
 
+  // Package ↔ service compatibility. FedEx branded packaging (its own boxes,
+  // envelope, pak, tube — carrier_package_code starting FEDEX_) is NOT valid
+  // with FedEx Ground / Home Delivery; the carrier 400s with
+  // PACKAGINGTYPE.VALIDATION.ERROR. Catch it here instead of after a failed
+  // label. (Custom / "your packaging" is fine with any service.)
+  const pkgServiceWarning = useMemo(() => {
+    if (carrier !== 'FEDEX' || isCustomPkg) return null
+    const preset = packagesForCarrier.find((p) => String(p.id) === packageChoice)
+    const svc = servicesForCarrier.find((s) => s.id === serviceId)
+    const code = (preset?.carrierPackageCode || '').toUpperCase()
+    const svcCode = (svc?.serviceCode || '').toUpperCase()
+    const isBrandedFedex = code.startsWith('FEDEX_')
+    const isGround = svcCode === 'FEDEX_GROUND' || svcCode.includes('GROUND') || svcCode.includes('SMART_POST')
+    if (isBrandedFedex && isGround) {
+      return `${preset?.name || 'FedEx branded packaging'} can't ship on ${svc?.name || 'a FedEx Ground service'}. `
+        + 'FedEx-branded boxes require a FedEx Express service (2Day, Express Saver, Priority/Standard Overnight). '
+        + 'Pick an Express service, or choose “Custom package…” to use your own box on Ground.'
+    }
+    return null
+  }, [carrier, isCustomPkg, packagesForCarrier, servicesForCarrier, packageChoice, serviceId])
+
   // ── Yup + Formik validation ────────────────────────────────────────────────
   // The page keeps its own useState for each field (needed by AI autofill, the
   // rate picker, warehouse resolution, etc.), so Formik is wired as a pure
@@ -1205,6 +1326,7 @@ export default function NewShipmentPage() {
     () => ({
       isInternational,
       isCustomPackage: isCustomPkg,
+      clientCode,
       carrier,
       account: accountNumber,
       incoterms,
@@ -1218,16 +1340,31 @@ export default function NewShipmentPage() {
       length,
       width,
       height,
-      items: items.map((it) => ({
-        description: it.description,
-        sku: it.sku,
-        hsCode: it.hsCode,
-        countryOfOrigin: it.countryOfOrigin,
-        quantity: it.quantity,
-        unitValue: it.unitValue,
-      })),
+      // Validate the rows the operator actually started filling. A pristine
+      // trailing "Add item" row (all fields blank) is skipped so it doesn't trip
+      // "Description/HS required" — the submit payload filters the same blanks
+      // via cleanItems. BUT on an international shipment where EVERY row is blank
+      // we keep the first row, so its per-field required errors render UNDER the
+      // inputs instead of only a top-level "needs at least one item" toast.
+      items: (() => {
+        const withDest = (it: ItemRow) => ({
+          description: it.description,
+          sku: it.sku,
+          hsCode: it.hsCode,
+          countryOfOrigin: it.countryOfOrigin,
+          quantity: it.quantity,
+          unitValue: it.unitValue,
+          // Destination country rides on each item so the HS-code rule can key
+          // its required digit-length off the importing country.
+          destCountry: (recipient.countryCode || '').toUpperCase(),
+        })
+        const started = items.filter((it) => it.description?.trim() || it.unitValue?.trim()
+          || it.hsCode?.trim() || it.sku?.trim() || it.countryOfOrigin?.trim())
+        if (started.length > 0) return started.map(withDest)
+        return isInternational && items.length > 0 ? [withDest(items[0])] : []
+      })(),
     }),
-    [isInternational, isCustomPkg, carrier, accountNumber, incoterms, reasonForExport,
+    [isInternational, isCustomPkg, clientCode, carrier, accountNumber, incoterms, reasonForExport,
       currency, sender, recipient, weight, declaredValue, insuredValue, length, width, height, items],
   )
   const formik = useFormik<ShipmentFormValues>({
@@ -1236,13 +1373,39 @@ export default function NewShipmentPage() {
     validationSchema: shipmentSchema,
     onSubmit: () => {},
   })
-  /** Field error at `path` — only surfaced after a submit attempt. */
+  // In edit/fix mode, map the carrier error to the specific fields it implicates
+  // so the reason shows UNDER the wrong/missing field (not just the top banner).
+  // These surface immediately (no submit needed), and clear once the operator
+  // edits that field.
+  const { fields: fixFieldErrors, hasItemError: fixItemError } = useMemo(
+    () => (fixOrderNo ? mapCarrierErrorToFields(fixError) : { fields: {}, hasItemError: false }),
+    [fixOrderNo, fixError],
+  )
+  const [clearedFixKeys, setClearedFixKeys] = useState<Set<string>>(new Set())
+  const carrierErrAt = (path: string): string | undefined =>
+    clearedFixKeys.has(path) ? undefined : fixFieldErrors[path]
+  /** Mark a carrier-mapped field error as resolved once the operator edits it. */
+  const clearFixKey = (path: string) => {
+    if (fixFieldErrors[path] && !clearedFixKeys.has(path)) {
+      setClearedFixKeys((s) => new Set(s).add(path))
+    }
+  }
+  /** Field error at `path` — carrier error first (edit mode), then form validation. */
   const errAt = (path: string): string | undefined =>
-    submitAttempted ? (getIn(formik.errors, path) as string | undefined) : undefined
+    carrierErrAt(path) ?? (submitAttempted ? (getIn(formik.errors, path) as string | undefined) : undefined)
   /** Whole address-block error map for AddressBlock (sender / recipient). */
   const addrErrors = (prefix: 'sender' | 'recipient'): AddressErrors | undefined => {
-    if (!submitAttempted) return undefined
-    return getIn(formik.errors, prefix) as AddressErrors | undefined
+    const base = (submitAttempted ? getIn(formik.errors, prefix) : undefined) as AddressErrors | undefined
+    const overlay: AddressErrors = {}
+    for (const key of Object.keys(fixFieldErrors)) {
+      if (key.startsWith(`${prefix}.`)) {
+        const field = key.slice(prefix.length + 1) as keyof AddressErrors
+        const msg = carrierErrAt(key)
+        if (msg) overlay[field] = msg
+      }
+    }
+    if (!base && Object.keys(overlay).length === 0) return undefined
+    return { ...(base ?? {}), ...overlay }
   }
   /** Per-item error map (description, quantity, unitValue, …). */
   const itemErrAt = (index: number, field: string): string | undefined =>
@@ -1714,6 +1877,12 @@ export default function NewShipmentPage() {
       return
     }
 
+    // Packaging ↔ service compatibility gate (carrier would otherwise 400).
+    if (pkgServiceWarning) {
+      showToast(pkgServiceWarning, 'Incompatible package + service')
+      return
+    }
+
     const w = Number(weight)
 
     const cleanItems: ManualShipmentItem[] = items
@@ -1830,7 +1999,9 @@ export default function NewShipmentPage() {
 
     setSubmitting(true)
     try {
-      const res = await orderService.generateManualLabel(payload)
+      const res = fixOrderNo
+        ? await orderService.regenerateOrder(fixOrderNo, payload)
+        : await orderService.generateManualLabel(payload)
       const orderNo = res.data?.orderNo
       // Sprint 43 — persist custom field values against the new order.
       // Best-effort: never block the success navigation on this call.
@@ -1860,6 +2031,18 @@ export default function NewShipmentPage() {
       const parsed = parseIntlValidationMessage(raw)
       if (parsed) {
         notify.error({ title: parsed.title, body: parsed.body })
+      } else if (/rejected the manual shipment|createShipment|HTTP \d{3}/i.test(raw)) {
+        // Carrier rejection — the backend message carries the raw connector
+        // payload ("FEDEX createShipment HTTP 400: {json}"). Humanize it for
+        // the toast (same treatment the orders list gives the Failure column)
+        // and keep the payload in the console for debugging. Preserve the
+        // "(saved as order N)" locator so the operator can find the row.
+        console.debug('[manual-label] carrier rejection:', raw)
+        const savedAs = raw.match(/\(saved as order \d+\)/)?.[0]
+        notify.error({
+          title: 'The carrier rejected this shipment',
+          body: summarizeCarrierError(raw) + (savedAs ? ` ${savedAs}` : ''),
+        })
       } else {
         notify.error(raw)
       }
@@ -1999,6 +2182,30 @@ export default function NewShipmentPage() {
               </button>
             </div>
 
+            {/* Fix-a-failed-order banner: the order's data is pre-filled below;
+                correct what the carrier rejected and re-generate in place. */}
+            {fixOrderNo ? (
+              <div className="rounded-xl border border-rose-300 bg-rose-50 px-4 py-3">
+                <div className="flex items-start gap-2.5">
+                  <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-rose-800">
+                      Fixing failed order #{fixOrderNo}{fixLoading ? ' — loading…' : ''}
+                    </p>
+                    {fixError ? (
+                      <p className="mt-0.5 break-words text-[12px] text-rose-700" title={fixError}>
+                        Carrier rejected it: {summarizeCarrierError(fixError)}
+                      </p>
+                    ) : (
+                      <p className="mt-0.5 text-[12px] text-rose-700">
+                        Correct the details below and regenerate — it keeps the same order number.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
             {/* ── Top: client · reason of export · currency ──
                 Compact single-row layout for both Shipment + Return
                 modes: flex-wrap row so fields sit inline on lg+ and
@@ -2013,9 +2220,11 @@ export default function NewShipmentPage() {
                 className="flex flex-wrap items-end gap-3 [&>*]:min-w-[160px] [&>*]:flex-1"
                 title="Choosing a client fills its ship-from and auto-selects its default carrier account. Reason & currency remember your last choice."
               >
-                <Field label="Client">
+                {/* Client stays REQUIRED (validation under the field) — dev's
+                    layout change and this branch's required-client rule merge. */}
+                <Field label="Client" required error={errAt('clientCode')}>
                   <select className={inputCls} value={clientCode} onChange={(e) => applyClient(e.target.value)}>
-                    <option value="">No client — ad-hoc</option>
+                    <option value="">Select a client…</option>
                     {clients.map((c) => (
                       <option key={c.clientCode} value={c.clientCode}>
                         {c.clientCode} — {c.name}
@@ -2181,7 +2390,7 @@ export default function NewShipmentPage() {
                 title={isReturn ? 'Return from · customer' : 'Ship from · sender'}
                 className="xl:row-span-2"
               >
-                <AddressBlock value={sender} onChange={(patch) => setSender((s) => ({ ...s, ...patch }))} withEmail={isReturn} errors={addrErrors('sender')} />
+                <AddressBlock value={sender} onChange={(patch) => { setSender((s) => ({ ...s, ...patch })); Object.keys(patch).forEach((k) => clearFixKey(`sender.${k}`)) }} withEmail={isReturn} errors={addrErrors('sender')} />
               </SectionCard>
               <SectionCard
                 icon={<FiMapPin className="h-3.5 w-3.5" />}
@@ -2196,6 +2405,7 @@ export default function NewShipmentPage() {
                     // so clear the stale carrier / format-check banners.
                     setCarrierAddressResult(null)
                     setRecipientCheck(null)
+                    Object.keys(patch).forEach((k) => clearFixKey(`recipient.${k}`))
                   }}
                   withEmail={!isReturn}
                   hideLine3
@@ -2582,8 +2792,8 @@ export default function NewShipmentPage() {
             >
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="Packaging" required className="col-span-2">
-                    <select className={inputCls} value={packageChoice} onChange={(e) => setPackageChoice(e.target.value)}>
+                  <Field label="Packaging" required className="col-span-2" error={errAt('package')}>
+                    <select className={inputCls} value={packageChoice} onChange={(e) => { setPackageChoice(e.target.value); clearFixKey('package') }}>
                       <optgroup label={`${CARRIER_LABEL[carrier] || carrier} packaging`}>
                         {packagesForCarrier.map((p) => (
                           <option key={p.id} value={String(p.id)}>{p.name}</option>
@@ -2600,12 +2810,18 @@ export default function NewShipmentPage() {
                     </select>
                   </Field>
                   <Field label={`Weight (${weightUnit.toLowerCase()})`} required error={errAt('weight')}>
-                    <input className={inputCls} type="number" min="0" step="0.1" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="2.5" />
+                    <input className={inputCls} type="number" min="0" step="0.1" value={weight} onChange={(e) => { setWeight(e.target.value); clearFixKey('weight') }} placeholder="2.5" />
                   </Field>
                   <Field label={`Declared value (${currency})`} error={errAt('declaredValue')}>
-                    <input className={inputCls} type="number" min="0" step="0.01" value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value)} placeholder="100.00" />
+                    <input className={inputCls} type="number" min="0" step="0.01" value={declaredValue} onChange={(e) => { setDeclaredValue(e.target.value); clearFixKey('declaredValue') }} placeholder="100.00" />
                   </Field>
                 </div>
+                {pkgServiceWarning ? (
+                  <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+                    <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>{pkgServiceWarning}</span>
+                  </div>
+                ) : null}
                 {/* Sprint 35 — signature at delivery + insured value.
                     NONE = carrier default (usually no signature domestic,
                     indirect on air); ADULT = 21+ ID required (higher fee).
@@ -2640,13 +2856,13 @@ export default function NewShipmentPage() {
                 {isCustomPkg ? (
                   <div className="grid grid-cols-3 gap-3">
                     <Field label={`Length (${dimUnit.toLowerCase()})`} required error={errAt('length')}>
-                      <input className={inputCls} type="number" min="0" step="0.1" value={length} onChange={(e) => setLength(e.target.value)} placeholder="12" />
+                      <input className={inputCls} type="number" min="0" step="0.1" value={length} onChange={(e) => setLength(e.target.value)} placeholder="e.g. 12" />
                     </Field>
                     <Field label={`Width (${dimUnit.toLowerCase()})`} required error={errAt('width')}>
-                      <input className={inputCls} type="number" min="0" step="0.1" value={width} onChange={(e) => setWidth(e.target.value)} placeholder="9" />
+                      <input className={inputCls} type="number" min="0" step="0.1" value={width} onChange={(e) => setWidth(e.target.value)} placeholder="e.g. 9" />
                     </Field>
                     <Field label={`Height/depth (${dimUnit.toLowerCase()})`} required error={errAt('height')}>
-                      <input className={inputCls} type="number" min="0" step="0.1" value={height} onChange={(e) => setHeight(e.target.value)} placeholder="4" />
+                      <input className={inputCls} type="number" min="0" step="0.1" value={height} onChange={(e) => setHeight(e.target.value)} placeholder="e.g. 4" />
                     </Field>
                   </div>
                 ) : null}
@@ -2888,6 +3104,12 @@ export default function NewShipmentPage() {
                   </>
                 }
               >
+                {fixItemError ? (
+                  <div className="mb-2 flex items-start gap-2 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
+                    <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>The carrier rejected the customs items — check each line's HS code, quantity and unit value (and that they sum to the declared value).</span>
+                  </div>
+                ) : null}
                 <div className="space-y-1.5 overflow-x-auto">
                   {/* header labels (once) */}
                   {/* Sprint 48 B11 — added "Pkg #" column between Amount and trash.
@@ -3018,7 +3240,7 @@ export default function NewShipmentPage() {
                 ) : (
                   <>
                     <FiZap className="h-3.5 w-3.5" />
-                    {isReturn ? 'Generate return label' : 'Generate label'}
+                    {fixOrderNo ? 'Fix & regenerate' : isReturn ? 'Generate return label' : 'Generate label'}
                     <FiArrowRight className="h-3.5 w-3.5" />
                   </>
                 )}

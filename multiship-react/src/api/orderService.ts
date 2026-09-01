@@ -138,9 +138,26 @@ export interface OrderWithLines {
   weight: number | null
   /** LB | KG — unit for the top-level `weight` field. Falls back per label renderer. */
   weightUnit?: string | null
+  /** Declared / customs value entered for the shipment. */
+  declaredValue?: number | null
   goodsDesc: string | null
   createdDate: string | null
   orderLines: OrderLine[]
+  // Ship-FROM (origin) captured on manual shipments; null on ERP/WMS orders.
+  shipFromName?: string | null
+  shipFromCompany?: string | null
+  shipFromAddr1?: string | null
+  shipFromAddr2?: string | null
+  shipFromCity?: string | null
+  shipFromState?: string | null
+  shipFromZip?: string | null
+  shipFromCountryCd?: string | null
+  shipFromPhone?: string | null
+  /** True when ship-from came from the client warehouse / platform default
+   *  rather than a sender entered on the order (bulk/ERP orders). */
+  shipFromResolved?: boolean | null
+  /** 'Y'|'N' — cross-border classification recorded at label time. */
+  intlYn?: string | null
   /** Sprint 29 — multi-package count column on the order (1 for legacy single-box). */
   packageCount?: number | null
   /** Sprint 29 — per-package rows (tracking / weight / dims) when this is a multi-package shipment. */
@@ -264,6 +281,14 @@ export interface LabelDocumentPayload {
     currency?: string | null
     weightUnit?: string | null
     notes?: string | null
+  } | null
+  /** What the shipment was billed — freight for the commercial invoice.
+   *  0.00 in sandbox until a production rate is captured. */
+  charges?: {
+    freight?: number | null
+    carrierAmount?: number | null
+    billableAmount?: number | null
+    currency?: string | null
   } | null
   /** Service level resolved from the ERP ship-via mapping (Settings → Shipping Services). */
   service?: { carrier: string; code: string; name: string; scope?: string } | null
@@ -676,13 +701,19 @@ export const orderService = {
    * not ZPL) or 502 (renderer failed) → false. Silent — the FE keeps
    * its JSX facsimile visible when this returns false, no error toast.
    *
+   * PR #544 — optional pkgIndex threads to backend's ?pkg=N. Passing a
+   * specific package targets its individual ZPL; omitted returns a
+   * vertically-stacked composite on multi-pkg orders. HEAD probe fires
+   * per pkg so the picker's package-change re-probes for that package.
+   *
    * Uses HEAD to avoid downloading the PNG until we know we want it;
    * the actual <img> renders the same URL with a fresh GET which the
    * browser caches per Cache-Control: private, max-age=60.
    */
-  headLabelPreviewPng: async (orderNo: number): Promise<boolean> => {
+  headLabelPreviewPng: async (orderNo: number, pkgIndex?: number): Promise<boolean> => {
     try {
-      const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/preview.png`, {
+      const qs = pkgIndex && pkgIndex > 0 ? `?pkg=${pkgIndex}` : ''
+      const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/preview.png${qs}`, {
         method: 'HEAD',
         credentials: 'include',
       })
@@ -694,9 +725,12 @@ export const orderService = {
 
   /** PR #538 — URL builder for the <img src=> tag once the HEAD probe
    *  above confirms the PNG endpoint is live. Kept as a helper so
-   *  LabelDocumentPage doesn't hardcode the path. */
-  labelPreviewPngUrl: (orderNo: number): string =>
-    `${BASE_URL}/orders/${orderNo}/label/preview.png`,
+   *  LabelDocumentPage doesn't hardcode the path.
+   *  PR #544 — optional pkgIndex forwards as ?pkg=N. */
+  labelPreviewPngUrl: (orderNo: number, pkgIndex?: number): string => {
+    const qs = pkgIndex && pkgIndex > 0 ? `?pkg=${pkgIndex}` : ''
+    return `${BASE_URL}/orders/${orderNo}/label/preview.png${qs}`
+  },
 
   /**
    * The order's commercial invoice as a PDF blob (Sprint 51). The platform's
@@ -764,6 +798,12 @@ export const orderService = {
   /** One-shot manual shipment: create + purchase the label in a single call. */
   generateManualLabel: (payload: ManualShipmentPayload) =>
     apiClient.post<ApiResponse<LabelGenerationResponse>>('/orders/manual-label', payload),
+
+  /** Fix a failed order and regenerate its label in place (same order number).
+   *  Same payload shape as generateManualLabel; the order flips ERROR → GENERATED
+   *  on success, or stays ERROR with the new carrier message on failure. */
+  regenerateOrder: (orderNo: number, payload: ManualShipmentPayload) =>
+    apiClient.post<ApiResponse<LabelGenerationResponse>>(`/orders/${orderNo}/regenerate`, payload),
 
   /**
    * Live tracking for an order — status, events, estimated delivery. Backend

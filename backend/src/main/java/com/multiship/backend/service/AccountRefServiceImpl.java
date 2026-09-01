@@ -75,8 +75,18 @@ public class AccountRefServiceImpl implements AccountRefService {
             usageByAccount.put(account.toUpperCase(Locale.ROOT), new Usage(labels, lastUsed));
         }
 
+        // Tenant clamp — the account reference book is platform-wide for
+        // operators, but a scoped USER must see only their OWN tenant's rows.
+        // The unfiltered findAll here predated the tenancy work and leaked
+        // every tenant's account numbers/names/stats to any ROLE_USER (the
+        // repository javadoc documents the same leak for a sibling query).
+        java.util.Optional<String> scope =
+                tenantScope == null ? java.util.Optional.empty() : tenantScope.resolveScope();
         List<CarrierAccountRefDTO> accounts = carrierAccountRefRepository.findAllByOrderByIsDefaultDescUpdatedAtDesc()
                 .stream()
+                .filter(account -> scope.isEmpty()
+                        || (StringUtils.hasText(account.getCustomerNo())
+                            && account.getCustomerNo().trim().equalsIgnoreCase(scope.get())))
                 .map(account -> {
                     CarrierAccountRefDTO dto = toDTO(account);
                     Usage usage = usageByAccount.get(account.getAccountNumber().toUpperCase(Locale.ROOT));
@@ -228,13 +238,27 @@ public class AccountRefServiceImpl implements AccountRefService {
                 .orElseGet(CarrierAccountRef::new);
 
         boolean isNewAccount = account.getId() == null;
-        // Sprint 50 Tier 0.5 PR H — natural-key hijack guard: if the existing
-        // (accountNumber, carrierCode) row belongs to a DIFFERENT tenant, a
-        // scoped USER must not be able to reassign it. Operators are silent.
-        if (!isNewAccount && StringUtils.hasText(account.getCustomerNo())) {
-            String existing = account.getCustomerNo();
-            String incoming = request.getCustomerNo();
-            if (incoming != null && !existing.equalsIgnoreCase(incoming.trim())) {
+        // Sprint 50 Tier 0.5 PR H — natural-key hijack guard, hardened: a
+        // scoped USER may only touch a row their own tenant already owns.
+        // The old guard only fired when the existing row HAD an owner, so a
+        // scoped user could "claim" a PLATFORM row (blank customerNo): the
+        // clamp above stamps their tenant into the request, and the write
+        // below would re-own the house account and overwrite its credentials.
+        // Platform operators pass through (they legitimately reassign rows);
+        // a missing enforcer (unit tests) is treated as operator.
+        boolean operator = tenantScope == null || tenantScope.isPlatformOperator();
+        if (!isNewAccount && !operator) {
+            String existing = StringUtils.hasText(account.getCustomerNo())
+                    ? account.getCustomerNo().trim() : null;
+            String incoming = StringUtils.hasText(request.getCustomerNo())
+                    ? request.getCustomerNo().trim() : null;
+            if (existing == null) {
+                throw new AccessDeniedException(
+                        ErrorCode.CROSS_TENANT_ACCESS_DENIED.name()
+                                + ": carrier account " + carrierCode + "/" + accountNumber
+                                + " is a platform account; only a platform operator can modify it.");
+            }
+            if (incoming != null && !existing.equalsIgnoreCase(incoming)) {
                 throw new AccessDeniedException(
                         ErrorCode.CROSS_TENANT_ACCESS_DENIED.name()
                                 + ": carrier account " + carrierCode + "/" + accountNumber

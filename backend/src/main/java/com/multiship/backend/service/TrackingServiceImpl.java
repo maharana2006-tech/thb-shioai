@@ -175,9 +175,11 @@ public class TrackingServiceImpl implements TrackingService {
             Optional<CarrierAccountRef> exact = carrierAccountRefRepository
                     .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(accountNumber, canonicalCarrier);
             if (exact.isPresent()) return exact.get();
-            Optional<CarrierAccountRef> anyCarrier = carrierAccountRefRepository
-                    .findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(accountNumber);
-            if (anyCarrier.isPresent()) return anyCarrier.get();
+            // NOTE: no any-carrier fallback here. (number, carrier) is the
+            // unique key, so the same number under a different carrier can be
+            // a DIFFERENT tenant's row — matching it would authenticate this
+            // track call with a foreign tenant's credentials. Tracking works
+            // fine on the platform account, so fall through to that instead.
         }
         List<CarrierAccountRef> platform = carrierAccountRefRepository
                 .findPlatformAccountsByCarrier(canonicalCarrier);
@@ -191,13 +193,13 @@ public class TrackingServiceImpl implements TrackingService {
      */
     static String canonicalizeCarrierCode(String shipViaCd) {
         if (!StringUtils.hasText(shipViaCd)) return null;
-        String v = shipViaCd.trim().toUpperCase(Locale.ROOT);
-        return switch (v) {
-            case "P80" -> "UPS";
-            case "F77" -> "FEDEX";
-            case "L01" -> "USPS";
-            default -> v;
-        };
+        // Delegate to the shared canonicalizer so carrier-prefixed SERVICE codes
+        // resolve too — a manual shipment stores its service code (e.g.
+        // FEDEX_2_DAY, FEDEX_GROUND) in ship_via_cd, and the old local map
+        // passed those through unchanged, so getCarrierConnector("FEDEX_2_DAY")
+        // failed with "carrier isn't configured" and no order could be tracked.
+        String canonical = ShippingConfigService.canonicalCarrierFor(shipViaCd);
+        return StringUtils.hasText(canonical) ? canonical : null;
     }
 
     /** Copy a connector TrackingResult onto the wire-shape DTO. */

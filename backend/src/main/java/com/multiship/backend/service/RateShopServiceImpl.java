@@ -275,21 +275,6 @@ public class RateShopServiceImpl implements RateShopService {
      * it in the per-carrier status list.
      */
     CarrierFanoutResult quoteOne(String carrierCode, ShipmentRequestDTO shipment, String customerNo) {
-        // Sprint 39 — cache lookup FIRST, before any credential resolution
-        // or network I/O. On hit we return LIVE options tagged as CACHE
-        // so the UI can render a "cached Xs ago" badge.
-        java.util.Optional<RateCacheService.CachedRates> cached =
-                rateCacheService.lookup(carrierCode, shipment);
-        if (cached.isPresent()) {
-            long seconds = java.time.Duration.between(
-                    cached.get().cachedAt(),
-                    java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)).getSeconds();
-            return new CarrierFanoutResult(carrierCode, cached.get().options(), "CACHE",
-                    cached.get().options().size() + " option"
-                            + (cached.get().options().size() == 1 ? "" : "s")
-                            + " from " + carrierCode + " (cached " + seconds + "s ago)");
-        }
-
         CarrierConnector connector;
         try {
             connector = carrierService.getCarrierConnector(carrierCode);
@@ -298,11 +283,33 @@ public class RateShopServiceImpl implements RateShopService {
                     carrierCode + " is not configured on this instance");
         }
 
+        // Resolve the billing account BEFORE the cache lookup (one cheap repo
+        // read, no network I/O) so the cache key carries the account whose
+        // negotiated pricing the quote reflects. Keying on the bare lane let
+        // tenant A's negotiated rates be served verbatim to tenant B within
+        // TTL — the exact leak the customerNo clamp upstream exists to stop.
         CarrierAccountRef account = resolveAccount(carrierCode, customerNo);
         if (account == null || !StringUtils.hasText(account.getClientId())
                 || !StringUtils.hasText(account.getClientSecret())) {
             return new CarrierFanoutResult(carrierCode, List.of(), "STUB",
                     "no credentials configured for " + carrierCode);
+        }
+        // Overlay the account number now — it scopes both the cache key and
+        // the carrier rate call (connectors use it for negotiated pricing).
+        ShipmentRequestDTO scoped = withAccountNumber(shipment, account.getAccountNumber());
+
+        // Sprint 39 — cache lookup before token acquisition / network I/O. On
+        // hit we return LIVE options tagged CACHE for the "cached Xs ago" badge.
+        java.util.Optional<RateCacheService.CachedRates> cached =
+                rateCacheService.lookup(carrierCode, scoped);
+        if (cached.isPresent()) {
+            long seconds = java.time.Duration.between(
+                    cached.get().cachedAt(),
+                    java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)).getSeconds();
+            return new CarrierFanoutResult(carrierCode, cached.get().options(), "CACHE",
+                    cached.get().options().size() + " option"
+                            + (cached.get().options().size() == 1 ? "" : "s")
+                            + " from " + carrierCode + " (cached " + seconds + "s ago)");
         }
 
         String accessToken;
@@ -316,11 +323,6 @@ public class RateShopServiceImpl implements RateShopService {
             return new CarrierFanoutResult(carrierCode, List.of(), "ERROR",
                     carrierCode + " token acquisition failed: " + ex.getMessage());
         }
-
-        // Overlay the account number for the rate call — connectors use it
-        // to look up negotiated pricing, and the incoming shipment might
-        // not carry the credentials owner's account number.
-        ShipmentRequestDTO scoped = withAccountNumber(shipment, account.getAccountNumber());
 
         // Sprint 48 B5 — packaging pre-flight before the carrier call.
         // Resolves the same preset a real label-generation would pick for
@@ -369,7 +371,9 @@ public class RateShopServiceImpl implements RateShopService {
             // Sprint 39 — cache non-empty results. Empty lists skip the
             // cache so a transient miss retries the carrier next time.
             if (!raw.isEmpty()) {
-                rateCacheService.store(carrierCode, shipment, raw);
+                // Store under the ACCOUNT-scoped envelope so the cached entry
+                // is keyed to the tenant/account whose pricing it reflects.
+                rateCacheService.store(carrierCode, scoped, raw);
             }
             return new CarrierFanoutResult(carrierCode, raw,
                     raw.isEmpty() ? "STUB" : "LIVE",
@@ -391,15 +395,24 @@ public class RateShopServiceImpl implements RateShopService {
      */
     CarrierAccountRef resolveAccount(String carrierCode, String customerNo) {
         if (StringUtils.hasText(customerNo)) {
-            List<CarrierAccountRef> ownedDefaults = carrierAccountRefRepository
-                    .findByCustomerNoIgnoreCaseAndClientDefaultTrue(customerNo);
-            for (CarrierAccountRef ref : ownedDefaults) {
-                if (carrierCode.equalsIgnoreCase(ref.getCarrierCode())
-                        && StringUtils.hasText(ref.getClientId())
-                        && StringUtils.hasText(ref.getClientSecret())) {
-                    return ref;
-                }
+            // Canonical cascade: default-flagged first, then the client's sole
+            // account on this carrier, active rows only. Previously a client
+            // whose only account wasn't flagged default was quoted HOUSE rates
+            // instead of their own negotiated rates, and a deactivated default
+            // still matched (the default query has no active filter).
+            List<CarrierAccountRef> usable = carrierAccountRefRepository
+                    .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(customerNo.trim())
+                    .stream()
+                    .filter(a -> !Boolean.FALSE.equals(a.getActive()))
+                    .filter(a -> carrierCode.equalsIgnoreCase(
+                            a.getCarrierCode() == null ? "" : a.getCarrierCode().trim()))
+                    .filter(a -> StringUtils.hasText(a.getClientId())
+                            && StringUtils.hasText(a.getClientSecret()))
+                    .toList();
+            for (CarrierAccountRef ref : usable) {
+                if (Boolean.TRUE.equals(ref.getClientDefault())) return ref;
             }
+            if (usable.size() == 1) return usable.get(0);
         }
         List<CarrierAccountRef> platform = carrierAccountRefRepository
                 .findPlatformAccountsByCarrier(carrierCode);

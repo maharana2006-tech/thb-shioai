@@ -11,7 +11,6 @@ import {
   FiFileText,
   FiFilter,
   FiRefreshCw,
-  FiRotateCw,
   FiCalendar,
   FiPackage,
   FiTruck,
@@ -28,6 +27,7 @@ import {
 } from 'react-icons/fi'
 import { ApiError, isAbortError } from '../api/apiClient'
 import { orderService, type Order, type QueueStats } from '../api/orderService'
+import { summarizeCarrierError } from '../utils/carrierErrorMap'
 import { clientService } from '../api/clientService'
 import type { CarrierAccountRef, OrderAccountResolution } from '../api/accountRefService'
 import AccountScenarioBadge from './workspace/AccountScenarioBadge'
@@ -50,6 +50,11 @@ const MultiWarehouseSplitModal = lazy(() => import('./modals/MultiWarehouseSplit
 const OrderImportModal = lazy(() => import('./modals/OrderImportModal'))
 
 type View = 'all' | 'ready' | 'details' | 'client' | 'choose' | 'failed' | 'generated'
+
+/** "City, State" for the destination column — omits a blank/null state so an
+ *  international address with no province doesn't render "City, null". */
+const formatDestination = (city?: string | null, state?: string | null): string =>
+  [city, state].map((v) => (v ?? '').trim()).filter(Boolean).join(', ')
 
 /** Server-side query behind each view of the workspace. */
 const VIEW_QUERY: Record<View, { status?: string; resolution?: string; defaultDirection: 'ASC' | 'DESC' }> = {
@@ -618,17 +623,18 @@ export default function OrdersWorkspace() {
     }
 
     if (status === 'ERROR') {
+      // Edit → open the shipment form pre-filled with this order's data + the
+      // carrier error, so the operator corrects it and regenerates IN PLACE.
+      // (The old "Retry" re-ran from stored data and could bounce to a Settings
+      // page when the cause was a missing client / customs profile.)
       return (
         <button
           type="button"
-          onClick={() => {
-            void generateForOrders([order])
-          }}
-          disabled={isGenerating}
+          onClick={() => navigate(`/orders/new?fixOrder=${orderNo}`)}
           className={`${ACTION_BASE} ${ACTION_RETRY}`}
         >
-          <FiRotateCw className="h-3 w-3" />
-          {isGenerating ? 'Retrying…' : 'Retry'}
+          <FiEdit3 className="h-3 w-3" />
+          Edit
         </button>
       )
     }
@@ -872,10 +878,10 @@ export default function OrdersWorkspace() {
 
     defs.push({
       id: 'city',
-      accessorFn: (o) => `${o.shippingDetails.city}, ${o.shippingDetails.state}`,
+      accessorFn: (o) => formatDestination(o.shippingDetails.city, o.shippingDetails.state),
       header: 'Destination',
       cell: ({ row }) => {
-        const dest = `${row.original.shippingDetails.city}, ${row.original.shippingDetails.state}`
+        const dest = formatDestination(row.original.shippingDetails.city, row.original.shippingDetails.state)
         return (
           <span className="block truncate text-[12.5px] text-[#3f3527]" title={dest}>
             {dest}
@@ -884,7 +890,7 @@ export default function OrdersWorkspace() {
       },
       meta: {
         headerLabel: 'Destination',
-        exportValue: (o: Order) => `${o.shippingDetails.city}, ${o.shippingDetails.state}`,
+        exportValue: (o: Order) => formatDestination(o.shippingDetails.city, o.shippingDetails.state),
       },
     })
 
@@ -893,7 +899,20 @@ export default function OrdersWorkspace() {
         id: 'status',
         accessorFn: (o) => o.labelDetails.status,
         header: 'Status',
-        cell: ({ row }) => <OrderStatusBadge status={row.original.labelDetails.status} />,
+        cell: ({ row }) => {
+          const err = row.original.errorDetails?.errorMessage
+          const isError = (row.original.labelDetails.status || '').toUpperCase() === 'ERROR'
+          return (
+            <div className="flex flex-col items-start gap-0.5">
+              <OrderStatusBadge status={row.original.labelDetails.status} />
+              {isError && err ? (
+                <span className="block max-w-[220px] truncate text-[10.5px] text-rose-600" title={err}>
+                  {summarizeCarrierError(err)}
+                </span>
+              ) : null}
+            </div>
+          )
+        },
         meta: {
           headerLabel: 'Status',
           exportValue: (o: Order) => o.labelDetails.status,
@@ -969,11 +988,17 @@ export default function OrdersWorkspace() {
         accessorFn: (o) => o.errorDetails?.errorMessage ?? '',
         header: 'Failure reason',
         enableSorting: false,
-        cell: ({ row }) => (
-          <span className="line-clamp-2 text-[11.5px] leading-4 text-rose-700">
-            {row.original.errorDetails?.errorMessage || 'Unknown failure'}
-          </span>
-        ),
+        cell: ({ row }) => {
+          const raw = row.original.errorDetails?.errorMessage
+          return (
+            <span
+              className="line-clamp-2 text-[11.5px] leading-4 text-rose-700"
+              title={raw || undefined}
+            >
+              {raw ? summarizeCarrierError(raw) : 'Unknown failure'}
+            </span>
+          )
+        },
         meta: {
           headerLabel: 'Failure reason',
           exportValue: (o: Order) => o.errorDetails?.errorMessage ?? '',

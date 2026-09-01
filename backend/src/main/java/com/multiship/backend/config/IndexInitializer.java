@@ -90,7 +90,19 @@ public class IndexInitializer implements CommandLineRunner {
             new IndexSpec("idx_order_label_tracking_tracking_number_trgm",
                     "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_order_label_tracking_tracking_number_trgm " +
                             "ON order_label_tracking USING gin (LOWER(tracking_number) gin_trgm_ops)",
-                    true)
+                    true),
+            // ---------- carrier_account_ref ----------
+            // At most ONE default-flagged account per (client, carrier). The
+            // application demotes siblings on set-default, but two concurrent
+            // set-default calls (read-modify-write, no row lock) could both
+            // win, leaving billing resolution nondeterministic. A partial
+            // unique index makes the invariant a DB guarantee. Platform rows
+            // (blank customer_no) are excluded — they use is_default instead.
+            new IndexSpec("uk_account_ref_client_default",
+                    "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uk_account_ref_client_default " +
+                            "ON carrier_account_ref (UPPER(customer_no), UPPER(carrier_code)) " +
+                            "WHERE client_default IS TRUE AND customer_no IS NOT NULL AND customer_no <> ''",
+                    false)
     );
 
     private final DataSource dataSource;
@@ -107,6 +119,15 @@ public class IndexInitializer implements CommandLineRunner {
         int failed = 0;
         for (IndexSpec spec : INDEX_STATEMENTS) {
             if (spec.needsPgTrgm() && !pgTrgmAvailable) {
+                skipped++;
+                continue;
+            }
+            // Skip indexes that already exist (e.g. created by a schema
+            // migration). CREATE INDEX CONCURRENTLY is rejected outright on a
+            // partitioned table — regardless of IF NOT EXISTS — so a pre-check
+            // avoids a failed statement and log noise for label_batch, which is
+            // now LIST-partitioned by order_source.
+            if (indexExists(spec.name())) {
                 skipped++;
                 continue;
             }
@@ -132,6 +153,21 @@ public class IndexInitializer implements CommandLineRunner {
         }
         log.info("IndexInitializer: {} ensured, {} skipped (pg_trgm unavailable), {} failed.",
                 created, skipped, failed);
+    }
+
+    /** True when an index (plain or partitioned) with this name already exists. */
+    private boolean indexExists(String indexName) {
+        try (Connection conn = dataSource.getConnection();
+             java.sql.PreparedStatement ps = conn.prepareStatement(
+                     "SELECT 1 FROM pg_class WHERE relname = ? AND relkind IN ('i', 'I')")) {
+            ps.setString(1, indexName);
+            try (java.sql.ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException ex) {
+            // On probe failure, fall through and let the CREATE attempt decide.
+            return false;
+        }
     }
 
     /** Best-effort {@code CREATE EXTENSION IF NOT EXISTS pg_trgm}.

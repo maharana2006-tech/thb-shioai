@@ -55,6 +55,14 @@ public class OrderServiceImpl implements OrderService {
     @Autowired
     private com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
 
+    // For resolving the ship-FROM origin of orders that didn't capture their own
+    // sender (bulk/ERP): the client's warehouse, else the platform default.
+    @Autowired
+    private com.multiship.backend.repository.ClientRepository clientRepository;
+
+    @Autowired
+    private com.multiship.backend.config.CarrierProperties carrierProperties;
+
     /**
      * Sprint 50 Tier 0.5 PR E — clamps caller-supplied tenant filters to the
      * authenticated caller's own tenant when the caller is tenant-scoped
@@ -352,6 +360,8 @@ public class OrderServiceImpl implements OrderService {
                 .map(this::mapToOrderLineDTO)
                 .collect(Collectors.toList());
 
+        ShipFrom shipFrom = resolveShipFrom(entity);
+
         OrderWithLinesDTO data = OrderWithLinesDTO.builder()
                 .orderNo(entity.getOrderNo())
                 .orderSuffix(entity.getOrderSuffix())
@@ -370,8 +380,21 @@ public class OrderServiceImpl implements OrderService {
                 .shipviaCd(entity.getShipviaCd())
                 .tenantId(resolveTenantKey(entity))
                 .weight(entity.getWeight())
+                .weightUnit(entity.getWeightUnit())
+                .declaredValue(entity.getPrice())
                 .goodsDesc(entity.getGoodsDesc())
                 .createdDate(entity.getCreatedDate())
+                .shipFromName(shipFrom.name())
+                .shipFromCompany(shipFrom.company())
+                .shipFromAddr1(shipFrom.line1())
+                .shipFromAddr2(shipFrom.line2())
+                .shipFromCity(shipFrom.city())
+                .shipFromState(shipFrom.state())
+                .shipFromZip(shipFrom.zip())
+                .shipFromCountryCd(shipFrom.country())
+                .shipFromPhone(shipFrom.phone())
+                .shipFromResolved(shipFrom.resolved())
+                .intlYn(entity.getIntlYn())
                 .isReturn(entity.getIsReturn())
                 // PR #543 — expose source + wmsExternalId so the FE label
                 // facsimile can derive PO (MAN{n} for manual/bulk,
@@ -553,6 +576,39 @@ public class OrderServiceImpl implements OrderService {
             return order.getCustNo();
         }
         return null;
+    }
+
+    /** Resolved ship-FROM for the order-details view. `resolved` is true when the
+     *  origin came from the client warehouse / platform default rather than a
+     *  sender the operator entered on the order (bulk/ERP orders). */
+    private record ShipFrom(String name, String company, String line1, String line2,
+                            String city, String state, String zip, String country,
+                            String phone, boolean resolved) {}
+
+    /**
+     * The order's ship-FROM. Manual shipments persist their own sender; bulk/ERP
+     * orders don't, so fall back to the client's configured warehouse and then
+     * the platform default — the same cascade the label document uses — so the
+     * details view always shows where a shipment left from.
+     */
+    private ShipFrom resolveShipFrom(Order e) {
+        if (StringUtils.hasText(e.getShipFromCountryCd())) {
+            return new ShipFrom(e.getShipFromName(), e.getShipFromCompany(), e.getShipFromAddr1(),
+                    e.getShipFromAddr2(), e.getShipFromCity(), e.getShipFromState(), e.getShipFromZip(),
+                    e.getShipFromCountryCd(), e.getShipFromPhone(), false);
+        }
+        String clientCode = resolveTenantKey(e);
+        com.multiship.backend.model.Client client = StringUtils.hasText(clientCode)
+                ? clientRepository.findByClientCodeIgnoreCase(clientCode.trim()).orElse(null) : null;
+        if (client != null && client.getShipFrom() != null && client.getShipFrom().hasValue()) {
+            com.multiship.backend.model.Address a = client.getShipFrom();
+            String name = StringUtils.hasText(a.getName()) ? a.getName() : client.getName();
+            return new ShipFrom(name, client.getName(), a.getLine1(), a.getLine2(),
+                    a.getCity(), a.getState(), a.getZip(), a.getCountry(), a.getPhone(), true);
+        }
+        com.multiship.backend.config.CarrierProperties.ShipperDefaults d = carrierProperties.getShipper();
+        return new ShipFrom(d.getName(), null, d.getAddressLine1(), d.getAddressLine2(),
+                d.getCity(), d.getState(), d.getPostalCode(), d.getCountryCode(), d.getPhone(), true);
     }
 
     private String resolveTenantKey(Object[] row) {

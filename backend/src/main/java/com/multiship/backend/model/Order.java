@@ -57,6 +57,43 @@ public class Order {
     @Column(name = "country_name")
     private String countryName;
 
+    // ----- Ship-FROM (origin) — persisted for manual shipments so the label
+    // document + commercial invoice render the sender the operator actually
+    // entered, instead of falling back to the platform/tenant warehouse (which
+    // would flip a domestic shipment international when the two differ). Null on
+    // ERP/WMS orders, which ship from the client's own warehouse. -----
+    @Column(name = "ship_from_name")
+    private String shipFromName;
+
+    @Column(name = "ship_from_company")
+    private String shipFromCompany;
+
+    @Column(name = "ship_from_addr1")
+    private String shipFromAddr1;
+
+    @Column(name = "ship_from_addr2")
+    private String shipFromAddr2;
+
+    @Column(name = "ship_from_city")
+    private String shipFromCity;
+
+    @Column(name = "ship_from_state")
+    private String shipFromState;
+
+    @Column(name = "ship_from_zip")
+    private String shipFromZip;
+
+    @Column(name = "ship_from_country_cd")
+    private String shipFromCountryCd;
+
+    @Column(name = "ship_from_phone")
+    private String shipFromPhone;
+
+    /** LB | KG — unit the operator entered the weight in. Null on legacy rows
+     *  (readers fall back to the tenant/global default). */
+    @Column(name = "weight_unit", length = 4)
+    private String weightUnit;
+
     @Column(name = "price")
     private BigDecimal price;
 

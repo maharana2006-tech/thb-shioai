@@ -1261,6 +1261,22 @@ public class ShippingConfigService {
         return id == null ? Optional.empty() : serviceRepository.findById(id);
     }
 
+    /**
+     * Exact service lookup by carrier + service code — the service a shipment
+     * ACTUALLY moved on. Used by post-ship display (label / documents) so the
+     * printed service name matches what was purchased, instead of the
+     * rule/scope re-resolution in {@link #resolveService} which returns the
+     * lane's default service and can disagree with the picked one.
+     */
+    @Transactional(readOnly = true)
+    public Optional<ShippingService> serviceByCode(String canonicalCarrier, String serviceCode) {
+        if (!StringUtils.hasText(canonicalCarrier) || !StringUtils.hasText(serviceCode)) {
+            return Optional.empty();
+        }
+        return serviceRepository.findByCarrierIgnoreCaseAndServiceCodeIgnoreCase(
+                canonicalCarrier.trim(), serviceCode.trim());
+    }
+
     /** Look up a package preset by id (for the manual-shipment flow's explicit package pick). */
     @Transactional(readOnly = true)
     public Optional<PackagePreset> presetById(Long id) {

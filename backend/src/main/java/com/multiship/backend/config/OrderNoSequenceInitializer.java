@@ -49,8 +49,21 @@ public class OrderNoSequenceInitializer implements CommandLineRunner {
         // after a legacy deploy cannot collide with an existing row.
         // GREATEST guards against an empty table (max is null) and against
         // a table whose max is below the floor.
+        //
+        // Consider every table keyed on order_no, not just label_batch:
+        // shipment_batch / label_package / order_label_tracking all carry
+        // order_no and can outlive the order row if orders are cleared without
+        // them. Seeding only off label_batch then re-hands a number a stale
+        // child row still holds → "duplicate key ... uk_shipment_batch_order_seq"
+        // on the next generate. Taking the max across all of them makes the
+        // sequence safe even after a partial clear.
         Integer max = jdbc.queryForObject(
-                "SELECT GREATEST(COALESCE(MAX(order_no), 0), " + MANUAL_FLOOR + ") FROM label_batch",
+                "SELECT GREATEST("
+                        + "COALESCE((SELECT MAX(order_no) FROM label_batch), 0), "
+                        + "COALESCE((SELECT MAX(order_no) FROM shipment_batch), 0), "
+                        + "COALESCE((SELECT MAX(order_no) FROM label_package), 0), "
+                        + "COALESCE((SELECT MAX(order_no) FROM order_label_tracking), 0), "
+                        + MANUAL_FLOOR + ")",
                 Integer.class);
         int seedTo = max != null ? max : MANUAL_FLOOR;
         jdbc.queryForObject("SELECT setval('" + SEQ_NAME + "', ?)", Long.class, seedTo);

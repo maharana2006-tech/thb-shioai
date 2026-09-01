@@ -2,6 +2,9 @@ package com.multiship.backend.repository;
 
 import com.multiship.backend.model.LabelPackage;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -23,5 +26,12 @@ public interface LabelPackageRepository extends JpaRepository<LabelPackage, Long
      */
     Optional<LabelPackage> findByTrackingNumber(String trackingNumber);
 
-    void deleteByOrderNo(Integer orderNo);
+    /**
+     * Bulk DELETE (see {@link ShipmentBatchRepository#deleteByOrderNo}) — clears
+     * a reused order's prior per-piece rows on regenerate, immediately and
+     * without tripping Hibernate's flush ordering against the fresh inserts.
+     */
+    @Modifying
+    @Query("delete from LabelPackage p where p.orderNo = :orderNo")
+    void deleteByOrderNo(@Param("orderNo") Integer orderNo);
 }

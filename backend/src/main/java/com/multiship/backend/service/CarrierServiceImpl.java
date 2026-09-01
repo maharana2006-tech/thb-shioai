@@ -621,11 +621,26 @@ public class CarrierServiceImpl implements CarrierService {
     // persist-result (@Transactional). Interim: 60s tx timeout in
     // application.properties bounds the worst case.
     @Override
+    public ApiResponse<LabelGenerationResponse> generateManualLabel(
+            com.multiship.backend.dto.ManualShipmentRequest req,
+            org.springframework.security.core.userdetails.UserDetails user) {
+        return generateManualLabel(req, user, null);
+    }
+
+    /**
+     * Manual label generation. When {@code existingOrderNo} is null a fresh
+     * order number is allocated (the New Shipment flow); when it is provided the
+     * existing order is UPDATED in place and re-labelled — the "fix a failed
+     * order and regenerate" flow, which corrects the shipment data and flips the
+     * order ERROR → GENERATED on the same order number.
+     */
+    @Override
     @org.springframework.transaction.annotation.Transactional
     @Timed(value = "carrier.generateManualLabel", description = "Manual (ad-hoc) label generation.")
     public ApiResponse<LabelGenerationResponse> generateManualLabel(
             com.multiship.backend.dto.ManualShipmentRequest req,
-            org.springframework.security.core.userdetails.UserDetails user) {
+            org.springframework.security.core.userdetails.UserDetails user,
+            Integer existingOrderNo) {
 
         if (req == null || req.getRecipient() == null) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR, "Recipient details are required.");
@@ -684,32 +699,60 @@ public class CarrierServiceImpl implements CarrierService {
             }
         }
 
-        // Carrier: from the request, else inferred from the credential account.
-        String carrier = resolveCanonicalCarrierCode(firstNonBlank(
+        // Carrier: from the request, else inferred from the picked credential
+        // account. No hard-coded terminal fallback — a typed FedEx number with
+        // no carrierCode used to be looked up as UPS, miss, and silently ship
+        // UPS on the platform account. Require the carrier instead.
+        String rawCarrier = firstNonBlank(
                 req.getCarrierCode(),
                 req.getAccountId() != null
                         ? carrierAccountRefRepository.findById(req.getAccountId())
                                 .map(CarrierAccountRef::getCarrierCode).orElse(null)
-                        : null,
-                "UPS"));
+                        : null);
+        if (!StringUtils.hasText(rawCarrier)) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                    "carrierCode is required — pick the carrier this shipment bills to.");
+        }
+        String carrier = resolveCanonicalCarrierCode(rawCarrier);
 
-        // Credential account: the picked account, else the typed number on file, else
-        // the carrier's platform account (so a hand-typed account still authenticates).
+        // Credential + bill-to account: the picked account, else the typed number
+        // on file for this carrier. An UNKNOWN typed number is a hard error —
+        // the old behaviour silently fell back to platform credentials while
+        // printing the unvalidated typed number as bill-to, so a typo shipped a
+        // mis-billed label with no warning.
         CarrierAccountRef account = null;
         if (req.getAccountId() != null) {
             account = carrierAccountRefRepository.findById(req.getAccountId()).orElse(null);
+            if (account == null) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                        "The selected carrier account no longer exists. Refresh and pick again.");
+            }
         }
-        if (account == null && typedNumber != null) {
+        if (account == null) {
             account = carrierAccountRefRepository
                     .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(typedNumber, carrier).orElse(null);
+            if (account == null) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                        "accountNumber " + typedNumber + " is not a registered " + carrier
+                                + " account in the platform. Add it in Settings → Carriers first.");
+            }
         }
-        if (account == null) {
-            account = carrierAccountRefRepository.findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
-        }
-        if (account == null) {
+        // Ownership gate — same rule the bulk import enforces at upload: the
+        // account must be a platform (house) account or owned by THIS request's
+        // client. Without it any caller could bill another tenant's account
+        // (the external API funnels through here too). Mismatch only errors
+        // when both sides are known, mirroring bulk's validateReferences.
+        String accountOwner = StringUtils.hasText(account.getCustomerNo())
+                ? account.getCustomerNo().trim() : null;
+        if (accountOwner != null && hasClient && !accountOwner.equalsIgnoreCase(resolvedClient.trim())) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
-                    "No verified " + carrier + " credentials are available to ship. Add or verify a "
-                    + carrier + " account first.");
+                    "accountNumber " + account.getAccountNumber() + " belongs to client "
+                            + accountOwner + ", not " + resolvedClient.trim() + ".");
+        }
+        if (Boolean.FALSE.equals(account.getActive())) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                    "accountNumber " + account.getAccountNumber() + " is deactivated. "
+                            + "Re-activate it in Settings → Carriers or pick another account.");
         }
         // Bill-to account number that prints on the label: the typed number wins.
         // Pre-fix had a "ACCOUNT" literal string as the ultimate fallback which
@@ -759,7 +802,13 @@ public class CarrierServiceImpl implements CarrierService {
             // scope resolved from the recipient country vs the platform
             // shipper default (from-address override is applied further
             // down; this pre-flight uses the platform default).
-            String originForScope = carrierProperties.getShipper().getCountryCode();
+            // Scope origin is the ENTERED sender country (falls back to the
+            // platform default only when no sender was supplied) — using the
+            // platform default here misclassified a domestic shipment as
+            // international whenever the operator's sender differed from it.
+            String originForScope = firstNonBlank(
+                    from != null ? from.getCountryCode() : null,
+                    carrierProperties.getShipper().getCountryCode());
             boolean intlForScope = to.getCountryCode() != null && originForScope != null
                     && !to.getCountryCode().trim().equalsIgnoreCase(originForScope.trim());
             String serviceCodeForScope = service != null ? service.getServiceCode() : null;
@@ -834,12 +883,28 @@ public class CarrierServiceImpl implements CarrierService {
                     service = rerouted;
                     String newCarrier = resolveCanonicalCarrierCode(rerouted.getCarrier());
                     if (!newCarrier.equalsIgnoreCase(carrier)) {
-                        // Swap carrier + connector; try to find a working
-                        // account for the new carrier (existing account, else
-                        // the platform account for that carrier).
+                        // Swap carrier + connector, and re-resolve the account ON
+                        // THE NEW CARRIER: the client's default/sole account first,
+                        // platform fallback second. The bill-to must be the account
+                        // we actually resolved — the old code kept the ORIGINAL
+                        // carrier's typed number as bill-to (a UPS number on a
+                        // FedEx label) and still carried the deliberately-removed
+                        // "ACCOUNT" literal as a final fallback.
                         carrier = newCarrier;
-                        CarrierAccountRef reroutedAccount = carrierAccountRefRepository
-                                .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+                        final String carrierForReroute = carrier;
+                        CarrierAccountRef reroutedAccount = hasClient
+                                ? carrierAccountRefRepository
+                                        .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(resolvedClient.trim())
+                                        .stream()
+                                        .filter(a -> !Boolean.FALSE.equals(a.getActive()))
+                                        .filter(a -> carrierForReroute.equalsIgnoreCase(resolveCanonicalCarrierCode(
+                                                a.getCarrierCode() == null ? "" : a.getCarrierCode().trim())))
+                                        .findFirst().orElse(null)
+                                : null;
+                        if (reroutedAccount == null) {
+                            reroutedAccount = carrierAccountRefRepository
+                                    .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+                        }
                         if (reroutedAccount == null) {
                             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                                     "Routing rule '" + routingResult.getMatchedRuleName()
@@ -847,7 +912,15 @@ public class CarrierServiceImpl implements CarrierService {
                                     + " credentials are available.");
                         }
                         account = reroutedAccount;
-                        billToNumber = firstNonBlank(typedNumber, account.getAccountNumber(), "ACCOUNT");
+                        billToNumber = account.getAccountNumber();
+                        if (!StringUtils.hasText(billToNumber)) {
+                            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                                    "Routing rule '" + routingResult.getMatchedRuleName()
+                                    + "' rerouted to " + carrier + " but the resolved account has no "
+                                    + "account number stored.");
+                        }
+                        log.warn("Routing reroute swapped billing to {} account {} (rule '{}')",
+                                carrier, billToNumber, routingResult.getMatchedRuleName());
                         connector = getCarrierConnector(carrier);
                     }
                     log.info("Routing rule '{}' rerouted client={} to service={} carrier={}",
@@ -932,10 +1005,27 @@ public class CarrierServiceImpl implements CarrierService {
         // orderNo allocated at persist. That meant we could never send
         // MAN{n} on the wire (didn't know n yet). Now allocated up
         // front; persisted with the same value later at line ~1099.
-        int allocatedOrderNo = orderRepository.nextManualOrderNo();
+        // Regenerate (existingOrderNo) reuses the SAME number so the label's
+        // MAN{n} matches the order row we update in place — a fresh sequence
+        // value here would stamp a different PO than the persisted order.
+        int allocatedOrderNo = existingOrderNo != null
+                ? existingOrderNo : orderRepository.nextManualOrderNo();
         ShipmentRequestDTO shipmentRequest = buildManualShipmentRequestDto(
                 req, from, to, carrier, billToNumber, serviceType, packageType,
                 length, width, height, fromCountry, account, allocatedOrderNo);
+
+        // International customs for the LABEL call. The manual path builds its
+        // own ShipmentRequestDTO and previously never attached an intl block —
+        // so cross-border manual shipments reached the carrier with no customs
+        // and were rejected (FedEx: TOTALCUSTOMSVALUE.REQUIRED). The commercial-
+        // invoice items are also persisted separately below (for the CI doc);
+        // this attaches them to the request the connector sends.
+        boolean isCrossBorder = to.getCountryCode() != null && fromCountry != null
+                && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
+        if (isCrossBorder) {
+            shipmentRequest.setIntl(buildManualIntlBlock(
+                    req, firstNonBlank(req.getCurrency(), "USD"), req.getDeclaredValue()));
+        }
 
         // Resolve the carrier's MPS cap for this service/scope and split
         // the shipment into sub-requests when we're over the cap. Every
@@ -1034,12 +1124,25 @@ public class CarrierServiceImpl implements CarrierService {
             try {
                 com.multiship.backend.model.ShippingService finalService = service;
                 String finalBillToNumber = billToNumber;
+                // `from` is reassigned during warehouse resolution, so capture a
+                // final snapshot for the lambda — lets a failed order keep the
+                // entered sender so the fix-and-regenerate form pre-fills it.
+                final com.multiship.backend.dto.ManualShipmentRequest.Address fromForErr = from;
                 requiresNewTransactionTemplate.executeWithoutResult(status -> {
-                    int failedOrderNo = orderRepository.nextManualOrderNo();
+                    // Fix-in-place failure: keep the SAME order and re-stamp it
+                    // ERROR with the new carrier message; otherwise allocate a
+                    // fresh failed-order number.
+                    // Persist the ERROR order under the SAME number the label
+                    // call carried (PR #543 pre-allocates; on regenerate that
+                    // is already the reused existingOrderNo) — a second
+                    // sequence bump here would desync PO MAN{n} from the row.
+                    int failedOrderNo = allocatedOrderNo;
                     failedOrderNoHolder[0] = failedOrderNo;
                     boolean intlErr = to.getCountryCode() != null && fromCountry != null
                             && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
-                    Order errOrder = new Order();
+                    Order errOrder = existingOrderNo != null
+                            ? orderRepository.findByOrderNo(existingOrderNo).orElseGet(Order::new)
+                            : new Order();
                     errOrder.setOrderNo(failedOrderNo);
                     errOrder.setOrderSuffix(0);
                     errOrder.setOrderStatus("ERROR");
@@ -1061,6 +1164,18 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setCountryName(to.getCountryCode());
                     errOrder.setPhone(to.getPhone());
                     errOrder.setWeight(req.getWeight());
+                    errOrder.setWeightUnit(firstNonBlank(req.getWeightUnit(), "LB"));
+                    if (fromForErr != null) {
+                        errOrder.setShipFromName(fromForErr.getName());
+                        errOrder.setShipFromCompany(fromForErr.getCompany());
+                        errOrder.setShipFromAddr1(fromForErr.getAddressLine1());
+                        errOrder.setShipFromAddr2(fromForErr.getAddressLine2());
+                        errOrder.setShipFromCity(fromForErr.getCity());
+                        errOrder.setShipFromState(fromForErr.getState());
+                        errOrder.setShipFromZip(fromForErr.getPostalCode());
+                        errOrder.setShipFromCountryCd(fromForErr.getCountryCode());
+                        errOrder.setShipFromPhone(fromForErr.getPhone());
+                    }
                     errOrder.setGoodsDesc(req.getGoodsDescription());
                     errOrder.setPrice(req.getDeclaredValue());
                     errOrder.setIntlYn(intlErr ? "Y" : "N");
@@ -1075,7 +1190,11 @@ public class CarrierServiceImpl implements CarrierService {
                     errTracking.setShipViaCd(errOrder.getShipviaCd());
                     errTracking.setAccountNumber(finalBillToNumber);
                     errTracking.setIsLabelGenerated(false);
-                    errTracking.setStatus("FAILED");
+                    // Canonical failure status is "ERROR" everywhere else (tab
+                    // counts, status filter, the other failure paths). Writing
+                    // "FAILED" here made these orders invisible to the Failed
+                    // tab and the Error status filter.
+                    errTracking.setStatus("ERROR");
                     errTracking.setErrorMessage(ex.getMessage());
                     errTracking.setCreatedAt(java.time.LocalDateTime.now());
                     errTracking.setUpdatedAt(java.time.LocalDateTime.now());
@@ -1086,9 +1205,51 @@ public class CarrierServiceImpl implements CarrierService {
                         persistEx.getMessage(), persistEx);
             }
             Integer failedOrderNo = failedOrderNoHolder[0];
+            // Persist the commodity lines on the failed order too — in a SEPARATE
+            // transaction AFTER the ERROR order committed above, so the just-saved
+            // order is visible to upsertCustoms and a customs hiccup can't roll
+            // back (and lose) the error record. Lets the fix-and-regenerate form
+            // pre-fill the commercial invoice + incoterms/currency/reason.
+            boolean intlFail = to.getCountryCode() != null && fromCountry != null
+                    && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
+            if (failedOrderNo != null && intlFail && req.getItems() != null && !req.getItems().isEmpty()) {
+                var failLines = req.getItems().stream()
+                        .filter(it -> StringUtils.hasText(it.getDescription()))
+                        .map(it -> com.multiship.backend.dto.OrderCustomsItemDTO.builder()
+                                .description(it.getDescription()).hsCode(it.getHsCode())
+                                .countryOfOrigin(it.getCountryOfOrigin()).quantity(it.getQuantity())
+                                .unitValue(it.getUnitValue()).weight(it.getWeight()).sku(it.getSku())
+                                .boxSeq(it.getBoxSeq()).build())
+                        .toList();
+                if (!failLines.isEmpty()) {
+                    var failCustoms = new com.multiship.backend.dto.OrderCustomsUpsertRequest();
+                    failCustoms.setIncoterms(req.getIncoterms());
+                    failCustoms.setReasonForExport(req.getReasonForExport());
+                    failCustoms.setCurrency(firstNonBlank(req.getCurrency(), "USD"));
+                    failCustoms.setItems(failLines);
+                    final Integer fno = failedOrderNo;
+                    try {
+                        requiresNewTransactionTemplate.executeWithoutResult(st ->
+                                customsService.upsertCustoms(String.valueOf(fno), failCustoms));
+                    } catch (Exception cEx) {
+                        log.warn("Failed order {}: could not save commercial-invoice items: {}",
+                                fno, cEx.getMessage());
+                    }
+                }
+            }
+            // Carry the ERROR order's number back to the caller (the bulk import
+            // service) in the response data, so it can attach the order to its
+            // batch and a retry can UPDATE this same row instead of INSERTing a
+            // second order for the source row.
+            LabelGenerationResponse failData = LabelGenerationResponse.builder()
+                    .orderNo(failedOrderNo != null ? failedOrderNo.longValue() : null)
+                    .status("ERROR")
+                    .message("The carrier rejected the manual shipment: " + ex.getMessage())
+                    .build();
             return failure(HttpStatus.BAD_GATEWAY, ErrorCode.CARRIER_FAILURE,
                     "The carrier rejected the manual shipment: " + ex.getMessage()
-                            + (failedOrderNo != null ? " (saved as order " + failedOrderNo + ")" : ""));
+                            + (failedOrderNo != null ? " (saved as order " + failedOrderNo + ")" : ""),
+                    failData);
         }
         // Master result = batch 1 (order_label_tracking downstream uses its
         // trackingNumber). label_package rows come from each batch's
@@ -1101,21 +1262,33 @@ public class CarrierServiceImpl implements CarrierService {
         // OrderNoSequenceInitializer.
         // PR #543 — reuse the orderNo allocated pre-carrier so the value
         // stamped on the label (MAN{orderNo}) matches the persisted row.
+        // allocatedOrderNo already resolves to existingOrderNo on regenerate.
         int orderNo = allocatedOrderNo;
         boolean intl = to.getCountryCode() != null && fromCountry != null
                 && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
 
         boolean isReturn = Boolean.TRUE.equals(req.getIsReturn());
 
-        Order order = new Order();
+        // Fix-in-place: load the existing (failed) order so the save UPDATEs it
+        // and keeps the same order number + optimistic-lock version; the New
+        // Shipment flow starts from a fresh entity.
+        Order order = existingOrderNo != null
+                ? orderRepository.findByOrderNo(existingOrderNo).orElseGet(Order::new)
+                : new Order();
         order.setOrderNo(orderNo);
         order.setOrderSuffix(0);
         order.setOrderStatus("GENERATED");
+        order.setIsError(false);
         order.setIsManual("Y");
         order.setIsReturn(isReturn ? "Y" : "N");
-        order.setSource(firstNonBlank(req.getSource(), "MANUAL"));
-        order.setCustNo(firstNonBlank(req.getClientCode(), "MANUAL"));
-        order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : null);
+        // On regenerate (existingOrderNo) preserve the order's own source /
+        // client so fixing a failed BULK/API order doesn't reclassify it as
+        // MANUAL (which would move it to another partition and wipe its client).
+        // For a new order the loaded entity's getters are null, so this is the
+        // same as before.
+        order.setSource(firstNonBlank(req.getSource(), order.getSource(), "MANUAL"));
+        order.setCustNo(firstNonBlank(req.getClientCode(), order.getCustNo(), "MANUAL"));
+        order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : order.getTenantId());
         order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
         order.setShipName(to.getName());
         order.setShipAttn(to.getCompany());
@@ -1128,6 +1301,23 @@ public class CarrierServiceImpl implements CarrierService {
         order.setCountryName(to.getCountryCode());
         order.setPhone(to.getPhone());
         order.setWeight(req.getWeight());
+        order.setWeightUnit(firstNonBlank(req.getWeightUnit(), "LB"));
+        // Persist the ship-FROM the operator entered (the effective `from`,
+        // after any warehouse merge) so the label document + commercial invoice
+        // render the real origin instead of falling back to the platform/tenant
+        // warehouse — which is what flipped a domestic US->US shipment into an
+        // India-origin international label.
+        if (from != null) {
+            order.setShipFromName(from.getName());
+            order.setShipFromCompany(from.getCompany());
+            order.setShipFromAddr1(from.getAddressLine1());
+            order.setShipFromAddr2(from.getAddressLine2());
+            order.setShipFromCity(from.getCity());
+            order.setShipFromState(from.getState());
+            order.setShipFromZip(from.getPostalCode());
+            order.setShipFromCountryCd(from.getCountryCode());
+            order.setShipFromPhone(from.getPhone());
+        }
         order.setGoodsDesc(req.getGoodsDescription());
         order.setPrice(req.getDeclaredValue());
         order.setIntlYn(intl ? "Y" : "N");
@@ -1150,6 +1340,16 @@ public class CarrierServiceImpl implements CarrierService {
             }
         }
         orderRepository.save(order);
+
+        // On regenerate the order row is reused, so the prior attempt's
+        // shipment_batch + label_package rows still exist. Clear them before
+        // writing the new ones, or the (order_no, batch_seq) unique key collides
+        // ("duplicate key value violates uk_shipment_batch_order_seq"). Bulk
+        // deletes run immediately, ahead of the inserts below.
+        if (existingOrderNo != null) {
+            shipmentBatchRepository.deleteByOrderNo(orderNo);
+            labelPackageRepository.deleteByOrderNo(orderNo);
+        }
 
         // Per-batch + per-package persistence. Each sub-request produced its
         // own carrier ShipmentResult; save one shipment_batch row per result
@@ -1266,17 +1466,21 @@ public class CarrierServiceImpl implements CarrierService {
                         "USD");
                 customsReq.setCurrency(currencyForCustoms);
                 customsReq.setItems(lines);
-                // Runs in its own REQUIRES_NEW transaction — same reasoning as
-                // the ERROR-order persistence above. A flush failure inside
-                // upsertCustoms (e.g. a bad commodity row) must not poison
-                // this method's own transaction; without isolation the order
-                // being labeled here would fail its commit with an opaque
-                // UnexpectedRollbackException even though the label itself
-                // (and the order/tracking/batch rows already saved above)
-                // succeeded.
+                // MUST run in THIS method's transaction (not REQUIRES_NEW).
+                // upsertCustoms() begins by re-loading the order via
+                // requireOrder(); the order was just saved above but is NOT yet
+                // committed, so an isolated REQUIRES_NEW transaction (a separate
+                // DB connection) cannot see it — requireOrder then returns a
+                // NOT_FOUND *failure response* (it does not throw), so the
+                // customs items are silently dropped and the commercial invoice
+                // renders empty. Joining the ambient transaction lets
+                // requireOrder see the in-session order and commits the customs
+                // rows atomically with the order (customs is part of the order).
+                // The items were validated on the client and are built from a
+                // typed DTO here, so a poisoning throw is not a practical risk;
+                // the try/catch stays as defence-in-depth for logging.
                 try {
-                    requiresNewTransactionTemplate.executeWithoutResult(status ->
-                            customsService.upsertCustoms(String.valueOf(orderNo), customsReq));
+                    customsService.upsertCustoms(String.valueOf(orderNo), customsReq);
                 } catch (Exception ex) {
                     log.warn("Manual order {}: could not save commercial-invoice items: {}",
                             orderNo, ex.getMessage(), ex);
@@ -1322,9 +1526,15 @@ public class CarrierServiceImpl implements CarrierService {
         boolean nextBusinessDay = hasClient
                 && resolutionService.isPastCutoff(resolvedClient, java.time.Instant.now());
 
-        OrderTracking tracking = new OrderTracking();
+        // Fix-in-place: reuse the failed order's existing tracking row so it's
+        // updated ERROR → GENERATED rather than leaving a stale ERROR row beside
+        // the new one (which would double-count in the failed/generated stats).
+        OrderTracking tracking = existingOrderNo != null
+                ? orderTrackingRepository.findByOrderNo(orderNo).orElseGet(OrderTracking::new)
+                : new OrderTracking();
         tracking.setOrderNo(orderNo);
         tracking.setOrderSuffix(0);
+        tracking.setErrorMessage(null);
         tracking.setTrackingNumber(result.trackingNumber());
         tracking.setTrackingUrl(result.trackingUrl());
         tracking.setShipViaCd(order.getShipviaCd());
@@ -2173,7 +2383,13 @@ public class CarrierServiceImpl implements CarrierService {
         boolean sameCustomsTerritory = com.multiship.backend.util.CustomsTerritories
                 .sameTerritory(shipper.getCountryCode(), order.getShiptoCountryCd());
         boolean customsRequired = international && !sameCustomsTerritory;
-        com.multiship.backend.dto.IntlShipmentBlockDTO intlBlock = buildIntlBlock(customsRequired, customs, profile);
+        // Pass the shipment's declared value as the customs-total fallback: when
+        // the customs line-items carry no unit prices (so they don't sum to a
+        // usable total), the declared value the operator entered is the customs
+        // value. Without this the carrier gets a zero/blank customs total and
+        // rejects the international shipment (FedEx: TOTALCUSTOMSVALUE.REQUIRED).
+        com.multiship.backend.dto.IntlShipmentBlockDTO intlBlock =
+                buildIntlBlock(customsRequired, customs, profile, order.getPrice());
 
         // F6-B3 — centralised defaults resolution. The scattered
         // per-field fallback logic that used to live inline here (weight
@@ -2351,10 +2567,83 @@ public class CarrierServiceImpl implements CarrierService {
      * (client-level default) → null. First non-null wins. Commodity list
      * comes only from the order (profile can't hold line items).
      */
+    /**
+     * Build a carrier-ready intl block directly from a manual shipment's
+     * items[]. Mirrors {@link #buildIntlBlock} but sources commodities from the
+     * ManualShipmentRequest instead of a persisted OrderCustoms. The customs
+     * total prefers the summed commodity line values and falls back to the
+     * shipment's declared value when the items carry no unit prices — carriers
+     * reject an international shipment with a zero/blank customs total.
+     */
+    private com.multiship.backend.dto.IntlShipmentBlockDTO buildManualIntlBlock(
+            com.multiship.backend.dto.ManualShipmentRequest req, String currency,
+            java.math.BigDecimal declaredValue) {
+        if (req.getItems() == null) return null;
+        var items = req.getItems().stream()
+                .filter(it -> StringUtils.hasText(it.getDescription()))
+                .toList();
+        if (items.isEmpty()) return null; // isReadyForCarrier() needs >=1 commodity
+
+        // FedEx requires EVERY commodity to carry a unitPrice AND a weight (a
+        // missing unitPrice surfaces as the misleading TOTALCUSTOMSVALUE.REQUIRED;
+        // a missing weight as WEIGHT.NONNUMERIC.ERROR). When the operator enters
+        // items without unit prices / weights, derive them: spread the
+        // shipment's declared value and package weight across the items by
+        // quantity so the per-line values still sum to the declared totals.
+        int totalQty = items.stream()
+                .mapToInt(it -> it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1).sum();
+        java.math.RoundingMode HU = java.math.RoundingMode.HALF_UP;
+        BigDecimal perUnitValue = (declaredValue != null && declaredValue.signum() > 0 && totalQty > 0)
+                ? declaredValue.divide(BigDecimal.valueOf(totalQty), 2, HU) : null;
+        BigDecimal pkgWeight = req.getWeight();
+
+        java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> commodities = items.stream()
+                .map(it -> {
+                    int qty = it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1;
+                    BigDecimal unitValue = it.getUnitValue() != null ? it.getUnitValue() : perUnitValue;
+                    // Per-line weight = the line's share of the package weight;
+                    // fall back to a small positive value so FedEx never sees 0.
+                    BigDecimal lineWeight = it.getWeight() != null ? it.getWeight()
+                            : (pkgWeight != null && pkgWeight.signum() > 0 && totalQty > 0
+                                    ? pkgWeight.multiply(BigDecimal.valueOf(qty))
+                                            .divide(BigDecimal.valueOf(totalQty), 3, HU)
+                                    : new BigDecimal("0.10"));
+                    return com.multiship.backend.dto.CustomsCommodityDTO.builder()
+                            .description(it.getDescription())
+                            .hsCode(it.getHsCode())
+                            .countryOfOrigin(it.getCountryOfOrigin())
+                            .quantity(qty)
+                            .unitValue(unitValue)
+                            .unitWeight(lineWeight)
+                            .sku(it.getSku())
+                            .boxSeq(it.getBoxSeq())
+                            .build();
+                })
+                .toList();
+
+        BigDecimal sum = commodities.stream()
+                .map(com.multiship.backend.dto.CustomsCommodityDTO::lineTotalValue)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal total = sum.signum() != 0
+                ? sum
+                : (declaredValue != null && declaredValue.signum() > 0 ? declaredValue : null);
+        return com.multiship.backend.dto.IntlShipmentBlockDTO.builder()
+                .international(true)
+                .commodities(commodities)
+                .customsCurrency(StringUtils.hasText(currency) ? currency.toUpperCase() : "USD")
+                .incoterms(firstNonBlank(req.getIncoterms(), "DAP"))
+                .reasonForExport(req.getReasonForExport())
+                .customsTotalValue(total)
+                .weightUnit(req.getWeightUnit())
+                .build();
+    }
+
     private com.multiship.backend.dto.IntlShipmentBlockDTO buildIntlBlock(
             boolean international,
             com.multiship.backend.model.OrderCustoms customs,
-            com.multiship.backend.model.ClientCustomsProfile profile) {
+            com.multiship.backend.model.ClientCustomsProfile profile,
+            java.math.BigDecimal fallbackDeclaredValue) {
         if (!international) return null;
         if (customs == null && profile == null) return null;
 
@@ -2374,10 +2663,19 @@ public class CarrierServiceImpl implements CarrierService {
                                         .build())
                                 .toList();
 
-        BigDecimal customsTotal = commodities.stream()
+        BigDecimal commoditySum = commodities.stream()
                 .map(com.multiship.backend.dto.CustomsCommodityDTO::lineTotalValue)
                 .filter(java.util.Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // Prefer the summed commodity line values; fall back to the shipment's
+        // declared value when they don't add up to a usable total (no unit
+        // prices on the items). Carriers require a non-zero customs value on
+        // an international shipment.
+        BigDecimal customsTotal = commoditySum.signum() != 0
+                ? commoditySum
+                : (fallbackDeclaredValue != null && fallbackDeclaredValue.signum() > 0
+                        ? fallbackDeclaredValue
+                        : BigDecimal.ZERO);
 
         return com.multiship.backend.dto.IntlShipmentBlockDTO.builder()
                 .international(true)

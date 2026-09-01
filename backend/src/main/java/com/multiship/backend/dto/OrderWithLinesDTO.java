@@ -31,8 +31,27 @@ public class OrderWithLinesDTO {
     private String shipviaCd;
     private String tenantId;
     private BigDecimal weight;
+    /** LB | KG — unit the weight was entered in; null on legacy rows. */
+    private String weightUnit;
+    /** Declared / customs value entered for the shipment. */
+    private BigDecimal declaredValue;
     private String goodsDesc;
     private LocalDate createdDate;
+    // Ship-FROM (origin) captured on manual shipments — null on ERP/WMS orders.
+    private String shipFromName;
+    private String shipFromCompany;
+    private String shipFromAddr1;
+    private String shipFromAddr2;
+    private String shipFromCity;
+    private String shipFromState;
+    private String shipFromZip;
+    private String shipFromCountryCd;
+    private String shipFromPhone;
+    /** True when the ship-from was resolved from the client warehouse / platform
+     *  default rather than a sender entered on the order (bulk/ERP orders). */
+    private Boolean shipFromResolved;
+    /** 'Y'|'N' — cross-border classification recorded at label time. */
+    private String intlYn;
     /** 'Y' when this is a reverse/return label. */
     private String isReturn;
     /** PR #543 — order source (`MANUAL | BULK | WMS | API | ERP`). Drives

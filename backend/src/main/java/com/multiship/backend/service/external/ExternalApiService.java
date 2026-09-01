@@ -626,9 +626,14 @@ public class ExternalApiService {
 
     private Optional<CarrierAccountRef> clientDefaultAccount(String clientCode, String carrier) {
         if (!StringUtils.hasText(clientCode)) return Optional.empty();
+        // Active + credentialed rows only — this path mints real labels, and
+        // the unfiltered version could select an inactive or credential-less
+        // account ahead of a working platform fallback.
         return carrierAccountRefRepository
                 .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(clientCode).stream()
+                .filter(a -> !Boolean.FALSE.equals(a.getActive()))
                 .filter(a -> carrier.equalsIgnoreCase(a.getCarrierCode()))
+                .filter(a -> StringUtils.hasText(a.getClientId()) && StringUtils.hasText(a.getClientSecret()))
                 .findFirst();
     }
 

@@ -260,6 +260,21 @@ public class OrderImportController {
                 .build());
     }
 
+    @Operation(summary = "Live label-generation progress for a batch",
+            description = "Returns { done, total, running } while a generate/retry is in flight, so the "
+                    + "UI can show a real X-of-N progress bar. Cheap to poll (in-memory, no DB round-trip); "
+                    + "running=false with done=total=0 means nothing is generating for this batch.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/history/{id}/generate/progress")
+    public ResponseEntity<ApiResponse<OrderImportService.GenProgressView>> generationProgress(
+            @org.springframework.web.bind.annotation.PathVariable Long id) {
+        OrderImportService.GenProgressView view = orderImportService.generationProgress(id);
+        return ResponseEntity.ok(ApiResponse.<OrderImportService.GenProgressView>builder()
+                .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
+                .data(view)
+                .build());
+    }
+
     @Operation(summary = "Correct one row of a saved import (Data History inline edit)",
             description = "Sprint 51 — replaces the row with the operator's edit, re-validates the " +
                     "whole batch, re-stamps each ungenerated row SAVED / NEEDS_FIX, and recomputes " +

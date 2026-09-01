@@ -65,6 +65,7 @@ class WmsServiceTest {
         WmsAddress to = new WmsAddress();
         to.setName("Jane Recipient");
         to.setAttn("Emily Contact");
+        to.setPhone("2071234567");
         // WMS crams the street + city/state/zip into addr1 with long space runs.
         to.setAddr1("42 Overseas Ave           London, GB SW1A 1AA      ");
         to.setCity("London");

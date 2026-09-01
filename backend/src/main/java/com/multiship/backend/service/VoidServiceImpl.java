@@ -114,6 +114,16 @@ public class VoidServiceImpl implements VoidService {
         CarrierAccountRef account = resolveAccount(canonicalCarrier, tracking.getAccountNumber());
         if (account == null || !StringUtils.hasText(account.getClientId())
                 || !StringUtils.hasText(account.getClientSecret())) {
+            // Distinguish "the billed account is gone" from "no credentials at
+            // all" — the carrier only accepts a cancel from the account that
+            // bought the label, so substituting another account can't work.
+            if (StringUtils.hasText(tracking.getAccountNumber())) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT,
+                        "This label was billed to " + canonicalCarrier + " account "
+                                + tracking.getAccountNumber().trim() + ", which is no longer "
+                                + "registered (or has no credentials). Re-add that account in "
+                                + "Settings → Carriers to void " + tracking.getTrackingNumber() + ".");
+            }
             return failure(HttpStatus.UNPROCESSABLE_CONTENT,
                     "No live credentials for " + canonicalCarrier
                             + " — cannot void " + tracking.getTrackingNumber() + ".");
@@ -210,17 +220,27 @@ public class VoidServiceImpl implements VoidService {
     }
 
     /**
-     * Resolve the account to authenticate the void call. Same fallback
-     * chain as TrackingServiceImpl.
+     * Resolve the account to authenticate the void call. When the tracking
+     * recorded the billing account, ONLY that exact (accountNumber, carrier)
+     * row is acceptable:
+     * <ul>
+     *   <li>The old any-carrier fallback matched the same number under a
+     *       DIFFERENT carrier — since (number, carrier) is the unique key,
+     *       that row can belong to another tenant, handing this void a
+     *       foreign tenant's credentials.</li>
+     *   <li>The old silent platform substitution sent the platform number as
+     *       {@code shipperAccountNumber} — exactly the mismatch FedEx rejects
+     *       (see the Sprint 49 comment at the call site). Failing loudly so
+     *       the operator re-registers the account beats a doomed carrier call.</li>
+     * </ul>
+     * Platform fallback remains only for legacy trackings that never recorded
+     * an account number.
      */
     CarrierAccountRef resolveAccount(String carrierCode, String accountNumber) {
         if (StringUtils.hasText(accountNumber)) {
-            Optional<CarrierAccountRef> exact = carrierAccountRefRepository
-                    .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(accountNumber, carrierCode);
-            if (exact.isPresent()) return exact.get();
-            Optional<CarrierAccountRef> anyCarrier = carrierAccountRefRepository
-                    .findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(accountNumber);
-            if (anyCarrier.isPresent()) return anyCarrier.get();
+            return carrierAccountRefRepository
+                    .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(accountNumber, carrierCode)
+                    .orElse(null);
         }
         List<CarrierAccountRef> platform = carrierAccountRefRepository
                 .findPlatformAccountsByCarrier(carrierCode);

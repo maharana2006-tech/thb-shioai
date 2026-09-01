@@ -115,7 +115,12 @@ async function apiRequest<T>(endpoint: string, options: FetchOptions = {}): Prom
       error instanceof ApiError ? error.status : undefined;
     const message = error instanceof Error ? error.message : String(error);
     const label = `[API Client] ${options.method || 'GET'} to ${endpoint}`;
-    if (status && status >= 400 && status < 500) {
+    // A 502 CARRIER_FAILURE is an expected business outcome (the carrier
+    // rejected the shipment; the UI shows a humanized toast) — logging it at
+    // console.error made every sandbox rejection look like an app failure.
+    const expectedCarrierRejection =
+      status === 502 && error instanceof ApiError && error.errorCode === 'CARRIER_FAILURE';
+    if ((status && status >= 400 && status < 500) || expectedCarrierRejection) {
       console.debug(`${label} — ${status}`, message);
     } else {
       console.error(`${label}:`, message);
@@ -183,9 +188,11 @@ export async function authFetch(endpoint: string, options: RequestInit = {}): Pr
     }
   }
 
-  const suffix = serverMessage ? ` — ${serverMessage}` : '';
+  // Use the server's own message as the error text (like the JSON path above)
+  // so callers show a clean "A file named … is already imported" instead of a
+  // raw "HTTP 409 — …". The status is still available via ApiError.status.
   throw new ApiError(
-    `HTTP ${response.status}${suffix}`,
+    serverMessage || `HTTP error! status: ${response.status}`,
     response.status,
     serverMessage ? { message: serverMessage } : {},
   );

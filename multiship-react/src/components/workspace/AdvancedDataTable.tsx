@@ -896,11 +896,12 @@ export default function AdvancedDataTable<T>({
                       ? (e) => {
                           // Interactive controls inside the row keep their own behavior.
                           if ((e.target as HTMLElement).closest('button, a, input, select, textarea, label')) return
-                          setExpandedId((prev) => {
-                            const next = prev === row.id ? null : row.id
-                            if (next) onRowExpand?.(row.original)
-                            return next
-                          })
+                          const willOpen = expandedId !== row.id
+                          setExpandedId(willOpen ? row.id : null)
+                          // Lazy-load the expanded content when opening — OUTSIDE the
+                          // state updater (updaters run during render, and the parent's
+                          // loader calls setState, which warns "update while rendering").
+                          if (willOpen) onRowExpand?.(row.original)
                         }
                       : undefined
                   }

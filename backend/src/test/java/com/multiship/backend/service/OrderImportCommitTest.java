@@ -49,6 +49,10 @@ class OrderImportCommitTest {
                 // validateRow doc comment. Fixture updated to keep pace.
                 .clientCode("ACME")
                 .recipientName("Jane " + rowNumber)
+                // recipientPhone joined the required-field set alongside
+                // clientCode/weightUnit (carriers reject a phone-less shipment);
+                // fixture updated so valid rows stay valid under validateRow.
+                .recipientPhone("2125550100")
                 .addressLine1(rowNumber + " Broadway")
                 .city("New York")
                 .state("NY")
@@ -89,7 +93,7 @@ class OrderImportCommitTest {
 
     @Test
     void commitCallsCarrierServiceForEveryValidRow() {
-        when(carrierService.generateManualLabel(any(), any()))
+        when(carrierService.generateManualLabel(any(), any(), any()))
                 .thenReturn(ok(1001L, "TN-1"),
                             ok(1002L, "TN-2"),
                             ok(1003L, "TN-3"));
@@ -100,7 +104,7 @@ class OrderImportCommitTest {
         assertEquals("success", resp.getStatus());
         assertEquals(3, resp.getData().getValidRows());
         assertEquals(0, resp.getData().getInvalidRows());
-        verify(carrierService, times(3)).generateManualLabel(any(), any());
+        verify(carrierService, times(3)).generateManualLabel(any(), any(), any());
 
         // Every row populated with the generated tracking number.
         for (int i = 0; i < 3; i++) {
@@ -113,12 +117,12 @@ class OrderImportCommitTest {
 
     @Test
     void commitPassesCarrierAndAccountNumberOntoManualShipmentRequest() {
-        when(carrierService.generateManualLabel(any(), any())).thenReturn(ok(1001L, "TN-1"));
+        when(carrierService.generateManualLabel(any(), any(), any())).thenReturn(ok(1001L, "TN-1"));
 
         service.commit(List.of(validRow(1)), "alice");
 
         ArgumentCaptor<ManualShipmentRequest> captor = ArgumentCaptor.forClass(ManualShipmentRequest.class);
-        verify(carrierService).generateManualLabel(captor.capture(), any());
+        verify(carrierService).generateManualLabel(captor.capture(), any(), any());
         ManualShipmentRequest req = captor.getValue();
         assertEquals("UPS", req.getCarrierCode());
         assertEquals("A12345", req.getAccountNumber());
@@ -139,7 +143,7 @@ class OrderImportCommitTest {
         // no longer maps to input row order. Route the response by the
         // request's recipient name (which mirrors the input row) so this
         // test remains deterministic under any thread scheduling.
-        when(carrierService.generateManualLabel(any(), any())).thenAnswer(inv -> {
+        when(carrierService.generateManualLabel(any(), any(), any())).thenAnswer(inv -> {
             ManualShipmentRequest req = inv.getArgument(0);
             String name = req.getRecipient() != null ? req.getRecipient().getName() : "";
             return switch (name) {
@@ -167,7 +171,7 @@ class OrderImportCommitTest {
 
     @Test
     void commitCarrierExceptionIsCaughtAndMarkedFailed() {
-        when(carrierService.generateManualLabel(any(), any()))
+        when(carrierService.generateManualLabel(any(), any(), any()))
                 .thenThrow(new RuntimeException("network dead"));
 
         ApiResponse<OrderImportPreviewDTO> resp = service.commit(
@@ -187,7 +191,7 @@ class OrderImportCommitTest {
         badRow.setPostalCode(null);
         badRow.setCountryCode(null);
 
-        when(carrierService.generateManualLabel(any(), any())).thenReturn(ok(1001L, "TN-1"));
+        when(carrierService.generateManualLabel(any(), any(), any())).thenReturn(ok(1001L, "TN-1"));
 
         ApiResponse<OrderImportPreviewDTO> resp = service.commit(
                 List.of(validRow(1), badRow), "alice");
@@ -195,7 +199,7 @@ class OrderImportCommitTest {
         assertEquals(1, resp.getData().getValidRows());
         assertEquals(1, resp.getData().getInvalidRows());
         // CarrierService called once, not twice.
-        verify(carrierService, times(1)).generateManualLabel(any(), any());
+        verify(carrierService, times(1)).generateManualLabel(any(), any(), any());
         // Bad row has NO generated status set (never got that far).
         OrderImportRowDTO bad = resp.getData().getRows().get(1);
         assertNull(bad.getGeneratedStatus());
@@ -346,7 +350,7 @@ class OrderImportCommitTest {
                 () -> scoped.generateLabelsForBatch(22L, "alice"));
         // Refused before any status flip / carrier call.
         verify(batchRepo, org.mockito.Mockito.never()).save(any());
-        verify(carrierService, org.mockito.Mockito.never()).generateManualLabel(any(), any());
+        verify(carrierService, org.mockito.Mockito.never()).generateManualLabel(any(), any(), any());
     }
 
     @Test
@@ -373,6 +377,6 @@ class OrderImportCommitTest {
 
         assertThrows(org.springframework.security.access.AccessDeniedException.class,
                 () -> scoped.generateLabelForRow(33L, 1, "alice"));
-        verify(carrierService, org.mockito.Mockito.never()).generateManualLabel(any(), any());
+        verify(carrierService, org.mockito.Mockito.never()).generateManualLabel(any(), any(), any());
     }
 }

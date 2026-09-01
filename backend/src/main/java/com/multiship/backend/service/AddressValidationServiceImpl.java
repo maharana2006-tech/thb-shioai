@@ -35,10 +35,21 @@ public class AddressValidationServiceImpl implements AddressValidationService {
     private final CarrierService carrierService;
     private final CarrierAccountRefRepository carrierAccountRefRepository;
 
+    /** Sprint 50 PR H clamp — this service was skipped in the original sweep,
+     *  so a scoped USER posting {@code customerNo: "OTHER"} authenticated with
+     *  OTHER's carrier credentials (a which-carriers-does-that-tenant-hold
+     *  oracle + quota burn on their account). Optional for unit tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.TenantScopeEnforcer tenantScope;
+
     @Override
     public ApiResponse<AddressValidationResponseDTO> validate(AddressValidationRequestDTO request) {
         if (request == null) {
             return failure(HttpStatus.BAD_REQUEST, "Request body is required.");
+        }
+        // Clamp the tenant BEFORE any credential resolution (see field note).
+        if (tenantScope != null) {
+            request.setCustomerNo(tenantScope.clampClientCode(request.getCustomerNo()));
         }
         if (!StringUtils.hasText(request.getCarrierCode())) {
             return failure(HttpStatus.BAD_REQUEST, "carrierCode is required.");
@@ -105,10 +116,13 @@ public class AddressValidationServiceImpl implements AddressValidationService {
 
     CarrierAccountRef resolveAccount(String carrierCode, String customerNo) {
         if (StringUtils.hasText(customerNo)) {
-            // Tier 1: client-owned default for this carrier.
+            // Tier 1: client-owned default for this carrier. Active rows only —
+            // tier 2 already filtered inactive rows, but tier 1 didn't, so an
+            // inactive-but-default account beat an active non-default one.
             List<CarrierAccountRef> ownedDefaults = carrierAccountRefRepository
                     .findByCustomerNoIgnoreCaseAndClientDefaultTrue(customerNo);
             for (CarrierAccountRef ref : ownedDefaults) {
+                if (Boolean.FALSE.equals(ref.getActive())) continue;
                 if (matchesCarrierWithCreds(ref, carrierCode)) {
                     return ref;
                 }

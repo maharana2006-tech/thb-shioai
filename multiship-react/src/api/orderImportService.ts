@@ -199,6 +199,17 @@ export const orderImportService = {
     ),
 
   /**
+   * Live label-generation progress for a batch, polled ALONGSIDE the generate
+   * request so the UI can show a real "X of N" bar. `running` is false (with
+   * done=total=0) when nothing is generating for the batch.
+   */
+  generationProgress: (id: number, signal?: AbortSignal) =>
+    apiClient.get<ApiResponse<{ done: number; total: number; running: boolean }>>(
+      `/orders/import/history/${id}/generate/progress`,
+      { signal },
+    ),
+
+  /**
    * Sprint 51 — correct one row of a saved import in place. The backend
    * re-validates the whole batch, re-stamps each ungenerated row
    * SAVED / NEEDS_FIX, and returns the refreshed batch (counts + status

@@ -64,7 +64,11 @@ class IndexInitializerTest {
         List<IndexInitializer.IndexSpec> specs = IndexInitializer.INDEX_STATEMENTS;
         for (IndexInitializer.IndexSpec spec : specs) {
             String sql = spec.sql().toUpperCase();
-            assertTrue(sql.contains("CREATE INDEX CONCURRENTLY"),
+            // Plain indexes: CREATE INDEX CONCURRENTLY. Unique constraints
+            // (uk_-named) use CREATE UNIQUE INDEX CONCURRENTLY — same lock
+            // guarantees, extra uniqueness.
+            assertTrue(sql.contains("CREATE INDEX CONCURRENTLY")
+                            || sql.contains("CREATE UNIQUE INDEX CONCURRENTLY"),
                     "MUST use CONCURRENTLY to avoid table locks in prod: " + spec.name());
             assertTrue(sql.contains("IF NOT EXISTS"),
                     "MUST use IF NOT EXISTS for idempotency across restarts: " + spec.name());
@@ -73,11 +77,13 @@ class IndexInitializerTest {
 
     @Test
     void indexNamesFollowConvention() {
-        // Convention: idx_<table>_<cols>[_trgm]. Guards ops's ability to
+        // Convention: idx_<table>_<cols>[_trgm] for plain indexes,
+        // uk_<table>_<cols> for unique constraints. Guards ops's ability to
         // reason about what an index covers from its name.
         for (IndexInitializer.IndexSpec spec : IndexInitializer.INDEX_STATEMENTS) {
-            assertTrue(spec.name().startsWith("idx_"),
-                    "index name must start with idx_: " + spec.name());
+            boolean unique = spec.sql().toUpperCase().contains("CREATE UNIQUE INDEX");
+            assertTrue(unique ? spec.name().startsWith("uk_") : spec.name().startsWith("idx_"),
+                    "index name must start with idx_ (or uk_ for unique): " + spec.name());
             if (spec.needsPgTrgm()) {
                 assertTrue(spec.name().endsWith("_trgm"),
                         "trigram indexes should end with _trgm: " + spec.name());
