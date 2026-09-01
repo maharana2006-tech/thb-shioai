@@ -28,12 +28,15 @@ import static org.mockito.Mockito.when;
 class LabelArtifactResolverTest {
 
     private OrderTrackingRepository orderTrackingRepository;
+    /** PR #544 — new required constructor arg (per-package label lookup). */
+    private com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
     private LabelArtifactResolver resolver;
 
     @BeforeEach
     void setUp() {
         orderTrackingRepository = mock(OrderTrackingRepository.class);
-        resolver = new LabelArtifactResolver(orderTrackingRepository);
+        labelPackageRepository = mock(com.multiship.backend.repository.LabelPackageRepository.class);
+        resolver = new LabelArtifactResolver(orderTrackingRepository, labelPackageRepository);
     }
 
     // ─── No-stored-artifact branches (fall to facsimile) ───────────────
