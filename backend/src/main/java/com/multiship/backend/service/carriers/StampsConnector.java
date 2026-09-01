@@ -91,6 +91,12 @@ public class StampsConnector implements CarrierConnector {
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
 
+    /** Field injection (not constructor) so the many unit tests that build
+     *  this connector directly with the two-arg constructor keep compiling;
+     *  those tests don't exercise listPackages(). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CarrierPackageCatalogRepository packageCatalogRepository;
+
     /** Per-thread reason the last getAccessToken fell back — read by verify. */
     private static final ThreadLocal<String> LAST_AUTH_DETAIL = new ThreadLocal<>();
 
@@ -174,11 +180,11 @@ public class StampsConnector implements CarrierConnector {
         if (!"US".equals(o) && !"PR".equals(o)) {
             return new PackageAvailability(List.of(), false, "USPS published packaging (US-only carrier)");
         }
-        List<PackageOffering> pkgs = List.of(
-                new PackageOffering("FLAT_RATE_ENVELOPE", "USPS Flat Rate Envelope", bd("12.5"), bd("9.5"), bd("0.5"), bd("70"), true, "DOMESTIC"),
-                new PackageOffering("SM_FLAT_RATE_BOX", "USPS Small Flat Rate Box", bd("8.69"), bd("5.44"), bd("1.75"), bd("70"), true, "DOMESTIC"),
-                new PackageOffering("MD_FLAT_RATE_BOX", "USPS Medium Flat Rate Box", bd("11.25"), bd("8.75"), bd("6"), bd("70"), true, "DOMESTIC"),
-                new PackageOffering("LG_FLAT_RATE_BOX", "USPS Large Flat Rate Box", bd("12.25"), bd("12"), bd("6"), bd("70"), true, "DOMESTIC"));
+        // Catalogue now lives in carrier_package_catalog (V32) instead of being
+        // hardcoded here.
+        List<PackageOffering> pkgs = CarrierPackageCatalogSupport.toOfferings(
+                packageCatalogRepository.findByCarrierCodeIgnoreCaseAndActiveTrueOrderBySortOrderAsc(CARRIER_CODE),
+                o);
         boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
         return realToken
                 ? new PackageAvailability(pkgs, true, "verified USPS account · published packaging")

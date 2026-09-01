@@ -38,6 +38,12 @@ public class UpsConnector implements CarrierConnector {
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
 
+    /** Field injection (not constructor) so the many unit tests that build
+     *  this connector directly with the two-arg constructor keep compiling;
+     *  those tests don't exercise listPackages(). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CarrierPackageCatalogRepository packageCatalogRepository;
+
     /** Per-thread reason the last getAccessToken fell back — read by verify. */
     private static final ThreadLocal<String> LAST_AUTH_DETAIL = new ThreadLocal<>();
 
@@ -149,18 +155,14 @@ public class UpsConnector implements CarrierConnector {
     public PackageAvailability listPackages(String originCountry, String accessToken, String environment) {
         // UPS packaging is a published, static catalogue (same set every origin);
         // the 10/25KG boxes are international-only. Token unused — packaging isn't
-        // a live availability call.
-        List<PackageOffering> pkgs = List.of(
-                new PackageOffering("01", "UPS Letter", bd("12.5"), bd("9.5"), bd("0.5"), bd("1"), false, "BOTH"),
-                new PackageOffering("04", "UPS Express Pak", bd("16"), bd("12.75"), bd("2"), bd("3"), false, "BOTH"),
-                new PackageOffering("03", "UPS Tube", bd("38"), bd("6"), bd("6"), null, false, "BOTH"),
-                new PackageOffering("2a", "UPS Small Express Box", bd("13"), bd("11"), bd("2"), null, false, "BOTH"),
-                new PackageOffering("2b", "UPS Medium Express Box", bd("15"), bd("11"), bd("3"), null, false, "BOTH"),
-                new PackageOffering("2c", "UPS Large Express Box", bd("18"), bd("13"), bd("3"), null, false, "BOTH"),
-                new PackageOffering("25", "UPS 10KG Box", bd("16.5"), bd("13.25"), bd("10.75"), bd("22"), true, "INTERNATIONAL"),
-                new PackageOffering("24", "UPS 25KG Box", bd("16.5"), bd("13.25"), bd("10.75"), bd("55"), true, "INTERNATIONAL"));
+        // a live availability call. Catalogue now lives in carrier_package_catalog
+        // (V32) instead of being hardcoded here, so ops can correct it without a
+        // code deploy.
+        List<PackageOffering> pkgs = CarrierPackageCatalogSupport.toOfferings(
+                packageCatalogRepository.findByCarrierCodeIgnoreCaseAndActiveTrueOrderBySortOrderAsc(CARRIER_CODE),
+                originCountry);
         boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
-        return realToken
+         return realToken
                 ? new PackageAvailability(pkgs, true, "verified UPS account · published packaging")
                 : new PackageAvailability(pkgs, false, "not verified — no live UPS credentials");
     }

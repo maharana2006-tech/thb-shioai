@@ -4,6 +4,7 @@ import { notify } from '../utils/notify'
 import { FiDownloadCloud, FiEdit3, FiGlobe, FiPlus, FiStar, FiTrash2, FiTruck, FiUsers, FiX } from 'react-icons/fi'
 import { dimWeightOf, oversizeOf, shippingConfigService, type PackagePreset } from '../api/shippingConfigService'
 import { allowlistUsageService, type ClientAllowedPackage } from '../api/clientCatalogService'
+import { accountRefService } from '../api/accountRefService'
 import { countryName } from '../utils/countries'
 import { useAppSession } from '../hooks/useAppSession'
 import { canManageCarriers, normalizeRole } from '../utils/roles'
@@ -121,6 +122,9 @@ export default function PackagesPage() {
   const canSync = canManageCarriers(normalizeRole(role))
   const [presets, setPresets] = useState<PackagePreset[]>([])
   const [assignments, setAssignments] = useState<ClientAllowedPackage[]>([])
+  /** Carrier codes with at least one configured account — feeds the carrier
+   *  filter dropdown even before any packaging has synced for that carrier. */
+  const [configuredCarriers, setConfiguredCarriers] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<PackagePreset | null>(null)
   const [saving, setSaving] = useState(false)
@@ -139,12 +143,14 @@ export default function PackagesPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [presetList, usageResp] = await Promise.all([
+      const [presetList, usageResp, accounts] = await Promise.all([
         shippingConfigService.listPresets(),
         allowlistUsageService.packages(),
+        accountRefService.listAccounts().catch(() => []),
       ])
       setPresets(presetList)
       setAssignments(usageResp.data ?? [])
+      setConfiguredCarriers([...new Set(accounts.map((a) => a.carrierCode.toUpperCase()))])
     } catch (e) {
       notify.apiError(e, 'Failed to load packages.')
     } finally {
@@ -291,16 +297,18 @@ export default function PackagesPage() {
 
   const num = (v: string) => (v === '' ? null : Number(v))
 
-  // Carriers present in the catalog (+ a Custom option when any hand-made box exists).
+  // Carriers present in the catalog, plus any carrier with a configured
+  // account (so the filter offers a carrier before its packaging has ever
+  // synced) — + a Custom option when any hand-made box exists.
   const carrierOptions = useMemo(() => {
-    const carriers = new Set<string>()
+    const carriers = new Set<string>(configuredCarriers)
     let hasCustom = false
     presets.forEach((p) => {
       if (p.kind === 'CARRIER' && p.carrier) carriers.add(p.carrier.toUpperCase())
       else hasCustom = true
     })
     return { carriers: [...carriers].sort(), hasCustom }
-  }, [presets])
+  }, [presets, configuredCarriers])
 
   // Custom boxes are universal; carrier packaging is per ship-from origin.
   // The carrier filter narrows to one carrier's packaging (or just custom boxes).
