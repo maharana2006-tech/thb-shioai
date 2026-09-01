@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  FiAlertCircle,
   FiArrowLeft,
   FiFileText,
   FiFilter,
@@ -533,7 +534,20 @@ export default function DataHistoryPage() {
         accessorFn: (b) => b.status ?? '',
         cell: ({ row }) => {
           const s = statusMeta(row.original.status)
-          return <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>{s.label}</span>
+          const invalid = row.original.invalidRows
+          return (
+            <span className="flex flex-col items-start gap-0.5">
+              <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>{s.label}</span>
+              {/* Errors must be visible while the batch is COLLAPSED too — the
+                  operator shouldn't have to expand a row to learn it's broken. */}
+              {invalid > 0 ? (
+                <span className="inline-flex items-center gap-1 text-[9.5px] font-semibold text-rose-700">
+                  <FiAlertCircle className="h-2.5 w-2.5 shrink-0" />
+                  {invalid} row{invalid === 1 ? '' : 's'} need{invalid === 1 ? 's' : ''} fixes — click to see why
+                </span>
+              ) : null}
+            </span>
+          )
         },
         meta: { headerLabel: 'Status' },
       },
@@ -551,8 +565,12 @@ export default function DataHistoryPage() {
                 {b.savedRows} saved
               </span>
               {b.invalidRows > 0 ? (
-                <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10.5px] font-bold text-rose-700 ring-1 ring-rose-200">
-                  {b.invalidRows} err
+                <span
+                  title={`${b.invalidRows} row(s) failed validation — click the row to see each error explained under its line.`}
+                  className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10.5px] font-bold text-rose-800 ring-1 ring-rose-300"
+                >
+                  <FiAlertCircle className="h-3 w-3 shrink-0" />
+                  {b.invalidRows} error{b.invalidRows === 1 ? '' : 's'}
                 </span>
               ) : null}
             </span>
