@@ -20,11 +20,16 @@ class AuditLogControllerAuthTest {
 
     @Test
     void listEndpoint_allowsAdminAndUser() throws Exception {
-        // Audit A3 — signature grew a `sort` String param (was 6 Strings + 2 ints;
-        // now 7 Strings + 2 ints).
+        // Signature growth history:
+        //   original — 6 Strings + 2 ints
+        //   Audit A3 — added `sort` String → 7 Strings + 2 ints
+        //   feat(logs) b2f69c4 — added `category` String + `orderNo` Integer
+        //                        (between entityKey and since) → 8 Strings +
+        //                        1 Integer + 2 ints (11 params total)
         Method list = AuditLogController.class.getDeclaredMethod("list",
                 String.class, String.class, String.class, String.class,
-                String.class, String.class, String.class, int.class, int.class);
+                String.class, Integer.class, String.class, String.class,
+                String.class, int.class, int.class);
         PreAuthorize gate = list.getAnnotation(PreAuthorize.class);
         assertNotNull(gate, "list() must carry @PreAuthorize");
         assertEquals("hasAnyRole('ADMIN','USER')", gate.value(),
