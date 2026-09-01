@@ -115,7 +115,12 @@ async function apiRequest<T>(endpoint: string, options: FetchOptions = {}): Prom
       error instanceof ApiError ? error.status : undefined;
     const message = error instanceof Error ? error.message : String(error);
     const label = `[API Client] ${options.method || 'GET'} to ${endpoint}`;
-    if (status && status >= 400 && status < 500) {
+    // A 502 CARRIER_FAILURE is an expected business outcome (the carrier
+    // rejected the shipment; the UI shows a humanized toast) — logging it at
+    // console.error made every sandbox rejection look like an app failure.
+    const expectedCarrierRejection =
+      status === 502 && error instanceof ApiError && error.errorCode === 'CARRIER_FAILURE';
+    if ((status && status >= 400 && status < 500) || expectedCarrierRejection) {
       console.debug(`${label} — ${status}`, message);
     } else {
       console.error(`${label}:`, message);

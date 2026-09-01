@@ -348,7 +348,18 @@ export default function LabelDocumentPage() {
   const broker = payload?.broker ?? null
   const brokerage = payload?.brokerage ?? null
   const customsDefaults = payload?.customsDefaults ?? null
-  const receiverIsImporter = !importer || importer.type === 'RECEIVER'
+  // Terms of sale: the ORDER's own incoterm (what the operator picked on this
+  // shipment) must beat the customs profile's tenant-wide default — the old
+  // priority let a stale profile DAP override an order created as DDP, which
+  // misstates duty liability on a customs document. Fallback derives from the
+  // importer profile type only when neither carries a value.
+  const profileSaysReceiver = !importer || importer.type === 'RECEIVER'
+  const termsOfSale = payload?.customs?.incoterms || customsDefaults?.incoterms
+    || (profileSaysReceiver ? 'DAP' : 'DDP')
+  // Importer of record follows the INCOTERM, not just the profile: under DDP
+  // the seller/shipper clears customs and pays duties, so "receiver is the
+  // importer" would be wrong even when no importer profile is configured.
+  const receiverIsImporter = termsOfSale === 'DDP' ? false : profileSaysReceiver
 
   // TENANT users may only open their own orders.
   const ownTenant = getTenantIdForUser(normalizeRole(role), username)
@@ -469,9 +480,9 @@ export default function LabelDocumentPage() {
 
   // ---- commercial-invoice header + totals ----------------------------------
   const ciWeightUnit = (payload?.customs?.weightUnit || order?.weightUnit || 'LB').toLowerCase()
-  const ciCurrency = (payload?.charges?.currency || customsDefaults?.currency || payload?.customs?.currency || 'USD').toUpperCase()
-  const purpose = purposeLabel(customsDefaults?.reasonForExport || payload?.customs?.reasonForExport)
-  const termsOfSale = customsDefaults?.incoterms || payload?.customs?.incoterms || (receiverIsImporter ? 'DAP' : 'DDP')
+  // Order-specific values beat profile defaults (same inversion as incoterms).
+  const ciCurrency = (payload?.charges?.currency || payload?.customs?.currency || customsDefaults?.currency || 'USD').toUpperCase()
+  const purpose = purposeLabel(payload?.customs?.reasonForExport || customsDefaults?.reasonForExport)
   const freightAmount = payload?.charges?.freight ?? 0
   const insuranceAmount = 0
   const otherAmount = 0
@@ -717,7 +728,7 @@ export default function LabelDocumentPage() {
                     for domestic parcels. */}
                 {isInternational ? (
                   <p className="text-[11px] font-black leading-none">
-                    INCOTERMS: {customsDefaults?.incoterms || (receiverIsImporter ? 'DAP' : 'DDP')}
+                    INCOTERMS: {termsOfSale}
                   </p>
                 ) : null}
                 <div className="mt-1 grid grid-cols-[1.08fr_1fr] font-mono text-[10px] leading-[13px]">
@@ -1009,8 +1020,15 @@ export default function LabelDocumentPage() {
                   <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Importer</p>
                   {receiverIsImporter ? (
                     <p className="text-slate-700">
-                      <span className="font-bold">Same as consignee</span> — DAP: the receiver is the importer of
-                      record; the carrier collects identity documents at destination.
+                      <span className="font-bold">Same as consignee</span> — {termsOfSale}: the receiver is the
+                      importer of record; the carrier collects identity documents at destination.
+                    </p>
+                  ) : !importer ? (
+                    /* DDP with no importer profile: duty liability sits with the
+                       seller — never claim the receiver imports under DDP. */
+                    <p className="text-slate-700">
+                      <span className="font-bold">Shipper / seller</span> — {termsOfSale}: the sender is the
+                      importer of record and pays duties &amp; taxes at destination.
                     </p>
                   ) : (
                     <>
