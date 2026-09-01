@@ -106,7 +106,11 @@ public class ShipmentValidationResult {
     private boolean international;
 
     @Data
-    @Builder
+    // PR #542 — toBuilder=true so ShipmentValidationService can rewrite
+    // matchLevel/message/etc on the returned sub-result when local
+    // validators flagged hard errors (see Fix 1 in
+    // callCarrierValidateShipment).
+    @Builder(toBuilder = true)
     @NoArgsConstructor
     @AllArgsConstructor
     public static class CarrierValidationSubResult {
