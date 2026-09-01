@@ -108,6 +108,34 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.external.IdempotencyService idempotency;
 
+    /**
+     * PR #544 follow-up — derive the effective package count from an
+     * {@link OrderWithLinesDTO}. Every label-serving endpoint that loops
+     * over packages must use this, not {@code getPackageCount()} alone,
+     * because the two data sources can disagree:
+     *
+     * <ul>
+     *   <li>{@code label_package} row count = actual per-piece labels the
+     *       carrier issued (from {@code generateManualLabel} success)</li>
+     *   <li>{@code Order.package_count} = intent at order-creation time
+     *       (also written on the manual-label error path — where it used to
+     *       be stomped to {@code 1} pre-Part-B)</li>
+     * </ul>
+     *
+     * <p>When they disagree, the {@code label_package} row count is the
+     * source of truth — those rows are what the passthrough resolver can
+     * actually serve. Using {@code MAX(...)} matches the FE picker's own
+     * signal at {@code LabelDocumentPage.tsx:449-451}, so the picker's
+     * "1 of 2" tabs and the composite always agree on how many labels
+     * to render.
+     */
+    static int effectivePkgCount(OrderWithLinesDTO data) {
+        if (data == null) return 1;
+        int fromPackages = data.getPackages() == null ? 0 : data.getPackages().size();
+        int fromCount = data.getPackageCount() == null ? 0 : data.getPackageCount();
+        return Math.max(1, Math.max(fromPackages, fromCount));
+    }
+
     /** Map a client Address value object into the label payload shape. */
     private Map<String, Object> addressMap(com.multiship.backend.model.Address a, String fallbackName) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -628,10 +656,12 @@ public class OrderController {
                         .body(new String(single.get()));
             }
         } else {
-            // Peek at package_count so a multi-pkg order concatenates.
+            // Peek at package count so a multi-pkg order concatenates. Uses
+            // effectivePkgCount() rather than raw getPackageCount() so a
+            // stale package_count doesn't drop pkg 2..N when label_package
+            // rows exist for them.
             ApiResponse<OrderWithLinesDTO> peek = orderService.getOrderWithLines(orderNo);
-            Integer count = peek.getData() != null ? peek.getData().getPackageCount() : null;
-            int totalPkgs = count == null || count < 1 ? 1 : count;
+            int totalPkgs = effectivePkgCount(peek.getData());
             if (totalPkgs > 1) {
                 StringBuilder allZpl = new StringBuilder();
                 boolean any = false;
@@ -679,8 +709,7 @@ public class OrderController {
                 ? trackingResponse.getData().getLabelDetails()
                 : null;
 
-        Integer pkgCount = orderResponse.getData().getPackageCount();
-        int totalPkgs = pkgCount == null || pkgCount < 1 ? 1 : pkgCount;
+        int totalPkgs = effectivePkgCount(orderResponse.getData());
         java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =
                 orderResponse.getData().getPackages() == null
                         ? java.util.List.of()
@@ -781,8 +810,7 @@ public class OrderController {
                             .ifPresent(zpls::add);
                 } else {
                     ApiResponse<OrderWithLinesDTO> peek = orderService.getOrderWithLines(orderNo);
-                    Integer count = peek.getData() != null ? peek.getData().getPackageCount() : null;
-                    int totalPkgs = count == null || count < 1 ? 1 : count;
+                    int totalPkgs = effectivePkgCount(peek.getData());
                     if (totalPkgs > 1) {
                         for (int i = 1; i <= totalPkgs; i++) {
                             labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", i)
@@ -833,8 +861,7 @@ public class OrderController {
                 ? trackingResponse.getData().getLabelDetails()
                 : null;
 
-        Integer pkgCountBoxed = orderResponse.getData().getPackageCount();
-        int totalPkgs = pkgCountBoxed == null || pkgCountBoxed < 1 ? 1 : pkgCountBoxed;
+        int totalPkgs = effectivePkgCount(orderResponse.getData());
         java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =
                 orderResponse.getData().getPackages() == null
                         ? java.util.List.of()
@@ -905,8 +932,7 @@ public class OrderController {
                 // Multi-pkg orders composite each package vertically into
                 // one PNG (per operator call on PR #544 Q3).
                 ApiResponse<OrderWithLinesDTO> orderResp = orderService.getOrderWithLines(orderNo);
-                Integer count = orderResp.getData() != null ? orderResp.getData().getPackageCount() : null;
-                int totalPkgs = count == null || count < 1 ? 1 : count;
+                int totalPkgs = effectivePkgCount(orderResp.getData());
                 if (totalPkgs <= 1) {
                     java.util.Optional<byte[]> zpl =
                             labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", null);
