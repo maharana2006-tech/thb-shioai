@@ -59,6 +59,12 @@ public class DhlConnector implements CarrierConnector {
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
 
+    /** Field injection (not constructor) so the many unit tests that build
+     *  this connector directly with the two-arg constructor keep compiling;
+     *  those tests don't exercise listPackages(). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CarrierPackageCatalogRepository packageCatalogRepository;
+
     @Override
     public String getCarrierCode() {
         return CARRIER_CODE;
@@ -119,11 +125,11 @@ public class DhlConnector implements CarrierConnector {
     public PackageAvailability listPackages(String originCountry, String accessToken, String environment) {
         // DHL Express Envelope + Box lineup. Weight caps enforced by DHL —
         // exceeding = fall back to YOUR_PACKAGING (custom dimensions).
-        List<PackageOffering> pkgs = List.of(
-                new PackageOffering("2BP", "DHL Express Envelope", bd("32.5"), bd("22.5"), bd("2.5"), bd("1"), false, "BOTH"),
-                new PackageOffering("2BX", "DHL Express Box (Small)", bd("33.7"), bd("18.2"), bd("10"), bd("15"), false, "BOTH"),
-                new PackageOffering("3BX", "DHL Express Box (Medium)", bd("33.7"), bd("32"), bd("18.2"), bd("25"), false, "BOTH"),
-                new PackageOffering("4BX", "DHL Express Box (Large)", bd("33.7"), bd("32.2"), bd("35"), bd("31"), false, "BOTH"));
+        // Catalogue now lives in carrier_package_catalog (V32) instead of being
+        // hardcoded here.
+        List<PackageOffering> pkgs = CarrierPackageCatalogSupport.toOfferings(
+                packageCatalogRepository.findByCarrierCodeIgnoreCaseAndActiveTrueOrderBySortOrderAsc(CARRIER_CODE),
+                originCountry);
         boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
         return realToken
                 ? new PackageAvailability(pkgs, true, "verified DHL account · published packaging")

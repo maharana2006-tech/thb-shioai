@@ -33,6 +33,12 @@ public class FedExConnector implements CarrierConnector {
     private final ObjectMapper objectMapper;
     private final com.multiship.backend.service.fx.FxRateService fxRateService;
 
+    /** Field injection (not constructor) so the many unit tests that build
+     *  this connector directly with the three-arg constructor keep compiling;
+     *  those tests don't exercise listPackages(). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CarrierPackageCatalogRepository packageCatalogRepository;
+
     @Override
     public String getCarrierCode() {
         return "FEDEX";
@@ -96,22 +102,12 @@ public class FedExConnector implements CarrierConnector {
 
     @Override
     public PackageAvailability listPackages(String originCountry, String accessToken, String environment) {
-        String o = originCountry == null ? "US" : originCountry.trim().toUpperCase(Locale.ROOT);
-        boolean us = "US".equals(o) || "PR".equals(o);
-        java.util.List<PackageOffering> pkgs = new java.util.ArrayList<>(List.of(
-                new PackageOffering("FEDEX_ENVELOPE", "FedEx Envelope", bd("12.5"), bd("9.5"), bd("0.5"), bd("1"), false, "BOTH"),
-                new PackageOffering("FEDEX_PAK", "FedEx Pak", bd("15.5"), bd("12"), bd("1.5"), bd("3"), false, "BOTH"),
-                new PackageOffering("FEDEX_TUBE", "FedEx Tube", bd("38"), bd("6"), bd("6"), null, false, "BOTH"),
-                new PackageOffering("FEDEX_10KG_BOX", "FedEx 10kg Box", bd("15.81"), bd("12.94"), bd("10.19"), bd("22"), true, "INTERNATIONAL"),
-                new PackageOffering("FEDEX_25KG_BOX", "FedEx 25kg Box", bd("21.56"), bd("16.56"), bd("13.19"), bd("55"), true, "INTERNATIONAL")));
-        if (us) {
-            // FedEx One Rate boxes are US-domestic flat-rate packaging.
-            pkgs.addAll(List.of(
-                    new PackageOffering("FEDEX_SMALL_BOX", "FedEx Small Box (One Rate)", bd("12.375"), bd("10.875"), bd("1.5"), bd("50"), true, "DOMESTIC"),
-                    new PackageOffering("FEDEX_MEDIUM_BOX", "FedEx Medium Box (One Rate)", bd("13.25"), bd("11.5"), bd("2.375"), bd("50"), true, "DOMESTIC"),
-                    new PackageOffering("FEDEX_LARGE_BOX", "FedEx Large Box (One Rate)", bd("17.875"), bd("12.375"), bd("3"), bd("50"), true, "DOMESTIC"),
-                    new PackageOffering("FEDEX_EXTRA_LARGE_BOX", "FedEx Extra Large Box (One Rate)", bd("11.875"), bd("11"), bd("10.75"), bd("50"), true, "DOMESTIC")));
-        }
+        // Catalogue now lives in carrier_package_catalog (V32) instead of being
+        // hardcoded here; FEDEX_SMALL/MEDIUM/LARGE/EXTRA_LARGE_BOX (One Rate) rows
+        // are flagged us_domestic_only there, same gate as the old inline `us` check.
+        List<PackageOffering> pkgs = CarrierPackageCatalogSupport.toOfferings(
+                packageCatalogRepository.findByCarrierCodeIgnoreCaseAndActiveTrueOrderBySortOrderAsc(getCarrierCode()),
+                originCountry);
         boolean realToken = StringUtils.hasText(accessToken) && !accessToken.contains("-local-");
         return realToken
                 ? new PackageAvailability(pkgs, true, "verified FedEx account · published packaging")
