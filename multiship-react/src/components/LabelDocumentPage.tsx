@@ -404,9 +404,10 @@ export default function LabelDocumentPage() {
   // COMPANY line on the actual label. Skip when it duplicates the
   // rendered name (avoids double-printing).
   const recipientCompany = rawShipAttn && rawShipAttn !== recipientName ? rawShipAttn : null
-  const recipientCityLine = order
-    ? `${order.shiptoCity || ''}, ${order.shiptoState || ''} ${order.shiptoZip || ''}`.trim()
-    : ''
+  // PR #544 rebase — `recipientCityLine` declaration removed. The only
+  // JSX usage was in the packing-slip Consignee block which a parallel
+  // dev PR (dev's `40c515f` orders-hardening) refactored out. Removed
+  // the dangling declaration to unblock eslint no-unused-vars.
   const destCountry = (order?.shiptoCountryCd || 'US').toUpperCase()
   // Sprint 48 B10 - customer-facing order number. Backend now sends
   // displayOrderNo pre-formatted (e.g. "MAN900001" for manual shipments,
