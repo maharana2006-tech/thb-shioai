@@ -693,6 +693,19 @@ export default function NewShipmentPage() {
     () => [...clientCarriers, ...platformCarriers],
     [clientCarriers, platformCarriers],
   )
+  /**
+   * Whether ANY shippable carrier exists in the workspace — client-owned
+   * accounts for ANY client count, not just the picked one. carrierOptions
+   * alone can't answer this: before a client is picked clientCarriers is
+   * empty, and when no VERIFIED PLATFORM account exists platformCarriers is
+   * empty too — the page then wrongly showed the red "No carriers connected"
+   * blocker even though a verified client account (FedEx/ACME) could ship.
+   */
+  const anyShippableCarrier = useMemo(
+    () => accounts.some((a) =>
+      (a.customerNo || a.verified === true) && svcCarrierSet.has(canon(a.carrierCode))),
+    [accounts, svcCarrierSet],
+  )
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot default carrier pick when options first populate; deriving at render would fight explicit user picks
@@ -2059,7 +2072,7 @@ export default function NewShipmentPage() {
   //   - client-scoped: client picked has no own carriers assigned,
   //     but platform (verified) accounts exist as a fallback. Soft
   //     warning; shipping is still allowed via platform.
-  const noCarriersAtAll = !loading && carrierOptions.length === 0
+  const noCarriersAtAll = !loading && !anyShippableCarrier
   const clientHasNoOwnCarriers = !loading && !!clientCode
     && clientCarriers.length === 0 && platformCarriers.length > 0
 
@@ -2252,6 +2265,14 @@ export default function NewShipmentPage() {
                 </Field>
                 <Field label="Carrier" required error={errAt('carrier')}>
                   <select className={inputCls} value={carrier} onChange={(e) => setCarrier(e.target.value)}>
+                    {/* No verified PLATFORM account + no client picked yet →
+                        the pools are empty although client accounts exist.
+                        Say what unlocks the list instead of rendering blank. */}
+                    {carrierOptions.length === 0 ? (
+                      <option value="">
+                        {anyShippableCarrier ? 'Select a client to see its carriers…' : 'No carriers available'}
+                      </option>
+                    ) : null}
                     {clientCarriers.length > 0 ? (
                       <optgroup label={`${clientCode || 'Client'} accounts`}>
                         {clientCarriers.map((c) => (

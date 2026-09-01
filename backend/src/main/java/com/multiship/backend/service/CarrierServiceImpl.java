@@ -1244,10 +1244,12 @@ public class CarrierServiceImpl implements CarrierService {
             }
             // Logs page: carrier rejection lands in the Errors tab. Written in
             // its own transaction (the ambient one may be rollback-only here).
+            // Notes carry the HUMANIZED sentence — the raw HTTP body is debug
+            // output and stays in the server log (WARN above), never in the UI.
             if (auditService != null) {
                 auditService.logOrderError(AuditService.CARRIER_REJECTED, failedOrderNo,
                         req.getClientCode(), carrier,
-                        ex.getMessage() == null ? "The carrier rejected the shipment." : ex.getMessage());
+                        com.multiship.backend.util.CarrierErrorMessages.humanize(ex.getMessage(), carrier));
             }
 
             // Carry the ERROR order's number back to the caller (the bulk import
