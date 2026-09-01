@@ -2584,8 +2584,29 @@ public class FedExConnector implements CarrierConnector {
                 pieceResponses.path(0).path("packageDocuments").path(0).path("url")
         );
 
-        JsonNode totalNetChargeNode = shipment.path("shipmentRatingDetails").path(0).path("totalNetCharge");
-        BigDecimal shippingCost = totalNetChargeNode.isNumber() ? totalNetChargeNode.decimalValue() : null;
+        // Shipment cost — FedEx nests it at completedShipmentDetail.shipmentRating
+        // .shipmentRateDetails[]. (The old read of a top-level "shipmentRatingDetails"
+        // matched nothing, so every FedEx label persisted cost 0 and the billing
+        // statement showed 0 billed.) Prefer the PAYOR_ACCOUNT rate — what the
+        // account is actually billed — over LIST, mirroring the rate-quote parser.
+        JsonNode rateDetails = shipment.at("/completedShipmentDetail/shipmentRating/shipmentRateDetails");
+        BigDecimal shippingCost = null;
+        if (rateDetails.isArray() && !rateDetails.isEmpty()) {
+            JsonNode chosen = rateDetails.get(0);
+            for (JsonNode entry : rateDetails) {
+                if (entry.path("rateType").asText("").startsWith("PAYOR_ACCOUNT")) {
+                    chosen = entry;
+                    break;
+                }
+            }
+            JsonNode net = chosen.path("totalNetCharge");
+            if (net.isNumber()) {
+                shippingCost = net.decimalValue();
+            } else if (net.path("amount").isNumber()) {
+                // Some FedEx response variants nest {amount, currency}.
+                shippingCost = net.path("amount").decimalValue();
+            }
+        }
 
         LocalDateTime estimatedDelivery = parseDateTime(
                 firstText(
@@ -2616,8 +2637,21 @@ public class FedExConnector implements CarrierConnector {
                 String pcLabelPdf = firstText(
                         piece.path("packageDocuments").path(0).path("encodedLabel"),
                         piece.path("packageDocuments").path(0).path("url"));
-                JsonNode pcCharge = piece.path("netChargeAmount");
-                BigDecimal pcNet = pcCharge.isNumber() ? pcCharge.decimalValue() : null;
+                // Per-piece charge: netChargeAmount is the billed figure, but the
+                // sandbox often returns 0 there while baseRateAmount carries the
+                // real rate — take the first positive of net → rate → base, else
+                // keep a numeric zero so the column still reads as "known 0".
+                BigDecimal pcNet = null;
+                for (String chargeKey : new String[] {"netChargeAmount", "netRateAmount", "baseRateAmount"}) {
+                    JsonNode n = piece.path(chargeKey);
+                    if (n.isNumber() && n.decimalValue().signum() > 0) {
+                        pcNet = n.decimalValue();
+                        break;
+                    }
+                }
+                if (pcNet == null && piece.path("netChargeAmount").isNumber()) {
+                    pcNet = piece.path("netChargeAmount").decimalValue();
+                }
                 packages.add(new PackageTracking(i + 1, pcTrack,
                         StringUtils.hasText(pcTrack) ? "https://www.fedex.com/fedextrack/?trknbr=" + pcTrack : null,
                         pcLabelUrl, pcLabelPdf, pcNet));
