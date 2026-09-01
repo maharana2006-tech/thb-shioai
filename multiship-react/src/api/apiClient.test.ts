@@ -341,7 +341,7 @@ describe('authFetch — non-JSON endpoints', () => {
       }),
     ) as typeof fetch
 
-    await expect(authFetch('/label/999.pdf')).rejects.toThrow(/HTTP 404 — not found/)
+    await expect(authFetch('/label/999.pdf')).rejects.toThrow(/^not found$/)
   })
 
   it('surfaces short non-JSON error bodies verbatim in the thrown message', async () => {
@@ -349,7 +349,7 @@ describe('authFetch — non-JSON endpoints', () => {
       async () => new Response('Rate limited', { status: 429 }),
     ) as typeof fetch
 
-    await expect(authFetch('/anything')).rejects.toThrow(/HTTP 429 — Rate limited/)
+    await expect(authFetch('/anything')).rejects.toThrow(/^Rate limited$/)
   })
 
   it('echoes X-XSRF-TOKEN on state-changing methods', async () => {
