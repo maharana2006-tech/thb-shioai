@@ -22,6 +22,11 @@ public class AuditLogDTO {
     private String changes;
     private String notes;
     private LocalDateTime createdAt;
+    /** ACTIVITY | SHIPMENT | ERROR | SYSTEM — legacy rows normalize to ACTIVITY. */
+    private String category;
+    /** INFO | WARN | ERROR — legacy rows normalize to INFO. */
+    private String severity;
+    private Integer orderNo;
 
     public static AuditLogDTO from(AuditLog e) {
         return AuditLogDTO.builder()
@@ -34,6 +39,9 @@ public class AuditLogDTO {
                 .changes(e.getChanges())
                 .notes(e.getNotes())
                 .createdAt(e.getCreatedAt())
+                .category(e.getCategory() == null ? "ACTIVITY" : e.getCategory())
+                .severity(e.getSeverity() == null ? "INFO" : e.getSeverity())
+                .orderNo(e.getOrderNo())
                 .build();
     }
 }

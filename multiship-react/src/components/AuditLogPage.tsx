@@ -34,6 +34,10 @@ export default function AuditLogPage() {
   const [entityType, setEntityType] = useState('')
   const [action, setAction] = useState('')
   const [entityKey, setEntityKey] = useState('')
+  /** Logs-page tab: '' = all, else ACTIVITY | SHIPMENT | ERROR. */
+  const [category, setCategory] = useState('')
+  /** "Everything about order N" filter. */
+  const [orderNoFilter, setOrderNoFilter] = useState('')
   /** Audit A1 — 300ms debounce so the AdvancedDataTable search box
    *  doesn't fire /audit-log per keystroke while the user is typing. */
   const [debouncedEntityKey, setDebouncedEntityKey] = useState('')
@@ -98,6 +102,9 @@ export default function AuditLogPage() {
         entityType: entityType || undefined,
         action: action || undefined,
         entityKey: debouncedEntityKey || undefined,
+        category: category || undefined,
+        orderNo: orderNoFilter.trim() !== '' && !Number.isNaN(Number(orderNoFilter))
+          ? Number(orderNoFilter) : undefined,
         since: since || undefined,
         until: until || undefined,
         sort: sortParam,
@@ -120,12 +127,12 @@ export default function AuditLogPage() {
     return () => {
       cancelled = true
     }
-  }, [actor, entityType, action, debouncedEntityKey, since, until, sortParam, pageIndex, pageSize, reloadToken])
+  }, [actor, entityType, action, debouncedEntityKey, category, orderNoFilter, since, until, sortParam, pageIndex, pageSize, reloadToken])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset to first page when filters change; must respond to prop-derived filter values, not derivable at render
     setPageIndex(0)
-  }, [actor, entityType, action, debouncedEntityKey, since, until, sortParam, pageSize])
+  }, [actor, entityType, action, debouncedEntityKey, category, orderNoFilter, since, until, sortParam, pageSize])
 
   const refresh = useCallback(() => setReloadToken((t) => t + 1), [])
   useEffect(() => {
@@ -188,7 +195,34 @@ export default function AuditLogPage() {
         id: 'action',
         accessorFn: (r) => r.action,
         header: 'Action',
-        cell: ({ row }) => <ActionBadge action={row.original.action} />,
+        cell: ({ row }) => (
+          <span className="inline-flex items-center gap-1.5">
+            {/* Severity dot — red for ERROR, amber for WARN, none for INFO. */}
+            {row.original.severity === 'ERROR' ? (
+              <span title="Error" className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-500" />
+            ) : row.original.severity === 'WARN' ? (
+              <span title="Warning" className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+            ) : null}
+            <ActionBadge action={row.original.action} />
+          </span>
+        ),
+      },
+      {
+        id: 'orderNo',
+        accessorFn: (r) => r.orderNo ?? '',
+        header: 'Order',
+        enableSorting: false,
+        cell: ({ row }) =>
+          row.original.orderNo != null ? (
+            <a
+              href={`/label/${row.original.orderNo}`}
+              className="font-mono text-[11.5px] font-semibold text-[#412d15] underline-offset-2 hover:underline"
+            >
+              #{row.original.orderNo}
+            </a>
+          ) : (
+            <span className="text-slate-300">—</span>
+          ),
       },
       {
         id: 'entityType',
@@ -223,10 +257,43 @@ export default function AuditLogPage() {
     [expanded],
   )
 
-  const filtersActive = !!(actor || entityType || action || entityKey || since || until)
+  const filtersActive = !!(actor || entityType || action || entityKey || orderNoFilter || since || until)
 
   return (
     <div className="space-y-4">
+      {/* Category tabs — the client's three logs plus All, one common table. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {([
+          { key: '', label: 'All logs' },
+          { key: 'ERROR', label: 'Errors' },
+          { key: 'SHIPMENT', label: 'Shipments' },
+          { key: 'ACTIVITY', label: 'User activity' },
+        ] as { key: string; label: string }[]).map((t) => {
+          const active = category === t.key
+          return (
+            <button
+              key={t.key || 'all'}
+              type="button"
+              onClick={() => setCategory(t.key)}
+              className={`rounded-xl px-3.5 py-1.5 text-[12.5px] font-semibold transition ${
+                active
+                  ? 'bg-[#1f150c] text-[#f4eede]'
+                  : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+              } ${t.key === 'ERROR' && !active ? 'text-rose-700' : ''}`}
+            >
+              {t.label}
+            </button>
+          )
+        })}
+        <input
+          value={orderNoFilter}
+          onChange={(e) => setOrderNoFilter(e.target.value.replace(/[^0-9]/g, ''))}
+          placeholder="Order #…"
+          inputMode="numeric"
+          className="ml-auto w-28 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[12px] outline-none focus:border-[#412d15]"
+          title="Show every log entry for one order"
+        />
+      </div>
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         {loading && !rows.length ? (
           <p className="py-10 text-center text-sm text-slate-500">Loading audit trail…</p>

@@ -54,6 +54,10 @@ public class AuditLogController {
             @RequestParam(required = false) String action,
             @Parameter(description = "Case-insensitive substring on human-readable key (client code, warehouse code, etc.)")
             @RequestParam(required = false) String entityKey,
+            @Parameter(description = "Logs-page tab: ACTIVITY | SHIPMENT | ERROR | SYSTEM. Empty = all. Legacy rows count as ACTIVITY.")
+            @RequestParam(required = false) String category,
+            @Parameter(description = "Exact order number — 'everything about order N'")
+            @RequestParam(required = false) Integer orderNo,
             @Parameter(description = "ISO-8601 lower bound on createdAt")
             @RequestParam(required = false) String since,
             @Parameter(description = "ISO-8601 upper bound on createdAt")
@@ -88,7 +92,9 @@ public class AuditLogController {
         // FE captured column-header clicks into state but never sent
         // them to the API, so all sorts silently defaulted to createdAt,DESC).
         Sort sortSpec = parseSort(sort);
-        Page<AuditLog> result = repo.search(safeActor, safeEntity, safeAction, safeKey, sinceTs, untilTs,
+        String safeCategory = category == null ? "" : category.trim().toUpperCase();
+        Page<AuditLog> result = repo.search(safeActor, safeEntity, safeAction, safeKey,
+                safeCategory, orderNo, sinceTs, untilTs,
                 PageRequest.of(safePage, safeSize, sortSpec));
 
         List<AuditLogDTO> content = result.getContent().stream().map(AuditLogDTO::from).toList();

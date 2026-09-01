@@ -73,6 +73,11 @@ import java.util.concurrent.TimeUnit;
 public class OrderImportServiceImpl implements OrderImportService {
 
     private final CarrierService carrierService;
+
+    /** Logs page: IMPORT_SAVED / IMPORT_GENERATED events. Optional so the
+     *  hand-built test constructors don't have to plumb it. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AuditService auditService;
     /** Sprint 48 — used to bake per-client account dropdowns into the
      *  .xlsx template. Optional (null in the no-arg test constructor). */
     private final CarrierAccountRefRepository accountRefRepository;
@@ -1438,6 +1443,14 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         log.info("Order import {} ({}): {} saved, {} invalid → batch {}",
                 draft ? "draft-save" : "save", requestedBy, saved, invalid, batchId);
+        // Logs page: user-activity trail for the import.
+        if (auditService != null && batchId != null) {
+            auditService.logEvent(AuditService.CAT_ACTIVITY, AuditService.SEV_INFO,
+                    AuditService.IMPORT_SAVED, AuditService.IMPORT_BATCH, batchId,
+                    normName, null,
+                    total + " row(s) imported · " + saved + " ready, " + invalid + " need fixes",
+                    null, requestedBy);
+        }
         String message = (draft && invalid > 0)
                 ? "Draft saved to history · " + saved + " ready, " + invalid + " still need fixing"
                 : total + " row(s) saved to history · all ready to generate";
@@ -1726,6 +1739,18 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         log.info("Import batch {} label generation ({}): {}/{} labels → {} (labelBatch {})",
                 id, requestedBy, generated, total, batch.getStatus(), batch.getLabelBatchId());
+        // Logs page: batch-generation summary in the shipment trail (per-order
+        // LABEL_GENERATED / CARRIER_REJECTED rows come from the carrier layer).
+        if (auditService != null) {
+            auditService.logEvent(AuditService.CAT_SHIPMENT,
+                    failed > 0 ? AuditService.SEV_WARN : AuditService.SEV_INFO,
+                    AuditService.IMPORT_GENERATED, AuditService.IMPORT_BATCH, id,
+                    batch.getFileName(), null,
+                    generated + " of " + total + " label(s) generated"
+                            + (failed > 0 ? " · " + failed + " failed" : "")
+                            + (invalid > 0 ? " · " + invalid + " still need fixes" : ""),
+                    null, requestedBy);
+        }
         return toBatchDTO(batch, rows);
     }
 

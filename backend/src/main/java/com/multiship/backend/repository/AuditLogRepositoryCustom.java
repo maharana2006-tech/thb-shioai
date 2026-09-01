@@ -23,4 +23,19 @@ public interface AuditLogRepositoryCustom {
             LocalDateTime since,
             LocalDateTime until,
             Pageable pageable);
+
+    /**
+     * Logs-page variant: adds the category tab filter ('' = all; NULL rows
+     * read as ACTIVITY) and an exact order-number filter (null = all).
+     */
+    Page<AuditLog> search(
+            String actor,
+            String entityType,
+            String action,
+            String entityKey,
+            String category,
+            Integer orderNo,
+            LocalDateTime since,
+            LocalDateTime until,
+            Pageable pageable);
 }

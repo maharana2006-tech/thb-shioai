@@ -15,6 +15,11 @@ export interface AuditLogEntry {
   changes: string | null
   notes: string | null
   createdAt: string
+  /** ACTIVITY | SHIPMENT | ERROR | SYSTEM (legacy rows normalize to ACTIVITY). */
+  category: string
+  /** INFO | WARN | ERROR (legacy rows normalize to INFO). */
+  severity: string
+  orderNo: number | null
 }
 
 export interface AuditLogListParams {
@@ -22,6 +27,10 @@ export interface AuditLogListParams {
   entityType?: string
   action?: string
   entityKey?: string
+  /** Logs-page tab: ACTIVITY | SHIPMENT | ERROR | SYSTEM. Empty = all. */
+  category?: string
+  /** Exact order number — "everything about order N". */
+  orderNo?: number
   since?: string
   until?: string
   /** Audit A3 — "property,direction" (e.g. "actor,ASC"). Backend
@@ -51,6 +60,8 @@ export const auditLogService = {
     if (params.entityType?.trim()) query.set('entityType', params.entityType.trim())
     if (params.action?.trim()) query.set('action', params.action.trim())
     if (params.entityKey?.trim()) query.set('entityKey', params.entityKey.trim())
+    if (params.category?.trim()) query.set('category', params.category.trim())
+    if (params.orderNo != null) query.set('orderNo', String(params.orderNo))
     if (params.since?.trim()) query.set('since', params.since.trim())
     if (params.until?.trim()) query.set('until', params.until.trim())
     if (params.sort?.trim()) query.set('sort', params.sort.trim())

@@ -46,9 +46,38 @@ public class AuditService {
     public static final String CUSTOMS_PROFILE = "CUSTOMS_PROFILE";
     public static final String CLIENT_POLICY = "CLIENT_POLICY";
     public static final String CLIENT_MARKUP = "CLIENT_MARKUP";
+    public static final String ORDER = "ORDER";
+    public static final String IMPORT_BATCH = "IMPORT_BATCH";
+    public static final String AUTH = "AUTH";
+
+    // ---- Log categories (Logs page tabs). NULL rows read as ACTIVITY.
+    public static final String CAT_ACTIVITY = "ACTIVITY";
+    public static final String CAT_SHIPMENT = "SHIPMENT";
+    public static final String CAT_ERROR = "ERROR";
+    public static final String CAT_SYSTEM = "SYSTEM";
+
+    // ---- Severities
+    public static final String SEV_INFO = "INFO";
+    public static final String SEV_WARN = "WARN";
+    public static final String SEV_ERROR = "ERROR";
+
+    // ---- Event actions (shipment lifecycle + activity)
+    public static final String LABEL_GENERATED = "LABEL_GENERATED";
+    public static final String LABEL_REGENERATED = "LABEL_REGENERATED";
+    public static final String CARRIER_REJECTED = "CARRIER_REJECTED";
+    public static final String LABEL_VOIDED = "LABEL_VOIDED";
+    public static final String IMPORT_SAVED = "IMPORT_SAVED";
+    public static final String IMPORT_GENERATED = "IMPORT_GENERATED";
+    public static final String LOGIN = "LOGIN";
+    public static final String LOGIN_FAILED = "LOGIN_FAILED";
 
     private final AuditLogRepository repo;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    /** For the REQUIRES_NEW event writes — optional so plain unit tests
+     *  (no Spring tx infrastructure) fall back to a direct save. */
+    @Autowired(required = false)
+    private org.springframework.transaction.PlatformTransactionManager txManager;
 
     // Optional so unit tests that instantiate AuditService by hand (no
     // Spring context) still work. When absent, clientCode falls back to
@@ -91,6 +120,62 @@ public class AuditService {
     public AuditLog record(String action, String entityType, Object entityId,
                            String entityKey, String notes) {
         return record(action, entityType, entityId, entityKey, null, notes);
+    }
+
+    /**
+     * Event-log write for the Logs page (shipment lifecycle, errors,
+     * activity). Unlike {@link #record}, this is BEST-EFFORT in its own
+     * REQUIRES_NEW transaction: a log write must never break (or be rolled
+     * back with) the business operation it describes — a carrier rejection
+     * marks the ambient tx rollback-only, and the ERROR row must survive it.
+     *
+     * @param clientCodeOverride the tenant the EVENT belongs to (e.g. the
+     *   order's client) — falls back to the acting user's scope. Without it
+     *   a platform operator generating for ACME would write a NULL-scope row
+     *   that ACME's own users can never see.
+     * @param actorOverride actor when the SecurityContext isn't populated
+     *   (login endpoint); null → SecurityContext username.
+     */
+    public void logEvent(String category, String severity, String action,
+                         String entityType, Object entityId, String entityKey,
+                         Integer orderNo, String notes,
+                         String clientCodeOverride, String actorOverride) {
+        try {
+            AuditLog row = AuditLog.builder()
+                    .actor(actorOverride != null ? actorOverride : currentActor())
+                    .action(action)
+                    .entityType(entityType)
+                    .entityId(entityId == null ? null : String.valueOf(entityId))
+                    .entityKey(truncate(entityKey, 200))
+                    .notes(truncate(notes, 500))
+                    .clientCode(clientCodeOverride != null && !clientCodeOverride.isBlank()
+                            ? clientCodeOverride.trim() : currentClientCode())
+                    .category(category)
+                    .severity(severity)
+                    .orderNo(orderNo)
+                    .build();
+            if (txManager != null) {
+                var tpl = new org.springframework.transaction.support.TransactionTemplate(txManager);
+                tpl.setPropagationBehavior(
+                        org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                tpl.executeWithoutResult(st -> repo.save(row));
+            } else {
+                repo.save(row);
+            }
+        } catch (Exception ex) {
+            // Logging is a secondary signal — never let it break the caller.
+            log.warn("Event-log write failed ({} {}): {}", category, action, ex.getMessage());
+        }
+    }
+
+    /** Shipment-lifecycle event (INFO). */
+    public void logShipment(String action, Integer orderNo, String clientCode, String key, String notes) {
+        logEvent(CAT_SHIPMENT, SEV_INFO, action, ORDER, orderNo, key, orderNo, notes, clientCode, null);
+    }
+
+    /** Error event tied to an order (carrier rejection etc.). */
+    public void logOrderError(String action, Integer orderNo, String clientCode, String key, String notes) {
+        logEvent(CAT_ERROR, SEV_ERROR, action, ORDER, orderNo, key, orderNo, notes, clientCode, null);
     }
 
     private static String currentActor() {

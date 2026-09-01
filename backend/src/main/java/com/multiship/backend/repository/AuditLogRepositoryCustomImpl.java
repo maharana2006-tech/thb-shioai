@@ -49,16 +49,33 @@ public class AuditLogRepositoryCustomImpl implements AuditLogRepositoryCustom {
                                  LocalDateTime since,
                                  LocalDateTime until,
                                  Pageable pageable) {
+        return search(actor, entityType, action, entityKey, "", null, since, until, pageable);
+    }
+
+    @Override
+    public Page<AuditLog> search(String actor,
+                                 String entityType,
+                                 String action,
+                                 String entityKey,
+                                 String category,
+                                 Integer orderNo,
+                                 LocalDateTime since,
+                                 LocalDateTime until,
+                                 Pageable pageable) {
         Optional<String> scope = tenantScope == null ? Optional.empty() : tenantScope.resolveScope();
 
         // Base predicates — same shape as the previous @Query. Kept as string
         // JPQL rather than Criteria API to preserve the empty-sentinel idiom
         // that dodges Postgres bytea-null-typing on nullable String params.
+        // Category: legacy rows predate the column, so NULL reads as ACTIVITY.
+        // orderNo uses a -1 sentinel for the same null-typing reason.
         String where = ""
                 + "WHERE (:actor = '' OR LOWER(COALESCE(a.actor, '')) LIKE CONCAT('%', LOWER(:actor), '%')) "
                 + "  AND (:entityType = '' OR a.entityType = :entityType) "
                 + "  AND (:action = '' OR a.action = :action) "
                 + "  AND (:entityKey = '' OR LOWER(COALESCE(a.entityKey, '')) LIKE CONCAT('%', LOWER(:entityKey), '%')) "
+                + "  AND (:category = '' OR COALESCE(a.category, 'ACTIVITY') = :category) "
+                + "  AND (:orderNo = -1 OR a.orderNo = :orderNo) "
                 + "  AND a.createdAt >= :since "
                 + "  AND a.createdAt <= :until";
         if (scope.isPresent()) {
@@ -74,8 +91,8 @@ public class AuditLogRepositoryCustomImpl implements AuditLogRepositoryCustom {
 
         TypedQuery<AuditLog> q = em.createQuery(selectJpql, AuditLog.class);
         TypedQuery<Long> countQ = em.createQuery(countJpql, Long.class);
-        bindCommon(q, actor, entityType, action, entityKey, since, until, scope);
-        bindCommon(countQ, actor, entityType, action, entityKey, since, until, scope);
+        bindCommon(q, actor, entityType, action, entityKey, category, orderNo, since, until, scope);
+        bindCommon(countQ, actor, entityType, action, entityKey, category, orderNo, since, until, scope);
 
         q.setFirstResult((int) pageable.getOffset());
         q.setMaxResults(pageable.getPageSize());
@@ -85,12 +102,15 @@ public class AuditLogRepositoryCustomImpl implements AuditLogRepositoryCustom {
     }
 
     private static void bindCommon(TypedQuery<?> q, String actor, String entityType, String action,
-                                   String entityKey, LocalDateTime since, LocalDateTime until,
+                                   String entityKey, String category, Integer orderNo,
+                                   LocalDateTime since, LocalDateTime until,
                                    Optional<String> scope) {
         q.setParameter("actor", actor);
         q.setParameter("entityType", entityType);
         q.setParameter("action", action);
         q.setParameter("entityKey", entityKey);
+        q.setParameter("category", category == null ? "" : category);
+        q.setParameter("orderNo", orderNo == null ? -1 : orderNo);
         q.setParameter("since", since);
         q.setParameter("until", until);
         if (scope.isPresent()) {

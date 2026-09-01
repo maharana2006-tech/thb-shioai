@@ -121,6 +121,11 @@ public class CarrierServiceImpl implements CarrierService {
      *  (order 900003 hit this via FEDEX_GROUND + FEDEX_ENVELOPE). */
     private final com.multiship.backend.service.resolution.PackagingCompatibilityGuard packagingCompatibilityGuard;
 
+    /** Logs page: shipment-lifecycle + carrier-error events. Optional so
+     *  tests building this service by hand don't have to plumb it. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AuditService auditService;
+
     /** Sprint 44 — optional so existing tests that build CarrierServiceImpl
      *  without Spring don't have to plumb another dep. When null, routing
      *  rules simply don't run. */
@@ -1237,6 +1242,14 @@ public class CarrierServiceImpl implements CarrierService {
                     }
                 }
             }
+            // Logs page: carrier rejection lands in the Errors tab. Written in
+            // its own transaction (the ambient one may be rollback-only here).
+            if (auditService != null) {
+                auditService.logOrderError(AuditService.CARRIER_REJECTED, failedOrderNo,
+                        req.getClientCode(), carrier,
+                        ex.getMessage() == null ? "The carrier rejected the shipment." : ex.getMessage());
+            }
+
             // Carry the ERROR order's number back to the caller (the bulk import
             // service) in the response data, so it can attach the order to its
             // batch and a retry can UPDATE this same row instead of INSERTing a
@@ -1553,6 +1566,17 @@ public class CarrierServiceImpl implements CarrierService {
         tracking.setCreatedAt(LocalDateTime.now());
         tracking.setUpdatedAt(LocalDateTime.now());
         orderTrackingRepository.save(tracking);
+
+        // Logs page: shipment-lifecycle trail (best-effort, own transaction).
+        if (auditService != null) {
+            auditService.logShipment(
+                    existingOrderNo != null ? AuditService.LABEL_REGENERATED : AuditService.LABEL_GENERATED,
+                    orderNo, req.getClientCode(), result.trackingNumber(),
+                    carrier + " label on account " + billToNumber
+                            + (markup.billable() != null
+                                ? " · billable " + markup.billable() + " " + firstNonBlank(markup.currency(), "USD")
+                                : ""));
+        }
 
         LabelGenerationResponse response = LabelGenerationResponse.builder()
                 .orderNo((long) orderNo)

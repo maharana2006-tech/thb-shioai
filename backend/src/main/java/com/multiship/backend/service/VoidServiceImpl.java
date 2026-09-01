@@ -51,6 +51,10 @@ public class VoidServiceImpl implements VoidService {
     private final OrderRepository orderRepository;
     private final TenantScopeEnforcer tenantScope;
 
+    /** Logs page: LABEL_VOIDED events. Optional for hand-built tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AuditService auditService;
+
     /**
      * Sprint 51 R1 (audit finding #1) — the void path used to read
      * {@link OrderTracking} without a row lock and without a transaction
@@ -206,6 +210,12 @@ public class VoidServiceImpl implements VoidService {
             tracking.setIsLabelGenerated(false);
             tracking.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
             orderTrackingRepository.save(tracking);
+            // Logs page: shipment-lifecycle trail.
+            if (auditService != null) {
+                auditService.logShipment(AuditService.LABEL_VOIDED, orderNo, null,
+                        tracking.getTrackingNumber(),
+                        canonicalCarrier + " label voided (" + perBatchResults.size() + " batch(es))");
+            }
         }
 
         VoidLabelResponseDTO body = VoidLabelResponseDTO.builder()

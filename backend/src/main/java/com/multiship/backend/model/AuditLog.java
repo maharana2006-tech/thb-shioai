@@ -33,6 +33,8 @@ import java.time.LocalDateTime;
                 @Index(name = "idx_audit_log_actor", columnList = "actor"),
                 @Index(name = "idx_audit_log_action", columnList = "action"),
                 @Index(name = "idx_audit_log_client_code", columnList = "client_code"),
+                @Index(name = "idx_audit_log_category", columnList = "category"),
+                @Index(name = "idx_audit_log_order_no", columnList = "order_no"),
         })
 @Data
 @Builder
@@ -107,6 +109,25 @@ public class AuditLog {
      */
     @Column(name = "client_code", length = 64)
     private String clientCode;
+
+    /**
+     * Log category — the top tab axis of the Logs page:
+     * ACTIVITY (who did what: settings CRUD, imports, logins),
+     * SHIPMENT (lifecycle: label generated / regenerated / voided / closed out),
+     * ERROR (carrier rejections, login failures, system errors),
+     * SYSTEM (background jobs). NULL = legacy rows, read as ACTIVITY.
+     */
+    @Column(name = "category", length = 20)
+    private String category;
+
+    /** INFO | WARN | ERROR — drives the severity badge. NULL reads as INFO. */
+    @Column(name = "severity", length = 10)
+    private String severity;
+
+    /** The order this event belongs to, when it belongs to one — lets the
+     *  Logs page answer "show me everything about order 900116". */
+    @Column(name = "order_no")
+    private Integer orderNo;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

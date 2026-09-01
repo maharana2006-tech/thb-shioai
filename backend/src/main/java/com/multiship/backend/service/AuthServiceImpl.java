@@ -46,6 +46,10 @@ public class AuthServiceImpl implements AuthService {
     @Autowired
     private UserRepository userRepository;
 
+    /** Logs page: login / failed-login events. Optional for unit tests. */
+    @Autowired(required = false)
+    private AuditService auditService;
+
     @Autowired
     private PasswordEncoder passwordEncoder;
 
@@ -500,6 +504,13 @@ public class AuthServiceImpl implements AuthService {
             // legitimate typos earlier in the session don't leave the
             // account half-locked at next login.
             authFailureLimiter.recordSuccess(ip, username);
+            // Logs page: user-activity trail. Actor passed explicitly — the
+            // SecurityContext isn't populated on the login endpoint.
+            if (auditService != null) {
+                auditService.logEvent(AuditService.CAT_ACTIVITY, AuditService.SEV_INFO,
+                        AuditService.LOGIN, AuditService.AUTH, null, username,
+                        null, "Signed in", user.getClientCode(), username);
+            }
             return ResponseEntity.ok(new AuthResponse(user.getUsername(), user.getRole()));
         }
 
@@ -509,6 +520,13 @@ public class AuthServiceImpl implements AuthService {
         // matches). Deactivated + unverified paths above do NOT count
         // — those aren't brute-force signals.
         authFailureLimiter.recordFailure(ip, username);
+        // Logs page: failed sign-ins land in the Errors tab (WARN — a typo,
+        // not a system failure; repeated ones are the brute-force signal).
+        if (auditService != null) {
+            auditService.logEvent(AuditService.CAT_ERROR, AuditService.SEV_WARN,
+                    AuditService.LOGIN_FAILED, AuditService.AUTH, null, username,
+                    null, "Invalid username or password", null, username);
+        }
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(new MessageResponse("Error: Invalid username or password!", ErrorCode.INVALID_CREDENTIALS));
     }
