@@ -90,7 +90,19 @@ public class IndexInitializer implements CommandLineRunner {
             new IndexSpec("idx_order_label_tracking_tracking_number_trgm",
                     "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_order_label_tracking_tracking_number_trgm " +
                             "ON order_label_tracking USING gin (LOWER(tracking_number) gin_trgm_ops)",
-                    true)
+                    true),
+            // ---------- carrier_account_ref ----------
+            // At most ONE default-flagged account per (client, carrier). The
+            // application demotes siblings on set-default, but two concurrent
+            // set-default calls (read-modify-write, no row lock) could both
+            // win, leaving billing resolution nondeterministic. A partial
+            // unique index makes the invariant a DB guarantee. Platform rows
+            // (blank customer_no) are excluded — they use is_default instead.
+            new IndexSpec("uk_account_ref_client_default",
+                    "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uk_account_ref_client_default " +
+                            "ON carrier_account_ref (UPPER(customer_no), UPPER(carrier_code)) " +
+                            "WHERE client_default IS TRUE AND customer_no IS NOT NULL AND customer_no <> ''",
+                    false)
     );
 
     private final DataSource dataSource;

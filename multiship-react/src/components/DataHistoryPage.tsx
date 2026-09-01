@@ -48,6 +48,9 @@ export default function DataHistoryPage() {
   const [openId, setOpenId] = useState<number | null>(null)
   const [rowsById, setRowsById] = useState<Record<number, OrderImportRow[] | 'loading'>>({})
   const [generatingId, setGeneratingId] = useState<number | null>(null)
+  // Live "X of N" label-generation progress per batch, polled while a batch
+  // generate/retry runs so the button shows a real progress bar, not a spinner.
+  const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number }>>({})
   // Bill-to account: the batch whose "Bills to" selector is mid-save.
   const [billingSavingId, setBillingSavingId] = useState<number | null>(null)
   // Confirm-before-generate when a batch bills to the platform account.
@@ -300,7 +303,27 @@ export default function DataHistoryPage() {
     const platform = batches.find((b) => b.id === id)?.billingMode === 'PLATFORM'
     setConfirmGenId(null)
     setGeneratingId(id)
+    setGenProgressById((m) => ({ ...m, [id]: { done: 0, total: 0 } }))
     setBatches((list) => list.map((b) => (b.id === id ? { ...b, status: 'IN_PROGRESS' } : b)))
+    // Poll the server's live counter ALONGSIDE the generate request (a separate
+    // GET) so the button shows a real "X of N" bar while the POST runs. The flag
+    // stops the loop the moment the POST settles.
+    let polling = true
+    const pollProgress = async () => {
+      while (polling) {
+        try {
+          const pr = await orderImportService.generationProgress(id)
+          const d = pr.data
+          if (polling && d && d.running && d.total > 0) {
+            setGenProgressById((m) => ({ ...m, [id]: { done: d.done, total: d.total } }))
+          }
+        } catch {
+          /* transient poll error — keep going, the POST result is authoritative */
+        }
+        await new Promise((r) => setTimeout(r, 400))
+      }
+    }
+    void pollProgress()
     try {
       const res = await orderImportService.generateLabels(id, { onlyFailed: isRetry, usePlatformAccount: platform })
       const updated = res.data
@@ -322,7 +345,13 @@ export default function DataHistoryPage() {
       notify.apiError(e, 'Label generation failed.')
       await load()
     } finally {
+      polling = false
       setGeneratingId(null)
+      setGenProgressById((m) => {
+        const next = { ...m }
+        delete next[id]
+        return next
+      })
     }
   }
 
@@ -546,6 +575,7 @@ export default function DataHistoryPage() {
           const canGenerate = canWrite && !isWms && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED')
           const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED'
           const busy = generatingId === b.id
+          const progress = genProgressById[b.id]
           const platform = b.billingMode === 'PLATFORM'
           const confirming = confirmGenId === b.id
           return (
@@ -569,7 +599,12 @@ export default function DataHistoryPage() {
                 ) : null
               ) : (
                 <>
-                  {canGenerate ? (
+                  {/* Keep the button mounted while THIS batch is generating — the
+                      click optimistically flips status to IN_PROGRESS, which isn't
+                      in canGenerate's set, so without `|| busy` the whole control
+                      (and its spinner) would unmount the instant you click and the
+                      loader would never show. */}
+                  {(canGenerate || busy) ? (
                     <>
                       <span
                         title="Which carrier account this batch bills to. Platform bills the house account and rebills the client with markup."
@@ -609,20 +644,51 @@ export default function DataHistoryPage() {
                             Cancel
                           </button>
                         </>
+                      ) : busy ? (
+                        // Live progress while generating: a real X-of-N bar once
+                        // the first poll lands, an indeterminate shimmer until then.
+                        (() => {
+                          const total = progress?.total ?? 0
+                          const done = Math.min(progress?.done ?? 0, total)
+                          const pct = total > 0 ? Math.round((done / total) * 100) : 0
+                          return (
+                            <div
+                              className="flex min-w-[150px] flex-col gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[#f4eede]"
+                              role="progressbar"
+                              aria-valuemin={0}
+                              aria-valuemax={total || undefined}
+                              aria-valuenow={total > 0 ? done : undefined}
+                              title={total > 0 ? `Generating labels — ${done} of ${total} done` : 'Generating labels…'}
+                            >
+                              <div className="flex items-center justify-between text-[11px] font-semibold">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                                  Generating…
+                                </span>
+                                {total > 0 ? <span className="tabular-nums">{done}/{total}</span> : null}
+                              </div>
+                              <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#f4eede]/20">
+                                {total > 0 ? (
+                                  <div
+                                    className="h-full rounded-full bg-[#f4eede] transition-[width] duration-300 ease-out"
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                ) : (
+                                  <div className="h-full w-1/3 animate-pulse rounded-full bg-[#f4eede]/70" />
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })()
                       ) : (
                         <button
                           type="button"
                           onClick={() => (platform ? setConfirmGenId(b.id) : void generate(b.id, isRetry))}
-                          disabled={busy}
                           title={isRetry ? 'Retry generating labels — only rows that FAILED or are un-generated will be re-sent' : 'Generate carrier labels for this saved import'}
                           className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
                         >
-                          {busy ? (
-                            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                          ) : (
-                            <FiZap className="h-3.5 w-3.5" />
-                          )}
-                          {busy ? 'Generating…' : isRetry ? 'Retry labels' : 'Generate labels'}
+                          <FiZap className="h-3.5 w-3.5" />
+                          {isRetry ? 'Retry labels' : 'Generate labels'}
                         </button>
                       )}
                     </>
@@ -652,7 +718,7 @@ export default function DataHistoryPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId],
+    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById],
   )
 
   /** Expanded content for a batch row — the all-columns editable grid. */
@@ -686,6 +752,10 @@ export default function DataHistoryPage() {
                     const gen = (r.generatedStatus ?? '').toUpperCase()
                     const rowIsWms = (b.source || '').toUpperCase() === 'WMS'
                     const generated = gen === 'GENERATED'
+                    // A row that passed validation but was rejected by the carrier
+                    // is FAILED, not "Ready" — surface that so it shows Retry (which
+                    // reuses the same order) instead of a fresh Generate.
+                    const failed = gen === 'FAILED'
                     const rowKey = `${b.id}-${r.rowNumber}`
                     const rowBusy = genRowKey === rowKey
                     const saving = savingCell === rowKey
@@ -698,6 +768,8 @@ export default function DataHistoryPage() {
                             <span className="font-mono text-[10px] font-bold text-[#8a7959]">{r.rowNumber}</span>
                             {generated ? (
                               <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Generated</span>
+                            ) : failed ? (
+                              <span title={r.generatedMessage || 'The carrier rejected this shipment'} className="cursor-help rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800">Failed</span>
                             ) : ok ? (
                               <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Ready</span>
                             ) : (
@@ -741,20 +813,26 @@ export default function DataHistoryPage() {
                             </span>
                           ) : !canWrite ? (
                             <span className="text-[9.5px] text-[#b6a684]">Read-only view</span>
-                          ) : ok ? (
-                            <button
-                              type="button"
-                              onClick={() => void generateRow(b.id, r.rowNumber)}
-                              disabled={rowBusy}
-                              className="inline-flex items-center gap-1 rounded-lg bg-[#1f150c] px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
-                            >
-                              {rowBusy ? (
-                                <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                              ) : (
-                                <FiZap className="h-3 w-3" />
-                              )}
-                              {rowBusy ? 'Generating…' : 'Generate label'}
-                            </button>
+                          ) : (ok || failed) ? (
+                            <div className="flex flex-col gap-0.5">
+                              <button
+                                type="button"
+                                onClick={() => void generateRow(b.id, r.rowNumber)}
+                                disabled={rowBusy}
+                                className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition disabled:cursor-not-allowed disabled:bg-[#dcd4c4] ${failed ? 'bg-rose-700 hover:bg-rose-800' : 'bg-[#1f150c] hover:bg-[#412d15]'}`}
+                                title={failed ? 'Retry — re-sends this same order to the carrier (no duplicate order is created)' : 'Generate a carrier label for this row'}
+                              >
+                                {rowBusy ? (
+                                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                                ) : (
+                                  <FiZap className="h-3 w-3" />
+                                )}
+                                {rowBusy ? 'Generating…' : failed ? 'Retry label' : 'Generate label'}
+                              </button>
+                              {failed && r.generatedMessage ? (
+                                <span title={r.generatedMessage} className="max-w-[220px] truncate text-[9px] text-rose-700">{r.generatedMessage}</span>
+                              ) : null}
+                            </div>
                           ) : (
                             <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
                           )}

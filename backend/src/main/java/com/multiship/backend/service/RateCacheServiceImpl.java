@@ -113,18 +113,20 @@ public class RateCacheServiceImpl implements RateCacheService {
 
     /**
      * Fingerprint the lane so identical shipments hit the same key.
-     * Uses only the fields carriers actually price on:
-     *   carrier, service type, package type, weight + weight unit,
-     *   origin postal + country, destination postal + country,
-     *   residential flag, declared value + currency.
-     * Missing account number / referenceNumber / shipper name / etc. —
-     * those don't affect price so we ignore them.
+     * Uses the fields carriers actually price on:
+     *   ACCOUNT NUMBER (negotiated pricing is per-account — without it one
+     *   tenant's negotiated rates were served verbatim to another tenant on
+     *   the same lane within TTL), carrier, service type, package type,
+     *   weight + weight unit, origin postal + country, destination postal +
+     *   country, residential flag, declared value + currency.
+     * Still ignored: referenceNumber / shipper name / etc. — no price impact.
      */
     static String key(String carrierCode, ShipmentRequestDTO r) {
         if (r == null || !StringUtils.hasText(carrierCode)) return null;
         String weight = r.getWeight() == null ? "" : r.getWeight().toPlainString();
         String weightUnit = r.getWeightUnit() == null ? "" : r.getWeightUnit().trim().toUpperCase(Locale.ROOT);
         return carrierCode.trim().toUpperCase(Locale.ROOT)
+                + "|" + trimUpper(r.getAccountNumber())
                 + "|" + trimUpper(r.getServiceType())
                 + "|" + trimUpper(r.getPackageType())
                 + "|" + weight

@@ -47,6 +47,22 @@ const PHONE_RE = /^[0-9()+\-.\s]{7,20}$/
 const HS_RE = /^\d{4}\.?\d{2}\.?\d{0,4}$/
 const ISO2_RE = /^[A-Za-z]{2}$/
 
+/**
+ * Minimum HS/tariff-code digit count the DESTINATION (importing) country expects
+ * on the commercial invoice. The first 6 digits are the international Harmonized
+ * System; importing countries extend it (US HTS = 10, EU Combined Nomenclature =
+ * 8, etc.). Countries not listed fall back to the 6-digit HS minimum.
+ */
+const HS_MIN_DIGITS: Record<string, number> = {
+  US: 10, CA: 10,
+  GB: 8, IE: 8, DE: 8, FR: 8, IT: 8, ES: 8, NL: 8, BE: 8, LU: 8, AT: 8,
+  PT: 8, DK: 8, SE: 8, FI: 8, PL: 8, CZ: 8, HU: 8, RO: 8, GR: 8,
+  IN: 8, CN: 8, AU: 8, MX: 8, BR: 8, ZA: 8, JP: 9, KR: 10, SG: 8,
+}
+const HS_DEFAULT_MIN = 6
+/** Count the numeric digits in an HS code (ignoring dots/spaces). */
+const hsDigits = (v?: string | null) => (v ?? '').replace(/\D/g, '').length
+
 /** '' → undefined so `.required()` fires instead of a NaN/type error. */
 const emptyToUndef = (_v: unknown, orig: unknown) =>
   orig === '' || orig === null ? undefined : _v
@@ -125,7 +141,12 @@ export const addressSchema = Yup.object({
   email: Yup.string().nullable().email('Enter a valid email').max(100, 'Max 100 characters'),
 })
 
+// Applied ONLY to international shipments (see shipmentSchema.items.when), so
+// every field here is mandatory for the commercial invoice / customs clearance.
 export const itemSchema = Yup.object({
+  // Destination country rides on each item (mirrored from the page) so the
+  // HS-code rule can require the digit length the importing country expects.
+  destCountry: Yup.string().nullable(),
   description: Yup.string()
     .transform((v) => (typeof v === 'string' ? v.trim() : v))
     .required('Description is required')
@@ -133,18 +154,33 @@ export const itemSchema = Yup.object({
     .max(50, 'Max 50 characters'),
   sku: Yup.string().max(40, 'Max 40 characters').nullable(),
   hsCode: Yup.string()
-    .nullable()
-    .matches(HS_RE, { excludeEmptyString: true, message: 'HS code must be 6–10 digits' }),
+    .transform((v) => (typeof v === 'string' ? v.trim() : v))
+    .required('HS code is required for customs')
+    .matches(HS_RE, 'HS code must be digits (e.g. 6109.10), 6–10 long')
+    // Country-wise length: the importing country sets the minimum (US=10, EU=8…).
+    .test('hs-country-length', function (value) {
+      const digits = hsDigits(value)
+      if (digits < 6) return true // the format rule already reports "too short"
+      const dest = ((this.parent as { destCountry?: string }).destCountry || '').toUpperCase()
+      const min = HS_MIN_DIGITS[dest] ?? HS_DEFAULT_MIN
+      if (digits >= min) return true
+      const article = min === 8 ? 'an' : 'a' // "an 8-digit", "a 10-digit"
+      return this.createError({
+        message: `${dest || 'This destination'} needs at least ${article} ${min}-digit HS code (you entered ${digits}).`,
+      })
+    }),
   countryOfOrigin: Yup.string()
-    .nullable()
-    .matches(ISO2_RE, { excludeEmptyString: true, message: 'Use a 2-letter country code' })
+    .transform((v) => (typeof v === 'string' ? v.trim() : v))
+    .required('Country of origin is required')
+    .matches(ISO2_RE, 'Use a 2-letter country code')
     .test('coo-iso', 'Not a recognized country', (v) => !v || VALID_COUNTRIES.has(v.toUpperCase())),
   quantity: Yup.number()
     .transform(emptyToUndef)
     .typeError('Quantity must be a number')
     .required('Qty required')
     .integer('Whole number')
-    .min(1, 'At least 1'),
+    .min(1, 'At least 1')
+    .max(100000, 'Quantity looks too high'),
   unitValue: Yup.number()
     .transform(emptyToUndef)
     .typeError('Unit value must be a number')
@@ -160,6 +196,11 @@ export const shipmentSchema = Yup.object({
   isInternational: Yup.boolean(),
   isCustomPackage: Yup.boolean(),
 
+  // Every manual shipment must be booked against a client (drives ship-from,
+  // account resolution, allowed services and billing).
+  clientCode: Yup.string()
+    .transform((v) => (typeof v === 'string' ? v.trim() : v))
+    .required('Select a client'),
   carrier: Yup.string().required('Pick a carrier'),
   account: Yup.string()
     .transform((v) => (typeof v === 'string' ? v.trim() : v))

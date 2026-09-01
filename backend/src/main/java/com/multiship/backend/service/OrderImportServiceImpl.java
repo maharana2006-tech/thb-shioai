@@ -186,6 +186,22 @@ public class OrderImportServiceImpl implements OrderImportService {
     private ExecutorService fanOutExecutor;
 
     /**
+     * Live label-generation progress per batch id, so the UI can poll a real
+     * "X of N" while a generate/retry runs. In-memory + concurrent: the
+     * generate HTTP thread registers an entry and the fan-out workers increment
+     * {@code done}; a separate poll request reads it; the entry is removed when
+     * the run ends. No DB round-trip, so it's cheap to poll frequently.
+     */
+    private final Map<Long, GenProgress> generationProgressByBatch = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Mutable counter behind {@link GenProgressView}. */
+    private static final class GenProgress {
+        final java.util.concurrent.atomic.AtomicInteger done = new java.util.concurrent.atomic.AtomicInteger();
+        final int total;
+        GenProgress(int total) { this.total = total; }
+    }
+
+    /**
      * Sprint 50 PR K — commit() is called synchronously from the
      * OrderImportController HTTP handler, so the caller thread IS a
      * Tomcat worker. Bound the total time the HTTP thread can be blocked
@@ -462,13 +478,18 @@ public class OrderImportServiceImpl implements OrderImportService {
         // carrier → set of known account numbers (uppercased). Sprint 51
         // BP-M6 — only the caller's clients' accounts + platform accounts
         // (customerNo IS NULL / blank), never a competitor's numbers.
-        Map<String, java.util.Set<String>> accountsByCarrier = new LinkedHashMap<>();
+        // carrier -> (accountNumber -> owning client code; "" = platform account
+        // usable by any client). Keyed by owner so a row billing to another
+        // client's account is rejected at upload instead of at label time.
+        Map<String, Map<String, String>> accountOwnerByCarrier = new LinkedHashMap<>();
         if (accountRefRepository != null && !rowClientCodes.isEmpty()) {
             for (CarrierAccountRef ref : accountRefRepository.findActiveByCustomerNoInOrPlatform(rowClientCodes)) {
                 if (ref.getCarrierCode() == null || ref.getAccountNumber() == null) continue;
-                accountsByCarrier
-                        .computeIfAbsent(ref.getCarrierCode().toUpperCase(Locale.ROOT), k -> new java.util.HashSet<>())
-                        .add(ref.getAccountNumber().trim().toUpperCase(Locale.ROOT));
+                String owner = StringUtils.hasText(ref.getCustomerNo())
+                        ? ref.getCustomerNo().trim().toUpperCase(Locale.ROOT) : "";
+                accountOwnerByCarrier
+                        .computeIfAbsent(ref.getCarrierCode().toUpperCase(Locale.ROOT), k -> new java.util.HashMap<>())
+                        .put(ref.getAccountNumber().trim().toUpperCase(Locale.ROOT), owner);
             }
         }
         // carrier → set of catalog service codes
@@ -525,16 +546,49 @@ public class OrderImportServiceImpl implements OrderImportService {
             boolean thirdParty = "THIRD_PARTY".equalsIgnoreCase(
                     row.getBillTo() == null ? "" : row.getBillTo().trim());
             if (account != null && carrier != null && KNOWN_CARRIERS.contains(carrier) && !thirdParty) {
-                java.util.Set<String> known = accountsByCarrier.getOrDefault(carrier, java.util.Set.of());
-                if (!known.contains(account)) {
-                    // A shipper's own account number, if provided, MUST be one
-                    // registered in the platform (this client's accounts +
-                    // platform accounts). Not found → hard error. THIRD_PARTY
-                    // (external bill-to) accounts are exempt — they live on the
-                    // recipient's carrier account, not ours, and are only
-                    // format-checked in validateRow.
+                // The billing account must be registered AND either a platform
+                // account or one owned by THIS row's client — otherwise it
+                // validates clean but fails at label time ("not a registered
+                // FEDEX account for this client"). THIRD_PARTY (external bill-to)
+                // accounts are exempt — only format-checked in validateRow.
+                Map<String, String> owners = accountOwnerByCarrier.getOrDefault(carrier, java.util.Map.of());
+                String owner = owners.get(account);
+                String rowClient = normalizeOrNull(row.getClientCode());
+                if (owner == null) {
                     errors.add("accountNumber " + account + " is not a registered "
                             + carrier + " account in the platform");
+                } else if (!owner.isEmpty() && rowClient != null && !owner.equals(rowClient)) {
+                    errors.add("accountNumber " + account + " belongs to client " + owner
+                            + ", not " + rowClient);
+                }
+            } else if (account == null && carrier != null && KNOWN_CARRIERS.contains(carrier)
+                    && !thirdParty && client != null && activeClients.contains(client)
+                    && accountRefRepository != null) {
+                // Blank accountNumber → the row falls back to the client's
+                // default/sole account at label time (resolveBulkAccount). If
+                // that resolution can't pick one, generate fails at the carrier
+                // with an order already minted (order 900100 sat in ERROR). Run
+                // the SAME resolver here so the failure lands on the accountNumber
+                // cell at upload/blur, exactly like every other reference check —
+                // validation and generate stay in lockstep by calling one
+                // resolver, never a re-implementation. THIRD_PARTY is exempt
+                // (external bill-to, format-checked only in validateRow).
+                BulkAccountPick pick = resolveBulkAccount(row.getClientCode(), carrier);
+                if (pick.error != null) {
+                    errors.add(pick.error);
+                } else if (pick.accountNumber != null) {
+                    // Resolution succeeded — say WHICH account will be billed when
+                    // it isn't the client's own, so the platform-account fallback
+                    // (client rule: blank account → house account, rebilled with
+                    // markup) is visible at preview instead of a surprise on the
+                    // invoice. Owner "" in the snapshot marks a platform account.
+                    Map<String, String> owners = accountOwnerByCarrier.getOrDefault(carrier, java.util.Map.of());
+                    String pickedOwner = owners.get(pick.accountNumber.trim().toUpperCase(Locale.ROOT));
+                    if ("".equals(pickedOwner)) {
+                        warnings.add("accountNumber is blank and " + client + " has no " + carrier
+                                + " account — this shipment will bill the PLATFORM account "
+                                + pick.accountNumber + " (rebilled to the client with markup)");
+                    }
                 }
             }
 
@@ -922,6 +976,35 @@ public class OrderImportServiceImpl implements OrderImportService {
             for (OrderImportRowDTO row : rows) {
                 row.setClientCode(clamp(row.getClientCode()));
             }
+            // Reject at UPLOAD time when this file is already in Import history —
+            // same file NAME, or same row CONTENT under a different name — so the
+            // operator sees "already imported" immediately instead of only when
+            // they hit Save. To re-import, delete the existing entry or edit its
+            // rows in the saved grid (updateRow, a different path).
+            if (importBatchRepository != null && !rows.isEmpty()) {
+                String normName = StringUtils.hasText(filename) ? filename.trim() : null;
+                if (normName != null) {
+                    com.multiship.backend.model.ImportBatch byName = importBatchRepository
+                            .findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(normName).orElse(null);
+                    if (byName != null) {
+                        return failure(HttpStatus.CONFLICT,
+                                "A file named \"" + normName + "\" is already imported as #" + byName.getId()
+                                + (byName.getCreatedAt() != null ? " on " + byName.getCreatedAt().toLocalDate() : "")
+                                + ". Delete it from Import history (or rename the file) before importing again.");
+                    }
+                }
+                String hash = contentHash(rows);
+                if (hash != null) {
+                    com.multiship.backend.model.ImportBatch dup = importBatchRepository
+                            .findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(hash).orElse(null);
+                    if (dup != null) {
+                        return failure(HttpStatus.CONFLICT,
+                                "This file was already imported as #" + dup.getId()
+                                + " (" + (StringUtils.hasText(dup.getFileName()) ? dup.getFileName() : "Untitled") + ")"
+                                + ". Edit a value or upload a different file to import a changed version.");
+                    }
+                }
+            }
             // Mint one batch id for this file upload right away and stamp
             // every row with it, so the whole sheet is grouped together
             // from the moment it's uploaded — commit() re-uses this same
@@ -1087,15 +1170,24 @@ public class OrderImportServiceImpl implements OrderImportService {
         return commit(rows, requestedBy, usePlatformAccount, null);
     }
 
+    public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy,
+                                                     boolean usePlatformAccount, String sourceOverride) {
+        return commit(rows, requestedBy, usePlatformAccount, sourceOverride, null);
+    }
+
     /**
      * @param usePlatformAccount when true, every group bills to the platform
      *   (house) account for its carrier, overriding any row/client account.
      *   Used by the Data History "Use platform account" generate option.
      * @param sourceOverride stamps the persisted order's {@code source} (e.g.
      *   "API" for WMS-fetched batches). Null → the default "BULK".
+     * @param onGroupComplete run once per group as it finishes (success OR
+     *   failure), on the worker thread — drives the live "X of N" progress bar.
+     *   Null when no progress reporting is needed.
      */
     public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy,
-                                                     boolean usePlatformAccount, String sourceOverride) {
+                                                     boolean usePlatformAccount, String sourceOverride,
+                                                     Runnable onGroupComplete) {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
         }
@@ -1166,7 +1258,15 @@ public class OrderImportServiceImpl implements OrderImportService {
         List<Callable<GroupOutcome>> tasks = new ArrayList<>(groupCount);
         for (Map.Entry<String, List<OrderImportRowDTO>> entry : groups.entrySet()) {
             List<OrderImportRowDTO> group = entry.getValue();
-            tasks.add(() -> processGroup(group, batchId, usePlatformAccount, sourceOverride));
+            tasks.add(() -> {
+                try {
+                    return processGroup(group, batchId, usePlatformAccount, sourceOverride);
+                } finally {
+                    // Tick exactly once per group as it finishes (whatever the
+                    // outcome) so the live progress bar advances in real time.
+                    if (onGroupComplete != null) onGroupComplete.run();
+                }
+            });
         }
 
         // Sprint 50 Tier 1 finding #15 — tenant key for fair-share. Groups
@@ -1284,21 +1384,34 @@ public class OrderImportServiceImpl implements OrderImportService {
             r.setGeneratedStatus(clean ? "SAVED" : "NEEDS_FIX");
         }
 
-        // Sprint 51 — reject re-uploading the same file. Hash the row DATA (not
-        // transient validation state), so an identical file is blocked even if
-        // renamed, while a file the operator has actually edited hashes
-        // differently and imports fine.
+        // De-dup Import history — a save / save-as-draft is REJECTED when the
+        // same file is already imported, so the operator can't pile up duplicate
+        // entries. Checked two ways:
+        //   (1) same file NAME (an already-imported file), and
+        //   (2) same row CONTENT under a different name (a renamed re-upload).
+        // To re-import, delete/trash the existing entry (or edit its rows in the
+        // saved grid, which updates in place via updateRow — a different path).
+        String normName = StringUtils.hasText(fileName) ? fileName.trim() : "Untitled import";
         String contentHash = contentHash(safe);
-        if (contentHash != null && importBatchRepository != null) {
-            com.multiship.backend.model.ImportBatch dup = importBatchRepository
-                    .findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(contentHash).orElse(null);
-            if (dup != null) {
-                String dupName = StringUtils.hasText(dup.getFileName()) ? dup.getFileName() : "Untitled";
+        if (importBatchRepository != null) {
+            com.multiship.backend.model.ImportBatch byName = importBatchRepository
+                    .findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(normName).orElse(null);
+            if (byName != null) {
                 return failure(HttpStatus.CONFLICT,
-                        "This file was already imported as #" + dup.getId()
-                        + " (" + dupName + ")"
-                        + (dup.getCreatedAt() != null ? " on " + dup.getCreatedAt().toLocalDate() : "")
-                        + ". Edit a value or upload a different file to import a changed version.");
+                        "A file named \"" + normName + "\" is already imported as #" + byName.getId()
+                        + (byName.getCreatedAt() != null ? " on " + byName.getCreatedAt().toLocalDate() : "")
+                        + ". Delete it from Import history (or rename the file) before importing again.");
+            }
+            if (contentHash != null) {
+                com.multiship.backend.model.ImportBatch dup = importBatchRepository
+                        .findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(contentHash).orElse(null);
+                if (dup != null) {
+                    String dupName = StringUtils.hasText(dup.getFileName()) ? dup.getFileName() : "Untitled";
+                    return failure(HttpStatus.CONFLICT,
+                            "This file was already imported as #" + dup.getId() + " (" + dupName + ")"
+                            + (dup.getCreatedAt() != null ? " on " + dup.getCreatedAt().toLocalDate() : "")
+                            + ". Edit a value or upload a different file to import a changed version.");
+                }
             }
         }
 
@@ -1306,7 +1419,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (importBatchRepository != null) {
             com.multiship.backend.model.ImportBatch batch = new com.multiship.backend.model.ImportBatch();
             batch.setCreatedBy(requestedBy);
-            batch.setFileName(StringUtils.hasText(fileName) ? fileName.trim() : "Untitled import");
+            batch.setFileName(normName);
             batch.setStatus(status);
             batch.setCreatedAt(java.time.LocalDateTime.now());
             batch.setTotalRows(total);
@@ -1567,7 +1680,17 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (!rowsToProcess.isEmpty()) {
             // WMS/API batches persist their generated orders as source=API.
             String sourceOverride = isApiSource(batch.getSource()) ? "API" : null;
-            commit(rowsToProcess, requestedBy, platform, sourceOverride);
+            // Register a live progress counter (total = groups, since one label
+            // covers a whole orderRef group) that a concurrent poll can read, and
+            // pass a per-group tick into commit. Always removed when the run ends.
+            GenProgress prog = new GenProgress(countGroups(rowsToProcess));
+            generationProgressByBatch.put(id, prog);
+            try {
+                commit(rowsToProcess, requestedBy, platform, sourceOverride,
+                        () -> prog.done.incrementAndGet());
+            } finally {
+                generationProgressByBatch.remove(id);
+            }
         }
 
         int total = rows.size();
@@ -1680,6 +1803,25 @@ public class OrderImportServiceImpl implements OrderImportService {
         log.info("Import batch {} row {} label ({}): {} → batch {} (labelBatch {})",
                 id, rowNumber, requestedBy, target.getGeneratedStatus(), batch.getStatus(), batch.getLabelBatchId());
         return toBatchDTO(batch, rows);
+    }
+
+    @Override
+    public GenProgressView generationProgress(Long id) {
+        GenProgress p = id == null ? null : generationProgressByBatch.get(id);
+        if (p == null) return new GenProgressView(0, 0, false);
+        // Clamp done ≤ total in case a poll lands between the last tick and removal.
+        return new GenProgressView(Math.min(p.done.get(), p.total), p.total, true);
+    }
+
+    /** Count of orderRef groups in a row set — one label (and one progress tick)
+     *  covers a whole group, so this is the progress bar's denominator. */
+    private static int countGroups(List<OrderImportRowDTO> rows) {
+        java.util.Set<String> keys = new java.util.HashSet<>();
+        for (OrderImportRowDTO r : rows) {
+            keys.add(StringUtils.hasText(r.getOrderRef())
+                    ? r.getOrderRef().trim() : "__row_" + r.getRowNumber());
+        }
+        return keys.size();
     }
 
     /**
@@ -2304,6 +2446,19 @@ public class OrderImportServiceImpl implements OrderImportService {
     /** HS code — 6 to 10 digits, dots allowed ("6109.10.0012"). */
     private static final java.util.regex.Pattern HS_RE =
             java.util.regex.Pattern.compile("^\\d{4,6}(\\.?\\d{2,4}){0,2}$");
+    /** Minimum HS/tariff digit count the DESTINATION (importing) country expects
+     *  — the first 6 are the international HS; countries extend it (US HTS=10,
+     *  EU CN=8…). Mirrors the manual form's HS_MIN_DIGITS. Default 6. */
+    private static final Map<String, Integer> HS_MIN_DIGITS = Map.ofEntries(
+            Map.entry("US", 10), Map.entry("CA", 10),
+            Map.entry("GB", 8), Map.entry("IE", 8), Map.entry("DE", 8), Map.entry("FR", 8),
+            Map.entry("IT", 8), Map.entry("ES", 8), Map.entry("NL", 8), Map.entry("BE", 8),
+            Map.entry("LU", 8), Map.entry("AT", 8), Map.entry("PT", 8), Map.entry("DK", 8),
+            Map.entry("SE", 8), Map.entry("FI", 8), Map.entry("PL", 8), Map.entry("CZ", 8),
+            Map.entry("HU", 8), Map.entry("RO", 8), Map.entry("GR", 8),
+            Map.entry("IN", 8), Map.entry("CN", 8), Map.entry("AU", 8), Map.entry("MX", 8),
+            Map.entry("BR", 8), Map.entry("ZA", 8), Map.entry("JP", 9), Map.entry("KR", 10),
+            Map.entry("SG", 8));
     private static final java.util.Set<String> WEIGHT_UNITS = java.util.Set.of("LB", "KG", "LBS", "KGS", "OZ");
     private static final java.util.Set<String> BILL_TO_VALUES = java.util.Set.of("SENDER", "RECIPIENT", "THIRD_PARTY");
     /**
@@ -2453,7 +2608,11 @@ public class OrderImportServiceImpl implements OrderImportService {
             errors.add("recipientEmail '" + email + "' is not a valid email");
         }
         String phone = row.getRecipientPhone();
-        if (StringUtils.hasText(phone)) {
+        if (!StringUtils.hasText(phone)) {
+            // Carriers (FedEx especially) reject a shipment with no recipient
+            // phone — catch it here instead of failing at label time.
+            errors.add("recipientPhone is required");
+        } else {
             String digits = phone.replaceAll("\\D", "");
             if (!PHONE_RE.matcher(phone.trim()).matches()) {
                 errors.add("recipientPhone '" + phone + "' contains invalid characters");
@@ -2625,6 +2784,20 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
             }
         }
+        // carrier → (serviceCode → scope DOMESTIC|INTERNATIONAL|BOTH). Used to
+        // catch a domestic-only service (e.g. FEDEX_GROUND) put on a shipment
+        // that crosses a border, which otherwise defaults through and fails at
+        // the carrier for a second, unrelated-looking reason.
+        Map<String, Map<String, String>> serviceScope = new java.util.HashMap<>();
+        if (shippingServiceRepository != null) {
+            for (com.multiship.backend.model.ShippingService s
+                    : shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()) {
+                if (s.getCarrier() == null || s.getServiceCode() == null || s.getScope() == null) continue;
+                serviceScope
+                        .computeIfAbsent(s.getCarrier().toUpperCase(Locale.ROOT), k -> new java.util.HashMap<>())
+                        .put(s.getServiceCode().toUpperCase(Locale.ROOT), s.getScope().trim().toUpperCase(Locale.ROOT));
+            }
+        }
         Map<String, List<OrderImportRowDTO>> groups = new LinkedHashMap<>();
         for (OrderImportRowDTO row : rows) {
             String key = StringUtils.hasText(row.getOrderRef())
@@ -2651,6 +2824,26 @@ public class OrderImportServiceImpl implements OrderImportService {
                     leader.getErrors() == null ? List.of() : leader.getErrors());
             String suffix = " is required for international shipments (countryCode=" + country + ")";
 
+            // (0) Service level must be able to cross the border. A blank service
+            //     defaults to the carrier's domestic Ground at label time (which
+            //     then fails for an international lane), and a DOMESTIC-scope
+            //     service (e.g. FEDEX_GROUND) can't cross a border either — catch
+            //     both on the serviceType cell instead of at the carrier.
+            //     Unknown/BOTH scope on a named service is left alone.
+            String svc = normalizeOrNull(leader.getServiceType());
+            String carr = normalizeOrNull(leader.getCarrierCode());
+            if (svc == null) {
+                errs.add("serviceType is required for international shipments (countryCode=" + country
+                        + "); a blank service ships domestic Ground and can't cross a border");
+            } else if (carr != null) {
+                String scope = serviceScope.getOrDefault(carr, java.util.Map.of()).get(svc);
+                if ("DOMESTIC".equals(scope)) {
+                    errs.add("serviceType '" + svc + "' is a domestic-only service and cannot ship to "
+                            + country.trim().toUpperCase(Locale.ROOT)
+                            + "; choose an international service for this carrier");
+                }
+            }
+
             // (a) Shipment-level customs essentials the carrier rejects without.
             //     Phone is a hard carrier requirement for international delivery
             //     + customs contact; currency denominates the declared value.
@@ -2676,6 +2869,20 @@ public class OrderImportServiceImpl implements OrderImportService {
                 if (!StringUtils.hasText(leader.getCountryOfOrigin()))  errs.add("countryOfOrigin" + suffix);
                 if (leader.getItemQuantity() == null)                   errs.add("itemQuantity" + suffix);
                 if (leader.getItemUnitValue() == null)                  errs.add("itemUnitValue" + suffix);
+            }
+            // (c) Country-wise HS length — a present HS code must carry the digit
+            //     count the importing country expects (US/CA=10, EU=8…). Mirrors
+            //     the manual form so bulk + manual reject the same short codes.
+            int minHs = HS_MIN_DIGITS.getOrDefault(country.trim().toUpperCase(Locale.ROOT), 6);
+            for (OrderImportRowDTO row : group) {
+                String hs = row.getHsCode();
+                if (!StringUtils.hasText(hs)) continue;
+                int digits = hs.replaceAll("\\D", "").length();
+                if (digits >= 6 && digits < minHs) {
+                    String msg = "hsCode '" + hs.trim() + "' needs at least " + minHs + " digits for "
+                            + country.trim().toUpperCase(Locale.ROOT) + " (you entered " + digits + ")";
+                    if (!errs.contains(msg)) errs.add(msg);
+                }
             }
             leader.setErrors(errs);
         }
@@ -2768,8 +2975,13 @@ public class OrderImportServiceImpl implements OrderImportService {
                 req.setAccountNumber(pick.accountNumber);
             }
 
+            // Reuse the order row from a prior attempt (a failed row carries the
+            // ERROR order's number) so a retry UPDATEs that same order instead of
+            // INSERTing a second one for the source row. Null on the first attempt
+            // → a fresh order is minted.
+            Integer existingOrderNo = leader.getGeneratedOrderNo();
             ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
-                    carrierService.generateManualLabel(req, null);
+                    carrierService.generateManualLabel(req, null, existingOrderNo);
             com.multiship.backend.dto.LabelGenerationResponse data =
                     resp == null ? null : resp.getData();
             if (resp != null && "success".equalsIgnoreCase(resp.getStatus()) && data != null
@@ -2803,23 +3015,93 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
                 return new GroupOutcome(valid, 0, 1);
             } else {
-                String msg = resp == null ? "no response" : resp.getMessage();
+                String raw = resp == null ? "no response" : resp.getMessage();
+                if (raw != null) log.warn("Order import group (leader row {}) carrier rejection: {}",
+                        leader.getRowNumber(), raw);
+                String msg = humanizeCarrierError(raw, leader);
+                // The ERROR order's number comes back in the failure data — record
+                // it on every row of the group so a retry reuses it (no duplicate
+                // INSERT), and attach it to this batch so failed orders aren't
+                // orphaned with a null batchId.
+                Integer failedNo = (data != null && data.getOrderNo() != null)
+                        ? data.getOrderNo().intValue() : null;
                 for (OrderImportRowDTO gr : group) {
                     gr.setGeneratedStatus("FAILED");
                     gr.setGeneratedMessage(msg);
+                    if (failedNo != null) gr.setGeneratedOrderNo(failedNo);
+                    if (batchId != null) gr.setBatchId(batchId);
+                }
+                if (failedNo != null && batchId != null && orderRepository != null) {
+                    orderRepository.findByOrderNo(failedNo).ifPresent(order -> {
+                        order.setBatchId(batchId);
+                        orderRepository.save(order);
+                    });
                 }
                 return new GroupOutcome(valid, 0, 0);
             }
         } catch (Exception ex) {
             log.warn("Order import group (leader row {}) failed at label generation: {}",
                     leader.getRowNumber(), ex.getMessage());
-            String msg = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+            String raw = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+            String msg = humanizeCarrierError(raw, leader);
             for (OrderImportRowDTO gr : group) {
                 gr.setGeneratedStatus("FAILED");
                 gr.setGeneratedMessage(msg);
             }
             return new GroupOutcome(valid, 0, 0);
         }
+    }
+
+    /**
+     * Turn a raw carrier rejection into one operator-facing sentence. The raw
+     * connector output ("FEDEX createShipment HTTP 400: {\"transactionId\":…}")
+     * is debug noise — it's logged at WARN and kept out of the grid. Known
+     * failure tokens map to an actionable sentence naming the carrier and, where
+     * relevant, the fix. Anything unrecognised falls back to a plain rejection
+     * line rather than leaking the payload. The "(saved as order N)" suffix the
+     * carrier layer appends is preserved so the operator can still find the row.
+     */
+    private static String humanizeCarrierError(String raw, OrderImportRowDTO leader) {
+        if (!StringUtils.hasText(raw)) return "The carrier rejected this shipment.";
+        String carrier = leader != null && StringUtils.hasText(leader.getCarrierCode())
+                ? leader.getCarrierCode().trim().toUpperCase(Locale.ROOT) : "The carrier";
+        String carrierName = switch (carrier) {
+            case "FEDEX" -> "FedEx"; case "UPS" -> "UPS"; case "USPS" -> "USPS"; case "DHL" -> "DHL";
+            default -> "The carrier";
+        };
+        // Preserve the "(saved as order N)" locator the carrier layer appended.
+        String tail = "";
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(\\(saved as order \\d+\\))").matcher(raw);
+        if (m.find()) tail = " " + m.group(1);
+        String up = raw.toUpperCase(Locale.ROOT);
+
+        if (up.contains("NOTSERVED") || up.contains("NOT SERVED") || up.contains("DESTINATION.COUNTRY")) {
+            return carrierName + " doesn't serve this destination country on the selected service." + tail;
+        }
+        if (up.contains("PHONENUMBER") || up.contains("PHONE NUMBER") || up.contains("PHONE.")) {
+            return carrierName + " needs a valid recipient phone number for this shipment." + tail;
+        }
+        if (up.contains("NOT A REGISTERED") || up.contains("NOT AUTHORIZED") || up.contains("NOT AUTHORISED")
+                || (up.contains("ACCOUNT") && (up.contains("HTTP 400") || up.contains("HTTP 401") || up.contains("HTTP 403")))) {
+            return carrierName + " rejected the billing account. The account isn't authorised for this carrier — check Settings → Carriers." + tail;
+        }
+        if (up.contains("POSTAL") || up.contains("ZIP")) {
+            return carrierName + " rejected the postal code for this address." + tail;
+        }
+        if (up.contains("CUSTOMS") || up.contains("COMMODITY") || up.contains("TOTALCUSTOMSVALUE")) {
+            return carrierName + " rejected the customs details for this international shipment." + tail;
+        }
+        // Not a recognised code. Only a raw carrier PAYLOAD is worth hiding — a
+        // JSON body or a bare "…HTTP 4xx: {…}" dump is debug output, not an
+        // operator message. A short, clean cause (a transport error, a timeout)
+        // is honest and useful, so it's kept verbatim.
+        boolean looksLikePayload = raw.contains("{") || raw.contains("}")
+                || java.util.regex.Pattern.compile("HTTP\\s*\\d{3}").matcher(up).find();
+        if (looksLikePayload) {
+            return carrierName + " rejected this shipment." + tail;
+        }
+        return raw;
     }
 
     /** Sprint 50 Tier 1 finding #8 — return shape for a per-group commit worker. */
@@ -2924,6 +3206,10 @@ public class OrderImportServiceImpl implements OrderImportService {
                     + " accounts and no default; set a default account or put accountNumber in the row");
         }
 
+        // The client has no usable account on this carrier — fall back to the
+        // platform (house) account, per the client's rule: a bulk row that leaves
+        // accountNumber blank bills the platform account. Only when there is no
+        // platform account for the carrier either is there nothing left to bill.
         CarrierAccountRef platform = accountRefRepository
                 .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
         if (platform != null) return BulkAccountPick.of(platform.getAccountNumber());

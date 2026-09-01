@@ -91,7 +91,58 @@ public class ManifestServiceImpl implements ManifestService {
                     "Carrier " + carrier + " isn't configured on this instance.");
         }
 
-        CarrierAccountRef account = resolveAccount(carrier, request.getCustomerNo());
+        // Tenant gate on the SUBMITTED TRACKINGS — the customerNo clamp above
+        // only steers credential choice; nothing stopped a scoped USER from
+        // listing another tenant's tracking numbers and closing them out. Any
+        // foreign tracking now rejects the whole request loudly.
+        java.util.Optional<String> callerScope = tenantScope.resolveScope();
+        if (callerScope.isPresent()) {
+            for (String t : request.getTrackingNumbers()) {
+                if (!StringUtils.hasText(t)) continue;
+                Integer orderNo = orderTrackingRepository.findByTrackingNumberIgnoreCase(t)
+                        .map(OrderTracking::getOrderNo).orElse(null);
+                String owner = orderNo == null ? null : orderRepository.findByOrderNo(orderNo)
+                        .map(o -> StringUtils.hasText(o.getTenantId()) ? o.getTenantId() : o.getCustNo())
+                        .orElse(null);
+                if (owner != null && !owner.trim().equalsIgnoreCase(callerScope.get())) {
+                    return failure(HttpStatus.UNPROCESSABLE_CONTENT,
+                            "Tracking " + t + " belongs to another client and cannot be "
+                                    + "closed out from this account.");
+                }
+            }
+        }
+
+        // Bill the close-out to the account the LABELS were actually generated
+        // on. Re-resolving the client default here closed out labels billed to
+        // account B under account A (or the house account when no default was
+        // flagged) — the recorded account is on each tracking row. Mixed
+        // accounts in one request can't share a manifest; split explicitly.
+        java.util.Set<String> recordedAccounts = new java.util.LinkedHashSet<>();
+        for (String t : request.getTrackingNumbers()) {
+            if (!StringUtils.hasText(t)) continue;
+            orderTrackingRepository.findByTrackingNumberIgnoreCase(t)
+                    .map(OrderTracking::getAccountNumber)
+                    .filter(StringUtils::hasText)
+                    .ifPresent(a -> recordedAccounts.add(a.trim()));
+        }
+        if (recordedAccounts.size() > 1) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT,
+                    "These trackings were billed to " + recordedAccounts.size()
+                            + " different accounts (" + String.join(", ", recordedAccounts)
+                            + "). Close out one account's shipments at a time.");
+        }
+        CarrierAccountRef account = null;
+        if (recordedAccounts.size() == 1) {
+            account = carrierAccountRefRepository
+                    .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(
+                            recordedAccounts.iterator().next(), carrier)
+                    .orElse(null);
+        }
+        // Legacy rows with no recorded account (or an account since deleted)
+        // keep the old default/platform resolution as a fallback.
+        if (account == null) {
+            account = resolveAccount(carrier, request.getCustomerNo());
+        }
         if (account == null || !StringUtils.hasText(account.getClientId())
                 || !StringUtils.hasText(account.getClientSecret())) {
             return success(singleFleetResponse(new CloseOutResult(carrier, null, null, null,
@@ -355,15 +406,24 @@ public class ManifestServiceImpl implements ManifestService {
 
     CarrierAccountRef resolveAccount(String carrierCode, String customerNo) {
         if (StringUtils.hasText(customerNo)) {
-            List<CarrierAccountRef> owned = carrierAccountRefRepository
-                    .findByCustomerNoIgnoreCaseAndClientDefaultTrue(customerNo);
-            for (CarrierAccountRef ref : owned) {
-                if (carrierCode.equalsIgnoreCase(ref.getCarrierCode())
-                        && StringUtils.hasText(ref.getClientId())
-                        && StringUtils.hasText(ref.getClientSecret())) {
-                    return ref;
-                }
+            // Canonical cascade: default-flagged first, then the client's sole
+            // account on this carrier (previously a client whose only account
+            // wasn't flagged default silently fell to the HOUSE account), and
+            // never a deactivated row (the default-flag query has no active
+            // filter, so a disabled client's stale default was still picked).
+            List<CarrierAccountRef> usable = carrierAccountRefRepository
+                    .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(customerNo.trim())
+                    .stream()
+                    .filter(a -> !Boolean.FALSE.equals(a.getActive()))
+                    .filter(a -> carrierCode.equalsIgnoreCase(
+                            a.getCarrierCode() == null ? "" : a.getCarrierCode().trim()))
+                    .filter(a -> StringUtils.hasText(a.getClientId())
+                            && StringUtils.hasText(a.getClientSecret()))
+                    .toList();
+            for (CarrierAccountRef ref : usable) {
+                if (Boolean.TRUE.equals(ref.getClientDefault())) return ref;
             }
+            if (usable.size() == 1) return usable.get(0);
         }
         List<CarrierAccountRef> platform = carrierAccountRefRepository
                 .findPlatformAccountsByCarrier(carrierCode);

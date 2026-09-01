@@ -272,7 +272,9 @@ class RateShopServiceImplTest {
         customer.setClientId("customer-cid");
         CarrierAccountRef platform = acct("UPS");
         platform.setClientId("platform-cid");
-        when(accountRepo.findByCustomerNoIgnoreCaseAndClientDefaultTrue("C001"))
+        // resolveAccount now walks the full owned-account list (default-flag
+        // first, then sole account) instead of only the default-flag query.
+        when(accountRepo.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc("C001"))
                 .thenReturn(List.of(customer));
         when(accountRepo.findPlatformAccountsByCarrier(anyString()))
                 .thenReturn(List.of(platform));
@@ -284,7 +286,7 @@ class RateShopServiceImplTest {
 
     @Test
     void resolveAccountFallsBackToPlatformWhenCustomerHasNone() {
-        when(accountRepo.findByCustomerNoIgnoreCaseAndClientDefaultTrue("C001"))
+        when(accountRepo.findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc("C001"))
                 .thenReturn(List.of());
         CarrierAccountRef platform = acct("UPS");
         when(accountRepo.findPlatformAccountsByCarrier("UPS"))
@@ -595,6 +597,6 @@ class RateShopServiceImplTest {
 
         // No carrier account resolution should have happened.
         org.mockito.Mockito.verify(accountRepo, org.mockito.Mockito.never())
-                .findByCustomerNoIgnoreCaseAndClientDefaultTrue(anyString());
+                .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(anyString());
     }
 }

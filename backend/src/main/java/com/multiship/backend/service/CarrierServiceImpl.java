@@ -695,32 +695,60 @@ public class CarrierServiceImpl implements CarrierService {
             }
         }
 
-        // Carrier: from the request, else inferred from the credential account.
-        String carrier = resolveCanonicalCarrierCode(firstNonBlank(
+        // Carrier: from the request, else inferred from the picked credential
+        // account. No hard-coded terminal fallback — a typed FedEx number with
+        // no carrierCode used to be looked up as UPS, miss, and silently ship
+        // UPS on the platform account. Require the carrier instead.
+        String rawCarrier = firstNonBlank(
                 req.getCarrierCode(),
                 req.getAccountId() != null
                         ? carrierAccountRefRepository.findById(req.getAccountId())
                                 .map(CarrierAccountRef::getCarrierCode).orElse(null)
-                        : null,
-                "UPS"));
+                        : null);
+        if (!StringUtils.hasText(rawCarrier)) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                    "carrierCode is required — pick the carrier this shipment bills to.");
+        }
+        String carrier = resolveCanonicalCarrierCode(rawCarrier);
 
-        // Credential account: the picked account, else the typed number on file, else
-        // the carrier's platform account (so a hand-typed account still authenticates).
+        // Credential + bill-to account: the picked account, else the typed number
+        // on file for this carrier. An UNKNOWN typed number is a hard error —
+        // the old behaviour silently fell back to platform credentials while
+        // printing the unvalidated typed number as bill-to, so a typo shipped a
+        // mis-billed label with no warning.
         CarrierAccountRef account = null;
         if (req.getAccountId() != null) {
             account = carrierAccountRefRepository.findById(req.getAccountId()).orElse(null);
+            if (account == null) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                        "The selected carrier account no longer exists. Refresh and pick again.");
+            }
         }
-        if (account == null && typedNumber != null) {
+        if (account == null) {
             account = carrierAccountRefRepository
                     .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(typedNumber, carrier).orElse(null);
+            if (account == null) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                        "accountNumber " + typedNumber + " is not a registered " + carrier
+                                + " account in the platform. Add it in Settings → Carriers first.");
+            }
         }
-        if (account == null) {
-            account = carrierAccountRefRepository.findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
-        }
-        if (account == null) {
+        // Ownership gate — same rule the bulk import enforces at upload: the
+        // account must be a platform (house) account or owned by THIS request's
+        // client. Without it any caller could bill another tenant's account
+        // (the external API funnels through here too). Mismatch only errors
+        // when both sides are known, mirroring bulk's validateReferences.
+        String accountOwner = StringUtils.hasText(account.getCustomerNo())
+                ? account.getCustomerNo().trim() : null;
+        if (accountOwner != null && hasClient && !accountOwner.equalsIgnoreCase(resolvedClient.trim())) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
-                    "No verified " + carrier + " credentials are available to ship. Add or verify a "
-                    + carrier + " account first.");
+                    "accountNumber " + account.getAccountNumber() + " belongs to client "
+                            + accountOwner + ", not " + resolvedClient.trim() + ".");
+        }
+        if (Boolean.FALSE.equals(account.getActive())) {
+            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                    "accountNumber " + account.getAccountNumber() + " is deactivated. "
+                            + "Re-activate it in Settings → Carriers or pick another account.");
         }
         // Bill-to account number that prints on the label: the typed number wins.
         // Pre-fix had a "ACCOUNT" literal string as the ultimate fallback which
@@ -851,12 +879,28 @@ public class CarrierServiceImpl implements CarrierService {
                     service = rerouted;
                     String newCarrier = resolveCanonicalCarrierCode(rerouted.getCarrier());
                     if (!newCarrier.equalsIgnoreCase(carrier)) {
-                        // Swap carrier + connector; try to find a working
-                        // account for the new carrier (existing account, else
-                        // the platform account for that carrier).
+                        // Swap carrier + connector, and re-resolve the account ON
+                        // THE NEW CARRIER: the client's default/sole account first,
+                        // platform fallback second. The bill-to must be the account
+                        // we actually resolved — the old code kept the ORIGINAL
+                        // carrier's typed number as bill-to (a UPS number on a
+                        // FedEx label) and still carried the deliberately-removed
+                        // "ACCOUNT" literal as a final fallback.
                         carrier = newCarrier;
-                        CarrierAccountRef reroutedAccount = carrierAccountRefRepository
-                                .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+                        final String carrierForReroute = carrier;
+                        CarrierAccountRef reroutedAccount = hasClient
+                                ? carrierAccountRefRepository
+                                        .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(resolvedClient.trim())
+                                        .stream()
+                                        .filter(a -> !Boolean.FALSE.equals(a.getActive()))
+                                        .filter(a -> carrierForReroute.equalsIgnoreCase(resolveCanonicalCarrierCode(
+                                                a.getCarrierCode() == null ? "" : a.getCarrierCode().trim())))
+                                        .findFirst().orElse(null)
+                                : null;
+                        if (reroutedAccount == null) {
+                            reroutedAccount = carrierAccountRefRepository
+                                    .findPlatformAccountsByCarrier(carrier).stream().findFirst().orElse(null);
+                        }
                         if (reroutedAccount == null) {
                             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                                     "Routing rule '" + routingResult.getMatchedRuleName()
@@ -864,7 +908,15 @@ public class CarrierServiceImpl implements CarrierService {
                                     + " credentials are available.");
                         }
                         account = reroutedAccount;
-                        billToNumber = firstNonBlank(typedNumber, account.getAccountNumber(), "ACCOUNT");
+                        billToNumber = account.getAccountNumber();
+                        if (!StringUtils.hasText(billToNumber)) {
+                            return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                                    "Routing rule '" + routingResult.getMatchedRuleName()
+                                    + "' rerouted to " + carrier + " but the resolved account has no "
+                                    + "account number stored.");
+                        }
+                        log.warn("Routing reroute swapped billing to {} account {} (rule '{}')",
+                                carrier, billToNumber, routingResult.getMatchedRuleName());
                         connector = getCarrierConnector(carrier);
                     }
                     log.info("Routing rule '{}' rerouted client={} to service={} carrier={}",
@@ -1184,9 +1236,51 @@ public class CarrierServiceImpl implements CarrierService {
                         persistEx.getMessage(), persistEx);
             }
             Integer failedOrderNo = failedOrderNoHolder[0];
+            // Persist the commodity lines on the failed order too — in a SEPARATE
+            // transaction AFTER the ERROR order committed above, so the just-saved
+            // order is visible to upsertCustoms and a customs hiccup can't roll
+            // back (and lose) the error record. Lets the fix-and-regenerate form
+            // pre-fill the commercial invoice + incoterms/currency/reason.
+            boolean intlFail = to.getCountryCode() != null && fromCountry != null
+                    && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
+            if (failedOrderNo != null && intlFail && req.getItems() != null && !req.getItems().isEmpty()) {
+                var failLines = req.getItems().stream()
+                        .filter(it -> StringUtils.hasText(it.getDescription()))
+                        .map(it -> com.multiship.backend.dto.OrderCustomsItemDTO.builder()
+                                .description(it.getDescription()).hsCode(it.getHsCode())
+                                .countryOfOrigin(it.getCountryOfOrigin()).quantity(it.getQuantity())
+                                .unitValue(it.getUnitValue()).weight(it.getWeight()).sku(it.getSku())
+                                .boxSeq(it.getBoxSeq()).build())
+                        .toList();
+                if (!failLines.isEmpty()) {
+                    var failCustoms = new com.multiship.backend.dto.OrderCustomsUpsertRequest();
+                    failCustoms.setIncoterms(req.getIncoterms());
+                    failCustoms.setReasonForExport(req.getReasonForExport());
+                    failCustoms.setCurrency(firstNonBlank(req.getCurrency(), "USD"));
+                    failCustoms.setItems(failLines);
+                    final Integer fno = failedOrderNo;
+                    try {
+                        requiresNewTransactionTemplate.executeWithoutResult(st ->
+                                customsService.upsertCustoms(String.valueOf(fno), failCustoms));
+                    } catch (Exception cEx) {
+                        log.warn("Failed order {}: could not save commercial-invoice items: {}",
+                                fno, cEx.getMessage());
+                    }
+                }
+            }
+            // Carry the ERROR order's number back to the caller (the bulk import
+            // service) in the response data, so it can attach the order to its
+            // batch and a retry can UPDATE this same row instead of INSERTing a
+            // second order for the source row.
+            LabelGenerationResponse failData = LabelGenerationResponse.builder()
+                    .orderNo(failedOrderNo != null ? failedOrderNo.longValue() : null)
+                    .status("ERROR")
+                    .message("The carrier rejected the manual shipment: " + ex.getMessage())
+                    .build();
             return failure(HttpStatus.BAD_GATEWAY, ErrorCode.CARRIER_FAILURE,
                     "The carrier rejected the manual shipment: " + ex.getMessage()
-                            + (failedOrderNo != null ? " (saved as order " + failedOrderNo + ")" : ""));
+                            + (failedOrderNo != null ? " (saved as order " + failedOrderNo + ")" : ""),
+                    failData);
         }
         // Master result = batch 1 (order_label_tracking downstream uses its
         // trackingNumber). label_package rows come from each batch's
@@ -1215,9 +1309,14 @@ public class CarrierServiceImpl implements CarrierService {
         order.setIsError(false);
         order.setIsManual("Y");
         order.setIsReturn(isReturn ? "Y" : "N");
-        order.setSource(firstNonBlank(req.getSource(), "MANUAL"));
-        order.setCustNo(firstNonBlank(req.getClientCode(), "MANUAL"));
-        order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : null);
+        // On regenerate (existingOrderNo) preserve the order's own source /
+        // client so fixing a failed BULK/API order doesn't reclassify it as
+        // MANUAL (which would move it to another partition and wipe its client).
+        // For a new order the loaded entity's getters are null, so this is the
+        // same as before.
+        order.setSource(firstNonBlank(req.getSource(), order.getSource(), "MANUAL"));
+        order.setCustNo(firstNonBlank(req.getClientCode(), order.getCustNo(), "MANUAL"));
+        order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : order.getTenantId());
         order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
         order.setShipName(to.getName());
         order.setShipAttn(to.getCompany());
@@ -1269,6 +1368,16 @@ public class CarrierServiceImpl implements CarrierService {
             }
         }
         orderRepository.save(order);
+
+        // On regenerate the order row is reused, so the prior attempt's
+        // shipment_batch + label_package rows still exist. Clear them before
+        // writing the new ones, or the (order_no, batch_seq) unique key collides
+        // ("duplicate key value violates uk_shipment_batch_order_seq"). Bulk
+        // deletes run immediately, ahead of the inserts below.
+        if (existingOrderNo != null) {
+            shipmentBatchRepository.deleteByOrderNo(orderNo);
+            labelPackageRepository.deleteByOrderNo(orderNo);
+        }
 
         // Per-batch + per-package persistence. Each sub-request produced its
         // own carrier ShipmentResult; save one shipment_batch row per result

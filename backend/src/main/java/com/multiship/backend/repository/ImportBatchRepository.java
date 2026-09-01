@@ -46,4 +46,9 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long> 
      *  reject re-uploading the same file. A soft-deleted batch does not block a
      *  re-upload, so the operator can delete and re-import a corrected file. */
     Optional<ImportBatch> findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(String contentHash);
+
+    /** Most recent LIVE batch with the same file name — re-saving an edited
+     *  version of the same file updates this entry in place instead of piling
+     *  up duplicate same-name rows in Import history. */
+    Optional<ImportBatch> findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(String fileName);
 }

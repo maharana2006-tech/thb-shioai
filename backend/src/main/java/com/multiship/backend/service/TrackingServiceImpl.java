@@ -175,9 +175,11 @@ public class TrackingServiceImpl implements TrackingService {
             Optional<CarrierAccountRef> exact = carrierAccountRefRepository
                     .findFirstByAccountNumberIgnoreCaseAndCarrierCodeIgnoreCase(accountNumber, canonicalCarrier);
             if (exact.isPresent()) return exact.get();
-            Optional<CarrierAccountRef> anyCarrier = carrierAccountRefRepository
-                    .findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(accountNumber);
-            if (anyCarrier.isPresent()) return anyCarrier.get();
+            // NOTE: no any-carrier fallback here. (number, carrier) is the
+            // unique key, so the same number under a different carrier can be
+            // a DIFFERENT tenant's row — matching it would authenticate this
+            // track call with a foreign tenant's credentials. Tracking works
+            // fine on the platform account, so fall through to that instead.
         }
         List<CarrierAccountRef> platform = carrierAccountRefRepository
                 .findPlatformAccountsByCarrier(canonicalCarrier);

@@ -142,15 +142,23 @@ public class PickupServiceImpl implements PickupService {
 
     CarrierAccountRef resolveAccount(String carrierCode, String customerNo) {
         if (StringUtils.hasText(customerNo)) {
-            List<CarrierAccountRef> owned = carrierAccountRefRepository
-                    .findByCustomerNoIgnoreCaseAndClientDefaultTrue(customerNo);
-            for (CarrierAccountRef ref : owned) {
-                if (carrierCode.equalsIgnoreCase(ref.getCarrierCode())
-                        && StringUtils.hasText(ref.getClientId())
-                        && StringUtils.hasText(ref.getClientSecret())) {
-                    return ref;
-                }
+            // Canonical cascade (mirrors ManifestServiceImpl.resolveAccount):
+            // default-flagged first, then the client's sole account on this
+            // carrier, active rows only. Previously an un-flagged sole account
+            // fell to the house account and deactivated defaults still matched.
+            List<CarrierAccountRef> usable = carrierAccountRefRepository
+                    .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(customerNo.trim())
+                    .stream()
+                    .filter(a -> !Boolean.FALSE.equals(a.getActive()))
+                    .filter(a -> carrierCode.equalsIgnoreCase(
+                            a.getCarrierCode() == null ? "" : a.getCarrierCode().trim()))
+                    .filter(a -> StringUtils.hasText(a.getClientId())
+                            && StringUtils.hasText(a.getClientSecret()))
+                    .toList();
+            for (CarrierAccountRef ref : usable) {
+                if (Boolean.TRUE.equals(ref.getClientDefault())) return ref;
             }
+            if (usable.size() == 1) return usable.get(0);
         }
         List<CarrierAccountRef> platform = carrierAccountRefRepository
                 .findPlatformAccountsByCarrier(carrierCode);

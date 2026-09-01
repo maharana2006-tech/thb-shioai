@@ -111,6 +111,16 @@ public interface OrderImportService {
     com.multiship.backend.dto.ImportBatchDTO generateLabelForRow(Long id, int rowNumber, String requestedBy);
 
     /**
+     * Live label-generation progress for a batch, so the UI can show a real
+     * "X of N" bar while a generate/retry runs. {@code running} is false (with
+     * done=total=0) when no generation is in flight for the batch.
+     */
+    record GenProgressView(int done, int total, boolean running) {}
+
+    /** Snapshot the in-flight generation progress for {@code id}. Never null. */
+    GenProgressView generationProgress(Long id);
+
+    /**
      * Sprint 51 — correct one row of a saved import in place (Data History
      * inline edit). Applies the edited row, re-runs the full validation
      * pipeline over the whole batch, re-stamps each ungenerated row as

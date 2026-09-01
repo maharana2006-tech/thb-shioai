@@ -18,6 +18,18 @@ import {
   type OrderImportRow,
 } from '../../api/orderImportService'
 import { notify } from '../../utils/notify'
+import { ApiError } from '../../api/apiClient'
+
+/** Clean, user-facing text + a friendly title for an upload/save failure —
+ *  duplicate-file (409) gets its own heading instead of "Something went wrong". */
+function importErrorDisplay(e: unknown, fallback: string): { title: string; body: string } {
+  if (e instanceof ApiError) {
+    const body = (e.payload?.message as string | undefined) || e.message || fallback
+    if (e.status === 409) return { title: 'File already imported', body }
+    return { title: 'Import failed', body }
+  }
+  return { title: 'Import failed', body: e instanceof Error ? e.message : fallback }
+}
 
 /**
  * Sprint 40 — CSV / XLSX order import modal. Three steps:
@@ -118,9 +130,9 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
         notify.error(response.message ?? 'Preview failed.')
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Upload failed.'
-      setError(msg)
-      notify.error(msg)
+      const { title, body } = importErrorDisplay(e, 'Upload failed.')
+      setError(body)
+      notify.error({ title, body })
     } finally {
       setUploading(false)
     }
@@ -142,7 +154,9 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
         notify.error(response.message ?? 'Save failed.')
       }
     } catch (e) {
-      notify.apiError(e, 'Save failed.')
+      const { title, body } = importErrorDisplay(e, 'Save failed.')
+      setError(body)
+      notify.error({ title, body })
     } finally {
       setCommitting(false)
     }
@@ -396,7 +410,12 @@ function UploadStep({
         <input
           type="file"
           accept=".csv,.xlsx,.txt"
-          onChange={(e) => onFileChange(e.target.files?.[0] ?? null)}
+          onChange={(e) => {
+            onFileChange(e.target.files?.[0] ?? null)
+            // Reset so re-selecting the SAME file fires onChange again
+            // (a file <input> won't emit change when the value is unchanged).
+            e.target.value = ''
+          }}
           className="sr-only"
         />
       </label>

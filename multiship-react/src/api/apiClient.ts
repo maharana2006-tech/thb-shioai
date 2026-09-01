@@ -183,9 +183,11 @@ export async function authFetch(endpoint: string, options: RequestInit = {}): Pr
     }
   }
 
-  const suffix = serverMessage ? ` — ${serverMessage}` : '';
+  // Use the server's own message as the error text (like the JSON path above)
+  // so callers show a clean "A file named … is already imported" instead of a
+  // raw "HTTP 409 — …". The status is still available via ApiError.status.
   throw new ApiError(
-    `HTTP ${response.status}${suffix}`,
+    serverMessage || `HTTP error! status: ${response.status}`,
     response.status,
     serverMessage ? { message: serverMessage } : {},
   );

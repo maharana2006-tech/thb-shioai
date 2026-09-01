@@ -866,8 +866,12 @@ public class OrderController {
      * client default changed since. Returns null when not applicable.
      */
     private OrderAccountResolutionDTO asShippedResolution(Integer orderNo) {
+        // Return the account the order was billed to whenever one is stored on
+        // the tracking row — including FAILED orders (the account is captured
+        // before the carrier call). Without this, a failed order shows "no
+        // account resolved" and the fix form can't load its service/package
+        // catalogs, which key off the resolved account.
         return orderTrackingRepository.findByOrderNo(orderNo)
-                .filter(tracking -> Boolean.TRUE.equals(tracking.getIsLabelGenerated()))
                 .map(com.multiship.backend.model.OrderTracking::getAccountNumber)
                 .filter(org.springframework.util.StringUtils::hasText)
                 .flatMap(accountNumber -> carrierAccountRefRepository

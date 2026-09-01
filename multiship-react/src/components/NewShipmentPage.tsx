@@ -15,6 +15,7 @@ import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
 import { shippingConfigService, type ShippingServiceItem, type PackagePreset } from '../api/shippingConfigService'
 import { customsService } from '../api/customsService'
+import { mapCarrierErrorToFields, summarizeCarrierError } from '../utils/carrierErrorMap'
 import { addressValidationService, type AddressValidationResponse } from '../api/addressValidationService'
 import { recipientBookService, type SavedRecipient } from '../api/recipientBookService'
 import { clientWarehouseService, type ClientWarehouse } from '../api/warehouseService'
@@ -53,6 +54,16 @@ const canon = (c?: string | null) => {
   if (v === 'P80') return 'UPS'
   if (v === 'F77') return 'FEDEX'
   if (v === 'L01') return 'USPS'
+  if (['UPS', 'FEDEX', 'USPS', 'DHL'].includes(v)) return v
+  if (v === 'STAMPS') return 'USPS'
+  // Carrier-prefixed SERVICE codes (e.g. INTERNATIONAL_ECONOMY, FEDEX_2_DAY)
+  // map back to their carrier — the fix/edit form derives the carrier from the
+  // order's ship-via code, which is a service code, not a carrier code.
+  if (v.startsWith('FEDEX') || v.startsWith('INTERNATIONAL_') || v.includes('OVERNIGHT')
+      || v.includes('GROUND_HOME') || v.includes('SMART_POST')) return 'FEDEX'
+  if (v.startsWith('UPS') || v.includes('WORLDWIDE') || v.includes('NEXT_DAY_AIR')) return 'UPS'
+  if (v.startsWith('USPS')) return 'USPS'
+  if (v.startsWith('DHL')) return 'DHL'
   return v
 }
 
@@ -1089,6 +1100,7 @@ export default function NewShipmentPage() {
     () => ({
       isInternational,
       isCustomPackage: isCustomPkg,
+      clientCode,
       carrier,
       account: accountNumber,
       incoterms,
@@ -1102,25 +1114,31 @@ export default function NewShipmentPage() {
       length,
       width,
       height,
-      // Only validate rows the operator actually started filling. A pristine
-      // "Add item" row (blank description AND blank value — quantity defaults to
-      // "1") must not trip "Description/Value required" and block submit; the
-      // submit payload filters the same blanks via cleanItems. If EVERY row is
-      // blank on an international shipment, the array is empty and the schema's
-      // .min(1) still fires "needs at least one item".
-      items: items
-        .filter((it) => it.description?.trim() || it.unitValue?.trim()
-          || it.hsCode?.trim() || it.sku?.trim() || it.countryOfOrigin?.trim())
-        .map((it) => ({
+      // Validate the rows the operator actually started filling. A pristine
+      // trailing "Add item" row (all fields blank) is skipped so it doesn't trip
+      // "Description/HS required" — the submit payload filters the same blanks
+      // via cleanItems. BUT on an international shipment where EVERY row is blank
+      // we keep the first row, so its per-field required errors render UNDER the
+      // inputs instead of only a top-level "needs at least one item" toast.
+      items: (() => {
+        const withDest = (it: ItemRow) => ({
           description: it.description,
           sku: it.sku,
           hsCode: it.hsCode,
           countryOfOrigin: it.countryOfOrigin,
           quantity: it.quantity,
           unitValue: it.unitValue,
-        })),
+          // Destination country rides on each item so the HS-code rule can key
+          // its required digit-length off the importing country.
+          destCountry: (recipient.countryCode || '').toUpperCase(),
+        })
+        const started = items.filter((it) => it.description?.trim() || it.unitValue?.trim()
+          || it.hsCode?.trim() || it.sku?.trim() || it.countryOfOrigin?.trim())
+        if (started.length > 0) return started.map(withDest)
+        return isInternational && items.length > 0 ? [withDest(items[0])] : []
+      })(),
     }),
-    [isInternational, isCustomPkg, carrier, accountNumber, incoterms, reasonForExport,
+    [isInternational, isCustomPkg, clientCode, carrier, accountNumber, incoterms, reasonForExport,
       currency, sender, recipient, weight, declaredValue, insuredValue, length, width, height, items],
   )
   const formik = useFormik<ShipmentFormValues>({
@@ -1129,13 +1147,39 @@ export default function NewShipmentPage() {
     validationSchema: shipmentSchema,
     onSubmit: () => {},
   })
-  /** Field error at `path` — only surfaced after a submit attempt. */
+  // In edit/fix mode, map the carrier error to the specific fields it implicates
+  // so the reason shows UNDER the wrong/missing field (not just the top banner).
+  // These surface immediately (no submit needed), and clear once the operator
+  // edits that field.
+  const { fields: fixFieldErrors, hasItemError: fixItemError } = useMemo(
+    () => (fixOrderNo ? mapCarrierErrorToFields(fixError) : { fields: {}, hasItemError: false }),
+    [fixOrderNo, fixError],
+  )
+  const [clearedFixKeys, setClearedFixKeys] = useState<Set<string>>(new Set())
+  const carrierErrAt = (path: string): string | undefined =>
+    clearedFixKeys.has(path) ? undefined : fixFieldErrors[path]
+  /** Mark a carrier-mapped field error as resolved once the operator edits it. */
+  const clearFixKey = (path: string) => {
+    if (fixFieldErrors[path] && !clearedFixKeys.has(path)) {
+      setClearedFixKeys((s) => new Set(s).add(path))
+    }
+  }
+  /** Field error at `path` — carrier error first (edit mode), then form validation. */
   const errAt = (path: string): string | undefined =>
-    submitAttempted ? (getIn(formik.errors, path) as string | undefined) : undefined
+    carrierErrAt(path) ?? (submitAttempted ? (getIn(formik.errors, path) as string | undefined) : undefined)
   /** Whole address-block error map for AddressBlock (sender / recipient). */
   const addrErrors = (prefix: 'sender' | 'recipient'): AddressErrors | undefined => {
-    if (!submitAttempted) return undefined
-    return getIn(formik.errors, prefix) as AddressErrors | undefined
+    const base = (submitAttempted ? getIn(formik.errors, prefix) : undefined) as AddressErrors | undefined
+    const overlay: AddressErrors = {}
+    for (const key of Object.keys(fixFieldErrors)) {
+      if (key.startsWith(`${prefix}.`)) {
+        const field = key.slice(prefix.length + 1) as keyof AddressErrors
+        const msg = carrierErrAt(key)
+        if (msg) overlay[field] = msg
+      }
+    }
+    if (!base && Object.keys(overlay).length === 0) return undefined
+    return { ...(base ?? {}), ...overlay }
   }
   /** Per-item error map (description, quantity, unitValue, …). */
   const itemErrAt = (index: number, field: string): string | undefined =>
@@ -1730,8 +1774,8 @@ export default function NewShipmentPage() {
                       Fixing failed order #{fixOrderNo}{fixLoading ? ' — loading…' : ''}
                     </p>
                     {fixError ? (
-                      <p className="mt-0.5 break-words text-[12px] text-rose-700">
-                        Carrier rejected it: {fixError}
+                      <p className="mt-0.5 break-words text-[12px] text-rose-700" title={fixError}>
+                        Carrier rejected it: {summarizeCarrierError(fixError)}
                       </p>
                     ) : (
                       <p className="mt-0.5 text-[12px] text-rose-700">
@@ -1750,9 +1794,9 @@ export default function NewShipmentPage() {
               note="Choosing a client fills its ship-from and auto-selects its default carrier account. Reason & currency remember your last choice."
             >
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                <Field label="Client">
+                <Field label="Client" required error={errAt('clientCode')}>
                   <select className={inputCls} value={clientCode} onChange={(e) => applyClient(e.target.value)}>
-                    <option value="">No client — ad-hoc</option>
+                    <option value="">Select a client…</option>
                     {clients.map((c) => (
                       <option key={c.clientCode} value={c.clientCode}>
                         {c.clientCode} — {c.name}
@@ -1859,7 +1903,7 @@ export default function NewShipmentPage() {
                 title={isReturn ? 'Return from · customer' : 'Ship from · sender'}
                 className="xl:row-span-2"
               >
-                <AddressBlock value={sender} onChange={(patch) => setSender((s) => ({ ...s, ...patch }))} withEmail={isReturn} errors={addrErrors('sender')} />
+                <AddressBlock value={sender} onChange={(patch) => { setSender((s) => ({ ...s, ...patch })); Object.keys(patch).forEach((k) => clearFixKey(`sender.${k}`)) }} withEmail={isReturn} errors={addrErrors('sender')} />
               </SectionCard>
               <SectionCard
                 icon={<FiMapPin className="h-3.5 w-3.5" />}
@@ -1874,6 +1918,7 @@ export default function NewShipmentPage() {
                     // so clear the stale carrier / format-check banners.
                     setCarrierAddressResult(null)
                     setRecipientCheck(null)
+                    Object.keys(patch).forEach((k) => clearFixKey(`recipient.${k}`))
                   }}
                   withEmail={!isReturn}
                   hideLine3
@@ -2143,8 +2188,8 @@ export default function NewShipmentPage() {
             >
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="Packaging" required className="col-span-2">
-                    <select className={inputCls} value={packageChoice} onChange={(e) => setPackageChoice(e.target.value)}>
+                  <Field label="Packaging" required className="col-span-2" error={errAt('package')}>
+                    <select className={inputCls} value={packageChoice} onChange={(e) => { setPackageChoice(e.target.value); clearFixKey('package') }}>
                       <optgroup label={`${CARRIER_LABEL[carrier] || carrier} packaging`}>
                         {packagesForCarrier.map((p) => (
                           <option key={p.id} value={String(p.id)}>{p.name}</option>
@@ -2161,10 +2206,10 @@ export default function NewShipmentPage() {
                     </select>
                   </Field>
                   <Field label={`Weight (${weightUnit.toLowerCase()})`} required error={errAt('weight')}>
-                    <input className={inputCls} type="number" min="0" step="0.1" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="2.5" />
+                    <input className={inputCls} type="number" min="0" step="0.1" value={weight} onChange={(e) => { setWeight(e.target.value); clearFixKey('weight') }} placeholder="2.5" />
                   </Field>
                   <Field label={`Declared value (${currency})`} error={errAt('declaredValue')}>
-                    <input className={inputCls} type="number" min="0" step="0.01" value={declaredValue} onChange={(e) => setDeclaredValue(e.target.value)} placeholder="100.00" />
+                    <input className={inputCls} type="number" min="0" step="0.01" value={declaredValue} onChange={(e) => { setDeclaredValue(e.target.value); clearFixKey('declaredValue') }} placeholder="100.00" />
                   </Field>
                 </div>
                 {pkgServiceWarning ? (
@@ -2489,6 +2534,12 @@ export default function NewShipmentPage() {
                   </>
                 }
               >
+                {fixItemError ? (
+                  <div className="mb-2 flex items-start gap-2 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
+                    <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>The carrier rejected the customs items — check each line's HS code, quantity and unit value (and that they sum to the declared value).</span>
+                  </div>
+                ) : null}
                 <div className="space-y-1.5 overflow-x-auto">
                   {/* header labels (once) */}
                   {/* Sprint 48 B11 — added "Pkg #" column between Amount and trash.
