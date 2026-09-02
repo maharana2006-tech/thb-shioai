@@ -112,12 +112,28 @@ export interface OrderLine {
 export interface OrderPackage {
   sequenceNumber?: number | null
   trackingNumber?: string | null
+  trackingUrl?: string | null
   weight?: number | null
   weightUnit?: string | null
   length?: number | null
   width?: number | null
   height?: number | null
   dimUnit?: string | null
+}
+
+/** PR #548 — one entry per shipment_batch row on the backend. Populated
+ *  for multi-package shipments. A single-request MPS shipment has exactly
+ *  one batch; an over-cap shipment has one per carrier call. Each batch
+ *  carries the carrier's master tracking (FedEx piece-1 tracking; UPS
+ *  ShipmentIdentificationNumber; DHL shipmentTrackingNumber). */
+export interface ShipmentBatchInfo {
+  batchSeq?: number | null
+  carrierCode?: string | null
+  masterTrackingNumber?: string | null
+  masterTrackingUrl?: string | null
+  masterLabelUrl?: string | null
+  packageCountInBatch?: number | null
+  shippingCost?: number | null
 }
 
 export interface OrderWithLines {
@@ -162,6 +178,13 @@ export interface OrderWithLines {
   packageCount?: number | null
   /** Sprint 29 — per-package rows (tracking / weight / dims) when this is a multi-package shipment. */
   packages?: OrderPackage[] | null
+  /** PR #548 — per-shipment_batch master tracking. Populated for
+   *  multi-package shipments (Sprint 48 B2+); empty on legacy or
+   *  single-package orders. Use `shipmentBatches[0]?.masterTrackingNumber`
+   *  for the "quote-to-customer" number and `packages[]` for the
+   *  per-piece children. Length > 1 when the shipment was split across
+   *  multiple carrier calls (over-cap). */
+  shipmentBatches?: ShipmentBatchInfo[] | null
   /** PR #543 — order source (`MANUAL | BULK | WMS | API | ERP`) drives
    *  the PO field on the JSX label facsimile:
    *    - `MANUAL` / `BULK`  → `MAN{orderNo}`
