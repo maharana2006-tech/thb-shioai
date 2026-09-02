@@ -27,6 +27,7 @@ import {
   FiSliders,
 } from 'react-icons/fi'
 import { ApiError, isAbortError } from '../api/apiClient'
+import { normalizeCarrierCode } from '../utils/carrierUtils'
 import { orderService, type Order, type QueueStats } from '../api/orderService'
 import { summarizeCarrierError } from '../utils/carrierErrorMap'
 import { clientService } from '../api/clientService'
@@ -312,6 +313,14 @@ export default function OrdersWorkspace() {
    *  the tab for automation. The modal carries the context that matters:
    *  tracking number, irreversibility, and the refund caveat. */
   const [confirmVoid, setConfirmVoid] = useState<{ orderNo: number; trackingNumber: string } | null>(null)
+
+  // Escape closes the void confirmation (parity with every other modal).
+  useEffect(() => {
+    if (!confirmVoid) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setConfirmVoid(null) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [confirmVoid])
 
   const handleVoid = async (orderNo: number, trackingNumber: string | null) => {
     if (!trackingNumber) return
@@ -1595,9 +1604,29 @@ export default function OrdersWorkspace() {
         {closeOutOpen ? (
           <CloseOutModal
             onClose={() => setCloseOutOpen(false)}
+            // Only LIVE labels belong on a manifest — a voided (or errored)
+            // tracking is dead at the carrier, and prefilling it put a
+            // cancelled number straight into the driver's scan list.
             trackingNumbers={rows
+              .filter((o) => (o.labelDetails.status || '').toUpperCase() === 'GENERATED'
+                && o.labelDetails.isGenerated)
               .map((o) => o.labelDetails.trackingNumber)
               .filter((t): t is string => Boolean(t))}
+            defaults={{
+              // Default the carrier to the one the prefilled trackings ship on
+              // (the hardcoded UPS default sat over an all-FedEx list).
+              carrierCode: (() => {
+                const counts = new Map<string, number>()
+                for (const o of rows) {
+                  if ((o.labelDetails.status || '').toUpperCase() !== 'GENERATED') continue
+                  const c = normalizeCarrierCode(o.shippingDetails.shipVia)?.toUpperCase()
+                  if (c) counts.set(c, (counts.get(c) ?? 0) + 1)
+                }
+                let best = 'UPS'; let n = 0
+                for (const [c, k] of counts) if (k > n) { best = c; n = k }
+                return best
+              })(),
+            }}
           />
         ) : null}
 

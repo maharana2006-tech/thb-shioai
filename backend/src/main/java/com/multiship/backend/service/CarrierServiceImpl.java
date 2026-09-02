@@ -570,14 +570,29 @@ public class CarrierServiceImpl implements CarrierService {
                         + ". Fix the client's carrier credentials and retry.";
                 errorCode = ErrorCode.CLIENT_CARRIER_AUTH_FAILED;
                 log.warn("Order {}: client account {} failed — no fallback, marking order ERROR.",
-                        orderNo, resolution.accountNumber());
+                        orderNo, resolution.accountNumber(), primaryEx);
             } else {
                 msg = "Label generation failed for order " + orderNo + " at " + resolution.carrierCode()
                         + " (account " + resolution.accountNumber() + "): " + primaryEx.getMessage();
                 errorCode = ErrorCode.CARRIER_FAILURE;
-                log.warn("Label generation failed for order {}: {}", orderNo, primaryEx.getMessage());
+                log.warn("Label generation failed for order {}: {}", orderNo, primaryEx.getMessage(), primaryEx);
             }
             markTrackingError(order, msg);
+            // If the failure crossed an inner @Transactional boundary the
+            // enclosing transaction is already globally rollback-only; letting
+            // the @Transactional proxy attempt a commit would replace this
+            // failure response with a raw UnexpectedRollbackException 500.
+            // Downgrade to a deliberate local rollback so the response survives
+            // (the ERROR tracking row was persisted REQUIRES_NEW above).
+            try {
+                org.springframework.transaction.TransactionStatus txStatus =
+                        org.springframework.transaction.interceptor.TransactionAspectSupport.currentTransactionStatus();
+                if (txStatus.isRollbackOnly()) {
+                    txStatus.setRollbackOnly();
+                }
+            } catch (org.springframework.transaction.NoTransactionException ignored) {
+                // Non-transactional caller (plain unit test) — nothing to downgrade.
+            }
             LabelGenerationResponse errorResponse = LabelGenerationResponse.builder()
                     .orderNo(orderNo)
                     .carrierCode(resolution.carrierCode())
@@ -1857,7 +1872,16 @@ public class CarrierServiceImpl implements CarrierService {
             com.multiship.backend.model.ShippingService resolvedService = preflightRoute != null
                     ? preflightRoute.service() : null;
             com.multiship.backend.model.PackagePreset preset = null;
-            if (preflightClient != null && resolvedService != null) {
+            // Skip the pick when the order already shipped once —
+            // buildShipmentRequest reused the as-packed label_package piece
+            // and never ran the strict pick, so re-running it here would
+            // throw for clients with no package config AND (because
+            // pickPackageForClient is @Transactional) mark the enclosing
+            // transaction rollback-only even inside this try/catch, killing
+            // the commit of an otherwise-successful label.
+            boolean hasPriorPieces = order.getOrderNo() != null
+                    && !labelPackageRepository.findByOrderNoOrderBySequenceNumberAsc(order.getOrderNo()).isEmpty();
+            if (preflightClient != null && resolvedService != null && !hasPriorPieces) {
                 try {
                     preset = shippingConfigService.pickPackageForClient(
                             resolvedService.getId(),
@@ -1951,7 +1975,20 @@ public class CarrierServiceImpl implements CarrierService {
 
     /** True when the order's ship-to country differs from the platform shipper's origin. */
     private boolean isInternational(Order order) {
+        // Effective origin mirrors buildShipmentRequest's shipper block: the
+        // client's default warehouse when one is attached, else the platform
+        // shipper defaults. Keeping the two aligned matters — a limit or
+        // pre-flight computed against the wrong origin country picks the
+        // wrong (intl vs domestic) rule set.
         String origin = carrierProperties.getShipper().getCountryCode();
+        String orderClient = firstNonBlank(order.getTenantId(), order.getCustNo());
+        if (orderClient != null) {
+            com.multiship.backend.model.Address whAddr = resolutionService.resolveWarehouse(orderClient, null)
+                    .map(Warehouse::getAddress).orElse(null);
+            if (whAddr != null && StringUtils.hasText(whAddr.getCountry())) {
+                origin = whAddr.getCountry();
+            }
+        }
         String dest = order.getShiptoCountryCd();
         return StringUtils.hasText(origin) && StringUtils.hasText(dest)
                 && !origin.trim().equalsIgnoreCase(dest.trim());
@@ -2016,18 +2053,26 @@ public class CarrierServiceImpl implements CarrierService {
         return failure(HttpStatus.TOO_MANY_REQUESTS, ErrorCode.CARRIER_RATE_LIMITED, msg, body);
     }
 
-    /** Marks an order's tracking row ERROR with the failure reason (retryable from the Labels page). */
+    /**
+     * Marks an order's tracking row ERROR with the failure reason (retryable
+     * from the Labels page). Runs in its own transaction: when the shipment
+     * attempt died crossing an inner @Transactional boundary, the enclosing
+     * transaction is already rollback-only and a same-session write would be
+     * discarded at commit — the operator would never see why the label failed.
+     */
     private void markTrackingError(Order order, String message) {
-        OrderTracking tracking = orderTrackingRepository.findByOrderNo(order.getOrderNo()).orElseGet(OrderTracking::new);
-        tracking.setOrderNo(order.getOrderNo());
-        tracking.setOrderSuffix(order.getOrderSuffix());
-        tracking.setShipViaCd(order.getShipviaCd());
-        tracking.setIsLabelGenerated(false);
-        tracking.setStatus("ERROR");
-        tracking.setErrorMessage(truncate(message, 255));
-        tracking.setCreatedAt(tracking.getCreatedAt() != null ? tracking.getCreatedAt() : LocalDateTime.now());
-        tracking.setUpdatedAt(LocalDateTime.now());
-        orderTrackingRepository.save(tracking);
+        requiresNewTransactionTemplate.executeWithoutResult(status -> {
+            OrderTracking tracking = orderTrackingRepository.findByOrderNo(order.getOrderNo()).orElseGet(OrderTracking::new);
+            tracking.setOrderNo(order.getOrderNo());
+            tracking.setOrderSuffix(order.getOrderSuffix());
+            tracking.setShipViaCd(order.getShipviaCd());
+            tracking.setIsLabelGenerated(false);
+            tracking.setStatus("ERROR");
+            tracking.setErrorMessage(truncate(message, 255));
+            tracking.setCreatedAt(tracking.getCreatedAt() != null ? tracking.getCreatedAt() : LocalDateTime.now());
+            tracking.setUpdatedAt(LocalDateTime.now());
+            orderTrackingRepository.save(tracking);
+        });
     }
 
     /**
@@ -2639,16 +2684,31 @@ public class CarrierServiceImpl implements CarrierService {
         // most-specific wins) → enabled catalog service; the old connector
         // default is only the last-resort fallback. International here =
         // COUNTRY difference (service level, not customs).
-        boolean international = order.getShiptoCountryCd() != null && shipper.getCountryCode() != null
-                && !order.getShiptoCountryCd().trim().equalsIgnoreCase(shipper.getCountryCode().trim());
         String orderClient = firstNonBlank(order.getTenantId(), order.getCustNo());
         // Origin warehouse: use the client's default attachment when we can
         // find one, otherwise null (unrestricted rules still match). This is
-        // what feeds ShipMethodRuleWarehouse-based rule filtering.
-        Long originWarehouseId = orderClient != null
-                ? resolutionService.resolveWarehouse(orderClient, null)
-                        .map(com.multiship.backend.model.Warehouse::getId).orElse(null)
+        // what feeds ShipMethodRuleWarehouse-based rule filtering — AND the
+        // shipper block below. The manual path already ships from the
+        // resolved warehouse; this path used to ignore it and stamp the
+        // platform shipper defaults, which flipped a domestic US→US re-ship
+        // into an international one (FedEx: TOTALCUSTOMSVALUE.REQUIRED)
+        // whenever the platform default sits in another country.
+        Warehouse originWarehouse = orderClient != null
+                ? resolutionService.resolveWarehouse(orderClient, null).orElse(null)
                 : null;
+        Long originWarehouseId = originWarehouse != null ? originWarehouse.getId() : null;
+        com.multiship.backend.model.Address whAddr = originWarehouse != null ? originWarehouse.getAddress() : null;
+        String shipperName = firstNonBlank(whAddr != null ? whAddr.getName() : null, shipper.getName());
+        String shipperPhone = firstNonBlank(whAddr != null ? whAddr.getPhone() : null, shipper.getPhone());
+        String shipperLine1 = firstNonBlank(whAddr != null ? whAddr.getLine1() : null, shipper.getAddressLine1());
+        String shipperLine2 = whAddr != null && StringUtils.hasText(whAddr.getLine1())
+                ? whAddr.getLine2() : shipper.getAddressLine2();
+        String shipperCity = firstNonBlank(whAddr != null ? whAddr.getCity() : null, shipper.getCity());
+        String shipperState = firstNonBlank(whAddr != null ? whAddr.getState() : null, shipper.getState());
+        String shipperPostal = firstNonBlank(whAddr != null ? whAddr.getZip() : null, shipper.getPostalCode());
+        String shipperCountry = firstNonBlank(whAddr != null ? whAddr.getCountry() : null, shipper.getCountryCode());
+        boolean international = order.getShiptoCountryCd() != null && shipperCountry != null
+                && !order.getShiptoCountryCd().trim().equalsIgnoreCase(shipperCountry.trim());
         // F5-B — resolveRoute returns both the ship-method rule ID AND the
         // resolved service so pickPackageForClient can enforce per-lane
         // package restrictions (ShipMethodRulePackage) alongside the
@@ -2656,7 +2716,7 @@ public class CarrierServiceImpl implements CarrierService {
         // rule matched (reached service via the carrier-catalog scope path).
         ShippingConfigService.ResolvedRoute route = shippingConfigService
                 .resolveRoute(connector.getCarrierCode(), orderClient, order.getShipviaCd(),
-                        order.getShiptoCountryCd(), international, shipper.getCountryCode(), originWarehouseId)
+                        order.getShiptoCountryCd(), international, shipperCountry, originWarehouseId)
                 .orElse(null);
         com.multiship.backend.model.ShippingService resolvedService = route != null ? route.service() : null;
         Long resolvedRuleId = route != null ? route.ruleId() : null;
@@ -2671,13 +2731,28 @@ public class CarrierServiceImpl implements CarrierService {
         // the constraint that failed. Caller's own try/catch (further up
         // the stack in generateLabel) translates it into an operator-visible
         // error response.
-        com.multiship.backend.model.PackagePreset preset = orderClient != null && resolvedService != null
-                ? shippingConfigService.pickPackageForClient(resolvedService.getId(),
-                        resolvedRuleId, orderClient, order.getWeight()).preset()
-                : null;
+        // Re-ship path — an order that already produced a label carries its
+        // as-packed pieces in label_package. Reuse that packaging instead of
+        // re-running the strict client pick: the parcel is already packed,
+        // and clients without ClientAllowedPackage config (manual orders,
+        // where the operator supplied the box explicitly) would otherwise
+        // fail a retry of a label that originally generated fine. Note the
+        // strict pick must be SKIPPED, not caught — pickPackageForClient is
+        // @Transactional, so its exception marks the enclosing transaction
+        // rollback-only even when handled here.
+        com.multiship.backend.model.LabelPackage asShippedPiece = order.getOrderNo() == null ? null
+                : labelPackageRepository.findByOrderNoOrderBySequenceNumberAsc(order.getOrderNo())
+                        .stream().findFirst().orElse(null);
+        com.multiship.backend.model.PackagePreset preset =
+                asShippedPiece == null && orderClient != null && resolvedService != null
+                        ? shippingConfigService.pickPackageForClient(resolvedService.getId(),
+                                resolvedRuleId, orderClient, order.getWeight()).preset()
+                        : null;
         String packageType = preset != null
                 ? ("CARRIER".equalsIgnoreCase(preset.getKind()) ? preset.getCarrierPackageCode() : "YOUR_PACKAGING")
-                : firstNonBlank(connector.getConfiguration().defaultPackageType(), "YOUR_PACKAGING");
+                : asShippedPiece != null && StringUtils.hasText(asShippedPiece.getPackageType())
+                        ? asShippedPiece.getPackageType()
+                        : firstNonBlank(connector.getConfiguration().defaultPackageType(), "YOUR_PACKAGING");
         // BILLABLE weight: max(actual + tare, dimensional weight) — what the
         // carrier actually charges for; flat-rate packaging skips DIM.
         BigDecimal weight = com.multiship.backend.util.PackageMath.billableWeight(preset, order.getWeight());
@@ -2702,7 +2777,7 @@ public class CarrierServiceImpl implements CarrierService {
         // border. CustomsTerritories.sameTerritory() suppresses the intl
         // block for those pairs so we don't build an unnecessary invoice.
         boolean sameCustomsTerritory = com.multiship.backend.util.CustomsTerritories
-                .sameTerritory(shipper.getCountryCode(), order.getShiptoCountryCd());
+                .sameTerritory(shipperCountry, order.getShiptoCountryCd());
         boolean customsRequired = international && !sameCustomsTerritory;
         // Pass the shipment's declared value as the customs-total fallback: when
         // the customs line-items carry no unit prices (so they don't sum to a
@@ -2798,20 +2873,20 @@ public class CarrierServiceImpl implements CarrierService {
                 .accountNumber(accountNumber)
                 .serviceType(serviceType)
                 .packageType(packageType)
-                .length(preset != null ? preset.getLength() : null)
-                .width(preset != null ? preset.getWidth() : null)
-                .height(preset != null ? preset.getHeight() : null)
+                .length(preset != null ? preset.getLength() : asShippedPiece != null ? asShippedPiece.getLength() : null)
+                .width(preset != null ? preset.getWidth() : asShippedPiece != null ? asShippedPiece.getWidth() : null)
+                .height(preset != null ? preset.getHeight() : asShippedPiece != null ? asShippedPiece.getHeight() : null)
                 .weight(weight)
                 .weightUnit(weightUnit)
                 .dimUnit(dimUnit)
-                .shipperName(shipper.getName())
-                .shipperPhone(shipper.getPhone())
-                .shipperAddressLine1(shipper.getAddressLine1())
-                .shipperAddressLine2(shipper.getAddressLine2())
-                .shipperCity(shipper.getCity())
-                .shipperState(shipper.getState())
-                .shipperPostalCode(shipper.getPostalCode())
-                .shipperCountryCode(shipper.getCountryCode())
+                .shipperName(shipperName)
+                .shipperPhone(shipperPhone)
+                .shipperAddressLine1(shipperLine1)
+                .shipperAddressLine2(shipperLine2)
+                .shipperCity(shipperCity)
+                .shipperState(shipperState)
+                .shipperPostalCode(shipperPostal)
+                .shipperCountryCode(shipperCountry)
                 .recipientName(firstNonBlank(order.getShipName(), order.getShipAttn(), order.getCustNo()))
                 // Pass null through when order.phone is blank (see F2 fix
                 // above for the manual-shipment path). Every connector omits

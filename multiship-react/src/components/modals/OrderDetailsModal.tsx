@@ -234,10 +234,15 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
             <button
               type="button"
               onClick={openLabel}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]"
+              title={(label?.status || '').toUpperCase() === 'VOIDED'
+                ? 'This label was voided — the document opens for record-keeping only and must not be used on a parcel.'
+                : undefined}
+              className={(label?.status || '').toUpperCase() === 'VOIDED'
+                ? 'inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-500 transition hover:bg-slate-50'
+                : 'inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[12px] font-semibold text-white transition hover:bg-[#412d15]'}
             >
               <FiTag className="h-3.5 w-3.5" />
-              View label
+              {(label?.status || '').toUpperCase() === 'VOIDED' ? 'Voided label (record)' : 'View label'}
             </button>
             <button
               type="button"
@@ -262,12 +267,17 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
             <div className="space-y-4">
               {/* tracking strip (only when generated) */}
               {label?.trackingNumber ? (
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-emerald-200 bg-emerald-50/70 px-4 py-2.5">
+                (() => { const voided = (label.status || '').toUpperCase() === 'VOIDED'; return (
+                <div className={`flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-2.5 ${
+                  voided ? 'border-slate-300 bg-slate-100' : 'border-emerald-200 bg-emerald-50/70'
+                }`}>
                   <div className="flex items-center gap-2 text-[12.5px]">
-                    <FiTruck className="h-4 w-4 text-emerald-700" />
+                    <FiTruck className={`h-4 w-4 ${voided ? 'text-slate-500' : 'text-emerald-700'}`} />
                     <span className="font-semibold text-slate-700">Tracking</span>
-                    <span className="font-mono font-semibold text-slate-950">{label.trackingNumber}</span>
-                    {label.generatedAt ? (
+                    <span className={`font-mono font-semibold ${voided ? 'text-slate-500 line-through' : 'text-slate-950'}`}>{label.trackingNumber}</span>
+                    {voided ? (
+                      <span className="rounded-full bg-slate-300 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-700">Voided — cancelled at the carrier</span>
+                    ) : label.generatedAt ? (
                       <span className="text-slate-500">· generated {formatDate(label.generatedAt)}</span>
                     ) : null}
                   </div>
@@ -283,6 +293,7 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
                     </a>
                   ) : null}
                 </div>
+                ) })()
               ) : null}
 
               {/* ship-from + ship-to + account + order-meta */}

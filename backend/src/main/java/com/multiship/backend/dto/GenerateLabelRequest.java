@@ -26,6 +26,16 @@ public class GenerateLabelRequest {
      * {@link ErrorCode#CLIENT_CARRIER_AUTH_FAILED} so the operator can
      * fix the client's credentials before retrying (or resend with
      * {@code useHouseAccount=true} to explicitly bill the platform).
+     *
+     * <p>Wrapper type, not primitive: Jackson 3 binds through the all-args
+     * constructor and passes {@code null} for ABSENT properties — a primitive
+     * here made every {@code {"accountId":N}} body (the account-picker's
+     * re-ship request) fail with "Cannot map null into type boolean".
      */
-    private boolean useHouseAccount;
+    private Boolean useHouseAccount;
+
+    /** Null-safe read — absent/null means the default: do NOT bill the house account. */
+    public boolean isUseHouseAccount() {
+        return Boolean.TRUE.equals(useHouseAccount);
+    }
 }

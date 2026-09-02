@@ -587,6 +587,9 @@ export default function NewShipmentPage() {
   // filtered dropdowns, and the ship-to warning banner.
   const [clientWarehouses, setClientWarehouses] = useState<ClientWarehouse[]>([])
   const [warehouseCode, setWarehouseCode] = useState('')
+  /** Fix-order mode: suppress the ONE-TIME default-warehouse auto-pick on
+   *  arrival so the order's prefilled sender isn't overlaid (defect 3.7/§6). */
+  const fixKeepSenderRef = useRef<boolean>(!!fixOrderNo)
   /** Set of service ids on the client's allowlist. null = client has no
    *  allowlist yet, treat as unrestricted so shipments still ship. */
   const [allowedServiceIds, setAllowedServiceIds] = useState<Set<number> | null>(null)
@@ -770,8 +773,17 @@ export default function NewShipmentPage() {
         setClientWarehouses(warehouses)
         // Auto-pick the default; else first available. Empty = keep whatever
         // sender address applyClient already produced.
-        const def = warehouses.find((w) => w.isDefault) || warehouses[0] || null
-        setWarehouseCode(def?.warehouse?.code ?? '')
+        // Fix-order mode: skip the auto-pick ONCE on arrival — the sender was
+        // prefilled from the ORDER, and auto-selecting the default warehouse
+        // overlaid its name before the operator ever saw the screen. Picking
+        // a warehouse deliberately afterwards still overlays as usual.
+        if (fixKeepSenderRef.current) {
+          fixKeepSenderRef.current = false
+          setWarehouseCode('')
+        } else {
+          const def = warehouses.find((w) => w.isDefault) || warehouses[0] || null
+          setWarehouseCode(def?.warehouse?.code ?? '')
+        }
         // Empty allowlists mean "not yet configured" — treat as unrestricted so
         // shipping still works. Phase 4 flips this to strict once the backend
         // resolver rejects on empty.
@@ -1906,7 +1918,7 @@ export default function NewShipmentPage() {
     if (missingLabelFields.length > 0) {
       showToast(
         `Pick ${missingLabelFields.join(' + ')} — no saved default for this client / account.`,
-        `${missingLabelFields.length} field${missingLabelFields.length === 1 ? '' : 's'} need attention`,
+        `${missingLabelFields.length} field${missingLabelFields.length === 1 ? ' needs' : 's need'} attention`,
       )
       scrollToFirstError()
       return
@@ -1921,7 +1933,7 @@ export default function NewShipmentPage() {
         more > 0
           ? `${msgs[0]} — and ${more} other field${more === 1 ? '' : 's'} highlighted in red.`
           : msgs[0],
-        `${msgs.length} field${msgs.length === 1 ? '' : 's'} need attention`,
+        `${msgs.length} field${msgs.length === 1 ? ' needs' : 's need'} attention`,
       )
       // Bring the first invalid field into view.
       scrollToFirstError()

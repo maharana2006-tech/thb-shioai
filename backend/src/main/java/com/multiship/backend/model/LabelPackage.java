@@ -63,11 +63,13 @@ public class LabelPackage {
     private String trackingNumber;
 
     /** Carrier's per-box tracking page URL when returned. */
-    @Column(name = "tracking_url", length = 500)
+    @Column(name = "tracking_url", columnDefinition = "text")
     private String trackingUrl;
 
-    /** Path/URL to the per-box label artifact (PDF/PNG/ZPL). */
-    @Column(name = "label_file_path", length = 500)
+    /** Per-box label artifact: a signed carrier URL or (since PR #550's
+     *  LabelBytesPersister) the base64-encoded label bytes — same content
+     *  class as order_label_tracking.label_file_path, widened by V31/V34. */
+    @Column(name = "label_file_path", columnDefinition = "text")
     private String labelFilePath;
 
     @Column(name = "weight", precision = 12, scale = 4)

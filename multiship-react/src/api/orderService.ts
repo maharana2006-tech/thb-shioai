@@ -647,6 +647,8 @@ export interface OrderDocumentRow {
   generatedAt: string | null
   /** true → customs data exists → /orders/{n}/commercial-invoice renders. */
   hasInvoice: boolean
+  /** true → the label was cancelled at the carrier; charge reversed. */
+  voided: boolean
   packageCount: number | null
   accountNumber: string | null
   carrierAmount: number | null

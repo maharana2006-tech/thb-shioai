@@ -485,6 +485,8 @@ export default function LabelDocumentPage() {
     : null
   const trackingNumber = perPkg?.trackingNumber || label?.trackingNumber || null
   const generated = Boolean(label?.isGenerated && trackingNumber)
+  /** Cancelled at the carrier — the label exists as a record but must not ship. */
+  const labelVoided = (label?.status || '').toUpperCase() === 'VOIDED'
   const perPkgWeight = perPkg?.weight ?? null
   const perPkgWeightUnit = perPkg?.weightUnit || null
 
@@ -838,7 +840,15 @@ export default function LabelDocumentPage() {
               className="print-doc relative w-[430px] shrink-0 border border-slate-300 bg-white text-black shadow-xl print:w-[3.76in] print:border-0 print:shadow-none"
               style={{ fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif' }}
             >
-              {!generated ? (
+              {labelVoided ? (
+                /* The label WAS generated and then cancelled — "NOT GENERATED"
+                   misdescribed that. Say what actually happened. */
+                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+                  <span className="-rotate-[24deg] border-4 border-slate-500/70 px-6 py-2 text-2xl font-black tracking-widest text-slate-500/70">
+                    VOIDED
+                  </span>
+                </div>
+              ) : !generated ? (
                 <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
                   <span className="-rotate-[24deg] border-4 border-red-500/70 px-6 py-2 text-2xl font-black tracking-widest text-red-500/70">
                     NOT GENERATED

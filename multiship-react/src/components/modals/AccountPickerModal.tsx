@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { notify } from '../../utils/notify'
 import { FiX } from 'react-icons/fi'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
+import { useModalDismiss } from '../../hooks/useModalDismiss'
 import { accountRefService, type CarrierAccountRef } from '../../api/accountRefService'
 import { formatCarrierName } from '../../utils/carrierUtils'
 import CarrierLogo from '../workspace/CarrierLogo'
@@ -38,6 +39,8 @@ export default function AccountPickerModal({
   // returns focus to whatever opened the modal.
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(true, dialogRef)
+  // A11y — Escape closes (X-only dismissal failed the regression run).
+  useModalDismiss(true, dialogRef, onClose)
 
   useEffect(() => {
     accountRefService

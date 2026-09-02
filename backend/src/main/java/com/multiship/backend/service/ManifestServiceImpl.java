@@ -91,6 +91,25 @@ public class ManifestServiceImpl implements ManifestService {
                     "Carrier " + carrier + " isn't configured on this instance.");
         }
 
+        // Dead-label gate — a VOIDED (or errored, never-generated) tracking is
+        // cancelled at the carrier and must never reach a driver's manifest.
+        // The frontend prefilter can drift; this is the hard guard.
+        for (String t : request.getTrackingNumbers()) {
+            if (!StringUtils.hasText(t)) continue;
+            OrderTracking tr = orderTrackingRepository.findByTrackingNumberIgnoreCase(t).orElse(null);
+            if (tr == null) continue; // unknown numbers fall to failedToClassify below
+            String st = tr.getStatus() == null ? "" : tr.getStatus().trim().toUpperCase(Locale.ROOT);
+            // Explicitly-dead labels only, keyed on STATUS — the generated
+            // flag defaults to false on the entity, so it can't distinguish
+            // a legacy row from a cancelled one. VOIDED = cancelled at the
+            // carrier; ERROR = the label was never bought.
+            if ("VOIDED".equals(st) || "ERROR".equals(st)) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT,
+                        "Tracking " + t + " is " + ("VOIDED".equals(st) ? "voided" : "an errored label")
+                                + " and cannot be manifested. Remove it and close out again.");
+            }
+        }
+
         // Tenant gate on the SUBMITTED TRACKINGS — the customerNo clamp above
         // only steers credential choice; nothing stopped a scoped USER from
         // listing another tenant's tracking numbers and closing them out. Any

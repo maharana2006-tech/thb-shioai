@@ -61,6 +61,9 @@ public class OrderDocumentSummaryService {
             LocalDateTime generatedAt,
             /** true → customs data exists → the commercial invoice renders. */
             boolean hasInvoice,
+            /** true → the label was cancelled at the carrier; downloads remain
+             *  for record-keeping but the charge is reversed. */
+            boolean voided,
             Integer packageCount,
             String accountNumber,
             BigDecimal carrierAmount,
@@ -117,6 +120,7 @@ public class OrderDocumentSummaryService {
                     .trackingNumber(t.getTrackingNumber())
                     .generatedAt(t.getLabelGeneratedAt())
                     .hasInvoice(customsOrderNos.contains(String.valueOf(no)))
+                    .voided("VOIDED".equalsIgnoreCase(t.getStatus() == null ? "" : t.getStatus().trim()))
                     .packageCount(order.getPackageCount())
                     .accountNumber(t.getAccountNumber())
                     .carrierAmount(t.getCarrierAmount())

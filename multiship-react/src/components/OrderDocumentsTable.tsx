@@ -129,6 +129,9 @@ export default function OrderDocumentsTable() {
                     {r.packageCount && r.packageCount > 1 ? (
                       <span className="ml-1 text-[9.5px] text-[#b6a684]">×{r.packageCount} pkg</span>
                     ) : null}
+                    {r.voided ? (
+                      <span className="ml-1.5 rounded-full bg-slate-200 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wide text-slate-600">Voided</span>
+                    ) : null}
                   </td>
                   <td className="whitespace-nowrap border-b border-[#f2ecdf] px-3 py-2 font-mono text-[10.5px] text-[#5a4526]">{r.custNo ?? '—'}</td>
                   <td className="border-b border-[#f2ecdf] px-3 py-2 font-semibold text-[#1f150c]">{r.recipientName ?? '—'}</td>
@@ -137,7 +140,15 @@ export default function OrderDocumentsTable() {
                   </td>
                   <td className="whitespace-nowrap border-b border-[#f2ecdf] px-3 py-2 font-mono text-[10.5px]">{r.carrier ?? '—'}</td>
                   <td className="whitespace-nowrap border-b border-[#f2ecdf] px-3 py-2 font-mono text-[10.5px] text-[#5a4526]">{r.trackingNumber ?? '—'}</td>
-                  <td className="whitespace-nowrap border-b border-[#f2ecdf] px-3 py-2 text-right tabular-nums">{money(r.billableAmount, r.markupCurrency)}</td>
+                  <td className="whitespace-nowrap border-b border-[#f2ecdf] px-3 py-2 text-right tabular-nums">
+                    {r.voided ? (
+                      <span title="Label voided — charge reversed" className="text-slate-400">
+                        <s>{money(r.billableAmount, r.markupCurrency)}</s>
+                      </span>
+                    ) : (
+                      money(r.billableAmount, r.markupCurrency)
+                    )}
+                  </td>
                   <td className="whitespace-nowrap border-b border-[#f2ecdf] px-3 py-2">
                     <span className="flex items-center gap-1">
                       <button type="button" onClick={() => void downloadLabel(r)} disabled={busyKey === `label-${r.orderNo}`} className={DOC_BTN} title="Download the 4x6 shipping label as PDF">

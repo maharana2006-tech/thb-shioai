@@ -210,11 +210,22 @@ public class VoidServiceImpl implements VoidService {
             tracking.setIsLabelGenerated(false);
             tracking.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
             orderTrackingRepository.save(tracking);
-            // Logs page: shipment-lifecycle trail.
+            // Logs page: shipment-lifecycle trail. Carry the money figures so
+            // the void reads as the reversal of the LABEL_GENERATED charge —
+            // both numbers, labelled, because "billable" (carrier + markup)
+            // and the raw carrier cost are different quantities and showing
+            // only one caused two surfaces to "disagree" about the amount.
             if (auditService != null) {
+                String money = "";
+                if (tracking.getBillableAmount() != null || tracking.getCarrierAmount() != null) {
+                    String ccy = tracking.getMarkupCurrency() == null ? "USD" : tracking.getMarkupCurrency();
+                    money = " · reversed"
+                            + (tracking.getCarrierAmount() != null ? " carrier " + tracking.getCarrierAmount() + " " + ccy : "")
+                            + (tracking.getBillableAmount() != null ? " / billable " + tracking.getBillableAmount() + " " + ccy : "");
+                }
                 auditService.logShipment(AuditService.LABEL_VOIDED, orderNo, null,
                         tracking.getTrackingNumber(),
-                        canonicalCarrier + " label voided (" + perBatchResults.size() + " batch(es))");
+                        canonicalCarrier + " label voided (" + perBatchResults.size() + " batch(es))" + money);
             }
         }
 
