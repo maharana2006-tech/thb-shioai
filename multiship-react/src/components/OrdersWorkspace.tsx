@@ -4,6 +4,7 @@ import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { notify } from '../utils/notify'
 // Espresso/cream button tokens — shared across the app (see components/ui/buttons).
 import { BTN_PRIMARY, BTN_GHOST_SM, BTN_PRIMARY_SM } from './ui/buttons'
+import IssuesInfoIcon from './ui/IssuesInfoIcon'
 import {
   FiCheckCircle,
   FiEdit3,
@@ -903,14 +904,19 @@ export default function OrdersWorkspace() {
           const err = row.original.errorDetails?.errorMessage
           const isError = (row.original.labelDetails.status || '').toUpperCase() === 'ERROR'
           return (
-            <div className="flex flex-col items-start gap-0.5">
+            <span className="inline-flex items-center gap-1.5">
               <OrderStatusBadge status={row.original.labelDetails.status} />
+              {/* ⓘ next to an ERROR badge — hover/focus shows the full
+                  humanized failure reason (the truncated inline text it
+                  replaces cut most messages off at 220px). */}
               {isError && err ? (
-                <span className="block max-w-[220px] truncate text-[10.5px] text-rose-600" title={err}>
-                  {summarizeCarrierError(err)}
-                </span>
+                <IssuesInfoIcon
+                  side="left"
+                  ariaLabel={`Order ${row.original.orderDetails.orderNo} error`}
+                  items={[{ tag: 'carrier', text: summarizeCarrierError(err) }]}
+                />
               ) : null}
-            </div>
+            </span>
           )
         },
         meta: {

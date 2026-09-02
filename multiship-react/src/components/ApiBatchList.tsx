@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import { FiDownloadCloud, FiInfo, FiRefreshCw, FiZap } from 'react-icons/fi'
+import { FiDownloadCloud, FiRefreshCw, FiZap } from 'react-icons/fi'
+import IssuesInfoIcon, { type IssueItem } from './ui/IssuesInfoIcon'
 import { wmsService } from '../api/wmsService'
 import { orderImportService } from '../api/orderImportService'
 import type { ImportBatchSummary, OrderImportRow } from '../api/orderImportService'
@@ -21,18 +22,11 @@ import { BTN_PRIMARY, BTN_GHOST, BTN_PRIMARY_SM } from './ui/buttons'
 // countryOfOrigin / item fields the grid gave you no way to enter.
 const API_COLUMNS: DhColumn[] = DH_COLUMNS
 
-/**
- * ⓘ badge revealing every issue on a row in a styled tooltip on hover or
- * keyboard focus: field-tagged validation errors, the carrier rejection,
- * and advisory notes. Rendered on BOTH ends of a problem row — the sticky
- * left cell (visible at any horizontal scroll) and the action cell on the
- * right. `side` flips which way the tooltip opens so it never leaves the
- * viewport: the left icon opens rightward, the right icon leftward.
- */
+/** Builds the shared ⓘ tooltip's item list from a batch row's problems and
+ *  renders it via {@link IssuesInfoIcon} — used on BOTH ends of a problem row. */
 function RowIssuesIcon({
   side,
   rowNumber,
-  hasErrors,
   byField,
   rowLevel,
   carrierMessage,
@@ -40,61 +34,24 @@ function RowIssuesIcon({
 }: {
   side: 'left' | 'right'
   rowNumber: number
-  hasErrors: boolean
   byField: Record<string, string[]>
   rowLevel: string[]
   carrierMessage?: string | null
   warnings: string[]
 }) {
+  const items: IssueItem[] = [
+    ...Object.entries(byField).flatMap(([field, msgs]) => msgs.map((m) => ({ tag: field, text: m }))),
+    ...rowLevel.map((m) => ({ tag: 'row', text: m })),
+    ...(carrierMessage ? [{ tag: 'carrier', text: carrierMessage }] : []),
+    ...warnings.map((w) => ({ tag: 'note', text: w, tone: 'warn' as const })),
+  ]
   return (
-    <span className={`group relative inline-flex align-middle ${side === 'right' ? 'ml-1.5' : ''}`}>
-      <button
-        type="button"
-        tabIndex={0}
-        aria-label={`Row ${rowNumber} issues`}
-        className={`inline-flex h-[18px] w-[18px] items-center justify-center rounded-full ring-1 transition ${
-          hasErrors
-            ? 'bg-rose-100 text-rose-700 ring-rose-300 hover:bg-rose-200'
-            : 'bg-amber-100 text-amber-700 ring-amber-300 hover:bg-amber-200'
-        }`}
-      >
-        <FiInfo className="h-3 w-3" />
-      </button>
-      <span
-        className={`pointer-events-none absolute top-1/2 z-30 hidden w-80 -translate-y-1/2 rounded-xl border border-[#e3d9c4] bg-white p-2.5 shadow-xl group-hover:block group-focus-within:block ${
-          side === 'left' ? 'left-full ml-2' : 'right-full mr-2'
-        }`}
-      >
-        <span className="block space-y-1">
-          {Object.entries(byField).flatMap(([field, msgs]) =>
-            msgs.map((m, i) => (
-              <span key={`${field}-${i}`} className="flex items-start gap-1.5 text-left text-[10px] leading-snug text-rose-700">
-                <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">{field}</span>
-                <span>{m}</span>
-              </span>
-            )),
-          )}
-          {rowLevel.map((m, i) => (
-            <span key={`row-${i}`} className="flex items-start gap-1.5 text-left text-[10px] leading-snug text-rose-700">
-              <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">row</span>
-              <span>{m}</span>
-            </span>
-          ))}
-          {carrierMessage ? (
-            <span className="flex items-start gap-1.5 text-left text-[10px] leading-snug text-rose-700">
-              <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">carrier</span>
-              <span>{carrierMessage}</span>
-            </span>
-          ) : null}
-          {warnings.map((w, i) => (
-            <span key={`warn-${i}`} className="flex items-start gap-1.5 text-left text-[10px] leading-snug text-amber-700">
-              <span className="mt-[1px] shrink-0 rounded bg-amber-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-amber-800 ring-1 ring-amber-200">note</span>
-              <span>{w}</span>
-            </span>
-          ))}
-        </span>
-      </span>
-    </span>
+    <IssuesInfoIcon
+      side={side}
+      ariaLabel={`Row ${rowNumber} issues`}
+      items={items}
+      className={side === 'right' ? 'ml-1.5' : ''}
+    />
   )
 }
 
@@ -455,7 +412,6 @@ export default function ApiBatchList() {
                                         <RowIssuesIcon
                                           side="left"
                                           rowNumber={r.rowNumber}
-                                          hasErrors={!ok || failed}
                                           byField={byField}
                                           rowLevel={rowLevel}
                                           carrierMessage={failed ? r.generatedMessage : null}
@@ -512,7 +468,6 @@ export default function ApiBatchList() {
                                       <RowIssuesIcon
                                         side="right"
                                         rowNumber={r.rowNumber}
-                                        hasErrors={!ok || failed}
                                         byField={byField}
                                         rowLevel={rowLevel}
                                         carrierMessage={failed ? r.generatedMessage : null}

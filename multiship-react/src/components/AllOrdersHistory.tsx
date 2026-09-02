@@ -5,6 +5,8 @@ import { notify } from '../utils/notify'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 import ApiBatchList from './ApiBatchList'
 import { BTN_GHOST_SM } from './ui/buttons'
+import IssuesInfoIcon from './ui/IssuesInfoIcon'
+import { summarizeCarrierError } from '../utils/carrierErrorMap'
 
 /**
  * Order Intake → "All orders" view. A unified list of every order regardless of
@@ -162,7 +164,21 @@ export default function AllOrdersHistory() {
         accessorFn: (o) => (o.labelDetails.status || o.orderDetails.status || 'PENDING').toUpperCase(),
         cell: ({ row }) => {
           const s = (row.original.labelDetails.status || row.original.orderDetails.status || 'PENDING').toUpperCase()
-          return <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ring-1 ${statusTone(s)}`}>{s}</span>
+          const err = row.original.errorDetails?.errorMessage
+          return (
+            <span className="inline-flex items-center gap-1.5">
+              <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ring-1 ${statusTone(s)}`}>{s}</span>
+              {/* ⓘ next to an ERROR badge — hover/focus reveals the full
+                  humanized failure reason right in the list. */}
+              {s === 'ERROR' && err ? (
+                <IssuesInfoIcon
+                  side="left"
+                  ariaLabel={`Order ${row.original.orderDetails.orderNo} error`}
+                  items={[{ tag: 'carrier', text: summarizeCarrierError(err) }]}
+                />
+              ) : null}
+            </span>
+          )
         },
         meta: { headerLabel: 'Status' },
       },
