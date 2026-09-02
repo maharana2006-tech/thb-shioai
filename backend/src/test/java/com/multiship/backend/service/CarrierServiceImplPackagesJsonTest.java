@@ -11,11 +11,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * V32 (issue #545) — locks in {@code label_batch.packages_json} round-trip.
+ * V33 (issue #545) — locks in {@code label_batch.packages_json} round-trip.
  * The auto label path ({@link CarrierServiceImpl#generateLabel}) rebuilds
  * a multi-box {@code ShipmentRequestDTO} from this column on retry /
  * regenerate; if serialisation drops fields, the retry silently reverts
- * to a single-box shipment (the pre-V32 regression pattern).
+ * to a single-box shipment (the pre-V33 regression pattern).
  */
 class CarrierServiceImplPackagesJsonTest {
 
