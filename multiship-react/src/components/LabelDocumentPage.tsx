@@ -695,6 +695,38 @@ export default function LabelDocumentPage() {
         </div>
       ) : order ? (
         <>
+          {/* PR #551 — Sandbox banner. When the carrier account resolved
+              for this order was on SANDBOX (not PRODUCTION), the printed
+              label is a test artifact — carriers issue placeholder
+              tracking barcodes (FedEx: "0000 0000 0000"), sandbox
+              watermarks ("TEST LABEL - DO NOT SHIP", "SAMPLE"), and
+              stylised routing codes. Every difference between what ops
+              see in the app preview and what an external ZPL viewer
+              (e.g. labelary.com) shows is expected sandbox behaviour.
+              Sidesteps the confusion pattern documented in
+              project_label_preview_audit.md STATE_1_OR_2_OK + sandbox
+              watermarks bullet. print:hidden — operator-facing only. */}
+          {activeTab === 'label' && isSandbox ? (
+            <div className="mb-4 flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-[13px] text-amber-900 shadow-sm print:hidden">
+              <div className="mt-0.5 text-[15px]">⚠</div>
+              <div>
+                <div className="font-semibold uppercase tracking-wide">
+                  Sandbox &mdash; test label only
+                </div>
+                <p className="mt-1 leading-snug">
+                  This label was generated on a {environment} carrier account.
+                  Barcodes are placeholders (e.g.{' '}
+                  <span className="font-mono">0000&nbsp;0000&nbsp;0000</span>),
+                  the label has <span className="font-mono">TEST LABEL - DO NOT SHIP</span>{' '}
+                  watermarks, and QR / PDF417 payloads use dummy routing.
+                  Do not use for real shipments. Real tracking + real
+                  barcodes only ship when the account environment is{' '}
+                  <span className="font-mono">PRODUCTION</span>.
+                </p>
+              </div>
+            </div>
+          ) : null}
+
           {/* PR #548 — Master + child tracking table. Shown for
               multi-package shipments (pkgCount > 1) OR when a
               shipmentBatches[0].masterTrackingNumber differs from

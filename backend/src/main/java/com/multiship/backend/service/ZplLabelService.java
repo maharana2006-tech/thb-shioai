@@ -151,9 +151,9 @@ public class ZplLabelService {
         // don't declare them. Only render for shipments crossing a customs
         // boundary.
         if (crossBorder) {
-            z.append("^CF0,28\n").append(text(24, 18, "INCOTERMS: DAP"));
+            z.append("^CF0,28,28\n").append(text(24, 18, "INCOTERMS: DAP"));
         }
-        z.append("^CF0,24\n");
+        z.append("^CF0,24,24\n");
         z.append(text(30, 56, "ORIGIN ID:" + zpl(shipper.getState()) + zpl(shipper.getPostalCode()).substring(0, Math.min(2, zpl(shipper.getPostalCode()).length())) + "A  " + zpl(shipper.getPhone())));
         z.append(text(30, 86, zpl(shipper.getName())));
         z.append(text(30, 116, zpl(shipper.getAddressLine1())));
@@ -179,7 +179,7 @@ public class ZplLabelService {
         // when the parcel exports from the US. Domestic + non-US shipments
         // don't need it.
         if (usExport) {
-            z.append("^CF0,20\n").append(text(438, 202, "NO EEI 30.37(a)"));
+            z.append("^CF0,20,20\n").append(text(438, 202, "NO EEI 30.37(a)"));
         }
 
         z.append("^FO20,236^GB772,6,6^FS\n");
@@ -188,8 +188,8 @@ public class ZplLabelService {
         // (custNo used to render here at Y=312, which read like part of the
         //  shipping address to the recipient. Moved to the footer block below
         //  where it belongs as a warehouse-facing routing hint.)
-        z.append("^CF0,22\n").append(text(24, 262, "TO"));
-        z.append("^CF0,46\n").append(text(72, 258, zpl(recipient)));
+        z.append("^CF0,22,22\n").append(text(24, 262, "TO"));
+        z.append("^CF0,46,46\n").append(text(72, 258, zpl(recipient)));
         int y = 320;
         if (StringUtils.hasText(order.getShipAddr1())) {
             z.append(text(72, y, zpl(order.getShipAddr1())));
@@ -199,7 +199,7 @@ public class ZplLabelService {
             z.append(text(72, y, "**TEST LABEL - DO NOT SHIP**"));
             y += 48;
         }
-        z.append("^CF0,44\n").append(text(72, y, city + " " + state + " " + zip));
+        z.append("^CF0,44,44\n").append(text(72, y, city + " " + state + " " + zip));
         // Destination country tag: use the actual destination (was hardcoded
         // '(US)'). Suppress for domestic since the country is implicit.
         if (crossBorder && !destCountryCode.isEmpty()) {
@@ -208,9 +208,9 @@ public class ZplLabelService {
         }
         y += 54;
         z.append("^FO770,260^A0R,24,24^FD").append(formCode).append("^FS\n");
-        z.append("^CF0,24\n").append(text(30, y, zpl(firstNonBlank(order.getPhone(), ""))));
+        z.append("^CF0,24,24\n").append(text(30, y, zpl(firstNonBlank(order.getPhone(), ""))));
         y += 30;
-        z.append("^CF0,20\n");
+        z.append("^CF0,20,20\n");
         z.append(text(30, y, "INV:")).append(text(400, y, "REF: " + orderDisplay));
         y += 26;
         // PO/DEPT line intentionally removed: PO isn't captured on the Order
@@ -233,29 +233,29 @@ public class ZplLabelService {
                     .append(pdf417Data).append("^FS\n");
         } else {
             z.append("^FO36,").append(barTop).append("^GB520,150,2^FS\n");
-            z.append("^CF0,24\n").append(text(120, barTop + 66, "2D BARCODE AFTER GENERATION"));
+            z.append("^CF0,24,24\n").append(text(120, barTop + 66, "2D BARCODE AFTER GENERATION"));
         }
-        z.append("^CF0,60\n").append(text(596, barTop, zpl(carrierName.equals("FEDEX") ? "FedEx" : carrierName)));
-        z.append("^CF0,28\n").append(text(620, barTop + 62, tier.toUpperCase(Locale.ROOT)));
+        z.append("^CF0,60,60\n").append(text(596, barTop, zpl(carrierName.equals("FEDEX") ? "FedEx" : carrierName)));
+        z.append("^CF0,28,28\n").append(text(620, barTop + 62, tier.toUpperCase(Locale.ROOT)));
         z.append("^FO600,").append(barTop + 96).append("^GB118,122,5^FS\n");
-        z.append("^FO628,").append(barTop + 108).append("^CF0,96^FD").append(serviceLetter).append("^FS\n");
+        z.append("^FO628,").append(barTop + 108).append("^CF0,96,96^FD").append(serviceLetter).append("^FS\n");
         z.append("^FO780,").append(barTop).append("^A0R,20,20^FD").append(meter).append("^FS\n");
 
         int routeTop = barTop + 236;
         z.append("^FO20,").append(routeTop - 10).append("^GB772,2,2^FS\n");
 
         // ---- routing section ----
-        z.append("^FO560,").append(routeTop + 2).append("^FB230,1,0,R,0^CF0,30^FDA1^FS\n");
-        z.append("^CF0,26\n").append(text(30, routeTop + 44, "TRK#"));
+        z.append("^FO560,").append(routeTop + 2).append("^FB230,1,0,R,0^CF0,30,30^FDA1^FS\n");
+        z.append("^CF0,26,26\n").append(text(30, routeTop + 44, "TRK#"));
         z.append("^FO100,").append(routeTop + 36).append("^GB72,36,2^FS\n");
-        z.append("^CF0,24\n").append(text(110, routeTop + 44, "0430"));
-        z.append("^CF0,40\n").append(text(190, routeTop + 36, generated ? trkGrouped : "PENDING"));
-        z.append("^FO560,").append(routeTop + 36).append("^FB230,1,0,R,0^CF0,40^FD").append(serviceCode).append("^FS\n");
-        z.append("^CF0,90\n").append(text(28, routeTop + 92, ursa));
-        z.append("^FO520,").append(routeTop + 88).append("^FB270,1,0,R,0^CF0,44^FD").append(zip).append("^FS\n");
-        z.append("^FO430,").append(routeTop + 140).append("^FB360,1,0,R,0^CF0,30^FD").append(state).append("-US ").append(airport).append("^FS\n");
+        z.append("^CF0,24,24\n").append(text(110, routeTop + 44, "0430"));
+        z.append("^CF0,40,40\n").append(text(190, routeTop + 36, generated ? trkGrouped : "PENDING"));
+        z.append("^FO560,").append(routeTop + 36).append("^FB230,1,0,R,0^CF0,40,40^FD").append(serviceCode).append("^FS\n");
+        z.append("^CF0,90,90\n").append(text(28, routeTop + 92, ursa));
+        z.append("^FO520,").append(routeTop + 88).append("^FB270,1,0,R,0^CF0,44,44^FD").append(zip).append("^FS\n");
+        z.append("^FO430,").append(routeTop + 140).append("^FB360,1,0,R,0^CF0,30,30^FD").append(state).append("-US ").append(airport).append("^FS\n");
         if (generated) {
-            z.append("^CF0,24\n").append(text(30, routeTop + 190, numericLine));
+            z.append("^CF0,24,24\n").append(text(30, routeTop + 190, numericLine));
         }
 
         // ---- warehouse-facing footer (two lines just above the Code128) ----
@@ -263,7 +263,7 @@ public class ZplLabelService {
         // block so it doesn't get read as part of the shipping address.
         int footerTop = routeTop + 216;
         z.append("^FO20,").append(footerTop - 8).append("^GB772,2,2^FS\n");
-        z.append("^CF0,22\n");
+        z.append("^CF0,22,22\n");
         String weightStr = effectiveWeight != null ? effectiveWeight.toPlainString() : "-";
         String weightUnitStr = effectiveWeightUnit != null ? effectiveWeightUnit.toUpperCase(Locale.ROOT) : "KG";
         String tierLabel = tier.toUpperCase(Locale.ROOT);
@@ -289,7 +289,7 @@ public class ZplLabelService {
             z.append("^FO50,").append(bcTop).append("^BCN,120,N,N,N^FD").append(zpl(trackingNumber)).append("^FS\n");
         } else {
             z.append("^FO50,").append(bcTop).append("^GB700,90,2^FS\n");
-            z.append("^CF0,26\n").append(text(160, bcTop + 34, "*** LABEL NOT GENERATED ***"));
+            z.append("^CF0,26,26\n").append(text(160, bcTop + 34, "*** LABEL NOT GENERATED ***"));
         }
 
         z.append("^XZ\n");

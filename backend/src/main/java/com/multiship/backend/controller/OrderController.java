@@ -1389,6 +1389,7 @@ public class OrderController {
             String detected = sniffStoredArtifactFormat(stored);
             String zplVerdict = resolverVerdict(orderNo, p.getSequenceNumber(), "ZPL");
             String pdfVerdict = resolverVerdict(orderNo, p.getSequenceNumber(), "PDF");
+            String zebrashVerdict = zebrashRenderProbe(orderNo, p.getSequenceNumber(), zplVerdict);
             if (!"PRESENT".equals(zplVerdict)) unresolvableZpl.add(p.getSequenceNumber());
             pkgStates.add(com.multiship.backend.dto.LabelStateDTO.PackageState.builder()
                     .sequenceNumber(p.getSequenceNumber())
@@ -1398,6 +1399,7 @@ public class OrderController {
                     .detectedFormat(detected)
                     .resolverOutcomeZpl(zplVerdict)
                     .resolverOutcomePdf(pdfVerdict)
+                    .zebrashOutcomeZpl(zebrashVerdict)
                     .build());
         }
 
@@ -1481,6 +1483,30 @@ public class OrderController {
         // three to empty. The per-package PackageState.detectedFormat above
         // gives the discriminating hint (NONE / URL / mismatched-format).
         return "EMPTY";
+    }
+
+    /**
+     * PR #551 — actually invokes the zebrash renderer on the pkg's ZPL
+     * bytes and reports whether it produced a valid PNG. Discriminates
+     * between "bytes are resolvable" (what {@link #resolverVerdict}
+     * reports) and "the FE's `<img src=…>` will actually see a PNG".
+     * FedEx sandbox ZPL uses malformed `^CF,0,0,0` that zebrash may
+     * reject — this is often why the FE falls back to the JSX facsimile
+     * even for STATE_1_OR_2_OK orders (900017 exhibited exactly this).
+     *
+     * <p>Skipped when the bytes are absent (no point rendering nothing);
+     * we don't want to double-count EMPTY as a render failure.
+     */
+    private String zebrashRenderProbe(Integer orderNo, Integer seq, String zplVerdict) {
+        if (!"PRESENT".equals(zplVerdict)) return "SKIPPED";
+        try {
+            byte[] zpl = labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", seq).orElse(null);
+            if (zpl == null || zpl.length == 0) return "SKIPPED";
+            byte[] png = zebrashRenderer.renderPng(zpl);
+            return png != null && png.length > 0 ? "RENDERABLE" : "RENDER_FAILED";
+        } catch (RuntimeException ex) {
+            return "RENDER_FAILED";
+        }
     }
 
     /**
