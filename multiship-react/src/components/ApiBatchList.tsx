@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import { FiDownloadCloud, FiRefreshCw, FiZap } from 'react-icons/fi'
+import { FiDownloadCloud, FiHome, FiRefreshCw, FiZap } from 'react-icons/fi'
 import { wmsService } from '../api/wmsService'
 import { orderImportService } from '../api/orderImportService'
 import type { ImportBatchSummary, OrderImportRow } from '../api/orderImportService'
@@ -40,6 +40,12 @@ export default function ApiBatchList() {
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [genRowKey, setGenRowKey] = useState<string | null>(null)
   const [generatingId, setGeneratingId] = useState<number | null>(null)
+  // Parity with the Import-history bulk flow: live "X of N" progress polled
+  // while a batch generates, the bill-to account mode, and the platform-
+  // billing confirm step.
+  const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number }>>({})
+  const [billingSavingId, setBillingSavingId] = useState<number | null>(null)
+  const [confirmGenId, setConfirmGenId] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -181,18 +187,79 @@ export default function ApiBatchList() {
   }
 
   /** Generate labels for the whole batch (or retry the failed/ungenerated rows). */
-  const generateBatch = async (batchId: number, isRetry: boolean) => {
-    setGeneratingId(batchId)
-    setBatches((list) => list.map((b) => (b.id === batchId ? { ...b, status: 'IN_PROGRESS' } : b)))
+  /** Persist a batch's bill-to account mode (survives reload + auditable). */
+  const setBilling = async (id: number, mode: 'AUTO' | 'PLATFORM') => {
+    setBillingSavingId(id)
+    setBatches((list) => list.map((b) => (b.id === id ? { ...b, billingMode: mode } : b)))
+    if (mode !== 'PLATFORM') setConfirmGenId((c) => (c === id ? null : c))
     try {
-      const res = await orderImportService.generateLabels(batchId, { onlyFailed: isRetry })
+      await orderImportService.setBillingMode(id, mode)
+    } catch (e) {
+      notify.apiError(e, 'Could not update the bill-to account.')
+      await load()
+    } finally {
+      setBillingSavingId(null)
+    }
+  }
+
+  /** Status-aware completion notice — a partial batch shouldn't toast green. */
+  const notifyForStatus = (status: string | null | undefined, message: string) => {
+    switch ((status || '').toUpperCase()) {
+      case 'COMPLETE':
+        notify.success(message)
+        break
+      case 'PARTIAL_COMPLETE':
+        notify.info({ title: 'Partially generated', body: message })
+        break
+      case 'FAILED':
+      case 'INITIATE':
+        notify.error({ title: 'Label generation failed', body: message })
+        break
+      default:
+        notify.info(message)
+    }
+  }
+
+  const generateBatch = async (batchId: number, isRetry: boolean) => {
+    const platform = batches.find((b) => b.id === batchId)?.billingMode === 'PLATFORM'
+    setConfirmGenId(null)
+    setGeneratingId(batchId)
+    setGenProgressById((m) => ({ ...m, [batchId]: { done: 0, total: 0 } }))
+    setBatches((list) => list.map((b) => (b.id === batchId ? { ...b, status: 'IN_PROGRESS' } : b)))
+    // Poll the server's live counter ALONGSIDE the generate request (a
+    // separate GET) so the button shows a real "X of N" bar while the POST
+    // runs — same pattern as the Import-history bulk flow.
+    let polling = true
+    const pollProgress = async () => {
+      while (polling) {
+        try {
+          const pr = await orderImportService.generationProgress(batchId)
+          const d = pr.data
+          if (polling && d && d.running && d.total > 0) {
+            setGenProgressById((m) => ({ ...m, [batchId]: { done: d.done, total: d.total } }))
+          }
+        } catch {
+          /* transient poll error — keep going, the POST result is authoritative */
+        }
+        await new Promise((r) => setTimeout(r, 400))
+      }
+    }
+    void pollProgress()
+    try {
+      const res = await orderImportService.generateLabels(batchId, { onlyFailed: isRetry, usePlatformAccount: platform })
       applyUpdate(batchId, res.data)
-      notify.success(res.message ?? 'Label generation finished.')
+      notifyForStatus(res.data?.status, res.message ?? 'Label generation finished.')
     } catch (e) {
       notify.apiError(e, 'Label generation failed.')
       await load()
     } finally {
+      polling = false
       setGeneratingId(null)
+      setGenProgressById((m) => {
+        const next = { ...m }
+        delete next[batchId]
+        return next
+      })
     }
   }
 
@@ -242,6 +309,9 @@ export default function ApiBatchList() {
             const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED'
             const canGen = CAN_GENERATE.has(st)
             const genBusy = generatingId === b.id
+            const progress = genProgressById[b.id]
+            const platform = b.billingMode === 'PLATFORM'
+            const confirming = confirmGenId === b.id
             return (
               <li key={b.id} className="overflow-hidden rounded-2xl border border-[#e3d9c4] bg-white shadow-sm">
                 {/* Card header */}
@@ -294,27 +364,105 @@ export default function ApiBatchList() {
                   <span className="shrink-0 rounded-full bg-[#f4eede] px-2.5 py-1 text-[11px] font-bold text-[#5a4526]">
                     {b.totalRows} {b.totalRows === 1 ? 'shipment' : 'shipments'}
                   </span>
-                  {canGen ? (
-                    <button
-                      type="button"
-                      onClick={() => void generateBatch(b.id, isRetry)}
-                      disabled={genBusy || !!b.invalidRows}
-                      title={
-                        b.invalidRows
-                          ? 'Fix the flagged rows before generating labels'
-                          : isRetry
-                            ? 'Retry generating labels for the rows that failed or aren’t generated yet'
-                            : 'Generate carrier labels for every row in this batch'
-                      }
-                      className={`${BTN_PRIMARY_SM} shrink-0`}
-                    >
-                      {genBusy ? (
-                        <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                  {/* Keep the controls mounted while THIS batch generates — the
+                      click optimistically flips status to IN_PROGRESS (not in
+                      CAN_GENERATE), so without `|| genBusy` the progress bar
+                      would unmount the instant you click. */}
+                  {(canGen || genBusy) ? (
+                    <>
+                      <span
+                        title="Which carrier account this batch bills to. Platform bills the house account and rebills the client with markup."
+                        className={`${confirming ? 'hidden' : 'inline-flex'} shrink-0 items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold ${
+                          platform ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]' : 'border-[#e3d9c4] bg-white text-[#5a4526]'
+                        }`}
+                      >
+                        <FiHome className="h-3.5 w-3.5 shrink-0" />
+                        <span className="hidden sm:inline text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>
+                        <select
+                          value={platform ? 'PLATFORM' : 'AUTO'}
+                          disabled={genBusy || billingSavingId === b.id}
+                          onChange={(e) => void setBilling(b.id, e.target.value as 'AUTO' | 'PLATFORM')}
+                          className="cursor-pointer border-0 bg-transparent pr-1 text-[11px] font-semibold text-inherit focus:outline-none disabled:cursor-not-allowed"
+                        >
+                          <option value="AUTO">Client account</option>
+                          <option value="PLATFORM">Platform account</option>
+                        </select>
+                      </span>
+                      {platform && confirming ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void generateBatch(b.id, isRetry)}
+                            disabled={genBusy}
+                            className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-[#412d15] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#5a4526] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
+                          >
+                            <FiHome className="h-3.5 w-3.5" />
+                            Confirm — bill to platform
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmGenId(null)}
+                            disabled={genBusy}
+                            className="inline-flex shrink-0 items-center rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : genBusy ? (
+                        // Live progress while generating: a real X-of-N bar once
+                        // the first poll lands, an indeterminate shimmer until then.
+                        (() => {
+                          const total = progress?.total ?? 0
+                          const done = Math.min(progress?.done ?? 0, total)
+                          const pct = total > 0 ? Math.round((done / total) * 100) : 0
+                          return (
+                            <div
+                              className="flex min-w-[150px] shrink-0 flex-col gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[#f4eede]"
+                              role="progressbar"
+                              aria-valuemin={0}
+                              aria-valuemax={total || undefined}
+                              aria-valuenow={total > 0 ? done : undefined}
+                              title={total > 0 ? `Generating labels — ${done} of ${total} done` : 'Generating labels…'}
+                            >
+                              <div className="flex items-center justify-between text-[11px] font-semibold">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                                  Generating…
+                                </span>
+                                {total > 0 ? <span className="tabular-nums">{done}/{total}</span> : null}
+                              </div>
+                              <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#f4eede]/20">
+                                {total > 0 ? (
+                                  <div
+                                    className="h-full rounded-full bg-[#f4eede] transition-[width] duration-300 ease-out"
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                ) : (
+                                  <div className="h-full w-1/3 animate-pulse rounded-full bg-[#f4eede]/70" />
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })()
                       ) : (
-                        <FiZap className="h-3.5 w-3.5" />
+                        <button
+                          type="button"
+                          onClick={() => (platform ? setConfirmGenId(b.id) : void generateBatch(b.id, isRetry))}
+                          disabled={!!b.invalidRows}
+                          title={
+                            b.invalidRows
+                              ? 'Fix the flagged rows before generating labels'
+                              : isRetry
+                                ? 'Retry generating labels for the rows that failed or aren’t generated yet'
+                                : 'Generate carrier labels for every row in this batch'
+                          }
+                          className={`${BTN_PRIMARY_SM} shrink-0`}
+                        >
+                          <FiZap className="h-3.5 w-3.5" />
+                          {isRetry ? 'Retry labels' : 'Generate labels'}
+                        </button>
                       )}
-                      {genBusy ? 'Generating…' : isRetry ? 'Retry labels' : 'Generate labels'}
-                    </button>
+                    </>
                   ) : null}
                 </div>
 
