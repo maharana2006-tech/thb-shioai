@@ -826,6 +826,20 @@ public class CarrierServiceImpl implements CarrierService {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
                     "A shipment weight greater than zero is required.");
         }
+        // Channel enum gate — reject loudly instead of persisting arbitrary
+        // strings into order_channel (a typo like "DTC" would render as "—"
+        // in the UI, indistinguishable from an unclassified row, while the
+        // CSV export leaked it downstream). Normalized here so the persist
+        // sites can trust the value; V36 backs this with a DB CHECK.
+        if (StringUtils.hasText(req.getChannel())) {
+            String normalizedChannel = req.getChannel().trim().toUpperCase(Locale.ROOT);
+            if (!"D2C".equals(normalizedChannel) && !"B2B".equals(normalizedChannel)) {
+                return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                        "channel must be 'D2C' or 'B2B' (got '" + req.getChannel()
+                                + "'). Omit it to classify from the recipient.");
+            }
+            req.setChannel(normalizedChannel);
+        }
         String typedNumber = StringUtils.hasText(req.getAccountNumber()) ? req.getAccountNumber().trim() : null;
         if (req.getAccountId() == null && typedNumber == null) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,

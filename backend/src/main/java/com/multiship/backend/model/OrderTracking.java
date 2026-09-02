@@ -60,7 +60,11 @@ public class OrderTracking {
     @Column(name = "idempotency_key", length = 100)
     private String idempotencyKey;
 
-    @Column(name = "error_message")
+    /** Carrier error responses run 500-2000 chars (FedEx nested JSON) — text,
+     *  not the JPA varchar(255) default. V31 intended this but its fresh-DB
+     *  guard skipped databases where Hibernate created the table after
+     *  Flyway ran; V36 re-widens and this mapping keeps new DBs correct. */
+    @Column(name = "error_message", columnDefinition = "text")
     private String errorMessage;
 
     // ===== 3PL snapshot (populated at label time; stable if the client's

@@ -876,7 +876,10 @@ export default function OrdersWorkspace() {
         return (
           <span
             className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone}`}
-            title={c === 'B2B' ? 'Business destination (company recipient)' : 'Direct-to-consumer (residential recipient)'}
+            // Value-only wording: the API doesn't expose WHY the channel was
+            // chosen (explicit override vs heuristic), so asserting a cause
+            // here told auditors the wrong story on overridden orders.
+            title={c === 'B2B' ? 'B2B — business-to-business shipment' : 'D2C — direct-to-consumer shipment'}
           >
             {c}
           </span>
