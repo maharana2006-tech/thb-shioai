@@ -146,6 +146,34 @@ public class OrderController {
         return Math.max(1, Math.max(fromPackages, fromCount));
     }
 
+    /**
+     * PR #548 — Build the badge text overlaid on the top-right of each
+     * composite panel. Format:
+     *   "PKG 1 OF 3"          (single-pkg or no tracking known)
+     *   "PKG 1 OF 3\n1Z999AA10123456784"   (multi-pkg with per-piece tracking)
+     * Returns {@code null} when no meaningful badge can be built — caller
+     * skips the overlay for that panel (fail-open).
+     */
+    static String badgeFor(int pkgIndex, int totalPkgs,
+            java.util.List<com.multiship.backend.dto.LabelPackageDTO> packages) {
+        if (totalPkgs < 1 || pkgIndex < 1 || pkgIndex > totalPkgs) return null;
+        String line1 = "PKG " + pkgIndex + " OF " + totalPkgs;
+        if (packages == null || packages.isEmpty()) return line1;
+        // Match by sequenceNumber; fall back to positional if seq is null
+        // (legacy rows before Sprint 47).
+        String tracking = packages.stream()
+                .filter(p -> p.getSequenceNumber() != null && p.getSequenceNumber() == pkgIndex)
+                .map(com.multiship.backend.dto.LabelPackageDTO::getTrackingNumber)
+                .filter(t -> t != null && !t.isBlank())
+                .findFirst()
+                .orElse(null);
+        if (tracking == null && pkgIndex - 1 < packages.size()) {
+            String posTracking = packages.get(pkgIndex - 1).getTrackingNumber();
+            if (posTracking != null && !posTracking.isBlank()) tracking = posTracking;
+        }
+        return tracking == null ? line1 : line1 + "\n" + tracking;
+    }
+
     /** Map a client Address value object into the label payload shape. */
     private Map<String, Object> addressMap(com.multiship.backend.model.Address a, String fallbackName) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -929,36 +957,56 @@ public class OrderController {
         }
         try {
             byte[] png;
+            // Fetch the order shape ONCE so both the single-pkg and multi-
+            // pkg branches can derive badges from the same label_package
+            // list. Cheap — the DTO is already cached / joined.
+            ApiResponse<OrderWithLinesDTO> orderResp = orderService.getOrderWithLines(orderNo);
+            int totalPkgs = effectivePkgCount(orderResp.getData());
+            java.util.List<com.multiship.backend.dto.LabelPackageDTO> pkgList =
+                    orderResp.getData() != null && orderResp.getData().getPackages() != null
+                            ? orderResp.getData().getPackages()
+                            : java.util.List.of();
+
             if (pkgIndex != null && pkgIndex > 0) {
                 // Explicit pkg → single-panel render for that package's
-                // stored ZPL.
+                // stored ZPL. Overlay a badge so the operator knows which
+                // box this label goes on even when the picker isn't
+                // visible (e.g. printing directly).
                 java.util.Optional<byte[]> zpl =
                         labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", pkgIndex);
                 if (zpl.isEmpty()) return ResponseEntity.status(404).build();
+                byte[] rendered = zebrashRenderer.renderPng(zpl.get());
+                String badge = badgeFor(pkgIndex, totalPkgs, pkgList);
+                png = badge == null
+                        ? rendered
+                        : zebrashCompositor.stackVerticallyWithBadges(
+                                java.util.List.of(rendered), java.util.List.of(badge));
+            } else if (totalPkgs <= 1) {
+                // Single-pkg order — keep the pre-PR-#544 behavior
+                // (shipment-level fetch, no badge — there's nothing to
+                // annotate against).
+                java.util.Optional<byte[]> zpl =
+                        labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", null);
+                if (zpl.isEmpty()) return ResponseEntity.status(404).build();
                 png = zebrashRenderer.renderPng(zpl.get());
             } else {
-                // pkg omitted — determine per-pkg count. Single-pkg orders
-                // keep the pre-PR-#544 behavior (shipment-level fetch).
-                // Multi-pkg orders composite each package vertically into
-                // one PNG (per operator call on PR #544 Q3).
-                ApiResponse<OrderWithLinesDTO> orderResp = orderService.getOrderWithLines(orderNo);
-                int totalPkgs = effectivePkgCount(orderResp.getData());
-                if (totalPkgs <= 1) {
+                // Multi-pkg composite — one panel per package, each with a
+                // "PKG N OF M" + tracking badge overlaid before stacking.
+                // The badges list runs parallel to the panels list; panels
+                // skipped due to unresolvable bytes have their badge index
+                // skipped too so numbering stays correct.
+                java.util.List<byte[]> panels = new java.util.ArrayList<>(totalPkgs);
+                java.util.List<String> badges = new java.util.ArrayList<>(totalPkgs);
+                for (int i = 1; i <= totalPkgs; i++) {
                     java.util.Optional<byte[]> zpl =
-                            labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", null);
-                    if (zpl.isEmpty()) return ResponseEntity.status(404).build();
-                    png = zebrashRenderer.renderPng(zpl.get());
-                } else {
-                    java.util.List<byte[]> panels = new java.util.ArrayList<>(totalPkgs);
-                    for (int i = 1; i <= totalPkgs; i++) {
-                        java.util.Optional<byte[]> zpl =
-                                labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", i);
-                        if (zpl.isEmpty()) continue; // skip missing panels rather than 404 the whole request
-                        panels.add(zebrashRenderer.renderPng(zpl.get()));
-                    }
-                    if (panels.isEmpty()) return ResponseEntity.status(404).build();
-                    png = zebrashCompositor.stackVertically(panels);
+                            labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", i);
+                    if (zpl.isEmpty()) continue; // skip missing panels rather than 404 the whole request
+                    panels.add(zebrashRenderer.renderPng(zpl.get()));
+                    String b = badgeFor(i, totalPkgs, pkgList);
+                    badges.add(b == null ? "" : b);
                 }
+                if (panels.isEmpty()) return ResponseEntity.status(404).build();
+                png = zebrashCompositor.stackVerticallyWithBadges(panels, badges);
             }
             return ResponseEntity.ok()
                     .header("Cache-Control", "private, max-age=60")

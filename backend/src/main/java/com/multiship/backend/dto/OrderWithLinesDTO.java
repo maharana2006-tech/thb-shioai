@@ -67,5 +67,18 @@ public class OrderWithLinesDTO {
     private Integer packageCount;
     /** Per-box rows (tracking, weight, dims). Ordered by sequenceNumber. Empty on legacy orders. */
     private List<LabelPackageDTO> packages;
+    /**
+     * PR #548 (Sprint 52 follow-up) — one entry per {@code shipment_batch}
+     * row, ordered by batchSeq. Populated for multi-package shipments;
+     * empty for single-pkg / pre-Sprint-48 legacy orders. Callers can
+     * grab the batch masters when they need to expose "master tracking
+     * vs child tracking" semantics (industry-standard for MPS shipments —
+     * FedEx returns a master + per-piece; UPS returns a
+     * ShipmentIdentificationNumber + PackageResults; DHL similar).
+     *
+     * <p>Length {@code >= 2} means the shipment was split across
+     * multiple carrier calls (over-cap); each entry has its own master.
+     */
+    private List<ShipmentBatchDTO> shipmentBatches;
     private List<OrderLineDTO> orderLines;
 }

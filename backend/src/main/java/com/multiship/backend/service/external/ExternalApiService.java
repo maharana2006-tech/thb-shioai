@@ -67,6 +67,16 @@ public class ExternalApiService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ExternalWebhookDispatcher webhookDispatcher;
 
+    /** PR #548 — populate master + child tracking on ExternalTrackingResponse.
+     *  Optional so tests without full Spring context still resolve; on null
+     *  the {@link #masterTrackingsFor} / {@link #childTrackingsFor} helpers
+     *  return empty lists, matching pre-#548 shape. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ShipmentBatchRepository shipmentBatchRepositoryForTracking;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.LabelPackageRepository labelPackageRepositoryForTracking;
+
     public ExternalApiService(ShippingConfigService shippingConfigService,
                               ShippingServiceRepository serviceRepository,
                               CarrierAccountRefRepository carrierAccountRefRepository,
@@ -512,7 +522,40 @@ public class ExternalApiService {
                 .estimatedDelivery(eta)
                 .delivered(delivered)
                 .trackingUrl(tracking.getTrackingUrl())
+                .masterTrackings(masterTrackingsFor(tracking.getOrderNo()))
+                .childTrackings(childTrackingsFor(tracking.getOrderNo()))
                 .build();
+    }
+
+    /**
+     * PR #548 — expose master tracking per shipment_batch. Empty when the
+     * repo isn't wired (unit tests) or the order has no batches (pre-
+     * Sprint-48 legacy). Partners that don't care about MPS ignore the
+     * field; new integrations use it to group per-piece events.
+     */
+    private java.util.List<ExternalTrackingResponse.MasterTracking> masterTrackingsFor(Integer orderNo) {
+        if (shipmentBatchRepositoryForTracking == null || orderNo == null) return java.util.List.of();
+        return shipmentBatchRepositoryForTracking.findByOrderNoOrderByBatchSeqAsc(orderNo).stream()
+                .map(b -> ExternalTrackingResponse.MasterTracking.builder()
+                        .batchSeq(b.getBatchSeq())
+                        .carrierCode(b.getCarrierCode())
+                        .masterTrackingNumber(b.getMasterTrackingNumber())
+                        .masterTrackingUrl(b.getMasterTrackingUrl())
+                        .packageCountInBatch(b.getPackageCountInBatch())
+                        .build())
+                .toList();
+    }
+
+    /** PR #548 — per-piece children ordered by sequenceNumber. */
+    private java.util.List<ExternalTrackingResponse.ChildTracking> childTrackingsFor(Integer orderNo) {
+        if (labelPackageRepositoryForTracking == null || orderNo == null) return java.util.List.of();
+        return labelPackageRepositoryForTracking.findByOrderNoOrderBySequenceNumberAsc(orderNo).stream()
+                .map(p -> ExternalTrackingResponse.ChildTracking.builder()
+                        .sequenceNumber(p.getSequenceNumber())
+                        .trackingNumber(p.getTrackingNumber())
+                        .trackingUrl(p.getTrackingUrl())
+                        .build())
+                .toList();
     }
 
     // ─────────────────────────────── void ──────────────────────────────────
