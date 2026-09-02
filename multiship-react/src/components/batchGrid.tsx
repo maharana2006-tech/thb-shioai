@@ -9,6 +9,25 @@ import { useEffect, useRef, useState } from 'react'
 
 import IssuesInfoIcon, { type IssueItem } from './ui/IssuesInfoIcon'
 
+/** D2C/B2B chip for a batch grid row, derived from the recipient company —
+ *  the same heuristic the persist path applies at generate time (import/WMS
+ *  rows carry no residential flag or explicit channel, so this preview
+ *  matches what gets stored). Value-only tooltip: the reason is not exposed
+ *  by the API, so the chip never asserts one. */
+export function RowChannelChip({ recipientCompany }: { recipientCompany?: string | null }) {
+  const b2b = !!(recipientCompany || '').trim()
+  return (
+    <span
+      className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ring-1 ${
+        b2b ? 'bg-indigo-50 text-indigo-700 ring-indigo-200' : 'bg-sky-50 text-sky-700 ring-sky-200'
+      }`}
+      title={b2b ? 'B2B — business-to-business shipment' : 'D2C — direct-to-consumer shipment'}
+    >
+      {b2b ? 'B2B' : 'D2C'}
+    </span>
+  )
+}
+
 /** Builds the shared ⓘ tooltip's item list from a batch row's problems and
  *  renders it via IssuesInfoIcon — used on BOTH ends of a problem row in the
  *  Import-history and API (WMS) grids. */

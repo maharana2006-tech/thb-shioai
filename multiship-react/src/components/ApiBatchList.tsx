@@ -4,7 +4,7 @@ import { wmsService } from '../api/wmsService'
 import { orderImportService } from '../api/orderImportService'
 import type { ImportBatchSummary, OrderImportRow } from '../api/orderImportService'
 import { notify } from '../utils/notify'
-import { GridCell, DH_COLUMNS, RowIssuesIcon, bucketRowErrors, type DhColumn } from './batchGrid'
+import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import { BTN_PRIMARY, BTN_GHOST, BTN_PRIMARY_SM } from './ui/buttons'
 
 /**
@@ -371,6 +371,7 @@ export default function ApiBatchList() {
                                           {r.errors!.length} error{r.errors!.length === 1 ? '' : 's'}
                                         </span>
                                       )}
+                                      <RowChannelChip recipientCompany={r.recipientCompany} />
                                       {/* Left-side ⓘ — lives in the STICKY cell so
                                           the issues stay one hover away no matter
                                           how far the wide grid is scrolled. */}

@@ -20,7 +20,7 @@ import AdvancedDataTable from './workspace/AdvancedDataTable'
 import AllOrdersHistory from './AllOrdersHistory'
 import OrderImportModal from './modals/OrderImportModal'
 import OrderDocumentsTable from './OrderDocumentsTable'
-import { GridCell, DH_COLUMNS, RowIssuesIcon, bucketRowErrors, type DhColumn } from './batchGrid'
+import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import { notify } from '../utils/notify'
 import {
   orderImportService,
@@ -802,25 +802,7 @@ export default function DataHistoryPage() {
                                 {r.errors!.length} error{r.errors!.length === 1 ? '' : 's'}
                               </span>
                             )}
-                            {/* D2C/B2B — derived from the recipient company, the same
-                                heuristic the persist path applies at generate time
-                                (import rows carry no residential flag or explicit
-                                channel, so this preview matches what gets stored). */}
-                            {(() => {
-                              const b2b = !!(r.recipientCompany || '').trim()
-                              return (
-                                <span
-                                  className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ring-1 ${
-                                    b2b
-                                      ? 'bg-indigo-50 text-indigo-700 ring-indigo-200'
-                                      : 'bg-sky-50 text-sky-700 ring-sky-200'
-                                  }`}
-                                  title={b2b ? 'B2B — business-to-business shipment' : 'D2C — direct-to-consumer shipment'}
-                                >
-                                  {b2b ? 'B2B' : 'D2C'}
-                                </span>
-                              )
-                            })()}
+                            <RowChannelChip recipientCompany={r.recipientCompany} />
                             {saving ? <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" /> : null}
                             {/* Left ⓘ — sticky cell, so the issues stay one
                                 hover away at any horizontal scroll position. */}
