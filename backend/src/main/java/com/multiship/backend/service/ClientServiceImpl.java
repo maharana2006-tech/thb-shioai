@@ -437,7 +437,7 @@ public class ClientServiceImpl implements ClientService {
                     "Client " + code + " was not found.");
         }
 
-        long orders = orderRepository.countOrdersUnified("", code, "", "", "", "", "", "", "", "", "");
+        long orders = orderRepository.countOrdersUnified("", code, "", "", "", "", "", "", "", "", "", "");
         if (orders > 0) {
             return failure(HttpStatus.CONFLICT, ErrorCode.CLIENT_HAS_ORDERS,
                     "Client " + code + " has " + orders + " orders and cannot be deleted — deactivate it instead.");
@@ -590,7 +590,7 @@ public class ClientServiceImpl implements ClientService {
                 .createdAt(client.getCreatedAt())
                 .updatedAt(client.getUpdatedAt())
                 .carrierAccounts(accounts)
-                .orderCount(orderRepository.countOrdersUnified("", client.getClientCode().toUpperCase(Locale.ROOT), "", "", "", "", "", "", "", "", ""))
+                .orderCount(orderRepository.countOrdersUnified("", client.getClientCode().toUpperCase(Locale.ROOT), "", "", "", "", "", "", "", "", "", ""))
                 // Sprint 52 — per-client flag; false triggers the
                 // "No billing markup saved" warnings in ClientsPage,
                 // ClientEditorPage step nav, ClientMarkupTab banner, and

@@ -234,6 +234,7 @@ public class OrderController {
             @Parameter(description = "Created on or after (yyyy-MM-dd)") @RequestParam(required = false) String createdFrom,
             @Parameter(description = "Created on or before (yyyy-MM-dd)") @RequestParam(required = false) String createdTo,
             @Parameter(description = "Order source: MANUAL | BULK | API | WMS | ERP") @RequestParam(required = false) String source,
+            @Parameter(description = "Shipping channel: D2C | B2B") @RequestParam(required = false) String channel,
             @Parameter(description = "Attach the cascade's account pick (accountResolution) to each row") @RequestParam(defaultValue = "false") boolean includeResolution) {
 
         if (!isValidSortBy(sortBy)) {
@@ -264,6 +265,7 @@ public class OrderController {
                 .createdFrom(createdFrom)
                 .createdTo(createdTo)
                 .source(source)
+                .channel(channel)
                 .build();
 
         ApiResponse<PageResponseDTO<OrderResponseDTO>> response =

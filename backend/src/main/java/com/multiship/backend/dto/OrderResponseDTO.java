@@ -47,6 +47,8 @@ public class OrderResponseDTO {
         private LocalDate createdDate;
         /** Where the order came from: MANUAL | WMS | API | ERP. */
         private String source;
+        /** Shipping channel: D2C | B2B. Null on orders predating classification. */
+        private String channel;
         /** The WMS's own order number, as sent on the external shipment request. */
         private String refOrderNumber;
         /** Id shared by every order generated from the same CSV/XLSX import upload. Null for non-import orders. */

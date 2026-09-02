@@ -158,6 +158,13 @@ public class Order {
     @Column(name = "order_source", length = 20)
     private String source;
 
+    /** D2C | B2B — shipping channel, classified at persist time (explicit API
+     *  channel field > recipient residential flag > recipient company present
+     *  = B2B > default D2C). Null on legacy rows — rendered as "—", never
+     *  backfilled by guessing. */
+    @Column(name = "order_channel", length = 3)
+    private String orderChannel;
+
     /** 'Y' when this is a reverse/return label (customer ships back). */
     @Column(name = "is_return")
     private String isReturn;

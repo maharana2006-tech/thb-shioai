@@ -13,6 +13,8 @@ export interface OrderDetails {
   createdDate: string
   /** Where the order came from: MANUAL | WMS | API | ERP. */
   source?: string | null
+  /** Shipping channel: D2C | B2B. Null on orders predating classification. */
+  channel?: string | null
   /** The WMS's own order number, as sent on the external shipment request. */
   refOrderNumber?: string | null
   /** Id shared by every order generated from the same CSV/XLSX import upload. Null for non-import orders. */
@@ -623,6 +625,8 @@ export interface OrderListParams {
   createdTo?: string
   /** Order source: MANUAL | BULK | API | WMS | ERP. Empty = all sources. */
   source?: string
+  /** Shipping channel: D2C | B2B. Empty = all channels. */
+  channel?: string
 }
 
 /** Tab counts for the Labels work queue. */
@@ -701,6 +705,7 @@ export const orderService = {
     if (params.createdFrom) query.set('createdFrom', params.createdFrom)
     if (params.createdTo) query.set('createdTo', params.createdTo)
     if (params.source) query.set('source', params.source)
+    if (params.channel) query.set('channel', params.channel)
 
     return apiClient.get<ApiResponse<PaginatedOrderData>>(`/orders?${query.toString()}`)
   },

@@ -225,6 +225,19 @@ public class ExternalApiService {
         manual.setAccountNumber(accountNumber);
         manual.setClientCode(clientCode);
         manual.setSource("API");
+        // D2C/B2B channel: reject anything that isn't one of the two values
+        // loudly (a typo like "DTC" silently falling back to the heuristic
+        // would misclassify without the caller ever knowing); omitted is fine
+        // — the persist path classifies from the recipient.
+        if (StringUtils.hasText(req.getChannel())) {
+            String channel = req.getChannel().trim().toUpperCase(java.util.Locale.ROOT);
+            if (!"D2C".equals(channel) && !"B2B".equals(channel)) {
+                throw new ExternalApiException(422, ErrorCode.VALIDATION_ERROR,
+                        "channel must be 'D2C' or 'B2B' (got '" + req.getChannel() + "'). "
+                                + "Omit it to let the platform classify from shipTo.");
+            }
+            manual.setChannel(channel);
+        }
         manual.setReference(req.getReference());
         manual.setDeclaredValue(req.getDeclaredValue());
         // Sprint 50 Tier 1 finding #4 — currency is set below after we've

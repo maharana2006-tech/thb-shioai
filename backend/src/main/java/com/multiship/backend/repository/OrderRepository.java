@@ -107,7 +107,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                   THEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END))
                 ELSE 'API'
             END as order_source,
-            b.batch_id
+            b.batch_id,
+            b.order_channel
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
@@ -301,6 +302,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                        THEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END))
                      ELSE 'API'
                    END) = :source)
+          AND (:channel = '' OR UPPER(COALESCE(b.order_channel, '')) = :channel)
           AND (:resolution = ''
                OR (:resolution = 'READY' AND """ + RESOLUTION_READY_SQL + """
                )
@@ -338,7 +340,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                   THEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END))
                 ELSE 'API'
             END as order_source,
-            b.batch_id
+            b.batch_id,
+            b.order_channel
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
@@ -374,6 +377,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("createdFrom") String createdFrom,
             @Param("createdTo") String createdTo,
             @Param("source") String source,
+            @Param("channel") String channel,
             @Param("offset") int offset,
             @Param("limit") int limit,
             @Param("sortBy") String sortBy,
@@ -396,7 +400,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("tracking") String tracking,
             @Param("createdFrom") String createdFrom,
             @Param("createdTo") String createdTo,
-            @Param("source") String source
+            @Param("source") String source,
+            @Param("channel") String channel
     );
 
     /** Tab counts for the Labels work queue, computed in one pass. */

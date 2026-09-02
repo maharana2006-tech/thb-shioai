@@ -68,6 +68,10 @@ public class ManualShipmentRequest {
     /** Where the order originated: MANUAL (default) | WMS | API. Recorded on the order. */
     private String source;
 
+    /** Optional explicit shipping channel: D2C | B2B. When absent the order is
+     *  classified from the recipient (residential flag, then company presence). */
+    private String channel;
+
     /**
      * Optional ship-from warehouse code (must be attached to
      * {@link #clientCode}). When set, its address wins over the {@link #sender}

@@ -122,6 +122,7 @@ export default function OrdersWorkspace() {
   const [dateTo, setDateTo] = useState('')
   // Order source filter: '' (all) | MANUAL | BULK | API | WMS | ERP.
   const [sourceFilter, setSourceFilter] = useState('')
+  const [channelFilter, setChannelFilter] = useState('')
   const [clientCodes, setClientCodes] = useState<string[]>([])
   // Sprint 51 migration — sort is owned by the shared AdvancedDataTable now.
   // sortBy / sortDirection remain the fetch-effect inputs (derived below).
@@ -276,6 +277,7 @@ export default function OrdersWorkspace() {
         createdFrom: dateFrom || undefined,
         createdTo: dateTo || undefined,
         source: sourceFilter || undefined,
+        channel: channelFilter || undefined,
         page: page - 1,
         size: pageSize,
         sortBy,
@@ -299,7 +301,7 @@ export default function OrdersWorkspace() {
     return () => {
       cancelled = true
     }
-  }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sourceFilter, sortBy, sortDirection, debouncedFilters, reloadToken])
+  }, [view, page, pageSize, debouncedQuery, clientFilter, dateFrom, dateTo, sourceFilter, channelFilter, sortBy, sortDirection, debouncedFilters, reloadToken])
 
   const refreshQueues = () => setReloadToken((token) => token + 1)
 
@@ -856,6 +858,37 @@ export default function OrdersWorkspace() {
     })
 
     defs.push({
+      id: 'channel',
+      accessorFn: (o) => o.orderDetails.channel ?? '',
+      header: 'Channel',
+      enableSorting: false,
+      cell: ({ row }) => {
+        // D2C/B2B, classified at persist time. Orders predating the
+        // classification carry null — render a quiet dash, never a guess.
+        const c = (row.original.orderDetails.channel || '').toUpperCase()
+        if (c !== 'D2C' && c !== 'B2B') {
+          return <span className="text-slate-300">—</span>
+        }
+        const tone =
+          c === 'B2B'
+            ? 'bg-indigo-50 text-indigo-700 ring-indigo-200'
+            : 'bg-sky-50 text-sky-700 ring-sky-200'
+        return (
+          <span
+            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone}`}
+            title={c === 'B2B' ? 'Business destination (company recipient)' : 'Direct-to-consumer (residential recipient)'}
+          >
+            {c}
+          </span>
+        )
+      },
+      meta: {
+        headerLabel: 'Channel',
+        exportValue: (o: Order) => (o.orderDetails.channel ?? '').toUpperCase(),
+      },
+    })
+
+    defs.push({
       id: 'refOrderNumber',
       accessorFn: (o) => o.orderDetails.refOrderNumber ?? '',
       header: 'Ref Order #',
@@ -1395,6 +1428,19 @@ export default function OrdersWorkspace() {
                           <option value="MANUAL">Manual</option>
                           <option value="BULK">Bulk (CSV/Excel)</option>
                           <option value="API">API</option>
+                        </select>,
+                      )}
+                      {advField(
+                        <FiDatabase className="h-3 w-3" />,
+                        'Channel',
+                        <select
+                          value={channelFilter}
+                          onChange={(e) => setChannelFilter(e.target.value)}
+                          className={advInputCls}
+                        >
+                          <option value="">Any channel</option>
+                          <option value="D2C">D2C (consumer)</option>
+                          <option value="B2B">B2B (business)</option>
                         </select>,
                       )}
                     </div>

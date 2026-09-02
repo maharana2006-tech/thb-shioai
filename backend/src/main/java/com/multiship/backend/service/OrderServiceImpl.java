@@ -134,6 +134,8 @@ public class OrderServiceImpl implements OrderService {
         // Order source: MANUAL | BULK | API | WMS | ERP. '' = all sources.
         // Uppercased so ?source=manual matches the stored MANUAL.
         String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
+        // Shipping channel: D2C | B2B. '' = all channels.
+        String channelFilter = trimmed(filters.getChannel()).toUpperCase(java.util.Locale.ROOT);
 
         if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
             return ApiResponse.<PageResponseDTO<OrderResponseDTO>>builder()
@@ -173,12 +175,12 @@ public class OrderServiceImpl implements OrderService {
         List<Object[]> results = orderRepository.findOrdersUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
-                createdFrom, createdTo, sourceFilter,
+                createdFrom, createdTo, sourceFilter, channelFilter,
                 page * size, size, sortBy, sortDirection);
         long totalRecords = orderRepository.countOrdersUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
-                createdFrom, createdTo, sourceFilter);
+                createdFrom, createdTo, sourceFilter, channelFilter);
 
         List<OrderResponseDTO> orders = results.stream()
                 .map(this::mapToOrderResponseDTO)
@@ -542,6 +544,7 @@ public class OrderServiceImpl implements OrderService {
                         .createdDate(row[10] != null ? (LocalDate) row[10] : null)
                         .source((String) row[19])
                         .batchId((Integer) row[20])
+                        .channel(row.length > 21 ? (String) row[21] : null)
                         .build())
                 .shippingDetails(OrderResponseDTO.ShippingDetails.builder()
                         .city((String) row[4])

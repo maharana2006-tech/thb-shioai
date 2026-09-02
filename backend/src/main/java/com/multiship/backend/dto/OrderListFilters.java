@@ -47,4 +47,7 @@ public class OrderListFilters {
     private String createdTo;
     /** Order source filter: MANUAL | BULK | API | WMS | ERP. Null/blank = all. */
     private String source;
+
+    /** Shipping-channel filter: D2C | B2B. Null/blank = all. */
+    private String channel;
 }

@@ -1314,6 +1314,7 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setIsManual("Y");
                     errOrder.setIsReturn(Boolean.TRUE.equals(req.getIsReturn()) ? "Y" : "N");
                     errOrder.setSource(firstNonBlank(req.getSource(), "MANUAL"));
+                    errOrder.setOrderChannel(resolveOrderChannel(req, to));
                     errOrder.setCustNo(firstNonBlank(req.getClientCode(), "MANUAL"));
                     errOrder.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : null);
                     errOrder.setShipviaCd( finalService != null ? finalService.getServiceCode() : serviceType);
@@ -1478,6 +1479,7 @@ public class CarrierServiceImpl implements CarrierService {
         // For a new order the loaded entity's getters are null, so this is the
         // same as before.
         order.setSource(firstNonBlank(req.getSource(), order.getSource(), "MANUAL"));
+        order.setOrderChannel(resolveOrderChannel(req, to));
         order.setCustNo(firstNonBlank(req.getClientCode(), order.getCustNo(), "MANUAL"));
         order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : order.getTenantId());
         order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);
@@ -2481,6 +2483,27 @@ public class CarrierServiceImpl implements CarrierService {
     private String persistLabelPath(String candidate) {
         if (labelBytesPersister == null) return candidate;
         return labelBytesPersister.toPersistable(candidate);
+    }
+
+    /**
+     * D2C / B2B channel classification, resolved once at persist time.
+     * Precedence: the caller's explicit channel (already validated upstream)
+     * → recipient residential flag (an explicit TRUE is a home even when a
+     * company name rides along — home businesses rate as residential) →
+     * recipient company presence = B2B → default D2C.
+     */
+    private static String resolveOrderChannel(com.multiship.backend.dto.ManualShipmentRequest req,
+                                              com.multiship.backend.dto.ManualShipmentRequest.Address recipient) {
+        if (req != null && StringUtils.hasText(req.getChannel())) {
+            return req.getChannel().trim().toUpperCase(Locale.ROOT);
+        }
+        if (recipient != null && Boolean.TRUE.equals(recipient.getResidential())) {
+            return "D2C";
+        }
+        if (recipient != null && StringUtils.hasText(recipient.getCompany())) {
+            return "B2B";
+        }
+        return "D2C";
     }
 
     private String truncate(String value, int maxLength) {

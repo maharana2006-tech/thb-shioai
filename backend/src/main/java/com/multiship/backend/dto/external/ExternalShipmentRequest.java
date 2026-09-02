@@ -18,6 +18,11 @@ public class ExternalShipmentRequest {
     /** The caller's own order/shipment reference (prints on the label). */
     private String reference;
 
+    /** Optional shipping channel: D2C (consumer) | B2B (business destination).
+     *  Case-insensitive; any other value is rejected 422. When omitted, the
+     *  platform classifies from shipTo (company present = B2B, else D2C). */
+    private String channel;
+
     /** The WMS's own order number — recorded for traceability, echoed back on the response. */
     private String refOrderNumber;
 
