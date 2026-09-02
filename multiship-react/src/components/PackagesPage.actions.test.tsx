@@ -60,9 +60,17 @@ vi.mock('../api/clientCatalogService', () => ({
 // accountRefService.listSyncEligible. Stub it so the single-carrier
 // sync test can drive the modal → confirm flow.
 const listSyncEligibleMock = vi.fn()
+// Dev's 7ebc7d1 ("package fetch") added an accountRefService.listAccounts()
+// call inside PackagesPage.load() to seed the carrier filter with any
+// configured-account carriers (independent of whether they've synced
+// packaging yet). Stub it with an empty array so the load() promise
+// resolves for every test in this file — before this mock, tests hit
+// "listAccounts is not a function" and 13 cases failed on both dev
+// and my rebased branch.
 vi.mock('../api/accountRefService', () => ({
   accountRefService: {
     listSyncEligible: (...args: unknown[]) => listSyncEligibleMock(...args),
+    listAccounts: vi.fn().mockResolvedValue([]),
   },
 }))
 
