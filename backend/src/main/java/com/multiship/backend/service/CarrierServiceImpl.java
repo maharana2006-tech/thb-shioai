@@ -86,6 +86,18 @@ public class CarrierServiceImpl implements CarrierService {
      *  client shipping on a USD UPS account no longer sends EUR figures
      *  labelled USD on the wire. Fails closed when a rate is unavailable. */
     private final ShipmentCurrencyConverter shipmentCurrencyConverter;
+
+    /**
+     * PR #550 — pre-fetches URL label bytes at persistence time so the DB
+     * carries base64 (survives URL expiry) instead of a signed URL that
+     * dies in 24-48h. Optional so pure-Mockito unit tests that don't
+     * wire this dep can still construct — {@link #persistLabelPath} is
+     * a passthrough when the persister is null. See
+     * feedback_lombok_constructor_arg_order.md for why this isn't a
+     * constructor arg.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private LabelBytesPersister labelBytesPersister;
     /**
      * Runs the failed-shipment ERROR-order persistence in its own DB
      * transaction, independent of the enclosing @Transactional method's.
@@ -589,7 +601,8 @@ public class CarrierServiceImpl implements CarrierService {
         tracking.setAccountNumber(used.accountNumber());
         tracking.setIsLabelGenerated(true);
         tracking.setLabelGeneratedAt(LocalDateTime.now());
-        tracking.setLabelFilePath(shipmentResult.labelUrl());
+        // PR #550 — pre-fetch URL labels so the row survives URL expiry.
+        tracking.setLabelFilePath(persistLabelPath(shipmentResult.labelUrl()));
         tracking.setStatus("GENERATED");
         tracking.setIdempotencyKey(normalizedKey);
         tracking.setErrorMessage(null);
@@ -711,7 +724,10 @@ public class CarrierServiceImpl implements CarrierService {
                         .sequenceNumber(seq)
                         .trackingNumber(pieceTracking)
                         .trackingUrl(pieceTrackingUrl)
-                        .labelFilePath(pieceLabel)
+                        // PR #550 — pre-fetch URL labels so DB carries base64
+                        // (survives URL expiry) instead of a signed URL that
+                        // dies in 24-48h.
+                        .labelFilePath(persistLabelPath(pieceLabel))
                         .weight(p.getWeight())
                         .weightUnit(p.getWeightUnit())
                         .length(p.getLength())
@@ -1573,7 +1589,8 @@ public class CarrierServiceImpl implements CarrierService {
                         .sequenceNumber(seq)
                         .trackingNumber(pieceTracking)
                         .trackingUrl(pieceTrackingUrl)
-                        .labelFilePath(piecelabel)
+                        // PR #550 — pre-fetch URL labels; survives URL expiry.
+                        .labelFilePath(persistLabelPath(piecelabel))
                         .weight(p.getWeight() != null ? p.getWeight() : req.getWeight())
                         .weightUnit(firstNonBlank(p.getWeightUnit(), req.getWeightUnit()))
                         .length(p.getLength() != null ? p.getLength() : length)
@@ -1706,7 +1723,9 @@ public class CarrierServiceImpl implements CarrierService {
         tracking.setAccountNumber(billToNumber);
         tracking.setIsLabelGenerated(true);
         tracking.setLabelGeneratedAt(LocalDateTime.now());
-        tracking.setLabelFilePath(result.labelUrl());
+        // PR #550 — pre-fetch URL labels so DB carries base64 (survives
+        // URL expiry) instead of a signed URL that dies in 24-48h.
+        tracking.setLabelFilePath(persistLabelPath(result.labelUrl()));
         tracking.setStatus("GENERATED");
         tracking.setWarehouseCode(resolvedWarehouseCode);
         tracking.setCarrierAmount(markup.carrierRate());
@@ -2387,6 +2406,18 @@ public class CarrierServiceImpl implements CarrierService {
                 carrierConnectedAt,
                 truncate(carrierEnvironment, 20)
         );
+    }
+
+    /**
+     * PR #550 — null-safe wrapper for {@link LabelBytesPersister#toPersistable}.
+     * Prefetches URL labels into base64 bytes so DB rows survive URL
+     * expiry (see order 900016 STATE_3 diagnosis). When the persister
+     * isn't wired (pure-Mockito unit tests), passthrough — no worse than
+     * pre-#550 behaviour.
+     */
+    private String persistLabelPath(String candidate) {
+        if (labelBytesPersister == null) return candidate;
+        return labelBytesPersister.toPersistable(candidate);
     }
 
     private String truncate(String value, int maxLength) {
