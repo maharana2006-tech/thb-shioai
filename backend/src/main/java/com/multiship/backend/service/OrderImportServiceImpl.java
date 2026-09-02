@@ -1228,8 +1228,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         resolveNamesToCodes(rows);
         // Final server-side gate for the dynamic reference checks — start
         // from a clean slate (rows round-trip stale preview errors) so the
-        // merge below sees only current failures.
-        for (OrderImportRowDTO row : rows) row.setErrors(List.of());
+        // merge below sees only current failures. Warnings too: they were
+        // never reset here, so every generate/retry pass re-APPENDED the
+        // same advisory (rows showed the platform-billing note 3× after
+        // three attempts).
+        for (OrderImportRowDTO row : rows) {
+            row.setErrors(List.of());
+            row.setWarnings(List.of());
+        }
         validateReferences(rows);
         validateBusinessRules(rows);
         validateCustomFields(rows);

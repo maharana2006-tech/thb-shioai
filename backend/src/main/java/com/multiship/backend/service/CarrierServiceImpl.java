@@ -1259,10 +1259,10 @@ public class CarrierServiceImpl implements CarrierService {
             LabelGenerationResponse failData = LabelGenerationResponse.builder()
                     .orderNo(failedOrderNo != null ? failedOrderNo.longValue() : null)
                     .status("ERROR")
-                    .message("The carrier rejected the manual shipment: " + ex.getMessage())
+                    .message("The carrier rejected the shipment: " + ex.getMessage())
                     .build();
             return failure(HttpStatus.BAD_GATEWAY, ErrorCode.CARRIER_FAILURE,
-                    "The carrier rejected the manual shipment: " + ex.getMessage()
+                    "The carrier rejected the shipment: " + ex.getMessage()
                             + (failedOrderNo != null ? " (saved as order " + failedOrderNo + ")" : ""),
                     failData);
         }

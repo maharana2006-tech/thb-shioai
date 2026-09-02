@@ -2044,7 +2044,7 @@ export default function NewShipmentPage() {
       const parsed = parseIntlValidationMessage(raw)
       if (parsed) {
         notify.error({ title: parsed.title, body: parsed.body })
-      } else if (/rejected the manual shipment|createShipment|HTTP \d{3}/i.test(raw)) {
+      } else if (/rejected the (manual )?shipment|createShipment|HTTP \d{3}/i.test(raw)) {
         // Carrier rejection — the backend message carries the raw connector
         // payload ("FEDEX createShipment HTTP 400: {json}"). Humanize it for
         // the toast (same treatment the orders list gives the Failure column)
