@@ -88,9 +88,15 @@ export default function AccountPickerModal({
               {carrierCode ? <span className="text-slate-400"> · {carrierCode}</span> : null} with…
             </h3>
             <p className="mt-1 text-xs leading-5 text-slate-500">
-              {clientCode
-                ? `${clientCode} has more than one ${carrierCode || 'carrier'} account — pick which one to bill.`
-                : 'Pick the carrier account for this label.'}
+              {/* Copy must match reality — the old text claimed "more than one
+                  account" unconditionally, even over an empty list. */}
+              {accounts.length === 0
+                ? `No usable ${carrierCode || 'carrier'} account found${clientCode ? ` for ${clientCode}` : ''}.`
+                : accounts.length === 1
+                  ? `Confirm the ${carrierCode || 'carrier'} account to bill${clientCode ? ` for ${clientCode}` : ''}.`
+                  : clientCode
+                    ? `${clientCode} has ${accounts.length} ${carrierCode || 'carrier'} accounts — pick which one to bill.`
+                    : 'Pick the carrier account for this label.'}
             </p>
           </div>
           <button

@@ -307,15 +307,19 @@ export default function OrdersWorkspace() {
    * at the carrier), then calls POST /orders/{n}/void. Refreshes the queue
    * on success so the row moves out of "generated" state.
    */
+  /** In-app confirm target — replaces the old native window.confirm(), which
+   *  was unstyleable, inconsistent with the app's modal pattern, and blocked
+   *  the tab for automation. The modal carries the context that matters:
+   *  tracking number, irreversibility, and the refund caveat. */
+  const [confirmVoid, setConfirmVoid] = useState<{ orderNo: number; trackingNumber: string } | null>(null)
+
   const handleVoid = async (orderNo: number, trackingNumber: string | null) => {
     if (!trackingNumber) return
-    const ok = window.confirm(
-      `Void tracking ${trackingNumber} at the carrier?\n\n`
-      + 'This calls the carrier\'s void / cancel endpoint (UPS, FedEx, USPS, DHL). '
-      + 'Postage is refunded only if the label hasn\'t been scanned in transit yet — '
-      + 'post-scan voids succeed but no refund is issued.',
-    )
-    if (!ok) return
+    setConfirmVoid({ orderNo, trackingNumber })
+  }
+
+  const executeVoid = async (orderNo: number) => {
+    setConfirmVoid(null)
     setVoidingOrderNo(orderNo)
     try {
       const response = await orderService.voidLabel(orderNo)
@@ -1522,6 +1526,62 @@ export default function OrdersWorkspace() {
 
         {detailsOrderNo !== null ? (
           <OrderDetailsModal orderNo={detailsOrderNo} onClose={() => setDetailsOrderNo(null)} />
+        ) : null}
+
+        {/* Void confirmation — in-app modal (see handleVoid). */}
+        {confirmVoid ? (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Void order ${confirmVoid.orderNo}`}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-[#1f150c]/45 p-4 backdrop-blur-[1px]"
+            onClick={() => setConfirmVoid(null)}
+          >
+            <div
+              className="w-full max-w-[430px] overflow-hidden rounded-2xl border border-rose-200 bg-white shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start gap-3 border-b border-rose-100 bg-rose-50 px-5 py-4">
+                <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+                  <FiXCircle className="h-4 w-4" />
+                </span>
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-rose-500">Void label</p>
+                  <h3 className="text-[15px] font-semibold text-[#1f150c]">
+                    Void order #{confirmVoid.orderNo}?
+                  </h3>
+                  <p className="mt-0.5 font-mono text-[11px] text-rose-700">{confirmVoid.trackingNumber}</p>
+                </div>
+              </div>
+              <div className="space-y-2 px-5 py-4 text-[12.5px] leading-relaxed text-[#5a4526]">
+                <p>
+                  This cancels the label at the carrier — <span className="font-semibold">it cannot be undone</span>.
+                  The tracking number dies and the label must not be used on a parcel.
+                </p>
+                <p>
+                  Postage is refunded only if the label hasn't been scanned in transit yet;
+                  post-scan voids succeed but no refund is issued.
+                </p>
+              </div>
+              <div className="flex items-center justify-end gap-2 border-t border-[#eee6d6] bg-[#faf7f0] px-5 py-3">
+                <button
+                  type="button"
+                  onClick={() => setConfirmVoid(null)}
+                  className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                >
+                  Keep the label
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void executeVoid(confirmVoid.orderNo)}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-rose-700 px-3.5 py-2 text-[12.5px] font-semibold text-white shadow-sm transition hover:bg-rose-800"
+                >
+                  <FiXCircle className="h-3.5 w-3.5" />
+                  Void the label
+                </button>
+              </div>
+            </div>
+          </div>
         ) : null}
 
         {trackingOrderNo !== null ? (

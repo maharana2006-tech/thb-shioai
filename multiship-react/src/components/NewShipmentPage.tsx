@@ -84,6 +84,18 @@ const COUNTRIES: [string, string][] = [
 ]
 const COUNTRY_NAME: Record<string, string> = Object.fromEntries(COUNTRIES)
 
+/** Name for ANY ISO code — curated list first, Intl.DisplayNames fallback so
+ *  codes outside the list (CU, NR, …) render "Cuba (CU)" instead of "CU (CU)". */
+const REGION_NAMES = (() => {
+  try { return new Intl.DisplayNames(['en'], { type: 'region' }) } catch { return null }
+})()
+const countryNameFor = (code: string): string => {
+  const c = (code || '').trim().toUpperCase()
+  if (!c) return ''
+  if (COUNTRY_NAME[c]) return COUNTRY_NAME[c]
+  try { return (c.length === 2 && REGION_NAMES?.of(c)) || c } catch { return c }
+}
+
 // Reason of export choices come from the canonical SHIPPING_PURPOSES
 // list (customsOptions.ts) so what the operator picks matches the
 // backend's SHIPPING_PURPOSE_ENUM byte-for-byte. Prior 6-value
@@ -162,7 +174,7 @@ function SectionCard({ icon, title, badge, note, className = '', wrapHeader = fa
 function CountrySelect({ value, onChange }: { value: string; onChange: (code: string) => void }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const selectedName = COUNTRY_NAME[value] || value || ''
+  const selectedName = countryNameFor(value)
   const q = query.trim().toLowerCase()
   const matches = q
     ? COUNTRIES.filter(([code, name]) => name.toLowerCase().includes(q) || code.toLowerCase().includes(q))
@@ -376,12 +388,12 @@ function AddressBlock({
             className={inputCls}
             value={value.phoneCountryCode ?? ''}
             onChange={(e) => onChange({ phoneCountryCode: e.target.value.replace(/[^\d]/g, '') })}
-            placeholder={dialCodeFor(value.countryCode) || '44'}
+            placeholder={dialCodeFor(value.countryCode) || 'e.g. 1'}
             inputMode="numeric"
             maxLength={4}
           />
         </Field>
-        <Field label="Phone" error={errors?.phone} hint={phoneHintFor(value.countryCode) || undefined}>
+        <Field label="Phone" required error={errors?.phone} hint={phoneHintFor(value.countryCode) || undefined}>
           <input className={inputCls} value={value.phone} onChange={(e) => onChange({ phone: e.target.value })} placeholder="2125550100" />
         </Field>
       </div>
@@ -1075,6 +1087,15 @@ export default function NewShipmentPage() {
         if (o.weight != null) setWeight(String(o.weight))
         if (o.weightUnit === 'LB' || o.weightUnit === 'KG') setWeightUnit(o.weightUnit)
         if (o.declaredValue != null) setDeclaredValue(String(o.declaredValue))
+        // Prefill the CLIENT from the order (tenantId, custNo fallback) —
+        // its absence left two required fields empty (CLIENT, and CARRIER
+        // whose option pool is client-derived) and forced the operator
+        // through applyClient, which overwrites the faithfully-prefilled
+        // ship-from with the client's warehouse default. Direct setClientCode
+        // keeps every prefilled field intact. "MANUAL" is the legacy
+        // no-client sentinel, not a real client.
+        const orderClient = (o.tenantId || o.custNo || '').trim().toUpperCase()
+        if (orderClient && orderClient !== 'MANUAL') setClientCode(orderClient)
         const carrierCanon = canon(String(o.shipviaCd ?? ''))
         if (carrierCanon) setCarrier(carrierCanon)
         if (customs) {
@@ -1110,7 +1131,19 @@ export default function NewShipmentPage() {
     if (pending.accountNumber) setAccountNumber(pending.accountNumber)
     if (pending.serviceCode) {
       const match = servicesForCarrier.find((s) => s.serviceCode === pending.serviceCode)
-      if (match) { setServiceId(match.id); pendingFixRef.current = null }
+      if (match) {
+        setServiceId(match.id)
+        pendingFixRef.current = null
+      } else if (servicesForCarrier.length > 0) {
+        // The order's original service isn't offered for this lane (e.g.
+        // FEDEX_GROUND on an international destination). The picker will
+        // fall back to a lane default — say so instead of substituting
+        // silently, so the operator knows a deliberate choice was replaced.
+        notify.info(
+          `The order's original service ${pending.serviceCode} isn't offered for this lane — review the auto-selected service before regenerating.`,
+        )
+        pendingFixRef.current = null
+      }
     } else {
       pendingFixRef.current = null
     }
@@ -1235,8 +1268,13 @@ export default function NewShipmentPage() {
           countryCode: yourAddr.country || base.countryCode,
         }
       : base
-    if (isReturn) setRecipient(merged)
-    else setSender(merged)
+    // Fix-order mode: the ship-from was prefilled from the ORDER (the address
+    // the failed label actually used). Overlaying the client's warehouse
+    // default here silently rewrote it — keep the order's sender.
+    if (!fixOrderNo) {
+      if (isReturn) setRecipient(merged)
+      else setSender(merged)
+    }
     const accts = (client.carrierAccounts || []).filter((a) => a.active)
     const def = accts.find((a) => a.clientDefault) || accts[0]
     if (def) {

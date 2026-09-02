@@ -128,7 +128,10 @@ export const addressSchema = Yup.object({
     .nullable()
     .matches(/^\d{1,4}$/, { excludeEmptyString: true, message: 'Digits only, no +' }),
   phone: Yup.string()
-    .nullable()
+    // Required — carriers hard-reject a phone-less party (FedEx:
+    // PHONENUMBER.EMPTY). Catching it here saves a doomed carrier round
+    // trip that used to mint an ERROR order just to learn this.
+    .required('Phone is required — carriers reject shipments without one')
     .matches(PHONE_RE, { excludeEmptyString: true, message: 'Enter a valid phone number' })
     // Country-aware length: the national number's digit count must match the
     // destination country (e.g. US = 10, IN = 10, GB = 9–10). Carriers reject a

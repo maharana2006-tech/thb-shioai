@@ -2207,26 +2207,40 @@ public class CarrierServiceImpl implements CarrierService {
             tenantScope.requireTenantMatch(
                     StringUtils.hasText(order.getTenantId()) ? order.getTenantId() : order.getCustNo());
 
-            // Sprint 51 — a generated order was already billed; surface the
-            // account from its tracking row (terminal GENERATED scenario)
-            // rather than re-computing a choice that no longer applies.
+            // Sprint 51 (extended) — any order whose tracking row records a
+            // bill-to account surfaces THAT account, not the pick-an-account
+            // cascade. Originally only GENERATED rows got this treatment;
+            // ERROR rows (attempted + billed-to on the failed call) and
+            // VOIDED rows (historically billed) fell through to the cascade
+            // and rendered "Pick an account" for accounts that were never in
+            // question. Scenario reflects the label state so the UI can word
+            // it (Billed / Attempted / Voided).
             OrderTracking tr = trackingByOrder.get(orderNo);
-            if (tr != null && Boolean.TRUE.equals(tr.getIsLabelGenerated())
-                    && StringUtils.hasText(tr.getAccountNumber())) {
+            if (tr != null && StringUtils.hasText(tr.getAccountNumber())) {
                 CarrierAccountRef billed = carrierAccountRefRepository
                         .findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(tr.getAccountNumber().trim())
                         .orElse(null);
                 String billedCarrier = billed != null
                         ? resolveCanonicalCarrierCode(billed.getCarrierCode())
                         : resolveCanonicalCarrierCode(firstNonBlank(order.getShipVia(), order.getShipviaCd()));
-                resolutions.add(OrderAccountResolutionDTO.builder()
-                        .orderNo(orderNo)
-                        .scenario(AccountResolution.SCENARIO_GENERATED)
-                        .carrierCode(billedCarrier)
-                        .accountNumber(tr.getAccountNumber())
-                        .accountName(billed != null ? billed.getAccountName() : null)
-                        .build());
-                continue;
+                String trStatus = tr.getStatus() == null ? "" : tr.getStatus().trim().toUpperCase(Locale.ROOT);
+                String scenario = Boolean.TRUE.equals(tr.getIsLabelGenerated())
+                        ? AccountResolution.SCENARIO_GENERATED
+                        : "VOIDED".equals(trStatus) ? "VOIDED"
+                        : "ERROR".equals(trStatus) ? "FAILED"
+                        : null;
+                if (scenario != null) {
+                    resolutions.add(OrderAccountResolutionDTO.builder()
+                            .orderNo(orderNo)
+                            .scenario(scenario)
+                            .carrierCode(billedCarrier)
+                            .accountNumber(tr.getAccountNumber())
+                            .accountName(billed != null ? billed.getAccountName() : null)
+                            .build());
+                    continue;
+                }
+                // Pending/unknown tracking states (e.g. WMS PENDING) still run
+                // the normal cascade below — nothing was billed yet.
             }
 
             AccountResolution resolution = resolveAccountForOrderWithDetails(
@@ -2353,12 +2367,16 @@ public class CarrierServiceImpl implements CarrierService {
      * but are never emitted by the API.
      */
     private String resolveCanonicalCarrierCode(String carrierCode) {
-        return switch (carrierCode.toUpperCase(Locale.ROOT)) {
-            case "P80" -> "UPS";
-            case "F77" -> "FEDEX";
-            case "L01" -> "USPS";
-            default -> carrierCode.toUpperCase(Locale.ROOT);
-        };
+        // Delegate to the shared canonicalizer so carrier-prefixed SERVICE
+        // codes resolve too. Manual/bulk orders persist their service code
+        // (FEDEX_GROUND) in ship_via_cd; the old local map passed it through
+        // unchanged, so the account cascade looked for accounts registered
+        // under "FEDEX_GROUND", found none, and told the operator to "Pick an
+        // account" for orders that were billed on a known FEDEX account.
+        String canonical = ShippingConfigService.canonicalCarrierFor(carrierCode);
+        return StringUtils.hasText(canonical)
+                ? canonical
+                : carrierCode.toUpperCase(Locale.ROOT);
     }
 
     /**

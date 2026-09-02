@@ -20,18 +20,23 @@ function extractMessages(raw: string): string[] {
   return out
 }
 
+/** Carriers sometimes omit the space after a sentence-ending period
+ *  ("exist.Please update…") — normalize for display. Letters only, so
+ *  decimals ("5007.20") and codes ("DESTINATION.COUNTRY") stay intact. */
+const fixSentenceSpacing = (s: string) => s.replace(/([a-z])\.([A-Z])/g, '$1. $2')
+
 /** A short, readable one-liner for the orders table. */
 export function summarizeCarrierError(raw?: string | null): string {
   if (!raw) return 'Label failed'
   const msgs = extractMessages(raw)
-  if (msgs.length) return msgs.join(' · ')
+  if (msgs.length) return fixSentenceSpacing(msgs.join(' · '))
   // No JSON messages — strip our wrapper prefix and any HTTP/transaction noise.
-  return raw
+  return fixSentenceSpacing(raw
     .replace(/^The carrier rejected[^:]*:\s*/i, '')
     .replace(/\b[A-Z]+ createShipment HTTP \d+:?\s*/i, '')
     .replace(/\{.*\}$/s, '')
     .trim()
-    .slice(0, 160) || 'Label failed'
+    .slice(0, 160)) || 'Label failed'
 }
 
 /**

@@ -69,9 +69,31 @@ export default function AccountScenarioBadge({
           label={`Client default • ${named}`}
         />
       )
-    case 'CHOOSE_ACCOUNT':
+    case 'FAILED':
+      // The label attempt failed AT THE CARRIER — the account it was billed
+      // to is a persisted fact from the tracking row, not a pending choice.
       return (
-        <Chip tone="bg-sky-100 text-sky-700" icon={<FiEdit3 className="h-3 w-3" />} label="Pick an account" />
+        <Chip
+          tone="bg-rose-100 text-rose-700"
+          icon={<FiAlertCircle className="h-3 w-3" />}
+          label={`Attempted • ${named}`}
+        />
+      )
+    case 'VOIDED':
+      // Historically billed, then cancelled — a record of what happened,
+      // never a shipment awaiting account setup.
+      return (
+        <Chip
+          tone="bg-slate-200 text-slate-600"
+          icon={<FiXCircle className="h-3 w-3" />}
+          label={`Voided • ${named}`}
+        />
+      )
+    case 'CHOOSE_ACCOUNT':
+      // Descriptive, not imperative — this chip is a status readout, not a
+      // button (the actionable "Choose Account" control lives in Actions).
+      return (
+        <Chip tone="bg-sky-100 text-sky-700" icon={<FiEdit3 className="h-3 w-3" />} label="No account chosen" />
       )
     case 'CLIENT_MISSING':
       return (
