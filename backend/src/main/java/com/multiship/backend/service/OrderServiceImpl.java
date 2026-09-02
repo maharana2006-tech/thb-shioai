@@ -55,6 +55,13 @@ public class OrderServiceImpl implements OrderService {
     @Autowired
     private com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
 
+    // PR #548 — expose master tracking per shipment_batch alongside the
+    // per-piece labels. Callers use this to distinguish "the master tracking
+    // number to quote to the customer" from "the individual piece numbers
+    // that carriers emit tracking events for".
+    @Autowired
+    private com.multiship.backend.repository.ShipmentBatchRepository shipmentBatchRepository;
+
     // For resolving the ship-FROM origin of orders that didn't capture their own
     // sender (bulk/ERP): the client's warehouse, else the platform default.
     @Autowired
@@ -420,6 +427,21 @@ public class OrderServiceImpl implements OrderService {
                                 .declaredValue(p.getDeclaredValue())
                                 .reference(p.getReference())
                                 .description(p.getDescription())
+                                .build())
+                        .toList())
+                // PR #548 — master-tracking per shipment_batch. Empty on
+                // pre-Sprint-48 orders (no rows) — FE falls back to the
+                // shipment-level tracking + per-piece children in that case.
+                .shipmentBatches(shipmentBatchRepository
+                        .findByOrderNoOrderByBatchSeqAsc(entity.getOrderNo()).stream()
+                        .map(b -> com.multiship.backend.dto.ShipmentBatchDTO.builder()
+                                .batchSeq(b.getBatchSeq())
+                                .carrierCode(b.getCarrierCode())
+                                .masterTrackingNumber(b.getMasterTrackingNumber())
+                                .masterTrackingUrl(b.getMasterTrackingUrl())
+                                .masterLabelUrl(b.getMasterLabelUrl())
+                                .packageCountInBatch(b.getPackageCountInBatch())
+                                .shippingCost(b.getShippingCost())
                                 .build())
                         .toList())
                 .orderLines(lines)

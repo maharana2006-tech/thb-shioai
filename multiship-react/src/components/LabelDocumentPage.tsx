@@ -694,6 +694,120 @@ export default function LabelDocumentPage() {
           This order belongs to another tenant.
         </div>
       ) : order ? (
+        <>
+          {/* PR #548 — Master + child tracking table. Shown for
+              multi-package shipments (pkgCount > 1) OR when a
+              shipmentBatches[0].masterTrackingNumber differs from
+              the shipment-level trackingNumber (rare but possible on
+              over-cap splits where the "shipment tracking" happened
+              to be piece 1's tracking, not the master).
+              print:hidden — operator-facing, not part of the printed
+              label; each label itself already has its own tracking. */}
+          {activeTab === 'label' &&
+              (pkgCount > 1 ||
+                (order.shipmentBatches?.length ?? 0) > 1) ? (
+            <div className="mb-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] shadow-sm print:hidden">
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Tracking numbers
+              </div>
+              {(order.shipmentBatches ?? []).map((b) => (
+                <div
+                  key={`batch-${b.batchSeq ?? 0}`}
+                  className="mb-2 border-l-2 border-emerald-500 pl-3"
+                >
+                  <div className="text-slate-800">
+                    <span className="font-semibold">
+                      Master{(order.shipmentBatches?.length ?? 0) > 1
+                        ? ` (batch ${b.batchSeq})`
+                        : ''}
+                      :{' '}
+                    </span>
+                    {b.masterTrackingUrl ? (
+                      <a
+                        href={b.masterTrackingUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-mono text-emerald-700 underline"
+                      >
+                        {b.masterTrackingNumber ?? '—'}
+                      </a>
+                    ) : (
+                      <span className="font-mono text-slate-800">
+                        {b.masterTrackingNumber ?? '—'}
+                      </span>
+                    )}
+                    <span className="ml-2 text-[11px] text-slate-500">
+                      {b.carrierCode ?? ''}
+                      {b.packageCountInBatch != null
+                        ? ` · ${b.packageCountInBatch} pkg${b.packageCountInBatch > 1 ? 's' : ''}`
+                        : ''}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              <table className="w-full border-collapse text-[12px]">
+                <thead className="text-left text-slate-500">
+                  <tr>
+                    <th className="border-b border-slate-200 py-1 pr-3 font-semibold">
+                      Pkg
+                    </th>
+                    <th className="border-b border-slate-200 py-1 pr-3 font-semibold">
+                      Child tracking
+                    </th>
+                    <th className="border-b border-slate-200 py-1 pr-3 font-semibold">
+                      Weight
+                    </th>
+                    <th className="border-b border-slate-200 py-1 font-semibold">
+                      Dimensions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(order.packages ?? []).map((p) => {
+                    const dims =
+                      p.length && p.width && p.height
+                        ? `${p.length}×${p.width}×${p.height} ${p.dimUnit ?? ''}`.trim()
+                        : ''
+                    const wt =
+                      p.weight != null
+                        ? `${p.weight} ${p.weightUnit ?? ''}`.trim()
+                        : ''
+                    return (
+                      <tr
+                        key={`pkg-${p.sequenceNumber ?? 0}`}
+                        className={
+                          p.sequenceNumber === pkgIndex
+                            ? 'bg-emerald-50'
+                            : undefined
+                        }
+                      >
+                        <td className="py-1 pr-3 font-semibold text-slate-700">
+                          {p.sequenceNumber ?? '—'}
+                        </td>
+                        <td className="py-1 pr-3 font-mono text-slate-800">
+                          {p.trackingUrl ? (
+                            <a
+                              href={p.trackingUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="underline"
+                            >
+                              {p.trackingNumber ?? '—'}
+                            </a>
+                          ) : (
+                            (p.trackingNumber ?? '—')
+                          )}
+                        </td>
+                        <td className="py-1 pr-3 text-slate-600">{wt || '—'}</td>
+                        <td className="py-1 text-slate-600">{dims || '—'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
         <div className="flex justify-center rounded-[26px] border border-slate-200/80 bg-slate-100/70 p-6 shadow-inner print:border-0 print:bg-white print:p-0 print:shadow-none">
           {activeTab === 'label' && carrierPreviewState === 'ready' ? (
             /* ==================== PR #538 — CARRIER-CANONICAL PNG (from backend zebrash render) ==================== */
@@ -1151,6 +1265,7 @@ export default function LabelDocumentPage() {
             </div>
           )}
         </div>
+        </>
       ) : null}
 
       {trackingOpen && order?.orderNo != null ? (

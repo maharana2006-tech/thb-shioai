@@ -183,6 +183,21 @@ public class Order {
     @Column(name = "package_count")
     private Integer packageCount;
 
+    /**
+     * V33 (was V32 — bumped after collision with V32__carrier_package_
+     * catalog.sql; see V33__orders_packages_json.sql header) — intended
+     * per-box package details, JSON-serialised from
+     * {@code ShipmentRequestDTO.packages} at order-creation time. Read by
+     * the auto label-generation path ({@code CarrierServiceImpl.
+     * generateLabel}) so a retry / regenerate of a failed multi-pkg
+     * shipment can reconstruct the multi-box request instead of
+     * collapsing to 1 package (issue #545). Null on single-box legacy
+     * orders — auto path falls back to the pre-V33 Order-scalar-fields
+     * shape in that case.
+     */
+    @Column(name = "packages_json", columnDefinition = "text")
+    private String packagesJson;
+
     @OneToMany(mappedBy = "order", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
     @ToString.Exclude
     @EqualsAndHashCode.Exclude

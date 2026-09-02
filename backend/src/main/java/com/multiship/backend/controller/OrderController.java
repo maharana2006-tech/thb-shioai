@@ -66,6 +66,16 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
 
+    // Diagnostic /label-state endpoint reads Order.packagesJson (added V33)
+    // and per-package labelFilePath rows directly. Adding these repos here
+    // rather than pushing the logic into OrderService — this is diagnostic-
+    // only, no reuse, no business logic worth abstracting.
+    @Autowired
+    private com.multiship.backend.repository.OrderRepository orderRepositoryForDiag;
+
+    @Autowired
+    private com.multiship.backend.repository.LabelPackageRepository labelPackageRepositoryForDiag;
+
     @Autowired
     private com.multiship.backend.repository.CarrierAccountRefRepository carrierAccountRefRepository;
 
@@ -107,6 +117,62 @@ public class OrderController {
      */
     @Autowired
     private com.multiship.backend.service.external.IdempotencyService idempotency;
+
+    /**
+     * PR #544 follow-up — derive the effective package count from an
+     * {@link OrderWithLinesDTO}. Every label-serving endpoint that loops
+     * over packages must use this, not {@code getPackageCount()} alone,
+     * because the two data sources can disagree:
+     *
+     * <ul>
+     *   <li>{@code label_package} row count = actual per-piece labels the
+     *       carrier issued (from {@code generateManualLabel} success)</li>
+     *   <li>{@code Order.package_count} = intent at order-creation time
+     *       (also written on the manual-label error path — where it used to
+     *       be stomped to {@code 1} pre-Part-B)</li>
+     * </ul>
+     *
+     * <p>When they disagree, the {@code label_package} row count is the
+     * source of truth — those rows are what the passthrough resolver can
+     * actually serve. Using {@code MAX(...)} matches the FE picker's own
+     * signal at {@code LabelDocumentPage.tsx:449-451}, so the picker's
+     * "1 of 2" tabs and the composite always agree on how many labels
+     * to render.
+     */
+    static int effectivePkgCount(OrderWithLinesDTO data) {
+        if (data == null) return 1;
+        int fromPackages = data.getPackages() == null ? 0 : data.getPackages().size();
+        int fromCount = data.getPackageCount() == null ? 0 : data.getPackageCount();
+        return Math.max(1, Math.max(fromPackages, fromCount));
+    }
+
+    /**
+     * PR #548 — Build the badge text overlaid on the top-right of each
+     * composite panel. Format:
+     *   "PKG 1 OF 3"          (single-pkg or no tracking known)
+     *   "PKG 1 OF 3\n1Z999AA10123456784"   (multi-pkg with per-piece tracking)
+     * Returns {@code null} when no meaningful badge can be built — caller
+     * skips the overlay for that panel (fail-open).
+     */
+    static String badgeFor(int pkgIndex, int totalPkgs,
+            java.util.List<com.multiship.backend.dto.LabelPackageDTO> packages) {
+        if (totalPkgs < 1 || pkgIndex < 1 || pkgIndex > totalPkgs) return null;
+        String line1 = "PKG " + pkgIndex + " OF " + totalPkgs;
+        if (packages == null || packages.isEmpty()) return line1;
+        // Match by sequenceNumber; fall back to positional if seq is null
+        // (legacy rows before Sprint 47).
+        String tracking = packages.stream()
+                .filter(p -> p.getSequenceNumber() != null && p.getSequenceNumber() == pkgIndex)
+                .map(com.multiship.backend.dto.LabelPackageDTO::getTrackingNumber)
+                .filter(t -> t != null && !t.isBlank())
+                .findFirst()
+                .orElse(null);
+        if (tracking == null && pkgIndex - 1 < packages.size()) {
+            String posTracking = packages.get(pkgIndex - 1).getTrackingNumber();
+            if (posTracking != null && !posTracking.isBlank()) tracking = posTracking;
+        }
+        return tracking == null ? line1 : line1 + "\n" + tracking;
+    }
 
     /** Map a client Address value object into the label payload shape. */
     private Map<String, Object> addressMap(com.multiship.backend.model.Address a, String fallbackName) {
@@ -628,10 +694,12 @@ public class OrderController {
                         .body(new String(single.get()));
             }
         } else {
-            // Peek at package_count so a multi-pkg order concatenates.
+            // Peek at package count so a multi-pkg order concatenates. Uses
+            // effectivePkgCount() rather than raw getPackageCount() so a
+            // stale package_count doesn't drop pkg 2..N when label_package
+            // rows exist for them.
             ApiResponse<OrderWithLinesDTO> peek = orderService.getOrderWithLines(orderNo);
-            Integer count = peek.getData() != null ? peek.getData().getPackageCount() : null;
-            int totalPkgs = count == null || count < 1 ? 1 : count;
+            int totalPkgs = effectivePkgCount(peek.getData());
             if (totalPkgs > 1) {
                 StringBuilder allZpl = new StringBuilder();
                 boolean any = false;
@@ -679,8 +747,7 @@ public class OrderController {
                 ? trackingResponse.getData().getLabelDetails()
                 : null;
 
-        Integer pkgCount = orderResponse.getData().getPackageCount();
-        int totalPkgs = pkgCount == null || pkgCount < 1 ? 1 : pkgCount;
+        int totalPkgs = effectivePkgCount(orderResponse.getData());
         java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =
                 orderResponse.getData().getPackages() == null
                         ? java.util.List.of()
@@ -781,8 +848,7 @@ public class OrderController {
                             .ifPresent(zpls::add);
                 } else {
                     ApiResponse<OrderWithLinesDTO> peek = orderService.getOrderWithLines(orderNo);
-                    Integer count = peek.getData() != null ? peek.getData().getPackageCount() : null;
-                    int totalPkgs = count == null || count < 1 ? 1 : count;
+                    int totalPkgs = effectivePkgCount(peek.getData());
                     if (totalPkgs > 1) {
                         for (int i = 1; i <= totalPkgs; i++) {
                             labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", i)
@@ -833,8 +899,7 @@ public class OrderController {
                 ? trackingResponse.getData().getLabelDetails()
                 : null;
 
-        Integer pkgCountBoxed = orderResponse.getData().getPackageCount();
-        int totalPkgs = pkgCountBoxed == null || pkgCountBoxed < 1 ? 1 : pkgCountBoxed;
+        int totalPkgs = effectivePkgCount(orderResponse.getData());
         java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =
                 orderResponse.getData().getPackages() == null
                         ? java.util.List.of()
@@ -892,37 +957,56 @@ public class OrderController {
         }
         try {
             byte[] png;
+            // Fetch the order shape ONCE so both the single-pkg and multi-
+            // pkg branches can derive badges from the same label_package
+            // list. Cheap — the DTO is already cached / joined.
+            ApiResponse<OrderWithLinesDTO> orderResp = orderService.getOrderWithLines(orderNo);
+            int totalPkgs = effectivePkgCount(orderResp.getData());
+            java.util.List<com.multiship.backend.dto.LabelPackageDTO> pkgList =
+                    orderResp.getData() != null && orderResp.getData().getPackages() != null
+                            ? orderResp.getData().getPackages()
+                            : java.util.List.of();
+
             if (pkgIndex != null && pkgIndex > 0) {
                 // Explicit pkg → single-panel render for that package's
-                // stored ZPL.
+                // stored ZPL. Overlay a badge so the operator knows which
+                // box this label goes on even when the picker isn't
+                // visible (e.g. printing directly).
                 java.util.Optional<byte[]> zpl =
                         labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", pkgIndex);
                 if (zpl.isEmpty()) return ResponseEntity.status(404).build();
+                byte[] rendered = zebrashRenderer.renderPng(zpl.get());
+                String badge = badgeFor(pkgIndex, totalPkgs, pkgList);
+                png = badge == null
+                        ? rendered
+                        : zebrashCompositor.stackVerticallyWithBadges(
+                                java.util.List.of(rendered), java.util.List.of(badge));
+            } else if (totalPkgs <= 1) {
+                // Single-pkg order — keep the pre-PR-#544 behavior
+                // (shipment-level fetch, no badge — there's nothing to
+                // annotate against).
+                java.util.Optional<byte[]> zpl =
+                        labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", null);
+                if (zpl.isEmpty()) return ResponseEntity.status(404).build();
                 png = zebrashRenderer.renderPng(zpl.get());
             } else {
-                // pkg omitted — determine per-pkg count. Single-pkg orders
-                // keep the pre-PR-#544 behavior (shipment-level fetch).
-                // Multi-pkg orders composite each package vertically into
-                // one PNG (per operator call on PR #544 Q3).
-                ApiResponse<OrderWithLinesDTO> orderResp = orderService.getOrderWithLines(orderNo);
-                Integer count = orderResp.getData() != null ? orderResp.getData().getPackageCount() : null;
-                int totalPkgs = count == null || count < 1 ? 1 : count;
-                if (totalPkgs <= 1) {
+                // Multi-pkg composite — one panel per package, each with a
+                // "PKG N OF M" + tracking badge overlaid before stacking.
+                // The badges list runs parallel to the panels list; panels
+                // skipped due to unresolvable bytes have their badge index
+                // skipped too so numbering stays correct.
+                java.util.List<byte[]> panels = new java.util.ArrayList<>(totalPkgs);
+                java.util.List<String> badges = new java.util.ArrayList<>(totalPkgs);
+                for (int i = 1; i <= totalPkgs; i++) {
                     java.util.Optional<byte[]> zpl =
-                            labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", null);
-                    if (zpl.isEmpty()) return ResponseEntity.status(404).build();
-                    png = zebrashRenderer.renderPng(zpl.get());
-                } else {
-                    java.util.List<byte[]> panels = new java.util.ArrayList<>(totalPkgs);
-                    for (int i = 1; i <= totalPkgs; i++) {
-                        java.util.Optional<byte[]> zpl =
-                                labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", i);
-                        if (zpl.isEmpty()) continue; // skip missing panels rather than 404 the whole request
-                        panels.add(zebrashRenderer.renderPng(zpl.get()));
-                    }
-                    if (panels.isEmpty()) return ResponseEntity.status(404).build();
-                    png = zebrashCompositor.stackVertically(panels);
+                            labelArtifactResolver.resolveAsBytes(orderNo, "ZPL", i);
+                    if (zpl.isEmpty()) continue; // skip missing panels rather than 404 the whole request
+                    panels.add(zebrashRenderer.renderPng(zpl.get()));
+                    String b = badgeFor(i, totalPkgs, pkgList);
+                    badges.add(b == null ? "" : b);
                 }
+                if (panels.isEmpty()) return ResponseEntity.status(404).build();
+                png = zebrashCompositor.stackVerticallyWithBadges(panels, badges);
             }
             return ResponseEntity.ok()
                     .header("Cache-Control", "private, max-age=60")
@@ -1222,6 +1306,195 @@ public class OrderController {
                                 .environment(ref.getEnvironment())
                                 .build()))
                 .orElse(null);
+    }
+
+    /**
+     * Admin diagnostic — the DB state that matters for multi-package
+     * label rendering, in one JSON response. Returns:
+     *
+     * <ul>
+     *   <li>{@code order} — Order.packageCount, packagesJson presence
+     *       (V33), source, order status, tracking's isLabelGenerated</li>
+     *   <li>{@code tracking} — OrderTracking.labelFilePath presence +
+     *       detected format via magic-byte sniff</li>
+     *   <li>{@code labelPackages} — per label_package row: seq, tracking,
+     *       hasLabelFilePath, detected format, and the actual
+     *       {@link com.multiship.backend.service.LabelArtifactResolver}
+     *       verdict for both ZPL and PDF (exactly what the composite
+     *       endpoint would see at render time)</li>
+     *   <li>{@code derived} — effectivePkgCount, missing sequences,
+     *       unresolvable sequences, and a matrixVerdict label matching
+     *       the diagnosis matrix in project_label_preview_audit.md</li>
+     * </ul>
+     *
+     * <p>Answers "why is order N still showing only 1 label" without
+     * shell access to Postgres. ADMIN-only — exposes raw storage state.
+     */
+    @Operation(summary = "Admin: dump the label-rendering state for one order",
+            description = "Diagnostic snapshot of label_batch + order_label_tracking + "
+                    + "label_package rows for a single order, plus the LabelArtifactResolver "
+                    + "verdict for each package. ADMIN-only — reveals raw storage details.")
+    @PreAuthorize("hasRole('ADMIN')")
+    @GetMapping("/{orderNo}/label-state")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.LabelStateDTO>> getLabelState(
+            @PathVariable Integer orderNo) {
+        com.multiship.backend.model.Order order =
+                orderRepositoryForDiag.findByOrderNo(orderNo).orElse(null);
+        if (order == null) {
+            return ResponseEntity.status(404).body(
+                    ApiResponse.<com.multiship.backend.dto.LabelStateDTO>builder()
+                            .status("error").code(404)
+                            .message("Order " + orderNo + " was not found.")
+                            .errorCode(com.multiship.backend.dto.ErrorCode.ORDER_NOT_FOUND.name())
+                            .timestamp(java.time.LocalDateTime.now())
+                            .build());
+        }
+
+        com.multiship.backend.model.OrderTracking tracking =
+                orderTrackingRepository.findByOrderNo(orderNo).orElse(null);
+        java.util.List<com.multiship.backend.model.LabelPackage> packages =
+                labelPackageRepositoryForDiag.findByOrderNoOrderBySequenceNumberAsc(orderNo);
+
+        // ── OrderState ─────────────────────────────────────────────────
+        String packagesJson = order.getPackagesJson();
+        com.multiship.backend.dto.LabelStateDTO.OrderState orderState =
+                com.multiship.backend.dto.LabelStateDTO.OrderState.builder()
+                        .packageCount(order.getPackageCount())
+                        .hasPackagesJson(packagesJson != null && !packagesJson.isBlank())
+                        .packagesJsonLength(packagesJson == null ? 0 : packagesJson.length())
+                        .source(order.getSource())
+                        .orderStatus(order.getOrderStatus())
+                        .isLabelGenerated(tracking != null && Boolean.TRUE.equals(tracking.getIsLabelGenerated()))
+                        .build();
+
+        // ── TrackingState ──────────────────────────────────────────────
+        com.multiship.backend.dto.LabelStateDTO.TrackingState trackingState = null;
+        if (tracking != null) {
+            String stored = tracking.getLabelFilePath();
+            trackingState = com.multiship.backend.dto.LabelStateDTO.TrackingState.builder()
+                    .status(tracking.getStatus())
+                    .trackingNumber(tracking.getTrackingNumber())
+                    .hasLabelFilePath(stored != null && !stored.isBlank())
+                    .labelFilePathLength(stored == null ? 0 : stored.length())
+                    .detectedFormat(sniffStoredArtifactFormat(stored))
+                    .build();
+        }
+
+        // ── PackageState per label_package row + resolver verdict ─────
+        java.util.List<com.multiship.backend.dto.LabelStateDTO.PackageState> pkgStates =
+                new java.util.ArrayList<>(packages.size());
+        java.util.List<Integer> unresolvableZpl = new java.util.ArrayList<>();
+        for (com.multiship.backend.model.LabelPackage p : packages) {
+            String stored = p.getLabelFilePath();
+            String detected = sniffStoredArtifactFormat(stored);
+            String zplVerdict = resolverVerdict(orderNo, p.getSequenceNumber(), "ZPL");
+            String pdfVerdict = resolverVerdict(orderNo, p.getSequenceNumber(), "PDF");
+            if (!"PRESENT".equals(zplVerdict)) unresolvableZpl.add(p.getSequenceNumber());
+            pkgStates.add(com.multiship.backend.dto.LabelStateDTO.PackageState.builder()
+                    .sequenceNumber(p.getSequenceNumber())
+                    .trackingNumber(p.getTrackingNumber())
+                    .hasLabelFilePath(stored != null && !stored.isBlank())
+                    .labelFilePathLength(stored == null ? 0 : stored.length())
+                    .detectedFormat(detected)
+                    .resolverOutcomeZpl(zplVerdict)
+                    .resolverOutcomePdf(pdfVerdict)
+                    .build());
+        }
+
+        // ── Derived: effectivePkgCount + missing sequences + verdict ──
+        int rowCount = packages.size();
+        int fromCount = order.getPackageCount() == null ? 0 : order.getPackageCount();
+        int effective = Math.max(1, Math.max(rowCount, fromCount));
+        java.util.Set<Integer> presentSeqs = new java.util.HashSet<>();
+        for (com.multiship.backend.model.LabelPackage p : packages) {
+            if (p.getSequenceNumber() != null) presentSeqs.add(p.getSequenceNumber());
+        }
+        java.util.List<Integer> missing = new java.util.ArrayList<>();
+        for (int i = 1; i <= effective; i++) if (!presentSeqs.contains(i)) missing.add(i);
+
+        String verdict = classifyMatrixState(effective, rowCount, unresolvableZpl.isEmpty());
+
+        com.multiship.backend.dto.LabelStateDTO.Derived derived =
+                com.multiship.backend.dto.LabelStateDTO.Derived.builder()
+                        .effectivePkgCount(effective)
+                        .labelPackageRowCount(rowCount)
+                        .missingSequences(missing)
+                        .unresolvableZplSequences(unresolvableZpl)
+                        .matrixVerdict(verdict)
+                        .build();
+
+        com.multiship.backend.dto.LabelStateDTO body =
+                com.multiship.backend.dto.LabelStateDTO.builder()
+                        .orderNo(orderNo)
+                        .order(orderState)
+                        .tracking(trackingState)
+                        .labelPackages(pkgStates)
+                        .derived(derived)
+                        .build();
+
+        return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.LabelStateDTO>builder()
+                .status("success").code(200)
+                .message("Label-state snapshot for order " + orderNo)
+                .data(body)
+                .timestamp(java.time.LocalDateTime.now())
+                .build());
+    }
+
+    /**
+     * Cheap format sniff on a stored {@code label_file_path} value. Does
+     * NOT fetch URLs (that would slow the diagnostic to carrier-latency);
+     * URL detection is purely by prefix. Returns:
+     * NONE | URL | ZPL | PDF | BASE64_UNKNOWN.
+     */
+    private static String sniffStoredArtifactFormat(String stored) {
+        if (stored == null || stored.isBlank()) return "NONE";
+        String trimmed = stored.trim();
+        String lower = trimmed.toLowerCase(java.util.Locale.ROOT);
+        if (lower.startsWith("http://") || lower.startsWith("https://")) return "URL";
+        if (trimmed.startsWith("^XA")) return "ZPL";
+        // Base64 sniff: decode first ~12 bytes to check magic.
+        try {
+            byte[] head = java.util.Base64.getDecoder().decode(
+                    trimmed.length() > 16 ? trimmed.substring(0, 16) : trimmed);
+            if (head.length >= 3 && head[0] == '^' && head[1] == 'X' && head[2] == 'A') return "ZPL";
+            if (head.length >= 5 && head[0] == '%' && head[1] == 'P' && head[2] == 'D'
+                    && head[3] == 'F' && head[4] == '-') return "PDF";
+            return "BASE64_UNKNOWN";
+        } catch (IllegalArgumentException notBase64) {
+            // Fall through — plain text that isn't ZPL/PDF.
+            return "BASE64_UNKNOWN";
+        }
+    }
+
+    /**
+     * Runs the actual {@link com.multiship.backend.service.LabelArtifactResolver}
+     * for one pkg + format and reports what it returned. This is EXACTLY
+     * what the composite endpoint sees at render time — no reinterpretation.
+     * Returns PRESENT when bytes are returned, or one of EMPTY_STORED |
+     * UNRESOLVABLE_FORMAT | FETCH_FAILED when Optional.empty().
+     */
+    private String resolverVerdict(Integer orderNo, Integer seq, String format) {
+        java.util.Optional<byte[]> out = labelArtifactResolver.resolveAsBytes(orderNo, format, seq);
+        if (out.isPresent()) return "PRESENT";
+        // We can't cheaply distinguish EMPTY_STORED / UNRESOLVABLE_FORMAT /
+        // FETCH_FAILED from Optional.empty alone — the resolver collapses all
+        // three to empty. The per-package PackageState.detectedFormat above
+        // gives the discriminating hint (NONE / URL / mismatched-format).
+        return "EMPTY";
+    }
+
+    /**
+     * Places the order into one of the matrix rows documented in
+     * project_label_preview_audit.md (states 1-6). Used by ops to skip
+     * reading the raw fields and go straight to a remediation.
+     */
+    private static String classifyMatrixState(int effectivePkgCount, int rowCount, boolean allResolvable) {
+        if (effectivePkgCount <= 1) return "STATE_6_SINGLE_PKG_NO_BUG";
+        if (rowCount == 0) return "STATE_5_NO_ROWS_FACSIMILE_ONLY";
+        if (rowCount < effectivePkgCount) return "STATE_4_MISSING_ROWS";
+        // rowCount >= effective at this point.
+        if (allResolvable) return "STATE_1_OR_2_OK";
+        return "STATE_3_ROW_PRESENT_BUT_BYTES_UNRESOLVABLE";
     }
 
     // ===== VALIDATION HELPERS =====

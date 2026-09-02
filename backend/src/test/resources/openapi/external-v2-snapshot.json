@@ -2776,6 +2776,21 @@
           }
         }
       },
+      "ChildTracking" : {
+        "type" : "object",
+        "properties" : {
+          "sequenceNumber" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "trackingNumber" : {
+            "type" : "string"
+          },
+          "trackingUrl" : {
+            "type" : "string"
+          }
+        }
+      },
       "ExternalTrackingResponse" : {
         "type" : "object",
         "properties" : {
@@ -2804,6 +2819,40 @@
           },
           "trackingUrl" : {
             "type" : "string"
+          },
+          "masterTrackings" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/MasterTracking"
+            }
+          },
+          "childTrackings" : {
+            "type" : "array",
+            "items" : {
+              "$ref" : "#/components/schemas/ChildTracking"
+            }
+          }
+        }
+      },
+      "MasterTracking" : {
+        "type" : "object",
+        "properties" : {
+          "batchSeq" : {
+            "type" : "integer",
+            "format" : "int32"
+          },
+          "carrierCode" : {
+            "type" : "string"
+          },
+          "masterTrackingNumber" : {
+            "type" : "string"
+          },
+          "masterTrackingUrl" : {
+            "type" : "string"
+          },
+          "packageCountInBatch" : {
+            "type" : "integer",
+            "format" : "int32"
           }
         }
       },
