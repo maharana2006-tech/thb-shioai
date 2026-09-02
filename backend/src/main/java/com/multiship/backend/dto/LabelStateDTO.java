@@ -90,6 +90,17 @@ public class LabelStateDTO {
         private String resolverOutcomeZpl;
         /** Same, but for "PDF". */
         private String resolverOutcomePdf;
+        /**
+         * PR #551 — whether {@link com.multiship.backend.service.ZebrashRenderer}
+         * can actually render the stored ZPL bytes to PNG. Discriminates
+         * between "bytes are present" (what {@code resolverOutcomeZpl} tells
+         * you) and "the render pipeline actually produces a PNG" (what the
+         * FE {@code <img>} tag will see). FedEx sandbox ZPL uses malformed
+         * {@code ^CF,0,0,0} commands that some renderers reject — bytes are
+         * PRESENT but zebrash returns null → FE falls back to facsimile.
+         * Values: RENDERABLE | RENDER_FAILED | SKIPPED (bytes absent).
+         */
+        private String zebrashOutcomeZpl;
     }
 
     @Data
