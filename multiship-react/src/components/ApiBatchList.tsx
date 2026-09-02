@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import { FiDownloadCloud, FiRefreshCw, FiZap } from 'react-icons/fi'
+import { FiDownloadCloud, FiInfo, FiRefreshCw, FiZap } from 'react-icons/fi'
 import { wmsService } from '../api/wmsService'
 import { orderImportService } from '../api/orderImportService'
 import type { ImportBatchSummary, OrderImportRow } from '../api/orderImportService'
@@ -417,46 +417,59 @@ export default function ApiBatchList() {
                                     ) : (
                                       <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
                                     )}
+                                    {/* ⓘ on the right — hover (or keyboard focus)
+                                        reveals every problem on the row in a rich
+                                        tooltip: field-tagged errors, the carrier
+                                        rejection, and advisory notes. Compact
+                                        replacement for the full-width strip. */}
+                                    {hasExplain ? (
+                                      <span className="group relative ml-1.5 inline-flex align-middle">
+                                        <button
+                                          type="button"
+                                          tabIndex={0}
+                                          aria-label={`Row ${r.rowNumber} issues`}
+                                          className={`inline-flex h-[18px] w-[18px] items-center justify-center rounded-full ring-1 transition ${
+                                            !ok || failed
+                                              ? 'bg-rose-100 text-rose-700 ring-rose-300 hover:bg-rose-200'
+                                              : 'bg-amber-100 text-amber-700 ring-amber-300 hover:bg-amber-200'
+                                          }`}
+                                        >
+                                          <FiInfo className="h-3 w-3" />
+                                        </button>
+                                        <span className="pointer-events-none absolute right-full top-1/2 z-30 mr-2 hidden w-80 -translate-y-1/2 rounded-xl border border-[#e3d9c4] bg-white p-2.5 shadow-xl group-hover:block group-focus-within:block">
+                                          <span className="block space-y-1">
+                                            {Object.entries(byField).flatMap(([field, msgs]) =>
+                                              msgs.map((m, i) => (
+                                                <span key={`${field}-${i}`} className="flex items-start gap-1.5 text-left text-[10px] leading-snug text-rose-700">
+                                                  <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">{field}</span>
+                                                  <span>{m}</span>
+                                                </span>
+                                              )),
+                                            )}
+                                            {rowLevel.map((m, i) => (
+                                              <span key={`row-${i}`} className="flex items-start gap-1.5 text-left text-[10px] leading-snug text-rose-700">
+                                                <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">row</span>
+                                                <span>{m}</span>
+                                              </span>
+                                            ))}
+                                            {failed && r.generatedMessage ? (
+                                              <span className="flex items-start gap-1.5 text-left text-[10px] leading-snug text-rose-700">
+                                                <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">carrier</span>
+                                                <span>{r.generatedMessage}</span>
+                                              </span>
+                                            ) : null}
+                                            {warnings.map((w, i) => (
+                                              <span key={`warn-${i}`} className="flex items-start gap-1.5 text-left text-[10px] leading-snug text-amber-700">
+                                                <span className="mt-[1px] shrink-0 rounded bg-amber-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-amber-800 ring-1 ring-amber-200">note</span>
+                                                <span>{w}</span>
+                                              </span>
+                                            ))}
+                                          </span>
+                                        </span>
+                                      </span>
+                                    ) : null}
                                   </td>
                                 </tr>
-                                {hasExplain ? (
-                                  /* WHY strip — same treatment as Import history:
-                                     every problem spelled out under the row, keyed
-                                     to its field, visible without hover. Sticky so
-                                     it stays readable during horizontal scroll. */
-                                  <tr className={failed || !ok ? 'bg-rose-50/70' : 'bg-amber-50/70'}>
-                                    <td colSpan={API_COLUMNS.length + 2} className="border-b border-[#f2ecdf] px-2 pb-1.5 pt-0.5">
-                                      <div className="sticky left-2 w-fit max-w-[820px] space-y-0.5">
-                                        {Object.entries(byField).flatMap(([field, msgs]) =>
-                                          msgs.map((m, i) => (
-                                            <p key={`${field}-${i}`} className="flex items-start gap-1.5 text-[10px] leading-snug text-rose-700">
-                                              <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">{field}</span>
-                                              <span>{m}</span>
-                                            </p>
-                                          )),
-                                        )}
-                                        {rowLevel.map((m, i) => (
-                                          <p key={`row-${i}`} className="flex items-start gap-1.5 text-[10px] leading-snug text-rose-700">
-                                            <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">row</span>
-                                            <span>{m}</span>
-                                          </p>
-                                        ))}
-                                        {failed && r.generatedMessage ? (
-                                          <p className="flex items-start gap-1.5 text-[10px] leading-snug text-rose-700">
-                                            <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">carrier</span>
-                                            <span>{r.generatedMessage}</span>
-                                          </p>
-                                        ) : null}
-                                        {warnings.map((w, i) => (
-                                          <p key={`warn-${i}`} className="flex items-start gap-1.5 text-[10px] leading-snug text-amber-700">
-                                            <span className="mt-[1px] shrink-0 rounded bg-amber-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-amber-800 ring-1 ring-amber-200">note</span>
-                                            <span>{w}</span>
-                                          </p>
-                                        ))}
-                                      </div>
-                                    </td>
-                                  </tr>
-                                ) : null}
                                 </Fragment>
                               )
                             })}
