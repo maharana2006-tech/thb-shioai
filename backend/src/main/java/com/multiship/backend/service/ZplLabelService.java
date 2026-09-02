@@ -60,6 +60,20 @@ public class ZplLabelService {
                              int pkgCount,
                              com.multiship.backend.dto.LabelPackageDTO perPkg) {
         CarrierProperties.ShipperDefaults shipper = carrierProperties.getShipper();
+        // Ship-from: the ORDER's resolved origin (persisted at generate time —
+        // the operator's sender or the client's warehouse), platform defaults
+        // only as a per-field fallback. Pre-fix the facsimile stamped the
+        // platform shipper on every label, printing a foreign origin — and,
+        // because the domestic/international check keyed off it, export
+        // paperwork (INCOTERMS/CI) — on plainly domestic shipments. The HTML
+        // label page already renders order.shipFrom*; the ZPL now matches it.
+        String sfName = firstNonBlank(order.getShipFromName(), shipper.getName());
+        String sfLine1 = firstNonBlank(order.getShipFromAddr1(), shipper.getAddressLine1());
+        String sfCity = firstNonBlank(order.getShipFromCity(), shipper.getCity());
+        String sfState = firstNonBlank(order.getShipFromState(), shipper.getState());
+        String sfZip = firstNonBlank(order.getShipFromZip(), shipper.getPostalCode());
+        String sfCountry = firstNonBlank(order.getShipFromCountryCd(), shipper.getCountryCode());
+        String sfPhone = firstNonBlank(order.getShipFromPhone(), shipper.getPhone());
 
         // Pkg count + index clamped once, reused for CAD, filename, and footer.
         int safeCount = Math.max(1, pkgCount);
@@ -130,7 +144,7 @@ public class ZplLabelService {
         // Domestic vs international — same customs territory (EU intra, EAEU
         // intra, GCC, SACU) counts as domestic so we don't print export
         // paperwork on parcels that don't cross a customs boundary.
-        String originCountryCode = shipper.getCountryCode() == null ? "" : shipper.getCountryCode().trim();
+        String originCountryCode = sfCountry == null ? "" : sfCountry.trim();
         String destCountryCode = order.getShiptoCountryCd() == null ? "" : order.getShiptoCountryCd().trim();
         boolean crossBorder = !destCountryCode.isEmpty() && !originCountryCode.isEmpty()
                 && !com.multiship.backend.util.CustomsTerritories.sameTerritory(originCountryCode, destCountryCode);
@@ -154,11 +168,11 @@ public class ZplLabelService {
             z.append("^CF0,28,28\n").append(text(24, 18, "INCOTERMS: DAP"));
         }
         z.append("^CF0,24,24\n");
-        z.append(text(30, 56, "ORIGIN ID:" + zpl(shipper.getState()) + zpl(shipper.getPostalCode()).substring(0, Math.min(2, zpl(shipper.getPostalCode()).length())) + "A  " + zpl(shipper.getPhone())));
-        z.append(text(30, 86, zpl(shipper.getName())));
-        z.append(text(30, 116, zpl(shipper.getAddressLine1())));
-        z.append(text(30, 172, zpl(shipper.getCity()) + ", " + zpl(shipper.getState()) + " " + zpl(shipper.getPostalCode()) + " " + zpl(shipper.getCountryCode())));
-        z.append(text(30, 202, "SIGN: " + zpl(shipper.getName())));
+        z.append(text(30, 56, "ORIGIN ID:" + zpl(sfState) + zpl(sfZip).substring(0, Math.min(2, zpl(sfZip).length())) + "A  " + zpl(sfPhone)));
+        z.append(text(30, 86, zpl(sfName)));
+        z.append(text(30, 116, zpl(sfLine1)));
+        z.append(text(30, 172, zpl(sfCity) + ", " + zpl(sfState) + " " + zpl(sfZip) + " " + zpl(sfCountry)));
+        z.append(text(30, 202, "SIGN: " + zpl(sfName)));
         z.append("^FO420,50^GB2,180,2^FS\n"); // column divider
         z.append(text(438, 56, "SHIP DATE: " + shipDate));
         z.append(text(438, 86, "ACTWGT: " + (effectiveWeight != null ? effectiveWeight : "-")
@@ -227,7 +241,7 @@ public class ZplLabelService {
             String pdf417Data = String.join("|",
                     zpl(trackingNumber), String.valueOf(order.getOrderNo()), zpl(order.getCustNo()),
                     zpl(recipient), city, state, zip, "US", serviceCode, shipDate,
-                    String.valueOf(order.getWeight()), zpl(shipper.getPostalCode()), formCode, meter);
+                    String.valueOf(order.getWeight()), zpl(sfZip), formCode, meter);
             z.append("^BY3\n");
             z.append("^FO36,").append(barTop).append("^B7N,6,5,5,,N^FD")
                     .append(pdf417Data).append("^FS\n");
