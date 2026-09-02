@@ -20,7 +20,7 @@ import AdvancedDataTable from './workspace/AdvancedDataTable'
 import AllOrdersHistory from './AllOrdersHistory'
 import OrderImportModal from './modals/OrderImportModal'
 import OrderDocumentsTable from './OrderDocumentsTable'
-import { GridCell, DH_COLUMNS, bucketRowErrors, type DhColumn } from './batchGrid'
+import { GridCell, DH_COLUMNS, RowIssuesIcon, bucketRowErrors, type DhColumn } from './batchGrid'
 import { notify } from '../utils/notify'
 import {
   orderImportService,
@@ -803,6 +803,18 @@ export default function DataHistoryPage() {
                               </span>
                             )}
                             {saving ? <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" /> : null}
+                            {/* Left ⓘ — sticky cell, so the issues stay one
+                                hover away at any horizontal scroll position. */}
+                            {hasExplain ? (
+                              <RowIssuesIcon
+                                side="left"
+                                rowNumber={r.rowNumber}
+                                byField={byField}
+                                rowLevel={rowLevel}
+                                carrierMessage={failed ? r.generatedMessage : null}
+                                warnings={warnings}
+                              />
+                            ) : null}
                           </div>
                         </td>
                         {DH_COLUMNS.map((c) => {
@@ -863,46 +875,18 @@ export default function DataHistoryPage() {
                           ) : (
                             <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
                           )}
+                          {hasExplain ? (
+                            <RowIssuesIcon
+                              side="right"
+                              rowNumber={r.rowNumber}
+                              byField={byField}
+                              rowLevel={rowLevel}
+                              carrierMessage={failed ? r.generatedMessage : null}
+                              warnings={warnings}
+                            />
+                          ) : null}
                         </td>
                       </tr>
-                      {hasExplain ? (
-                        /* WHY strip — every problem on the row spelled out in
-                           place, keyed to its field, instead of hiding in hover
-                           tooltips. The inner div is sticky so the text stays
-                           readable while the wide grid scrolls horizontally. */
-                        <tr className={failed || !ok ? 'bg-rose-50/70' : 'bg-amber-50/70'}>
-                          <td colSpan={DH_COLUMNS.length + 2} className="border-b border-[#f2ecdf] px-2 pb-1.5 pt-0.5">
-                            <div className="sticky left-2 w-fit max-w-[820px] space-y-0.5">
-                              {Object.entries(byField).flatMap(([field, msgs]) =>
-                                msgs.map((m, i) => (
-                                  <p key={`${field}-${i}`} className="flex items-start gap-1.5 text-[10px] leading-snug text-rose-700">
-                                    <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">{field}</span>
-                                    <span>{m}</span>
-                                  </p>
-                                )),
-                              )}
-                              {rowLevel.map((m, i) => (
-                                <p key={`row-${i}`} className="flex items-start gap-1.5 text-[10px] leading-snug text-rose-700">
-                                  <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">row</span>
-                                  <span>{m}</span>
-                                </p>
-                              ))}
-                              {failed && r.generatedMessage ? (
-                                <p className="flex items-start gap-1.5 text-[10px] leading-snug text-rose-700">
-                                  <span className="mt-[1px] shrink-0 rounded bg-rose-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-rose-800 ring-1 ring-rose-200">carrier</span>
-                                  <span>{r.generatedMessage}</span>
-                                </p>
-                              ) : null}
-                              {warnings.map((w, i) => (
-                                <p key={`warn-${i}`} className="flex items-start gap-1.5 text-[10px] leading-snug text-amber-700">
-                                  <span className="mt-[1px] shrink-0 rounded bg-amber-100 px-1 font-mono text-[8.5px] font-bold uppercase tracking-wide text-amber-800 ring-1 ring-amber-200">note</span>
-                                  <span>{w}</span>
-                                </p>
-                              ))}
-                            </div>
-                          </td>
-                        </tr>
-                      ) : null}
                       </Fragment>
                     )
                   })}

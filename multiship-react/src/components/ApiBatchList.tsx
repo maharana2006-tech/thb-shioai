@@ -1,11 +1,10 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import { FiDownloadCloud, FiRefreshCw, FiZap } from 'react-icons/fi'
-import IssuesInfoIcon, { type IssueItem } from './ui/IssuesInfoIcon'
 import { wmsService } from '../api/wmsService'
 import { orderImportService } from '../api/orderImportService'
 import type { ImportBatchSummary, OrderImportRow } from '../api/orderImportService'
 import { notify } from '../utils/notify'
-import { GridCell, DH_COLUMNS, bucketRowErrors, type DhColumn } from './batchGrid'
+import { GridCell, DH_COLUMNS, RowIssuesIcon, bucketRowErrors, type DhColumn } from './batchGrid'
 import { BTN_PRIMARY, BTN_GHOST, BTN_PRIMARY_SM } from './ui/buttons'
 
 /**
@@ -21,39 +20,6 @@ import { BTN_PRIMARY, BTN_GHOST, BTN_PRIMARY_SM } from './ui/buttons'
 // made international WMS rows UNFIXABLE: validation demanded hsCode /
 // countryOfOrigin / item fields the grid gave you no way to enter.
 const API_COLUMNS: DhColumn[] = DH_COLUMNS
-
-/** Builds the shared ⓘ tooltip's item list from a batch row's problems and
- *  renders it via {@link IssuesInfoIcon} — used on BOTH ends of a problem row. */
-function RowIssuesIcon({
-  side,
-  rowNumber,
-  byField,
-  rowLevel,
-  carrierMessage,
-  warnings,
-}: {
-  side: 'left' | 'right'
-  rowNumber: number
-  byField: Record<string, string[]>
-  rowLevel: string[]
-  carrierMessage?: string | null
-  warnings: string[]
-}) {
-  const items: IssueItem[] = [
-    ...Object.entries(byField).flatMap(([field, msgs]) => msgs.map((m) => ({ tag: field, text: m }))),
-    ...rowLevel.map((m) => ({ tag: 'row', text: m })),
-    ...(carrierMessage ? [{ tag: 'carrier', text: carrierMessage }] : []),
-    ...warnings.map((w) => ({ tag: 'note', text: w, tone: 'warn' as const })),
-  ]
-  return (
-    <IssuesInfoIcon
-      side={side}
-      ariaLabel={`Row ${rowNumber} issues`}
-      items={items}
-      className={side === 'right' ? 'ml-1.5' : ''}
-    />
-  )
-}
 
 const fmtDateTime = (v?: string | null) =>
   v

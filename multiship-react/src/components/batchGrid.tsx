@@ -7,6 +7,43 @@
 // dev workflow here).
 import { useEffect, useRef, useState } from 'react'
 
+import IssuesInfoIcon, { type IssueItem } from './ui/IssuesInfoIcon'
+
+/** Builds the shared ⓘ tooltip's item list from a batch row's problems and
+ *  renders it via IssuesInfoIcon — used on BOTH ends of a problem row in the
+ *  Import-history and API (WMS) grids. */
+export function RowIssuesIcon({
+  side,
+  rowNumber,
+  byField,
+  rowLevel,
+  carrierMessage,
+  warnings,
+}: {
+  side: 'left' | 'right'
+  rowNumber: number
+  byField: Record<string, string[]>
+  rowLevel: string[]
+  carrierMessage?: string | null
+  warnings: string[]
+}) {
+  const items: IssueItem[] = [
+    ...Object.entries(byField).flatMap(([field, msgs]) => msgs.map((m) => ({ tag: field, text: m }))),
+    ...rowLevel.map((m) => ({ tag: 'row', text: m })),
+    ...(carrierMessage ? [{ tag: 'carrier', text: carrierMessage }] : []),
+    ...warnings.map((w) => ({ tag: 'note', text: w, tone: 'warn' as const })),
+  ]
+  return (
+    <IssuesInfoIcon
+      side={side}
+      ariaLabel={`Row ${rowNumber} issues`}
+      items={items}
+      className={side === 'right' ? 'ml-1.5' : ''}
+    />
+  )
+}
+
+
 /**
  * Shared primitives for the import/API batch spreadsheet grid — the editable
  * cell, the column model, and the error→field bucketing. Extracted so both
