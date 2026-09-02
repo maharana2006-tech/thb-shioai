@@ -151,6 +151,12 @@ export type ResolutionScenario =
   | 'CLIENT_MISSING'
   | 'CLIENT_INACTIVE'
   | 'NO_DEFAULT'
+  // Dev's f047c80 ("nine defects from Orders-section E2E reports") added
+  // FAILED + VOIDED cases in AccountScenarioBadge.tsx without extending
+  // this union — the TS build broke at the switch statement. Adding
+  // them here to close the loop.
+  | 'FAILED'
+  | 'VOIDED'
 
 export interface OrderAccountResolution {
   orderNo: number
