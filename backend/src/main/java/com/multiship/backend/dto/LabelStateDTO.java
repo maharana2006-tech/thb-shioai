@@ -43,7 +43,7 @@ public class LabelStateDTO {
     @AllArgsConstructor
     public static class OrderState {
         private Integer packageCount;
-        /** True when {@code label_batch.packages_json} is populated (V32). */
+        /** True when {@code label_batch.packages_json} is populated (V33). */
         private boolean hasPackagesJson;
         /** Character length of packages_json when present (0 when NULL). */
         private int packagesJsonLength;

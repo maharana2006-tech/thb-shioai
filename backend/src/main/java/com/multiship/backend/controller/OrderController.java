@@ -66,7 +66,7 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
 
-    // Diagnostic /label-state endpoint reads Order.packagesJson (added V32)
+    // Diagnostic /label-state endpoint reads Order.packagesJson (added V33)
     // and per-package labelFilePath rows directly. Adding these repos here
     // rather than pushing the logic into OrderService — this is diagnostic-
     // only, no reuse, no business logic worth abstracting.
@@ -1314,7 +1314,7 @@ public class OrderController {
      *
      * <ul>
      *   <li>{@code order} — Order.packageCount, packagesJson presence
-     *       (V32), source, order status, tracking's isLabelGenerated</li>
+     *       (V33), source, order status, tracking's isLabelGenerated</li>
      *   <li>{@code tracking} — OrderTracking.labelFilePath presence +
      *       detected format via magic-byte sniff</li>
      *   <li>{@code labelPackages} — per label_package row: seq, tracking,

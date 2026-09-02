@@ -515,7 +515,7 @@ public class CarrierServiceImpl implements CarrierService {
         }
 
         CarrierConnector connector;
-        // V32 — swapped from bare ShipmentResult to AutoShipmentAttempt so
+        // V33 — swapped from bare ShipmentResult to AutoShipmentAttempt so
         // the persistence block below can iterate sub-requests + results
         // (mirrors generateManualLabel). The .master() accessor returns
         // the first-batch ShipmentResult that OrderTracking has always
@@ -597,7 +597,7 @@ public class CarrierServiceImpl implements CarrierService {
         tracking.setUpdatedAt(LocalDateTime.now());
         orderTrackingRepository.save(tracking);
 
-        // V32 (issue #545) — persist per-piece label_package + per-batch
+        // V33 (issue #545) — persist per-piece label_package + per-batch
         // shipment_batch rows so the auto path reaches feature-parity with
         // generateManualLabel. Without this, a 2-pkg regenerate via the
         // auto path would carrier-side succeed but the FE would still see
@@ -630,12 +630,12 @@ public class CarrierServiceImpl implements CarrierService {
     }
 
     /**
-     * V32 — per-piece label + per-batch shipment persistence for the auto
+     * V33 — per-piece label + per-batch shipment persistence for the auto
      * (Order-based) label path. Mirrors the block in
      * {@link #generateManualLabel} at ~line 1358-1428; extracted so both
      * paths stay in sync going forward. No-op when the request was truly
      * single-package (no packages[] on shipmentRequest AND response has
-     * no per-piece entries) — that's back-compat with pre-V32 shape and
+     * no per-piece entries) — that's back-compat with pre-V33 shape and
      * avoids creating a spurious 1-row label_package for orders that
      * genuinely have nothing per-box to say.
      */
@@ -731,7 +731,7 @@ public class CarrierServiceImpl implements CarrierService {
         }
 
         // Reconcile Order.packageCount to the actual persisted count. Pre-
-        // V32 this was frozen at whatever generateManualLabel wrote at
+        // V33 this was frozen at whatever generateManualLabel wrote at
         // order-creation time; the auto path never updated it even when the
         // regenerated shipment differed. Now the FE picker + composite
         // loop bound (OrderController.effectivePkgCount) both see truth.
@@ -1324,7 +1324,7 @@ public class CarrierServiceImpl implements CarrierService {
                             && shipmentRequest.getPackages() != null
                             ? Math.max(1, shipmentRequest.getPackages().size())
                             : 1);
-                    // V32 — persist the intended packages payload on the
+                    // V33 — persist the intended packages payload on the
                     // failed row too, so the auto path's retry has the
                     // per-box dims/weights it needs to rebuild a
                     // multi-package request.
@@ -1488,10 +1488,10 @@ public class CarrierServiceImpl implements CarrierService {
         order.setPackageCount(shipmentRequest.getPackages() != null
                 ? Math.max(1, shipmentRequest.getPackages().size())
                 : 1);
-        // V32 — persist the intended packages payload so the auto path
+        // V33 — persist the intended packages payload so the auto path
         // (POST /orders/{n}/label) can reconstruct the multi-box
         // shipment on retry / regenerate. Null on single-box legacy
-        // (matches the pre-V32 shape).
+        // (matches the pre-V33 shape).
         order.setPackagesJson(serializePackagesJson(shipmentRequest.getPackages()));
         // Per-shipment importer/broker override (does NOT touch the client's saved profile).
         if (req.getImporter() != null || req.getBroker() != null) {
@@ -1759,7 +1759,7 @@ public class CarrierServiceImpl implements CarrierService {
 
     /** One shipment attempt against a resolved account; throws on carrier failure. */
     /**
-     * V32 — attempt result carries both the sub-request list and their
+     * V33 — attempt result carries both the sub-request list and their
      * results so the caller ({@link #generateLabel}) can persist per-batch +
      * per-piece rows in the same shape {@link #generateManualLabel} already
      * uses. {@code shipmentRequest} is the FULL request pre-split (needed
@@ -1891,11 +1891,11 @@ public class CarrierServiceImpl implements CarrierService {
             }
         }
 
-        // V32 (issue #545) — mirror generateManualLabel's split-and-loop
+        // V33 (issue #545) — mirror generateManualLabel's split-and-loop
         // shape so the auto path handles multi-box orders that exceed the
         // per-request carrier cap. Common case (pkg count fits in one
         // carrier call) resolves to a 1-element sub-request list and
-        // carrier is called exactly once — no behavior change vs pre-V32
+        // carrier is called exactly once — no behavior change vs pre-V33
         // for single-box orders. The multi-pkg case now works because
         // shipmentRequest.packages is populated from label_batch.
         // packages_json (see buildShipmentRequest / issue #545).
@@ -2401,9 +2401,9 @@ public class CarrierServiceImpl implements CarrierService {
             new com.fasterxml.jackson.databind.ObjectMapper();
 
     /**
-     * V32 — serialise the intended packages payload for {@code label_batch.
+     * V33 — serialise the intended packages payload for {@code label_batch.
      * packages_json}. Returns {@code null} for null/empty input so the
-     * column stays NULL on single-box legacy orders (matching pre-V32
+     * column stays NULL on single-box legacy orders (matching pre-V33
      * behavior). Serialisation failures degrade to null with a warn log
      * rather than blowing up the label call — the auto-path fallback
      * still works from Order-scalar fields.
@@ -2420,7 +2420,7 @@ public class CarrierServiceImpl implements CarrierService {
     }
 
     /**
-     * V32 — deserialise {@code label_batch.packages_json} back into per-box
+     * V33 — deserialise {@code label_batch.packages_json} back into per-box
      * DTOs for the auto label path. Returns an empty list for null/blank
      * (auto path treats that as "no per-box data; use Order scalars").
      * Malformed JSON is logged and returned as empty rather than
@@ -2812,7 +2812,7 @@ public class CarrierServiceImpl implements CarrierService {
                 .labelImageType(defaults.labelImageType())
                 .labelStockType(defaults.labelStockType())
                 .intl(intlBlock)
-                // V32 (issue #545) — thread the intended per-box packages
+                // V33 (issue #545) — thread the intended per-box packages
                 // when the order was created as multi-box. Read from
                 // label_batch.packages_json, populated by
                 // generateManualLabel (both success + error paths). Null

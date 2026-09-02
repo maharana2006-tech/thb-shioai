@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * the composite loop used {@code Order.packageCount} alone, so when the
  * write path left {@code packageCount=1} but {@code label_package} had
  * 2 rows (regenerate stomp path — see {@code CarrierServiceImpl} error-
- * path pre-V32), the FE picker showed "1 of 2" but the BE composite only
+ * path pre-V33), the FE picker showed "1 of 2" but the BE composite only
  * looped once. This helper matches the FE's own signal at
  * {@code LabelDocumentPage.tsx:449-451} so picker + composite agree.
  */
