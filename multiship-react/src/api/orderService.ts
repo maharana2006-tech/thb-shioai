@@ -588,7 +588,38 @@ export interface TrackingResponseDTO {
   currentLocation: string | null
   estimatedDelivery: string | null
   events: TrackingEventDTO[]
-  source: 'LIVE' | 'CACHE' | 'STUB'
+  /**
+   * Audit L1 (PR #553) — 'RATE_LIMITED' added so the FE can show a
+   * distinct backoff badge instead of the generic "carrier is down"
+   * treatment for STUB. Pre-#553 a 429 silently degraded to STUB.
+   */
+  source: 'LIVE' | 'CACHE' | 'STUB' | 'RATE_LIMITED'
+  /** Audit L1 — carrier-supplied Retry-After hint (seconds). Non-null only when source=RATE_LIMITED. */
+  retryAfterSeconds?: number | null
+  /**
+   * Audit L2 (PR #553) — per-batch master tracking, mirroring the
+   * external v2 shape from PR #548. Populated for multi-package
+   * shipments; empty on single-pkg / pre-Sprint-48 legacy orders.
+   */
+  masterTrackings?: TrackingMasterInfo[] | null
+  /** Audit L2 — per-piece children ordered by sequenceNumber. */
+  childTrackings?: TrackingChildInfo[] | null
+}
+
+/** PR #553 — one entry per shipment_batch on the live-tracking payload. */
+export interface TrackingMasterInfo {
+  batchSeq?: number | null
+  carrierCode?: string | null
+  masterTrackingNumber?: string | null
+  masterTrackingUrl?: string | null
+  packageCountInBatch?: number | null
+}
+
+/** PR #553 — one entry per label_package on the live-tracking payload. */
+export interface TrackingChildInfo {
+  sequenceNumber?: number | null
+  trackingNumber?: string | null
+  trackingUrl?: string | null
 }
 
 // ===== Order Service =====

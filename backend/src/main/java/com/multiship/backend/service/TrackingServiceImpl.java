@@ -59,6 +59,21 @@ public class TrackingServiceImpl implements TrackingService {
     private final OrderRepository orderRepository;
     private final TenantScopeEnforcer tenantScope;
 
+    /**
+     * Audit L2 — populate masterTrackings[] + childTrackings[] on the
+     * response, matching the external v2 shape from PR #548. Optional
+     * (@Autowired required=false) so pure-Mockito tests that don't wire
+     * these deps still construct — helpers null-check and degrade to
+     * empty lists (matches pre-audit shape). See
+     * feedback_lombok_constructor_arg_order.md for why this isn't a
+     * constructor arg.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ShipmentBatchRepository shipmentBatchRepositoryForTracking;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.LabelPackageRepository labelPackageRepositoryForTracking;
+
     private final Cache<String, CacheEntry> cache = Caffeine.newBuilder()
             .maximumSize(MAX_ENTRIES)
             .expireAfterWrite(CACHE_TTL_DELIVERED)
@@ -122,7 +137,7 @@ public class TrackingServiceImpl implements TrackingService {
             // the 1-arg trackShipment. The UI can still show the tracking
             // link even without live events.
             CarrierConnector.TrackingResult stub = connector.trackShipment(trackingNumber);
-            TrackingResponseDTO dto = toDto(stub, canonicalCarrier, "STUB");
+            TrackingResponseDTO dto = withMpsTopology(toDto(stub, canonicalCarrier, "STUB"), orderNo);
             return success(dto, "No live credentials for " + canonicalCarrier
                     + " — returning the URL-only stub.");
         }
@@ -135,26 +150,81 @@ public class TrackingServiceImpl implements TrackingService {
             log.warn("Token acquisition for {} failed while tracking {}: {}",
                     canonicalCarrier, trackingNumber, ex.getMessage());
             CarrierConnector.TrackingResult stub = connector.trackShipment(trackingNumber);
-            TrackingResponseDTO dto = toDto(stub, canonicalCarrier, "STUB");
+            TrackingResponseDTO dto = withMpsTopology(toDto(stub, canonicalCarrier, "STUB"), orderNo);
             return success(dto, "Live token unavailable — URL-only stub returned.");
         }
 
         CarrierConnector.TrackingResult result;
         try {
             result = connector.trackShipment(trackingNumber, accessToken, account.getEnvironment());
+        } catch (com.multiship.backend.service.carriers.exceptions.CarrierRateLimitException rle) {
+            // Audit L1 — distinguish "carrier is throttling me" from "carrier
+            // is unavailable". Pre-fix this fell into the generic catch and
+            // silently degraded to STUB — partners could not tell backoff
+            // was required. Now emits source=RATE_LIMITED with the carrier's
+            // Retry-After hint so the FE / partner can schedule its next
+            // poll properly.
+            log.info("Live tracking for {} rate-limited at {} (retry-after={}s)",
+                    trackingNumber, canonicalCarrier, rle.getRetryAfterSeconds());
+            CarrierConnector.TrackingResult stub = connector.trackShipment(trackingNumber);
+            TrackingResponseDTO dto = withMpsTopology(toDto(stub, canonicalCarrier, "RATE_LIMITED"), orderNo)
+                    .toBuilder()
+                    .retryAfterSeconds(rle.getRetryAfterSeconds())
+                    .build();
+            return success(dto, "Carrier is rate-limiting requests"
+                    + (rle.getRetryAfterSeconds() != null
+                            ? " — retry after " + rle.getRetryAfterSeconds() + "s." : "."));
         } catch (Exception ex) {
             log.warn("Live tracking for {} failed at {}: {}",
                     trackingNumber, canonicalCarrier, ex.getMessage());
             CarrierConnector.TrackingResult stub = connector.trackShipment(trackingNumber);
-            return success(toDto(stub, canonicalCarrier, "STUB"), "Live tracking call failed.");
+            return success(withMpsTopology(toDto(stub, canonicalCarrier, "STUB"), orderNo),
+                    "Live tracking call failed.");
         }
 
-        TrackingResponseDTO dto = toDto(result, canonicalCarrier, "LIVE");
-        // Cache LIVE results only — STUB responses are already cheap.
+        TrackingResponseDTO dto = withMpsTopology(toDto(result, canonicalCarrier, "LIVE"), orderNo);
+        // Cache LIVE results only — STUB / RATE_LIMITED responses are already cheap.
         cache.put(trackingNumber, new CacheEntry(dto,
                 dto.getDelivered() != null && dto.getDelivered()
                         ? CACHE_TTL_DELIVERED : CACHE_TTL_ACTIVE));
         return success(dto, "Live tracking checked.");
+    }
+
+    /**
+     * Audit L2 — enrich the DTO with per-batch master + per-piece child
+     * arrays. Matches the external v2 shape from PR #548 so internal FE
+     * (TrackingTimelineModal) can show per-piece context. No-op when the
+     * repos aren't wired (pure-Mockito tests) or the order isn't multi-
+     * package (empty lists preserve the pre-audit shape).
+     */
+    private TrackingResponseDTO withMpsTopology(TrackingResponseDTO dto, Integer orderNo) {
+        if (dto == null || orderNo == null) return dto;
+        java.util.List<TrackingResponseDTO.MasterTracking> masters = java.util.List.of();
+        java.util.List<TrackingResponseDTO.ChildTracking> children = java.util.List.of();
+        if (shipmentBatchRepositoryForTracking != null) {
+            masters = shipmentBatchRepositoryForTracking.findByOrderNoOrderByBatchSeqAsc(orderNo).stream()
+                    .map(b -> TrackingResponseDTO.MasterTracking.builder()
+                            .batchSeq(b.getBatchSeq())
+                            .carrierCode(b.getCarrierCode())
+                            .masterTrackingNumber(b.getMasterTrackingNumber())
+                            .masterTrackingUrl(b.getMasterTrackingUrl())
+                            .packageCountInBatch(b.getPackageCountInBatch())
+                            .build())
+                    .toList();
+        }
+        if (labelPackageRepositoryForTracking != null) {
+            children = labelPackageRepositoryForTracking.findByOrderNoOrderBySequenceNumberAsc(orderNo).stream()
+                    .map(p -> TrackingResponseDTO.ChildTracking.builder()
+                            .sequenceNumber(p.getSequenceNumber())
+                            .trackingNumber(p.getTrackingNumber())
+                            .trackingUrl(p.getTrackingUrl())
+                            .build())
+                    .toList();
+        }
+        return dto.toBuilder()
+                .masterTrackings(masters)
+                .childTrackings(children)
+                .build();
     }
 
     /**
