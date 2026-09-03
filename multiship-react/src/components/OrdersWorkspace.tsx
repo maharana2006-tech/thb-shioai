@@ -33,7 +33,8 @@ import { summarizeCarrierError } from '../utils/carrierErrorMap'
 import { clientService } from '../api/clientService'
 import type { CarrierAccountRef, OrderAccountResolution } from '../api/accountRefService'
 import AccountScenarioBadge from './workspace/AccountScenarioBadge'
-import OrderStatusBadge from './workspace/OrderStatusBadge'
+// PR #555 — inline compact status dot+label supersedes OrderStatusBadge.
+// import OrderStatusBadge from './workspace/OrderStatusBadge'
 import AdvancedDataTable from './workspace/AdvancedDataTable'
 // Bundle audit #434 follow-up: modals are only rendered behind
 // `xxxOpen ?` guards, so React.lazy defers each chunk fetch until an
@@ -757,6 +758,20 @@ export default function OrdersWorkspace() {
       ? new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       : '—'
 
+  // PR #555 — auto-hide low-signal columns (Ref #, Batch) when every row on
+  // the current page has an empty value. Consumed as `initialHiddenColumns`
+  // on <AdvancedDataTable> so tenants that don't feed these fields don't see
+  // a permanently-dashed column. This runs on data change but only affects
+  // FIRST-load default visibility; once a user toggles the column menu,
+  // their preference persists in localStorage and wins over this default.
+  const autoHiddenColumns = useMemo<string[]>(() => {
+    if (!rows.length) return []
+    const hidden: string[] = []
+    if (rows.every((r) => !r.orderDetails.refOrderNumber)) hidden.push('refOrderNumber')
+    if (rows.every((r) => r.orderDetails.batchId == null)) hidden.push('batchId')
+    return hidden
+  }, [rows])
+
   // ── Sprint 51 migration — column defs feed into the shared AdvancedDataTable.
   // Column `id`s that match sortKey names (`orderNo`, `customer`, `city`,
   // `status`, `createdDate`, `tracking`, `generatedAt`) let TanStack's sorting
@@ -804,6 +819,9 @@ export default function OrdersWorkspace() {
       id: 'orderNo',
       accessorFn: (o) => o.orderDetails.orderNo,
       header: 'Order #',
+      // PR #555 — explicit sizes so table-layout: fixed can allocate space
+      // predictably instead of react-table's 160-default per column.
+      size: 96,
       cell: ({ row }) => (
         <span className="font-mono text-[12.5px] font-bold tabular-nums text-[#1f150c]">
           #{row.original.orderDetails.orderNo}
@@ -819,6 +837,7 @@ export default function OrdersWorkspace() {
       id: 'customer',
       accessorFn: (o) => o.orderDetails.customerCode,
       header: 'Client',
+      size: 96,
       cell: ({ row }) => (
         <span className="block truncate font-mono text-[12px] font-semibold text-[#5a4526]">
           {row.original.orderDetails.customerCode}
@@ -833,21 +852,31 @@ export default function OrdersWorkspace() {
     defs.push({
       id: 'source',
       accessorFn: (o) => o.orderDetails.source ?? 'API',
-      header: 'Source',
+      header: 'Src',
       enableSorting: false,
+      // PR #555 compaction: single-letter chip (M/A/B) with title-tooltip.
+      // Server folds WMS/ERP/legacy into API; only MANUAL/BULK/API reach here.
+      // Full label preserved on hover — icon-only style saves ~60px vs the
+      // previous "MANUAL" / "BULK" / "API" pill.
+      size: 44,
       cell: ({ row }) => {
-        // Server folds WMS/ERP/legacy into API; only MANUAL/BULK/API reach here.
         const s = (row.original.orderDetails.source || 'API').toUpperCase()
         const tone: Record<string, string> = {
           MANUAL: 'bg-amber-50 text-amber-700 ring-amber-200',
           API: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
           BULK: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
         }
+        const label: Record<string, string> = {
+          MANUAL: 'Manual — created via /orders/new',
+          API: 'API — imported via external partner / WMS',
+          BULK: 'Bulk — imported via CSV/Excel',
+        }
         return (
           <span
-            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone[s] || tone.API}`}
+            title={label[s] || 'Order source'}
+            className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ring-1 ${tone[s] || tone.API}`}
           >
-            {s}
+            {s.charAt(0)}
           </span>
         )
       },
@@ -860,14 +889,15 @@ export default function OrdersWorkspace() {
     defs.push({
       id: 'channel',
       accessorFn: (o) => o.orderDetails.channel ?? '',
-      header: 'Channel',
+      header: 'Ch',
       enableSorting: false,
+      // PR #555 compaction — single-letter chip (D/B) with tooltip.
+      // Orders predating classification carry null — render a dash.
+      size: 44,
       cell: ({ row }) => {
-        // D2C/B2B, classified at persist time. Orders predating the
-        // classification carry null — render a quiet dash, never a guess.
         const c = (row.original.orderDetails.channel || '').toUpperCase()
         if (c !== 'D2C' && c !== 'B2B') {
-          return <span className="text-slate-300">—</span>
+          return <span title="Channel not classified for this order" className="text-slate-300">—</span>
         }
         const tone =
           c === 'B2B'
@@ -875,13 +905,10 @@ export default function OrdersWorkspace() {
             : 'bg-sky-50 text-sky-700 ring-sky-200'
         return (
           <span
-            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${tone}`}
-            // Value-only wording: the API doesn't expose WHY the channel was
-            // chosen (explicit override vs heuristic), so asserting a cause
-            // here told auditors the wrong story on overridden orders.
             title={c === 'B2B' ? 'B2B — business-to-business shipment' : 'D2C — direct-to-consumer shipment'}
+            className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ring-1 ${tone}`}
           >
-            {c}
+            {c.charAt(0)}
           </span>
         )
       },
@@ -894,8 +921,12 @@ export default function OrdersWorkspace() {
     defs.push({
       id: 'refOrderNumber',
       accessorFn: (o) => o.orderDetails.refOrderNumber ?? '',
-      header: 'Ref Order #',
+      header: 'Ref #',
       enableSorting: false,
+      // PR #555 — auto-hidden when all rows on the current page have an
+      // empty refOrderNumber (see hiddenColumnsOnEmpty below). Users who
+      // deliberately want it visible can toggle via the column menu.
+      size: 90,
       cell: ({ row }) => (
         <span
           className="block truncate font-mono text-[12px] text-[#5a4526]"
@@ -905,7 +936,7 @@ export default function OrdersWorkspace() {
         </span>
       ),
       meta: {
-        headerLabel: 'Ref Order #',
+        headerLabel: 'Ref #',
         exportValue: (o: Order) => o.orderDetails.refOrderNumber ?? '',
       },
     })
@@ -915,6 +946,9 @@ export default function OrdersWorkspace() {
       accessorFn: (o) => o.orderDetails.batchId ?? '',
       header: 'Batch',
       enableSorting: false,
+      // PR #555 — auto-hidden when all rows on the current page have an
+      // empty batchId.
+      size: 72,
       cell: ({ row }) => (
         <span className="block truncate font-mono text-[12px] text-[#5a4526]">
           {row.original.orderDetails.batchId ?? <span className="text-[#b3a583]">—</span>}
@@ -929,12 +963,35 @@ export default function OrdersWorkspace() {
     defs.push({
       id: 'city',
       accessorFn: (o) => formatDestination(o.shippingDetails.city, o.shippingDetails.state),
-      header: 'Destination',
+      header: 'Dest',
+      // PR #555 compaction — cell shows "NJ · 07728" (state + zip), tooltip
+      // carries the full address block (recipient name + street + city +
+      // state + zip + country). Country implicit ~90% traffic; if you need
+      // it, hover. Sort-key still on the underlying city, state so ordering
+      // is unchanged.
+      size: 110,
       cell: ({ row }) => {
-        const dest = formatDestination(row.original.shippingDetails.city, row.original.shippingDetails.state)
+        const s = row.original.shippingDetails
+        // Cell body — state + zip. Fall back to city if state missing.
+        const cellText = s.state && s.zipCode
+          ? `${s.state} · ${s.zipCode}`
+          : s.state
+            ? s.state
+            : s.city
+              ? s.city
+              : '—'
+        // Tooltip = "City, ST ZIP" (full destination) — the only address
+        // fields the /orders list endpoint exposes today. If ShippingDetails
+        // grows recipient / street fields in a future DTO refresh, this
+        // tooltip should expand to a multi-line address block.
+        const tooltipParts = [s.city, s.state, s.zipCode].filter(Boolean)
+        const tooltip = tooltipParts.length > 0 ? tooltipParts.join(' ') : 'No destination on file'
         return (
-          <span className="block truncate text-[12.5px] text-[#3f3527]" title={dest}>
-            {dest}
+          <span
+            className="block truncate text-[12.5px] tabular-nums text-[#3f3527]"
+            title={tooltip}
+          >
+            {cellText}
           </span>
         )
       },
@@ -949,16 +1006,33 @@ export default function OrdersWorkspace() {
         id: 'status',
         accessorFn: (o) => o.labelDetails.status,
         header: 'Status',
+        // PR #555 compaction — colored dot + short 4-char label (GEN /
+        // PEND / ERR / VOID) with full status on tooltip. IssuesInfoIcon
+        // still displayed on ERROR with the humanized carrier reason so
+        // ops can hover once for the full picture. This is also why the
+        // dedicated "Failure reason" column is gone in the failed view —
+        // it's fully surfaced here.
+        size: 72,
         cell: ({ row }) => {
+          const raw = (row.original.labelDetails.status || 'UNKNOWN').toUpperCase()
           const err = row.original.errorDetails?.errorMessage
-          const isError = (row.original.labelDetails.status || '').toUpperCase() === 'ERROR'
+          const map: Record<string, { short: string; dot: string; label: string }> = {
+            GENERATED: { short: 'GEN', dot: 'bg-emerald-500', label: 'Generated — label created and billed' },
+            PENDING: { short: 'PEND', dot: 'bg-amber-500', label: 'Pending — label not yet generated' },
+            ERROR: { short: 'ERR', dot: 'bg-rose-500', label: 'Error — hover the ⓘ for the carrier reason' },
+            VOIDED: { short: 'VOID', dot: 'bg-slate-400', label: 'Voided — shipment cancelled' },
+          }
+          const entry = map[raw] || { short: raw.slice(0, 4), dot: 'bg-slate-300', label: raw }
           return (
             <span className="inline-flex items-center gap-1.5">
-              <OrderStatusBadge status={row.original.labelDetails.status} />
-              {/* ⓘ next to an ERROR badge — hover/focus shows the full
-                  humanized failure reason (the truncated inline text it
-                  replaces cut most messages off at 220px). */}
-              {isError && err ? (
+              <span
+                title={entry.label}
+                className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-700 ring-1 ring-slate-200"
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${entry.dot}`} />
+                {entry.short}
+              </span>
+              {raw === 'ERROR' && err ? (
                 <IssuesInfoIcon
                   side="left"
                   ariaLabel={`Order ${row.original.orderDetails.orderNo} error`}
@@ -977,8 +1051,12 @@ export default function OrdersWorkspace() {
         id: 'createdDate',
         accessorFn: (o) => o.orderDetails.createdDate ?? '',
         header: 'Created',
+        size: 100,
         cell: ({ row }) => (
-          <span className="whitespace-nowrap text-[12px] text-[#8a7959]">
+          <span
+            className="whitespace-nowrap text-[12px] text-[#8a7959]"
+            title={row.original.orderDetails.createdDate || 'unknown creation date'}
+          >
             {formatCreated(row.original.orderDetails.createdDate)}
           </span>
         ),
@@ -993,15 +1071,31 @@ export default function OrdersWorkspace() {
       defs.push({
         id: 'tracking',
         accessorFn: (o) => o.labelDetails.trackingNumber ?? '',
-        header: 'Tracking',
-        cell: ({ row }) => (
-          <span
-            className="block truncate font-mono text-[12px] text-[#5a4526]"
-            title={row.original.labelDetails.trackingNumber || undefined}
-          >
-            {row.original.labelDetails.trackingNumber || '—'}
-          </span>
-        ),
+        header: 'Track',
+        // PR #555 compaction — last-4-digits chip (…6784) with the full
+        // tracking number on hover + click-to-open the carrier tracking
+        // URL. Saves ~120px vs the previous "1Z999AA10123456784" full
+        // number cell.
+        size: 78,
+        cell: ({ row }) => {
+          const tn = row.original.labelDetails.trackingNumber
+          const url = row.original.labelDetails.trackingUrl
+          if (!tn) return <span className="text-[#b3a583]">—</span>
+          const last4 = tn.length > 4 ? tn.slice(-4) : tn
+          const chip = (
+            <span
+              title={`Tracking ${tn}${url ? '\n(click to open carrier page)' : ''}`}
+              className="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-sky-800 ring-1 ring-sky-200"
+            >
+              …{last4}
+            </span>
+          )
+          return url ? (
+            <a href={url} target="_blank" rel="noreferrer" className="inline-block hover:opacity-80">
+              {chip}
+            </a>
+          ) : chip
+        },
         meta: {
           headerLabel: 'Tracking',
           exportValue: (o: Order) => o.labelDetails.trackingNumber ?? '',
@@ -1010,9 +1104,13 @@ export default function OrdersWorkspace() {
       defs.push({
         id: 'generatedAt',
         accessorFn: (o) => o.labelDetails.generatedAt ?? '',
-        header: 'Generated',
+        header: 'Gen',
+        size: 84,
         cell: ({ row }) => (
-          <span className="whitespace-nowrap text-[12px] text-[#8a7959]">
+          <span
+            className="whitespace-nowrap text-[12px] text-[#8a7959]"
+            title={row.original.labelDetails.generatedAt || 'not generated yet'}
+          >
             {relativeTime(row.original.labelDetails.generatedAt) || '—'}
           </span>
         ),
@@ -1024,47 +1122,37 @@ export default function OrdersWorkspace() {
     } else {
       defs.push({
         id: 'carrierAccount',
-        header: 'Carrier account',
+        header: 'Account',
         enableSorting: false,
+        // PR #555 — AccountScenarioBadge is already an icon+short-label chip.
+        // Give it a bounded width so it truncates rather than pushing other
+        // columns.
+        size: 140,
         cell: ({ row }) => (
           <AccountScenarioBadge resolution={row.original.accountResolution ?? undefined} />
         ),
         meta: {
-          headerLabel: 'Carrier account',
+          headerLabel: 'Account',
           exportValue: (o: Order) =>
             o.accountResolution?.accountNumber ?? o.carrierAccount?.accountCode ?? '',
         },
       })
     }
 
-    if (view === 'failed') {
-      defs.push({
-        id: 'failure',
-        accessorFn: (o) => o.errorDetails?.errorMessage ?? '',
-        header: 'Failure reason',
-        enableSorting: false,
-        cell: ({ row }) => {
-          const raw = row.original.errorDetails?.errorMessage
-          return (
-            <span
-              className="line-clamp-2 text-[11.5px] leading-4 text-rose-700"
-              title={raw || undefined}
-            >
-              {raw ? summarizeCarrierError(raw) : 'Unknown failure'}
-            </span>
-          )
-        },
-        meta: {
-          headerLabel: 'Failure reason',
-          exportValue: (o: Order) => o.errorDetails?.errorMessage ?? '',
-        },
-      })
-    }
+    // PR #555 — dedicated Failure-reason column removed. On ERROR rows the
+    // Status column already renders an IssuesInfoIcon that shows the
+    // humanized carrier error on hover; a separate wrapped-two-line column
+    // was chewing ~200px in the failed view without adding info that
+    // wasn't already one hover away.
 
     defs.push({
       id: 'actions',
       header: () => <span className="block text-right">Actions</span>,
       enableSorting: false,
+      // PR #555 — actions column carries up to 4 icon buttons + 1 primary
+      // action (Generate/Regenerate). Bounded so it doesn't push other
+      // columns off screen on mid-size laptops.
+      size: 172,
       cell: ({ row }) => {
         const order = row.original
         const orderNo = order.orderDetails.orderNo
@@ -1235,6 +1323,13 @@ export default function OrdersWorkspace() {
             tableKey="orders"
             columns={columns}
             data={rows}
+            // PR #555 — auto-hide Ref # and Batch when every row on the
+            // current page has an empty value (tenants that don't feed
+            // those fields shouldn't see a dead-value column). Only
+            // applies on FIRST load per tableKey; once a user toggles
+            // column visibility via the column menu, their preference
+            // is persisted in localStorage and wins over this default.
+            initialHiddenColumns={autoHiddenColumns}
             manualPagination
             manualSorting
             sorting={sorting}
