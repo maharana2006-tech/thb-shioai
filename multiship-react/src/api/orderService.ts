@@ -754,8 +754,16 @@ export const orderService = {
    * PR B will layer in carrier-artifact passthrough (return the real
    * PDF bytes when the carrier's stored artifact is PDF format).
    */
+  /**
+   * PR #552 — pkgIndex semantics fixed. Pre-fix used `pkgIndex > 1`
+   * which silently omitted the query param for pkg=1, so the "Download
+   * PDF" button while on pkg 1 accidentally fetched the all-pkg PDF
+   * with a misleading `pkg1of3` filename. Now: pass any positive
+   * pkgIndex through to `?pkg=N`; omit only when caller genuinely
+   * wants the all-pkg file (pass `undefined`).
+   */
   getLabelPdf: async (orderNo: number, pkgIndex?: number): Promise<Blob> => {
-    const qs = pkgIndex && pkgIndex > 1 ? `?pkg=${pkgIndex}` : ''
+    const qs = pkgIndex && pkgIndex > 0 ? `?pkg=${pkgIndex}` : ''
     const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/pdf${qs}`, {
       credentials: 'include',
     })

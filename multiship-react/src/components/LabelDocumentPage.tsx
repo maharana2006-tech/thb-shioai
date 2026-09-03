@@ -246,23 +246,58 @@ export default function LabelDocumentPage() {
     notify.success(`${link.download} downloaded — send it straight to a Zebra printer.`)
   }
 
+  /**
+   * PR #552 — Main "Download PDF" button semantics: ALWAYS all-pkg
+   * multi-page PDF on multi-pkg orders (the pre-fix behaviour was
+   * accidental due to `pkgIndex > 1` filter — see orderService.getLabelPdf
+   * javadoc). To get a single-pkg PDF, use the per-pkg icon button
+   * next to the picker (see downloadPdfForPkg below).
+   */
   const downloadPdf = async () => {
     if (pdfInFlightRef.current) return
     pdfInFlightRef.current = true
     setPdfBusy(true)
     try {
-      const blob = await orderService.getLabelPdf(orderNo, pkgIndex)
+      // Pass undefined so getLabelPdf omits ?pkg — BE returns all-pkg
+      // multi-page PDF when multi-pkg, or single-page when single-pkg.
+      const blob = await orderService.getLabelPdf(orderNo, undefined)
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
       link.download = pkgCount > 1
-        ? `label-${orderNo}-pkg${pkgIndex}of${pkgCount}.pdf`
+        ? `label-${orderNo}-all${pkgCount}.pdf`
         : `label-${orderNo}.pdf`
       link.click()
       URL.revokeObjectURL(url)
       notify.success(`${link.download} downloaded.`)
     } catch (err) {
       notify.apiError(err, 'Failed to fetch the label PDF.')
+    } finally {
+      pdfInFlightRef.current = false
+      setPdfBusy(false)
+    }
+  }
+
+  /**
+   * PR #552 — Per-pkg PDF download. Bound to the small icon button
+   * inside the package picker chip. Fetches only the specified pkg's
+   * PDF page. Only shown on multi-pkg orders.
+   */
+  const downloadPdfForPkg = async (targetPkg: number) => {
+    if (pdfInFlightRef.current) return
+    pdfInFlightRef.current = true
+    setPdfBusy(true)
+    try {
+      const blob = await orderService.getLabelPdf(orderNo, targetPkg)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `label-${orderNo}-pkg${targetPkg}of${pkgCount}.pdf`
+      link.click()
+      URL.revokeObjectURL(url)
+      notify.success(`${link.download} downloaded.`)
+    } catch (err) {
+      notify.apiError(err, 'Failed to fetch the per-package PDF.')
     } finally {
       pdfInFlightRef.current = false
       setPdfBusy(false)
@@ -587,7 +622,10 @@ export default function LabelDocumentPage() {
             ) : null}
           </div>
 
-          {/* Multi-package picker — only shown when the shipment has >1 box. */}
+          {/* Multi-package picker — only shown when the shipment has >1 box.
+              PR #552 — the picker now also carries a small download icon that
+              fetches ONLY the selected pkg's PDF. Main "Download PDF" button
+              always downloads all pkgs; this icon is the per-pkg opt-in. */}
           {pkgCount > 1 ? (
             <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2 py-1 text-[12px] text-slate-700 print:hidden">
               <span className="font-semibold uppercase tracking-wide">Package</span>
@@ -604,6 +642,19 @@ export default function LabelDocumentPage() {
                   <option key={n} value={n}>{n} of {pkgCount}</option>
                 ))}
               </select>
+              <button
+                type="button"
+                onClick={() => {
+                  void downloadPdfForPkg(pkgIndex)
+                }}
+                disabled={loading || Boolean(error) || tenantBlocked || pdfBusy}
+                title={`Download PDF for package ${pkgIndex} only`}
+                aria-label={`Download PDF for package ${pkgIndex} of ${pkgCount}`}
+                data-testid="download-per-pkg-pdf-btn"
+                className="inline-flex items-center rounded-md border border-slate-200 bg-slate-50 p-1 text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiDownload className="h-3 w-3" />
+              </button>
             </div>
           ) : null}
 
@@ -637,12 +688,16 @@ export default function LabelDocumentPage() {
                   void downloadPdf()
                 }}
                 disabled={loading || Boolean(error) || tenantBlocked || pdfBusy}
-                title="4x6 PDF facsimile of the shipping label (Sprint 52 PR A)"
+                title={
+                  pkgCount > 1
+                    ? `Download PDF (all ${pkgCount} packages — one file, ${pkgCount} pages). Use the small download icon in the Package picker to grab a single package.`
+                    : '4x6 PDF of the shipping label'
+                }
                 data-testid="download-pdf-btn"
                 className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FiDownload className="h-3.5 w-3.5" />
-                {pdfBusy ? 'Fetching…' : 'Download PDF'}
+                {pdfBusy ? 'Fetching…' : (pkgCount > 1 ? `Download PDF (all ${pkgCount})` : 'Download PDF')}
               </button>
               <button
                 type="button"
