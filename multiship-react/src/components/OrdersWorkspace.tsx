@@ -751,7 +751,14 @@ export default function OrdersWorkspace() {
   )
 
   const showStatusColumn = view === 'all'
-  const showTracking = view === 'generated'
+  // PR #556 — Tracking column now visible on 'all' and 'generated' tabs.
+  // Pre-fix: gated to 'generated' only, so the default landing view (All)
+  // never rendered a Track column even for orders that had tracking. The
+  // 'all' view mixes PENDING/GENERATED/ERROR/VOIDED rows; PENDING rows will
+  // just show a "—" in the chip cell (guarded in the cell renderer). No
+  // point exposing on Ready/Details/Client/Choose since those are PENDING-
+  // resolution filters and no tracking exists yet.
+  const showTracking = view === 'all' || view === 'generated'
 
   const formatCreated = (value?: string | null) =>
     value
