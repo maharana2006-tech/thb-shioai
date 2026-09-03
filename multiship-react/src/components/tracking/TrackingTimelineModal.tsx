@@ -224,6 +224,14 @@ export default function TrackingTimelineModal({
             <StatusBlock data={data} />
           ) : null}
 
+          {/* PR #553 audit L3 — per-piece topology for MPS shipments.
+              Shown between StatusBlock and EventsTimeline when the
+              order has multiple pieces or multiple batches. Doesn't
+              affect events rendering (still flat chronological); adds
+              context so the operator knows which physical boxes the
+              scan events could belong to. */}
+          {data ? <MpsTopology data={data} /> : null}
+
           {data && hasEvents ? <EventsTimeline events={data.events} /> : null}
 
           {data && !hasEvents ? <NoEventsFallback data={data} /> : null}
@@ -265,7 +273,7 @@ function StatusBlock({ data }: { data: TrackingResponseDTO }) {
               {delivered ? <FiCheckCircle className="h-3 w-3" /> : <FiTruck className="h-3 w-3" />}
               {data.status ?? 'Unknown'}
             </span>
-            <SourceBadge source={data.source} />
+            <SourceBadge source={data.source} retryAfterSeconds={data.retryAfterSeconds} />
           </div>
           {data.currentLocation ? (
             <p className="mt-2 flex items-center gap-1 text-[12px] text-slate-600">
@@ -289,7 +297,10 @@ function StatusBlock({ data }: { data: TrackingResponseDTO }) {
   )
 }
 
-function SourceBadge({ source }: { source: TrackingResponseDTO['source'] }) {
+function SourceBadge({ source, retryAfterSeconds }: {
+  source: TrackingResponseDTO['source']
+  retryAfterSeconds?: number | null
+}) {
   if (source === 'LIVE') {
     return (
       <span
@@ -310,6 +321,23 @@ function SourceBadge({ source }: { source: TrackingResponseDTO['source'] }) {
       </span>
     )
   }
+  // PR #553 audit L1 — distinguish carrier throttling from carrier-down.
+  // Pre-fix a 429 collapsed into STUB and the amber "URL-only" badge — the
+  // operator couldn't tell "wait 60s" from "carrier is down for hours".
+  if (source === 'RATE_LIMITED') {
+    return (
+      <span
+        title={
+          retryAfterSeconds
+            ? `Carrier is throttling requests — retry after ${retryAfterSeconds}s`
+            : 'Carrier is throttling requests — back off before retrying'
+        }
+        className="inline-flex items-center rounded-full bg-orange-50 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.14em] text-orange-700"
+      >
+        Rate-limited{retryAfterSeconds ? ` · ${retryAfterSeconds}s` : ''}
+      </span>
+    )
+  }
   return (
     <span
       title="No live credentials on this account — only the carrier tracking URL is available"
@@ -317,6 +345,81 @@ function SourceBadge({ source }: { source: TrackingResponseDTO['source'] }) {
     >
       URL-only
     </span>
+  )
+}
+
+/**
+ * PR #553 audit L3 — MPS topology strip. For multi-package shipments,
+ * shows the master tracking(s) + child tracking(s) so operators know
+ * which physical boxes exist under this shipment. Scan events themselves
+ * are still rendered flat below (carrier-supplied events don't carry
+ * per-piece attribution in most cases); this component just makes the
+ * piece structure visible instead of hidden.
+ *
+ * <p>Renders nothing on single-pkg / pre-Sprint-48 legacy orders (empty
+ * masterTrackings + childTrackings), matching the pre-#553 UX.
+ */
+function MpsTopology({ data }: { data: TrackingResponseDTO }) {
+  const masters = data.masterTrackings ?? []
+  const children = data.childTrackings ?? []
+  if (masters.length === 0 && children.length === 0) return null
+  return (
+    <div className="mb-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12px] shadow-sm">
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+        This shipment ({children.length || masters.reduce((n, m) => n + (m.packageCountInBatch ?? 0), 0)} packages)
+      </div>
+      {masters.map((m) => (
+        <div
+          key={`m-${m.batchSeq ?? 0}`}
+          className="flex items-center justify-between border-l-2 border-emerald-500 pl-2 leading-tight"
+        >
+          <div className="text-slate-800">
+            <span className="font-semibold">
+              Master{masters.length > 1 ? ` (batch ${m.batchSeq})` : ''}:{' '}
+            </span>
+            {m.masterTrackingUrl ? (
+              <a
+                href={m.masterTrackingUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="font-mono text-emerald-700 underline"
+              >
+                {m.masterTrackingNumber ?? '—'}
+              </a>
+            ) : (
+              <span className="font-mono">{m.masterTrackingNumber ?? '—'}</span>
+            )}
+          </div>
+          <span className="text-[10px] text-slate-500">
+            {m.carrierCode ?? ''}
+            {m.packageCountInBatch != null
+              ? ` · ${m.packageCountInBatch} pkg${m.packageCountInBatch > 1 ? 's' : ''}`
+              : ''}
+          </span>
+        </div>
+      ))}
+      {children.length > 0 ? (
+        <div className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[11px]">
+          {children.map((c) => (
+            <div key={`c-${c.sequenceNumber ?? 0}`} className="contents">
+              <span className="font-semibold text-slate-500">Pkg {c.sequenceNumber ?? '—'}</span>
+              {c.trackingUrl ? (
+                <a
+                  href={c.trackingUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="truncate font-mono text-slate-800 underline"
+                >
+                  {c.trackingNumber ?? '—'}
+                </a>
+              ) : (
+                <span className="truncate font-mono text-slate-800">{c.trackingNumber ?? '—'}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   )
 }
 

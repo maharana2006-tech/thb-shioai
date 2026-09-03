@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -84,5 +85,35 @@ public class WebhookController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(body);
         }
         return ResponseEntity.status(HttpStatus.OK).body(body);
+    }
+
+    /**
+     * Sprint 52 audit H1 — carrier backpressure. When the webhook async
+     * executor saturates, {@link com.multiship.backend.service.WebhookServiceImpl}
+     * throws {@code WebhookProcessingOverloadedException} — the javadoc at
+     * that class documents "signals the controller to return 503 so the
+     * carrier retries", but the wiring was never landed. Result pre-fix:
+     * Spring's default handler returned 500 INTERNAL_SERVER_ERROR, which
+     * carriers treat as a hard failure and either drop or slow-retry
+     * the event.
+     *
+     * <p>Now returns 503 SERVICE_UNAVAILABLE with a {@code Retry-After}
+     * header suggesting the carrier back off ~1 minute before re-posting.
+     * Carriers' standard behaviour on 503 is exponential backoff with
+     * idempotent retry — exactly what we want during load spikes.
+     */
+    @ExceptionHandler(com.multiship.backend.service.WebhookServiceImpl.WebhookProcessingOverloadedException.class)
+    public ResponseEntity<Map<String, Object>> handleOverloaded(
+            com.multiship.backend.service.WebhookServiceImpl.WebhookProcessingOverloadedException ex) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", "overloaded");
+        // Use the exception's dedicated getter — .getMessage() has a
+        // "Webhook async executor saturated for tracking=…" prefix intended
+        // for logs; the body wants just the tracking number for correlation.
+        body.put("trackingNumber", ex.getTrackingNumber());
+        body.put("message", "Webhook processing queue is at capacity; retry after 60s.");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header("Retry-After", "60")
+                .body(body);
     }
 }
