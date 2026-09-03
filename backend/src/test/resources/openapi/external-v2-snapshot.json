@@ -1389,6 +1389,9 @@
           "reference" : {
             "type" : "string"
           },
+          "channel" : {
+            "type" : "string"
+          },
           "refOrderNumber" : {
             "type" : "string"
           },
