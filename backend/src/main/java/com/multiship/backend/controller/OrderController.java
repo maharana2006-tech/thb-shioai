@@ -57,6 +57,12 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.ZebrashCompositor zebrashCompositor;
 
+    // PR #552 — concat carrier per-piece PDFs into one multi-page file
+    // when the operator asks for the "all pkgs" PDF and the carrier
+    // returned PDF format (not ZPL) per piece.
+    @Autowired
+    private com.multiship.backend.service.PdfMerger pdfMerger;
+
     @org.springframework.beans.factory.annotation.Value("${label.render-carrier-zpl:false}")
     private boolean renderCarrierZplEnabled;
 
@@ -821,6 +827,33 @@ public class OrderController {
                         .body(single.get());
             }
         } else {
+            // pkg omitted → operator wants ALL packages in one file.
+            // PR #552 — when multi-pkg + carrier stored per-piece PDFs,
+            // merge them via PdfMerger into a single N-page file instead
+            // of just returning the master (which was pre-#552 behaviour
+            // — pkg 2..N labels were unreachable via the PDF endpoint).
+            ApiResponse<OrderWithLinesDTO> peek = orderService.getOrderWithLines(orderNo);
+            int totalPkgsForPdf = effectivePkgCount(peek.getData());
+            if (totalPkgsForPdf > 1) {
+                java.util.List<byte[]> perPiecePdfs = new java.util.ArrayList<>(totalPkgsForPdf);
+                for (int i = 1; i <= totalPkgsForPdf; i++) {
+                    labelArtifactResolver.resolveAsBytes(orderNo, "PDF", i)
+                            .ifPresent(perPiecePdfs::add);
+                }
+                if (!perPiecePdfs.isEmpty()) {
+                    byte[] merged = pdfMerger.mergeToOne(perPiecePdfs);
+                    String suffix = perPiecePdfs.size() > 1
+                            ? "-all" + perPiecePdfs.size()
+                            : "-pkg1";
+                    return ResponseEntity.ok()
+                            .header("Content-Disposition", "attachment; filename=label-"
+                                    + orderNo + suffix + ".pdf")
+                            .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+                            .body(merged);
+                }
+            }
+            // Single-pkg or no per-piece PDFs — fall back to shipment-level
+            // master PDF (pre-#552 behaviour).
             java.util.Optional<byte[]> passthrough = labelArtifactResolver
                     .resolveAsBytes(orderNo, "PDF", null);
             if (passthrough.isPresent()) {
