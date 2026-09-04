@@ -959,4 +959,48 @@ class ShippingConfigServiceTest {
         assertTrue(resp.getMessage().contains("Warning"),
                 "KG preset must be converted to LB (30kg ≈ 66lb > 50 lb cap) and warn. Got: " + resp.getMessage());
     }
+
+    // ─── serviceByCode(carrier, code, originCountry) regression pin ───
+    //
+    // /label/{orderNo} was throwing 500 with
+    // IncorrectResultSizeDataAccessException from
+    // findByCarrierIgnoreCaseAndServiceCodeIgnoreCase — the seed had
+    // TWO rows for (FEDEX, INTERNATIONAL_PRIORITY): one originCountry=US
+    // (id 15) and one originCountry=GB (id 23). The natural key is
+    // (carrier, code, originCountry) so the lookup must scope by
+    // origin. These tests pin the fix.
+
+    @Test
+    void serviceByCode_scopedByOriginCountry_picksTheRightRow() {
+        ShippingService us = ShippingService.builder()
+                .id(15L).carrier("FEDEX").serviceCode("INTERNATIONAL_PRIORITY")
+                .originCountry("US").name("FedEx Intl Priority (US)").enabled(true).build();
+        when(serviceRepository
+                .findByCarrierIgnoreCaseAndServiceCodeIgnoreCaseAndOriginCountryIgnoreCase(
+                        "FEDEX", "INTERNATIONAL_PRIORITY", "US"))
+                .thenReturn(Optional.of(us));
+
+        Optional<ShippingService> found = service.serviceByCode(
+                "FEDEX", "INTERNATIONAL_PRIORITY", "US");
+
+        assertTrue(found.isPresent());
+        assertEquals(15L, found.get().getId());
+    }
+
+    @Test
+    void serviceByCode_blankOriginCountry_returnsEmpty() {
+        // Guard — historically the 2-arg method could blow up on
+        // duplicates. New signature requires origin; blank origin →
+        // empty so caller falls through to rule/scope re-resolution.
+        assertTrue(service.serviceByCode("FEDEX", "INTERNATIONAL_PRIORITY", null).isEmpty());
+        assertTrue(service.serviceByCode("FEDEX", "INTERNATIONAL_PRIORITY", "").isEmpty());
+    }
+
+    @Test
+    void serviceByCode_blankCarrierOrCode_returnsEmpty() {
+        assertTrue(service.serviceByCode(null, "GROUND", "US").isEmpty());
+        assertTrue(service.serviceByCode("FEDEX", null, "US").isEmpty());
+        assertTrue(service.serviceByCode("", "GROUND", "US").isEmpty());
+        assertTrue(service.serviceByCode("FEDEX", "", "US").isEmpty());
+    }
 }

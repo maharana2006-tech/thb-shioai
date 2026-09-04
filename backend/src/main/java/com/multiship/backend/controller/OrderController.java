@@ -465,7 +465,7 @@ public class OrderController {
         String svcCarrier = com.multiship.backend.service.ShippingConfigService
                 .canonicalCarrierFor(order.getShipviaCd());
         com.multiship.backend.model.ShippingService ruledService = shippingConfigService
-                .serviceByCode(svcCarrier, order.getShipviaCd())
+                .serviceByCode(svcCarrier, order.getShipviaCd(), shipperCountry)
                 .orElseGet(() -> shippingConfigService
                         .resolveService(svcCarrier, clientCode, order.getShipviaCd(),
                                 shipToCountry, serviceIntl, shipperCountry)
