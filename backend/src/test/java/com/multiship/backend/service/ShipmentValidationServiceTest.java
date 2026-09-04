@@ -290,6 +290,95 @@ class ShipmentValidationServiceTest {
                 .anyMatch(e -> ErrorCode.PACKAGE_NOT_ALLOWED_FOR_SERVICE.name().equals(e.getCode())));
     }
 
+    // ─── Commodity weight adapter (regression — FedEx intl pre-flight) ─
+    //
+    // Historical bug: adaptForValidators built CustomsCommodityDTOs
+    // without unitWeight, so the FedEx validateShipment pre-flight sent
+    // commodities with null weights and FedEx rejected every intl
+    // shipment with "Commodity weight is missing or invalid". These
+    // tests pin buildValidatorCommodities' spread-fallback behaviour so
+    // the pre-flight now mirrors buildManualIntlBlock.
+
+    @Test
+    void buildValidatorCommodities_perLineWeight_setDirectlyWhenPresent() {
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setWeight(new BigDecimal("10.0"));
+        req.setWeightUnit("LB");
+        ManualShipmentRequest.Item it = new ManualShipmentRequest.Item();
+        it.setDescription("Widget");
+        it.setQuantity(2);
+        it.setUnitValue(new BigDecimal("15.00"));
+        it.setWeight(new BigDecimal("3.5"));
+        req.setItems(java.util.List.of(it));
+
+        var commodities = ShipmentValidationService.buildValidatorCommodities(req);
+
+        assertEquals(1, commodities.size());
+        assertEquals(new BigDecimal("3.5"), commodities.get(0).getUnitWeight());
+    }
+
+    @Test
+    void buildValidatorCommodities_missingLineWeight_spreadsFromPkgWeight() {
+        // pkgWeight=10 LB, two items qty=2 + qty=3 → total qty 5. Each
+        // line's share is pkgWeight * qty / totalQty = 4.0 and 6.0
+        // respectively — a strict share so per-line sum equals pkg wt.
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setWeight(new BigDecimal("10.0"));
+        req.setWeightUnit("LB");
+        ManualShipmentRequest.Item a = new ManualShipmentRequest.Item();
+        a.setDescription("A"); a.setQuantity(2);
+        ManualShipmentRequest.Item b = new ManualShipmentRequest.Item();
+        b.setDescription("B"); b.setQuantity(3);
+        req.setItems(java.util.List.of(a, b));
+
+        var commodities = ShipmentValidationService.buildValidatorCommodities(req);
+
+        assertEquals(new BigDecimal("4.000"), commodities.get(0).getUnitWeight());
+        assertEquals(new BigDecimal("6.000"), commodities.get(1).getUnitWeight());
+    }
+
+    @Test
+    void buildValidatorCommodities_zeroLineWeight_treatedAsMissing_spreads() {
+        // Regression pin — the fix now checks signum > 0, so a stored 0
+        // weight (from an operator FE edge case) falls through to the
+        // pkg-weight spread instead of being sent to FedEx as-is.
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setWeight(new BigDecimal("6.0"));
+        ManualShipmentRequest.Item it = new ManualShipmentRequest.Item();
+        it.setDescription("X"); it.setQuantity(1); it.setWeight(BigDecimal.ZERO);
+        req.setItems(java.util.List.of(it));
+
+        var commodities = ShipmentValidationService.buildValidatorCommodities(req);
+
+        assertEquals(new BigDecimal("6.000"), commodities.get(0).getUnitWeight(),
+                "0 weight must be treated as missing and replaced by the spread");
+    }
+
+    @Test
+    void buildValidatorCommodities_noPkgWeightAndNoLineWeight_fallbackNonZero() {
+        // Both pkgWeight and line weight blank — commodity still needs a
+        // positive weight so FedEx doesn't reject; the shaper uses a
+        // small non-zero constant (0.10) rather than null / 0.
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        ManualShipmentRequest.Item it = new ManualShipmentRequest.Item();
+        it.setDescription("Y"); it.setQuantity(1);
+        req.setItems(java.util.List.of(it));
+
+        var commodities = ShipmentValidationService.buildValidatorCommodities(req);
+
+        assertEquals(new BigDecimal("0.10"), commodities.get(0).getUnitWeight());
+    }
+
+    @Test
+    void buildValidatorCommodities_emptyOrNullItems_returnsEmpty() {
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setWeight(new BigDecimal("5.0"));
+        assertTrue(ShipmentValidationService.buildValidatorCommodities(req).isEmpty());
+
+        req.setItems(java.util.List.of());
+        assertTrue(ShipmentValidationService.buildValidatorCommodities(req).isEmpty());
+    }
+
     // ─── Null-body handling ────────────────────────────────────────────
 
     @Test
