@@ -967,12 +967,14 @@ export default function LabelDocumentPage() {
                   <div className="pr-2 uppercase">
                     <p>ORIGIN ID:{(shipper?.state || 'XX').toUpperCase()}{(shipper?.postalCode || '').slice(0, 2)}A&nbsp;&nbsp;{(shipper?.phone || '').replace(/\s+/g, '')}</p>
                     <p>{shipper?.name}</p>
-                    {/* PR #535 — shipper COMPANY line. Backend
-                        addressMap emits `company` when the address's
-                        own name (warehouse alias) differs from the
-                        client's registered name; otherwise null and
-                        this line is suppressed. */}
-                    {shipper?.company ? <p>{shipper.company}</p> : null}
+                    {/* PR #535 — shipper COMPANY line, only when it says
+                        something the name line doesn't. The backend can emit
+                        company === name (ship_from_company mirrors the sender
+                        name on manual orders), which printed the shipper
+                        twice on the PDF while the ZPL printed it once. */}
+                    {shipper?.company && shipper.company.trim().toLowerCase() !== (shipper?.name || '').trim().toLowerCase()
+                      ? <p>{shipper.company}</p>
+                      : null}
                     <p>{shipper?.addressLine1}</p>
                     <p>&nbsp;</p>
                     <p>{shipper?.city}, {shipper?.state} {shipper?.postalCode} {shipper?.countryCode}</p>
@@ -1233,7 +1235,11 @@ export default function LabelDocumentPage() {
                 </div>
                 <div className="border border-slate-300 p-3">
                   <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Broker</p>
-                  {brokerage === 'BROKER_SELECT' && broker ? (
+                  {/* A broker row with no name/company is not a designated
+                      broker — it printed a bare "—" with an empty PH line.
+                      Fall through to the carrier-brokerage sentence, matching
+                      the form's own "Carrier clears customs" wording. */}
+                  {brokerage === 'BROKER_SELECT' && broker && (broker.name || broker.company) ? (
                     <>
                       <p className="font-bold">{broker.name || broker.company || '—'}</p>
                       {/* Collapse when name and company are the same string —

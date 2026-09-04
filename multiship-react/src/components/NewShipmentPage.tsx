@@ -2856,7 +2856,19 @@ export default function NewShipmentPage() {
                       carrier isn't recognised (no options). */}
                   {isInternational && clearanceOptionsForCarrier(canon(carrier)).length > 0 ? (
                     <Field label="Duties paid by"
-                           hint={clearanceOption ? undefined : 'Blank = carrier default'}>
+                           // The old "Blank = carrier default" read as an
+                           // unconditional RECIPIENT default; blank actually
+                           // follows the incoterm (DDP → sender pays).
+                           hint={clearanceOption ? undefined
+                             : 'Blank = follows the incoterm (DDP → sender pays, DAP/DDU → recipient pays)'}
+                           error={
+                             // A label that says DDP while the consignee gets
+                             // the duty bill is a promise the paperwork breaks
+                             // at delivery — surface the contradiction here.
+                             incoterms === 'DDP' && clearanceOption.toUpperCase().includes('RECIPIENT')
+                               ? 'DDP means the sender pays duties, but this bills them to the recipient — the label will promise DDP while the consignee gets the customs bill. Pick sender-pays or change the incoterm.'
+                               : undefined
+                           }>
                       <select className={inputCls}
                               value={clearanceOption}
                               onChange={(e) => setClearanceOption(e.target.value)}>

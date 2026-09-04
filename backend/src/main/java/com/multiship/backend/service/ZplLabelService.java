@@ -237,7 +237,11 @@ public class ZplLabelService {
         }
         y += 54;
         z.append("^FO770,260^A0R,24,24^FD").append(formCode).append("^FS\n");
-        z.append("^CF0,24,24\n").append(text(30, y, zpl(firstNonBlank(order.getPhone(), ""))));
+        // Same phone string as the PDF label: digits with the destination's
+        // dial code prepended (the raw column value lacks it, so the two
+        // renderers printed different numbers on international labels).
+        z.append("^CF0,24,24\n").append(text(30, y,
+                zpl(com.multiship.backend.util.DialCodes.withDialCode(order.getPhone(), destCountryCode))));
         y += 30;
         z.append("^CF0,20,20\n");
         z.append(text(30, y, "INV:")).append(text(400, y, "REF: " + orderDisplay));

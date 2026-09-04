@@ -740,7 +740,7 @@ export default function CustomsProfileModal({
             icon={<FiGlobe className="h-3.5 w-3.5" />}
             tone="bg-emerald-50 text-emerald-700"
             title="Customs defaults"
-            hint="Applied to every international shipment on this client + destination when the shipment itself doesn't override. All optional — blank = carrier default (SALE / DAP / RECIPIENT / USD)."
+            hint="Applied to every international shipment on this client + destination when the shipment itself doesn't override. All optional — blank purpose = SALE, blank incoterms = DAP, blank currency = USD, and blank duty billing follows the shipment's incoterm (DDP bills the sender, DAP/DDU the recipient)."
           >
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <Field label="Shipping purpose">
