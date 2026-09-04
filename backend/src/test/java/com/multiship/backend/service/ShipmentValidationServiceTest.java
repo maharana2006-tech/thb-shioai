@@ -369,6 +369,85 @@ class ShipmentValidationServiceTest {
         assertEquals(new BigDecimal("0.10"), commodities.get(0).getUnitWeight());
     }
 
+    // ─── Customs total + currency roll-up (Bug #2 from deep-dive) ──────
+
+    @Test
+    void adaptForValidators_customsTotal_prefersCommoditySumOverDeclaredValue() {
+        // Operator entered items with unitValue but no explicit declared
+        // value — customs total must be summed from lines, not left null.
+        // Pre-fix: intl.customsTotalValue = req.declaredValue = null →
+        // FedEx rejected with "Insufficient information for commodity 1".
+        ManualShipmentRequest req = intlReqWithItems(
+                new BigDecimal("25.00"), 2, new BigDecimal("50.00"), 1);
+        req.setDeclaredValue(null);
+
+        var dto = service.adaptForValidators(req, true);
+
+        assertEquals(new BigDecimal("100.00"), dto.getIntl().getCustomsTotalValue(),
+                "customs total must sum from commodity lines when declared value blank");
+    }
+
+    @Test
+    void adaptForValidators_customsTotal_fallsBackToDeclaredWhenLineTotalsBlank() {
+        // Operator entered items with description + qty only, plus a
+        // declared value on the shipment. buildValidatorCommodities
+        // spreads declaredValue → unitValue per line, so commodity sum
+        // equals declaredValue and the fallback matches.
+        ManualShipmentRequest req = intlReqWithBlankPriceItems(2);
+        req.setDeclaredValue(new BigDecimal("40.00"));
+
+        var dto = service.adaptForValidators(req, true);
+
+        assertNotNull(dto.getIntl().getCustomsTotalValue());
+        assertTrue(dto.getIntl().getCustomsTotalValue().signum() > 0,
+                "customs total must not be null/zero when declared value is set");
+    }
+
+    @Test
+    void adaptForValidators_customsCurrency_defaultsToUSD_whenBlank() {
+        ManualShipmentRequest req = intlReqWithItems(
+                new BigDecimal("10"), 1, new BigDecimal("10"), 1);
+        req.setCurrency(null);
+
+        var dto = service.adaptForValidators(req, true);
+
+        assertEquals("USD", dto.getIntl().getCustomsCurrency());
+    }
+
+    @Test
+    void adaptForValidators_incoterms_defaultToDAP_whenBlank() {
+        ManualShipmentRequest req = intlReqWithItems(
+                new BigDecimal("10"), 1, new BigDecimal("10"), 1);
+        req.setIncoterms(null);
+
+        var dto = service.adaptForValidators(req, true);
+
+        assertEquals("DAP", dto.getIntl().getIncoterms());
+    }
+
+    private ManualShipmentRequest intlReqWithItems(BigDecimal p1, int q1, BigDecimal p2, int q2) {
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setWeight(new BigDecimal("5.0"));
+        req.setCurrency("USD");
+        req.setIncoterms("DAP");
+        ManualShipmentRequest.Item a = new ManualShipmentRequest.Item();
+        a.setDescription("A"); a.setQuantity(q1); a.setUnitValue(p1);
+        ManualShipmentRequest.Item b = new ManualShipmentRequest.Item();
+        b.setDescription("B"); b.setQuantity(q2); b.setUnitValue(p2);
+        req.setItems(java.util.List.of(a, b));
+        return req;
+    }
+
+    private ManualShipmentRequest intlReqWithBlankPriceItems(int qty) {
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setWeight(new BigDecimal("5.0"));
+        req.setCurrency("USD");
+        ManualShipmentRequest.Item it = new ManualShipmentRequest.Item();
+        it.setDescription("Widget"); it.setQuantity(qty);
+        req.setItems(java.util.List.of(it));
+        return req;
+    }
+
     @Test
     void buildValidatorCommodities_emptyOrNullItems_returnsEmpty() {
         ManualShipmentRequest req = new ManualShipmentRequest();
