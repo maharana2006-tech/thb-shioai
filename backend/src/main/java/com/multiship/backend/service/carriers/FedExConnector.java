@@ -419,36 +419,79 @@ public class FedExConnector implements CarrierConnector {
             JsonNode root = objectMapper.readTree(body);
             JsonNode arr = root.path("errors");
             if (!arr.isArray()) return java.util.List.of();
-            java.util.List<String> out = new java.util.ArrayList<>();
+            // Preserve insertion order; use a Set to dedupe. Two FedEx
+            // errors on the same commodity often produce identical humanized
+            // lines (e.g., "commodity value invalid" + "commodity customs
+            // value invalid" both flag COMMODITY_INDEX=1 with the same
+            // customer-facing message). Show once. (PR #557 dedupe policy.)
+            java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
             for (JsonNode e : arr) {
+                String message = e.path("message").asText("").trim();
+                String code = e.path("code").asText("").trim();
                 JsonNode params = e.path("parameterList");
-                if (params.isArray() && params.size() > 0) {
-                    // Expand per-field details — skip the wrapper code +
-                    // "Validation failed" wire text, it's not actionable.
-                    for (JsonNode p : params) {
-                        String key = p.path("key").asText("");
-                        String value = p.path("value").asText("");
-                        String field = humanizeFedExFieldPath(key);
-                        if (StringUtils.hasText(field) && StringUtils.hasText(value)) {
-                            out.add(field + " — " + value);
-                        } else if (StringUtils.hasText(value)) {
-                            out.add(value);
-                        } else if (StringUtils.hasText(field)) {
-                            out.add(field);
-                        }
-                    }
+                // Build context prefix from parameterList (COMMODITY_INDEX,
+                // PACKAGE_INDEX, etc.). PR #557 audit: pre-fix, we DROPPED
+                // the top-level `message` when parameterList existed and
+                // surfaced only "<KEY> — <value>" — which produced the
+                // unreadable "COMMODITY_INDEX — 1" the operator reported.
+                // Now we PREFIX humanized context to the message so the
+                // operator sees, e.g.:
+                //   "Commodity line 1: The commodity unit value must be
+                //    greater than 0."
+                String prefix = buildFedExErrorPrefix(params);
+                String finalMessage;
+                if (StringUtils.hasText(message)) {
+                    finalMessage = StringUtils.hasText(prefix)
+                            ? prefix + ": " + message
+                            : message;
+                } else if (StringUtils.hasText(prefix)) {
+                    // Message empty, but we have context — show what we can.
+                    finalMessage = prefix;
+                } else if (StringUtils.hasText(code)) {
+                    finalMessage = code;
                 } else {
-                    // No parameterList — fall back to top-level code + message.
-                    String code = e.path("code").asText("");
-                    String message = e.path("message").asText("");
-                    out.add(StringUtils.hasText(code) ? code + ": " + message : message);
+                    continue; // nothing to say
                 }
+                out.add(finalMessage);
             }
-            return out;
+            return new java.util.ArrayList<>(out);
         } catch (Exception ignore) {
             return java.util.List.of();
         }
     }
+
+    /**
+     * PR #557 audit — humanize a FedEx parameterList into a leading
+     * context phrase like "Commodity line 1" or "Package 2". Parameters
+     * with unknown keys are ignored (avoids "MYSTERY_KEY — 7" noise).
+     * Returns an empty string when no known-key parameter is present.
+     */
+    static String buildFedExErrorPrefix(JsonNode params) {
+        if (params == null || !params.isArray()) return "";
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        for (JsonNode p : params) {
+            String key = p.path("key").asText("");
+            String value = p.path("value").asText("");
+            String humanKey = FEDEX_PARAMETER_KEYS.get(key);
+            if (humanKey != null && StringUtils.hasText(value)) {
+                parts.add(humanKey + " " + value);
+            }
+        }
+        return String.join(", ", parts);
+    }
+
+    /**
+     * PR #557 — parameterList key → human-readable label. Keys not in
+     * this map are skipped (they were previously surfaced as raw
+     * "MYSTERY_KEY — 7" chunks, which confused operators). Add new keys
+     * as we encounter them in FedEx error responses.
+     */
+    private static final java.util.Map<String, String> FEDEX_PARAMETER_KEYS = java.util.Map.ofEntries(
+            java.util.Map.entry("COMMODITY_INDEX", "Commodity line"),
+            java.util.Map.entry("PACKAGE_INDEX", "Package"),
+            java.util.Map.entry("PACKAGE_LINE_ITEM_INDEX", "Package"),
+            java.util.Map.entry("RECIPIENT_INDEX", "Recipient")
+    );
 
     /**
      * Translate a FedEx wire field path (e.g.

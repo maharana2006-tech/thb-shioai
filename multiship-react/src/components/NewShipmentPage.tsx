@@ -1470,9 +1470,23 @@ export default function NewShipmentPage() {
     if (!base && Object.keys(overlay).length === 0) return undefined
     return { ...(base ?? {}), ...overlay }
   }
-  /** Per-item error map (description, quantity, unitValue, …). */
-  const itemErrAt = (index: number, field: string): string | undefined =>
-    submitAttempted ? (getIn(formik.errors, `items[${index}].${field}`) as string | undefined) : undefined
+  /**
+   * Per-item error map (description, quantity, unitValue, …).
+   *
+   * PR #557 audit — for international shipments, `unitValue` errors fire
+   * IMMEDIATELY (not just after a submit-attempt). FedEx rejects the
+   * shipment when any commodity has a 0 / empty unit value with an
+   * unreadable "COMMODITY_INDEX — 1" wire error; catching it inline saves
+   * the operator a round-trip to the carrier. Other fields keep the
+   * post-submit-attempt gating (avoids alarming users mid-typing on
+   * fields they haven't reached yet).
+   */
+  const itemErrAt = (index: number, field: string): string | undefined => {
+    const err = getIn(formik.errors, `items[${index}].${field}`) as string | undefined
+    if (!err) return undefined
+    if (field === 'unitValue' && isInternational) return err
+    return submitAttempted ? err : undefined
+  }
 
   // Importer/broker resolve from the client's profile covering the destination country.
   const destCountry = (recipient.countryCode || '').toUpperCase()
