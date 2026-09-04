@@ -3055,37 +3055,41 @@ public class CarrierServiceImpl implements CarrierService {
                 .toList();
         if (items.isEmpty()) return null; // isReadyForCarrier() needs >=1 commodity
 
-        // FedEx requires EVERY commodity to carry a unitPrice AND a weight (a
-        // missing unitPrice surfaces as the misleading TOTALCUSTOMSVALUE.REQUIRED;
-        // a missing weight as WEIGHT.NONNUMERIC.ERROR). When the operator enters
-        // items without unit prices / weights, derive them: spread the
-        // shipment's declared value and package weight across the items by
-        // quantity so the per-line values still sum to the declared totals.
+        // STRICT — no silent fallbacks. Every required commodity field
+        // (hsCode, countryOfOrigin, unitValue > 0, weight) MUST have
+        // been enforced by ShipmentValidationService.checkIntlRequiredFields
+        // upstream, so this method just mirrors what the operator entered.
+        //
+        // The only derivation still done here is per-line weight from
+        // pkg weight × qty / totalQty — because pkg weight IS a required
+        // shipment field and the spread is faithful to what the operator
+        // entered (not a fabricated value). Missing pkg weight AND
+        // missing line weight → null on the wire → carrier rejects
+        // (defense-in-depth if the validator was bypassed).
         int totalQty = items.stream()
                 .mapToInt(it -> it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1).sum();
         java.math.RoundingMode HU = java.math.RoundingMode.HALF_UP;
-        BigDecimal perUnitValue = (declaredValue != null && declaredValue.signum() > 0 && totalQty > 0)
-                ? declaredValue.divide(BigDecimal.valueOf(totalQty), 2, HU) : null;
         BigDecimal pkgWeight = req.getWeight();
+        boolean canSpreadWeight = pkgWeight != null && pkgWeight.signum() > 0 && totalQty > 0;
 
         java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> commodities = items.stream()
                 .map(it -> {
                     int qty = it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1;
-                    BigDecimal unitValue = it.getUnitValue() != null ? it.getUnitValue() : perUnitValue;
-                    // Per-line weight = the line's share of the package weight;
-                    // fall back to a small positive value so FedEx never sees 0.
-                    BigDecimal lineWeight = (it.getWeight() != null && it.getWeight().signum() > 0)
-                            ? it.getWeight()
-                            : (pkgWeight != null && pkgWeight.signum() > 0 && totalQty > 0
-                                    ? pkgWeight.multiply(BigDecimal.valueOf(qty))
-                                            .divide(BigDecimal.valueOf(totalQty), 3, HU)
-                                    : new BigDecimal("0.10"));
+                    BigDecimal lineWeight;
+                    if (it.getWeight() != null && it.getWeight().signum() > 0) {
+                        lineWeight = it.getWeight();
+                    } else if (canSpreadWeight) {
+                        lineWeight = pkgWeight.multiply(BigDecimal.valueOf(qty))
+                                .divide(BigDecimal.valueOf(totalQty), 3, HU);
+                    } else {
+                        lineWeight = null;
+                    }
                     return com.multiship.backend.dto.CustomsCommodityDTO.builder()
                             .description(it.getDescription())
                             .hsCode(it.getHsCode())
                             .countryOfOrigin(it.getCountryOfOrigin())
                             .quantity(qty)
-                            .unitValue(unitValue)
+                            .unitValue(it.getUnitValue())
                             .unitWeight(lineWeight)
                             .sku(it.getSku())
                             .boxSeq(it.getBoxSeq())
@@ -3103,8 +3107,8 @@ public class CarrierServiceImpl implements CarrierService {
         return com.multiship.backend.dto.IntlShipmentBlockDTO.builder()
                 .international(true)
                 .commodities(commodities)
-                .customsCurrency(StringUtils.hasText(currency) ? currency.toUpperCase() : "USD")
-                .incoterms(firstNonBlank(req.getIncoterms(), "DAP"))
+                .customsCurrency(StringUtils.hasText(currency) ? currency.toUpperCase() : null)
+                .incoterms(StringUtils.hasText(req.getIncoterms()) ? req.getIncoterms() : null)
                 .reasonForExport(req.getReasonForExport())
                 .customsTotalValue(total)
                 .weightUnit(req.getWeightUnit())
