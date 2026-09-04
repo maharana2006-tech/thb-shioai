@@ -919,6 +919,18 @@ export default function LabelDocumentPage() {
                already checked, but a mid-session backend restart could
                invalidate). */
             <div className="print-doc relative w-[430px] shrink-0 border border-slate-300 bg-white shadow-xl print:w-[3.76in] print:border-0 print:shadow-none">
+              {/* AWB caption — FedEx sandbox labels return ZPL with empty
+                 TRK# text fields and "0000 0000 0000" placeholder digits
+                 (the real number is only in the barcode + API response).
+                 Users viewing the PNG mistake this for "AWB missing".
+                 The caption always shows the real trackingNumber above
+                 the label so intent is unambiguous. Hidden in print so
+                 the actual thermal label ships clean. */}
+              {trackingNumber ? (
+                <div className="border-b border-slate-200 bg-slate-50 px-2 py-1.5 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700 print:hidden">
+                  AWB / Tracking# <span className="font-mono text-[12px] font-black text-emerald-700">{trackingNumber}</span>
+                </div>
+              ) : null}
               <img
                 src={orderService.labelPreviewPngUrl(orderNo, pkgIndex)}
                 alt={`Shipping label for order ${orderNo}`}

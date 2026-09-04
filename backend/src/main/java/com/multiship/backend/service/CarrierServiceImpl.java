@@ -2955,8 +2955,19 @@ public class CarrierServiceImpl implements CarrierService {
                 // above for the manual-shipment path). Every connector omits
                 // the phone element when null instead of printing fake data.
                 .recipientPhone(order.getPhone())
-                .recipientAddressLine1(firstNonBlank(order.getShipAddr1(), order.getLocation(), ""))
-                .recipientAddressLine2(null)
+                // Order.location is the storage slot for the recipient's
+                // address line 2 (manual shipments write it there via
+                // setLocation(to.getAddressLine2())). Historically this
+                // builder used it as a fallback for line 1 AND hardcoded
+                // line 2 to null — dropping line-2 data on every
+                // Order-based label render. Now: line 1 comes only from
+                // shipAddr1 (empty-string when null so the connector
+                // wire builder still gets a value), line 2 comes from
+                // location and stays null when the operator left it
+                // blank (each connector's address builder skips null
+                // line-2 cleanly).
+                .recipientAddressLine1(firstNonBlank(order.getShipAddr1(), ""))
+                .recipientAddressLine2(order.getLocation())
                 .recipientCity(firstNonBlank(order.getShiptoCity(), ""))
                 .recipientState(firstNonBlank(order.getShiptoState(), ""))
                 .recipientPostalCode(firstNonBlank(order.getShiptoZip(), ""))
