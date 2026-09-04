@@ -1262,19 +1262,33 @@ public class ShippingConfigService {
     }
 
     /**
-     * Exact service lookup by carrier + service code — the service a shipment
-     * ACTUALLY moved on. Used by post-ship display (label / documents) so the
-     * printed service name matches what was purchased, instead of the
-     * rule/scope re-resolution in {@link #resolveService} which returns the
-     * lane's default service and can disagree with the picked one.
+     * Exact service lookup by carrier + service code + origin country —
+     * the service a shipment ACTUALLY moved on. Used by post-ship
+     * display (label / documents) so the printed service name matches
+     * what was purchased, instead of the rule/scope re-resolution in
+     * {@link #resolveService} which returns the lane's default service
+     * and can disagree with the picked one.
+     *
+     * <p>Origin country is REQUIRED because the natural key of
+     * shipping_service is {@code (carrier, service_code, origin_country)}
+     * — the same carrier can seed the same service code for multiple
+     * origins (e.g. FEDEX INTERNATIONAL_PRIORITY for both US and GB).
+     * Historically this method omitted origin and blew up on those
+     * duplicates with {@code IncorrectResultSizeDataAccessException}.
+     * When origin is blank OR no row matches, return empty and let the
+     * caller fall through to the rule / scope re-resolution path.
      */
     @Transactional(readOnly = true)
-    public Optional<ShippingService> serviceByCode(String canonicalCarrier, String serviceCode) {
-        if (!StringUtils.hasText(canonicalCarrier) || !StringUtils.hasText(serviceCode)) {
+    public Optional<ShippingService> serviceByCode(String canonicalCarrier,
+                                                   String serviceCode,
+                                                   String originCountry) {
+        if (!StringUtils.hasText(canonicalCarrier) || !StringUtils.hasText(serviceCode)
+                || !StringUtils.hasText(originCountry)) {
             return Optional.empty();
         }
-        return serviceRepository.findByCarrierIgnoreCaseAndServiceCodeIgnoreCase(
-                canonicalCarrier.trim(), serviceCode.trim());
+        return serviceRepository
+                .findByCarrierIgnoreCaseAndServiceCodeIgnoreCaseAndOriginCountryIgnoreCase(
+                        canonicalCarrier.trim(), serviceCode.trim(), originCountry.trim());
     }
 
     /** Look up a package preset by id (for the manual-shipment flow's explicit package pick). */
