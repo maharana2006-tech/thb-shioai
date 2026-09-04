@@ -43,6 +43,8 @@ class ShipmentValidationServiceTest {
     private PackagePresetRepository packagePresetRepository;
     private com.multiship.backend.service.CarrierService carrierService;
     private com.multiship.backend.repository.CarrierAccountRefRepository carrierAccountRefRepository;
+    private com.multiship.backend.repository.ClientRepository clientRepository;
+    private com.multiship.backend.repository.ClientCustomsProfileRepository clientCustomsProfileRepository;
 
     private ShipmentValidationService service;
 
@@ -52,16 +54,22 @@ class ShipmentValidationServiceTest {
         resolutionService = mock(ShipmentResolutionService.class);
         shippingServiceRepository = mock(ShippingServiceRepository.class);
         packagePresetRepository = mock(PackagePresetRepository.class);
-        // Sprint 52 PR δ — new deps for carrier-native validateShipment.
+        // Sprint 52 PR δ — deps for carrier-native validateShipment.
         // Constructor arg order matches @RequiredArgsConstructor field
         // declaration order in ShipmentValidationService.
         carrierService = mock(com.multiship.backend.service.CarrierService.class);
         carrierAccountRefRepository = mock(com.multiship.backend.repository.CarrierAccountRefRepository.class);
+        // Strict-fill sources for intl currency + incoterms (no
+        // hardcoded USD/DAP defaults).
+        clientRepository = mock(com.multiship.backend.repository.ClientRepository.class);
+        clientCustomsProfileRepository = mock(
+                com.multiship.backend.repository.ClientCustomsProfileRepository.class);
 
         service = new ShipmentValidationService(
                 packagingCompatibilityGuard, resolutionService,
                 shippingServiceRepository, packagePresetRepository,
-                carrierService, carrierAccountRefRepository);
+                carrierService, carrierAccountRefRepository,
+                clientRepository, clientCustomsProfileRepository);
     }
 
     // ─── Happy path ─────────────────────────────────────────────────────
@@ -355,10 +363,10 @@ class ShipmentValidationServiceTest {
     }
 
     @Test
-    void buildValidatorCommodities_noPkgWeightAndNoLineWeight_fallbackNonZero() {
-        // Both pkgWeight and line weight blank — commodity still needs a
-        // positive weight so FedEx doesn't reject; the shaper uses a
-        // small non-zero constant (0.10) rather than null / 0.
+    void buildValidatorCommodities_noPkgWeightAndNoLineWeight_returnsNullWeight() {
+        // Strict — no more 0.10 last-resort. When pkgWeight AND line
+        // weight both blank, the shaper returns null weight and the
+        // local validator surfaces customs.weight.missing.
         ManualShipmentRequest req = new ManualShipmentRequest();
         ManualShipmentRequest.Item it = new ManualShipmentRequest.Item();
         it.setDescription("Y"); it.setQuantity(1);
@@ -366,7 +374,294 @@ class ShipmentValidationServiceTest {
 
         var commodities = ShipmentValidationService.buildValidatorCommodities(req);
 
-        assertEquals(new BigDecimal("0.10"), commodities.get(0).getUnitWeight());
+        assertNull(commodities.get(0).getUnitWeight(),
+                "no fallback — undeliverable weight surfaces as an error, not fabricated 0.10");
+    }
+
+    @Test
+    void buildValidatorCommodities_missingUnitValue_returnsNullPrice() {
+        // Strict — no declared-value spread. Missing unitValue stays
+        // null; local validator surfaces customs.unitValue.missing.
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setWeight(new BigDecimal("5.0"));
+        req.setDeclaredValue(new BigDecimal("100.00"));
+        ManualShipmentRequest.Item it = new ManualShipmentRequest.Item();
+        it.setDescription("Z"); it.setQuantity(2);
+        req.setItems(java.util.List.of(it));
+
+        var commodities = ShipmentValidationService.buildValidatorCommodities(req);
+
+        assertNull(commodities.get(0).getUnitValue(),
+                "no declared-value spread — undeliverable price surfaces as an error");
+    }
+
+    // ─── Customs total + currency roll-up (Bug #2 from deep-dive) ──────
+
+    @Test
+    void adaptForValidators_customsTotal_prefersCommoditySumOverDeclaredValue() {
+        // Operator entered items with unitValue but no explicit declared
+        // value — customs total must be summed from lines, not left null.
+        // Pre-fix: intl.customsTotalValue = req.declaredValue = null →
+        // FedEx rejected with "Insufficient information for commodity 1".
+        ManualShipmentRequest req = intlReqWithItems(
+                new BigDecimal("25.00"), 2, new BigDecimal("50.00"), 1);
+        req.setDeclaredValue(null);
+
+        var dto = service.adaptForValidators(req, true);
+
+        assertEquals(new BigDecimal("100.00"), dto.getIntl().getCustomsTotalValue(),
+                "customs total must sum from commodity lines when declared value blank");
+    }
+
+    @Test
+    void adaptForValidators_customsTotal_isNullWhenCommoditySumZero() {
+        // Strict — no declared-value fallback on customsTotal either.
+        // With blank-price items, unitValue stays null so lineTotalValue
+        // is null → commodity sum is 0 → customsTotal is null. Local
+        // validator will already have flagged customs.unitValue.missing.
+        ManualShipmentRequest req = intlReqWithBlankPriceItems(2);
+        req.setDeclaredValue(new BigDecimal("40.00"));
+
+        var dto = service.adaptForValidators(req, true);
+
+        assertNull(dto.getIntl().getCustomsTotalValue(),
+                "no declared-value fallback — customs total is only summed from real line values");
+    }
+
+    @Test
+    void adaptForValidators_customsCurrency_isNullWhenAllSourcesBlank() {
+        // Precedence: operator → CarrierAccountRef → Client.defaultCurrency.
+        // All three blank here (ad-hoc + no client + no matching
+        // account) → currency is null and checkIntlRequiredFields flags
+        // customs.currency.missing on the local errors.
+        ManualShipmentRequest req = intlReqWithItems(
+                new BigDecimal("10"), 1, new BigDecimal("10"), 1);
+        req.setCurrency(null);
+        req.setClientCode(null);
+        req.setCarrierCode(null);
+
+        var dto = service.adaptForValidators(req, true);
+
+        assertNull(dto.getIntl().getCustomsCurrency());
+    }
+
+    @Test
+    void adaptForValidators_incoterms_isNullWhenAllSourcesBlank() {
+        // Precedence: operator → ClientCustomsProfile.incoterms. Ad-hoc
+        // shipment with no clientCode → no profile → null → local error.
+        ManualShipmentRequest req = intlReqWithItems(
+                new BigDecimal("10"), 1, new BigDecimal("10"), 1);
+        req.setIncoterms(null);
+        req.setClientCode(null);
+
+        var dto = service.adaptForValidators(req, true);
+
+        assertNull(dto.getIntl().getIncoterms());
+    }
+
+    // ─── Currency + incoterms precedence resolvers ─────────────────────
+
+    @Test
+    void resolveCustomsCurrency_operatorSelectionWins() {
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setCurrency("EUR");
+        req.setCarrierCode("FEDEX"); req.setAccountNumber("ACC1");
+        // Account has different currency — operator choice must still win.
+        com.multiship.backend.model.CarrierAccountRef acc =
+                com.multiship.backend.model.CarrierAccountRef.builder()
+                        .carrierCode("FEDEX").accountNumber("ACC1")
+                        .currency("USD").clientId("id").clientSecret("s")
+                        .active(true).build();
+        when(carrierAccountRefRepository.findPlatformAccountsByCarrier("FEDEX"))
+                .thenReturn(java.util.List.of(acc));
+
+        assertEquals("EUR", service.resolveCustomsCurrency(req));
+    }
+
+    @Test
+    void resolveCustomsCurrency_fallsThroughToCarrierAccount() {
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setCarrierCode("FEDEX"); req.setAccountNumber("ACC1");
+        com.multiship.backend.model.CarrierAccountRef acc =
+                com.multiship.backend.model.CarrierAccountRef.builder()
+                        .carrierCode("FEDEX").accountNumber("ACC1")
+                        .currency("gbp").clientId("id").clientSecret("s")
+                        .active(true).build();
+        when(carrierAccountRefRepository.findPlatformAccountsByCarrier("FEDEX"))
+                .thenReturn(java.util.List.of(acc));
+
+        assertEquals("GBP", service.resolveCustomsCurrency(req));
+    }
+
+    @Test
+    void resolveCustomsCurrency_fallsThroughToClientDefault() {
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setCarrierCode("FEDEX"); req.setAccountNumber("ACC1");
+        req.setClientCode("THB001");
+        // Account has no currency; client has one.
+        com.multiship.backend.model.CarrierAccountRef acc =
+                com.multiship.backend.model.CarrierAccountRef.builder()
+                        .carrierCode("FEDEX").accountNumber("ACC1")
+                        .clientId("id").clientSecret("s").active(true).build();
+        when(carrierAccountRefRepository.findPlatformAccountsByCarrier("FEDEX"))
+                .thenReturn(java.util.List.of(acc));
+        com.multiship.backend.model.Client client =
+                com.multiship.backend.model.Client.builder()
+                        .clientCode("THB001").defaultCurrency("CAD").build();
+        when(clientRepository.findByClientCodeIgnoreCase("THB001"))
+                .thenReturn(java.util.Optional.of(client));
+
+        assertEquals("CAD", service.resolveCustomsCurrency(req));
+    }
+
+    @Test
+    void resolveCustomsCurrency_returnsNullWhenAllBlank() {
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        assertNull(service.resolveCustomsCurrency(req));
+    }
+
+    @Test
+    void resolveIncoterms_operatorSelectionWins() {
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setIncoterms("ddp");
+        req.setClientCode("THB001");
+        // Profile has DAP but operator wins.
+        com.multiship.backend.model.ClientCustomsProfile profile =
+                com.multiship.backend.model.ClientCustomsProfile.builder()
+                        .clientCode("THB001").incoterms("DAP").build();
+        when(clientCustomsProfileRepository.findByClientAndCountry("THB001", "GB"))
+                .thenReturn(java.util.Optional.of(profile));
+
+        assertEquals("DDP", service.resolveIncoterms(req, "GB"));
+    }
+
+    @Test
+    void resolveIncoterms_fallsThroughToCustomsProfile() {
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setClientCode("THB001");
+        com.multiship.backend.model.ClientCustomsProfile profile =
+                com.multiship.backend.model.ClientCustomsProfile.builder()
+                        .clientCode("THB001").incoterms("DAP").build();
+        when(clientCustomsProfileRepository.findByClientAndCountry("THB001", "GB"))
+                .thenReturn(java.util.Optional.of(profile));
+
+        assertEquals("DAP", service.resolveIncoterms(req, "GB"));
+    }
+
+    @Test
+    void resolveIncoterms_returnsNullForAdhocWithNoOperatorChoice() {
+        // Ad-hoc (no clientCode) + blank operator incoterms → null →
+        // local error 'Incoterms is required'.
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        assertNull(service.resolveIncoterms(req, "GB"));
+    }
+
+    // ─── Strict per-commodity checks (end-to-end via validate()) ───────
+
+    @Test
+    void intlShipment_missingHsCode_flagsLocalError() {
+        ManualShipmentRequest req = fullIntlRequest();
+        req.getItems().get(0).setHsCode(null);
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> e.getField() != null && e.getField().endsWith("hsCode")
+                        && e.getMessage().contains("HS")),
+                "missing hsCode must fail with row-scoped error");
+    }
+
+    @Test
+    void intlShipment_missingCountryOfOrigin_flagsLocalError() {
+        ManualShipmentRequest req = fullIntlRequest();
+        req.getItems().get(0).setCountryOfOrigin(null);
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> e.getField() != null && e.getField().endsWith("countryOfOrigin")),
+                "missing countryOfOrigin must fail with row-scoped error");
+    }
+
+    @Test
+    void intlShipment_zeroUnitValue_flagsLocalError() {
+        ManualShipmentRequest req = fullIntlRequest();
+        req.getItems().get(0).setUnitValue(BigDecimal.ZERO);
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> e.getField() != null && e.getField().endsWith("unitValue")),
+                "0 unitValue must fail — no silent declared-value spread");
+    }
+
+    @Test
+    void intlShipment_missingCurrencyAndAllSources_flagsLocalError() {
+        ManualShipmentRequest req = fullIntlRequest();
+        req.setCurrency(null); req.setClientCode(null); req.setCarrierCode(null);
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> "currency".equals(e.getField())),
+                "unresolvable currency must fail — no USD default");
+    }
+
+    @Test
+    void intlShipment_missingIncotermsAndAllSources_flagsLocalError() {
+        ManualShipmentRequest req = fullIntlRequest();
+        req.setIncoterms(null); req.setClientCode(null);
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> "incoterms".equals(e.getField())),
+                "unresolvable incoterms must fail — no DAP default");
+    }
+
+    private ManualShipmentRequest fullIntlRequest() {
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setCountryCode("GB");
+        req.getRecipient().setPostalCode("SW1A 2AA");
+        req.getRecipient().setState("");
+        req.setCurrency("USD");
+        req.setIncoterms("DAP");
+        req.setReasonForExport("SALE");
+        req.setDeclaredValue(new BigDecimal("100.00"));
+        ManualShipmentRequest.Item a = new ManualShipmentRequest.Item();
+        a.setDescription("Widget"); a.setHsCode("8471.30");
+        a.setCountryOfOrigin("US"); a.setQuantity(2);
+        a.setUnitValue(new BigDecimal("50.00"));
+        req.setItems(new java.util.ArrayList<>(java.util.List.of(a)));
+        return req;
+    }
+
+    private ManualShipmentRequest intlReqWithItems(BigDecimal p1, int q1, BigDecimal p2, int q2) {
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setWeight(new BigDecimal("5.0"));
+        req.setCurrency("USD");
+        req.setIncoterms("DAP");
+        ManualShipmentRequest.Item a = new ManualShipmentRequest.Item();
+        a.setDescription("A"); a.setQuantity(q1); a.setUnitValue(p1);
+        ManualShipmentRequest.Item b = new ManualShipmentRequest.Item();
+        b.setDescription("B"); b.setQuantity(q2); b.setUnitValue(p2);
+        req.setItems(java.util.List.of(a, b));
+        return req;
+    }
+
+    private ManualShipmentRequest intlReqWithBlankPriceItems(int qty) {
+        ManualShipmentRequest req = new ManualShipmentRequest();
+        req.setWeight(new BigDecimal("5.0"));
+        req.setCurrency("USD");
+        ManualShipmentRequest.Item it = new ManualShipmentRequest.Item();
+        it.setDescription("Widget"); it.setQuantity(qty);
+        req.setItems(java.util.List.of(it));
+        return req;
     }
 
     @Test
