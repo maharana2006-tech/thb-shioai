@@ -1775,6 +1775,7 @@ export default function NewShipmentPage() {
     reasonForExport,
     currency,
     weightUnit,
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- autoItemWeight is a stable derived helper over items + weight; adding it triggers a new identity every render.
   }), [items, incoterms, reasonForExport, currency, weightUnit])
 
   /** Copy wizard-side state back into the inline form state so both stay in sync. */
@@ -1833,8 +1834,9 @@ export default function NewShipmentPage() {
   useEffect(() => {
     if (!isInternational) return
     const next = invoiceTotal > 0 ? invoiceTotal.toFixed(2) : ''
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Yup's insured-le-declared cap (shipmentSchema.ts:250) reads this.parent.declaredValue via formik state; on international the operator can't edit the field so we mirror the invoice sum here as the single source of truth. Cascading render is bounded (state only updates when the string representation actually differs).
     if (next !== declaredValue) setDeclaredValue(next)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- declaredValue included to avoid loop; setDeclaredValue is stable
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- declaredValue read to prevent infinite loop; setDeclaredValue is stable
   }, [isInternational, invoiceTotal])
 
   // ── AI assist handlers (one per section, suggestion-only) ──────────────────
