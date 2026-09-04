@@ -1201,6 +1201,32 @@ public class CarrierServiceImpl implements CarrierService {
         boolean isCrossBorder = to.getCountryCode() != null && fromCountry != null
                 && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
         if (isCrossBorder) {
+            // BUSINESS (commercial/DDP) importer profiles must carry the
+            // importer's tax registration — e.g. the CBSA Business Number
+            // into CA — or the commercial invoice prints without the one
+            // identifier the entry clears on. The invoice looked complete
+            // and shipped anyway, so gate here with the exact gap named.
+            // A per-shipment importer override with its own taxId satisfies
+            // the requirement for this label.
+            if (StringUtils.hasText(resolvedClient)) {
+                com.multiship.backend.model.ClientCustomsProfile ciProfile = clientCustomsProfileRepository
+                        .findByClientAndCountry(resolvedClient.trim().toUpperCase(Locale.ROOT),
+                                to.getCountryCode().trim().toUpperCase(Locale.ROOT))
+                        .orElse(null);
+                boolean overrideHasTaxId = req.getImporter() != null
+                        && req.getImporter().get("taxId") instanceof String s2
+                        && StringUtils.hasText(s2);
+                if (ciProfile != null && !"RECEIVER".equalsIgnoreCase(ciProfile.getImporterType())
+                        && !StringUtils.hasText(ciProfile.getImporterTaxId()) && !overrideHasTaxId) {
+                    return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                            "This shipment enters " + to.getCountryCode().trim().toUpperCase(Locale.ROOT)
+                                    + " under a BUSINESS importer profile with no tax/business number."
+                                    + " Commercial imports need the importer's registration on the invoice"
+                                    + " (e.g. the CBSA Business Number for CA) — add it to the "
+                                    + resolvedClient + "/" + to.getCountryCode().trim().toUpperCase(Locale.ROOT)
+                                    + " profile in Settings → Importer/Broker, then generate again.");
+                }
+            }
             shipmentRequest.setIntl(buildManualIntlBlock(
                     req, firstNonBlank(req.getCurrency(), "USD"), req.getDeclaredValue()));
         }
@@ -3289,16 +3315,35 @@ public class CarrierServiceImpl implements CarrierService {
         // RECEIVER (DAP) profiles pass without a fixed importer — the order's
         // consignee IS the importer of record and the carrier collects their
         // KYC. BUSINESS (DDP) profiles must carry a usable importer identity.
-        boolean hasProfile = clientCode != null && !clientCode.isBlank()
-                && clientCustomsProfileRepository
+        com.multiship.backend.model.ClientCustomsProfile profile = clientCode != null && !clientCode.isBlank()
+                ? clientCustomsProfileRepository
                         .findByClientAndCountry(clientCode.trim().toUpperCase(), shipToCountry.toUpperCase())
-                        .filter(p -> "RECEIVER".equalsIgnoreCase(p.getImporterType())
-                                || (org.springframework.util.StringUtils.hasText(p.getImporterName())
-                                        && org.springframework.util.StringUtils.hasText(p.getImporterAddress1())
-                                        && org.springframework.util.StringUtils.hasText(p.getImporterCity())))
-                        .isPresent();
-        if (hasProfile) {
-            return null;
+                        .orElse(null)
+                : null;
+        if (profile != null) {
+            if ("RECEIVER".equalsIgnoreCase(profile.getImporterType())) {
+                return null;
+            }
+            boolean identityComplete = org.springframework.util.StringUtils.hasText(profile.getImporterName())
+                    && org.springframework.util.StringUtils.hasText(profile.getImporterAddress1())
+                    && org.springframework.util.StringUtils.hasText(profile.getImporterCity());
+            if (identityComplete) {
+                // A commercial (BUSINESS/DDP) entry needs the importer's tax
+                // registration on the invoice — e.g. the CBSA Business Number
+                // into CA — or the shipment doesn't clear. The profile form
+                // captures it; an invoice printed without it looked fine but
+                // was un-clearable, so gate here with a message naming the
+                // exact gap instead of letting it out silently.
+                if (!org.springframework.util.StringUtils.hasText(profile.getImporterTaxId())) {
+                    return "Order " + order.getOrderNo() + " ships DDP to " + shipToCountry.toUpperCase()
+                            + " but the BUSINESS importer profile for "
+                            + (clientCode != null ? clientCode : "the client") + "/" + shipToCountry.toUpperCase()
+                            + " has no tax/business number. Commercial imports need the importer's registration"
+                            + " on the invoice (e.g. the CBSA Business Number for CA) — add it to the profile"
+                            + " in Settings → Importer/Broker, then generate again.";
+                }
+                return null;
+            }
         }
 
         return "Order " + order.getOrderNo() + " ships internationally to " + shipToCountry.toUpperCase()

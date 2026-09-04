@@ -40,11 +40,14 @@ const labelDate = (value?: string | null) => {
 
 const money = (value: number | null | undefined) => (typeof value === 'number' ? value.toFixed(2) : '0.00')
 
-/** Commercial-invoice date style: 05/18/2026 (US numeric, as FedEx prints). */
+/** Commercial-invoice date: 18 MAY 2026 — unambiguous for customs officers
+ *  in any locale (05/18 vs 18/05 reads differently in the destination
+ *  country), and matches the backend PDF invoice + the label's date style. */
+const CI_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
 const ciDate = (value?: string | null) => {
   const parsed = value ? new Date(value) : new Date()
   const d = Number.isNaN(parsed.getTime()) ? new Date() : parsed
-  return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`
+  return `${String(d.getDate()).padStart(2, '0')} ${CI_MONTHS[d.getMonth()]} ${d.getFullYear()}`
 }
 
 /** Reason-for-export code → the human "Purpose" a customs invoice prints. */
@@ -417,6 +420,13 @@ export default function LabelDocumentPage() {
               : order?.weight != null && totalItemQty > 0
                 ? (order.weight * qty) / totalItemQty
                 : null
+          // The quantity split is an ESTIMATE (it apportions the parcel's
+          // gross weight — packaging included — by unit count, so 12 steel
+          // bottles can come out "lighter" than 30 cotton totes). Customs
+          // assesses on net weight, so when we didn't get real per-item
+          // weights the invoice must say the figure is estimated rather
+          // than presenting it as fact.
+          const netWeightEstimated = it.weight == null && netWeight != null
           return {
             id: i,
             lineNo: i + 1,
@@ -430,6 +440,7 @@ export default function LabelDocumentPage() {
             totalPrice: qty * unit,
             customsDeclValue: qty * unit,
             netWeight,
+            netWeightEstimated,
           }
         })
       : order?.orderLines || []
@@ -1210,10 +1221,14 @@ export default function LabelDocumentPage() {
                   <p>{[order.shiptoCity, order.shiptoZip, order.shiptoState, destCountry].filter(Boolean).join(', ')}</p>
                   <div className="mt-1 space-y-0.5">
                     <KV label="PH" value={order.phone} />
-                    <KV label="GSTIN" value={importer?.gstin} />
-                    <KV label="IRS/EIN" value={importer?.taxIdType === 'EIN' ? importer?.taxId : undefined} />
+                    {/* Destination-specific tax identifiers render only when
+                        present — printing empty GSTIN / IRS-EIN / PN-KN labels
+                        on every invoice was template bleed from the India lane
+                        (GSTIN is an Indian identifier; it means nothing on a
+                        CA or EU entry). */}
+                    {importer?.gstin ? <KV label="GSTIN" value={importer.gstin} /> : null}
+                    {importer?.taxIdType === 'EIN' && importer?.taxId ? <KV label="IRS/EIN" value={importer.taxId} /> : null}
                     <KV label="Food Shipment" value="N" />
-                    <KV label="PN/KN" value="" />
                   </div>
                 </div>
                 <div className="border border-slate-300 p-3">
@@ -1221,7 +1236,12 @@ export default function LabelDocumentPage() {
                   {brokerage === 'BROKER_SELECT' && broker ? (
                     <>
                       <p className="font-bold">{broker.name || broker.company || '—'}</p>
-                      {broker.company && broker.name ? <p>{broker.company}</p> : null}
+                      {/* Collapse when name and company are the same string —
+                          a brokerage entered in both fields printed twice. */}
+                      {broker.company && broker.name
+                        && broker.company.trim().toLowerCase() !== broker.name.trim().toLowerCase()
+                        ? <p>{broker.company}</p>
+                        : null}
                       {broker.addressLine1 ? <p>{broker.addressLine1}{broker.addressLine2 ? `, ${broker.addressLine2}` : ''}</p> : null}
                       <p>{[broker.city, broker.postalCode, broker.state, broker.countryCode].filter(Boolean).join(', ')}</p>
                       <div className="mt-1 space-y-0.5">
@@ -1278,15 +1298,17 @@ export default function LabelDocumentPage() {
                 {lines.length ? (
                   lines.map((line, i) => {
                     const net = (line as { netWeight?: number | null }).netWeight
+                    const netEst = (line as { netWeightEstimated?: boolean }).netWeightEstimated
+                    const estSuffix = netEst ? ' (est)' : ''
                     return (
                       <div key={line.id} className={`px-3 py-2 ${i > 0 ? 'border-t border-slate-200' : ''}`}>
                         <div className="grid grid-cols-3 gap-x-4 gap-y-0.5">
                           <KV label="MARK/NBRS" value={line.itemNo} />
                           <KV label="HS CODE" value={line.hsCode} />
                           <KV label="CTRY MFG" value={line.countryOfOrigin} />
-                          <KV label="NET WT" value={net != null ? `${money(net)} ${ciWeightUnit}` : ''} />
+                          <KV label="NET WT" value={net != null ? `${money(net)} ${ciWeightUnit}${estSuffix}` : ''} />
                           <KV label="PACK WT" value={`${money(0)} ${ciWeightUnit}`} />
-                          <KV label="GROSS WT" value={net != null ? `${money(net)} ${ciWeightUnit}` : ''} />
+                          <KV label="GROSS WT" value={net != null ? `${money(net)} ${ciWeightUnit}${estSuffix}` : ''} />
                           <KV label="UNIT QTY" value={`${line.qtyShipped ?? 0} EA`} />
                           <KV label="UNIT VALUE" value={`$${money(line.unitPrice)}`} />
                           <KV label="COMMODITY VALUE" value={`$${money(line.totalPrice)} ${ciCurrency}`} />
