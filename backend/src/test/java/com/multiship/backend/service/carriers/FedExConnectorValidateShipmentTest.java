@@ -144,4 +144,44 @@ class FedExConnectorValidateShipmentTest {
         assertEquals("", FedExConnector.humanizeFedExFieldPath(""));
         assertEquals("", FedExConnector.humanizeFedExFieldPath(null));
     }
+
+    // ─── PR #557 audit — parameterList humanization + dedup ─────────
+
+    @org.junit.jupiter.api.Test
+    void buildFedExErrorPrefix_knownKey_returnsHumanContext() throws Exception {
+        // Matches the exact shape FedEx returns for commodity-value errors
+        // — {key: COMMODITY_INDEX, value: 1}. Pre-fix the operator saw
+        // "COMMODITY_INDEX — 1"; now context becomes "Commodity line 1".
+        ObjectMapper om = new ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode params = om.readTree(
+                "[{\"key\":\"COMMODITY_INDEX\",\"value\":\"1\"}]");
+        assertEquals("Commodity line 1", FedExConnector.buildFedExErrorPrefix(params));
+    }
+
+    @org.junit.jupiter.api.Test
+    void buildFedExErrorPrefix_unknownKey_isDropped() throws Exception {
+        // Unknown keys were previously surfaced verbatim ("MYSTERY — 7").
+        // Now silently dropped so we don't leak wire-y strings.
+        ObjectMapper om = new ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode params = om.readTree(
+                "[{\"key\":\"MYSTERY_KEY\",\"value\":\"7\"}]");
+        assertEquals("", FedExConnector.buildFedExErrorPrefix(params));
+    }
+
+    @org.junit.jupiter.api.Test
+    void buildFedExErrorPrefix_multipleKnownKeys_joinedComma() throws Exception {
+        ObjectMapper om = new ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode params = om.readTree(
+                "[{\"key\":\"PACKAGE_INDEX\",\"value\":\"2\"},"
+                + "{\"key\":\"COMMODITY_INDEX\",\"value\":\"3\"}]");
+        assertEquals("Package 2, Commodity line 3",
+                FedExConnector.buildFedExErrorPrefix(params));
+    }
+
+    @org.junit.jupiter.api.Test
+    void buildFedExErrorPrefix_nullOrEmpty_returnsEmpty() throws Exception {
+        assertEquals("", FedExConnector.buildFedExErrorPrefix(null));
+        ObjectMapper om = new ObjectMapper();
+        assertEquals("", FedExConnector.buildFedExErrorPrefix(om.readTree("[]")));
+    }
 }

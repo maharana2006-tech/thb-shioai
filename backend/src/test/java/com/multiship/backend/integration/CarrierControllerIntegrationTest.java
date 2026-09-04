@@ -301,8 +301,20 @@ class CarrierControllerIntegrationTest extends AbstractIntegrationTest {
                 List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
     }
 
+    /**
+     * PR #557 hotfix — check by shipviaCd (semantic key), not by id.
+     * Sibling test {@code CarrierControllerNegativeIntegrationTest} seeds
+     * the same cds (P80 / F77) at different ids (9201-9203 vs 9101-9102);
+     * pre-fix both tests wrote rows because the id-based existence check
+     * missed the duplicate cd. That produced a shared-testcontainer state
+     * with two rows per cd and every {@code findByShipviaCdIgnoreCase}
+     * query on the connect() path failed with
+     * {@link org.springframework.dao.IncorrectResultSizeDataAccessException}
+     * — CI flaked here 3× on PRs #552 / #557 before we caught the
+     * pattern. See {@code feedback_it_stack_trace_first.md}.
+     */
     private void seedShipVia(Integer id, String cd, String desc) {
-        if (shipViaRepository.findById(id).isPresent()) return;
+        if (shipViaRepository.findByShipviaCdIgnoreCase(cd).isPresent()) return;
         ShipVia sv = new ShipVia();
         sv.setId(id);
         sv.setShipviaCd(cd);
