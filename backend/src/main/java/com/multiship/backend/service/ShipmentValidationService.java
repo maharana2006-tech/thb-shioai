@@ -82,6 +82,12 @@ public class ShipmentValidationService {
      *  UPS with native validate endpoints). */
     private final CarrierService carrierService;
     private final com.multiship.backend.repository.CarrierAccountRefRepository carrierAccountRefRepository;
+    /** Strict-fill sources for intl customs currency + incoterms.
+     *  Currency precedence: operator → CarrierAccountRef → Client.defaultCurrency → error.
+     *  Incoterms precedence: operator → ClientCustomsProfile.incoterms → error.
+     *  No hardcoded USD/DAP defaults. */
+    private final com.multiship.backend.repository.ClientRepository clientRepository;
+    private final com.multiship.backend.repository.ClientCustomsProfileRepository clientCustomsProfileRepository;
 
     @Transactional(readOnly = true)
     public ApiResponse<ShipmentValidationResult> validate(ManualShipmentRequest req) {
@@ -203,6 +209,10 @@ public class ShipmentValidationService {
         // ─── Customs / international validation ─────────────────────────────
         ShipmentRequestDTO adapted = adaptForValidators(req, international);
         if (international) {
+            // Strict per-commodity + currency/incoterms pre-checks. No
+            // fabricated fallbacks — every missing REQUIRED field surfaces
+            // as a local error before the carrier hop.
+            checkIntlRequiredFields(req, recipientCountry, errors);
             for (IntlShipmentValidator.ValidationError ve : IntlShipmentValidator.validate(adapted)) {
                 errors.add(ValidationIssue.builder()
                         .code(ve.code()).message(ve.message()).build());
@@ -641,6 +651,91 @@ public class ShipmentValidationService {
         }
     }
 
+    /**
+     * Strict per-commodity + resolvable currency/incoterms checks for
+     * international shipments. Every missing REQUIRED field surfaces as
+     * a local error so the operator gets the full punch-list on one
+     * pass — no silent USD/DAP defaults, no declared-value spread, no
+     * "0.10 kg" fabricated weight.
+     *
+     * <ul>
+     *   <li>Per-commodity: {@code description}, {@code hsCode},
+     *       {@code countryOfOrigin}, {@code quantity > 0},
+     *       {@code unitValue > 0}, and a derivable
+     *       {@code weight} (line-level OR pkg-weight spread).</li>
+     *   <li>Currency: resolvable via
+     *       {@link #resolveCustomsCurrency(ManualShipmentRequest)} —
+     *       operator → CarrierAccountRef → Client.defaultCurrency.</li>
+     *   <li>Incoterms: resolvable via
+     *       {@link #resolveIncoterms(ManualShipmentRequest, String)} —
+     *       operator → ClientCustomsProfile.incoterms.</li>
+     * </ul>
+     */
+    private void checkIntlRequiredFields(ManualShipmentRequest req,
+                                         String recipientCountry,
+                                         List<ValidationIssue> errors) {
+        // Currency + incoterms — resolvable via precedence, else error.
+        if (resolveCustomsCurrency(req) == null) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Customs currency is required — pick one on the shipment, "
+                            + "or set a default on the carrier account or client.",
+                    "currency"));
+        }
+        if (resolveIncoterms(req, recipientCountry) == null) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Incoterms is required for international shipments — pick one "
+                            + "on the shipment, or set a default on the client's "
+                            + "customs profile for " + recipientCountry + ".",
+                    "incoterms"));
+        }
+        // Per-commodity strict — hsCode, countryOfOrigin, unitValue > 0,
+        // derivable weight. Loop by index so error messages point at the
+        // right row.
+        java.util.List<ManualShipmentRequest.Item> items = req.getItems();
+        if (items == null || items.isEmpty()) return; // IntlShipmentValidator flags commodities.empty
+        boolean canSpreadWeight = req.getWeight() != null && req.getWeight().signum() > 0;
+        for (int i = 0; i < items.size(); i++) {
+            ManualShipmentRequest.Item it = items.get(i);
+            if (it == null) continue;
+            String rowLabel = "Item " + (i + 1);
+            String fieldPrefix = "items[" + i + "].";
+            if (!StringUtils.hasText(it.getDescription())) {
+                // Description is enforced by IntlShipmentValidator but flag here too
+                // so the operator sees the same row-numbered message the other
+                // fields use — one banner, one punch-list.
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        rowLabel + ": description is required.",
+                        fieldPrefix + "description"));
+            }
+            if (!StringUtils.hasText(it.getHsCode())) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        rowLabel + ": HS (harmonized) code is required for international shipments.",
+                        fieldPrefix + "hsCode"));
+            }
+            if (!StringUtils.hasText(it.getCountryOfOrigin())) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        rowLabel + ": country of origin is required for international shipments.",
+                        fieldPrefix + "countryOfOrigin"));
+            }
+            if (it.getUnitValue() == null || it.getUnitValue().signum() <= 0) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        rowLabel + ": unit value greater than zero is required.",
+                        fieldPrefix + "unitValue"));
+            }
+            // Weight is derivable when the line has its own OR pkg weight
+            // is set (spread across items by qty). If NEITHER is set the
+            // line can't be filled — error at the row so the operator
+            // knows exactly where to add weight.
+            boolean lineHasOwnWeight = it.getWeight() != null && it.getWeight().signum() > 0;
+            if (!lineHasOwnWeight && !canSpreadWeight) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                        rowLabel + ": weight is required — either fill it in on the row "
+                                + "or set the shipment's package weight.",
+                        fieldPrefix + "weight"));
+            }
+        }
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────────────
 
     /**
@@ -678,31 +773,29 @@ public class ShipmentValidationService {
             // IntlShipmentValidator short-circuits on intl.international != TRUE
             // (line 88), so the flag must be set even when commodities are
             // empty (so the validator surfaces the "no commodities" error).
+            //
+            // No fallbacks — the strict pre-checks in validate() already
+            // flag missing hsCode/countryOfOrigin/unitValue/currency/
+            // incoterms as local errors. This shell just mirrors the
+            // operator's payload plus the pkg-weight spread (a
+            // derivation, not a fallback — pkg weight is a required
+            // shipment field, so spreading it across items is faithful
+            // to what the operator entered).
             java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> commodities =
                     buildValidatorCommodities(req);
-            // Mirror CarrierServiceImpl.buildManualIntlBlock's roll-up:
-            // customs total prefers the summed commodity line values (so
-            // FedEx line-items and total agree) and falls back to the
-            // shipment's declared value only when items carry no unit
-            // prices. Previously this adapter used declaredValue directly
-            // — leaving customsTotalValue null when the operator entered
-            // items with unit prices but no explicit declared value, and
-            // FedEx rejected the resulting shell with "Insufficient
-            // information for commodity 1".
             BigDecimal commoditySum = commodities.stream()
                     .map(com.multiship.backend.dto.CustomsCommodityDTO::lineTotalValue)
                     .filter(java.util.Objects::nonNull)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
-            BigDecimal customsTotal = commoditySum.signum() > 0
-                    ? commoditySum
-                    : (req.getDeclaredValue() != null && req.getDeclaredValue().signum() > 0
-                            ? req.getDeclaredValue() : null);
-            String customsCurrency = StringUtils.hasText(req.getCurrency())
-                    ? req.getCurrency().toUpperCase(Locale.ROOT) : "USD";
+            BigDecimal customsTotal = commoditySum.signum() > 0 ? commoditySum : null;
+            String recipientCountry = req.getRecipient() != null
+                    ? normCountry(req.getRecipient().getCountryCode()) : null;
+            String customsCurrency = resolveCustomsCurrency(req);
+            String customsIncoterms = resolveIncoterms(req, recipientCountry);
             intl = IntlShipmentBlockDTO.builder()
                     .international(true)
                     .commodities(commodities)
-                    .incoterms(StringUtils.hasText(req.getIncoterms()) ? req.getIncoterms() : "DAP")
+                    .incoterms(customsIncoterms)
                     .reasonForExport(req.getReasonForExport())
                     .customsCurrency(customsCurrency)
                     .customsTotalValue(customsTotal)
@@ -717,12 +810,18 @@ public class ShipmentValidationService {
     }
 
     /**
-     * Mirrors {@link CarrierServiceImpl#buildManualIntlBlock}'s commodity
-     * shaping so the FedEx pre-flight sees the same per-line unitWeight +
-     * unitValue the actual createShipment call would send. Historically
-     * this adapter dropped {@code unitWeight}, so FedEx rejected every
-     * intl pre-flight with "Commodity weight is missing or invalid" even
-     * when the operator's package weight was populated.
+     * Commodity shaping for the pre-flight intl block. STRICT — no
+     * fabricated values:
+     * <ul>
+     *   <li>Per-line {@code unitValue} = operator's item.unitValue (no
+     *       declared-value spread). Missing → null on the wire; local
+     *       pre-checks flag as {@code customs.unitValue.missing}.</li>
+     *   <li>Per-line {@code unitWeight} = operator's item.weight if set,
+     *       otherwise the shipment's pkgWeight × qty / totalQty share
+     *       (a derivation from a required field, not a fallback). No
+     *       "0.10" last-resort — missing pkg weight → null on the wire;
+     *       local pre-checks flag as {@code customs.weight.missing}.</li>
+     * </ul>
      */
     // package-private for direct unit-test coverage of the weight-spread math.
     static java.util.List<com.multiship.backend.dto.CustomsCommodityDTO>
@@ -731,32 +830,78 @@ public class ShipmentValidationService {
         int totalQty = req.getItems().stream()
                 .mapToInt(it -> it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1).sum();
         java.math.RoundingMode HU = java.math.RoundingMode.HALF_UP;
-        BigDecimal perUnitValue = (req.getDeclaredValue() != null
-                && req.getDeclaredValue().signum() > 0 && totalQty > 0)
-                ? req.getDeclaredValue().divide(BigDecimal.valueOf(totalQty), 2, HU) : null;
         BigDecimal pkgWeight = req.getWeight();
+        boolean canSpread = pkgWeight != null && pkgWeight.signum() > 0 && totalQty > 0;
         return req.getItems().stream()
                 .map(it -> {
                     int qty = it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1;
-                    BigDecimal unitValue = it.getUnitValue() != null ? it.getUnitValue() : perUnitValue;
-                    BigDecimal lineWeight = (it.getWeight() != null && it.getWeight().signum() > 0)
-                            ? it.getWeight()
-                            : (pkgWeight != null && pkgWeight.signum() > 0 && totalQty > 0
-                                    ? pkgWeight.multiply(BigDecimal.valueOf(qty))
-                                            .divide(BigDecimal.valueOf(totalQty), 3, HU)
-                                    : new BigDecimal("0.10"));
+                    BigDecimal lineWeight;
+                    if (it.getWeight() != null && it.getWeight().signum() > 0) {
+                        lineWeight = it.getWeight();
+                    } else if (canSpread) {
+                        lineWeight = pkgWeight.multiply(BigDecimal.valueOf(qty))
+                                .divide(BigDecimal.valueOf(totalQty), 3, HU);
+                    } else {
+                        lineWeight = null;
+                    }
                     return com.multiship.backend.dto.CustomsCommodityDTO.builder()
                             .description(it.getDescription())
                             .hsCode(it.getHsCode())
                             .countryOfOrigin(it.getCountryOfOrigin())
                             .quantity(qty)
-                            .unitValue(unitValue)
+                            .unitValue(it.getUnitValue())
                             .unitWeight(lineWeight)
                             .sku(it.getSku())
                             .boxSeq(it.getBoxSeq())
                             .build();
                 })
                 .toList();
+    }
+
+    /**
+     * Currency precedence: operator → CarrierAccountRef.currency →
+     * Client.defaultCurrency → null. Customs profile is intentionally
+     * skipped (user decision — carrier billing currency governs intl
+     * customs, not the client-scoped customs profile).
+     */
+    String resolveCustomsCurrency(ManualShipmentRequest req) {
+        if (StringUtils.hasText(req.getCurrency())) {
+            return req.getCurrency().trim().toUpperCase(Locale.ROOT);
+        }
+        if (StringUtils.hasText(req.getCarrierCode()) && StringUtils.hasText(req.getAccountNumber())) {
+            com.multiship.backend.model.CarrierAccountRef account = resolveAccount(
+                    req.getCarrierCode().trim().toUpperCase(Locale.ROOT), req.getClientCode());
+            if (account != null && StringUtils.hasText(account.getCurrency())) {
+                return account.getCurrency().trim().toUpperCase(Locale.ROOT);
+            }
+        }
+        if (StringUtils.hasText(req.getClientCode())) {
+            java.util.Optional<com.multiship.backend.model.Client> client =
+                    clientRepository.findByClientCodeIgnoreCase(req.getClientCode());
+            if (client.isPresent() && StringUtils.hasText(client.get().getDefaultCurrency())) {
+                return client.get().getDefaultCurrency().trim().toUpperCase(Locale.ROOT);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Incoterms precedence: operator → ClientCustomsProfile.incoterms
+     * (looked up by clientCode + recipient country) → null.
+     */
+    String resolveIncoterms(ManualShipmentRequest req, String recipientCountry) {
+        if (StringUtils.hasText(req.getIncoterms())) {
+            return req.getIncoterms().trim().toUpperCase(Locale.ROOT);
+        }
+        if (StringUtils.hasText(req.getClientCode()) && StringUtils.hasText(recipientCountry)) {
+            java.util.Optional<com.multiship.backend.model.ClientCustomsProfile> profile =
+                    clientCustomsProfileRepository.findByClientAndCountry(
+                            req.getClientCode(), recipientCountry);
+            if (profile.isPresent() && StringUtils.hasText(profile.get().getIncoterms())) {
+                return profile.get().getIncoterms().trim().toUpperCase(Locale.ROOT);
+            }
+        }
+        return null;
     }
 
     private ValidationIssue issue(ErrorCode code, String message, String field) {
