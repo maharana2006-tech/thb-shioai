@@ -670,19 +670,42 @@ public class ShipmentValidationService {
      * checks. Not the full CarrierServiceImpl.buildShipmentRequest —
      * that method has 20+ dependencies and is overkill for a pre-flight.
      */
-    private ShipmentRequestDTO adaptForValidators(ManualShipmentRequest req, boolean international) {
+    // package-private for direct unit-test coverage of the customs-total
+    // + currency roll-up (see ShipmentValidationServiceTest).
+    ShipmentRequestDTO adaptForValidators(ManualShipmentRequest req, boolean international) {
         IntlShipmentBlockDTO intl = null;
         if (international) {
             // IntlShipmentValidator short-circuits on intl.international != TRUE
             // (line 88), so the flag must be set even when commodities are
             // empty (so the validator surfaces the "no commodities" error).
+            java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> commodities =
+                    buildValidatorCommodities(req);
+            // Mirror CarrierServiceImpl.buildManualIntlBlock's roll-up:
+            // customs total prefers the summed commodity line values (so
+            // FedEx line-items and total agree) and falls back to the
+            // shipment's declared value only when items carry no unit
+            // prices. Previously this adapter used declaredValue directly
+            // — leaving customsTotalValue null when the operator entered
+            // items with unit prices but no explicit declared value, and
+            // FedEx rejected the resulting shell with "Insufficient
+            // information for commodity 1".
+            BigDecimal commoditySum = commodities.stream()
+                    .map(com.multiship.backend.dto.CustomsCommodityDTO::lineTotalValue)
+                    .filter(java.util.Objects::nonNull)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal customsTotal = commoditySum.signum() > 0
+                    ? commoditySum
+                    : (req.getDeclaredValue() != null && req.getDeclaredValue().signum() > 0
+                            ? req.getDeclaredValue() : null);
+            String customsCurrency = StringUtils.hasText(req.getCurrency())
+                    ? req.getCurrency().toUpperCase(Locale.ROOT) : "USD";
             intl = IntlShipmentBlockDTO.builder()
                     .international(true)
-                    .commodities(buildValidatorCommodities(req))
-                    .incoterms(req.getIncoterms())
+                    .commodities(commodities)
+                    .incoterms(StringUtils.hasText(req.getIncoterms()) ? req.getIncoterms() : "DAP")
                     .reasonForExport(req.getReasonForExport())
-                    .customsCurrency(req.getCurrency())
-                    .customsTotalValue(req.getDeclaredValue())
+                    .customsCurrency(customsCurrency)
+                    .customsTotalValue(customsTotal)
                     .weightUnit(req.getWeightUnit())
                     .build();
         }
