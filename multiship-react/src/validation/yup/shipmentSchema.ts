@@ -192,6 +192,14 @@ export const itemSchema = Yup.object({
     .test('max-2-decimals', 'At most 2 decimal places', (v) =>
       v == null || Math.abs(v * 100 - Math.round(v * 100)) < 1e-9,
     ),
+  // PR #558 — per-item weight. Optional (blank string acceptable);
+  // when blank the FE auto-fills from `pkgWeight × qty / totalQty`.
+  // When operator types something, must be a positive number.
+  weight: Yup.number()
+    .transform(emptyToUndef)
+    .typeError('Weight must be a number')
+    .moreThan(0, 'Must be greater than 0')
+    .nullable(),
 })
 
 export const shipmentSchema = Yup.object({

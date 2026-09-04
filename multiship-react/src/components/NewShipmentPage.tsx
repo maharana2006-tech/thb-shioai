@@ -628,7 +628,7 @@ export default function NewShipmentPage() {
   // from sum(unitValue × quantity in that box). null boxSeq = unassigned
   // (falls into box 1 by default; treated as legacy single-box CI).
   type ItemRow = NewShipmentItemRow
-  const blankItem = (): ItemRow => ({ description: '', sku: '', hsCode: '', countryOfOrigin: '', quantity: '1', unitValue: '', boxSeq: '' })
+  const blankItem = (): ItemRow => ({ description: '', sku: '', hsCode: '', countryOfOrigin: '', quantity: '1', unitValue: '', boxSeq: '', weight: '' })
   const [items, setItems] = useState<ItemRow[]>([blankItem()])
   // Reason of export prefills from `CarrierAccountRef.shippingPurpose`
   // (see prefill useEffect below). Sticky read removed — force-pick
@@ -1119,6 +1119,10 @@ export default function NewShipmentPage() {
               description: it.description ?? '', sku: it.sku ?? '', hsCode: it.hsCode ?? '',
               countryOfOrigin: it.countryOfOrigin ?? '', quantity: String(it.quantity ?? 1),
               unitValue: it.unitValue != null ? String(it.unitValue) : '', boxSeq: '',
+              // PR #558 — hydrate per-item weight when the customs record
+              // carries it; blank string when null so the auto-fill
+              // placeholder (pkgWeight × qty / totalQty) shows.
+              weight: it.weight != null ? String(it.weight) : '',
             })))
           }
         }
@@ -1607,6 +1611,10 @@ export default function NewShipmentPage() {
           countryOfOrigin: it.countryOfOrigin.trim().toUpperCase() || undefined,
           quantity: it.quantity ? Number(it.quantity) : null,
           unitValue: it.unitValue ? Number(it.unitValue) : null,
+          // PR #558 — per-item weight; auto-computed from pkg weight when
+          // operator left blank (see autoItemWeight). Falls to null when
+          // pkg weight is also blank so BE fallback fires.
+          weight: autoItemWeight(it) || null,
         }))
       const isCustom = packageChoice === CUSTOM_PKG
       const payload = {
@@ -1759,12 +1767,15 @@ export default function NewShipmentPage() {
         countryOfOrigin: it.countryOfOrigin.trim().toUpperCase() || null,
         quantity: Number(it.quantity) || 1,
         unitValue: Number(it.unitValue) || 0,
+        // PR #558 — per-item weight; auto-fill from pkg weight when blank.
+        weight: autoItemWeight(it) || null,
         sku: it.sku.trim() || null,
       })),
     incoterms,
     reasonForExport,
     currency,
     weightUnit,
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- autoItemWeight is a stable derived helper over items + weight; adding it triggers a new identity every render.
   }), [items, incoterms, reasonForExport, currency, weightUnit])
 
   /** Copy wizard-side state back into the inline form state so both stay in sync. */
@@ -1777,6 +1788,7 @@ export default function NewShipmentPage() {
       quantity: String(it.quantity ?? 1),
       unitValue: it.unitValue != null ? String(it.unitValue) : '',
       boxSeq: '', // Sprint 48 B11 — wizard doesn't collect boxSeq yet; preserved as blank
+      weight: it.weight != null ? String(it.weight) : '', // PR #558 — wizard doesn't collect weight yet; fallback fills.
     }))
     // Keep at least one row so the inline form isn't blank after a Save
     // with zero items entered in the wizard.
@@ -1796,6 +1808,36 @@ export default function NewShipmentPage() {
   const addItem = () => setItems((rows) => [blankItem(), ...rows])
   const removeItem = (i: number) => setItems((rows) => (rows.length > 1 ? rows.filter((_, idx) => idx !== i) : rows))
   const invoiceTotal = items.reduce((sum, it) => sum + (Number(it.quantity) || 0) * (Number(it.unitValue) || 0), 0)
+
+  // PR #558 — per-item weight auto-fill. Sums quantities across all rows
+  // (min 1 to guard divide-by-zero) then spreads the shipment-level
+  // package weight proportionally when a row's own weight is blank.
+  // Operator override always wins.
+  const totalItemQty = items.reduce((sum, it) => sum + (Number(it.quantity) || 0), 0) || 1
+  const pkgWeightNumeric = Number(weight) || 0
+  const autoItemWeight = (it: ItemRow): number => {
+    if (it.weight) return Number(it.weight) || 0
+    const qty = Number(it.quantity) || 0
+    if (pkgWeightNumeric <= 0 || qty <= 0) return 0
+    // 3-decimal precision matches BE fallback in buildManualIntlBlock.
+    return Math.round((pkgWeightNumeric * qty / totalItemQty) * 1000) / 1000
+  }
+
+  // PR #558 — for international shipments, keep the `declaredValue`
+  // state (which drives Formik/Yup validation + the carrier payload)
+  // in sync with the auto-computed invoiceTotal. Domestic shipments
+  // are unchanged — operator's manual entry wins. The input is
+  // rendered as readonly (see Field) so the operator can't drift from
+  // this value; changing Items unit prices propagates automatically.
+  // Guards against feedback loops: only writes when the string
+  // representation actually differs.
+  useEffect(() => {
+    if (!isInternational) return
+    const next = invoiceTotal > 0 ? invoiceTotal.toFixed(2) : ''
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Yup's insured-le-declared cap (shipmentSchema.ts:250) reads this.parent.declaredValue via formik state; on international the operator can't edit the field so we mirror the invoice sum here as the single source of truth. Cascading render is bounded (state only updates when the string representation actually differs).
+    if (next !== declaredValue) setDeclaredValue(next)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- declaredValue read to prevent infinite loop; setDeclaredValue is stable
+  }, [isInternational, invoiceTotal])
 
   // ── AI assist handlers (one per section, suggestion-only) ──────────────────
   const weightInLb = () => {
@@ -1971,6 +2013,8 @@ export default function NewShipmentPage() {
         countryOfOrigin: it.countryOfOrigin.trim().toUpperCase() || undefined,
         quantity: it.quantity ? Number(it.quantity) : null,
         unitValue: it.unitValue ? Number(it.unitValue) : null,
+        // PR #558 — per-item weight; auto-computed from pkg weight when blank.
+        weight: autoItemWeight(it) || null,
         // Sprint 48 B11 — assign item to a specific physical package;
         // backend derives per-box declared value from sum of items
         // when at least one item is assigned.
@@ -2897,8 +2941,36 @@ export default function NewShipmentPage() {
                   <Field label={`Weight (${weightUnit.toLowerCase()})`} required error={errAt('weight')}>
                     <input className={inputCls} type="number" min="0" step="0.1" value={weight} onChange={(e) => { setWeight(e.target.value); clearFixKey('weight') }} placeholder="2.5" />
                   </Field>
-                  <Field label={`Declared value (${currency})`} error={errAt('declaredValue')}>
-                    <input className={inputCls} type="number" min="0" step="0.01" value={declaredValue} onChange={(e) => { setDeclaredValue(e.target.value); clearFixKey('declaredValue') }} placeholder="100.00" />
+                  <Field
+                    label={`Declared value (${currency})${isInternational ? ' — auto' : ''}`}
+                    error={errAt('declaredValue')}
+                    hint={isInternational
+                      ? 'Computed from Items: sum of quantity × unit value.'
+                      : undefined}
+                  >
+                    {isInternational ? (
+                      // PR #558 — for international, Declared Value is the
+                      // sum(qty × unit price) across items. Made readonly
+                      // so the operator can't drift from the customs total
+                      // sent to the carrier. Empty items → red hint below.
+                      <>
+                        <input
+                          className={`${inputCls} !bg-[#faf7f0] !text-[#5a4526] cursor-not-allowed`}
+                          type="text"
+                          readOnly
+                          value={invoiceTotal > 0 ? invoiceTotal.toFixed(2) : '—'}
+                          title="Auto-computed from Items — edit the Items section to change this value"
+                          tabIndex={-1}
+                        />
+                        {invoiceTotal <= 0 ? (
+                          <p className="mt-1 px-1 text-[11px] font-semibold text-rose-600">
+                            Fill in Items unit prices to enable this shipment.
+                          </p>
+                        ) : null}
+                      </>
+                    ) : (
+                      <input className={inputCls} type="number" min="0" step="0.01" value={declaredValue} onChange={(e) => { setDeclaredValue(e.target.value); clearFixKey('declaredValue') }} placeholder="100.00" />
+                    )}
                   </Field>
                 </div>
                 {pkgServiceWarning ? (
@@ -3198,9 +3270,11 @@ export default function NewShipmentPage() {
                 <div className="space-y-1.5 overflow-x-auto">
                   {/* header labels (once) */}
                   {/* Sprint 48 B11 — added "Pkg #" column between Amount and trash.
+                      PR #558 — added "Weight" column between Unit value and Amount for
+                      per-commodity weight (required by FedEx for intl shipments).
                       Total packages available = primary box + extraPackages. */}
-                  <div className="hidden min-w-[820px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_0.6fr_44px] gap-2 sm:grid">
-                    {['Description *', 'SKU', 'HS code', 'Origin', 'Qty', `Unit value (${currency}) *`, `Amount (${currency})`, 'Pkg #'].map((h) => (
+                  <div className="hidden min-w-[900px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_0.7fr_1fr_0.6fr_44px] gap-2 sm:grid">
+                    {['Description *', 'SKU', 'HS code', 'Origin', 'Qty', `Unit value (${currency}) *`, `Wt (${weightUnit.toLowerCase()})`, `Amount (${currency})`, 'Pkg #'].map((h) => (
                       <span key={h} className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">{h}</span>
                     ))}
                     <span />
@@ -3214,6 +3288,9 @@ export default function NewShipmentPage() {
                     canRemove={items.length > 1}
                     inputCls={inputCls}
                     itemErr={itemErrAt}
+                    // PR #558 — weight helpers for the per-item Wt column.
+                    weightUnit={weightUnit}
+                    autoItemWeight={autoItemWeight}
                   />
 
                   {/* invoice total */}
@@ -3517,6 +3594,14 @@ export type NewShipmentItemRow = {
   quantity: string
   unitValue: string
   boxSeq: string
+  /**
+   * PR #558 — per-commodity weight for international shipments. FedEx
+   * requires it and rejected "Commodity weight is missing or invalid"
+   * when zero. When left blank on international, FE + BE fall back to
+   * spreading `packageWeight × qty / totalQty` across items; operator
+   * can override this cell for uneven weight distribution.
+   */
+  weight: string
 }
 
 /**
@@ -3540,6 +3625,8 @@ export function VirtualizedNewShipmentItems({
   canRemove,
   inputCls,
   itemErr,
+  weightUnit,
+  autoItemWeight,
 }: {
   items: NewShipmentItemRow[]
   patchItem: (i: number, patch: Partial<NewShipmentItemRow>) => void
@@ -3549,6 +3636,10 @@ export function VirtualizedNewShipmentItems({
   inputCls: string
   /** Per-item validation lookup (only returns messages after a submit attempt). */
   itemErr?: (index: number, field: string) => string | undefined
+  /** PR #558 — LB / KG suffix on the weight column placeholder. */
+  weightUnit: string
+  /** PR #558 — compute the auto-fill weight from pkg weight × qty share. */
+  autoItemWeight: (it: NewShipmentItemRow) => number
 }) {
   const parentRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual's useVirtualizer() returns functions that cannot be memoized safely — library-level incompatibility with react-hooks analyzer, not a code issue
@@ -3594,6 +3685,8 @@ export function VirtualizedNewShipmentItems({
               canRemove={canRemove}
               inputCls={inputCls}
               itemErr={itemErr}
+              weightUnit={weightUnit}
+              autoItemWeight={autoItemWeight}
             />
           </div>
         ))}
@@ -3612,6 +3705,8 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
   canRemove,
   inputCls,
   itemErr,
+  weightUnit,
+  autoItemWeight,
 }: {
   index: number
   it: NewShipmentItemRow
@@ -3621,14 +3716,20 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
   canRemove: boolean
   inputCls: string
   itemErr?: (index: number, field: string) => string | undefined
+  weightUnit: string
+  autoItemWeight: (it: NewShipmentItemRow) => number
 }) {
   const patch = useCallback((delta: Partial<NewShipmentItemRow>) => patchItem(index, delta), [patchItem, index])
   const remove = useCallback(() => removeItem(index), [removeItem, index])
   const amount = (Number(it.quantity) || 0) * (Number(it.unitValue) || 0)
   const err = (field: string) => (itemErr ? itemErr(index, field) : undefined)
+  // PR #558 — placeholder shows the auto-computed weight so operator
+  // knows what BE will send when they leave the cell blank.
+  const autoWt = autoItemWeight(it)
+  const wtPlaceholder = autoWt > 0 ? `auto ${autoWt.toFixed(2)}` : '0.10'
   return (
     <div className="space-y-1">
-      <div className="grid min-w-[820px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_1fr_0.6fr_44px] items-start gap-2">
+      <div className="grid min-w-[900px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_0.7fr_1fr_0.6fr_44px] items-start gap-2">
         <input className={`${inputCls}${itemErrRing(err('description'))}`} value={it.description} onChange={(e) => patch({ description: e.target.value })} placeholder="Cotton t-shirt" />
         <input className={`${inputCls}${itemErrRing(err('sku'))}`} value={it.sku} onChange={(e) => patch({ sku: e.target.value })} placeholder="SKU-001" />
         <HsCodeCombobox
@@ -3641,6 +3742,17 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
         <input className={`${inputCls} uppercase${itemErrRing(err('countryOfOrigin'))}`} value={it.countryOfOrigin} onChange={(e) => patch({ countryOfOrigin: e.target.value })} placeholder="US" maxLength={2} />
         <input className={`${inputCls}${itemErrRing(err('quantity'))}`} type="number" min="1" step="1" value={it.quantity} onFocus={(e) => e.currentTarget.select()} onChange={(e) => patch({ quantity: e.target.value })} placeholder="1" />
         <input className={`${inputCls}${itemErrRing(err('unitValue'))}`} type="number" min="0" step="0.01" value={it.unitValue} onChange={(e) => patch({ unitValue: e.target.value })} placeholder="20.00" />
+        {/* PR #558 — per-item weight; blank = auto from pkg weight × qty share.
+            Placeholder shows the computed value so operator sees what BE
+            will use. Type to override. */}
+        <input
+          className={`${inputCls}${itemErrRing(err('weight'))}`}
+          type="number" min="0" step="0.01"
+          value={it.weight}
+          onChange={(e) => patch({ weight: e.target.value })}
+          placeholder={wtPlaceholder}
+          title={`Weight of one row (${weightUnit.toLowerCase()}) — auto-fills from package weight × qty share when blank.`}
+        />
         <div className={`${inputCls} flex items-center justify-end bg-[#faf7f0] font-mono tabular-nums`}>
           {amount > 0 ? amount.toFixed(2) : '—'}
         </div>
@@ -3675,6 +3787,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
           err('countryOfOrigin'),
           err('quantity'),
           err('unitValue'),
+          err('weight'),
         ].filter(Boolean)
         return msgs.length ? (
           <p className="ms-field-error px-1 text-[10.5px] font-semibold text-rose-600">{msgs.join(' · ')}</p>
