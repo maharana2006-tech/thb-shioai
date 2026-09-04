@@ -3424,10 +3424,14 @@ public class CarrierServiceImpl implements CarrierService {
         if (a == null) return original;
         com.multiship.backend.dto.ManualShipmentRequest.Address merged =
                 new com.multiship.backend.dto.ManualShipmentRequest.Address();
-        merged.setName(firstNonBlank(a.getName(), original != null ? original.getName() : null));
-        // Warehouse address has no distinct company field — reuse name, then
-        // fall back to whatever the caller sent.
-        merged.setCompany(firstNonBlank(a.getName(), original != null ? original.getCompany() : null));
+        // Identity precedence flipped: the caller's sender (the client's
+        // company, set by the UI on client pick) wins; the warehouse alias
+        // ("Main Fulfillment Center") is only the fallback. The warehouse is
+        // where the parcel ships FROM — printing its facility alias as the
+        // shipper on labels/CIs replaced the client's brand with an internal
+        // name the recipient has never heard of.
+        merged.setName(firstNonBlank(original != null ? original.getName() : null, a.getName()));
+        merged.setCompany(firstNonBlank(original != null ? original.getCompany() : null, a.getName()));
         merged.setPhone(firstNonBlank(a.getPhone(), original != null ? original.getPhone() : null));
         merged.setEmail(original != null ? original.getEmail() : null);
         merged.setAddressLine1(firstNonBlank(a.getLine1(), original != null ? original.getAddressLine1() : null));

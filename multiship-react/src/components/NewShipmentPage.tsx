@@ -42,7 +42,7 @@ import type { LandedCostRequest } from '../api/landedCostService'
 import type { CustomsItem, OrderCustomsPayload } from '../api/customsService'
 import { parseIntlValidationMessage } from '../utils/intlValidationErrors'
 import { useFormik, getIn } from 'formik'
-import { shipmentSchema, type ShipmentFormValues } from '../validation/yup/shipmentSchema'
+import { shipmentSchema, hsExampleFor, type ShipmentFormValues } from '../validation/yup/shipmentSchema'
 import { dialCodeFor, postalPlaceholderFor, phoneHintFor } from '../utils/countryFormats'
 import { STATE_CODE_OPTIONS } from '../utils/stateCodes'
 import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddressFields'
@@ -804,8 +804,11 @@ export default function NewShipmentPage() {
   }, [clientCode])
 
   // When the picked warehouse changes, overwrite the sender block with the
-  // warehouse's address. Only overwrites fields the warehouse actually has, so
-  // manual edits on unfilled columns aren't clobbered.
+  // warehouse's ADDRESS. Identity fields (name/company) are NOT touched —
+  // the warehouse is where the parcel ships from, but the shipper on the
+  // label is the client (applyClient set it); overwriting printed the
+  // facility alias ("Main Fulfillment Center") as the shipper on labels
+  // and commercial invoices instead of the client's company.
   useEffect(() => {
     if (!warehouseCode) return
     const cw = clientWarehouses.find((w) => w.warehouse?.code === warehouseCode)
@@ -814,7 +817,8 @@ export default function NewShipmentPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- overwrite sender block with warehouse address when picker changes; depends on prior sender state to preserve unfilled fields, not derivable at render
     setSender((cur) => ({
       ...cur,
-      ...(a.name ? { name: a.name } : {}),
+      // Name only as a fallback when nothing identifies the sender yet.
+      ...(a.name && !cur.name ? { name: a.name } : {}),
       ...(a.line1 ? { addressLine1: a.line1 } : {}),
       ...(a.line2 != null ? { addressLine2: a.line2 || '' } : {}),
       ...(a.city ? { city: a.city } : {}),
@@ -3293,6 +3297,7 @@ export default function NewShipmentPage() {
                     // PR #558 — weight helpers for the per-item Wt column.
                     weightUnit={weightUnit}
                     autoItemWeight={autoItemWeight}
+                    hsPlaceholder={hsExampleFor(destCountry)}
                   />
 
                   {/* invoice total */}
@@ -3629,6 +3634,7 @@ export function VirtualizedNewShipmentItems({
   itemErr,
   weightUnit,
   autoItemWeight,
+  hsPlaceholder,
 }: {
   items: NewShipmentItemRow[]
   patchItem: (i: number, patch: Partial<NewShipmentItemRow>) => void
@@ -3642,6 +3648,8 @@ export function VirtualizedNewShipmentItems({
   weightUnit: string
   /** PR #558 — compute the auto-fill weight from pkg weight × qty share. */
   autoItemWeight: (it: NewShipmentItemRow) => number
+  /** Destination-aware HS example (hsExampleFor) for the code placeholder. */
+  hsPlaceholder?: string
 }) {
   const parentRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual's useVirtualizer() returns functions that cannot be memoized safely — library-level incompatibility with react-hooks analyzer, not a code issue
@@ -3689,6 +3697,7 @@ export function VirtualizedNewShipmentItems({
               itemErr={itemErr}
               weightUnit={weightUnit}
               autoItemWeight={autoItemWeight}
+              hsPlaceholder={hsPlaceholder}
             />
           </div>
         ))}
@@ -3709,6 +3718,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
   itemErr,
   weightUnit,
   autoItemWeight,
+  hsPlaceholder,
 }: {
   index: number
   it: NewShipmentItemRow
@@ -3720,6 +3730,9 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
   itemErr?: (index: number, field: string) => string | undefined
   weightUnit: string
   autoItemWeight: (it: NewShipmentItemRow) => number
+  /** Destination-aware HS example (from hsExampleFor) so the placeholder
+   *  never suggests a code the country-minimum rule would reject. */
+  hsPlaceholder?: string
 }) {
   const patch = useCallback((delta: Partial<NewShipmentItemRow>) => patchItem(index, delta), [patchItem, index])
   const remove = useCallback(() => removeItem(index), [removeItem, index])
@@ -3736,6 +3749,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
         <input className={`${inputCls}${itemErrRing(err('sku'))}`} value={it.sku} onChange={(e) => patch({ sku: e.target.value })} placeholder="SKU-001" />
         <HsCodeCombobox
           value={it.hsCode}
+          placeholder={hsPlaceholder}
           onChange={(v) => patch({ hsCode: v })}
           onDescriptionSuggest={(desc) => {
             if (!it.description || !it.description.trim()) patch({ description: desc })

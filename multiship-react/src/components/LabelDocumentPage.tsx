@@ -1303,7 +1303,9 @@ export default function LabelDocumentPage() {
                     return (
                       <div key={line.id} className={`px-3 py-2 ${i > 0 ? 'border-t border-slate-200' : ''}`}>
                         <div className="grid grid-cols-3 gap-x-4 gap-y-0.5">
-                          <KV label="MARK/NBRS" value={line.itemNo} />
+                          {/* SKU renders only when entered — same no-empty-label
+                              rule as the consignee tax identifiers. */}
+                          {line.itemNo ? <KV label="MARK/NBRS" value={line.itemNo} /> : null}
                           <KV label="HS CODE" value={line.hsCode} />
                           <KV label="CTRY MFG" value={line.countryOfOrigin} />
                           <KV label="NET WT" value={net != null ? `${money(net)} ${ciWeightUnit}${estSuffix}` : ''} />

@@ -60,6 +60,14 @@ const HS_MIN_DIGITS: Record<string, number> = {
   IN: 8, CN: 8, AU: 8, MX: 8, BR: 8, ZA: 8, JP: 9, KR: 10, SG: 8,
 }
 const HS_DEFAULT_MIN = 6
+/** An HS-code example that SATISFIES the destination's minimum-digit rule —
+ *  derived from the same table the rule reads, so a hint can never suggest
+ *  a code the validator then rejects (the old static "6109.10" example was
+ *  6 digits while CA/US demand 10). */
+export const hsExampleFor = (dest?: string | null): string => {
+  const min = HS_MIN_DIGITS[(dest || '').toUpperCase()] ?? HS_DEFAULT_MIN
+  return min >= 10 ? '6109.10.0012' : min >= 8 ? '6109.10.00' : '6109.10'
+}
 /** Count the numeric digits in an HS code (ignoring dots/spaces). */
 const hsDigits = (v?: string | null) => (v ?? '').replace(/\D/g, '').length
 
@@ -159,7 +167,7 @@ export const itemSchema = Yup.object({
   hsCode: Yup.string()
     .transform((v) => (typeof v === 'string' ? v.trim() : v))
     .required('HS code is required for customs')
-    .matches(HS_RE, 'HS code must be digits (e.g. 6109.10), 6–10 long')
+    .matches(HS_RE, 'HS code must be digits (e.g. 6109.10.0012), 6–10 long')
     // Country-wise length: the importing country sets the minimum (US=10, EU=8…).
     .test('hs-country-length', function (value) {
       const digits = hsDigits(value)

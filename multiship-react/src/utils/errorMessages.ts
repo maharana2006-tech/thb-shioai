@@ -175,6 +175,13 @@ export const errorMessages: Readonly<Record<string, FriendlyError>> = {
  * Kept pure so components can call it directly when they need the message
  * for inline UI (form errors, badge tooltips) rather than a modal.
  */
+/** Codes whose server message is already the best possible body (it names the
+ *  exact gap and where to fix it) but whose toast deserved a better heading
+ *  than the generic "Something went wrong" — e.g. the customs BN gate. */
+const errorTitles: Readonly<Record<string, string>> = {
+  VALIDATION_ERROR: 'This shipment needs attention',
+}
+
 export function getFriendlyError(
   errorCode: string | null | undefined,
   serverMessage?: string | null,
@@ -183,8 +190,9 @@ export function getFriendlyError(
   if (errorCode && errorMessages[errorCode]) {
     return errorMessages[errorCode]
   }
+  const title = errorCode ? errorTitles[errorCode] : undefined
   if (serverMessage && serverMessage.trim().length > 0) {
-    return { message: serverMessage }
+    return title ? { title, message: serverMessage } : { message: serverMessage }
   }
-  return { message: fallback }
+  return title ? { title, message: fallback } : { message: fallback }
 }
