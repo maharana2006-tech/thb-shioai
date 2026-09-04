@@ -755,6 +755,12 @@ public class OrderController {
                 ? trackingResponse.getData().getLabelDetails()
                 : null;
 
+        // Incoterms ride on order_customs, not the order row — thread them onto
+        // the DTO so the ZPL prints the shipment's actual term (the facsimile
+        // used to hardcode DAP while the CI/PDF said DDP).
+        orderCustomsRepository.findByOrderNoIgnoreCase(String.valueOf(orderNo))
+                .ifPresent(c -> orderResponse.getData().setIncoterms(c.getIncoterms()));
+
         int totalPkgs = effectivePkgCount(orderResponse.getData());
         java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =
                 orderResponse.getData().getPackages() == null

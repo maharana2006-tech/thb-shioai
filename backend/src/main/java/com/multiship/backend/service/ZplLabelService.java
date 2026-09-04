@@ -165,7 +165,12 @@ public class ZplLabelService {
         // don't declare them. Only render for shipments crossing a customs
         // boundary.
         if (crossBorder) {
-            z.append("^CF0,28,28\n").append(text(24, 18, "INCOTERMS: DAP"));
+            // The shipment's actual term from its customs declaration — DAP is
+            // only the fallback for legacy orders whose customs row predates
+            // incoterms capture. Hardcoding DAP printed the wrong term on DDP
+            // shipments while the CI and PDF label showed the right one.
+            z.append("^CF0,28,28\n").append(text(24, 18,
+                    "INCOTERMS: " + zpl(firstNonBlank(order.getIncoterms(), "DAP")).toUpperCase(Locale.ROOT)));
         }
         z.append("^CF0,24,24\n");
         z.append(text(30, 56, "ORIGIN ID:" + zpl(sfState) + zpl(sfZip).substring(0, Math.min(2, zpl(sfZip).length())) + "A  " + zpl(sfPhone)));
@@ -205,6 +210,16 @@ public class ZplLabelService {
         z.append("^CF0,22,22\n").append(text(24, 262, "TO"));
         z.append("^CF0,46,46\n").append(text(72, 258, zpl(recipient)));
         int y = 320;
+        // Consignee company (shipAttn) between name and street — matching the
+        // PDF label. On a B2B international parcel the company IS the
+        // consignee; the ZPL used to drop this line entirely. Skipped when it
+        // merely repeats the name (recipient falls back to shipAttn when the
+        // name is blank).
+        String consigneeCompany = order.getShipAttn() != null ? order.getShipAttn().trim() : "";
+        if (StringUtils.hasText(consigneeCompany) && !consigneeCompany.equalsIgnoreCase(recipient.trim())) {
+            z.append(text(72, y, zpl(consigneeCompany)));
+            y += 48;
+        }
         if (StringUtils.hasText(order.getShipAddr1())) {
             z.append(text(72, y, zpl(order.getShipAddr1())));
             y += 48;
@@ -240,7 +255,11 @@ public class ZplLabelService {
             // (drives the symbol to the ~3/4-width footprint of the sample).
             String pdf417Data = String.join("|",
                     zpl(trackingNumber), String.valueOf(order.getOrderNo()), zpl(order.getCustNo()),
-                    zpl(recipient), city, state, zip, "US", serviceCode, shipDate,
+                    zpl(recipient), city, state, zip,
+                    // Actual destination country — was hardcoded "US", which put
+                    // the wrong country in the 2D payload on international labels.
+                    firstNonBlank(destCountryCode, "US").toUpperCase(Locale.ROOT),
+                    serviceCode, shipDate,
                     String.valueOf(order.getWeight()), zpl(sfZip), formCode, meter);
             z.append("^BY3\n");
             z.append("^FO36,").append(barTop).append("^B7N,6,5,5,,N^FD")
@@ -267,7 +286,9 @@ public class ZplLabelService {
         z.append("^FO560,").append(routeTop + 36).append("^FB230,1,0,R,0^CF0,40,40^FD").append(serviceCode).append("^FS\n");
         z.append("^CF0,90,90\n").append(text(28, routeTop + 92, ursa));
         z.append("^FO520,").append(routeTop + 88).append("^FB270,1,0,R,0^CF0,44,44^FD").append(zip).append("^FS\n");
-        z.append("^FO430,").append(routeTop + 140).append("^FB360,1,0,R,0^CF0,30,30^FD").append(state).append("-US ").append(airport).append("^FS\n");
+        z.append("^FO430,").append(routeTop + 140).append("^FB360,1,0,R,0^CF0,30,30^FD").append(state)
+                .append("-").append(firstNonBlank(destCountryCode, "US").toUpperCase(Locale.ROOT))
+                .append(" ").append(airport).append("^FS\n");
         if (generated) {
             z.append("^CF0,24,24\n").append(text(30, routeTop + 190, numericLine));
         }

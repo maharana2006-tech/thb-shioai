@@ -33,6 +33,10 @@ public class OrderWithLinesDTO {
     private BigDecimal weight;
     /** LB | KG — unit the weight was entered in; null on legacy rows. */
     private String weightUnit;
+    /** Incoterms from the order's customs declaration (DDP, DAP, …). Populated
+     *  by the ZPL endpoint so the thermal label prints the shipment's actual
+     *  term instead of a hardcoded fallback; null on domestic orders. */
+    private String incoterms;
     /** Declared / customs value entered for the shipment. */
     private BigDecimal declaredValue;
     private String goodsDesc;
