@@ -3074,7 +3074,8 @@ public class CarrierServiceImpl implements CarrierService {
                     BigDecimal unitValue = it.getUnitValue() != null ? it.getUnitValue() : perUnitValue;
                     // Per-line weight = the line's share of the package weight;
                     // fall back to a small positive value so FedEx never sees 0.
-                    BigDecimal lineWeight = it.getWeight() != null ? it.getWeight()
+                    BigDecimal lineWeight = (it.getWeight() != null && it.getWeight().signum() > 0)
+                            ? it.getWeight()
                             : (pkgWeight != null && pkgWeight.signum() > 0 && totalQty > 0
                                     ? pkgWeight.multiply(BigDecimal.valueOf(qty))
                                             .divide(BigDecimal.valueOf(totalQty), 3, HU)

@@ -676,24 +676,14 @@ public class ShipmentValidationService {
             // IntlShipmentValidator short-circuits on intl.international != TRUE
             // (line 88), so the flag must be set even when commodities are
             // empty (so the validator surfaces the "no commodities" error).
-            java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> commodities = req.getItems() == null
-                    ? java.util.List.of()
-                    : req.getItems().stream()
-                            .map(it -> com.multiship.backend.dto.CustomsCommodityDTO.builder()
-                                    .description(it.getDescription())
-                                    .hsCode(it.getHsCode())
-                                    .countryOfOrigin(it.getCountryOfOrigin())
-                                    .quantity(it.getQuantity())
-                                    .unitValue(it.getUnitValue())
-                                    .build())
-                            .toList();
             intl = IntlShipmentBlockDTO.builder()
                     .international(true)
-                    .commodities(commodities)
+                    .commodities(buildValidatorCommodities(req))
                     .incoterms(req.getIncoterms())
                     .reasonForExport(req.getReasonForExport())
                     .customsCurrency(req.getCurrency())
                     .customsTotalValue(req.getDeclaredValue())
+                    .weightUnit(req.getWeightUnit())
                     .build();
         }
         return ShipmentRequestDTO.builder()
@@ -701,6 +691,49 @@ public class ShipmentValidationService {
                 .intl(intl)
                 .dangerousGoods(req.getDangerousGoods())
                 .build();
+    }
+
+    /**
+     * Mirrors {@link CarrierServiceImpl#buildManualIntlBlock}'s commodity
+     * shaping so the FedEx pre-flight sees the same per-line unitWeight +
+     * unitValue the actual createShipment call would send. Historically
+     * this adapter dropped {@code unitWeight}, so FedEx rejected every
+     * intl pre-flight with "Commodity weight is missing or invalid" even
+     * when the operator's package weight was populated.
+     */
+    // package-private for direct unit-test coverage of the weight-spread math.
+    static java.util.List<com.multiship.backend.dto.CustomsCommodityDTO>
+            buildValidatorCommodities(ManualShipmentRequest req) {
+        if (req.getItems() == null || req.getItems().isEmpty()) return java.util.List.of();
+        int totalQty = req.getItems().stream()
+                .mapToInt(it -> it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1).sum();
+        java.math.RoundingMode HU = java.math.RoundingMode.HALF_UP;
+        BigDecimal perUnitValue = (req.getDeclaredValue() != null
+                && req.getDeclaredValue().signum() > 0 && totalQty > 0)
+                ? req.getDeclaredValue().divide(BigDecimal.valueOf(totalQty), 2, HU) : null;
+        BigDecimal pkgWeight = req.getWeight();
+        return req.getItems().stream()
+                .map(it -> {
+                    int qty = it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1;
+                    BigDecimal unitValue = it.getUnitValue() != null ? it.getUnitValue() : perUnitValue;
+                    BigDecimal lineWeight = (it.getWeight() != null && it.getWeight().signum() > 0)
+                            ? it.getWeight()
+                            : (pkgWeight != null && pkgWeight.signum() > 0 && totalQty > 0
+                                    ? pkgWeight.multiply(BigDecimal.valueOf(qty))
+                                            .divide(BigDecimal.valueOf(totalQty), 3, HU)
+                                    : new BigDecimal("0.10"));
+                    return com.multiship.backend.dto.CustomsCommodityDTO.builder()
+                            .description(it.getDescription())
+                            .hsCode(it.getHsCode())
+                            .countryOfOrigin(it.getCountryOfOrigin())
+                            .quantity(qty)
+                            .unitValue(unitValue)
+                            .unitWeight(lineWeight)
+                            .sku(it.getSku())
+                            .boxSeq(it.getBoxSeq())
+                            .build();
+                })
+                .toList();
     }
 
     private ValidationIssue issue(ErrorCode code, String message, String field) {
