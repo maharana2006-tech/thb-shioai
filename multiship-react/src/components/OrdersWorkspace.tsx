@@ -858,70 +858,54 @@ export default function OrdersWorkspace() {
 
     defs.push({
       id: 'source',
-      accessorFn: (o) => o.orderDetails.source ?? 'API',
+      accessorFn: (o) => `${o.orderDetails.source ?? 'API'} ${o.orderDetails.channel ?? ''}`.trim(),
       header: 'Src',
       enableSorting: false,
-      // PR #555 compaction: single-letter chip (M/A/B) with title-tooltip.
-      // Server folds WMS/ERP/legacy into API; only MANUAL/BULK/API reach here.
-      // Full label preserved on hover — icon-only style saves ~60px vs the
-      // previous "MANUAL" / "BULK" / "API" pill.
-      size: 44,
+      // ONE column for source + channel (client request: the two single-letter
+      // chip columns read as duplicates side by side). Source chip (M/A/B)
+      // first, channel chip (D/B) beside it when the order is classified.
+      // Full labels preserved on hover; server folds WMS/ERP/legacy into API.
+      size: 64,
       cell: ({ row }) => {
         const s = (row.original.orderDetails.source || 'API').toUpperCase()
-        const tone: Record<string, string> = {
+        const sTone: Record<string, string> = {
           MANUAL: 'bg-amber-50 text-amber-700 ring-amber-200',
           API: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
           BULK: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
         }
-        const label: Record<string, string> = {
+        const sLabel: Record<string, string> = {
           MANUAL: 'Manual — created via /orders/new',
           API: 'API — imported via external partner / WMS',
           BULK: 'Bulk — imported via CSV/Excel',
         }
-        return (
-          <span
-            title={label[s] || 'Order source'}
-            className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ring-1 ${tone[s] || tone.API}`}
-          >
-            {s.charAt(0)}
-          </span>
-        )
-      },
-      meta: {
-        headerLabel: 'Source',
-        exportValue: (o: Order) => (o.orderDetails.source ?? 'API').toUpperCase(),
-      },
-    })
-
-    defs.push({
-      id: 'channel',
-      accessorFn: (o) => o.orderDetails.channel ?? '',
-      header: 'Ch',
-      enableSorting: false,
-      // PR #555 compaction — single-letter chip (D/B) with tooltip.
-      // Orders predating classification carry null — render a dash.
-      size: 44,
-      cell: ({ row }) => {
         const c = (row.original.orderDetails.channel || '').toUpperCase()
-        if (c !== 'D2C' && c !== 'B2B') {
-          return <span title="Channel not classified for this order" className="text-slate-300">—</span>
-        }
-        const tone =
-          c === 'B2B'
-            ? 'bg-indigo-50 text-indigo-700 ring-indigo-200'
-            : 'bg-sky-50 text-sky-700 ring-sky-200'
+        const classified = c === 'D2C' || c === 'B2B'
+        const cTone = c === 'B2B'
+          ? 'bg-indigo-50 text-indigo-700 ring-indigo-200'
+          : 'bg-sky-50 text-sky-700 ring-sky-200'
         return (
-          <span
-            title={c === 'B2B' ? 'B2B — business-to-business shipment' : 'D2C — direct-to-consumer shipment'}
-            className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ring-1 ${tone}`}
-          >
-            {c.charAt(0)}
+          <span className="inline-flex items-center gap-1">
+            <span
+              title={sLabel[s] || 'Order source'}
+              className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ring-1 ${sTone[s] || sTone.API}`}
+            >
+              {s.charAt(0)}
+            </span>
+            {classified ? (
+              <span
+                title={c === 'B2B' ? 'B2B — business-to-business shipment' : 'D2C — direct-to-consumer shipment'}
+                className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ring-1 ${cTone}`}
+              >
+                {c.charAt(0)}
+              </span>
+            ) : null}
           </span>
         )
       },
       meta: {
-        headerLabel: 'Channel',
-        exportValue: (o: Order) => (o.orderDetails.channel ?? '').toUpperCase(),
+        headerLabel: 'Source / Channel',
+        exportValue: (o: Order) =>
+          `${(o.orderDetails.source ?? 'API').toUpperCase()}${o.orderDetails.channel ? ` ${o.orderDetails.channel.toUpperCase()}` : ''}`,
       },
     })
 
