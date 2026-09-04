@@ -1755,6 +1755,22 @@ export default function NewShipmentPage() {
     notify.success('Applied carrier-suggested address.')
   }
 
+  // PR #558 — per-item weight auto-fill. Sums quantities across all rows
+  // (min 1 to guard divide-by-zero) then spreads the shipment-level
+  // package weight proportionally when a row's own weight is blank.
+  // Operator override always wins. Defined BEFORE wizardPayload/other
+  // useMemos that reference it — a `const` fn hoisted via TDZ crashes
+  // the entire page render on first mount if used before declaration.
+  const totalItemQty = items.reduce((sum, it) => sum + (Number(it.quantity) || 0), 0) || 1
+  const pkgWeightNumeric = Number(weight) || 0
+  const autoItemWeight = (it: ItemRow): number => {
+    if (it.weight) return Number(it.weight) || 0
+    const qty = Number(it.quantity) || 0
+    if (pkgWeightNumeric <= 0 || qty <= 0) return 0
+    // 3-decimal precision matches BE fallback in buildManualIntlBlock.
+    return Math.round((pkgWeightNumeric * qty / totalItemQty) * 1000) / 1000
+  }
+
   // Wizard payload = a snapshot of the current inline state in the shape
   // CustomsWizard expects (OrderCustomsPayload). Rebuilt each time the
   // wizard opens so it starts from whatever the user last typed inline.
@@ -1808,20 +1824,6 @@ export default function NewShipmentPage() {
   const addItem = () => setItems((rows) => [blankItem(), ...rows])
   const removeItem = (i: number) => setItems((rows) => (rows.length > 1 ? rows.filter((_, idx) => idx !== i) : rows))
   const invoiceTotal = items.reduce((sum, it) => sum + (Number(it.quantity) || 0) * (Number(it.unitValue) || 0), 0)
-
-  // PR #558 — per-item weight auto-fill. Sums quantities across all rows
-  // (min 1 to guard divide-by-zero) then spreads the shipment-level
-  // package weight proportionally when a row's own weight is blank.
-  // Operator override always wins.
-  const totalItemQty = items.reduce((sum, it) => sum + (Number(it.quantity) || 0), 0) || 1
-  const pkgWeightNumeric = Number(weight) || 0
-  const autoItemWeight = (it: ItemRow): number => {
-    if (it.weight) return Number(it.weight) || 0
-    const qty = Number(it.quantity) || 0
-    if (pkgWeightNumeric <= 0 || qty <= 0) return 0
-    // 3-decimal precision matches BE fallback in buildManualIntlBlock.
-    return Math.round((pkgWeightNumeric * qty / totalItemQty) * 1000) / 1000
-  }
 
   // PR #558 — for international shipments, keep the `declaredValue`
   // state (which drives Formik/Yup validation + the carrier payload)
