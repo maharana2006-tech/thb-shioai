@@ -981,6 +981,20 @@ export default function LabelDocumentPage() {
                   Incoterms <span className="font-mono text-[12px] font-black text-emerald-700">{termsOfSale}</span>
                 </div>
               ) : null}
+              {/* Address LINE 2 caption — FedEx's thermal-label template
+                  drops recipient line 2 from the visible text; the value
+                  survives only inside the MaxiCode barcode. Read it back
+                  from carrierResponseDetails (decoded from FedEx's own
+                  bytes — verified provenance) and surface as a caption
+                  strip so the operator can visually confirm line 2 is on
+                  file. Hidden in print so the real thermal label ships
+                  clean; the on-file line 2 already prints via the
+                  MaxiCode. */}
+              {carrierResponseDetails?.recipientAddressLine2 ? (
+                <div className="border-b border-slate-200 bg-slate-50 px-2 py-1 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700 print:hidden">
+                  Line 2 <span className="font-mono text-[12px] font-black text-emerald-700">{carrierResponseDetails.recipientAddressLine2}</span>
+                </div>
+              ) : null}
               <img
                 src={orderService.labelPreviewPngUrl(orderNo, pkgIndex)}
                 alt={`Shipping label for order ${orderNo}`}
