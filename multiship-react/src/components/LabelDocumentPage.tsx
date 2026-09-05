@@ -365,13 +365,11 @@ export default function LabelDocumentPage() {
   const shipper = payload?.shipper
   const resolution = payload?.resolution
   const legacyAccount = payload?.carrierAccount
-  /**
-   * Fields decoded straight from the carrier's returned label bytes (see
-   * FedExMaxiCodeParser backend-side). We render these as a side panel
-   * so operators can trust that "line 2 / EEI / commodity" is exactly
-   * what the carrier confirmed, without inferring from local Order data.
-   */
-  const carrierResponseDetails = payload?.carrierResponseDetails
+  /* PR ρ — carrierResponseDetails is still on the wire (backend keeps
+     emitting it so /orders/{n}/carrier-payload-preview and any future
+     admin diagnostic can consume it) but this component no longer
+     renders any of the decoded fields. The Label tab is intentionally
+     stripped down to just the carrier PNG per operator ask. */
   // Customs blocks resolved from the client's Importer/Broker profile.
   const importer = payload?.importer ?? null
   const broker = payload?.broker ?? null
@@ -957,40 +955,13 @@ export default function LabelDocumentPage() {
                already checked, but a mid-session backend restart could
                invalidate). */
             <div className="print-doc relative w-[430px] shrink-0 border border-slate-300 bg-white shadow-xl print:w-[3.76in] print:border-0 print:shadow-none">
-              {/* AWB caption — FedEx sandbox labels return ZPL with empty
-                 TRK# text fields and "0000 0000 0000" placeholder digits
-                 (the real number is only in the barcode + API response).
-                 Users viewing the PNG mistake this for "AWB missing".
-                 The caption always shows the real trackingNumber above
-                 the label so intent is unambiguous. Hidden in print so
-                 the actual thermal label ships clean. */}
-              {trackingNumber ? (
-                <div className="border-b border-slate-200 bg-slate-50 px-2 py-1.5 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700 print:hidden">
-                  AWB / Tracking# <span className="font-mono text-[12px] font-black text-emerald-700">{trackingNumber}</span>
-                </div>
-              ) : null}
-              {/* INCOTERMS is intentionally NOT surfaced as a caption on
-                  the carrier-PNG branch — FedEx's MaxiCode doesn't carry
-                  it, so we have no carrier-response provenance for the
-                  value. Operator asked for label captions to reflect
-                  only carrier-verified data; incoterms remain visible
-                  on the Commercial Invoice tab and in the JSX facsimile
-                  (both of which are our own render surfaces where
-                  local-DB provenance is expected). */}
-              {/* Address LINE 2 caption — FedEx's thermal-label template
-                  drops recipient line 2 from the visible text; the value
-                  survives only inside the MaxiCode barcode. Read it back
-                  from carrierResponseDetails (decoded from FedEx's own
-                  bytes — verified provenance) and surface as a caption
-                  strip so the operator can visually confirm line 2 is on
-                  file. Hidden in print so the real thermal label ships
-                  clean; the on-file line 2 already prints via the
-                  MaxiCode. */}
-              {carrierResponseDetails?.recipientAddressLine2 ? (
-                <div className="border-b border-slate-200 bg-slate-50 px-2 py-1 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700 print:hidden">
-                  Line 2 <span className="font-mono text-[12px] font-black text-emerald-700">{carrierResponseDetails.recipientAddressLine2}</span>
-                </div>
-              ) : null}
+              {/* Label preview strictly shows the carrier's own PNG — no
+                  overlays, no captions, no augmentation. Operators asked
+                  for the label view to be exclusively what the carrier
+                  returned; anything sourced from local Order or from the
+                  MaxiCode decoder was moved off this surface. AWB is
+                  still visible above the toolbar via the Track button;
+                  line 2 is on the Commercial Invoice tab. */}
               <img
                 src={orderService.labelPreviewPngUrl(orderNo, pkgIndex)}
                 alt={`Shipping label for order ${orderNo}`}
@@ -1267,68 +1238,14 @@ export default function LabelDocumentPage() {
             null
           )}
 
-          {/* ================ CARRIER RESPONSE DETAILS SIDE PANEL ================ */}
-          {/* Rendered alongside the label preview (either the carrier PNG or
-             the JSX facsimile) with fields decoded from the carrier's own
-             MaxiCode payload. Every value here came FROM the carrier
-             response — no local Order/OrderCustoms augmentation. Purpose:
-             give the operator a definitive answer to "did FedEx receive
-             line 2 / did it record the EEI / did it note the commodity",
-             independent of the thermal-label template's visible-text
-             choices. Hidden in print so the thermal label ships clean. */}
-          {activeTab === 'label' && carrierResponseDetails?.source ? (
-            <aside className="w-[320px] shrink-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm print:hidden">
-              <div className="mb-2 flex items-center justify-between border-b border-slate-200 pb-2">
-                <div>
-                  <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
-                    From carrier response
-                  </p>
-                  <p className="text-[13px] font-semibold text-slate-900">
-                    {carrierResponseDetails.source}
-                  </p>
-                </div>
-                <span
-                  title="Every field on this panel was decoded from the carrier-returned bytes (not from local Order / OrderCustoms). Useful for verifying line 2 or EEI when the thermal-label template doesn't render them as visible text."
-                  className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700"
-                >
-                  Verified
-                </span>
-              </div>
-              <dl className="space-y-1.5 text-[12px]">
-                {(
-                  [
-                    ['AWB / Tracking#', carrierResponseDetails.trackingNumber],
-                    ['Service code', carrierResponseDetails.serviceCode],
-                    ['Recipient', carrierResponseDetails.recipientName],
-                    ['Line 1', carrierResponseDetails.recipientAddressLine1],
-                    ['Line 2', carrierResponseDetails.recipientAddressLine2],
-                    ['City', carrierResponseDetails.recipientCity],
-                    ['State', carrierResponseDetails.recipientState],
-                    ['Postal', carrierResponseDetails.recipientPostalCode],
-                    ['Country', carrierResponseDetails.recipientCountryCode],
-                    ['Phone', carrierResponseDetails.recipientPhone],
-                    ['Reference #', carrierResponseDetails.referenceNumber],
-                    ['Customer PO', carrierResponseDetails.customerPo],
-                    ['Commodity', carrierResponseDetails.commodityDescription],
-                    ['Customs value',
-                      carrierResponseDetails.customsValue && carrierResponseDetails.customsCurrency
-                        ? `${carrierResponseDetails.customsValue} ${carrierResponseDetails.customsCurrency}`
-                        : (carrierResponseDetails.customsValue ?? null)],
-                    ['EEI statement', carrierResponseDetails.eeiStatement],
-                  ] as const
-                )
-                  .filter(([, value]) => value != null && String(value).trim() !== '')
-                  .map(([label, value]) => (
-                    <div key={label} className="grid grid-cols-[110px_1fr] gap-2">
-                      <dt className="text-[10.5px] font-bold uppercase tracking-[0.1em] text-slate-400">
-                        {label}
-                      </dt>
-                      <dd className="break-words font-mono text-[11.5px] text-slate-900">{value}</dd>
-                    </div>
-                  ))}
-              </dl>
-            </aside>
-          ) : null}
+          {/* The MaxiCode-decoded "From carrier response — Verified" side
+              panel was removed per operator ask: the Label tab should
+              show ONLY the carrier's rendered PNG (their thermal-label
+              template), nothing else. The decoded fields remain
+              available via the /orders/{n}/carrier-payload-preview
+              admin diagnostic endpoint and are still populated on
+              payload.carrierResponseDetails for anyone else who wants
+              them — this UI simply no longer renders them. */}
 
           {activeTab === 'label' ? null : (
             /* ==================== COMMERCIAL INVOICE (Letter) ==================== */
