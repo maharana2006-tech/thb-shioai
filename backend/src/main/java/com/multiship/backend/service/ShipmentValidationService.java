@@ -95,6 +95,10 @@ public class ShipmentValidationService {
      *  feed. See docs/flyway-fresh-db-guard-pattern.md for parallel
      *  precedent on infra-outage-safe defaults. */
     private final com.multiship.backend.service.fx.FxRateService fxRateService;
+    /** PR 3 — per-origin export-declaration policies (US FTR, CA B13A,
+     *  GB CDS, AU EDN, JP declaration, IN SB). Registry-lookup by
+     *  shipper country ISO. */
+    private final com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry exportDeclarationPolicyRegistry;
 
     @Transactional(readOnly = true)
     public ApiResponse<ShipmentValidationResult> validate(ManualShipmentRequest req) {
@@ -221,6 +225,16 @@ public class ShipmentValidationService {
             // as a local error before the carrier hop.
             checkIntlRequiredFields(req, recipientCountry, errors);
             for (IntlShipmentValidator.ValidationError ve : IntlShipmentValidator.validate(adapted, fxRateService)) {
+                errors.add(ValidationIssue.builder()
+                        .code(ve.code()).message(ve.message()).build());
+            }
+            // PR 3 — per-origin export-declaration policies (US FTR, CA
+            // B13A, GB CDS, AU EDN, JP declaration, IN SB). Registry may
+            // be null when no policies wire (e.g. minimal test context) —
+            // validatePolicies is null-safe.
+            for (IntlShipmentValidator.ValidationError ve :
+                    IntlShipmentValidator.validatePolicies(
+                            adapted, fxRateService, exportDeclarationPolicyRegistry)) {
                 errors.add(ValidationIssue.builder()
                         .code(ve.code()).message(ve.message()).build());
             }

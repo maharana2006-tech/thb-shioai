@@ -195,6 +195,10 @@ class IntlShipmentValidatorTest {
     }
 
     // ===== US FTR §30.37 EEI gating — customs.eei.required =====
+    // PR 3 — the inline US rule moved to UsFtr30_37Policy. These tests
+    // now drive it via validatePolicies() with a registry that contains
+    // just the US policy; behaviour is identical to the prior inline
+    // implementation.
 
     /** Build a request with origin/dest countries so the EEI rule can fire. */
     private static ShipmentRequestDTO usToDe(IntlShipmentBlockDTO intl) {
@@ -204,10 +208,17 @@ class IntlShipmentValidatorTest {
                 .intl(intl).build();
     }
 
+    /** Registry pre-loaded with just the US FTR policy. */
+    private static com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry usRegistry() {
+        return new com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry(
+                java.util.List.of(new com.multiship.backend.service.intl.UsFtr30_37Policy()));
+    }
+
     @Test
     void eeiRequiredAtOrAboveThresholdWithoutFtrOrAes() {
-        List<IntlShipmentValidator.ValidationError> errors = IntlShipmentValidator.validate(
-                usToDe(validIntl().customsTotalValue(new BigDecimal("2500.00")).build()));
+        List<IntlShipmentValidator.ValidationError> errors = IntlShipmentValidator.validatePolicies(
+                usToDe(validIntl().customsTotalValue(new BigDecimal("2500.00")).build()),
+                null, usRegistry());
         assertTrue(errors.stream().anyMatch(
                 e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
                 "$2,500 USD US→DE with no FTR/AES must raise CODE_EEI_REQUIRED");
@@ -215,30 +226,31 @@ class IntlShipmentValidatorTest {
 
     @Test
     void eeiSatisfiedByFtrExemption() {
-        assertTrue(IntlShipmentValidator.validate(
+        assertTrue(IntlShipmentValidator.validatePolicies(
                 usToDe(validIntl()
                         .customsTotalValue(new BigDecimal("3000.00"))
                         .ftrExemption("NO_EEI_30_37_h")
-                        .build())).stream().noneMatch(
+                        .build()), null, usRegistry()).stream().noneMatch(
                                 e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
                 "30.37(h) exemption at $3,000 satisfies the EEI rule");
     }
 
     @Test
     void eeiSatisfiedByAesCitation() {
-        assertTrue(IntlShipmentValidator.validate(
+        assertTrue(IntlShipmentValidator.validatePolicies(
                 usToDe(validIntl()
                         .customsTotalValue(new BigDecimal("3000.00"))
                         .aesCitation("X20260101123456")
-                        .build())).stream().noneMatch(
+                        .build()), null, usRegistry()).stream().noneMatch(
                                 e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
                 "AES ITN at $3,000 satisfies the EEI rule");
     }
 
     @Test
     void eeiNotRequiredUnderThreshold() {
-        assertTrue(IntlShipmentValidator.validate(
-                usToDe(validIntl().customsTotalValue(new BigDecimal("2499.99")).build())).stream()
+        assertTrue(IntlShipmentValidator.validatePolicies(
+                usToDe(validIntl().customsTotalValue(new BigDecimal("2499.99")).build()),
+                null, usRegistry()).stream()
                 .noneMatch(e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
                 "$2,499.99 sits just under the threshold — rule must not fire");
     }
@@ -246,37 +258,35 @@ class IntlShipmentValidatorTest {
     @Test
     void eeiNotRequiredForCanadaDestination() {
         // §30.36 is the Canada bilateral exemption — never gated by value here.
-        assertTrue(IntlShipmentValidator.validate(
+        assertTrue(IntlShipmentValidator.validatePolicies(
                 ShipmentRequestDTO.builder()
                         .shipperCountryCode("US").recipientCountryCode("CA")
                         .intl(validIntl().customsTotalValue(new BigDecimal("5000.00")).build())
-                        .build()).stream()
+                        .build(), null, usRegistry()).stream()
                 .noneMatch(e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
                 "US→CA is bilateral; rule must not fire regardless of value");
     }
 
     @Test
     void eeiNotRequiredForNonUsOrigin() {
-        assertTrue(IntlShipmentValidator.validate(
+        assertTrue(IntlShipmentValidator.validatePolicies(
                 ShipmentRequestDTO.builder()
                         .shipperCountryCode("DE").recipientCountryCode("US")
                         .intl(validIntl().customsTotalValue(new BigDecimal("5000.00")).build())
-                        .build()).stream()
+                        .build(), null, usRegistry()).stream()
                 .noneMatch(e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
-                "Non-US origin is out of scope for the US FTR rule");
+                "Non-US origin is out of scope for the US FTR policy");
     }
 
     @Test
     void eeiNotGatedOnNonUsdCurrency_whenFxAbsent() {
         // No FX plumbed → non-USD declarations skip the deterministic
         // check (safer than false-blocking on a broken/absent rate feed).
-        // Carriers still reject downstream. PR 2 lets callers wire an
-        // FxRateService to close this gap; see the *_withFx_* tests below.
-        assertTrue(IntlShipmentValidator.validate(
+        assertTrue(IntlShipmentValidator.validatePolicies(
                 usToDe(validIntl()
                         .customsCurrency("EUR")
                         .customsTotalValue(new BigDecimal("3000.00"))
-                        .build())).stream()
+                        .build()), null, usRegistry()).stream()
                 .noneMatch(e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
                 "EUR-declared shipment must not fire the rule when no FX is available");
     }
@@ -312,11 +322,11 @@ class IntlShipmentValidatorTest {
         // €3,000 EUR at 1 EUR = 1.08 USD → $3,240 USD → over threshold →
         // rule fires (same behaviour as a plain $3,000 USD shipment).
         var fx = fixedRateFx("EUR", "USD", new BigDecimal("1.08"));
-        var errors = IntlShipmentValidator.validate(
+        var errors = IntlShipmentValidator.validatePolicies(
                 usToDe(validIntl()
                         .customsCurrency("EUR")
                         .customsTotalValue(new BigDecimal("3000.00"))
-                        .build()), fx);
+                        .build()), fx, usRegistry());
         assertTrue(errors.stream().anyMatch(
                 e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
                 "€3,000 at 1.08 must convert to $3,240 USD and fire the rule");
@@ -326,11 +336,11 @@ class IntlShipmentValidatorTest {
     void eeiNotGated_onEur2300_withFx_convertsUnderThreshold() {
         // €2,300 EUR at 1 EUR = 1.08 USD → $2,484 USD → under threshold.
         var fx = fixedRateFx("EUR", "USD", new BigDecimal("1.08"));
-        var errors = IntlShipmentValidator.validate(
+        var errors = IntlShipmentValidator.validatePolicies(
                 usToDe(validIntl()
                         .customsCurrency("EUR")
                         .customsTotalValue(new BigDecimal("2300.00"))
-                        .build()), fx);
+                        .build()), fx, usRegistry());
         assertTrue(errors.stream().noneMatch(
                 e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
                 "€2,300 at 1.08 = $2,484 sits under the threshold");
@@ -340,11 +350,11 @@ class IntlShipmentValidatorTest {
     void eeiNotGated_onFxOutage_fallsThrough() {
         // Rate feed down → rule doesn't fire (safer than false-blocking).
         var fx = fxOutage();
-        var errors = IntlShipmentValidator.validate(
+        var errors = IntlShipmentValidator.validatePolicies(
                 usToDe(validIntl()
                         .customsCurrency("GBP")
                         .customsTotalValue(new BigDecimal("5000.00"))
-                        .build()), fx);
+                        .build()), fx, usRegistry());
         assertTrue(errors.stream().noneMatch(
                 e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
                 "FX outage must never turn into a false-positive block");
@@ -352,13 +362,117 @@ class IntlShipmentValidatorTest {
 
     @Test
     void usdShipment_stillGated_whenFxProvided() {
-        // FX plumbing doesn't change the USD path — the rule short-circuits
+        // FX plumbing doesn't change the USD path — policy short-circuits
         // on USD before ever consulting FX.
         var fx = fxOutage(); // even a broken fx doesn't matter for USD
-        var errors = IntlShipmentValidator.validate(
-                usToDe(validIntl().customsTotalValue(new BigDecimal("3000.00")).build()), fx);
+        var errors = IntlShipmentValidator.validatePolicies(
+                usToDe(validIntl().customsTotalValue(new BigDecimal("3000.00")).build()),
+                fx, usRegistry());
         assertTrue(errors.stream().anyMatch(
                 e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
                 "USD-native shipments must gate regardless of FX availability");
+    }
+
+    // ===== PR 3 — non-US corridors via registry =====
+
+    private static com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry allCorridors() {
+        return new com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry(java.util.List.of(
+                new com.multiship.backend.service.intl.UsFtr30_37Policy(),
+                new com.multiship.backend.service.intl.CaB13APolicy(),
+                new com.multiship.backend.service.intl.GbCdsPolicy(),
+                new com.multiship.backend.service.intl.AuEdnPolicy(),
+                new com.multiship.backend.service.intl.JpDeclarationPolicy(),
+                new com.multiship.backend.service.intl.InShippingBillPolicy()));
+    }
+
+    private static ShipmentRequestDTO from(String origin, String dest, IntlShipmentBlockDTO intl) {
+        return ShipmentRequestDTO.builder()
+                .shipperCountryCode(origin).recipientCountryCode(dest).intl(intl).build();
+    }
+
+    @Test
+    void caB13A_firedAtCad2000_toDe() {
+        // CAD-native, straight comparison — no FX needed.
+        var intl = validIntl().customsCurrency("CAD").customsTotalValue(new BigDecimal("2000")).build();
+        var errors = IntlShipmentValidator.validatePolicies(from("CA", "DE", intl), null, allCorridors());
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_CA_B13A_REQUIRED.equals(e.code())),
+                "CA→DE at CAD $2,000 must trigger B13A rule");
+    }
+
+    @Test
+    void caB13A_notFiredForUsDestination() {
+        // CA→US is exempt (continental bilateral).
+        var intl = validIntl().customsCurrency("CAD").customsTotalValue(new BigDecimal("10000")).build();
+        var errors = IntlShipmentValidator.validatePolicies(from("CA", "US", intl), null, allCorridors());
+        assertTrue(errors.stream().noneMatch(
+                e -> IntlShipmentValidator.CODE_CA_B13A_REQUIRED.equals(e.code())),
+                "CA→US must never trigger B13A regardless of value");
+    }
+
+    @Test
+    void caB13A_satisfiedByExportDeclarationReference() {
+        var intl = validIntl().customsCurrency("CAD").customsTotalValue(new BigDecimal("5000"))
+                .exportDeclarationReference("CA-B13A-2026-99999").build();
+        var errors = IntlShipmentValidator.validatePolicies(from("CA", "DE", intl), null, allCorridors());
+        assertTrue(errors.stream().noneMatch(
+                e -> IntlShipmentValidator.CODE_CA_B13A_REQUIRED.equals(e.code())),
+                "populated exportDeclarationReference must suppress the CA rule");
+    }
+
+    @Test
+    void gbCds_firedAtGbp873_toUs() {
+        var intl = validIntl().customsCurrency("GBP").customsTotalValue(new BigDecimal("873")).build();
+        var errors = IntlShipmentValidator.validatePolicies(from("GB", "US", intl), null, allCorridors());
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_GB_CDS_REQUIRED.equals(e.code())),
+                "GB→US at £873 must trigger CDS rule");
+    }
+
+    @Test
+    void auEdn_firedAtAud2000_toUs() {
+        var intl = validIntl().customsCurrency("AUD").customsTotalValue(new BigDecimal("2000")).build();
+        var errors = IntlShipmentValidator.validatePolicies(from("AU", "US", intl), null, allCorridors());
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_AU_EDN_REQUIRED.equals(e.code())),
+                "AU→US at AUD $2,000 must trigger EDN rule");
+    }
+
+    @Test
+    void jpDeclaration_firedAt200000Yen() {
+        var intl = validIntl().customsCurrency("JPY").customsTotalValue(new BigDecimal("200000")).build();
+        var errors = IntlShipmentValidator.validatePolicies(from("JP", "US", intl), null, allCorridors());
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_JP_DECLARATION_REQUIRED.equals(e.code())),
+                "JP→US at ¥200,000 must trigger declaration rule");
+    }
+
+    @Test
+    void inSb_firedForEveryExportRegardlessOfValue() {
+        // IN policy has no value threshold.
+        var intl = validIntl().customsCurrency("INR").customsTotalValue(new BigDecimal("100")).build();
+        var errors = IntlShipmentValidator.validatePolicies(from("IN", "US", intl), null, allCorridors());
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_IN_SB_REQUIRED.equals(e.code())),
+                "IN→US at any value must trigger SB rule");
+    }
+
+    @Test
+    void inSb_suppressedForDomesticIndiaShipment() {
+        // Shouldn't fire on IN→IN even though the policy has no threshold.
+        var intl = validIntl().customsCurrency("INR").customsTotalValue(new BigDecimal("100")).build();
+        var errors = IntlShipmentValidator.validatePolicies(from("IN", "IN", intl), null, allCorridors());
+        assertTrue(errors.stream().noneMatch(
+                e -> IntlShipmentValidator.CODE_IN_SB_REQUIRED.equals(e.code())),
+                "IN→IN is domestic; policy must not fire");
+    }
+
+    @Test
+    void unknownOrigin_noRuleFires() {
+        // No policy registered for BR — nothing fires.
+        var intl = validIntl().customsCurrency("BRL").customsTotalValue(new BigDecimal("100000")).build();
+        var errors = IntlShipmentValidator.validatePolicies(from("BR", "US", intl), null, allCorridors());
+        assertTrue(errors.isEmpty(),
+                "Unmapped origin BR must yield no errors — fallback is the generic advisory in the service layer");
     }
 }

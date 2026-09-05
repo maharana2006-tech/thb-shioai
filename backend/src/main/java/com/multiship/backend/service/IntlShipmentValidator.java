@@ -56,6 +56,16 @@ public final class IntlShipmentValidator {
      * EEI" message. Catching it here surfaces an actionable local error.
      */
     public static final String CODE_EEI_REQUIRED = "customs.eei.required";
+    /** CA B13A required for exports ≥ CAD $2,000 to destinations outside US. */
+    public static final String CODE_CA_B13A_REQUIRED = "customs.export.b13a.required";
+    /** GB CDS declaration required for exports ≥ £873 (non-EU destinations). */
+    public static final String CODE_GB_CDS_REQUIRED = "customs.export.cds.required";
+    /** AU EDN required for exports ≥ AUD $2,000. */
+    public static final String CODE_AU_EDN_REQUIRED = "customs.export.edn.required";
+    /** JP export declaration required for exports ≥ ¥200,000. */
+    public static final String CODE_JP_DECLARATION_REQUIRED = "customs.export.jp.declaration.required";
+    /** IN Shipping Bill required for ALL exports (no value threshold). */
+    public static final String CODE_IN_SB_REQUIRED = "customs.export.in.sb.required";
     /** Widest documented carrier commodity ceiling. Cheaper to hard-code
      *  than to plumb CarrierLimitService this far up the call chain. */
     static final int MAX_COMMODITIES_HARD_CEILING = 999;
@@ -197,34 +207,42 @@ public final class IntlShipmentValidator {
             }
         }
 
-        // US FTR §30.37 — require EEI on high-value US-origin exports.
-        //   Origin  : shipperCountryCode == "US"
-        //   Dest    : recipientCountryCode != "US" and != "CA"
-        //             (Canada bilaterals are covered by NOEEI §30.36)
-        //   Currency: any (FX-converted to USD when {@code fx} is non-null;
-        //             USD-only when it isn't).
-        //   Value   : USD-equivalent of customsTotalValue >= 2500
-        // Enforcement: one of ftrExemption OR aesCitation must be populated.
-        // Both blank → hard error naming the two ways to satisfy the rule.
-        String shipperCountry = normalizeCountry(request.getShipperCountryCode());
-        String recipientCountry = normalizeCountry(request.getRecipientCountryCode());
-        boolean usOrigin = "US".equals(shipperCountry);
-        boolean nonCaDest = !recipientCountry.isEmpty()
-                && !"CA".equals(recipientCountry)
-                && !"US".equals(recipientCountry);
-        if (usOrigin && nonCaDest
-                && isBlank(intl.getFtrExemption()) && isBlank(intl.getAesCitation())) {
-            Optional<BigDecimal> usdEquivalent = customsTotalInUsd(intl, fx);
-            if (usdEquivalent.isPresent()
-                    && usdEquivalent.get().compareTo(EEI_THRESHOLD_USD) >= 0) {
-                errors.add(new ValidationError(CODE_EEI_REQUIRED,
-                        "US exports valued at $" + EEI_THRESHOLD_USD.toPlainString()
-                                + " or more (per Schedule B code) to non-Canada destinations "
-                                + "require either an AES Citation (ITN) or an FTR §30.37 exemption. "
-                                + "Provide one on the international details step before shipping."));
-            }
-        }
+        // PR 3 — the US FTR §30.37 rule has moved to
+        // com.multiship.backend.service.intl.UsFtr30_37Policy, wired into
+        // the ExportDeclarationPolicyRegistry. This base validator runs
+        // corridor-agnostic checks; per-origin export-declaration rules
+        // are evaluated via {@link #validatePolicies(ShipmentRequestDTO,
+        // FxRateService, ExportDeclarationPolicyRegistry)} — call that
+        // separately after this one.
 
+        return errors;
+    }
+
+    /**
+     * PR 3 — evaluate origin-specific export-declaration rules via the
+     * registry. Returns the (typically 0 or 1) errors from the policy
+     * whose {@code originIso()} matches the request's shipper country.
+     * Empty when no policy is registered for the origin, or when the
+     * policy doesn't fire (destination exempt, under threshold,
+     * reference already populated, FX outage).
+     *
+     * <p>Callers should combine this with {@link #validate(ShipmentRequestDTO,
+     * FxRateService)} — the base validator handles commodity structure
+     * and header enums; this method handles the value-threshold gate.
+     */
+    public static List<ValidationError> validatePolicies(
+            ShipmentRequestDTO request,
+            FxRateService fx,
+            com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry registry) {
+        List<ValidationError> errors = new ArrayList<>();
+        if (registry == null || request == null) return errors;
+        IntlShipmentBlockDTO intl = request.getIntl();
+        if (intl == null || !Boolean.TRUE.equals(intl.getInternational())) return errors;
+        String shipperCountry = normalizeCountry(request.getShipperCountryCode());
+        if (shipperCountry.isEmpty()) return errors;
+        registry.lookup(shipperCountry)
+                .flatMap(p -> p.evaluate(request, fx))
+                .ifPresent(errors::add);
         return errors;
     }
 
