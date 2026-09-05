@@ -2479,16 +2479,24 @@ public class CarrierServiceImpl implements CarrierService {
         } catch (CarrierConnectionException ex) {
             return failure(422, ex.getMessage());
         }
-        // Resolve the account the same way generateLabel does — from the
-        // persisted OrderCarrierDetails when present, else the client's
-        // default. Preview needs to see the same account the real ship
-        // used, otherwise the payload would show the wrong billing side.
+        // Resolve the account the way the ship path does: first the
+        // persisted OrderCarrierDetails (order-based re-generation) then
+        // the same cascade resolveOrderAccounts uses for orders (manual
+        // shipments don't get an OrderCarrierDetails row but resolve
+        // via CarrierAccountRef cascade at ship time).
         String accountNumber = orderCarrierDetailsRepository.findByOrderNo(orderNo.intValue())
                 .map(com.multiship.backend.model.OrderCarrierDetails::getAccountNumber)
                 .orElse(null);
         if (!StringUtils.hasText(accountNumber)) {
+            ApiResponse<java.util.List<OrderAccountResolutionDTO>> resolveResp =
+                    resolveOrderAccounts(java.util.List.of(orderNo.intValue()));
+            if (resolveResp.getData() != null && !resolveResp.getData().isEmpty()) {
+                accountNumber = resolveResp.getData().get(0).getAccountNumber();
+            }
+        }
+        if (!StringUtils.hasText(accountNumber)) {
             return failure(422,
-                    "Order " + orderNo + " has no persisted carrier account — can't preview payload before a ship.");
+                    "Order " + orderNo + " has no resolvable carrier account — check client + carrier setup.");
         }
         try {
             ShipmentRequestDTO request = buildShipmentRequest(order, accountNumber, connector);
