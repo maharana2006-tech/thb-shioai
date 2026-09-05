@@ -91,6 +91,11 @@ public class CarrierServiceImpl implements CarrierService {
      *  outages fall through as "rule doesn't fire" — never blocks the
      *  label flow on a broken feed. */
     private final com.multiship.backend.service.fx.FxRateService intlValidationFx;
+    /** PR 3 — per-origin export-declaration policies (US FTR, CA B13A,
+     *  GB CDS, AU EDN, JP declaration, IN SB). Consulted in the label
+     *  belt-and-braces validation path so a shipment can't slip through
+     *  when the pre-flight was bypassed. */
+    private final com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry exportDeclarationPolicyRegistry;
 
     /**
      * PR #550 — pre-fetches URL label bytes at persistence time so the DB
@@ -1871,7 +1876,10 @@ public class CarrierServiceImpl implements CarrierService {
         // name the missing field. IntlShipmentValidator concatenates every
         // gap into one actionable message.
         java.util.List<IntlShipmentValidator.ValidationError> intlErrors =
-                IntlShipmentValidator.validate(shipmentRequest, intlValidationFx);
+                new java.util.ArrayList<>(
+                        IntlShipmentValidator.validate(shipmentRequest, intlValidationFx));
+        intlErrors.addAll(IntlShipmentValidator.validatePolicies(
+                shipmentRequest, intlValidationFx, exportDeclarationPolicyRegistry));
         if (!intlErrors.isEmpty()) {
             throw new com.multiship.backend.exception.CarrierConnectionException(
                     IntlShipmentValidator.toMessage(intlErrors));

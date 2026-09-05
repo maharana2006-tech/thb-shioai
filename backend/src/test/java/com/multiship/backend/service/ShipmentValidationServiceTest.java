@@ -46,6 +46,7 @@ class ShipmentValidationServiceTest {
     private com.multiship.backend.repository.ClientRepository clientRepository;
     private com.multiship.backend.repository.ClientCustomsProfileRepository clientCustomsProfileRepository;
     private com.multiship.backend.service.fx.FxRateService fxRateService;
+    private com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry exportDeclarationPolicyRegistry;
 
     private ShipmentValidationService service;
 
@@ -70,13 +71,34 @@ class ShipmentValidationServiceTest {
         // Default stub: identity (USD-to-USD) so existing USD tests pass
         // without extra when() plumbing. Non-USD tests stub explicitly.
         fxRateService = mock(com.multiship.backend.service.fx.FxRateService.class);
+        // PR 3 — empty registry by default so existing tests only see
+        // the base validator + generic advisory. Per-corridor tests
+        // rebuild the service with a populated registry via the
+        // withRegistry() helper.
+        exportDeclarationPolicyRegistry = new com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry(
+                java.util.List.of());
 
         service = new ShipmentValidationService(
                 packagingCompatibilityGuard, resolutionService,
                 shippingServiceRepository, packagePresetRepository,
                 carrierService, carrierAccountRefRepository,
                 clientRepository, clientCustomsProfileRepository,
-                fxRateService);
+                fxRateService, exportDeclarationPolicyRegistry);
+    }
+
+    /** Rebuilds {@link #service} with a registry populated by the given
+     *  {@link com.multiship.backend.service.intl.ExportDeclarationPolicy}
+     *  policies — used by per-corridor tests below to opt into origin
+     *  rules without disturbing the pre-existing test surface. */
+    private void withRegistry(com.multiship.backend.service.intl.ExportDeclarationPolicy... policies) {
+        exportDeclarationPolicyRegistry = new com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry(
+                java.util.List.of(policies));
+        service = new ShipmentValidationService(
+                packagingCompatibilityGuard, resolutionService,
+                shippingServiceRepository, packagePresetRepository,
+                carrierService, carrierAccountRefRepository,
+                clientRepository, clientCustomsProfileRepository,
+                fxRateService, exportDeclarationPolicyRegistry);
     }
 
     // ─── Happy path ─────────────────────────────────────────────────────
