@@ -458,10 +458,17 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
+            // Same .uri() bug as createShipment before PR #577 — no path
+            // meant POST to baseUrl root, UPS returned their marketing HTML
+            // index page, parseUpsValidateShipmentResponse choked on '<' at
+            // line 1 col 1.
+            String shipUri = carrierProperties.getUps().getShipmentPath()
+                    + "/" + carrierProperties.getUps().getApiVersion() + "/ship";
             String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl)
                     .build()
                     .post()
+                    .uri(shipUri)
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
