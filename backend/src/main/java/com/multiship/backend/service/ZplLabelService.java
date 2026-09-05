@@ -194,10 +194,21 @@ public class ZplLabelService {
         String cadSuffix = safeCount > 1 ? "-" + safeIndex : "";
         z.append(text(438, 116, "CAD: " + orderDisplay + cadSuffix + "/MSHIP1"));
         z.append(text(438, 172, "BILL SENDER"));
-        // EEI (Electronic Export Information) exemption text is only relevant
-        // when the parcel exports from the US. Domestic + non-US shipments
-        // don't need it.
-        if (usExport) {
+        // EEI (Electronic Export Information) exemption text — only legal
+        // under US FTR §30.37(a) when the declared value is UNDER $2,500
+        // USD per Schedule B code. On higher-value US exports the correct
+        // statement is either the AES ITN filed with Census, or a
+        // different §30.37 exemption (30.37(h) tools of trade, 30.36
+        // Canada, etc.). Rather than print a wrong-value 30.37(a) claim
+        // on the label — a real customs-compliance risk — we suppress the
+        // EEI line when we don't know the actual statement. The label
+        // stays legally silent; the commercial invoice + carrier manifest
+        // carry the authoritative EEI record. When ZplLabelService gains
+        // an intl-block plumb (follow-up), swap this guard for the
+        // resolved statement text.
+        boolean underEeiThreshold = order.getDeclaredValue() != null
+                && order.getDeclaredValue().compareTo(new java.math.BigDecimal("2500")) < 0;
+        if (usExport && underEeiThreshold) {
             z.append("^CF0,20,20\n").append(text(438, 202, "NO EEI 30.37(a)"));
         }
 

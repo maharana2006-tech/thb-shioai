@@ -43,6 +43,17 @@ public final class IntlShipmentValidator {
      *  Per-carrier caps are enforced later at CarrierLimitService (which knows
      *  the resolved carrier); this is the cheap defensive check upstream. */
     public static final String CODE_TOO_MANY_COMMODITIES = "customs.commodities.tooMany";
+    /**
+     * US FTR §30.37 — an export from the US to a destination other than
+     * Canada, valued at $2,500 USD or more per Schedule B code, must have
+     * either an AES ITN (real Census filing) or a legally-recognized FTR
+     * exemption (30.37(h) tools of trade / 30.36 Canada / ...). Without one,
+     * FedEx (and other US-aware carriers) auto-apply 30.37(a) which is
+     * only valid under $2,500 — the carrier then rejects with a cryptic
+     * "The FTR Exemption or AES Citation you provided is not valid for
+     * EEI" message. Catching it here surfaces an actionable local error.
+     */
+    public static final String CODE_EEI_REQUIRED = "customs.eei.required";
     /** Widest documented carrier commodity ceiling. Cheaper to hard-code
      *  than to plumb CarrierLimitService this far up the call chain. */
     static final int MAX_COMMODITIES_HARD_CEILING = 999;
@@ -167,7 +178,48 @@ public final class IntlShipmentValidator {
             }
         }
 
+        // US FTR §30.37 — require EEI on high-value US-origin exports.
+        //   Origin  : shipperCountryCode == "US"
+        //   Dest    : recipientCountryCode != "US" and != "CA"
+        //             (Canada bilaterals are covered by NOEEI §30.36)
+        //   Currency: customsCurrency == "USD" (the statute is USD-scoped;
+        //             non-USD declarations are left alone here — carrier
+        //             still rejects, but the operator's own filing currency
+        //             would need conversion via a real FX service to gate
+        //             deterministically here, and that's out of scope for
+        //             a pure-function validator).
+        //   Value   : customsTotalValue >= 2500
+        // Enforcement: one of ftrExemption OR aesCitation must be populated.
+        // Both blank → hard error naming the two ways to satisfy the rule.
+        String shipperCountry = normalizeCountry(request.getShipperCountryCode());
+        String recipientCountry = normalizeCountry(request.getRecipientCountryCode());
+        String currencyForEei = intl.getCustomsCurrency() == null
+                ? "" : intl.getCustomsCurrency().trim().toUpperCase();
+        boolean usOrigin = "US".equals(shipperCountry);
+        boolean nonCaDest = !recipientCountry.isEmpty()
+                && !"CA".equals(recipientCountry)
+                && !"US".equals(recipientCountry);
+        boolean usdDeclared = "USD".equals(currencyForEei);
+        boolean overThreshold = intl.getCustomsTotalValue() != null
+                && intl.getCustomsTotalValue().compareTo(EEI_THRESHOLD_USD) >= 0;
+        if (usOrigin && nonCaDest && usdDeclared && overThreshold
+                && isBlank(intl.getFtrExemption()) && isBlank(intl.getAesCitation())) {
+            errors.add(new ValidationError(CODE_EEI_REQUIRED,
+                    "US exports valued at $" + EEI_THRESHOLD_USD.toPlainString()
+                            + " or more (per Schedule B code) to non-Canada destinations "
+                            + "require either an AES Citation (ITN) or an FTR §30.37 exemption. "
+                            + "Provide one on the international details step before shipping."));
+        }
+
         return errors;
+    }
+
+    /** US FTR §30.37(a) monetary threshold (per Schedule B code). */
+    static final BigDecimal EEI_THRESHOLD_USD = new BigDecimal("2500");
+
+    /** ISO country code normalizer — upper-cases and trims; null → "". */
+    private static String normalizeCountry(String s) {
+        return s == null ? "" : s.trim().toUpperCase();
     }
 
     /**

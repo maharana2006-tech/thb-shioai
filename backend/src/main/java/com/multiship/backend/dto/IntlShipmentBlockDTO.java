@@ -110,6 +110,31 @@ public class IntlShipmentBlockDTO {
     /** Payer's carrier account when dutyBillTo != SENDER. */
     private String dutyAccount;
 
+    // ===== US Export Electronic Export Information (EEI) =====
+    /**
+     * FTR §30.37 exemption wire code — mutually exclusive with
+     * {@link #aesCitation}. One of:
+     * <ul>
+     *   <li>{@code NO_EEI_30_37_a} — value < $2,500 USD per Schedule B code
+     *       (the historical FedEx auto-default; ONLY valid under $2,500).</li>
+     *   <li>{@code NO_EEI_30_37_h} — tools of trade / returned goods.</li>
+     *   <li>{@code NO_EEI_30_36} — shipments to Canada.</li>
+     * </ul>
+     * Rendered on the label as {@code "NO EEI 30.37(a)"} etc; wired to
+     * FedEx as {@code customsClearanceDetail.exportDetail
+     * .foreignTradeStatisticsRegulations.filingCitation}.
+     */
+    private String ftrExemption;
+
+    /**
+     * AES Internal Transaction Number filed with US Census — required (in
+     * lieu of {@link #ftrExemption}) on US-origin exports ≥ $2,500 USD per
+     * Schedule B code, to any destination other than Canada. Free-form; the
+     * connector emits it verbatim to FedEx as {@code
+     * customsClearanceDetail.exportDetail.exportComplianceStatement}.
+     */
+    private String aesCitation;
+
     // ===== Commodity lines =====
     // Sprint 52 — defense-in-depth cap at the worst-case documented
     // carrier ceiling (999). CarrierLimitService still enforces the

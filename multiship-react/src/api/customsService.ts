@@ -28,6 +28,10 @@ export interface OrderCustoms {
   currency?: string | null
   weightUnit?: string | null
   notes?: string | null
+  /** US FTR §30.37 exemption wire code — see utils/customsOptions.ts FTR_EXEMPTIONS. */
+  ftrExemption?: string | null
+  /** AES ITN filed with US Census (e.g. "X20260101123456"). */
+  aesCitation?: string | null
   items: CustomsItem[]
   createdAt?: string | null
   updatedAt?: string | null
@@ -44,6 +48,19 @@ export interface OrderCustomsPayload {
   currency?: string
   weightUnit?: string
   notes?: string
+  /**
+   * US FTR §30.37 exemption wire code — mutually exclusive with
+   * {@link aesCitation}. Enumerated in utils/customsOptions.ts
+   * FTR_EXEMPTIONS. Populated on US-origin exports where the operator
+   * claims an exemption instead of filing AES.
+   */
+  ftrExemption?: string
+  /**
+   * AES ITN filed with US Census. Required — in lieu of
+   * {@link ftrExemption} — on US-origin exports valued ≥ $2,500 USD
+   * per Schedule B code to non-Canada destinations.
+   */
+  aesCitation?: string
   items: CustomsItem[]
 }
 

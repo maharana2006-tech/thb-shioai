@@ -101,6 +101,23 @@ public class ManualShipmentRequest {
     /** 3-letter currency for the declared/unit values. */
     private String currency;
 
+    /**
+     * US Export Electronic Export Information (EEI). Populate exactly ONE
+     * of the two on a US-origin export:
+     * <ul>
+     *   <li>{@link #ftrExemption} — wire code (NO_EEI_30_37_a / _30_37_h /
+     *       _30_36). 30.37(a) is only legal under $2,500 USD per Schedule B
+     *       code; 30.36 is Canada only; 30.37(h) is tools of trade.</li>
+     *   <li>{@link #aesCitation} — AES ITN filed with US Census (required
+     *       when value ≥ $2,500 USD and none of the enumerated exemptions
+     *       apply).</li>
+     * </ul>
+     * IntlShipmentValidator enforces the value threshold; connectors emit
+     * whichever is set.
+     */
+    private String ftrExemption;
+    private String aesCitation;
+
     /** Per-shipment importer override (label-document keys) — overrides the client profile for THIS label only. */
     private java.util.Map<String, Object> importer;
     /** Per-shipment customs-broker override — overrides the client profile for THIS label only. */
