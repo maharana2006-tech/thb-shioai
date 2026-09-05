@@ -267,16 +267,98 @@ class IntlShipmentValidatorTest {
     }
 
     @Test
-    void eeiNotGatedOnNonUsdCurrency() {
-        // Non-USD declarations skip the deterministic check — FX conversion
-        // is out of scope for the pure-function validator; carriers still
-        // reject downstream if the USD-equivalent exceeds the threshold.
+    void eeiNotGatedOnNonUsdCurrency_whenFxAbsent() {
+        // No FX plumbed → non-USD declarations skip the deterministic
+        // check (safer than false-blocking on a broken/absent rate feed).
+        // Carriers still reject downstream. PR 2 lets callers wire an
+        // FxRateService to close this gap; see the *_withFx_* tests below.
         assertTrue(IntlShipmentValidator.validate(
                 usToDe(validIntl()
                         .customsCurrency("EUR")
                         .customsTotalValue(new BigDecimal("3000.00"))
                         .build())).stream()
                 .noneMatch(e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
-                "EUR-declared shipments aren't gated by this validator (no FX)");
+                "EUR-declared shipment must not fire the rule when no FX is available");
+    }
+
+    // ===== PR 2 — FX-normalized threshold via injected FxRateService =====
+
+    /** Fixed-rate FX stub — enough for validator tests without pulling in Mockito. */
+    private static com.multiship.backend.service.fx.FxRateService fixedRateFx(
+            String from, String to, BigDecimal rate) {
+        return new com.multiship.backend.service.fx.FxRateService() {
+            @Override public java.util.Optional<BigDecimal> rate(String f, String t) {
+                if (from.equalsIgnoreCase(f) && to.equalsIgnoreCase(t)) return java.util.Optional.of(rate);
+                return java.util.Optional.empty();
+            }
+            @Override public java.util.Optional<BigDecimal> convert(BigDecimal amount, String f, String t) {
+                return rate(f, t).map(r -> amount.multiply(r));
+            }
+            @Override public boolean supports(String currency) { return true; }
+        };
+    }
+
+    /** FX stub whose rate feed is always down. */
+    private static com.multiship.backend.service.fx.FxRateService fxOutage() {
+        return new com.multiship.backend.service.fx.FxRateService() {
+            @Override public java.util.Optional<BigDecimal> rate(String f, String t) { return java.util.Optional.empty(); }
+            @Override public java.util.Optional<BigDecimal> convert(BigDecimal amount, String f, String t) { return java.util.Optional.empty(); }
+            @Override public boolean supports(String currency) { return false; }
+        };
+    }
+
+    @Test
+    void eeiGatedOnEur3000_withFx_convertsOverThreshold() {
+        // €3,000 EUR at 1 EUR = 1.08 USD → $3,240 USD → over threshold →
+        // rule fires (same behaviour as a plain $3,000 USD shipment).
+        var fx = fixedRateFx("EUR", "USD", new BigDecimal("1.08"));
+        var errors = IntlShipmentValidator.validate(
+                usToDe(validIntl()
+                        .customsCurrency("EUR")
+                        .customsTotalValue(new BigDecimal("3000.00"))
+                        .build()), fx);
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "€3,000 at 1.08 must convert to $3,240 USD and fire the rule");
+    }
+
+    @Test
+    void eeiNotGated_onEur2300_withFx_convertsUnderThreshold() {
+        // €2,300 EUR at 1 EUR = 1.08 USD → $2,484 USD → under threshold.
+        var fx = fixedRateFx("EUR", "USD", new BigDecimal("1.08"));
+        var errors = IntlShipmentValidator.validate(
+                usToDe(validIntl()
+                        .customsCurrency("EUR")
+                        .customsTotalValue(new BigDecimal("2300.00"))
+                        .build()), fx);
+        assertTrue(errors.stream().noneMatch(
+                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "€2,300 at 1.08 = $2,484 sits under the threshold");
+    }
+
+    @Test
+    void eeiNotGated_onFxOutage_fallsThrough() {
+        // Rate feed down → rule doesn't fire (safer than false-blocking).
+        var fx = fxOutage();
+        var errors = IntlShipmentValidator.validate(
+                usToDe(validIntl()
+                        .customsCurrency("GBP")
+                        .customsTotalValue(new BigDecimal("5000.00"))
+                        .build()), fx);
+        assertTrue(errors.stream().noneMatch(
+                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "FX outage must never turn into a false-positive block");
+    }
+
+    @Test
+    void usdShipment_stillGated_whenFxProvided() {
+        // FX plumbing doesn't change the USD path — the rule short-circuits
+        // on USD before ever consulting FX.
+        var fx = fxOutage(); // even a broken fx doesn't matter for USD
+        var errors = IntlShipmentValidator.validate(
+                usToDe(validIntl().customsTotalValue(new BigDecimal("3000.00")).build()), fx);
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "USD-native shipments must gate regardless of FX availability");
     }
 }

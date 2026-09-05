@@ -45,6 +45,7 @@ class ShipmentValidationServiceTest {
     private com.multiship.backend.repository.CarrierAccountRefRepository carrierAccountRefRepository;
     private com.multiship.backend.repository.ClientRepository clientRepository;
     private com.multiship.backend.repository.ClientCustomsProfileRepository clientCustomsProfileRepository;
+    private com.multiship.backend.service.fx.FxRateService fxRateService;
 
     private ShipmentValidationService service;
 
@@ -56,7 +57,8 @@ class ShipmentValidationServiceTest {
         packagePresetRepository = mock(PackagePresetRepository.class);
         // Sprint 52 PR δ — deps for carrier-native validateShipment.
         // Constructor arg order matches @RequiredArgsConstructor field
-        // declaration order in ShipmentValidationService.
+        // declaration order in ShipmentValidationService (see
+        // feedback_lombok_constructor_arg_order.md — order MUST match).
         carrierService = mock(com.multiship.backend.service.CarrierService.class);
         carrierAccountRefRepository = mock(com.multiship.backend.repository.CarrierAccountRefRepository.class);
         // Strict-fill sources for intl currency + incoterms (no
@@ -64,12 +66,17 @@ class ShipmentValidationServiceTest {
         clientRepository = mock(com.multiship.backend.repository.ClientRepository.class);
         clientCustomsProfileRepository = mock(
                 com.multiship.backend.repository.ClientCustomsProfileRepository.class);
+        // PR 2 — FX conversion for the intl-value threshold rules.
+        // Default stub: identity (USD-to-USD) so existing USD tests pass
+        // without extra when() plumbing. Non-USD tests stub explicitly.
+        fxRateService = mock(com.multiship.backend.service.fx.FxRateService.class);
 
         service = new ShipmentValidationService(
                 packagingCompatibilityGuard, resolutionService,
                 shippingServiceRepository, packagePresetRepository,
                 carrierService, carrierAccountRefRepository,
-                clientRepository, clientCustomsProfileRepository);
+                clientRepository, clientCustomsProfileRepository,
+                fxRateService);
     }
 
     // ─── Happy path ─────────────────────────────────────────────────────
@@ -691,9 +698,11 @@ class ShipmentValidationServiceTest {
     }
 
     @Test
-    void highValueIntl_nonUsd_noWarning() {
-        // Non-USD skipped for now — matches the current scope of the US
-        // FTR rule (both are USD-scoped until FX plumbing lands).
+    void highValueIntl_nonUsd_fxOutage_noWarning() {
+        // Rate feed down — FxRateService returns Optional.empty(). Rule
+        // must NOT fire (safer than blocking on a broken FX feed; carrier
+        // still catches at its own edge). Default Mockito behavior for
+        // Optional-returning methods is empty, so no explicit when().
         ManualShipmentRequest req = fullIntlRequest();
         req.setCurrency("EUR");
         req.setDeclaredValue(new BigDecimal("3000.00"));
@@ -704,7 +713,62 @@ class ShipmentValidationServiceTest {
         assertTrue(res.getData().getLocalWarnings().stream()
                 .noneMatch(w -> ShipmentValidationService.CODE_EXPORT_DECLARATION_RECOMMENDED
                         .equals(w.getCode())),
-                "EUR-declared shipments must not raise the USD-scoped advisory");
+                "FX outage must fall through as no-warning — never false-block");
+    }
+
+    @Test
+    void highValueIntl_eur3000_convertsToOverThreshold_warningFires() {
+        // €3,000 EUR at 1 EUR = 1.08 USD → $3,240 → over $2,500 → warning.
+        // Wire the FX mock explicitly.
+        ManualShipmentRequest req = fullIntlRequest();
+        req.setCurrency("EUR");
+        req.setDeclaredValue(new BigDecimal("3000.00"));
+        when(fxRateService.convert(new BigDecimal("3000.00"), "EUR", "USD"))
+                .thenReturn(Optional.of(new BigDecimal("3240.00")));
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalWarnings().stream()
+                .anyMatch(w -> ShipmentValidationService.CODE_EXPORT_DECLARATION_RECOMMENDED
+                        .equals(w.getCode())),
+                "€3,000 EUR at 1.08 USD = $3,240 must raise the advisory");
+    }
+
+    @Test
+    void highValueIntl_eur500_convertsUnderThreshold_noWarning() {
+        // €500 EUR at 1 EUR = 1.08 USD → $540 → under threshold → no warning.
+        ManualShipmentRequest req = fullIntlRequest();
+        req.setCurrency("EUR");
+        req.setDeclaredValue(new BigDecimal("500.00"));
+        when(fxRateService.convert(new BigDecimal("500.00"), "EUR", "USD"))
+                .thenReturn(Optional.of(new BigDecimal("540.00")));
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalWarnings().stream()
+                .noneMatch(w -> ShipmentValidationService.CODE_EXPORT_DECLARATION_RECOMMENDED
+                        .equals(w.getCode())),
+                "€500 EUR at 1.08 USD = $540 sits under the threshold");
+    }
+
+    @Test
+    void highValueIntl_gbp2000_convertsOverThreshold_warningFires() {
+        // £2,000 GBP at 1 GBP = 1.27 USD → $2,540 → over $2,500 → warning.
+        ManualShipmentRequest req = fullIntlRequest();
+        req.setCurrency("GBP");
+        req.setDeclaredValue(new BigDecimal("2000.00"));
+        when(fxRateService.convert(new BigDecimal("2000.00"), "GBP", "USD"))
+                .thenReturn(Optional.of(new BigDecimal("2540.00")));
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalWarnings().stream()
+                .anyMatch(w -> ShipmentValidationService.CODE_EXPORT_DECLARATION_RECOMMENDED
+                        .equals(w.getCode())),
+                "£2,000 GBP at 1.27 USD = $2,540 crosses the threshold");
     }
 
     private ManualShipmentRequest fullIntlRequest() {
