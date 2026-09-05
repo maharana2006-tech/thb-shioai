@@ -351,10 +351,21 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
+            // PR ω — createShipment was posting to baseUrl root (e.g.
+            // https://wwwcie.ups.com/) with no path, so UPS returned their
+            // marketing HTML index page and parseShipmentResult choked on
+            // '<' at position 60 with "Unexpected character... expected a
+            // valid value (JSON String, ...)". Every other UPS endpoint on
+            // this connector explicitly sets .uri(...) (voidShipment :736,
+            // pickup :1262, endOfDay :1462); this one was the outlier.
+            // UPS Ship API: POST /api/shipments/{version}/ship.
+            String shipUri = carrierProperties.getUps().getShipmentPath()
+                    + "/" + carrierProperties.getUps().getApiVersion() + "/ship";
             String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl)
                     .build()
                     .post()
+                    .uri(shipUri)
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
