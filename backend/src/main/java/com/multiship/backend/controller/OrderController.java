@@ -1420,6 +1420,30 @@ public class OrderController {
      * <p>Answers "why is order N still showing only 1 label" without
      * shell access to Postgres. ADMIN-only — exposes raw storage state.
      */
+    /**
+     * Reconstructs + returns the exact JSON body {@link CarrierConnector
+     * #createShipment} would POST for this order. No carrier call is made.
+     * Backed by {@link CarrierService#previewCarrierPayload}. Purpose:
+     * let operators audit "what did we actually send to FedEx / UPS /
+     * DHL / USPS for this order" — including customs commodities, EEI
+     * statement, dutiesPayment, dimensions, service — without having to
+     * enable wire logging + re-generate the label. Answers the very
+     * common "is item info in the payload or not?" question directly.
+     */
+    @Operation(summary = "Admin: reconstruct the carrier-outbound payload for one order",
+            description = "Rebuilds ShipmentRequestDTO from persisted Order + OrderCustoms "
+                    + "and returns the connector's exact JSON payload (FedEx /ship/v1 body, "
+                    + "UPS ShipConfirm body, etc.) without any carrier hop. Includes customs "
+                    + "commodities, EEI statement, duty payment, dimensions, and service type. "
+                    + "ADMIN-only.")
+    @PreAuthorize("hasRole('ADMIN')")
+    @GetMapping("/{orderNo}/carrier-payload-preview")
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> getCarrierPayloadPreview(
+            @PathVariable Long orderNo) {
+        ApiResponse<java.util.Map<String, Object>> response = carrierService.previewCarrierPayload(orderNo);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
     @Operation(summary = "Admin: dump the label-rendering state for one order",
             description = "Diagnostic snapshot of label_batch + order_label_tracking + "
                     + "label_package rows for a single order, plus the LabelArtifactResolver "

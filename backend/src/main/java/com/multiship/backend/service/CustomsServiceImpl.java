@@ -73,6 +73,13 @@ public class CustomsServiceImpl implements CustomsService {
         customs.setCurrency(upperOrNull(request.getCurrency()));
         customs.setWeightUnit(upperOrNull(request.getWeightUnit()));
         customs.setNotes(trimOrNull(request.getNotes()));
+        // PR ω — persist export-compliance fields the intl track shipped.
+        // Prior to this the wire to FedEx carried the value but the DB
+        // row was left blank, so future reads (label re-generation,
+        // audit) misread the order as "no exemption chosen".
+        customs.setFtrExemption(trimOrNull(request.getFtrExemption()));
+        customs.setAesCitation(trimOrNull(request.getAesCitation()));
+        customs.setExportDeclarationReference(trimOrNull(request.getExportDeclarationReference()));
 
         // Replace the item set wholesale (orphanRemoval clears the old rows).
         customs.getItems().clear();

@@ -64,6 +64,23 @@ public interface CarrierConnector {
     ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment);
 
     /**
+     * Return the exact JSON body this connector would POST to the
+     * carrier for the given request — without actually calling the
+     * carrier. Used by the {@code /orders/{n}/carrier-payload-preview}
+     * diagnostic endpoint so operators can inspect what would go on
+     * the wire (including customs commodities, EEI, dutiesPayment) for
+     * an already-persisted order.
+     *
+     * <p>Default returns an empty map — connectors without a live
+     * payload builder (or without a natural Map representation) fall
+     * back to "not available" on the diagnostic endpoint. FedEx +
+     * UPS + DHL override to expose their real payload shape.
+     */
+    default java.util.Map<String, Object> previewShipmentPayload(ShipmentRequestDTO request) {
+        return java.util.Map.of();
+    }
+
+    /**
      * Rate shopping — ask the carrier what its services would cost for the
      * given shipment shape. Sprint 18 introduces the default (empty list)
      * so connectors that don't have a live Rate API yet keep compiling.

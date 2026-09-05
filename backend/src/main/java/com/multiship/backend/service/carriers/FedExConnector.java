@@ -299,6 +299,18 @@ public class FedExConnector implements CarrierConnector {
      *   <li>4xx / 5xx → ERROR / valid=false, errors carry FedEx's message.</li>
      * </ul>
      */
+    /**
+     * Diagnostic — dump the exact JSON body {@link #createShipment} would
+     * POST, without calling FedEx. Backed by {@link #buildShipmentPayload}
+     * so any change to the wire builder shows up here automatically.
+     * Sensitive credentials are already masked at their source (account
+     * numbers) — the returned map is safe to serialize to admin JSON.
+     */
+    @Override
+    public java.util.Map<String, Object> previewShipmentPayload(ShipmentRequestDTO request) {
+        return buildShipmentPayload(request);
+    }
+
     @Override
     public ValidateShipmentResult validateShipment(ShipmentRequestDTO request,
                                                     String accessToken,
@@ -1873,7 +1885,7 @@ public class FedExConnector implements CarrierConnector {
      * has an IOSS number. Belongs on Shipper because we're the IOSS
      * registrant (the seller); FedEx propagates it to EU customs.
      */
-    private Map<String, Object> buildShipmentPayload(ShipmentRequestDTO request) {
+    Map<String, Object> buildShipmentPayload(ShipmentRequestDTO request) {  // package-visible so previewShipmentPayload can call it
         // FDX-2 — boundary guard. Pre-fix, a blank accountNumber silently
         // became the literal string "ACCOUNT" which FedEx rejects with a
         // cryptic validation error. F3 fixed the bill-to resolution path
