@@ -319,6 +319,37 @@ export interface LabelDocumentPayload {
     billableAmount?: number | null
     currency?: string | null
   } | null
+  /**
+   * Structured decode of the carrier's label response (currently the FedEx
+   * MaxiCode payload from the returned ZPL). Every field is pure carrier
+   * data — no local Order/OrderCustoms augmentation. Populated when the
+   * stored artifact is parseable ZPL with a MaxiCode block; null otherwise.
+   * Rendered as an authoritative side panel on LabelDocumentPage so the
+   * operator can trust that "line 2 / EEI / commodity is exactly what the
+   * carrier confirmed" — independent of whatever the thermal-label
+   * template chose to render as visible text.
+   */
+  carrierResponseDetails?: {
+    source?: string | null
+    trackingNumber?: string | null
+    serviceCode?: string | null
+    service?: string | null
+    recipientName?: string | null
+    recipientAddressLine1?: string | null
+    recipientAddressLine2?: string | null
+    recipientCity?: string | null
+    recipientState?: string | null
+    recipientPostalCode?: string | null
+    recipientCountryCode?: string | null
+    recipientPhone?: string | null
+    referenceNumber?: string | null
+    customerPo?: string | null
+    customsCountryCode?: string | null
+    customsValue?: string | null
+    customsCurrency?: string | null
+    commodityDescription?: string | null
+    eeiStatement?: string | null
+  } | null
   /** Service level resolved from the ERP ship-via mapping (Settings → Shipping Services). */
   service?: { carrier: string; code: string; name: string; scope?: string } | null
   /** The default package preset (Settings → Packages) used for type + dimensions. */
