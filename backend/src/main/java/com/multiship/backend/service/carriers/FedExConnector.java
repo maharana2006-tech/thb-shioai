@@ -39,6 +39,23 @@ public class FedExConnector implements CarrierConnector {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.CarrierPackageCatalogRepository packageCatalogRepository;
 
+    /**
+     * Per-thread reason the last {@link #getAccessToken} rejection carried,
+     * read by {@link com.multiship.backend.service.AccountRefServiceImpl#runCredentialCheck}
+     * via {@link #consumeAuthFailureDetail}. Same pattern UPS + Stamps already
+     * use — enables the Verify button to surface the actual FedEx error
+     * (invalid_client vs sandbox-key-used-on-prod vs OAuth outage) instead of
+     * the previous one-liner "Unable to obtain FedEx access token."
+     */
+    private static final ThreadLocal<String> LAST_AUTH_DETAIL = new ThreadLocal<>();
+
+    @Override
+    public String consumeAuthFailureDetail() {
+        String detail = LAST_AUTH_DETAIL.get();
+        LAST_AUTH_DETAIL.remove();
+        return detail;
+    }
+
     @Override
     public String getCarrierCode() {
         return "FEDEX";
@@ -195,7 +212,9 @@ public class FedExConnector implements CarrierConnector {
      */
     @Override
     public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
+        LAST_AUTH_DETAIL.remove();
         String tokenUrl = getTokenUrl(environment);
+        boolean sandbox = "SANDBOX".equalsIgnoreCase(environment);
         try {
             MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
             form.add("grant_type", "client_credentials");
@@ -213,14 +232,92 @@ public class FedExConnector implements CarrierConnector {
             JsonNode jsonNode = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
             String accessToken = jsonNode.path("access_token").asText(null);
             if (!StringUtils.hasText(accessToken)) {
-                throw new CarrierConnectionException("FedEx token response did not contain an access token.");
+                LAST_AUTH_DETAIL.set(
+                        "FedEx OAuth returned no access_token from " + tokenUrl + ".");
+                throw new CarrierConnectionException(
+                        "FedEx token response did not contain an access token.");
             }
 
             return accessToken;
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            // FedEx returns the specific reason ({"errors":[{"code":"NOT.AUTHORIZED.ERROR",
+            // "message":"..."}]}) in the response body. Surface it in the log
+            // AND to the operator so verify failures are actionable — the
+            // previous catch-all message "Unable to obtain FedEx access token."
+            // hid the difference between a sandbox key used against prod, an
+            // unapproved production app, wrong secret, and FedEx OAuth outage.
+            // Sprint 51 BS-L1 — scrub credentials before logging; FedEx 401
+            // bodies sometimes echo the presented clientId back.
+            String body = ex.getResponseBodyAsString();
+            int status = ex.getStatusCode().value();
+            String safeBody = LogRedaction.redactSecrets(body, clientId, clientSecret);
+            log.warn("FedEx token request rejected (HTTP {}) at {}: {}",
+                    status, tokenUrl, safeBody);
+            String detail = describeFedExAuthError(status, body, sandbox);
+            LAST_AUTH_DETAIL.set(detail);
+            throw new CarrierConnectionException(detail, ex);
         } catch (Exception ex) {
             log.error("Failed to obtain FedEx access token from {}", tokenUrl, ex);
-            throw new CarrierConnectionException("Unable to obtain FedEx access token.", ex);
+            LAST_AUTH_DETAIL.set(
+                    "Could not reach the FedEx OAuth endpoint (" + ex.getMessage() + ").");
+            throw new CarrierConnectionException(
+                    "Unable to obtain FedEx access token: " + ex.getMessage(), ex);
         }
+    }
+
+    /**
+     * Turn a FedEx OAuth error body into an operator-facing sentence. Mirrors
+     * {@code UpsConnector.describeUpsAuthError}. FedEx's most common failure
+     * codes on the token endpoint:
+     * <ul>
+     *   <li>{@code NOT.AUTHORIZED.ERROR} — bad clientId/secret, OR sandbox
+     *       key used against production (or vice-versa), OR the FedEx
+     *       developer app hasn't been approved for production yet (a
+     *       separate portal step after key creation).</li>
+     *   <li>{@code UNAUTHORIZED.CREDENTIAL.APPLICATION} — the credentials
+     *       are structurally valid but the app doesn't have access to this
+     *       API scope (Ship v1, Rate v1, ...). Portal fix, not a code fix.</li>
+     *   <li>{@code SYSTEM.UNEXPECTED.ERROR} — FedEx-side outage. Retry.</li>
+     * </ul>
+     */
+    private String describeFedExAuthError(int status, String body, boolean sandbox) {
+        String code = null;
+        String message = null;
+        try {
+            JsonNode err = objectMapper.readTree(Optional.ofNullable(body).orElse("{}"))
+                    .path("errors").path(0);
+            code = err.path("code").asText(null);
+            message = err.path("message").asText(null);
+        } catch (Exception ignore) {
+            // fall through
+        }
+        String env = sandbox
+                ? "SANDBOX (apis-sandbox.fedex.com)"
+                : "PRODUCTION (apis.fedex.com)";
+        if ("NOT.AUTHORIZED.ERROR".equals(code)
+                || (message != null && message.toLowerCase(Locale.ROOT).contains("unauthorized"))) {
+            return "FedEx rejected the credentials ("
+                    + (code != null ? code : "unauthorized") + "). "
+                    + "Confirm the Client ID / Secret are FedEx OAuth keys for the "
+                    + env + " environment — a sandbox key fails against production, and a"
+                    + " production key won't work until the FedEx Developer Portal app has"
+                    + " been APPROVED for production (a separate step after key creation).";
+        }
+        if ("UNAUTHORIZED.CREDENTIAL.APPLICATION".equals(code)) {
+            return "FedEx credentials are valid but the app doesn't have access to this API "
+                    + "for " + env + ". In the FedEx Developer Portal, add the required "
+                    + "products (Ship / Rate / Track / ...) to the app and try again.";
+        }
+        if ("SYSTEM.UNEXPECTED.ERROR".equals(code)) {
+            return "FedEx OAuth returned a transient system error (SYSTEM.UNEXPECTED.ERROR) for "
+                    + env + ". Retry in a minute; if it persists, check status.fedex.com.";
+        }
+        if (code != null || message != null) {
+            return "FedEx OAuth returned HTTP " + status + " ("
+                    + code + ": " + message + ") for " + env + ".";
+        }
+        return "FedEx OAuth returned HTTP " + status + " for " + env
+                + " with an unrecognised error body.";
     }
 
     @Override
