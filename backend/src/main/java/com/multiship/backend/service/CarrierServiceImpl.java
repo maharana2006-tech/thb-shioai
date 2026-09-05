@@ -2821,6 +2821,13 @@ public class CarrierServiceImpl implements CarrierService {
                         account != null ? account.getFedexLabelImageType() : null))
                 .labelStockType(firstNonBlank(req.getLabelStockType(),
                         account != null ? account.getFedexLabelStockType() : null))
+                // Per-account label stock size (inches) — precedence: account
+                // → hardcoded 4x6 (at connector time). Every carrier reads
+                // the same DTO fields; per-carrier connectors normalise to
+                // their own envelope (UPS emits inches; FedEx maps to a
+                // STOCK_4X6-style enum; DHL/USPS resolve at their layer).
+                .labelStockHeight(account != null ? account.getLabelStockHeight() : null)
+                .labelStockWidth(account != null ? account.getLabelStockWidth() : null)
                 .build();
     }
 
@@ -3113,6 +3120,11 @@ public class CarrierServiceImpl implements CarrierService {
                 // other connectors ignore. Null-safe on the connector side.
                 .labelImageType(defaults.labelImageType())
                 .labelStockType(defaults.labelStockType())
+                // Per-account label stock size (inches) — Order-based path.
+                // Threads through ShipmentDefaultsResolver so re-generation
+                // matches manual-label behavior.
+                .labelStockHeight(defaults.labelStockHeight())
+                .labelStockWidth(defaults.labelStockWidth())
                 .intl(intlBlock)
                 // V33 (issue #545) — thread the intended per-box packages
                 // when the order was created as multi-box. Read from

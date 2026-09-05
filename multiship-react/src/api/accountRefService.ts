@@ -47,6 +47,12 @@ export interface CarrierAccountRef {
    *  only; other carriers ignore). NULL means PAPER_4X6 (pre-FDX-H3
    *  hardcode). */
   labelStockType?: string | null
+  /** Per-account label stock size in inches. UPS emits verbatim; FedEx /
+   *  DHL / USPS map to their per-carrier enums at connector time. Nulls
+   *  fall back to 4×6 (Height=6, Width=4) at label time. Standard picks:
+   *  4x6, 4x8, 4x9, 6x4, 8x4. */
+  labelStockHeight?: number | null
+  labelStockWidth?: number | null
   /** Third-party billing default — only meaningful when clearanceOption is
    *  THIRD_PARTY. Nullable individually; per-shipment overrides live on the
    *  Shipment row (follow-up). */
@@ -119,6 +125,10 @@ export interface AccountRefUpsertPayload {
   /** FDX-H3 — per-account FedEx labelSpecification.labelStockType (FedEx
    *  only). Null clears the persisted value; omitted keeps it. */
   labelStockType?: string | null
+  /** Per-account label stock size in inches (both required or both null).
+   *  Backend validates each in [3.0, 8.0] range per UPS Ship API spec. */
+  labelStockHeight?: number | null
+  labelStockWidth?: number | null
   /** Third-party billing default (only sent when clearance = THIRD_PARTY).
    *  Null on any field = clear the persisted value; omitting the field from
    *  the payload entirely = keep the persisted value. */

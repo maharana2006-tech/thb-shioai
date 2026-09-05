@@ -368,6 +368,19 @@ public class AccountRefServiceImpl implements AccountRefService {
             account.setFedexLabelStockType(lst.isEmpty() ? null : lst.toUpperCase(Locale.ROOT));
         }
 
+        // Per-account label stock size (inches). Threaded to every connector
+        // via ShipmentRequestDTO — UPS emits it verbatim, FedEx/DHL/USPS
+        // normalise to their own enums at connector time. Null = keep
+        // persisted value; non-null = write through. Both values move
+        // as a pair (a 4-inch-wide height without a width would be
+        // ambiguous), so we only clear/set both when both arrive.
+        if (request.getLabelStockHeight() != null) {
+            account.setLabelStockHeight(request.getLabelStockHeight());
+        }
+        if (request.getLabelStockWidth() != null) {
+            account.setLabelStockWidth(request.getLabelStockWidth());
+        }
+
         // Third-party billing defaults. Same null-vs-empty-string semantics:
         // null in request = keep persisted; non-null (incl. empty) = write
         // through with empty normalized to null. Country is upper-cased to
@@ -513,6 +526,8 @@ public class AccountRefServiceImpl implements AccountRefService {
                 .labelImageFormat(account.getLabelImageFormat())
                 .labelImageType(account.getFedexLabelImageType())
                 .labelStockType(account.getFedexLabelStockType())
+                .labelStockHeight(account.getLabelStockHeight())
+                .labelStockWidth(account.getLabelStockWidth())
                 .thirdPartyAccount(account.getThirdPartyAccount())
                 .thirdPartyName(account.getThirdPartyName())
                 .thirdPartyAddress1(account.getThirdPartyAddress1())

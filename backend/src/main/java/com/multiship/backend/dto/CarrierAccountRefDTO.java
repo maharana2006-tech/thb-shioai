@@ -57,6 +57,13 @@ public class CarrierAccountRefDTO {
      *  only; other carriers ignore). NULL means PAPER_4X6 (pre-FDX-H3
      *  hardcode). */
     private String labelStockType;
+    /** Per-account label stock size in inches. UPS Ship API v1 requires
+     *  LabelStockSize on every shipment; FedEx / DHL / USPS map to their
+     *  own enums via ShipmentDefaultsResolver. Nullable — nulls fall to
+     *  the 4x6 default (Height=6, Width=4). Standard operator picks:
+     *  4x6 / 4x8 / 4x9 / 6x4 / 8x4. */
+    private java.math.BigDecimal labelStockHeight;
+    private java.math.BigDecimal labelStockWidth;
     /** Third-party billing address (default, when clearanceOption=THIRD_PARTY).
      *  Nullable — per-shipment overrides live on the Shipment row. */
     private String thirdPartyAccount;

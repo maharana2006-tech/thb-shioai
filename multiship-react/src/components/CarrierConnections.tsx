@@ -168,6 +168,8 @@ interface DrawerState {
    *  (resolver falls back to GIF). Only UPS rows render the picker;
    *  other carriers keep this null. */
   labelImageFormat: string | null
+  labelStockHeight: number | null
+  labelStockWidth: number | null
   /** FDX-H3 — per-account FedEx labelSpecification.imageType. Null = no
    *  override (resolver falls back to PDF). Only FEDEX rows render the
    *  picker; other carriers keep this null. */
@@ -204,6 +206,8 @@ const emptyDrawer: DrawerState = {
   currency: '',
   pickupType: null,
   labelImageFormat: null,
+  labelStockHeight: null,
+  labelStockWidth: null,
   labelImageType: null,
   labelStockType: null,
   thirdPartyAccount: '',
@@ -499,6 +503,8 @@ export default function CarrierConnections({
         currency: account.currency || '',
         pickupType: account.pickupType ?? null,
         labelImageFormat: account.labelImageFormat ?? null,
+        labelStockHeight: account.labelStockHeight ?? null,
+        labelStockWidth: account.labelStockWidth ?? null,
         labelImageType: account.labelImageType ?? null,
         labelStockType: account.labelStockType ?? null,
         thirdPartyAccount:  account.thirdPartyAccount  || '',
@@ -643,6 +649,13 @@ export default function CarrierConnections({
         // render the pickers; non-FedEx send null (no-op).
         labelImageType: drawer.carrierCode === 'FEDEX' ? (drawer.labelImageType || null) : null,
         labelStockType: drawer.carrierCode === 'FEDEX' ? (drawer.labelStockType || null) : null,
+        // Per-account label stock size (inches). Applies to ALL carriers —
+        // UPS reads it verbatim (its Ship API requires it); FedEx / DHL /
+        // USPS map to their per-carrier enums at connector time or
+        // ignore. Both fields move as a pair; if either is null, both go
+        // null on the wire and the backend falls to the 4x6 default.
+        labelStockHeight: drawer.labelStockHeight ?? null,
+        labelStockWidth: drawer.labelStockWidth ?? null,
         // Third-party billing default. Only send the address when the picked
         // clearance is THIRD_PARTY — flipping to SENDER/RECIPIENT explicitly
         // clears the persisted third-party row (send empty strings so the
@@ -1642,6 +1655,50 @@ export default function CarrierConnections({
                       </p>
                     </div>
                   ) : null}
+
+                  {/* Label stock size — required by UPS Ship API v1
+                      (LabelSpecification.LabelStockSize.Height/Width in
+                      inches); FedEx/DHL/USPS map to their own enums at
+                      connector time. Nulls fall to 4x6 (Height=6, Width=4)
+                      at label time so pre-existing rows read unchanged.
+                      Standard operator picks below cover 90% of cases;
+                      custom sizes need the backend Height/Width fields
+                      set directly. */}
+                  <div className="mt-2">
+                    <Field label="Label stock size">
+                      <select
+                        value={
+                          drawer.labelStockHeight && drawer.labelStockWidth
+                            ? `${drawer.labelStockWidth}x${drawer.labelStockHeight}`
+                            : ''
+                        }
+                        onChange={(e) => {
+                          const v = e.target.value
+                          if (!v) {
+                            setDrawer((c) => ({ ...c, labelStockHeight: null, labelStockWidth: null }))
+                            return
+                          }
+                          const [w, h] = v.split('x').map(Number)
+                          setDrawer((c) => ({ ...c, labelStockHeight: h, labelStockWidth: w }))
+                        }}
+                        className={inputClassName}
+                      >
+                        <option value="">4x6 (default — thermal shipping)</option>
+                        <option value="4x6">4x6 portrait (explicit)</option>
+                        <option value="4x8">4x8 portrait (label + doc tab)</option>
+                        <option value="4x9">4x9 portrait (label + CI/CN22)</option>
+                        <option value="6x4">6x4 landscape</option>
+                        <option value="8x4">8x4 landscape</option>
+                      </select>
+                    </Field>
+                    <p className="-mt-1 mb-2 text-[10.5px] leading-4 text-slate-400">
+                      Physical label paper size (inches, width × height). UPS
+                      requires this on every shipment (Ship API v1 error
+                      9120244 when absent). FedEx/DHL/USPS map to their own
+                      enums. Blank uses the 4x6 default matching standard
+                      thermal shipping labels.
+                    </p>
+                  </div>
 
                   {/* Third-party billing sub-panel — only shown when the
                       operator picks THIRD_PARTY. Every field is an
