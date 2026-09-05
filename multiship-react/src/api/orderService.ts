@@ -146,6 +146,10 @@ export interface OrderWithLines {
   shipName: string | null
   shipAttn: string | null
   shipAddr1: string | null
+  /** Recipient LINE 2 (stored on Order.location backend-side); nullable
+   *  when the shipment was single-line. Rendered under shipAddr1 on the
+   *  label preview + Commercial Invoice consignee block. */
+  shipAddr2: string | null
   phone: string | null
   shiptoCity: string | null
   shiptoState: string | null

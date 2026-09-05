@@ -23,6 +23,11 @@ public class OrderWithLinesDTO {
     private String shipName;
     private String shipAttn;
     private String shipAddr1;
+    /** Recipient's address LINE 2 — stored on {@code Order.location} (per PR #563
+     *  backend fix; manual/API shipments write it via setLocation(addressLine2)).
+     *  Exposed on this DTO so the label preview + Commercial Invoice can render
+     *  the recipient's full multi-line address instead of only line 1. */
+    private String shipAddr2;
     private String phone;
     private String shiptoCity;
     private String shiptoState;
