@@ -1750,8 +1750,18 @@ public class UpsConnector implements CarrierConnector {
         // from the pre-2010 UPS integration guides. Switched to a
         // descriptive value so support tickets can correlate labels to this
         // application. UPS accepts any non-empty string.
+        // UPS Ship API v1 requires LabelStockSize alongside LabelImageFormat
+        // (rejected with 9120244 "Missing label specification label stock
+        // size." when omitted). Height + Width are in inches; standard
+        // thermal shipping label is 4x6 in portrait (Height=6, Width=4).
+        // Range per UPS spec: 3-8 inches on each axis. Kept as a static
+        // 6x4 because our stored label artifacts are ALL 4x6 today; if a
+        // customer ships on 4x8 or 4x9 stock, thread a per-shipment
+        // override through ShipmentRequestDTO the same way labelImageFormat
+        // is threaded above (UPS-4b).
         shipmentRequest.put("LabelSpecification", Map.of(
                 "LabelImageFormat", Map.of("Code", labelFormat),
+                "LabelStockSize", Map.of("Height", "6", "Width", "4"),
                 "HTTPUserAgent", "multiship"));
         payload.put("ShipmentRequest", shipmentRequest);
         return payload;
