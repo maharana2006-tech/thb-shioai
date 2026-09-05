@@ -63,6 +63,16 @@ public class FedExMaxiCodeParser {
             Pattern.DOTALL);
 
     /**
+     * Zebra hex-escape sequence — {@code _XX} where XX is 2 hex digits.
+     * FedEx uses this to encode the MaxiCode's ASCII control chars
+     * (GS 0x1D, RS 0x1E, FS 0x1C) as printable text; the printer
+     * converts them to raw bytes at print time. We have to undo this
+     * escaping first, otherwise the MaxiCode looks like inert text
+     * to the regex.
+     */
+    private static final Pattern ZEBRA_HEX_ESCAPE = Pattern.compile("_([0-9A-F]{2})");
+
+    /**
      * Parse a ZPL text blob into a {@link Details} view. Returns
      * {@link Details#EMPTY} when no MaxiCode payload is found
      * (never throws — carriers that don't emit MaxiCode still get a
@@ -71,6 +81,11 @@ public class FedExMaxiCodeParser {
      */
     public Details parse(String zpl) {
         if (zpl == null || zpl.isEmpty()) return Details.EMPTY;
+        // Undo Zebra's _XX hex-escape encoding first — the MaxiCode
+        // payload lives in ZPL as ASCII-safe text and its GS/RS/FS
+        // separators come across as "_1D" / "_1E" / "_1C" until we
+        // decode them into their real control-char equivalents.
+        zpl = decodeZebraHexEscapes(zpl);
         Matcher m = MAXICODE_ENVELOPE.matcher(zpl);
         if (!m.find()) return Details.EMPTY;
         String payload = m.group(1);
@@ -182,6 +197,27 @@ public class FedExMaxiCodeParser {
 
     private static String safe(String[] arr, int idx) {
         return idx >= 0 && idx < arr.length ? arr[idx] : null;
+    }
+
+    /**
+     * Replace every {@code _XX} Zebra hex-escape with the corresponding
+     * single-byte character. Idempotent-safe: leaves stray underscores
+     * (not followed by 2 hex digits) intact. Package-visible for direct
+     * unit-test coverage of the escape decoding.
+     */
+    static String decodeZebraHexEscapes(String s) {
+        if (s == null || s.isEmpty()) return s;
+        Matcher m = ZEBRA_HEX_ESCAPE.matcher(s);
+        StringBuilder out = new StringBuilder(s.length());
+        int lastEnd = 0;
+        while (m.find()) {
+            out.append(s, lastEnd, m.start());
+            int codePoint = Integer.parseInt(m.group(1), 16);
+            out.append((char) codePoint);
+            lastEnd = m.end();
+        }
+        out.append(s, lastEnd, s.length());
+        return out.toString();
     }
 
     private static String nullIfBlank(String s) {
