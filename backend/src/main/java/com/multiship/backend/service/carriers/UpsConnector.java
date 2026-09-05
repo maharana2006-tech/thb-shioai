@@ -1955,10 +1955,21 @@ public class UpsConnector implements CarrierConnector {
         // (Letter/Pak/Tube/etc); covers the common "brown box" case.
         // Documented here so future audits don't re-flag the hardcoded
         // "02" as a silent-fallback bug.
-        pkg.put("PackagingType", Map.of(
-                "Code", firstNonBlank(
-                        firstNonBlank(p.getPackageType(), request.getPackageType()),
-                        "02")));
+        //
+        // Translate the shared "YOUR_PACKAGING" sentinel that
+        // CarrierServiceImpl.java:1172 emits for every CUSTOM preset
+        // into UPS's own "02" enum. UPS rejects any string not in its
+        // fixed enum (01 Letter / 02 CustomerBox / 03 Tube / 04 Pak /
+        // 21 ExpressBox / 24 25KG / 25 10KG / 30 Pallet / 2a/2b/2c
+        // Small/Med/Large Express Box); pre-fix "YOUR_PACKAGING" fell
+        // through to the wire verbatim and UPS rejected 9120xxx
+        // "Missing or invalid Package PackagingType Code."
+        String resolvedPackageCode = firstNonBlank(
+                p.getPackageType(), request.getPackageType());
+        String upsPackageCode = ("YOUR_PACKAGING".equalsIgnoreCase(resolvedPackageCode)
+                || !StringUtils.hasText(resolvedPackageCode))
+                        ? "02" : resolvedPackageCode;
+        pkg.put("PackagingType", Map.of("Code", upsPackageCode));
 
         String weightUnitCode = "KG".equalsIgnoreCase(
                 firstNonBlank(p.getWeightUnit(), request.getWeightUnit())) ? "KGS" : "LBS";
