@@ -101,6 +101,19 @@ public class CarrierAccountRef {
     private String clearanceOption;
 
     /**
+     * Per-account label stock size, in inches. UPS Ship API v1 requires
+     * this on every shipment (rejected 9120244 when omitted); FedEx / DHL /
+     * USPS map it to their respective label-stock enums. Nullable — nulls
+     * fall to the ShipmentDefaultsResolver's 4x6 default at label time.
+     * Standard values operators pick from: 4x6, 4x8, 4x9, 6x4, 8x4.
+     */
+    @Column(name = "label_stock_height", precision = 3, scale = 1)
+    private java.math.BigDecimal labelStockHeight;
+
+    @Column(name = "label_stock_width", precision = 3, scale = 1)
+    private java.math.BigDecimal labelStockWidth;
+
+    /**
      * F6-B2 — per-account billing currency override. ISO 4217 3-letter code.
      * When NULL, the resolver falls back to the carrier's hardcoded home
      * currency (USPS/UPS/FedEx → USD; DHL → EUR). When set, this value is

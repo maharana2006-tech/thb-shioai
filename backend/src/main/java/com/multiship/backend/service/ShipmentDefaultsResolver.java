@@ -105,7 +105,9 @@ public class ShipmentDefaultsResolver {
                 resolvePickupType(inputs),
                 resolveLabelImageFormat(inputs),
                 resolveLabelImageType(inputs),
-                resolveLabelStockType(inputs));
+                resolveLabelStockType(inputs),
+                inputs.account() != null ? inputs.account().getLabelStockHeight() : null,
+                inputs.account() != null ? inputs.account().getLabelStockWidth() : null);
     }
 
     // ===== per-field resolvers =====
@@ -322,7 +324,12 @@ public class ShipmentDefaultsResolver {
             String pickupType,
             String labelImageFormat,
             String labelImageType,
-            String labelStockType) {}
+            String labelStockType,
+            /** Per-account label stock size (inches). Nullable; connector-side
+             *  fallback is 4×6 (Height=6, Width=4). UPS emits verbatim; FedEx /
+             *  DHL / USPS normalise to their per-carrier enums at connector time. */
+            java.math.BigDecimal labelStockHeight,
+            java.math.BigDecimal labelStockWidth) {}
 
     /** Thrown when a required field can't be resolved OR shippingPurpose
      *  is set to a value outside the enum. */

@@ -144,6 +144,26 @@ public class AccountRefUpsertRequest {
     private String labelStockType;
 
     /**
+     * Per-account label stock size in inches. Threaded to every connector
+     * via ShipmentRequestDTO.labelStockHeight/Width. UPS requires it in
+     * the envelope; FedEx/DHL/USPS map to their per-carrier enums via
+     * the connector-side normalisation.
+     * <p>Constraints per UPS Ship API v1: each side 3.0 to 8.0 inches.
+     * Both nullable — null pair falls to 4x6 (Height=6, Width=4) at
+     * label time.
+     */
+    @jakarta.validation.constraints.DecimalMin(value = "3.0",
+            message = "labelStockHeight must be at least 3.0 inches (UPS min)")
+    @jakarta.validation.constraints.DecimalMax(value = "8.0",
+            message = "labelStockHeight must be at most 8.0 inches (UPS max)")
+    private java.math.BigDecimal labelStockHeight;
+    @jakarta.validation.constraints.DecimalMin(value = "3.0",
+            message = "labelStockWidth must be at least 3.0 inches (UPS min)")
+    @jakarta.validation.constraints.DecimalMax(value = "8.0",
+            message = "labelStockWidth must be at most 8.0 inches (UPS max)")
+    private java.math.BigDecimal labelStockWidth;
+
+    /**
      * Third-party billing address — captured against the account when
      * clearanceOption = THIRD_PARTY. All optional here (backend validates only
      * the max lengths); the frontend enforces "at least account number"

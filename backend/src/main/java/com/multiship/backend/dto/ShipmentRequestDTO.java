@@ -377,6 +377,19 @@ public class ShipmentRequestDTO {
     private String labelStockType;
 
     /**
+     * Per-account label stock size in inches (from CarrierAccountRef).
+     * Threaded to every connector: UPS emits {@code LabelStockSize.Height}
+     * / {@code .Width} verbatim; FedEx/DHL/USPS normalise to their own
+     * enums at connector time via a shared height×width → carrier-enum
+     * map. Nullable — nulls fall to the 4×6 default (Height=6, Width=4)
+     * at label time.
+     *
+     * <p>Standard operator picks: 4x6, 4x8, 4x9, 6x4, 8x4.
+     */
+    private java.math.BigDecimal labelStockHeight;
+    private java.math.BigDecimal labelStockWidth;
+
+    /**
      * Return the packages list connectors should iterate. Guarantees a
      * non-empty list so per-connector code doesn't have to fork on
      * null/empty:
