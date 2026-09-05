@@ -381,6 +381,11 @@ public class OrderServiceImpl implements OrderService {
                 .shipName(entity.getShipName())
                 .shipAttn(entity.getShipAttn())
                 .shipAddr1(entity.getShipAddr1())
+                // Recipient LINE 2 — persisted on Order.location by the manual
+                // + API shipment paths (per PR #563 backend fix). Expose here
+                // so LabelDocumentPage can render the multi-line address on
+                // both the label preview and the Commercial Invoice.
+                .shipAddr2(entity.getLocation())
                 .phone(entity.getPhone())
                 .shiptoCity(entity.getShiptoCity())
                 .shiptoState(entity.getShiptoState())

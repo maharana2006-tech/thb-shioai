@@ -734,6 +734,37 @@ export default function LabelDocumentPage() {
                 <FiCopy className="h-3.5 w-3.5" />
                 Copy ZPL
               </button>
+              {/* View AWB — opens the platform's ZPL→PDF conversion in a new
+                  tab (as opposed to the "Download PDF" button which forces
+                  an attachment download). The FedEx-returned labelFilePath
+                  is base64 ZPL, not a signed carrier URL, so we can't link
+                  directly to the carrier; the /label/pdf endpoint is the
+                  authoritative viewable form. */}
+              <a
+                href={`/api/v1/orders/${orderNo}/label/pdf`}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open the label PDF (AWB) in a new tab"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                <FiExternalLink className="h-3.5 w-3.5" />
+                View AWB
+              </a>
+              {/* Track — direct link to the carrier's own tracking page. Only
+                  shown when the backend surfaced a trackingUrl (all four
+                  carriers do once the label is generated). */}
+              {label?.trackingUrl ? (
+                <a
+                  href={label.trackingUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`Track ${trackingNumber ?? ''} on the carrier site`}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  <FiActivity className="h-3.5 w-3.5" />
+                  Track
+                </a>
+              ) : null}
             </>
           ) : null}
 
@@ -931,6 +962,18 @@ export default function LabelDocumentPage() {
                   AWB / Tracking# <span className="font-mono text-[12px] font-black text-emerald-700">{trackingNumber}</span>
                 </div>
               ) : null}
+              {/* INCOTERMS caption — the FedEx carrier ZPL doesn't print
+                  incoterms on its thermal label, so when we render the
+                  carrier PNG (activeTab==='label' + carrierPreviewState==='ready')
+                  the operator sees the raw FedEx label without commercial
+                  terms. Show a caption strip next to AWB so the term is
+                  visible above the PNG. Same "hidden in print so the real
+                  label ships clean" pattern the AWB caption uses. */}
+              {isInternational && termsOfSale ? (
+                <div className="border-b border-slate-200 bg-slate-50 px-2 py-1 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700 print:hidden">
+                  Incoterms <span className="font-mono text-[12px] font-black text-emerald-700">{termsOfSale}</span>
+                </div>
+              ) : null}
               <img
                 src={orderService.labelPreviewPngUrl(orderNo, pkgIndex)}
                 alt={`Shipping label for order ${orderNo}`}
@@ -970,7 +1013,7 @@ export default function LabelDocumentPage() {
               <div className="px-2 pb-1 pt-1.5">
                 {/* Incoterms are a cross-border commercial term — hidden
                     for domestic parcels. */}
-                {isInternational ? (
+                {isInternational && termsOfSale ? (
                   <p className="text-[11px] font-black leading-none">
                     INCOTERMS: {termsOfSale}
                   </p>
@@ -1053,6 +1096,9 @@ export default function LabelDocumentPage() {
                         of the address. Moved to the warehouse footer below the label. */}
                     {order.shipAddr1 ? (
                       <p className="text-[18px] font-black uppercase leading-[22px]">{order.shipAddr1}</p>
+                    ) : null}
+                    {order.shipAddr2 ? (
+                      <p className="text-[18px] font-black uppercase leading-[22px]">{order.shipAddr2}</p>
                     ) : null}
                     {generated && isSandbox ? (
                       <p className="text-[18px] font-black leading-[22px]">**TEST LABEL - DO NOT SHIP**</p>
@@ -1232,6 +1278,7 @@ export default function LabelDocumentPage() {
                   <p className="font-bold">{order.shipAttn || recipientName}</p>
                   {order.shipAttn && order.shipAttn !== recipientName ? <p>{recipientName}</p> : null}
                   {order.shipAddr1 ? <p>{order.shipAddr1}</p> : null}
+                  {order.shipAddr2 ? <p>{order.shipAddr2}</p> : null}
                   <p>{[order.shiptoCity, order.shiptoZip, order.shiptoState, destCountry].filter(Boolean).join(', ')}</p>
                   <div className="mt-1 space-y-0.5">
                     <KV label="PH" value={order.phone} />
