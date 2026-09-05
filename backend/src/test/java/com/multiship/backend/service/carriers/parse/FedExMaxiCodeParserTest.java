@@ -158,6 +158,23 @@ class FedExMaxiCodeParserTest {
         assertEquals("Duplex-145, Lane-1, Sai Paradise", d.getRecipientAddressLine1());
         assertEquals("Bhubaneswar", d.getRecipientCity());
         assertEquals("Manoj Kr Maharana", d.getRecipientName());
+        // Postal should have the "02 " SCM-version prefix stripped
+        // (the real FedEx sandbox wire form embeds the version + space).
+        assertEquals("751024", d.getRecipientPostalCode(),
+                "SCM version prefix must be stripped from postal");
+    }
+
+    @Test
+    void postalWithoutSpaceHasScmVersionStripped() {
+        // Some FedEx accounts omit the space between SCM version and
+        // postal ("02751024" instead of "02 751024"). Both must land as
+        // just "751024" on the DTO.
+        String zpl = "^XA^BD^FD[)>" + RS + "01" + GS + "02751024" + GS + "356" + GS + "01"
+                + GS + "1234567890120430" + GS + "FDE"
+                + GS + "Line1" + GS + "City" + GS + "ST" + GS + "Name" + RS + "06"
+                + FS + FS + FS + FS + FS + "^FS^XZ";
+        FedExMaxiCodeParser.Details d = parser.parse(zpl);
+        assertEquals("751024", d.getRecipientPostalCode());
     }
 
     @Test

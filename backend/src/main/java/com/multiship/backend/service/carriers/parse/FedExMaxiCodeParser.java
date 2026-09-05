@@ -108,11 +108,17 @@ public class FedExMaxiCodeParser {
         // don't shift the address fields.
         String[] scm = scmHeader.split(String.valueOf(GS));
         String postalRaw = safe(scm, 0);
-        // Peel the SCM version prefix (usually 2 chars) off the postal
-        // field. Recognised shape: 2 digits + space + 4-10 char postal.
+        // Peel the FedEx SCM version prefix off the postal field. The
+        // MaxiCode SCM standard reserves the first field's leading 2
+        // chars for the version ("01" or "02"); FedEx typically emits
+        // "02" with either no space or a single space before the real
+        // postal. Only strip when we recognise one of those known
+        // version literals — a shape-only strip would eat real postal
+        // digits on non-FedEx corridors.
         String postal = postalRaw;
-        if (postalRaw != null && postalRaw.matches("^\\d{2}\\s.+")) {
-            postal = postalRaw.substring(3);
+        if (postalRaw != null && (postalRaw.startsWith("02") || postalRaw.startsWith("01"))
+                && postalRaw.length() >= 4) {
+            postal = postalRaw.substring(2).stripLeading();
         }
         String country  = safe(scm, 1);
         String service  = safe(scm, 2);
