@@ -3,10 +3,12 @@ package com.multiship.backend.service;
 import com.multiship.backend.dto.CustomsCommodityDTO;
 import com.multiship.backend.dto.IntlShipmentBlockDTO;
 import com.multiship.backend.dto.ShipmentRequestDTO;
+import com.multiship.backend.service.fx.FxRateService;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -89,11 +91,28 @@ public final class IntlShipmentValidator {
     private IntlShipmentValidator() {}
 
     /**
-     * Full validation entry point. Returns an empty list when the request is
-     * OK to send to the carrier. When {@code request.intl} is null the
-     * shipment is treated as domestic — no errors regardless of other fields.
+     * Full validation entry point (no FX — USD-scoped for the FTR rule).
+     * Kept for back-compat with test callers that don't wire an
+     * {@link FxRateService}; production callers should prefer
+     * {@link #validate(ShipmentRequestDTO, FxRateService)} so non-USD
+     * declarations aren't silently skipped by the value-threshold rule.
      */
     public static List<ValidationError> validate(ShipmentRequestDTO request) {
+        return validate(request, null);
+    }
+
+    /**
+     * Full validation entry point with FX. When {@code fx} is non-null the
+     * FTR-value rule converts the declared customs total into USD before
+     * comparing against the $2,500 threshold — so a €3,000 EUR US→GB
+     * shipment gets gated the same way a $3,000 USD one does. A rate
+     * lookup failure falls through as "rule not fired" (safer than false
+     * blocking): the carrier will still catch the missing EEI at its
+     * own edge, but the local pre-flight doesn't invent a verdict from
+     * a broken rate feed.
+     */
+    public static List<ValidationError> validate(ShipmentRequestDTO request,
+                                                  FxRateService fx) {
         List<ValidationError> errors = new ArrayList<>();
         IntlShipmentBlockDTO intl = request == null ? null : request.getIntl();
         if (intl == null || !Boolean.TRUE.equals(intl.getInternational())) {
@@ -182,36 +201,54 @@ public final class IntlShipmentValidator {
         //   Origin  : shipperCountryCode == "US"
         //   Dest    : recipientCountryCode != "US" and != "CA"
         //             (Canada bilaterals are covered by NOEEI §30.36)
-        //   Currency: customsCurrency == "USD" (the statute is USD-scoped;
-        //             non-USD declarations are left alone here — carrier
-        //             still rejects, but the operator's own filing currency
-        //             would need conversion via a real FX service to gate
-        //             deterministically here, and that's out of scope for
-        //             a pure-function validator).
-        //   Value   : customsTotalValue >= 2500
+        //   Currency: any (FX-converted to USD when {@code fx} is non-null;
+        //             USD-only when it isn't).
+        //   Value   : USD-equivalent of customsTotalValue >= 2500
         // Enforcement: one of ftrExemption OR aesCitation must be populated.
         // Both blank → hard error naming the two ways to satisfy the rule.
         String shipperCountry = normalizeCountry(request.getShipperCountryCode());
         String recipientCountry = normalizeCountry(request.getRecipientCountryCode());
-        String currencyForEei = intl.getCustomsCurrency() == null
-                ? "" : intl.getCustomsCurrency().trim().toUpperCase();
         boolean usOrigin = "US".equals(shipperCountry);
         boolean nonCaDest = !recipientCountry.isEmpty()
                 && !"CA".equals(recipientCountry)
                 && !"US".equals(recipientCountry);
-        boolean usdDeclared = "USD".equals(currencyForEei);
-        boolean overThreshold = intl.getCustomsTotalValue() != null
-                && intl.getCustomsTotalValue().compareTo(EEI_THRESHOLD_USD) >= 0;
-        if (usOrigin && nonCaDest && usdDeclared && overThreshold
+        if (usOrigin && nonCaDest
                 && isBlank(intl.getFtrExemption()) && isBlank(intl.getAesCitation())) {
-            errors.add(new ValidationError(CODE_EEI_REQUIRED,
-                    "US exports valued at $" + EEI_THRESHOLD_USD.toPlainString()
-                            + " or more (per Schedule B code) to non-Canada destinations "
-                            + "require either an AES Citation (ITN) or an FTR §30.37 exemption. "
-                            + "Provide one on the international details step before shipping."));
+            Optional<BigDecimal> usdEquivalent = customsTotalInUsd(intl, fx);
+            if (usdEquivalent.isPresent()
+                    && usdEquivalent.get().compareTo(EEI_THRESHOLD_USD) >= 0) {
+                errors.add(new ValidationError(CODE_EEI_REQUIRED,
+                        "US exports valued at $" + EEI_THRESHOLD_USD.toPlainString()
+                                + " or more (per Schedule B code) to non-Canada destinations "
+                                + "require either an AES Citation (ITN) or an FTR §30.37 exemption. "
+                                + "Provide one on the international details step before shipping."));
+            }
         }
 
         return errors;
+    }
+
+    /**
+     * Convert {@link IntlShipmentBlockDTO#getCustomsTotalValue()} to USD
+     * for the threshold check. Precedence:
+     * <ol>
+     *   <li>Value is null → {@link Optional#empty()} (rule can't fire).</li>
+     *   <li>Currency already USD → return the value verbatim.</li>
+     *   <li>Currency non-USD + {@code fx} available + rate resolves →
+     *       return the converted amount.</li>
+     *   <li>Otherwise → {@link Optional#empty()} (rate feed outage or
+     *       {@code fx} is null; rule doesn't fire, carrier still catches
+     *       at its own edge — safer than a false-positive block).</li>
+     * </ol>
+     */
+    static Optional<BigDecimal> customsTotalInUsd(IntlShipmentBlockDTO intl, FxRateService fx) {
+        BigDecimal amount = intl.getCustomsTotalValue();
+        if (amount == null) return Optional.empty();
+        String currency = intl.getCustomsCurrency() == null
+                ? "USD" : intl.getCustomsCurrency().trim().toUpperCase();
+        if (currency.isEmpty() || "USD".equals(currency)) return Optional.of(amount);
+        if (fx == null) return Optional.empty();
+        return fx.convert(amount, currency, "USD");
     }
 
     /** US FTR §30.37(a) monetary threshold (per Schedule B code). */

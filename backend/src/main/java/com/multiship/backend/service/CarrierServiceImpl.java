@@ -86,6 +86,11 @@ public class CarrierServiceImpl implements CarrierService {
      *  client shipping on a USD UPS account no longer sends EUR figures
      *  labelled USD on the wire. Fails closed when a rate is unavailable. */
     private final ShipmentCurrencyConverter shipmentCurrencyConverter;
+    /** PR 2 — used by IntlShipmentValidator to normalize non-USD customs
+     *  totals to USD for the $2,500 FTR/EEI threshold check. Rate-feed
+     *  outages fall through as "rule doesn't fire" — never blocks the
+     *  label flow on a broken feed. */
+    private final com.multiship.backend.service.fx.FxRateService intlValidationFx;
 
     /**
      * PR #550 — pre-fetches URL label bytes at persistence time so the DB
@@ -1866,7 +1871,7 @@ public class CarrierServiceImpl implements CarrierService {
         // name the missing field. IntlShipmentValidator concatenates every
         // gap into one actionable message.
         java.util.List<IntlShipmentValidator.ValidationError> intlErrors =
-                IntlShipmentValidator.validate(shipmentRequest);
+                IntlShipmentValidator.validate(shipmentRequest, intlValidationFx);
         if (!intlErrors.isEmpty()) {
             throw new com.multiship.backend.exception.CarrierConnectionException(
                     IntlShipmentValidator.toMessage(intlErrors));

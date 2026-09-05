@@ -88,6 +88,13 @@ public class ShipmentValidationService {
      *  No hardcoded USD/DAP defaults. */
     private final com.multiship.backend.repository.ClientRepository clientRepository;
     private final com.multiship.backend.repository.ClientCustomsProfileRepository clientCustomsProfileRepository;
+    /** FX conversion for the intl-value threshold rules. Non-USD customs
+     *  declarations get their totals converted to USD before comparing
+     *  against the $2,500 statutory threshold. Rate-feed outages fall
+     *  through as "rule doesn't fire" — safer than blocking on a broken
+     *  feed. See docs/flyway-fresh-db-guard-pattern.md for parallel
+     *  precedent on infra-outage-safe defaults. */
+    private final com.multiship.backend.service.fx.FxRateService fxRateService;
 
     @Transactional(readOnly = true)
     public ApiResponse<ShipmentValidationResult> validate(ManualShipmentRequest req) {
@@ -213,7 +220,7 @@ public class ShipmentValidationService {
             // fabricated fallbacks — every missing REQUIRED field surfaces
             // as a local error before the carrier hop.
             checkIntlRequiredFields(req, recipientCountry, errors);
-            for (IntlShipmentValidator.ValidationError ve : IntlShipmentValidator.validate(adapted)) {
+            for (IntlShipmentValidator.ValidationError ve : IntlShipmentValidator.validate(adapted, fxRateService)) {
                 errors.add(ValidationIssue.builder()
                         .code(ve.code()).message(ve.message()).build());
             }
@@ -781,15 +788,16 @@ public class ShipmentValidationService {
      * that hard rule doesn't (non-US origin, or US-origin with the
      * FTR/AES fields already populated but a value ≥ $2,500).
      *
-     * <p>Scoped to USD-declared shipments for now — non-USD needs FX
-     * conversion which lands in a follow-up PR (matches the current
-     * scope of the US FTR rule).
+     * <p>PR 2 (FX plumbing): non-USD declarations are now converted to
+     * USD via {@link com.multiship.backend.service.fx.FxRateService}. Rate
+     * lookup failures fall through as "rule doesn't fire" — same defensive
+     * posture as the FTR rule; carrier still catches at its edge.
      */
     private void checkHighValueExportDeclaration(ManualShipmentRequest req,
                                                   List<ValidationIssue> warnings) {
         if (req == null) return;
         String currency = resolveCustomsCurrency(req);
-        if (currency == null || !"USD".equalsIgnoreCase(currency)) return;
+        if (currency == null) return;
         java.math.BigDecimal total = req.getDeclaredValue();
         if (total == null) {
             // Fall back to sum of commodity line totals when declaredValue
@@ -799,7 +807,21 @@ public class ShipmentValidationService {
                     .filter(java.util.Objects::nonNull)
                     .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
         }
-        if (total == null || total.compareTo(IntlShipmentValidator.EEI_THRESHOLD_USD) < 0) return;
+        if (total == null || total.signum() <= 0) return;
+        // FX-normalize to USD before comparing. USD passes through as-is;
+        // other currencies via the injected FxRateService. Rate-feed
+        // outages return empty → rule doesn't fire (safer than false-positive).
+        java.math.BigDecimal usdEquivalent;
+        if ("USD".equalsIgnoreCase(currency)) {
+            usdEquivalent = total;
+        } else {
+            java.util.Optional<java.math.BigDecimal> converted = fxRateService == null
+                    ? java.util.Optional.empty()
+                    : fxRateService.convert(total, currency, "USD");
+            if (converted.isEmpty()) return;
+            usdEquivalent = converted.get();
+        }
+        if (usdEquivalent.compareTo(IntlShipmentValidator.EEI_THRESHOLD_USD) < 0) return;
         boolean anyRefPopulated = StringUtils.hasText(req.getFtrExemption())
                 || StringUtils.hasText(req.getAesCitation())
                 || StringUtils.hasText(req.getExportDeclarationReference());
