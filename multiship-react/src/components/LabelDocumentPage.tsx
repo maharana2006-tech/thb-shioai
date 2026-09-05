@@ -969,18 +969,14 @@ export default function LabelDocumentPage() {
                   AWB / Tracking# <span className="font-mono text-[12px] font-black text-emerald-700">{trackingNumber}</span>
                 </div>
               ) : null}
-              {/* INCOTERMS caption — the FedEx carrier ZPL doesn't print
-                  incoterms on its thermal label, so when we render the
-                  carrier PNG (activeTab==='label' + carrierPreviewState==='ready')
-                  the operator sees the raw FedEx label without commercial
-                  terms. Show a caption strip next to AWB so the term is
-                  visible above the PNG. Same "hidden in print so the real
-                  label ships clean" pattern the AWB caption uses. */}
-              {isInternational && termsOfSale ? (
-                <div className="border-b border-slate-200 bg-slate-50 px-2 py-1 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-700 print:hidden">
-                  Incoterms <span className="font-mono text-[12px] font-black text-emerald-700">{termsOfSale}</span>
-                </div>
-              ) : null}
+              {/* INCOTERMS is intentionally NOT surfaced as a caption on
+                  the carrier-PNG branch — FedEx's MaxiCode doesn't carry
+                  it, so we have no carrier-response provenance for the
+                  value. Operator asked for label captions to reflect
+                  only carrier-verified data; incoterms remain visible
+                  on the Commercial Invoice tab and in the JSX facsimile
+                  (both of which are our own render surfaces where
+                  local-DB provenance is expected). */}
               {/* Address LINE 2 caption — FedEx's thermal-label template
                   drops recipient line 2 from the visible text; the value
                   survives only inside the MaxiCode barcode. Read it back

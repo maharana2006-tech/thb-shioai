@@ -1459,6 +1459,12 @@ public class CarrierServiceImpl implements CarrierService {
                     failCustoms.setReasonForExport(req.getReasonForExport());
                     failCustoms.setCurrency(firstNonBlank(req.getCurrency(), "USD"));
                     failCustoms.setItems(failLines);
+                    // PR ω — persist export-compliance fields even on the
+                    // failed-order path so the operator can retry with the
+                    // full context they submitted.
+                    failCustoms.setFtrExemption(req.getFtrExemption());
+                    failCustoms.setAesCitation(req.getAesCitation());
+                    failCustoms.setExportDeclarationReference(req.getExportDeclarationReference());
                     final Integer fno = failedOrderNo;
                     try {
                         requiresNewTransactionTemplate.executeWithoutResult(st ->
@@ -1715,6 +1721,14 @@ public class CarrierServiceImpl implements CarrierService {
                         "USD");
                 customsReq.setCurrency(currencyForCustoms);
                 customsReq.setItems(lines);
+                // PR ω — the export-compliance fields (FTR §30.37 exemption,
+                // AES ITN, generic export declaration ref) flowed through
+                // to the carrier via IntlShipmentBlockDTO but were dropped
+                // on the persist path, leaving order_customs blank even
+                // when the FedEx label was stamped "NO EEI 30.37(h)".
+                customsReq.setFtrExemption(req.getFtrExemption());
+                customsReq.setAesCitation(req.getAesCitation());
+                customsReq.setExportDeclarationReference(req.getExportDeclarationReference());
                 // MUST run in THIS method's transaction (not REQUIRES_NEW).
                 // upsertCustoms() begins by re-loading the order via
                 // requireOrder(); the order was just saved above but is NOT yet
@@ -2437,6 +2451,75 @@ public class CarrierServiceImpl implements CarrierService {
                 .filter(connector -> connector.getCarrierCode().equalsIgnoreCase(canonicalCarrierCode))
                 .findFirst()
                 .orElseThrow(() -> new CarrierConnectionException("Unsupported carrier: " + carrierCode));
+    }
+
+    /**
+     * Diagnostic — reconstruct the outbound carrier payload for a
+     * persisted order and return it as-would-be-sent. No carrier hop.
+     * See {@link CarrierService#previewCarrierPayload}.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<java.util.Map<String, Object>> previewCarrierPayload(Long orderNo) {
+        if (orderNo == null) {
+            return failure(400, "Order number is required.");
+        }
+        Order order = orderRepository.findById(orderNo.intValue()).orElse(null);
+        if (order == null) {
+            return failure(404, "Order " + orderNo + " not found.");
+        }
+        String carrierCode = resolveCanonicalCarrierCode(order.getShipviaCd());
+        if (!StringUtils.hasText(carrierCode)) {
+            return failure(422,
+                    "Order " + orderNo + " has no resolved carrier code (shipviaCd is blank).");
+        }
+        CarrierConnector connector;
+        try {
+            connector = getCarrierConnector(carrierCode);
+        } catch (CarrierConnectionException ex) {
+            return failure(422, ex.getMessage());
+        }
+        // Resolve the account the same way generateLabel does — from the
+        // persisted OrderCarrierDetails when present, else the client's
+        // default. Preview needs to see the same account the real ship
+        // used, otherwise the payload would show the wrong billing side.
+        String accountNumber = orderCarrierDetailsRepository.findByOrderNo(orderNo.intValue())
+                .map(com.multiship.backend.model.OrderCarrierDetails::getAccountNumber)
+                .orElse(null);
+        if (!StringUtils.hasText(accountNumber)) {
+            return failure(422,
+                    "Order " + orderNo + " has no persisted carrier account — can't preview payload before a ship.");
+        }
+        try {
+            ShipmentRequestDTO request = buildShipmentRequest(order, accountNumber, connector);
+            java.util.Map<String, Object> body = connector.previewShipmentPayload(request);
+            java.util.Map<String, Object> wrapped = new java.util.LinkedHashMap<>();
+            wrapped.put("carrier", connector.getCarrierCode());
+            wrapped.put("orderNo", orderNo);
+            wrapped.put("accountNumber", accountNumber);
+            wrapped.put("note",
+                    "Reconstructed from persisted Order + OrderCustoms — the exact JSON body "
+                            + "createShipment() would POST to the carrier. No carrier call was made.");
+            wrapped.put("payload", body);
+            return ApiResponse.<java.util.Map<String, Object>>builder()
+                    .status("SUCCESS").code(200)
+                    .message("Carrier payload reconstructed.")
+                    .timestamp(java.time.LocalDateTime.now())
+                    .data(wrapped).build();
+        } catch (Exception ex) {
+            log.warn("previewCarrierPayload failed for orderNo={}: {}", orderNo, ex.getMessage(), ex);
+            return failure(500, "Preview failed: " + ex.getMessage());
+        }
+    }
+
+    /** Small helper for the diagnostic endpoint above — mirrors the
+     *  ApiResponse.failure shape used elsewhere in this file. */
+    private static ApiResponse<java.util.Map<String, Object>> failure(int code, String message) {
+        return ApiResponse.<java.util.Map<String, Object>>builder()
+                .status("ERROR").code(code)
+                .message(message)
+                .timestamp(java.time.LocalDateTime.now())
+                .build();
     }
 
     private User resolveUser(UserDetails userDetails) {

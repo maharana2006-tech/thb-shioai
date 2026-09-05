@@ -80,4 +80,19 @@ public interface CarrierService {
              *  PO field can be stamped MAN{orderNo}. Null when validate
              *  hop calls this (no persisted orderNo yet). */
             Integer orderNoForPo);
+
+    /**
+     * Diagnostic — reconstruct + return the exact JSON body we would POST
+     * to the carrier for a persisted order, without calling the carrier.
+     * Backed by {@link CarrierConnector#previewShipmentPayload}. Wired to
+     * the {@code GET /orders/{n}/carrier-payload-preview} admin endpoint
+     * so operators can audit what actually went on the wire for an
+     * already-labelled shipment. Non-FedEx carriers return the interface
+     * default (empty map) until they implement {@code previewShipmentPayload}.
+     *
+     * <p>Never mutates DB state and never contacts the carrier. Fails
+     * cleanly with an operator-facing message when the Order can't be
+     * resolved to a carrier account.
+     */
+    ApiResponse<java.util.Map<String, Object>> previewCarrierPayload(Long orderNo);
 }
