@@ -193,4 +193,90 @@ class IntlShipmentValidatorTest {
                 requestWith(validIntl().reasonForExport("GARBAGE").build()));
         assertTrue(errors.stream().anyMatch(e -> IntlShipmentValidator.CODE_BAD_REASON.equals(e.code())));
     }
+
+    // ===== US FTR §30.37 EEI gating — customs.eei.required =====
+
+    /** Build a request with origin/dest countries so the EEI rule can fire. */
+    private static ShipmentRequestDTO usToDe(IntlShipmentBlockDTO intl) {
+        return ShipmentRequestDTO.builder()
+                .shipperCountryCode("US")
+                .recipientCountryCode("DE")
+                .intl(intl).build();
+    }
+
+    @Test
+    void eeiRequiredAtOrAboveThresholdWithoutFtrOrAes() {
+        List<IntlShipmentValidator.ValidationError> errors = IntlShipmentValidator.validate(
+                usToDe(validIntl().customsTotalValue(new BigDecimal("2500.00")).build()));
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "$2,500 USD US→DE with no FTR/AES must raise CODE_EEI_REQUIRED");
+    }
+
+    @Test
+    void eeiSatisfiedByFtrExemption() {
+        assertTrue(IntlShipmentValidator.validate(
+                usToDe(validIntl()
+                        .customsTotalValue(new BigDecimal("3000.00"))
+                        .ftrExemption("NO_EEI_30_37_h")
+                        .build())).stream().noneMatch(
+                                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "30.37(h) exemption at $3,000 satisfies the EEI rule");
+    }
+
+    @Test
+    void eeiSatisfiedByAesCitation() {
+        assertTrue(IntlShipmentValidator.validate(
+                usToDe(validIntl()
+                        .customsTotalValue(new BigDecimal("3000.00"))
+                        .aesCitation("X20260101123456")
+                        .build())).stream().noneMatch(
+                                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "AES ITN at $3,000 satisfies the EEI rule");
+    }
+
+    @Test
+    void eeiNotRequiredUnderThreshold() {
+        assertTrue(IntlShipmentValidator.validate(
+                usToDe(validIntl().customsTotalValue(new BigDecimal("2499.99")).build())).stream()
+                .noneMatch(e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "$2,499.99 sits just under the threshold — rule must not fire");
+    }
+
+    @Test
+    void eeiNotRequiredForCanadaDestination() {
+        // §30.36 is the Canada bilateral exemption — never gated by value here.
+        assertTrue(IntlShipmentValidator.validate(
+                ShipmentRequestDTO.builder()
+                        .shipperCountryCode("US").recipientCountryCode("CA")
+                        .intl(validIntl().customsTotalValue(new BigDecimal("5000.00")).build())
+                        .build()).stream()
+                .noneMatch(e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "US→CA is bilateral; rule must not fire regardless of value");
+    }
+
+    @Test
+    void eeiNotRequiredForNonUsOrigin() {
+        assertTrue(IntlShipmentValidator.validate(
+                ShipmentRequestDTO.builder()
+                        .shipperCountryCode("DE").recipientCountryCode("US")
+                        .intl(validIntl().customsTotalValue(new BigDecimal("5000.00")).build())
+                        .build()).stream()
+                .noneMatch(e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "Non-US origin is out of scope for the US FTR rule");
+    }
+
+    @Test
+    void eeiNotGatedOnNonUsdCurrency() {
+        // Non-USD declarations skip the deterministic check — FX conversion
+        // is out of scope for the pure-function validator; carriers still
+        // reject downstream if the USD-equivalent exceeds the threshold.
+        assertTrue(IntlShipmentValidator.validate(
+                usToDe(validIntl()
+                        .customsCurrency("EUR")
+                        .customsTotalValue(new BigDecimal("3000.00"))
+                        .build())).stream()
+                .noneMatch(e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "EUR-declared shipments aren't gated by this validator (no FX)");
+    }
 }

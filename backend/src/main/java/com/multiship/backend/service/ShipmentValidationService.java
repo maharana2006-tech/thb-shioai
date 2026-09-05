@@ -800,10 +800,23 @@ public class ShipmentValidationService {
                     .customsCurrency(customsCurrency)
                     .customsTotalValue(customsTotal)
                     .weightUnit(req.getWeightUnit())
+                    .ftrExemption(req.getFtrExemption())
+                    .aesCitation(req.getAesCitation())
                     .build();
         }
+        // Shipper/recipient country populated so IntlShipmentValidator can
+        // apply US-origin export rules (§30.37 EEI) at pre-flight — without
+        // this, the validator sees a null origin and can't gate the
+        // $2,500-threshold rule.
+        String shipperCountry = req.getSender() != null
+                ? normCountry(req.getSender().getCountryCode()) : null;
+        String recipientCountryCode = req.getRecipient() != null
+                ? normCountry(req.getRecipient().getCountryCode()) : null;
         return ShipmentRequestDTO.builder()
                 .declaredValueCurrency(req.getCurrency())
+                .declaredValue(req.getDeclaredValue())
+                .shipperCountryCode(shipperCountry)
+                .recipientCountryCode(recipientCountryCode)
                 .intl(intl)
                 .dangerousGoods(req.getDangerousGoods())
                 .build();

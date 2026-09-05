@@ -440,6 +440,68 @@ class FedExConnectorPayloadTest {
     }
 
     // ===================================================================
+    // US Export EEI — exportDetail.exportComplianceStatement wiring
+    // ===================================================================
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void exportDetailOmittedWhenNoFtrOrAes() throws Exception {
+        // Absent FTR/AES on the intl block, we leave exportDetail off the
+        // wire and let FedEx apply its server-side default (§30.37(a),
+        // safe only under $2,500 USD). Value-threshold gating happens at
+        // IntlShipmentValidator upstream.
+        ShipmentRequestDTO r = baseRequest();
+        r.setIntl(baseIntl());
+        Map<String, Object> ccd = (Map<String, Object>) requestedShipment(r).get("customsClearanceDetail");
+        assertNull(ccd.get("exportDetail"),
+                "no FTR/AES on the DTO → no exportDetail block on the wire");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void ftrExemptionEmittedAsExportComplianceStatement() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setFtrExemption("NO_EEI_30_37_h");
+        r.setIntl(intl);
+        Map<String, Object> ccd = (Map<String, Object>) requestedShipment(r).get("customsClearanceDetail");
+        Map<String, Object> exportDetail = (Map<String, Object>) ccd.get("exportDetail");
+        assertNotNull(exportDetail, "FTR exemption must land in an exportDetail block");
+        assertEquals("NO EEI 30.37(h)", exportDetail.get("exportComplianceStatement"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void aesCitationPreferredOverFtrOnCollision() throws Exception {
+        // Operator supplied both — real AES filing takes precedence over a
+        // claimed exemption. Backend validator makes the two mutually
+        // exclusive at the DTO layer; this test guards the connector-side
+        // tie-breaker for any path that bypasses the FE UI mutex.
+        ShipmentRequestDTO r = baseRequest();
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setFtrExemption("NO_EEI_30_37_a");
+        intl.setAesCitation("X20260101123456");
+        r.setIntl(intl);
+        Map<String, Object> ccd = (Map<String, Object>) requestedShipment(r).get("customsClearanceDetail");
+        Map<String, Object> exportDetail = (Map<String, Object>) ccd.get("exportDetail");
+        assertEquals("X20260101123456", exportDetail.get("exportComplianceStatement"),
+                "AES filing wins the tie — real Census record beats claimed exemption");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void ftrExemption30_36MapsToCanadaStatement() throws Exception {
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientCountryCode("CA");
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setFtrExemption("NO_EEI_30_36");
+        r.setIntl(intl);
+        Map<String, Object> ccd = (Map<String, Object>) requestedShipment(r).get("customsClearanceDetail");
+        Map<String, Object> exportDetail = (Map<String, Object>) ccd.get("exportDetail");
+        assertEquals("NO EEI 30.36", exportDetail.get("exportComplianceStatement"));
+    }
+
+    // ===================================================================
     // Sprint 51 — email + company on shipper / recipient contact block
     // ===================================================================
 

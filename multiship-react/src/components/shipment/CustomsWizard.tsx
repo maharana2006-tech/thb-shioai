@@ -1,5 +1,6 @@
 import { memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
+  FiAlertCircle,
   FiCheckCircle,
   FiChevronLeft,
   FiChevronRight,
@@ -14,6 +15,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import type { CustomsItem, OrderCustomsPayload } from '../../api/customsService'
 import HsCodeCombobox from './HsCodeCombobox'
 import { fromCents, toCents } from '../../utils/money'
+import { EEI_THRESHOLD_USD, FTR_EXEMPTIONS } from '../../utils/customsOptions'
 
 /**
  * Sprint 49 Tier 4 Fix 5 — line-total formatter. Multiplies quantity
@@ -241,7 +243,13 @@ export default function CustomsWizard({
           />
         ) : null}
         {stepId === 'duties' ? (
-          <DutiesStep value={value} onPatch={patch} />
+          <DutiesStep
+            value={value}
+            onPatch={patch}
+            originCountry={originCountry}
+            destinationCountry={destinationCountry}
+            invoiceTotal={invoiceTotal}
+          />
         ) : null}
         {stepId === 'review' ? (
           <ReviewStep
@@ -560,10 +568,32 @@ const CommodityRow = memo(function CommodityRow({
 function DutiesStep({
   value,
   onPatch,
+  originCountry,
+  destinationCountry,
+  invoiceTotal,
 }: {
   value: OrderCustomsPayload
   onPatch: (delta: Partial<OrderCustomsPayload>) => void
+  originCountry?: string | null
+  destinationCountry?: string | null
+  invoiceTotal: number
 }) {
+  // US Electronic Export Information (EEI). Show the FTR/AES picker only
+  // on US-origin exports to non-Canada destinations — the statute is
+  // scoped to that route. Canada (§30.36) is the same statute but a
+  // different, always-valid citation, so we don't need operator input.
+  const originIsUs = (originCountry ?? '').trim().toUpperCase() === 'US'
+  const destIsCa = (destinationCountry ?? '').trim().toUpperCase() === 'CA'
+  const destIsUs = (destinationCountry ?? '').trim().toUpperCase() === 'US'
+  const eeiApplicable = originIsUs && !destIsCa && !destIsUs && !!destinationCountry
+  // Value threshold — mirror the backend rule. Non-USD is left alone
+  // (backend also does; converting would need FX and the operator can
+  // switch to USD if they want the front-end warning).
+  const currencyIsUsd = (value.currency ?? 'USD').toUpperCase() === 'USD'
+  const overThreshold = invoiceTotal >= EEI_THRESHOLD_USD
+  const missingEei = !value.ftrExemption && !value.aesCitation
+  const showHighValueBanner = eeiApplicable && currencyIsUsd && overThreshold && missingEei
+
   return (
     <div className="space-y-4">
       <h3 className="text-[15px] font-semibold text-slate-950">Duties & terms</h3>
@@ -643,6 +673,69 @@ function DutiesStep({
         </div>
       </div>
 
+      {eeiApplicable ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/40 p-3 space-y-3">
+          <div className="flex items-start gap-2">
+            <FiInfo aria-hidden="true" className="mt-0.5 h-4 w-4 text-amber-700" />
+            <div className="text-[12px] text-amber-900">
+              <div className="font-semibold">US Export — Electronic Export Information (EEI)</div>
+              <div className="mt-0.5 text-[11px] text-amber-800">
+                Pick a §30.37 exemption <em>or</em> paste the AES ITN you filed with US Census.
+                Shipments ≥ ${EEI_THRESHOLD_USD.toLocaleString()} USD to non-Canada destinations
+                cannot ship under §30.37(a); the carrier will reject them.
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                FTR exemption
+              </label>
+              <select
+                value={value.ftrExemption ?? ''}
+                onChange={(e) => onPatch({ ftrExemption: e.target.value || undefined,
+                                          // Mutually exclusive — picking an exemption clears the ITN.
+                                          aesCitation: e.target.value ? undefined : value.aesCitation })}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px]"
+                disabled={!!value.aesCitation}
+              >
+                <option value="">— none —</option>
+                {FTR_EXEMPTIONS.map((e) => (
+                  <option key={e.value} value={e.value}>
+                    {e.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                AES ITN
+              </label>
+              <input
+                type="text"
+                value={value.aesCitation ?? ''}
+                onChange={(e) => onPatch({ aesCitation: e.target.value || undefined,
+                                           // Same mutual exclusion the other way.
+                                           ftrExemption: e.target.value ? undefined : value.ftrExemption })}
+                placeholder="e.g. X20260101123456"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[12.5px] font-mono"
+                disabled={!!value.ftrExemption}
+              />
+            </div>
+          </div>
+          {showHighValueBanner ? (
+            <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11.5px] text-rose-900">
+              <FiAlertCircle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <span className="font-semibold">EEI required for this value.</span>{' '}
+                Invoice total ${invoiceTotal.toLocaleString()} USD exceeds the §30.37(a)
+                threshold — provide either an FTR exemption or the AES ITN to proceed.
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <div>
         <label className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
           Notes (optional)
@@ -678,6 +771,11 @@ function ReviewStep({
         <Kv label="Reason">{value.reasonForExport ?? '—'}</Kv>
         <Kv label="Currency">{value.currency ?? '—'}</Kv>
         <Kv label="Weight unit">{value.weightUnit ?? 'LB'}</Kv>
+        {value.ftrExemption || value.aesCitation ? (
+          <Kv label="EEI">
+            {value.aesCitation ? `AES ${value.aesCitation}` : (value.ftrExemption ?? '—')}
+          </Kv>
+        ) : null}
       </div>
 
       <div>

@@ -48,7 +48,7 @@ import { STATE_CODE_OPTIONS } from '../utils/stateCodes'
 import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddressFields'
 import { compatiblePresetIds } from '../utils/servicePackageCompatibility'
 import { shipmentValidationService, type ShipmentValidationResult } from '../api/shipmentValidationService'
-import { SHIPPING_PURPOSES, clearanceOptionsForCarrier } from '../utils/customsOptions'
+import { SHIPPING_PURPOSES, clearanceOptionsForCarrier, FTR_EXEMPTIONS, EEI_THRESHOLD_USD } from '../utils/customsOptions'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -637,6 +637,12 @@ export default function NewShipmentPage() {
   // as a no-op for legacy readers.
   const [reasonForExport, setReasonForExport] = useState('')
   const [currency, setCurrency] = useState(() => readSticky('ms:lastCurrency', 'USD'))
+  // EEI — US Foreign Trade Regulations §30.37 exemption code (from the
+  // FTR_EXEMPTIONS list) or the AES ITN filed with US Census. Mutually
+  // exclusive; validation banner fires on high-value US exports without
+  // either. Not sticky — the ITN is per-shipment.
+  const [ftrExemption, setFtrExemption] = useState('')
+  const [aesCitation, setAesCitation] = useState('')
 
   // Optional guided-wizard for the customs section. Off by default; users
   // click "Open guided wizard" to enter a 4-step flow that maps onto the
@@ -1118,6 +1124,8 @@ export default function NewShipmentPage() {
           if (customs.currency) setCurrency(customs.currency)
           if (customs.incoterms) setIncoterms(customs.incoterms)
           if (customs.reasonForExport) setReasonForExport(customs.reasonForExport)
+          if (customs.ftrExemption) setFtrExemption(customs.ftrExemption)
+          if (customs.aesCitation) setAesCitation(customs.aesCitation)
           if (customs.items?.length) {
             setItems(customs.items.map((it) => ({
               description: it.description ?? '', sku: it.sku ?? '', hsCode: it.hsCode ?? '',
@@ -1252,12 +1260,27 @@ export default function NewShipmentPage() {
     // Not label-scoped but the guard hook is the same one used by
     // submit()/validateShipment() so we co-locate.
     if (isInternational && !reasonForExport) missing.push('Reason of export')
+    // US Export EEI — mirror the backend validator (IntlShipmentValidator
+    // CODE_EEI_REQUIRED). US-origin + non-Canada dest + USD invoice
+    // >= $2,500 without FTR exemption or AES ITN → forcing pick keeps
+    // the operator from a FedEx server-side reject.
+    const originIsUs = (sender.countryCode ?? '').trim().toUpperCase() === 'US'
+    const destCcNorm = (recipient.countryCode ?? '').trim().toUpperCase()
+    if (isInternational
+        && originIsUs
+        && destCcNorm && destCcNorm !== 'CA' && destCcNorm !== 'US'
+        && (currency ?? 'USD').toUpperCase() === 'USD'
+        && Number(declaredValue || 0) >= EEI_THRESHOLD_USD
+        && !ftrExemption && !aesCitation) {
+      missing.push(`FTR exemption or AES ITN (required at ≥ $${EEI_THRESHOLD_USD.toLocaleString()})`)
+    }
     // Incoterms same pattern as Reason of export — prefill from
     // ClientCustomsProfile via importerProfile; NULL profile / value
     // blocks with a targeted toast.
     if (isInternational && !incoterms) missing.push('Incoterms')
     return missing
-  }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport, incoterms])
+  }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport, incoterms,
+      sender.countryCode, recipient.countryCode, currency, declaredValue, ftrExemption, aesCitation])
 
   /**
    * Select a client: fill YOUR address on the correct side and auto-pick its
@@ -1649,6 +1672,8 @@ export default function NewShipmentPage() {
           incoterms: incoterms || undefined,
           reasonForExport: reasonForExport || undefined,
           clearanceOption: clearanceOption || undefined,
+          ftrExemption: ftrExemption || undefined,
+          aesCitation: aesCitation || undefined,
         } : {}),
         ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
         ...(signatureOption !== 'NONE' ? { signatureOption } : {}),
@@ -1795,8 +1820,10 @@ export default function NewShipmentPage() {
     reasonForExport,
     currency,
     weightUnit,
+    ftrExemption: ftrExemption || undefined,
+    aesCitation: aesCitation || undefined,
   // eslint-disable-next-line react-hooks/exhaustive-deps -- autoItemWeight is a stable derived helper over items + weight; adding it triggers a new identity every render.
-  }), [items, incoterms, reasonForExport, currency, weightUnit])
+  }), [items, incoterms, reasonForExport, currency, weightUnit, ftrExemption, aesCitation])
 
   /** Copy wizard-side state back into the inline form state so both stay in sync. */
   const acceptWizardPayload = (payload: OrderCustomsPayload) => {
@@ -1816,6 +1843,11 @@ export default function NewShipmentPage() {
     if (payload.incoterms) setIncoterms(payload.incoterms)
     if (payload.reasonForExport) setReasonForExport(payload.reasonForExport)
     if (payload.currency) setCurrency(payload.currency)
+    // EEI — accept either code exclusively; wizard already clears the
+    // other side on pick, but re-assert here so wire state matches UI.
+    if (payload.ftrExemption) { setFtrExemption(payload.ftrExemption); setAesCitation('') }
+    else if (payload.aesCitation) { setAesCitation(payload.aesCitation); setFtrExemption('') }
+    else { setFtrExemption(''); setAesCitation('') }
     if (payload.weightUnit && (payload.weightUnit === 'LB' || payload.weightUnit === 'KG')) {
       setWeightUnit(payload.weightUnit)
     }
@@ -2120,6 +2152,8 @@ export default function NewShipmentPage() {
         reasonForExport,
         incoterms,
         ...(clearanceOption ? { clearanceOption } : {}),
+        ...(ftrExemption ? { ftrExemption } : {}),
+        ...(aesCitation ? { aesCitation } : {}),
       } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
     }
@@ -2413,6 +2447,51 @@ export default function NewShipmentPage() {
                       ))}
                     </select>
                   </Field>
+                ) : null}
+                {/* US Export EEI — FTR §30.37 exemption OR AES ITN. Only on
+                    US-origin exports to non-Canada destinations (Canada
+                    uses §30.36 which is bilateral / auto-applied by
+                    carriers). Empty on shipments where the rule doesn't
+                    apply keeps the form terse. Mutually-exclusive picker:
+                    filling one disables the other so the wire payload can
+                    never carry both. */}
+                {isInternational
+                    && (sender.countryCode ?? '').trim().toUpperCase() === 'US'
+                    && !['CA', 'US', ''].includes((recipient.countryCode ?? '').trim().toUpperCase()) ? (
+                  <>
+                    <Field label="FTR exemption"
+                           error={submitAttempted
+                                  && (currency ?? 'USD').toUpperCase() === 'USD'
+                                  && Number(declaredValue || 0) >= EEI_THRESHOLD_USD
+                                  && !ftrExemption && !aesCitation
+                             ? `Required at ≥ $${EEI_THRESHOLD_USD.toLocaleString()} — pick one or paste an AES ITN.`
+                             : undefined}>
+                      <select className={inputCls}
+                              value={ftrExemption}
+                              disabled={!!aesCitation}
+                              onChange={(e) => {
+                                setFtrExemption(e.target.value)
+                                if (e.target.value) setAesCitation('')
+                              }}>
+                        <option value="">-- None (using AES) --</option>
+                        {FTR_EXEMPTIONS.map((ex) => (
+                          <option key={ex.value} value={ex.value}>{ex.label}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="AES ITN (Census)"
+                           error={undefined}>
+                      <input className={inputCls}
+                             type="text"
+                             placeholder="e.g. X20260101123456"
+                             value={aesCitation}
+                             disabled={!!ftrExemption}
+                             onChange={(e) => {
+                               setAesCitation(e.target.value)
+                               if (e.target.value) setFtrExemption('')
+                             }} />
+                    </Field>
+                  </>
                 ) : null}
                 <Field label="Currency" error={errAt('currency')}>
                   <select className={inputCls} value={currency} onChange={(e) => setCurrency(e.target.value)}>

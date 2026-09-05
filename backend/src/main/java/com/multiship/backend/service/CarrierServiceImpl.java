@@ -3123,6 +3123,8 @@ public class CarrierServiceImpl implements CarrierService {
                 .reasonForExport(req.getReasonForExport())
                 .customsTotalValue(total)
                 .weightUnit(req.getWeightUnit())
+                .ftrExemption(StringUtils.hasText(req.getFtrExemption()) ? req.getFtrExemption() : null)
+                .aesCitation(StringUtils.hasText(req.getAesCitation()) ? req.getAesCitation() : null)
                 .build();
     }
 
@@ -3226,6 +3228,8 @@ public class CarrierServiceImpl implements CarrierService {
                 .brokerLicense(profile == null ? null : profile.getBrokerLicense())
                 .dutyBillTo(profile == null ? null : profile.getDutiesBillTo())
                 .dutyAccount(profile == null ? null : profile.getDutiesAccount())
+                .ftrExemption(customs == null ? null : customs.getFtrExemption())
+                .aesCitation(customs == null ? null : customs.getAesCitation())
                 .commodities(commodities)
                 .build();
     }

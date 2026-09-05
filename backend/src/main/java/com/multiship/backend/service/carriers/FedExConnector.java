@@ -2250,7 +2250,56 @@ public class FedExConnector implements CarrierConnector {
         java.util.List<Map<String, Object>> brokers = buildBrokers(intl);
         if (!brokers.isEmpty()) detail.put("brokers", brokers);
 
+        // US Electronic Export Information (EEI). Emit an exportDetail
+        // block whenever the operator has supplied EITHER an FTR §30.37
+        // exemption OR an AES ITN. Absent both, we let FedEx apply its
+        // server-side default — safe only when customs value < $2,500
+        // USD (IntlShipmentValidator gates the high-value case upstream
+        // with CODE_EEI_REQUIRED so we never reach the connector without
+        // one populated on shipments that need it).
+        Map<String, Object> exportDetail = buildExportDetail(intl);
+        if (!exportDetail.isEmpty()) detail.put("exportDetail", exportDetail);
+
         return detail;
+    }
+
+    /**
+     * FedEx {@code customsClearanceDetail.exportDetail}. FedEx accepts the
+     * exemption text OR the AES ITN through the same
+     * {@code exportComplianceStatement} field; AES takes precedence when
+     * both are provided (real filing beats claimed exemption).
+     *
+     * <p>Wire values:
+     * <ul>
+     *   <li>{@code NO_EEI_30_37_a} → {@code "NO EEI 30.37(a)"}</li>
+     *   <li>{@code NO_EEI_30_37_h} → {@code "NO EEI 30.37(h)"}</li>
+     *   <li>{@code NO_EEI_30_36}   → {@code "NO EEI 30.36"}</li>
+     *   <li>{@code aesCitation}    → verbatim (operator supplies the "AES X..."
+     *                                or "AES" prefix per Census filing format)</li>
+     * </ul>
+     */
+    private Map<String, Object> buildExportDetail(com.multiship.backend.dto.IntlShipmentBlockDTO intl) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        String statement = null;
+        if (StringUtils.hasText(intl.getAesCitation())) {
+            statement = intl.getAesCitation().trim();
+        } else if (StringUtils.hasText(intl.getFtrExemption())) {
+            statement = mapFtrExemptionToStatement(intl.getFtrExemption().trim());
+        }
+        if (statement != null) out.put("exportComplianceStatement", statement);
+        return out;
+    }
+
+    /** FTR wire-code → FedEx statement text. Unknown codes pass through
+     *  verbatim so operators can supply custom text (e.g. license symbols)
+     *  the connector doesn't have to enumerate. */
+    private static String mapFtrExemptionToStatement(String code) {
+        switch (code.toUpperCase(Locale.ROOT)) {
+            case "NO_EEI_30_37_A": return "NO EEI 30.37(a)";
+            case "NO_EEI_30_37_H": return "NO EEI 30.37(h)";
+            case "NO_EEI_30_36":   return "NO EEI 30.36";
+            default:               return code;
+        }
     }
 
     /**

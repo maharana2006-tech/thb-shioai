@@ -76,3 +76,39 @@ export function clearanceLabel(carrier: string | null | undefined, value: string
   if (!value) return ''
   return clearanceOptionsForCarrier(carrier).find((o) => o.value === value)?.label ?? value
 }
+
+/**
+ * US Foreign Trade Regulations §30.37 exemption codes. One of these — OR
+ * an AES ITN filed with US Census — is required on every US-origin export
+ * to a non-Canada destination valued ≥ $2,500 USD (per Schedule B code).
+ * Without one, FedEx auto-applies 30.37(a) and rejects the shipment on
+ * the value threshold.
+ *
+ *   30.37(a) — sub-$2,500 shipments. Legal ONLY under that threshold.
+ *   30.37(h) — tools of trade / temporary export (return within 12 months).
+ *   30.36    — shipments to Canada (bilateral exemption).
+ *
+ * The values here mirror the backend wire codes (IntlShipmentBlockDTO
+ * .ftrExemption). Labels stay statute-accurate — operators pick from a
+ * closed vocabulary and the connector maps to the carrier's own statement
+ * format.
+ */
+export const FTR_EXEMPTIONS = [
+  { value: 'NO_EEI_30_37_a', label: 'NOEEI §30.37(a) — value under $2,500 USD' },
+  { value: 'NO_EEI_30_37_h', label: 'NOEEI §30.37(h) — tools of trade / temporary export' },
+  { value: 'NO_EEI_30_36',   label: 'NOEEI §30.36 — export to Canada' },
+] as const
+
+export type FtrExemption = typeof FTR_EXEMPTIONS[number]['value']
+
+/** Human label for a persisted FTR wire code. Falls back to the raw value
+ *  so unknown codes still render (rather than "undefined"). */
+export function ftrExemptionLabel(value: string | null | undefined): string {
+  if (!value) return ''
+  return FTR_EXEMPTIONS.find((e) => e.value === value)?.label ?? value
+}
+
+/** US FTR §30.37(a) monetary threshold — mirrors IntlShipmentValidator
+ *  .EEI_THRESHOLD_USD on the backend. Frontend uses it to gate the EEI
+ *  field visibility and validation banner. */
+export const EEI_THRESHOLD_USD = 2500

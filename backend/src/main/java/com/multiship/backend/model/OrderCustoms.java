@@ -97,6 +97,26 @@ public class OrderCustoms {
     private String notes;
 
     /**
+     * US FTR §30.37 exemption wire code: {@code NO_EEI_30_37_a},
+     * {@code NO_EEI_30_37_h}, or {@code NO_EEI_30_36}. Populated on US-origin
+     * exports where the operator claims one of the enumerated exemptions.
+     * Mutually exclusive with {@link #aesCitation} — the FTR requires ONE
+     * of an exemption OR a real AES filing citation, never both.
+     */
+    @Column(name = "ftr_exemption", length = 32)
+    private String ftrExemption;
+
+    /**
+     * AES Internal Transaction Number returned after filing Electronic
+     * Export Information with US Census. Typically an "X" or "AES"-prefixed
+     * string (e.g. "X20260101123456"). Required — instead of a §30.37
+     * exemption — on US-origin exports ≥ $2,500 USD per Schedule B code
+     * to any destination other than Canada.
+     */
+    @Column(name = "aes_citation", length = 64)
+    private String aesCitation;
+
+    /**
      * Sprint 48 N+1 fix — EAGER because every code path that loads an
      * OrderCustoms row also reads its items (label generation, commercial
      * invoice render, per-package declared-value derivation). Default LAZY
