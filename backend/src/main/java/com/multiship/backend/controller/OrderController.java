@@ -97,6 +97,13 @@ public class OrderController {
     @Autowired
     private com.multiship.backend.service.ShippingConfigService shippingConfigService;
 
+    /** Parses the FedEx MaxiCode payload embedded in the returned ZPL so
+     *  the label preview can surface fields FedEx accepted but did not
+     *  render as visible text on the thermal label (recipient line 2,
+     *  phone, EEI statement, commodity, etc). */
+    @Autowired
+    private com.multiship.backend.service.carriers.parse.FedExMaxiCodeParser fedExMaxiCodeParser;
+
     @Autowired
     private com.multiship.backend.service.PackingSlipService packingSlipService;
 
@@ -655,6 +662,48 @@ public class OrderController {
             charges.put("currency", t.getMarkupCurrency());
             payload.put("charges", charges);
         });
+
+        // ===== carrier response details (decoded from carrier's own label bytes) =====
+        // Parse the FedEx MaxiCode payload embedded in the returned ZPL so
+        // the UI can surface fields FedEx accepted but doesn't render as
+        // visible text (recipient line 2, phone, EEI, commodity). Pure
+        // decode of what the carrier sent back — no local augmentation.
+        // Silent no-op when the stored artifact isn't ZPL (URL/PDF), when
+        // the ZPL is malformed, or when the operator's carrier isn't FedEx.
+        try {
+            java.util.Optional<byte[]> zplBytes = labelArtifactResolver
+                    .resolveAsBytes(orderNo, "ZPL", null);
+            if (zplBytes.isPresent()) {
+                String zpl = new String(zplBytes.get(), java.nio.charset.StandardCharsets.ISO_8859_1);
+                com.multiship.backend.service.carriers.parse.FedExMaxiCodeParser.Details d =
+                        fedExMaxiCodeParser.parse(zpl);
+                if (d.isPresent()) {
+                    Map<String, Object> details = new LinkedHashMap<>();
+                    details.put("source", d.getSource());
+                    details.put("trackingNumber", d.getTrackingNumber());
+                    details.put("serviceCode", d.getServiceCode());
+                    details.put("service", d.getService());
+                    details.put("recipientName", d.getRecipientName());
+                    details.put("recipientAddressLine1", d.getRecipientAddressLine1());
+                    details.put("recipientAddressLine2", d.getRecipientAddressLine2());
+                    details.put("recipientCity", d.getRecipientCity());
+                    details.put("recipientState", d.getRecipientState());
+                    details.put("recipientPostalCode", d.getRecipientPostalCode());
+                    details.put("recipientCountryCode", d.getRecipientCountryCode());
+                    details.put("recipientPhone", d.getRecipientPhone());
+                    details.put("referenceNumber", d.getReferenceNumber());
+                    details.put("customerPo", d.getCustomerPo());
+                    details.put("customsCountryCode", d.getCustomsCountryCode());
+                    details.put("customsValue", d.getCustomsValue());
+                    details.put("customsCurrency", d.getCustomsCurrency());
+                    details.put("commodityDescription", d.getCommodityDescription());
+                    details.put("eeiStatement", d.getEeiStatement());
+                    payload.put("carrierResponseDetails", details);
+                }
+            }
+        } catch (Exception ignored) {
+            // Best-effort — a parser failure never breaks the label page.
+        }
 
         ApiResponse<Map<String, Object>> response = ApiResponse.<Map<String, Object>>builder()
                 .status("SUCCESS")

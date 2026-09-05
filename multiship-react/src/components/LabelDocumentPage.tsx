@@ -365,6 +365,13 @@ export default function LabelDocumentPage() {
   const shipper = payload?.shipper
   const resolution = payload?.resolution
   const legacyAccount = payload?.carrierAccount
+  /**
+   * Fields decoded straight from the carrier's returned label bytes (see
+   * FedExMaxiCodeParser backend-side). We render these as a side panel
+   * so operators can trust that "line 2 / EEI / commodity" is exactly
+   * what the carrier confirmed, without inferring from local Order data.
+   */
+  const carrierResponseDetails = payload?.carrierResponseDetails
   // Customs blocks resolved from the client's Importer/Broker profile.
   const importer = payload?.importer ?? null
   const broker = payload?.broker ?? null
@@ -939,7 +946,7 @@ export default function LabelDocumentPage() {
             </div>
           ) : null}
 
-        <div className="flex justify-center rounded-[26px] border border-slate-200/80 bg-slate-100/70 p-6 shadow-inner print:border-0 print:bg-white print:p-0 print:shadow-none">
+        <div className="flex flex-wrap justify-center gap-6 rounded-[26px] border border-slate-200/80 bg-slate-100/70 p-6 shadow-inner print:block print:border-0 print:bg-white print:p-0 print:shadow-none">
           {activeTab === 'label' && carrierPreviewState === 'ready' ? (
             /* ==================== PR #538 — CARRIER-CANONICAL PNG (from backend zebrash render) ==================== */
             /* When the backend feature flag label.render-carrier-zpl is on
@@ -1245,6 +1252,75 @@ export default function LabelDocumentPage() {
               </div>
             </div>
           ) : (
+            /* ==================== COMMERCIAL INVOICE (Letter) ==================== */
+            /* CI branch keeps its own flex-wrap layout — no side panel here. */
+            null
+          )}
+
+          {/* ================ CARRIER RESPONSE DETAILS SIDE PANEL ================ */}
+          {/* Rendered alongside the label preview (either the carrier PNG or
+             the JSX facsimile) with fields decoded from the carrier's own
+             MaxiCode payload. Every value here came FROM the carrier
+             response — no local Order/OrderCustoms augmentation. Purpose:
+             give the operator a definitive answer to "did FedEx receive
+             line 2 / did it record the EEI / did it note the commodity",
+             independent of the thermal-label template's visible-text
+             choices. Hidden in print so the thermal label ships clean. */}
+          {activeTab === 'label' && carrierResponseDetails?.source ? (
+            <aside className="w-[320px] shrink-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm print:hidden">
+              <div className="mb-2 flex items-center justify-between border-b border-slate-200 pb-2">
+                <div>
+                  <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                    From carrier response
+                  </p>
+                  <p className="text-[13px] font-semibold text-slate-900">
+                    {carrierResponseDetails.source}
+                  </p>
+                </div>
+                <span
+                  title="Every field on this panel was decoded from the carrier-returned bytes (not from local Order / OrderCustoms). Useful for verifying line 2 or EEI when the thermal-label template doesn't render them as visible text."
+                  className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700"
+                >
+                  Verified
+                </span>
+              </div>
+              <dl className="space-y-1.5 text-[12px]">
+                {(
+                  [
+                    ['AWB / Tracking#', carrierResponseDetails.trackingNumber],
+                    ['Service code', carrierResponseDetails.serviceCode],
+                    ['Recipient', carrierResponseDetails.recipientName],
+                    ['Line 1', carrierResponseDetails.recipientAddressLine1],
+                    ['Line 2', carrierResponseDetails.recipientAddressLine2],
+                    ['City', carrierResponseDetails.recipientCity],
+                    ['State', carrierResponseDetails.recipientState],
+                    ['Postal', carrierResponseDetails.recipientPostalCode],
+                    ['Country', carrierResponseDetails.recipientCountryCode],
+                    ['Phone', carrierResponseDetails.recipientPhone],
+                    ['Reference #', carrierResponseDetails.referenceNumber],
+                    ['Customer PO', carrierResponseDetails.customerPo],
+                    ['Commodity', carrierResponseDetails.commodityDescription],
+                    ['Customs value',
+                      carrierResponseDetails.customsValue && carrierResponseDetails.customsCurrency
+                        ? `${carrierResponseDetails.customsValue} ${carrierResponseDetails.customsCurrency}`
+                        : (carrierResponseDetails.customsValue ?? null)],
+                    ['EEI statement', carrierResponseDetails.eeiStatement],
+                  ] as const
+                )
+                  .filter(([, value]) => value != null && String(value).trim() !== '')
+                  .map(([label, value]) => (
+                    <div key={label} className="grid grid-cols-[110px_1fr] gap-2">
+                      <dt className="text-[10.5px] font-bold uppercase tracking-[0.1em] text-slate-400">
+                        {label}
+                      </dt>
+                      <dd className="break-words font-mono text-[11.5px] text-slate-900">{value}</dd>
+                    </div>
+                  ))}
+              </dl>
+            </aside>
+          ) : null}
+
+          {activeTab === 'label' ? null : (
             /* ==================== COMMERCIAL INVOICE (Letter) ==================== */
             <div className="print-doc w-full max-w-[820px] bg-white p-8 text-[11px] leading-5 text-slate-900 shadow-xl print:max-w-none print:p-0 print:shadow-none">
               {/* Header — title + shipment meta, as the FedEx CI lays it out. */}
