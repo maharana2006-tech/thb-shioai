@@ -643,6 +643,11 @@ export default function NewShipmentPage() {
   // either. Not sticky — the ITN is per-shipment.
   const [ftrExemption, setFtrExemption] = useState('')
   const [aesCitation, setAesCitation] = useState('')
+  // Generic export declaration reference — non-US origins (CA B13A / GB
+  // CDS / EU MRN / AU EDN / JP declaration / IN SB). Backend WARNs (not
+  // errors) on high-value intl when this + ftrExemption + aesCitation
+  // are all blank.
+  const [exportDeclarationReference, setExportDeclarationReference] = useState('')
 
   // Optional guided-wizard for the customs section. Off by default; users
   // click "Open guided wizard" to enter a 4-step flow that maps onto the
@@ -1126,6 +1131,7 @@ export default function NewShipmentPage() {
           if (customs.reasonForExport) setReasonForExport(customs.reasonForExport)
           if (customs.ftrExemption) setFtrExemption(customs.ftrExemption)
           if (customs.aesCitation) setAesCitation(customs.aesCitation)
+          if (customs.exportDeclarationReference) setExportDeclarationReference(customs.exportDeclarationReference)
           if (customs.items?.length) {
             setItems(customs.items.map((it) => ({
               description: it.description ?? '', sku: it.sku ?? '', hsCode: it.hsCode ?? '',
@@ -1674,6 +1680,7 @@ export default function NewShipmentPage() {
           clearanceOption: clearanceOption || undefined,
           ftrExemption: ftrExemption || undefined,
           aesCitation: aesCitation || undefined,
+          exportDeclarationReference: exportDeclarationReference || undefined,
         } : {}),
         ...(dgBlock ? { dangerousGoods: dgBlock } : {}),
         ...(signatureOption !== 'NONE' ? { signatureOption } : {}),
@@ -1822,8 +1829,9 @@ export default function NewShipmentPage() {
     weightUnit,
     ftrExemption: ftrExemption || undefined,
     aesCitation: aesCitation || undefined,
+    exportDeclarationReference: exportDeclarationReference || undefined,
   // eslint-disable-next-line react-hooks/exhaustive-deps -- autoItemWeight is a stable derived helper over items + weight; adding it triggers a new identity every render.
-  }), [items, incoterms, reasonForExport, currency, weightUnit, ftrExemption, aesCitation])
+  }), [items, incoterms, reasonForExport, currency, weightUnit, ftrExemption, aesCitation, exportDeclarationReference])
 
   /** Copy wizard-side state back into the inline form state so both stay in sync. */
   const acceptWizardPayload = (payload: OrderCustomsPayload) => {
@@ -1848,6 +1856,9 @@ export default function NewShipmentPage() {
     if (payload.ftrExemption) { setFtrExemption(payload.ftrExemption); setAesCitation('') }
     else if (payload.aesCitation) { setAesCitation(payload.aesCitation); setFtrExemption('') }
     else { setFtrExemption(''); setAesCitation('') }
+    // Generic export declaration reference — independent of the US
+    // FTR/AES pair. Sync verbatim.
+    setExportDeclarationReference(payload.exportDeclarationReference ?? '')
     if (payload.weightUnit && (payload.weightUnit === 'LB' || payload.weightUnit === 'KG')) {
       setWeightUnit(payload.weightUnit)
     }
@@ -2154,6 +2165,7 @@ export default function NewShipmentPage() {
         ...(clearanceOption ? { clearanceOption } : {}),
         ...(ftrExemption ? { ftrExemption } : {}),
         ...(aesCitation ? { aesCitation } : {}),
+        ...(exportDeclarationReference ? { exportDeclarationReference } : {}),
       } : {}),
       ...(isInternational && override ? { importer: override.importer, broker: override.broker } : {}),
     }
@@ -2492,6 +2504,23 @@ export default function NewShipmentPage() {
                              }} />
                     </Field>
                   </>
+                ) : null}
+                {/* Generic export declaration reference — shows on ANY
+                    international shipment. Complementary to the US
+                    FTR/AES fields above; used for non-US origins whose
+                    export regime issues a reference (CA B13A / GB CDS /
+                    EU MRN / AU EDN / JP declaration / IN SB). Backend
+                    WARNs (not blocks) on high-value intl without any of
+                    the three refs populated. */}
+                {isInternational ? (
+                  <Field label="Export declaration ref"
+                         error={undefined}>
+                    <input className={inputCls}
+                           type="text"
+                           placeholder="CA B13A / GB CDS / EU MRN / AU EDN / JP / IN SB — non-US origins"
+                           value={exportDeclarationReference}
+                           onChange={(e) => setExportDeclarationReference(e.target.value)} />
+                  </Field>
                 ) : null}
                 <Field label="Currency" error={errAt('currency')}>
                   <select className={inputCls} value={currency} onChange={(e) => setCurrency(e.target.value)}>

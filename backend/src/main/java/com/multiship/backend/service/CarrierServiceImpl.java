@@ -3125,6 +3125,8 @@ public class CarrierServiceImpl implements CarrierService {
                 .weightUnit(req.getWeightUnit())
                 .ftrExemption(StringUtils.hasText(req.getFtrExemption()) ? req.getFtrExemption() : null)
                 .aesCitation(StringUtils.hasText(req.getAesCitation()) ? req.getAesCitation() : null)
+                .exportDeclarationReference(StringUtils.hasText(req.getExportDeclarationReference())
+                        ? req.getExportDeclarationReference() : null)
                 .build();
     }
 
@@ -3230,6 +3232,7 @@ public class CarrierServiceImpl implements CarrierService {
                 .dutyAccount(profile == null ? null : profile.getDutiesAccount())
                 .ftrExemption(customs == null ? null : customs.getFtrExemption())
                 .aesCitation(customs == null ? null : customs.getAesCitation())
+                .exportDeclarationReference(customs == null ? null : customs.getExportDeclarationReference())
                 .commodities(commodities)
                 .build();
     }

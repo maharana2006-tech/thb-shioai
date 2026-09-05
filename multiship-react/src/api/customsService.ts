@@ -32,6 +32,8 @@ export interface OrderCustoms {
   ftrExemption?: string | null
   /** AES ITN filed with US Census (e.g. "X20260101123456"). */
   aesCitation?: string | null
+  /** Generic export declaration reference for non-US origins (CA B13A / GB CDS / EU MRN / AU EDN / JP declaration / IN SB). */
+  exportDeclarationReference?: string | null
   items: CustomsItem[]
   createdAt?: string | null
   updatedAt?: string | null
@@ -61,6 +63,14 @@ export interface OrderCustomsPayload {
    * per Schedule B code to non-Canada destinations.
    */
   aesCitation?: string
+  /**
+   * Generic export declaration reference for non-US origins:
+   * CA B13A / GB CDS / EU MRN / AU EDN / JP declaration id / IN SB.
+   * Free-form; connector emits verbatim. Advisory warning fires on
+   * high-value intl shipments where this AND the FTR/AES fields are
+   * all blank.
+   */
+  exportDeclarationReference?: string
   items: CustomsItem[]
 }
 

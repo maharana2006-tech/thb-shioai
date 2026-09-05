@@ -624,6 +624,89 @@ class ShipmentValidationServiceTest {
                 "unresolvable incoterms must fail — no DAP default");
     }
 
+    // ─── Generic high-value export-declaration advisory (warning-level) ─
+
+    @Test
+    void highValueIntl_noExportRef_emitsExportDeclarationWarning() {
+        // $3,000 US→GB with none of ftr/aes/exportDeclarationReference set.
+        // Warning-only (not error) so it doesn't false-block intra-EU /
+        // US→CA / other corridors that legitimately need no reference.
+        ManualShipmentRequest req = fullIntlRequest();
+        req.setDeclaredValue(new BigDecimal("3000.00"));
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalWarnings().stream()
+                .anyMatch(w -> ShipmentValidationService.CODE_EXPORT_DECLARATION_RECOMMENDED
+                        .equals(w.getCode())),
+                "high-value intl without any export ref must WARN — got warnings: "
+                        + res.getData().getLocalWarnings());
+    }
+
+    @Test
+    void highValueIntl_withExportDeclarationReference_noWarning() {
+        ManualShipmentRequest req = fullIntlRequest();
+        req.setDeclaredValue(new BigDecimal("3000.00"));
+        req.setExportDeclarationReference("CA-B13A-2026-99999");
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalWarnings().stream()
+                .noneMatch(w -> ShipmentValidationService.CODE_EXPORT_DECLARATION_RECOMMENDED
+                        .equals(w.getCode())),
+                "populated exportDeclarationReference must suppress the advisory");
+    }
+
+    @Test
+    void highValueIntl_withFtrExemption_noExportWarning() {
+        // Reusing FTR from the US flow — same field satisfies the generic
+        // advisory too (any of the three refs suppresses the warning).
+        ManualShipmentRequest req = fullIntlRequest();
+        req.setDeclaredValue(new BigDecimal("3000.00"));
+        req.setFtrExemption("NO_EEI_30_37_h");
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalWarnings().stream()
+                .noneMatch(w -> ShipmentValidationService.CODE_EXPORT_DECLARATION_RECOMMENDED
+                        .equals(w.getCode())),
+                "populated ftrExemption must also suppress the generic advisory");
+    }
+
+    @Test
+    void underThresholdIntl_noExportRef_noWarning() {
+        ManualShipmentRequest req = fullIntlRequest();
+        req.setDeclaredValue(new BigDecimal("500.00"));
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalWarnings().stream()
+                .noneMatch(w -> ShipmentValidationService.CODE_EXPORT_DECLARATION_RECOMMENDED
+                        .equals(w.getCode())),
+                "$500 under the $2,500 threshold must not raise the advisory");
+    }
+
+    @Test
+    void highValueIntl_nonUsd_noWarning() {
+        // Non-USD skipped for now — matches the current scope of the US
+        // FTR rule (both are USD-scoped until FX plumbing lands).
+        ManualShipmentRequest req = fullIntlRequest();
+        req.setCurrency("EUR");
+        req.setDeclaredValue(new BigDecimal("3000.00"));
+        stubServiceAndPreset();
+
+        var res = service.validate(req);
+
+        assertTrue(res.getData().getLocalWarnings().stream()
+                .noneMatch(w -> ShipmentValidationService.CODE_EXPORT_DECLARATION_RECOMMENDED
+                        .equals(w.getCode())),
+                "EUR-declared shipments must not raise the USD-scoped advisory");
+    }
+
     private ManualShipmentRequest fullIntlRequest() {
         ManualShipmentRequest req = fullDomesticRequest();
         req.getRecipient().setCountryCode("GB");

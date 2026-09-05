@@ -115,3 +115,33 @@ describe('CustomsWizard — US Export EEI section', () => {
     expect(screen.queryByText(/EEI required for this value/i)).not.toBeInTheDocument()
   })
 })
+
+describe('CustomsWizard — generic export declaration reference', () => {
+  it('renders the export-declaration input on any intl duties step (non-US too)', () => {
+    renderAtDutiesStep({ originCountry: 'GB', destinationCountry: 'DE' })
+    // Placeholder is unique per-input; more stable than getByLabelText
+    // when labels aren't htmlFor-associated.
+    expect(screen.getByPlaceholderText(/Reference issued by the origin/i)).toBeInTheDocument()
+  })
+
+  it('shows the advisory banner when high-value intl has no ref at all', () => {
+    renderAtDutiesStep({
+      originCountry: 'GB',
+      destinationCountry: 'DE',
+      value: { items: [{ description: 'W', quantity: 1, unitValue: 3000, hsCode: '', countryOfOrigin: 'GB' }] },
+    })
+    expect(screen.getByText(/Most origin countries require an export declaration/i)).toBeInTheDocument()
+  })
+
+  it('suppresses the advisory when exportDeclarationReference is populated', () => {
+    renderAtDutiesStep({
+      originCountry: 'GB',
+      destinationCountry: 'DE',
+      value: {
+        exportDeclarationReference: 'GB-CDS-2026-99999',
+        items: [{ description: 'W', quantity: 1, unitValue: 3000, hsCode: '', countryOfOrigin: 'GB' }],
+      },
+    })
+    expect(screen.queryByText(/Most origin countries require an export declaration/i)).not.toBeInTheDocument()
+  })
+})

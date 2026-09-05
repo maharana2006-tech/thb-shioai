@@ -501,6 +501,41 @@ class FedExConnectorPayloadTest {
         assertEquals("NO EEI 30.36", exportDetail.get("exportComplianceStatement"));
     }
 
+    @SuppressWarnings("unchecked")
+    @Test
+    void exportDeclarationReferenceEmittedVerbatim() throws Exception {
+        // Non-US origin path — CA B13A / GB CDS / EU MRN / AU EDN / JP /
+        // IN SB all pass through the same exportComplianceStatement slot,
+        // verbatim (no wire mapping — the reference format is the
+        // operator's responsibility).
+        ShipmentRequestDTO r = baseRequest();
+        r.setShipperCountryCode("GB");
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setExportDeclarationReference("GB-CDS-2026-99999");
+        r.setIntl(intl);
+        Map<String, Object> ccd = (Map<String, Object>) requestedShipment(r).get("customsClearanceDetail");
+        Map<String, Object> exportDetail = (Map<String, Object>) ccd.get("exportDetail");
+        assertEquals("GB-CDS-2026-99999", exportDetail.get("exportComplianceStatement"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void exportRefPrecedence_aesOverFtrOverGenericRef() throws Exception {
+        // Precedence documented in IntlShipmentBlockDTO — AES > FTR >
+        // generic ref. Real filing beats claimed exemption; claimed
+        // exemption beats untyped non-US reference.
+        ShipmentRequestDTO r = baseRequest();
+        IntlShipmentBlockDTO intl = baseIntl();
+        intl.setAesCitation("X20260101123456");
+        intl.setFtrExemption("NO_EEI_30_37_a");
+        intl.setExportDeclarationReference("CA-B13A-99999");
+        r.setIntl(intl);
+        Map<String, Object> ccd = (Map<String, Object>) requestedShipment(r).get("customsClearanceDetail");
+        Map<String, Object> exportDetail = (Map<String, Object>) ccd.get("exportDetail");
+        assertEquals("X20260101123456", exportDetail.get("exportComplianceStatement"),
+                "AES ITN wins the three-way precedence");
+    }
+
     // ===================================================================
     // Sprint 51 — email + company on shipper / recipient contact block
     // ===================================================================

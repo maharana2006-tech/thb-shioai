@@ -217,6 +217,11 @@ public class ShipmentValidationService {
                 errors.add(ValidationIssue.builder()
                         .code(ve.code()).message(ve.message()).build());
             }
+            // Generic high-value export-declaration advisory. Fires as a
+            // WARNING (not error) — some corridors legitimately have no
+            // reference (intra-EU, US→CA §30.36), so we advise but don't
+            // block. Per-corridor hard rules land in a follow-up PR.
+            checkHighValueExportDeclaration(req, warnings);
         } else {
             skipped.add(check("customs", "domestic shipment (sender/recipient in same territory)"));
         }
@@ -759,6 +764,58 @@ public class ShipmentValidationService {
         return c == null ? null : c.trim().toUpperCase(Locale.ROOT);
     }
 
+    /** Documented warning code the FE localises + the FE test asserts on. */
+    static final String CODE_EXPORT_DECLARATION_RECOMMENDED = "customs.export.declaration.recommended";
+
+    /**
+     * Cross-corridor advisory — most origin countries require an export
+     * declaration for shipments over the equivalent of USD $2,500 (US FTR
+     * §30.37, CA B13A CAD $2,000, GB CDS £873, EU AES €1,000, AU EDN AUD
+     * $2,000, JP ¥200,000). Rather than block, we WARN when a high-value
+     * international shipment carries no reference at all — some corridors
+     * legitimately need none (intra-EU, US→CA §30.36) so a hard block
+     * would false-fire.
+     *
+     * <p>US-specific hard rule ({@code customs.eei.required}) still runs
+     * upstream in {@link IntlShipmentValidator}; this fires only when
+     * that hard rule doesn't (non-US origin, or US-origin with the
+     * FTR/AES fields already populated but a value ≥ $2,500).
+     *
+     * <p>Scoped to USD-declared shipments for now — non-USD needs FX
+     * conversion which lands in a follow-up PR (matches the current
+     * scope of the US FTR rule).
+     */
+    private void checkHighValueExportDeclaration(ManualShipmentRequest req,
+                                                  List<ValidationIssue> warnings) {
+        if (req == null) return;
+        String currency = resolveCustomsCurrency(req);
+        if (currency == null || !"USD".equalsIgnoreCase(currency)) return;
+        java.math.BigDecimal total = req.getDeclaredValue();
+        if (total == null) {
+            // Fall back to sum of commodity line totals when declaredValue
+            // wasn't set explicitly — mirrors what adaptForValidators does.
+            total = buildValidatorCommodities(req).stream()
+                    .map(com.multiship.backend.dto.CustomsCommodityDTO::lineTotalValue)
+                    .filter(java.util.Objects::nonNull)
+                    .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+        }
+        if (total == null || total.compareTo(IntlShipmentValidator.EEI_THRESHOLD_USD) < 0) return;
+        boolean anyRefPopulated = StringUtils.hasText(req.getFtrExemption())
+                || StringUtils.hasText(req.getAesCitation())
+                || StringUtils.hasText(req.getExportDeclarationReference());
+        if (anyRefPopulated) return;
+        warnings.add(ValidationIssue.builder()
+                .code(CODE_EXPORT_DECLARATION_RECOMMENDED)
+                .message("Most origin countries require an export declaration for "
+                        + "international shipments over $"
+                        + IntlShipmentValidator.EEI_THRESHOLD_USD.toPlainString()
+                        + " USD (US FTR §30.37, CA B13A, GB CDS, EU AES, AU EDN, "
+                        + "JP declaration, IN Shipping Bill). Provide the appropriate "
+                        + "reference in the export declaration field, or verify none "
+                        + "is required for this corridor.")
+                .build());
+    }
+
     /**
      * Minimal adapter — build just enough of ShipmentRequestDTO for
      * IntlShipmentValidator + DangerousGoodsValidator to run their
@@ -802,6 +859,7 @@ public class ShipmentValidationService {
                     .weightUnit(req.getWeightUnit())
                     .ftrExemption(req.getFtrExemption())
                     .aesCitation(req.getAesCitation())
+                    .exportDeclarationReference(req.getExportDeclarationReference())
                     .build();
         }
         // Shipper/recipient country populated so IntlShipmentValidator can
