@@ -118,6 +118,16 @@ public class ManualShipmentRequest {
     private String ftrExemption;
     private String aesCitation;
 
+    /**
+     * Generic export declaration reference for non-US origins (CA B13A /
+     * GB CDS / EU MRN / AU EDN / JP declaration id / IN SB). Populated
+     * when the origin's regulator issued a reference number that must
+     * accompany the shipment. ShipmentValidationService WARNs (does not
+     * block) on high-value intl without any of ftrExemption / aesCitation
+     * / exportDeclarationReference.
+     */
+    private String exportDeclarationReference;
+
     /** Per-shipment importer override (label-document keys) — overrides the client profile for THIS label only. */
     private java.util.Map<String, Object> importer;
     /** Per-shipment customs-broker override — overrides the client profile for THIS label only. */

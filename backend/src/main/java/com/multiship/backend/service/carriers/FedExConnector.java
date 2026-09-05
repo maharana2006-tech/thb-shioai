@@ -2285,6 +2285,11 @@ public class FedExConnector implements CarrierConnector {
             statement = intl.getAesCitation().trim();
         } else if (StringUtils.hasText(intl.getFtrExemption())) {
             statement = mapFtrExemptionToStatement(intl.getFtrExemption().trim());
+        } else if (StringUtils.hasText(intl.getExportDeclarationReference())) {
+            // Non-US origin — CA B13A / GB CDS / EU MRN / AU EDN / JP
+            // declaration / IN SB, verbatim. FedEx's exportComplianceStatement
+            // is documented catch-all for any origin-specific reference.
+            statement = intl.getExportDeclarationReference().trim();
         }
         if (statement != null) out.put("exportComplianceStatement", statement);
         return out;

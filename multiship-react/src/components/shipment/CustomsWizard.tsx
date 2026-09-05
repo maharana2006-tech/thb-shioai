@@ -684,6 +684,10 @@ function DutiesStep({
                 Shipments ≥ ${EEI_THRESHOLD_USD.toLocaleString()} USD to non-Canada destinations
                 cannot ship under §30.37(a); the carrier will reject them.
               </div>
+              <div className="mt-1 text-[11px] text-amber-800">
+                Not a US-origin shipment? Use the <em>Export declaration reference</em>
+                field below (CA B13A / GB CDS / EU MRN / AU EDN / JP declaration / IN SB).
+              </div>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -736,6 +740,40 @@ function DutiesStep({
         </div>
       ) : null}
 
+      {/* Generic export declaration reference — for non-US origins where
+          the EEI section above isn't applicable. Always shown on the
+          duties step (the wizard is already intl-scoped). Backend warns
+          (not errors) on high-value intl shipments where this + the two
+          US-specific fields above are all blank. */}
+      <div>
+        <label className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
+          Export declaration reference
+          <span className="ml-1 font-normal normal-case tracking-normal text-slate-400">
+            (CA B13A / GB CDS / EU MRN / AU EDN / JP declaration / IN SB)
+          </span>
+        </label>
+        <input
+          type="text"
+          value={value.exportDeclarationReference ?? ''}
+          onChange={(e) => onPatch({ exportDeclarationReference: e.target.value || undefined })}
+          placeholder="Reference issued by the origin country's export regulator"
+          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[12.5px] font-mono"
+        />
+        {invoiceTotal >= EEI_THRESHOLD_USD
+            && !value.ftrExemption
+            && !value.aesCitation
+            && !value.exportDeclarationReference ? (
+          <div className="mt-2 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-900">
+            <FiInfo aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <span className="font-semibold">Advisory:</span>{' '}
+              Most origin countries require an export declaration over ${EEI_THRESHOLD_USD.toLocaleString()} USD.
+              Provide the reference issued by your origin's regulator, or verify none is required for this corridor.
+            </div>
+          </div>
+        ) : null}
+      </div>
+
       <div>
         <label className="mb-1 block text-[10.5px] font-bold uppercase tracking-[0.14em] text-slate-400">
           Notes (optional)
@@ -775,6 +813,9 @@ function ReviewStep({
           <Kv label="EEI">
             {value.aesCitation ? `AES ${value.aesCitation}` : (value.ftrExemption ?? '—')}
           </Kv>
+        ) : null}
+        {value.exportDeclarationReference ? (
+          <Kv label="Export ref">{value.exportDeclarationReference}</Kv>
         ) : null}
       </div>
 

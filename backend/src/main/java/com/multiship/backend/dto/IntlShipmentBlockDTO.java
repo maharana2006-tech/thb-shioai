@@ -135,6 +135,27 @@ public class IntlShipmentBlockDTO {
      */
     private String aesCitation;
 
+    /**
+     * Generic export declaration reference — the non-US analogue of
+     * {@link #aesCitation}. Populated when the origin's regulator issued a
+     * reference (CA B13A / GB CDS / EU MRN / AU EDN / JP declaration ID /
+     * IN SB number) that must accompany the shipment. Connectors emit it
+     * in whichever free-form reference slot their wire format has.
+     *
+     * <p>Precedence for FedEx's {@code exportComplianceStatement} slot
+     * (which the FedEx API accepts as a catch-all for both AES + non-AES
+     * export references):
+     * <ol>
+     *   <li>{@link #aesCitation} (real US AES filing)</li>
+     *   <li>{@link #ftrExemption} (mapped to statement text)</li>
+     *   <li>{@link #exportDeclarationReference} (verbatim)</li>
+     * </ol>
+     * ShipmentValidationService emits a WARNING when a high-value intl
+     * shipment leaves all three blank — advisory, doesn't block (some
+     * corridors legitimately need no reference).
+     */
+    private String exportDeclarationReference;
+
     // ===== Commodity lines =====
     // Sprint 52 — defense-in-depth cap at the worst-case documented
     // carrier ceiling (999). CarrierLimitService still enforces the

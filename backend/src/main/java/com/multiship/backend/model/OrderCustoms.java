@@ -117,6 +117,25 @@ public class OrderCustoms {
     private String aesCitation;
 
     /**
+     * Generic export declaration reference — one free-form slot for the
+     * origin country's export-declaration regime when it isn't US FTR.
+     * Populated verbatim by the operator; connectors emit it in whatever
+     * free-form reference field their wire format has. Examples:
+     * <ul>
+     *   <li>CA — B13A export declaration ref</li>
+     *   <li>GB — CDS declaration ref</li>
+     *   <li>EU — MRN (Movement Reference Number)</li>
+     *   <li>AU — EDN (Export Declaration Number)</li>
+     *   <li>JP — Export Declaration ID (輸出申告番号)</li>
+     *   <li>IN — Shipping Bill (SB) number</li>
+     * </ul>
+     * {@link #ftrExemption} and {@link #aesCitation} take precedence on
+     * US-origin routes — this field is the fallback for everywhere else.
+     */
+    @Column(name = "export_declaration_reference", length = 96)
+    private String exportDeclarationReference;
+
+    /**
      * Sprint 48 N+1 fix — EAGER because every code path that loads an
      * OrderCustoms row also reads its items (label generation, commercial
      * invoice render, per-package declared-value derivation). Default LAZY
