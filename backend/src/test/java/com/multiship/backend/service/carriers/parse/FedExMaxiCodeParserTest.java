@@ -139,6 +139,37 @@ class FedExMaxiCodeParserTest {
     }
 
     @Test
+    void zebraHexEscapesAreDecodedBeforeParsing() {
+        // Real FedEx-sandbox ZPL comes with control chars encoded as
+        // Zebra's _XX printable hex (e.g. "_1D" for GS). Parser must
+        // decode those first, otherwise nothing matches.
+        String literalEscapes = "^XA^BD^FD[)>_1E01_1D02 751024_1D356_1D01"
+                + "_1D7948605362440430_1DFDE_1DDuplex-145, Lane-1, Sai Paradise"
+                + "_1DBhubaneswar_1DOR_1DManoj Kr Maharana_1E06_1D12Z919437129909"
+                + "_1D14ZDaruthenga, KIIT Road_1CUS_1C2400_1CUSD_1CCotton T-Shirt"
+                + "_1CNO EEI 30.37(a)^FS^XZ";
+
+        FedExMaxiCodeParser.Details d = parser.parse(literalEscapes);
+        assertTrue(d.isPresent(), "Zebra hex-escapes must be decoded before regex");
+        assertEquals("Daruthenga, KIIT Road", d.getRecipientAddressLine2());
+        assertEquals("NO EEI 30.37(a)", d.getEeiStatement());
+        assertEquals("Cotton T-Shirt", d.getCommodityDescription());
+        assertEquals("919437129909", d.getRecipientPhone());
+        assertEquals("Duplex-145, Lane-1, Sai Paradise", d.getRecipientAddressLine1());
+        assertEquals("Bhubaneswar", d.getRecipientCity());
+        assertEquals("Manoj Kr Maharana", d.getRecipientName());
+    }
+
+    @Test
+    void decodeZebraHexEscapesLeavesStrayUnderscoresIntact() {
+        // "_" followed by non-hex chars must pass through — never mangle
+        // real address / name data that legitimately contains _.
+        String s = "abc_def_1D_XX_1Eend";
+        String decoded = FedExMaxiCodeParser.decodeZebraHexEscapes(s);
+        assertEquals("abc_def" + GS + "_XX" + RS + "end", decoded);
+    }
+
+    @Test
     void trackingShorterThan16DigitsFallsThroughVerbatim() {
         // Not every carrier concatenates SVC into the tracking number.
         // Fall through verbatim rather than mis-slicing.
