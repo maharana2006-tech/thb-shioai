@@ -739,22 +739,9 @@ export default function LabelDocumentPage() {
                 <FiCopy className="h-3.5 w-3.5" />
                 Copy ZPL
               </button>
-              {/* View AWB — opens the platform's ZPL→PDF conversion in a new
-                  tab (as opposed to the "Download PDF" button which forces
-                  an attachment download). The FedEx-returned labelFilePath
-                  is base64 ZPL, not a signed carrier URL, so we can't link
-                  directly to the carrier; the /label/pdf endpoint is the
-                  authoritative viewable form. */}
-              <a
-                href={`/api/v1/orders/${orderNo}/label/pdf`}
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Open the label PDF (AWB) in a new tab"
-                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <FiExternalLink className="h-3.5 w-3.5" />
-                View AWB
-              </a>
+              {/* View AWB button removed per operator ask — the main
+                  "Download PDF" button in this same toolbar already
+                  fetches /label/pdf, so the affordance is redundant. */}
               {/* Track — direct link to the carrier's own tracking page. Only
                   shown when the backend surfaced a trackingUrl (all four
                   carriers do once the label is generated). */}
