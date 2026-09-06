@@ -1962,7 +1962,7 @@ public class UpsConnector implements CarrierConnector {
         if (StringUtils.hasText(line2)) lines.add(line2);
         address.put("AddressLine", lines);
         address.put("City", firstNonBlank(city, ""));
-        address.put("StateProvinceCode", firstNonBlank(state, ""));
+        address.put("StateProvinceCode", sanitizeUpsStateCode(state));
         address.put("PostalCode", firstNonBlank(postal, ""));
         address.put("CountryCode", firstNonBlank(country, "US"));
         party.put("Address", address);
@@ -2479,7 +2479,7 @@ public class UpsConnector implements CarrierConnector {
         if (StringUtils.hasText(soldToLine2)) soldToLines.add(soldToLine2);
         soldToAddr.put("AddressLine", soldToLines);
         soldToAddr.put("City", firstNonBlank(soldToCity, ""));
-        soldToAddr.put("StateProvinceCode", firstNonBlank(soldToState, ""));
+        soldToAddr.put("StateProvinceCode", sanitizeUpsStateCode(soldToState));
         soldToAddr.put("PostalCode", firstNonBlank(soldToPostal, ""));
         soldToAddr.put("CountryCode", firstNonBlank(soldToCountry, ""));
         soldTo.put("Address", soldToAddr);
@@ -2500,7 +2500,7 @@ public class UpsConnector implements CarrierConnector {
         if (StringUtils.hasText(request.getShipperAddressLine2())) shipFromLines.add(request.getShipperAddressLine2());
         shipFromAddr.put("AddressLine", shipFromLines);
         shipFromAddr.put("City", firstNonBlank(request.getShipperCity(), ""));
-        shipFromAddr.put("StateProvinceCode", firstNonBlank(request.getShipperState(), ""));
+        shipFromAddr.put("StateProvinceCode", sanitizeUpsStateCode(request.getShipperState()));
         shipFromAddr.put("PostalCode", firstNonBlank(request.getShipperPostalCode(), ""));
         shipFromAddr.put("CountryCode", firstNonBlank(request.getShipperCountryCode(), ""));
         shipFrom.put("Address", shipFromAddr);
@@ -2539,11 +2539,27 @@ public class UpsConnector implements CarrierConnector {
         if (StringUtils.hasText(intl.getImporterAddressLine2())) lines.add(intl.getImporterAddressLine2());
         addr.put("AddressLine", lines);
         addr.put("City", firstNonBlank(intl.getImporterCity(), ""));
-        addr.put("StateProvinceCode", firstNonBlank(intl.getImporterState(), ""));
+        addr.put("StateProvinceCode", sanitizeUpsStateCode(intl.getImporterState()));
         addr.put("PostalCode", firstNonBlank(intl.getImporterPostcode(), ""));
         addr.put("CountryCode", firstNonBlank(intl.getImporterCountry(), ""));
         soldTo.put("Address", addr);
         return soldTo;
+    }
+
+    /**
+     * UPS Ship API 128100 fix — StateProvinceCode must be 0-5
+     * alphanumeric per UPS spec. Countries without state codes (UK,
+     * many EU, most of APAC) commonly have operators typing the city
+     * or region name ("London", "Greater London", "England") which
+     * UPS rejects. Strip non-alphanumerics, uppercase, then truncate
+     * to 5 chars. If nothing valid remains → "" (UPS accepts empty
+     * for jurisdictions without formal province codes).
+     */
+    private static String sanitizeUpsStateCode(String raw) {
+        if (!StringUtils.hasText(raw)) return "";
+        String cleaned = raw.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT);
+        if (cleaned.isEmpty()) return "";
+        return cleaned.length() > 5 ? cleaned.substring(0, 5) : cleaned;
     }
 
     private static String firstNonBlank(String... candidates) {
