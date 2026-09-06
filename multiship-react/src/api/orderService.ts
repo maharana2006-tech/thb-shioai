@@ -572,6 +572,33 @@ export interface ManualShipmentPayload {
    *  DHL / USPS ignore. Return labels bypass this and always emit
    *  CONTACT_FEDEX_TO_SCHEDULE. */
   pickupType?: string | null
+  /** Commodity auto-split strategy — set on the SECOND submit, after the
+   *  operator picks in the modal. Null / omitted on the first submit. */
+  splitStrategy?: SplitStrategy | null
+}
+
+/** Commodity auto-split strategy. See docs/plans/commodity_autosplit.md. */
+export type SplitStrategy =
+  | 'SAME_PACKAGES'
+  | 'PROPORTIONAL_PACKAGES'
+  | 'ONE_PACKAGE_PER_SPLIT'
+
+/** Body of the 422 SPLIT_REQUIRED response — mirrors backend
+ *  SplitRequiredResponse. FE catches this errorCode on submit, opens
+ *  the SplitShipmentModal with these options, re-submits with the
+ *  operator's pick as `splitStrategy`. */
+export interface SplitRequiredPayload {
+  carrier: string
+  actualCommodityCount: number
+  carrierCap: number
+  requiredSplitCount: number
+  packageCount: number
+  strategies: {
+    code: SplitStrategy
+    label: string
+    trackingCount: number
+    note: string
+  }[]
 }
 
 /** One box in a multi-package shipment — mirrors backend PackageDetailDTO. */
