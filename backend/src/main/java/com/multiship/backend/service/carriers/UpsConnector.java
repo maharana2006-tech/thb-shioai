@@ -2348,7 +2348,23 @@ public class UpsConnector implements CarrierConnector {
             // Master shipment ID — the customer-facing identity that ties
             // all pieces together.
             trackingNumber = results.path("ShipmentIdentificationNumber").asText(null);
-            packageResults = results.path("PackageResults");
+            // UPS SOAP-to-JSON quirk: PackageResults is a single OBJECT
+            // when there's exactly 1 package, an ARRAY when there are
+            // multiple. Pre-fix, the single-package (typical) case had
+            // isArray()=false → piece0=null → labelUrl=null → the
+            // GraphicImage base64 dropped on the floor and label_file_path
+            // saved empty. Sandbox tracking still came back as
+            // "1ZXXXXXXXXXXXXXXXX" so the shipment looked GENERATED but
+            // the label was invisible for preview.
+            JsonNode rawPackageResults = results.path("PackageResults");
+            if (rawPackageResults.isObject()) {
+                com.fasterxml.jackson.databind.node.ArrayNode wrapped =
+                        objectMapper.createArrayNode();
+                wrapped.add(rawPackageResults);
+                packageResults = wrapped;
+            } else {
+                packageResults = rawPackageResults;
+            }
             // Prefer the shipment-level total; else piece 1's base charge.
             JsonNode totalCharge = results.path("ShipmentCharges").path("TotalCharges").path("MonetaryValue");
             shippingCost = parseUpsMonetary(totalCharge);
