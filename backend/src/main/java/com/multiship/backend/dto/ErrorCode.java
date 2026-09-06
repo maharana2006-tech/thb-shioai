@@ -253,6 +253,15 @@ public enum ErrorCode {
      */
     COMMODITIES_LIMIT_EXCEEDED,
     /**
+     * Shipment carries more commodity lines than the resolved carrier
+     * cap, AND the caller did not specify a split strategy. Response is
+     * HTTP 422 with a {@link SplitRequiredResponse} body listing
+     * strategy options; operator picks in the FE modal, FE re-submits
+     * with {@code splitStrategy} populated to trigger the auto-split
+     * pipeline. See docs/plans/commodity_autosplit.md.
+     */
+    SPLIT_REQUIRED,
+    /**
      * Bulk-label / bulk-import batch is larger than the platform allows
      * in one call. Response is HTTP 422 — the operator splits their
      * batch into multiple submissions.

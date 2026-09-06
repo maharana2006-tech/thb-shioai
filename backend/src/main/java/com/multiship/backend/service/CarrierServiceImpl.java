@@ -1261,21 +1261,41 @@ public class CarrierServiceImpl implements CarrierService {
                 carrier, directionForLimit, fromCountry, to.getCountryCode(), serviceType);
         com.multiship.backend.model.CarrierShippingLimit limit = carrierLimitService.resolveLimit(
                 carrier, serviceTypeForLimit, intlForLimit, directionForLimit);
-        // Sprint 52 — commodities pre-flight. Reject before we split, before
-        // we hit the carrier. See ShipmentSplitter.assertCommoditiesFit javadoc.
+        // Commodity auto-split (2026-09-06) — when commodities > carrier
+        // cap AND the caller didn't specify a splitStrategy, return
+        // SPLIT_REQUIRED so the FE modal can present strategy options.
+        // Once the operator picks, the FE re-submits with req.splitStrategy
+        // populated; we then split the commodities into N sub-requests
+        // and hit the carrier N times. See docs/plans/commodity_autosplit.md.
+        com.multiship.backend.dto.SplitStrategy splitStrategy = req.getSplitStrategy();
+        if (splitStrategy == null && shipmentSplitter.isOverCommodityCap(shipmentRequest, limit)) {
+            return splitRequiredResponse(carrier, shipmentRequest, limit);
+        }
+        // Preflight — legacy path still throws for callers that don't
+        // participate in the auto-split flow (bulk import etc). When
+        // splitStrategy is present, allowAutoSplit=true skips the throw
+        // and we split downstream.
         try {
-            shipmentSplitter.assertCommoditiesFit(shipmentRequest, limit);
+            shipmentSplitter.assertCommoditiesFit(shipmentRequest, limit, splitStrategy != null);
         } catch (com.multiship.backend.exception.CommoditiesLimitExceededException cle) {
             log.warn("Manual shipment rejected: {}", cle.getMessage());
             return failure(HttpStatus.UNPROCESSABLE_CONTENT,
                     ErrorCode.COMMODITIES_LIMIT_EXCEEDED, cle.getMessage());
         }
-        java.math.BigDecimal totalWeightLb = shipmentSplitter.totalWeightLb(shipmentRequest);
-        boolean overCap = autoSplitEnabled && carrierLimitService.requiresSplit(
-                limit, shipmentRequest.effectivePackages().size(), totalWeightLb);
-        java.util.List<ShipmentRequestDTO> subRequests = overCap
-                ? shipmentSplitter.split(shipmentRequest, limit)
+        // Commodity split first (produces 1 or N sub-requests), then
+        // per-commodity-split package split (MPS). Nested loop covers the
+        // rare "heavy commodities AND heavy MPS" case.
+        java.util.List<ShipmentRequestDTO> commoditySplits = splitStrategy != null
+                ? shipmentSplitter.splitByCommodityStrategy(shipmentRequest, limit, splitStrategy)
                 : java.util.List.of(shipmentRequest);
+        java.util.List<ShipmentRequestDTO> subRequests = new java.util.ArrayList<>();
+        for (ShipmentRequestDTO cs : commoditySplits) {
+            java.math.BigDecimal csWeightLb = shipmentSplitter.totalWeightLb(cs);
+            boolean overCap = autoSplitEnabled && carrierLimitService.requiresSplit(
+                    limit, cs.effectivePackages().size(), csWeightLb);
+            subRequests.addAll(overCap ? shipmentSplitter.split(cs, limit) : java.util.List.of(cs));
+        }
+        java.math.BigDecimal totalWeightLb = shipmentSplitter.totalWeightLb(shipmentRequest);
         if (subRequests.size() > 1) {
             log.info("Splitting {}-pkg shipment into {} carrier calls (cap={} for {}/{})",
                     shipmentRequest.effectivePackages().size(), subRequests.size(),
@@ -3503,6 +3523,74 @@ public class CarrierServiceImpl implements CarrierService {
 
     private <T> ApiResponse<T> failure(HttpStatus status, ErrorCode errorCode, String message) {
         return failure(status, errorCode, message, null);
+    }
+
+    /**
+     * Auto-split (2026-09-06) — 422 SPLIT_REQUIRED response body carries
+     * the strategy options the FE modal presents to the operator. See
+     * docs/plans/commodity_autosplit.md.
+     *
+     * <p>Strategy trackingCount is an operator-facing preview:
+     * <ul>
+     *   <li>SAME_PACKAGES: splitCount × pkgCount tracking numbers
+     *       (each split carries all boxes).</li>
+     *   <li>PROPORTIONAL_PACKAGES: pkgCount tracking numbers
+     *       (packages distributed round-robin).</li>
+     *   <li>ONE_PACKAGE_PER_SPLIT: max(splitCount, pkgCount) trackings.</li>
+     * </ul>
+     */
+    private <T> ApiResponse<T> splitRequiredResponse(String carrier,
+            ShipmentRequestDTO request,
+            com.multiship.backend.model.CarrierShippingLimit limit) {
+        int count = request.getIntl().getCommodities().size();
+        int cap = limit != null && limit.getMaxCommodities() != null
+                ? limit.getMaxCommodities() : Integer.MAX_VALUE;
+        int splitCount = shipmentSplitter.requiredSplitCount(request, limit);
+        int pkgCount = request.effectivePackages().size();
+
+        java.util.List<com.multiship.backend.dto.SplitRequiredResponse.StrategyOption> strategies =
+                java.util.List.of(
+                        com.multiship.backend.dto.SplitRequiredResponse.StrategyOption.builder()
+                                .code(com.multiship.backend.dto.SplitStrategy.SAME_PACKAGES.name())
+                                .label("Duplicate packages, split invoice")
+                                .trackingCount(splitCount * Math.max(1, pkgCount))
+                                .note(String.format(
+                                        "%d boxes × %d shipments = %d tracking numbers. Carrier bills %dx shipping for %d physical boxes.",
+                                        pkgCount, splitCount, splitCount * pkgCount, splitCount, pkgCount))
+                                .build(),
+                        com.multiship.backend.dto.SplitRequiredResponse.StrategyOption.builder()
+                                .code(com.multiship.backend.dto.SplitStrategy.PROPORTIONAL_PACKAGES.name())
+                                .label("Distribute packages proportionally")
+                                .trackingCount(Math.max(pkgCount, splitCount))
+                                .note(String.format(
+                                        "%d boxes distributed across %d shipments (round-robin). Each split's invoice names only the items in that split's boxes.",
+                                        pkgCount, splitCount))
+                                .build(),
+                        com.multiship.backend.dto.SplitRequiredResponse.StrategyOption.builder()
+                                .code(com.multiship.backend.dto.SplitStrategy.ONE_PACKAGE_PER_SPLIT.name())
+                                .label("One package per shipment")
+                                .trackingCount(splitCount)
+                                .note(String.format(
+                                        "%d shipments each with 1 package + ~%d commodities. Uses per-package item breakdown when available.",
+                                        splitCount, (count + splitCount - 1) / splitCount))
+                                .build());
+
+        com.multiship.backend.dto.SplitRequiredResponse payload =
+                com.multiship.backend.dto.SplitRequiredResponse.builder()
+                        .carrier(carrier)
+                        .actualCommodityCount(count)
+                        .carrierCap(cap)
+                        .requiredSplitCount(splitCount)
+                        .packageCount(pkgCount)
+                        .strategies(strategies)
+                        .build();
+
+        String msg = String.format(
+                "%s caps at %d commodity lines per shipment; this shipment has %d. Pick a split strategy to continue.",
+                carrier, cap, count);
+        @SuppressWarnings("unchecked")
+        T data = (T) payload;
+        return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.SPLIT_REQUIRED, msg, data);
     }
 
     /**

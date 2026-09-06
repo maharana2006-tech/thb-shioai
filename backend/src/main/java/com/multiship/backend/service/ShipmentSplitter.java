@@ -1,7 +1,10 @@
 package com.multiship.backend.service;
 
+import com.multiship.backend.dto.CustomsCommodityDTO;
+import com.multiship.backend.dto.IntlShipmentBlockDTO;
 import com.multiship.backend.dto.PackageDetailDTO;
 import com.multiship.backend.dto.ShipmentRequestDTO;
+import com.multiship.backend.dto.SplitStrategy;
 import com.multiship.backend.exception.CommoditiesLimitExceededException;
 import com.multiship.backend.model.CarrierShippingLimit;
 import lombok.extern.slf4j.Slf4j;
@@ -45,27 +48,162 @@ public class ShipmentSplitter {
 
     /**
      * Sprint 52 — pre-flight check that a shipment's commodity count fits
-     * the carrier cap. Commodities are NOT split across sub-shipments
-     * (splitting a commercial invoice across labels breaks shipper intent
-     * and customs reconciliation); over-cap requests throw so the caller
-     * can surface a 422 to the operator instead of quietly generating a
-     * malformed multi-label shipment.
+     * the carrier cap. When {@code allowAutoSplit=true}, over-cap requests
+     * DO NOT throw — the caller intends to invoke
+     * {@link #splitByCommodityStrategy} downstream. When false (the
+     * pre-2026-09-06 behaviour), throws {@link
+     * CommoditiesLimitExceededException} for legacy callers.
      *
      * <p>No-op when {@code request.intl} is null (domestic) or commodities
      * is empty / below cap.
      */
-    public void assertCommoditiesFit(ShipmentRequestDTO request, CarrierShippingLimit limit) {
+    public void assertCommoditiesFit(ShipmentRequestDTO request, CarrierShippingLimit limit,
+            boolean allowAutoSplit) {
         if (request == null || request.getIntl() == null) return;
         List<?> commodities = request.getIntl().getCommodities();
         if (commodities == null || commodities.isEmpty()) return;
-        int cap = (limit != null && limit.getMaxCommodities() != null)
-                ? limit.getMaxCommodities()
-                : Integer.MAX_VALUE;
+        int cap = commodityCap(limit);
         if (commodities.size() > cap) {
+            if (allowAutoSplit) return; // caller will split downstream
             String carrier = limit != null && limit.getCarrierCode() != null
                     ? limit.getCarrierCode() : "carrier";
             throw new CommoditiesLimitExceededException(carrier, commodities.size(), cap);
         }
+    }
+
+    /**
+     * Back-compat overload for pre-2026-09-06 callers that don't pass
+     * an auto-split flag. Behaves the old way (throws on over-cap).
+     */
+    public void assertCommoditiesFit(ShipmentRequestDTO request, CarrierShippingLimit limit) {
+        assertCommoditiesFit(request, limit, false);
+    }
+
+    /**
+     * Report whether {@code request} exceeds the carrier's commodity cap.
+     * Domestic (no intl) shipments always return false. Callers use this
+     * to decide whether to invoke {@link #splitByCommodityStrategy} or
+     * hit the carrier directly.
+     */
+    public boolean isOverCommodityCap(ShipmentRequestDTO request, CarrierShippingLimit limit) {
+        if (request == null || request.getIntl() == null
+                || request.getIntl().getCommodities() == null
+                || request.getIntl().getCommodities().isEmpty()) return false;
+        return request.getIntl().getCommodities().size() > commodityCap(limit);
+    }
+
+    /**
+     * Compute how many sub-shipments the split will produce given the
+     * current commodity count + carrier cap. Used to preview the split
+     * on the FE modal ({@code SplitRequiredResponse.requiredSplitCount}).
+     */
+    public int requiredSplitCount(ShipmentRequestDTO request, CarrierShippingLimit limit) {
+        if (!isOverCommodityCap(request, limit)) return 1;
+        int cap = commodityCap(limit);
+        int count = request.getIntl().getCommodities().size();
+        return (count + cap - 1) / cap;
+    }
+
+    private static int commodityCap(CarrierShippingLimit limit) {
+        return (limit != null && limit.getMaxCommodities() != null)
+                ? limit.getMaxCommodities()
+                : Integer.MAX_VALUE;
+    }
+
+    /**
+     * Split a shipment whose commodity count exceeds the carrier's cap
+     * into N sub-requests. Sprint XX auto-split (see docs/plans/
+     * commodity_autosplit.md).
+     *
+     * <p>Strategy semantics:
+     * <ul>
+     *   <li>{@link SplitStrategy#SAME_PACKAGES}: each sub-request carries
+     *       ALL physical packages. Wasteful (carrier bills 4× shipping
+     *       for 3 boxes if we split 4×) but customs-simple. Recommended
+     *       default.</li>
+     *   <li>{@link SplitStrategy#PROPORTIONAL_PACKAGES}: packages
+     *       distributed round-robin across sub-requests. Some sub-requests
+     *       may have 0 packages (skip those — commodities alone don't
+     *       ship).</li>
+     *   <li>{@link SplitStrategy#ONE_PACKAGE_PER_SPLIT}: N packages → N
+     *       sub-requests, each with 1 package. Commodities distributed
+     *       across sub-requests either by {@code boxSeq} metadata (when
+     *       populated) or evenly (fallback).</li>
+     * </ul>
+     *
+     * <p>Per-split declaredValue = sum(qty × unitValue) for the split's
+     * commodity slice. Currency copied from parent.
+     *
+     * <p>No-op when {@code request.intl} is null or already ≤ cap —
+     * returns the input as a single-element list.
+     */
+    public List<ShipmentRequestDTO> splitByCommodityStrategy(
+            ShipmentRequestDTO request, CarrierShippingLimit limit, SplitStrategy strategy) {
+        if (!isOverCommodityCap(request, limit)) return List.of(request);
+        int cap = commodityCap(limit);
+        List<CustomsCommodityDTO> commodities = request.getIntl().getCommodities();
+
+        // Slice commodities into ceil(N/cap) chunks.
+        List<List<CustomsCommodityDTO>> commoditySlices = new ArrayList<>();
+        for (int start = 0; start < commodities.size(); start += cap) {
+            int end = Math.min(start + cap, commodities.size());
+            commoditySlices.add(new ArrayList<>(commodities.subList(start, end)));
+        }
+        int splitCount = commoditySlices.size();
+
+        // Determine per-split packages according to strategy.
+        List<PackageDetailDTO> allPkgs = request.effectivePackages();
+        List<List<PackageDetailDTO>> packageSlices = new ArrayList<>();
+        SplitStrategy effective = strategy != null ? strategy : SplitStrategy.SAME_PACKAGES;
+        switch (effective) {
+            case PROPORTIONAL_PACKAGES:
+                for (int i = 0; i < splitCount; i++) packageSlices.add(new ArrayList<>());
+                for (int i = 0; i < allPkgs.size(); i++) {
+                    packageSlices.get(i % splitCount).add(allPkgs.get(i));
+                }
+                break;
+            case ONE_PACKAGE_PER_SPLIT:
+                // If splitCount > pkgs.size(), duplicate the last package
+                // into the extra slots (no meaningful boxSeq fallback here).
+                for (int i = 0; i < splitCount; i++) {
+                    PackageDetailDTO pkg = i < allPkgs.size()
+                            ? allPkgs.get(i) : allPkgs.get(allPkgs.size() - 1);
+                    packageSlices.add(new ArrayList<>(List.of(pkg)));
+                }
+                break;
+            case SAME_PACKAGES:
+            default:
+                for (int i = 0; i < splitCount; i++) {
+                    packageSlices.add(new ArrayList<>(allPkgs));
+                }
+                break;
+        }
+
+        // Build sub-requests, one per commodity slice.
+        List<ShipmentRequestDTO> out = new ArrayList<>(splitCount);
+        for (int i = 0; i < splitCount; i++) {
+            List<CustomsCommodityDTO> slice = commoditySlices.get(i);
+            List<PackageDetailDTO> pkgSlice = packageSlices.get(i);
+            BigDecimal sliceDeclared = slice.stream()
+                    .filter(c -> c.getUnitValue() != null)
+                    .map(c -> {
+                        BigDecimal qty = c.getQuantity() != null
+                                ? BigDecimal.valueOf(c.getQuantity()) : BigDecimal.ONE;
+                        return c.getUnitValue().multiply(qty);
+                    })
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            IntlShipmentBlockDTO parentIntl = request.getIntl();
+            IntlShipmentBlockDTO sliceIntl = parentIntl.toBuilder()
+                    .commodities(slice)
+                    .build();
+            // Reuse cloneShipmentWith but override declaredValue AND intl.
+            ShipmentRequestDTO sub = cloneShipmentWith(request, pkgSlice, sliceDeclared);
+            sub.setIntl(sliceIntl);
+            out.add(sub);
+        }
+        log.info("Commodity auto-split: {} commodities → {} sub-shipments (cap={}, strategy={})",
+                commodities.size(), splitCount, cap, effective);
+        return out;
     }
 
     /**
