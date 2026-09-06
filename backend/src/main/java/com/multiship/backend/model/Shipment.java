@@ -74,7 +74,7 @@ public class Shipment {
     @Column(name = "tracking_url", length = 500)
     private String trackingUrl;
 
-    @Column(name = "label_url", length = 500)
+    @Column(name = "label_url", columnDefinition = "text")
     private String labelUrl;
 
     /** Base64 label bytes (short-lived when labelUrl is populated). */
