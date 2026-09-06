@@ -2487,7 +2487,7 @@ public class OrderImportServiceImpl implements OrderImportService {
      *  — the first 6 are the international HS; countries extend it (US HTS=10,
      *  EU CN=8…). Mirrors the manual form's HS_MIN_DIGITS. Default 6. */
     private static final Map<String, Integer> HS_MIN_DIGITS = Map.ofEntries(
-            Map.entry("US", 10), Map.entry("CA", 10),
+            Map.entry("US", 10), Map.entry("CA", 8),
             Map.entry("GB", 8), Map.entry("IE", 8), Map.entry("DE", 8), Map.entry("FR", 8),
             Map.entry("IT", 8), Map.entry("ES", 8), Map.entry("NL", 8), Map.entry("BE", 8),
             Map.entry("LU", 8), Map.entry("AT", 8), Map.entry("PT", 8), Map.entry("DK", 8),
