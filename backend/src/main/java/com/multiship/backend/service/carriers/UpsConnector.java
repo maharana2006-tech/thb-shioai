@@ -2212,6 +2212,14 @@ public class UpsConnector implements CarrierConnector {
         com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
         Map<String, Object> forms = new LinkedHashMap<>();
         forms.put("FormType", "01");
+        // UPS 9120800 fix — InternationalForms requires a Contacts block on
+        // the commercial invoice. Missing → UPS rejects with cryptic
+        // "9120800 Missing contact information." even when Shipper.Phone
+        // and ShipTo.Phone are populated (those cover parcel routing, not
+        // paperless invoice). Contacts.SoldTo defaults to the recipient
+        // (consignee-is-importer, matches SoldTo.Option=01 at Shipment
+        // level). Contacts.ShipFrom mirrors Shipper.
+        forms.put("Contacts", buildInternationalFormsContacts(request));
         forms.put("InvoiceNumber", firstNonBlank(request.getReferenceNumber(), ""));
         // F6-E — invoice date follows the shipper's local calendar day.
         // Pre-F6-E UTC produced a 1-day-earlier date for shippers printing
@@ -2250,6 +2258,87 @@ public class UpsConnector implements CarrierConnector {
         }
         forms.put("Product", products);
         return forms;
+    }
+
+    /**
+     * InternationalForms.Contacts — commercial-invoice contact block
+     * required by UPS Ship API v1 for cross-border shipments. Structure:
+     * <pre>
+     *   Contacts.SoldTo    { Name, AttentionName, Address, Phone,
+     *                        UltimateConsigneeIndicator="01" }
+     *   Contacts.ShipFrom  { Name, AttentionName, Address, Phone }
+     * </pre>
+     * SoldTo defaults to the recipient (consignee = importer, matches
+     * Shipment.SoldTo.Option="01"). ShipFrom mirrors Shipper. Both
+     * blocks reuse buildParty for consistency with the parcel-routing
+     * Shipper/ShipTo blocks — same phone-conditional wiring, same
+     * address flattening.
+     */
+    private Map<String, Object> buildInternationalFormsContacts(ShipmentRequestDTO request) {
+        com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
+        Map<String, Object> contacts = new LinkedHashMap<>();
+
+        // SoldTo — consignee is the default importer (matches Shipment.
+        // SoldTo.Option="01"). When the intl block names a distinct
+        // importer, use those fields.
+        boolean distinctImporter = intl != null
+                && StringUtils.hasText(intl.getImporterName())
+                && !intl.getImporterName().equalsIgnoreCase(request.getRecipientName());
+        String soldToName = distinctImporter ? intl.getImporterName() : request.getRecipientName();
+        String soldToAttention = distinctImporter
+                ? firstNonBlank(intl.getImporterContact(), intl.getImporterName())
+                : request.getRecipientName();
+        String soldToPhone = distinctImporter && StringUtils.hasText(intl.getImporterPhone())
+                ? intl.getImporterPhone()
+                : joinPhone(request.getRecipientPhoneCountryCode(), request.getRecipientPhone());
+        String soldToLine1 = distinctImporter ? intl.getImporterAddress1() : request.getRecipientAddressLine1();
+        String soldToLine2 = distinctImporter ? intl.getImporterAddress2() : request.getRecipientAddressLine2();
+        String soldToCity = distinctImporter ? intl.getImporterCity() : request.getRecipientCity();
+        String soldToState = distinctImporter ? intl.getImporterState() : request.getRecipientState();
+        String soldToPostal = distinctImporter ? intl.getImporterPostcode() : request.getRecipientPostalCode();
+        String soldToCountry = distinctImporter ? intl.getImporterCountry() : request.getRecipientCountryCode();
+
+        Map<String, Object> soldTo = new LinkedHashMap<>();
+        soldTo.put("Name", firstNonBlank(soldToName, ""));
+        soldTo.put("AttentionName", firstNonBlank(soldToAttention, soldToName, ""));
+        soldTo.put("UltimateConsigneeIndicator", "01");
+        if (StringUtils.hasText(soldToPhone)) {
+            soldTo.put("Phone", Map.of("Number", soldToPhone));
+        }
+        Map<String, Object> soldToAddr = new LinkedHashMap<>();
+        java.util.List<String> soldToLines = new java.util.ArrayList<>();
+        if (StringUtils.hasText(soldToLine1)) soldToLines.add(soldToLine1);
+        if (StringUtils.hasText(soldToLine2)) soldToLines.add(soldToLine2);
+        soldToAddr.put("AddressLine", soldToLines);
+        soldToAddr.put("City", firstNonBlank(soldToCity, ""));
+        soldToAddr.put("StateProvinceCode", firstNonBlank(soldToState, ""));
+        soldToAddr.put("PostalCode", firstNonBlank(soldToPostal, ""));
+        soldToAddr.put("CountryCode", firstNonBlank(soldToCountry, ""));
+        soldTo.put("Address", soldToAddr);
+        contacts.put("SoldTo", soldTo);
+
+        // ShipFrom — mirrors the Shipper block (customs paperwork keeps
+        // the shipper contact for exporter of record).
+        Map<String, Object> shipFrom = new LinkedHashMap<>();
+        shipFrom.put("Name", firstNonBlank(request.getShipperCompany(),
+                request.getShipperName(), ""));
+        shipFrom.put("AttentionName", firstNonBlank(request.getShipperName(), ""));
+        if (StringUtils.hasText(request.getShipperPhone())) {
+            shipFrom.put("Phone", Map.of("Number", request.getShipperPhone()));
+        }
+        Map<String, Object> shipFromAddr = new LinkedHashMap<>();
+        java.util.List<String> shipFromLines = new java.util.ArrayList<>();
+        if (StringUtils.hasText(request.getShipperAddressLine1())) shipFromLines.add(request.getShipperAddressLine1());
+        if (StringUtils.hasText(request.getShipperAddressLine2())) shipFromLines.add(request.getShipperAddressLine2());
+        shipFromAddr.put("AddressLine", shipFromLines);
+        shipFromAddr.put("City", firstNonBlank(request.getShipperCity(), ""));
+        shipFromAddr.put("StateProvinceCode", firstNonBlank(request.getShipperState(), ""));
+        shipFromAddr.put("PostalCode", firstNonBlank(request.getShipperPostalCode(), ""));
+        shipFromAddr.put("CountryCode", firstNonBlank(request.getShipperCountryCode(), ""));
+        shipFrom.put("Address", shipFromAddr);
+        contacts.put("ShipFrom", shipFrom);
+
+        return contacts;
     }
 
     /**
