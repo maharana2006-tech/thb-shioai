@@ -1963,19 +1963,32 @@ public class UpsConnector implements CarrierConnector {
         // Documented here so future audits don't re-flag the hardcoded
         // "02" as a silent-fallback bug.
         //
-        // Translate the shared "YOUR_PACKAGING" sentinel that
-        // CarrierServiceImpl.java:1172 emits for every CUSTOM preset
-        // into UPS's own "02" enum. UPS rejects any string not in its
-        // fixed enum (01 Letter / 02 CustomerBox / 03 Tube / 04 Pak /
-        // 21 ExpressBox / 24 25KG / 25 10KG / 30 Pallet / 2a/2b/2c
-        // Small/Med/Large Express Box); pre-fix "YOUR_PACKAGING" fell
-        // through to the wire verbatim and UPS rejected 9120xxx
-        // "Missing or invalid Package PackagingType Code."
+        // Whitelist-based coercion into UPS's own fixed Packaging.Code
+        // enum. Anything not in the whitelist (blank, "YOUR_PACKAGING"
+        // sentinel from CarrierServiceImpl.java:1172, preset IDs like
+        // "18" that a multi-package FE payload emits when a CUSTOM
+        // preset is picked, arbitrary preset names) falls back to "02"
+        // = Customer Supplied Package. UPS rejects any other string
+        // with 9120600 "Missing or invalid Package PackagingType Code."
+        //
+        // Valid enum per UPS Ship API v2409:
+        //   01 Letter | 02 Customer Supplied Package | 03 Tube |
+        //   04 Pak | 21 Express Box | 24 25KG Box | 25 10KG Box |
+        //   30 Pallet | 2a Small / 2b Medium / 2c Large Express Box.
+        java.util.Set<String> validUpsPackageCodes = java.util.Set.of(
+                "01", "02", "03", "04", "21", "24", "25", "30",
+                "2a", "2b", "2c");
         String resolvedPackageCode = firstNonBlank(
                 p.getPackageType(), request.getPackageType());
-        String upsPackageCode = ("YOUR_PACKAGING".equalsIgnoreCase(resolvedPackageCode)
-                || !StringUtils.hasText(resolvedPackageCode))
-                        ? "02" : resolvedPackageCode;
+        String upsPackageCode;
+        if (StringUtils.hasText(resolvedPackageCode)
+                && validUpsPackageCodes.contains(resolvedPackageCode.toLowerCase())) {
+            upsPackageCode = resolvedPackageCode.toLowerCase();
+        } else {
+            log.info("UPS packaging code '{}' not in enum whitelist, coercing to '02' (Customer Supplied Package)",
+                    resolvedPackageCode);
+            upsPackageCode = "02";
+        }
         pkg.put("PackagingType", Map.of("Code", upsPackageCode));
 
         String weightUnitCode = "KG".equalsIgnoreCase(
