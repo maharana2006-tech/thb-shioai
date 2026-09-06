@@ -1385,6 +1385,22 @@ export default function NewShipmentPage() {
     return null
   }, [carrier, isCustomPkg, packagesForCarrier, servicesForCarrier, packageChoice, serviceId])
 
+  // Inline max-weight warning. When the operator picks a carrier packaging
+  // preset that has a max_weight set (e.g. UPS Express Pak = 3 lb, FedEx
+  // Envelope = 10 oz) and their entered weight exceeds it, the carrier
+  // will reject at label time. Surface it inline so they can bump to
+  // Custom or pick a larger box before hitting Generate Label.
+  const weightOverPresetMaxWarning = useMemo(() => {
+    if (isCustomPkg || !weight) return null
+    const preset = packagesForCarrier.find((p) => String(p.id) === packageChoice)
+    if (!preset?.maxWeight) return null
+    const enteredLb = weightUnit === 'KG' ? Number(weight) * 2.20462 : Number(weight)
+    const limitLb = preset.weightUnit === 'KG' ? preset.maxWeight * 2.20462 : preset.maxWeight
+    if (!Number.isFinite(enteredLb) || !Number.isFinite(limitLb)) return null
+    if (enteredLb <= limitLb) return null
+    return `Exceeds ${preset.name}'s ${preset.maxWeight} ${(preset.weightUnit || 'LB').toLowerCase()} max — carrier will reject. Pick a larger box or Custom package.`
+  }, [isCustomPkg, weight, weightUnit, packagesForCarrier, packageChoice])
+
   // ── Yup + Formik validation ────────────────────────────────────────────────
   // The page keeps its own useState for each field (needed by AI autofill, the
   // rate picker, warehouse resolution, etc.), so Formik is wired as a pure
@@ -3064,7 +3080,7 @@ export default function NewShipmentPage() {
                       <option value={CUSTOM_PKG}>Custom package…</option>
                     </select>
                   </Field>
-                  <Field label={`Weight (${weightUnit.toLowerCase()})`} required error={errAt('weight')}>
+                  <Field label={`Weight (${weightUnit.toLowerCase()})`} required error={errAt('weight') || weightOverPresetMaxWarning}>
                     <input className={inputCls} type="number" min="0" step="0.1" value={weight} onChange={(e) => { setWeight(e.target.value); clearFixKey('weight') }} placeholder="2.5" />
                   </Field>
                   <Field
