@@ -1989,7 +1989,14 @@ public class UpsConnector implements CarrierConnector {
                     resolvedPackageCode);
             upsPackageCode = "02";
         }
-        pkg.put("PackagingType", Map.of("Code", upsPackageCode));
+        // JSON key is "Packaging" (nested object with Code) on the UPS
+        // Ship API. UPS's error message refers to it as "PackagingType"
+        // ("Missing or invalid Package PackagingType Code") which caused
+        // the pre-fix "PackagingType" key on the wire — UPS silently
+        // dropped the unknown field, saw no "Packaging" block, and
+        // rejected 120600. The UPS Rate API uses "PackagingType" as the
+        // key (different endpoint) so the two easily get swapped.
+        pkg.put("Packaging", Map.of("Code", upsPackageCode));
 
         String weightUnitCode = "KG".equalsIgnoreCase(
                 firstNonBlank(p.getWeightUnit(), request.getWeightUnit())) ? "KGS" : "LBS";
