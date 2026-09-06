@@ -2252,8 +2252,32 @@ public class UpsConnector implements CarrierConnector {
         forms.put("CurrencyCode", firstNonBlank(intl.getCustomsCurrency(), "USD").toUpperCase());
 
         String weightUnitCode = "KG".equalsIgnoreCase(intl.getWeightUnit()) ? "KGS" : "LBS";
+        // UPS 128039 fix — UPS Ship API v1 caps
+        // InternationalForms.Product at 50 entries per shipment. Beyond
+        // that → "Invalid number of products." Consolidate commodities
+        // that share (HS code + description + origin country) — customs
+        // authorities classify by HS, so lines that share the triple are
+        // legitimately roll-uppable on the commercial invoice:
+        //   qty        = sum(qty)
+        //   unit value = weight-average (sum(qty × unit) / sum(qty))
+        //   weight     = sum(unit weight × qty) / sum(qty)   [per-unit]
+        // This is what carriers and freight forwarders do by default
+        // when a paperless invoice would otherwise overflow — matches
+        // FedEx's own SDK behaviour.
+        java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> consolidated =
+                consolidateCommoditiesByHs(intl.getCommodities());
+        if (consolidated.size() > 50) {
+            throw new IllegalArgumentException(
+                    "UPS international shipment (order " + request.getReferenceNumber()
+                    + ") has " + consolidated.size() + " distinct HS/description/origin "
+                    + "groups after consolidation, above UPS's 50-product cap on the "
+                    + "paperless commercial invoice. Reduce SKU diversity (consolidate "
+                    + "similar items under a shared HS code) or split the order into "
+                    + "multiple shipments before generating the label. UPS would "
+                    + "reject with \"128039 Invalid number of products.\"");
+        }
         java.util.List<Map<String, Object>> products = new java.util.ArrayList<>();
-        for (com.multiship.backend.dto.CustomsCommodityDTO c : intl.getCommodities()) {
+        for (com.multiship.backend.dto.CustomsCommodityDTO c : consolidated) {
             Map<String, Object> product = new LinkedHashMap<>();
             product.put("Description", firstNonBlank(c.getDescription(), ""));
             if (StringUtils.hasText(c.getHsCode())) product.put("CommodityCode", c.getHsCode());
@@ -2275,6 +2299,85 @@ public class UpsConnector implements CarrierConnector {
                 "CurrencyCode", firstNonBlank(intl.getCustomsCurrency(), "USD").toUpperCase(),
                 "MonetaryValue", computeIntlInvoiceTotal(request).toPlainString()));
         return forms;
+    }
+
+    /**
+     * Consolidate commodities that share (HS code + description + origin
+     * country) into single invoice lines. Keeps the wire under UPS's
+     * 50-product cap without operator intervention when the operator's
+     * SKU catalog has many variants under a shared HS code.
+     *
+     * <p>Roll-up rules per group:
+     * <ul>
+     *   <li>{@code quantity} = sum of member quantities.</li>
+     *   <li>{@code unitValue} = weight-averaged by quantity:
+     *       {@code sum(qty × unit) / sum(qty)}. Preserves the group's
+     *       total line value while keeping Unit.Value on a per-unit
+     *       basis as UPS expects.</li>
+     *   <li>{@code unitWeight} = weight-averaged the same way; total
+     *       group weight is qty × unitWeight so the invoice weight
+     *       balances after consolidation.</li>
+     *   <li>{@code sku} = first member's SKU (informational only —
+     *       customs doesn't classify by SKU).</li>
+     * </ul>
+     * Grouping key is normalised (trim + upper-case HS/origin, trim
+     * description) so surface variations don't split lines that
+     * should merge. Ordering is stable to keep wire payloads diffable.
+     */
+    private java.util.List<com.multiship.backend.dto.CustomsCommodityDTO>
+            consolidateCommoditiesByHs(java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> commodities) {
+        if (commodities == null || commodities.isEmpty()) return java.util.List.of();
+        // LinkedHashMap keeps insertion order → deterministic wire.
+        java.util.Map<String, java.util.List<com.multiship.backend.dto.CustomsCommodityDTO>> groups =
+                new java.util.LinkedHashMap<>();
+        for (com.multiship.backend.dto.CustomsCommodityDTO c : commodities) {
+            String key = String.join("|",
+                    firstNonBlank(c.getHsCode(), "").trim().toUpperCase(Locale.ROOT),
+                    firstNonBlank(c.getDescription(), "").trim(),
+                    firstNonBlank(c.getCountryOfOrigin(), "").trim().toUpperCase(Locale.ROOT));
+            groups.computeIfAbsent(key, k -> new java.util.ArrayList<>()).add(c);
+        }
+        java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> out = new java.util.ArrayList<>();
+        for (java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> group : groups.values()) {
+            if (group.size() == 1) {
+                out.add(group.get(0));
+                continue;
+            }
+            java.math.BigDecimal totalQty = java.math.BigDecimal.ZERO;
+            java.math.BigDecimal weightedValue = java.math.BigDecimal.ZERO;
+            java.math.BigDecimal weightedUnitWeight = java.math.BigDecimal.ZERO;
+            boolean anyWeight = false;
+            for (com.multiship.backend.dto.CustomsCommodityDTO m : group) {
+                java.math.BigDecimal qty = m.getQuantity() != null
+                        ? java.math.BigDecimal.valueOf(m.getQuantity())
+                        : java.math.BigDecimal.ONE;
+                totalQty = totalQty.add(qty);
+                if (m.getUnitValue() != null) {
+                    weightedValue = weightedValue.add(m.getUnitValue().multiply(qty));
+                }
+                if (m.getUnitWeight() != null) {
+                    weightedUnitWeight = weightedUnitWeight.add(m.getUnitWeight().multiply(qty));
+                    anyWeight = true;
+                }
+            }
+            com.multiship.backend.dto.CustomsCommodityDTO leader = group.get(0);
+            com.multiship.backend.dto.CustomsCommodityDTO merged =
+                    com.multiship.backend.dto.CustomsCommodityDTO.builder()
+                            .hsCode(leader.getHsCode())
+                            .description(leader.getDescription())
+                            .countryOfOrigin(leader.getCountryOfOrigin())
+                            .sku(leader.getSku())
+                            .quantity(totalQty.intValueExact())
+                            .unitValue(totalQty.signum() > 0
+                                    ? weightedValue.divide(totalQty, 4, java.math.RoundingMode.HALF_UP)
+                                    : java.math.BigDecimal.ZERO)
+                            .unitWeight(anyWeight && totalQty.signum() > 0
+                                    ? weightedUnitWeight.divide(totalQty, 4, java.math.RoundingMode.HALF_UP)
+                                    : null)
+                            .build();
+            out.add(merged);
+        }
+        return out;
     }
 
     /**
