@@ -2276,6 +2276,16 @@ public class UpsConnector implements CarrierConnector {
                     })
                     .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
         }
+        if (invoiceTotal.signum() <= 0) {
+            throw new IllegalArgumentException(
+                    "UPS international shipment (order " + request.getReferenceNumber()
+                    + ") requires a positive customs invoice total. Both the "
+                    + "shipment Declared Value AND the sum of commodity "
+                    + "(Qty × Unit Value) came to 0 — UPS rejects with "
+                    + "\"120502 InvoiceLineTotal MonetaryValue must be greater "
+                    + "than 0.\" Fill in each item's unit value (or set a "
+                    + "positive Declared Value) before generating the label.");
+        }
         forms.put("InvoiceLineTotal", Map.of(
                 "CurrencyCode", firstNonBlank(intl.getCustomsCurrency(), "USD").toUpperCase(),
                 "MonetaryValue", invoiceTotal.toPlainString()));
@@ -2593,6 +2603,23 @@ public class UpsConnector implements CarrierConnector {
             boolean shipperHasEmail = false;
             boolean shipToHasPhone = false;
             boolean shipToHasEmail = false;
+            Object intlInvoiceTotal = "-";
+            Integer intlProductCount = null;
+            if (shipment != null) {
+                Map<String, Object> serviceOptions =
+                        (Map<String, Object>) shipment.get("ShipmentServiceOptions");
+                if (serviceOptions != null) {
+                    Map<String, Object> intlForms =
+                            (Map<String, Object>) serviceOptions.get("InternationalForms");
+                    if (intlForms != null) {
+                        Map<String, Object> ilt =
+                                (Map<String, Object>) intlForms.get("InvoiceLineTotal");
+                        if (ilt != null) intlInvoiceTotal = ilt.get("MonetaryValue");
+                        Object products = intlForms.get("Product");
+                        if (products instanceof java.util.List<?> pl) intlProductCount = pl.size();
+                    }
+                }
+            }
             if (shipment != null) {
                 Map<String, Object> service = (Map<String, Object>) shipment.get("Service");
                 if (service != null) serviceCode = service.get("Code");
@@ -2624,10 +2651,12 @@ public class UpsConnector implements CarrierConnector {
             }
             log.info("UPS {} wire → env={} Service.Code={} Package[0].Packaging.Code={} "
                             + "Shipper.CountryCode={} hasPhone={} hasEmail={} "
-                            + "ShipTo.CountryCode={} hasPhone={} hasEmail={}",
+                            + "ShipTo.CountryCode={} hasPhone={} hasEmail={} "
+                            + "IntlForms.InvoiceLineTotal={} products={}",
                     op, environment, serviceCode, packagingCode,
                     shipperCountry, shipperHasPhone, shipperHasEmail,
-                    shipToCountry, shipToHasPhone, shipToHasEmail);
+                    shipToCountry, shipToHasPhone, shipToHasEmail,
+                    intlInvoiceTotal, intlProductCount);
         } catch (Exception ex) {
             log.debug("UPS {} wire payload log skipped: {}", op, ex.getMessage());
         }
