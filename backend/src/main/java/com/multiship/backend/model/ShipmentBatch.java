@@ -54,7 +54,7 @@ public class ShipmentBatch {
     @Column(name = "master_tracking_url", length = 500)
     private String masterTrackingUrl;
 
-    @Column(name = "master_label_url", length = 500)
+    @Column(name = "master_label_url", columnDefinition = "text")
     private String masterLabelUrl;
 
     @Column(name = "master_label_pdf", columnDefinition = "text")
