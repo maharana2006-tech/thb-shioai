@@ -351,6 +351,7 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
+            logUpsWirePayload("createShipment", payload, environment);
             // PR ω — createShipment was posting to baseUrl root (e.g.
             // https://wwwcie.ups.com/) with no path, so UPS returned their
             // marketing HTML index page and parseShipmentResult choked on
@@ -458,6 +459,7 @@ public class UpsConnector implements CarrierConnector {
             String baseUrl = isSandbox(environment)
                     ? carrierProperties.getUps().getSandboxUrl()
                     : carrierProperties.getUps().getApiBaseUrl();
+            logUpsWirePayload("validateShipment", payload, environment);
             // Same .uri() bug as createShipment before PR #577 — no path
             // meant POST to baseUrl root, UPS returned their marketing HTML
             // index page, parseUpsValidateShipmentResponse choked on '<' at
@@ -2404,6 +2406,58 @@ public class UpsConnector implements CarrierConnector {
 
         return new ShipmentResult(trackingNumber, trackingUrl, labelUrl, labelPdf,
                 shippingCost, estimatedDelivery, response, packages);
+    }
+
+    /**
+     * Wire-payload diagnostic. Extracts the fields most likely to be
+     * misattributed at operator support time — Service.Code, first
+     * Package.Packaging.Code, ShipTo/Shipper country — into a single
+     * INFO log line so we can grep the exact bytes we sent when the
+     * carrier's response doesn't match the operator's picked service
+     * (e.g. UPS sandbox returns a canned "Ground" label regardless).
+     * Purposely does not log the full payload (labels + addresses can
+     * bloat the log; use HTTP-client tracing for the whole body).
+     */
+    @SuppressWarnings("unchecked")
+    private void logUpsWirePayload(String op, Map<String, Object> payload, String environment) {
+        try {
+            Map<String, Object> shipmentRequest = (Map<String, Object>) payload.get("ShipmentRequest");
+            Map<String, Object> shipment = shipmentRequest == null ? null
+                    : (Map<String, Object>) shipmentRequest.get("Shipment");
+            Object serviceCode = null;
+            Object packagingCode = null;
+            Object shipToCountry = null;
+            Object shipperCountry = null;
+            if (shipment != null) {
+                Map<String, Object> service = (Map<String, Object>) shipment.get("Service");
+                if (service != null) serviceCode = service.get("Code");
+                Object pkgObj = shipment.get("Package");
+                Map<String, Object> firstPkg = null;
+                if (pkgObj instanceof java.util.List<?> list && !list.isEmpty()) {
+                    firstPkg = (Map<String, Object>) list.get(0);
+                } else if (pkgObj instanceof Map) {
+                    firstPkg = (Map<String, Object>) pkgObj;
+                }
+                if (firstPkg != null) {
+                    Map<String, Object> packaging = (Map<String, Object>) firstPkg.get("Packaging");
+                    if (packaging != null) packagingCode = packaging.get("Code");
+                }
+                Map<String, Object> shipTo = (Map<String, Object>) shipment.get("ShipTo");
+                if (shipTo != null) {
+                    Map<String, Object> a = (Map<String, Object>) shipTo.get("Address");
+                    if (a != null) shipToCountry = a.get("CountryCode");
+                }
+                Map<String, Object> shipper = (Map<String, Object>) shipment.get("Shipper");
+                if (shipper != null) {
+                    Map<String, Object> a = (Map<String, Object>) shipper.get("Address");
+                    if (a != null) shipperCountry = a.get("CountryCode");
+                }
+            }
+            log.info("UPS {} wire → env={} Service.Code={} Package[0].Packaging.Code={} Shipper.CountryCode={} ShipTo.CountryCode={}",
+                    op, environment, serviceCode, packagingCode, shipperCountry, shipToCountry);
+        } catch (Exception ex) {
+            log.debug("UPS {} wire payload log skipped: {}", op, ex.getMessage());
+        }
     }
 
     /** UPS monetary values arrive as JSON strings ("12.34"), not numbers. */
