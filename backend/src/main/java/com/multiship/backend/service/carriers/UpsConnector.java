@@ -2270,7 +2270,8 @@ public class UpsConnector implements CarrierConnector {
                     .filter(c -> c.getUnitValue() != null)
                     .map(c -> {
                         java.math.BigDecimal qty = c.getQuantity() != null
-                                ? c.getQuantity() : java.math.BigDecimal.ONE;
+                                ? java.math.BigDecimal.valueOf(c.getQuantity())
+                                : java.math.BigDecimal.ONE;
                         return c.getUnitValue().multiply(qty);
                     })
                     .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
