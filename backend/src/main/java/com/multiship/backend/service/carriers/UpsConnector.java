@@ -1743,6 +1743,20 @@ public class UpsConnector implements CarrierConnector {
         // International forms only when the request carries an intl block
         // that's ready (all required fields present).
         if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {
+            // UPS 120502 fix — Shipment.InvoiceLineTotal is REQUIRED for
+            // international shipments (separate from
+            // InternationalForms.InvoiceLineTotal). Missing → UPS rejects
+            // with "120502 InvoiceLineTotal MonetaryValue must be greater
+            // than 0." even when InternationalForms.InvoiceLineTotal is
+            // populated correctly (verified via wire log 2026-09-06).
+            // Emitted BEFORE InternationalForms so the top-level total
+            // is the invoice authority; InternationalForms mirrors it.
+            java.math.BigDecimal intlTotal = computeIntlInvoiceTotal(request);
+            String intlCurrency = firstNonBlank(request.getIntl().getCustomsCurrency(),
+                    request.getDeclaredValueCurrency(), "USD").toUpperCase();
+            shipment.put("InvoiceLineTotal", Map.of(
+                    "CurrencyCode", intlCurrency,
+                    "MonetaryValue", intlTotal.toPlainString()));
             Map<String, Object> forms = buildInternationalForms(request);
             Map<String, Object> serviceOptions = new LinkedHashMap<>();
             serviceOptions.put("InternationalForms", forms);
@@ -2257,39 +2271,58 @@ public class UpsConnector implements CarrierConnector {
             products.add(product);
         }
         forms.put("Product", products);
-        // UPS 120502 fix — InternationalForms requires InvoiceLineTotal
-        // with MonetaryValue > 0 (customs total for the paperless
-        // commercial invoice). Missing → UPS rejects with
-        // "120502 InvoiceLineTotal MonetaryValue must be greater than 0."
-        // Prefer the declaredValue when set (already the customs total
-        // per IntlShipmentValidator); else sum(quantity × unitValue)
-        // across commodities so we always have a positive figure.
-        java.math.BigDecimal invoiceTotal = request.getDeclaredValue();
-        if (invoiceTotal == null || invoiceTotal.signum() <= 0) {
-            invoiceTotal = intl.getCommodities().stream()
-                    .filter(c -> c.getUnitValue() != null)
-                    .map(c -> {
-                        java.math.BigDecimal qty = c.getQuantity() != null
-                                ? java.math.BigDecimal.valueOf(c.getQuantity())
-                                : java.math.BigDecimal.ONE;
-                        return c.getUnitValue().multiply(qty);
-                    })
-                    .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
-        }
-        if (invoiceTotal.signum() <= 0) {
+        forms.put("InvoiceLineTotal", Map.of(
+                "CurrencyCode", firstNonBlank(intl.getCustomsCurrency(), "USD").toUpperCase(),
+                "MonetaryValue", computeIntlInvoiceTotal(request).toPlainString()));
+        return forms;
+    }
+
+    /**
+     * Compute the customs invoice total UPS expects on BOTH
+     * Shipment.InvoiceLineTotal (top-level) and
+     * InternationalForms.InvoiceLineTotal (paperless invoice).
+     *
+     * <p>Precedence (matches FedEx {@code customsValue} rule):
+     * <ol>
+     *   <li>{@code sum(qty × unitValue)} across commodities — the customs
+     *       authority's expectation of the invoice reflecting the item
+     *       breakdown. Always preferred when > 0.</li>
+     *   <li>{@code request.declaredValue} — fallback only when the commodity
+     *       sum is 0 (e.g. missing unit values in a partial upload).</li>
+     * </ol>
+     *
+     * <p>Throws when both are 0 — turns UPS's cryptic 120502 into an
+     * actionable "fill in item unit value" message the operator can
+     * act on immediately.
+     */
+    private java.math.BigDecimal computeIntlInvoiceTotal(ShipmentRequestDTO request) {
+        com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
+        java.math.BigDecimal fromCommodities = intl == null || intl.getCommodities() == null
+                ? java.math.BigDecimal.ZERO
+                : intl.getCommodities().stream()
+                        .filter(c -> c.getUnitValue() != null)
+                        .map(c -> {
+                            java.math.BigDecimal qty = c.getQuantity() != null
+                                    ? java.math.BigDecimal.valueOf(c.getQuantity())
+                                    : java.math.BigDecimal.ONE;
+                            return c.getUnitValue().multiply(qty);
+                        })
+                        .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+        java.math.BigDecimal chosen = fromCommodities.signum() > 0
+                ? fromCommodities
+                : (request.getDeclaredValue() != null ? request.getDeclaredValue()
+                        : java.math.BigDecimal.ZERO);
+        if (chosen.signum() <= 0) {
             throw new IllegalArgumentException(
                     "UPS international shipment (order " + request.getReferenceNumber()
                     + ") requires a positive customs invoice total. Both the "
-                    + "shipment Declared Value AND the sum of commodity "
-                    + "(Qty × Unit Value) came to 0 — UPS rejects with "
+                    + "sum of commodity (Qty × Unit Value) AND the shipment "
+                    + "Declared Value came to 0 — UPS rejects with "
                     + "\"120502 InvoiceLineTotal MonetaryValue must be greater "
                     + "than 0.\" Fill in each item's unit value (or set a "
                     + "positive Declared Value) before generating the label.");
         }
-        forms.put("InvoiceLineTotal", Map.of(
-                "CurrencyCode", firstNonBlank(intl.getCustomsCurrency(), "USD").toUpperCase(),
-                "MonetaryValue", invoiceTotal.toPlainString()));
-        return forms;
+        return chosen;
     }
 
     /**
