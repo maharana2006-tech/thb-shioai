@@ -200,6 +200,15 @@ public class ManualShipmentRequest {
             message = "labelStockType must be a supported FedEx label stock type")
     private String labelStockType;
 
+    /**
+     * Commodity auto-split strategy. Null on the first submit; if the
+     * commodity count exceeds the carrier's cap, backend returns
+     * {@code SPLIT_REQUIRED} with strategy options. Operator picks in the
+     * FE modal, FE re-submits with this field populated. See
+     * {@link SplitStrategy} and docs/plans/commodity_autosplit.md.
+     */
+    private SplitStrategy splitStrategy;
+
     @Data
     public static class Address {
         private String name;

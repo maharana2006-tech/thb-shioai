@@ -23,7 +23,7 @@ import java.util.List;
  * to re-derive anything from Order + Customs entities.
  */
 @Data
-@Builder
+@Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
 public class IntlShipmentBlockDTO {
