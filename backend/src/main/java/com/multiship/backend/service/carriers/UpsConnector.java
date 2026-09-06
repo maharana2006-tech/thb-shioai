@@ -1752,11 +1752,12 @@ public class UpsConnector implements CarrierConnector {
         String labelFormat = StringUtils.hasText(request.getLabelImageFormat())
                 ? request.getLabelImageFormat().trim().toUpperCase(Locale.ROOT)
                 : "GIF";
-        // UPS-5 — HTTPUserAgent is UPS's Label-Spec-side identifier for the
-        // label-generating tool. Historical "Mozilla/4.5" was legacy cargo
-        // from the pre-2010 UPS integration guides. Switched to a
-        // descriptive value so support tickets can correlate labels to this
-        // application. UPS accepts any non-empty string.
+        // UPS-5 — HTTPUserAgent is UPS's LabelSpecification-side UA that
+        // UPS uses when rendering the label image. UPS validates the shape
+        // (must look like a real HTTP User-Agent string) and rejects
+        // 120701 "Missing/Invalid LabelSpecification/HTTPUserAgent" on any
+        // non-canonical value. "multiship" (previous) failed validation.
+        // Every UPS integration guide example uses Mozilla/5.0 exactly.
         // UPS Ship API v1 requires LabelStockSize alongside LabelImageFormat
         // (rejected with 9120244 "Missing label specification label stock
         // size." when omitted). Height + Width are in inches; range per
@@ -1771,7 +1772,7 @@ public class UpsConnector implements CarrierConnector {
         shipmentRequest.put("LabelSpecification", Map.of(
                 "LabelImageFormat", Map.of("Code", labelFormat),
                 "LabelStockSize", Map.of("Height", stockHeight, "Width", stockWidth),
-                "HTTPUserAgent", "multiship"));
+                "HTTPUserAgent", "Mozilla/5.0"));
         payload.put("ShipmentRequest", shipmentRequest);
         return payload;
     }
