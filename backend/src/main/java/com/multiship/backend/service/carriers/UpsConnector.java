@@ -346,6 +346,12 @@ public class UpsConnector implements CarrierConnector {
                             + "CarrierAccountRef row exists for this shipper + carrier before "
                             + "generating the label.");
         }
+        // UPS-9120800 boundary guard — UPS Ship API rejects international
+        // shipments without Phone.Number on Shipper AND ShipTo with a
+        // cryptic "Missing contact information." Turn it into an
+        // actionable message pointing at the field so the operator can
+        // fix it upstream instead of round-tripping to UPS.
+        assertUpsIntlContactPresent(request);
         try {
             Map<String, Object> payload = buildShipmentPayload(request);
             String baseUrl = isSandbox(environment)
@@ -453,6 +459,17 @@ public class UpsConnector implements CarrierConnector {
                     "UPS validateShipment requires the shipper account number that owns the label "
                             + "(order " + request.getReferenceNumber() + ").",
                     null);
+        }
+        // UPS-9120800 same boundary guard as createShipment. Surface as a
+        // typed ValidateShipmentResult so the validate button shows the
+        // actionable message inline in the FE panel instead of rethrowing.
+        try {
+            assertUpsIntlContactPresent(request);
+        } catch (IllegalArgumentException guardEx) {
+            return new ValidateShipmentResult(false, "ERROR", "SHIPMENT",
+                    java.util.List.of(),
+                    java.util.List.of(guardEx.getMessage()),
+                    guardEx.getMessage(), null);
         }
         try {
             Map<String, Object> payload = buildShipmentPayload(request, "validate");
@@ -2409,6 +2426,39 @@ public class UpsConnector implements CarrierConnector {
     }
 
     /**
+     * UPS 9120800 boundary guard. UPS Ship API requires a Phone.Number on
+     * both Shipper and ShipTo for international shipments (customs
+     * contact requirement). Missing either → cryptic error
+     * "9120800 Missing contact information." Fail fast with a message
+     * that names the exact field so the operator can fix it in the
+     * shipment form instead of watching UPS reject.
+     */
+    private static void assertUpsIntlContactPresent(ShipmentRequestDTO request) {
+        String shipperCountry = firstNonBlank(request.getShipperCountryCode(), "").toUpperCase(Locale.ROOT);
+        String recipientCountry = firstNonBlank(request.getRecipientCountryCode(), "").toUpperCase(Locale.ROOT);
+        if (!StringUtils.hasText(shipperCountry) || !StringUtils.hasText(recipientCountry)) return;
+        if (shipperCountry.equals(recipientCountry)) return;
+        boolean shipperPhoneMissing = !StringUtils.hasText(request.getShipperPhone());
+        boolean recipientPhoneMissing = !StringUtils.hasText(request.getRecipientPhone());
+        if (!shipperPhoneMissing && !recipientPhoneMissing) return;
+        StringBuilder msg = new StringBuilder(
+                "UPS international shipment (" + shipperCountry + " → "
+                + recipientCountry + ") requires a phone number on ");
+        if (shipperPhoneMissing && recipientPhoneMissing) {
+            msg.append("both Shipper AND Recipient");
+        } else if (shipperPhoneMissing) {
+            msg.append("Shipper");
+        } else {
+            msg.append("Recipient");
+        }
+        msg.append(" — UPS rejects with 9120800 \"Missing contact information.\" "
+                + "Fill the phone field in the shipment form (order ")
+           .append(request.getReferenceNumber())
+           .append(") before generating the label.");
+        throw new IllegalArgumentException(msg.toString());
+    }
+
+    /**
      * Wire-payload diagnostic. Extracts the fields most likely to be
      * misattributed at operator support time — Service.Code, first
      * Package.Packaging.Code, ShipTo/Shipper country — into a single
@@ -2428,6 +2478,10 @@ public class UpsConnector implements CarrierConnector {
             Object packagingCode = null;
             Object shipToCountry = null;
             Object shipperCountry = null;
+            boolean shipperHasPhone = false;
+            boolean shipperHasEmail = false;
+            boolean shipToHasPhone = false;
+            boolean shipToHasEmail = false;
             if (shipment != null) {
                 Map<String, Object> service = (Map<String, Object>) shipment.get("Service");
                 if (service != null) serviceCode = service.get("Code");
@@ -2446,15 +2500,23 @@ public class UpsConnector implements CarrierConnector {
                 if (shipTo != null) {
                     Map<String, Object> a = (Map<String, Object>) shipTo.get("Address");
                     if (a != null) shipToCountry = a.get("CountryCode");
+                    shipToHasPhone = shipTo.get("Phone") != null;
+                    shipToHasEmail = StringUtils.hasText((String) shipTo.get("EMailAddress"));
                 }
                 Map<String, Object> shipper = (Map<String, Object>) shipment.get("Shipper");
                 if (shipper != null) {
                     Map<String, Object> a = (Map<String, Object>) shipper.get("Address");
                     if (a != null) shipperCountry = a.get("CountryCode");
+                    shipperHasPhone = shipper.get("Phone") != null;
+                    shipperHasEmail = StringUtils.hasText((String) shipper.get("EMailAddress"));
                 }
             }
-            log.info("UPS {} wire → env={} Service.Code={} Package[0].Packaging.Code={} Shipper.CountryCode={} ShipTo.CountryCode={}",
-                    op, environment, serviceCode, packagingCode, shipperCountry, shipToCountry);
+            log.info("UPS {} wire → env={} Service.Code={} Package[0].Packaging.Code={} "
+                            + "Shipper.CountryCode={} hasPhone={} hasEmail={} "
+                            + "ShipTo.CountryCode={} hasPhone={} hasEmail={}",
+                    op, environment, serviceCode, packagingCode,
+                    shipperCountry, shipperHasPhone, shipperHasEmail,
+                    shipToCountry, shipToHasPhone, shipToHasEmail);
         } catch (Exception ex) {
             log.debug("UPS {} wire payload log skipped: {}", op, ex.getMessage());
         }
