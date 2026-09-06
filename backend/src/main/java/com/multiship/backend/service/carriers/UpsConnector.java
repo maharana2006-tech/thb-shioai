@@ -2257,6 +2257,27 @@ public class UpsConnector implements CarrierConnector {
             products.add(product);
         }
         forms.put("Product", products);
+        // UPS 120502 fix — InternationalForms requires InvoiceLineTotal
+        // with MonetaryValue > 0 (customs total for the paperless
+        // commercial invoice). Missing → UPS rejects with
+        // "120502 InvoiceLineTotal MonetaryValue must be greater than 0."
+        // Prefer the declaredValue when set (already the customs total
+        // per IntlShipmentValidator); else sum(quantity × unitValue)
+        // across commodities so we always have a positive figure.
+        java.math.BigDecimal invoiceTotal = request.getDeclaredValue();
+        if (invoiceTotal == null || invoiceTotal.signum() <= 0) {
+            invoiceTotal = intl.getCommodities().stream()
+                    .filter(c -> c.getUnitValue() != null)
+                    .map(c -> {
+                        java.math.BigDecimal qty = c.getQuantity() != null
+                                ? c.getQuantity() : java.math.BigDecimal.ONE;
+                        return c.getUnitValue().multiply(qty);
+                    })
+                    .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+        }
+        forms.put("InvoiceLineTotal", Map.of(
+                "CurrencyCode", firstNonBlank(intl.getCustomsCurrency(), "USD").toUpperCase(),
+                "MonetaryValue", invoiceTotal.toPlainString()));
         return forms;
     }
 
