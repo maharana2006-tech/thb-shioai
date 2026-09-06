@@ -2291,8 +2291,8 @@ public class UpsConnector implements CarrierConnector {
         String soldToPhone = distinctImporter && StringUtils.hasText(intl.getImporterPhone())
                 ? intl.getImporterPhone()
                 : joinPhone(request.getRecipientPhoneCountryCode(), request.getRecipientPhone());
-        String soldToLine1 = distinctImporter ? intl.getImporterAddress1() : request.getRecipientAddressLine1();
-        String soldToLine2 = distinctImporter ? intl.getImporterAddress2() : request.getRecipientAddressLine2();
+        String soldToLine1 = distinctImporter ? intl.getImporterAddressLine1() : request.getRecipientAddressLine1();
+        String soldToLine2 = distinctImporter ? intl.getImporterAddressLine2() : request.getRecipientAddressLine2();
         String soldToCity = distinctImporter ? intl.getImporterCity() : request.getRecipientCity();
         String soldToState = distinctImporter ? intl.getImporterState() : request.getRecipientState();
         String soldToPostal = distinctImporter ? intl.getImporterPostcode() : request.getRecipientPostalCode();
