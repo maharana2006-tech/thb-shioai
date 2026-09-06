@@ -9,7 +9,10 @@ import {
   type ManualShipmentAddress,
   type ManualShipmentItem,
   type ManualShipmentPayload,
+  type SplitRequiredPayload,
+  type SplitStrategy,
 } from '../api/orderService'
+import { SplitShipmentModal } from './modals/SplitShipmentModal'
 import { accountRefService, type CarrierAccountRef } from '../api/accountRefService'
 import { clientService, type Client } from '../api/clientService'
 import { customsProfileService, type CustomsProfile } from '../api/customsProfileService'
@@ -495,6 +498,11 @@ export default function NewShipmentPage() {
   const [overrideEditorOpen, setOverrideEditorOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  // Commodity auto-split modal (2026-09-06). Populated when the manual-
+  // shipment submit returns 422 SPLIT_REQUIRED — the payload lists
+  // strategy options; on operator pick, we re-submit with splitStrategy.
+  const [splitPrompt, setSplitPrompt] = useState<SplitRequiredPayload | null>(null)
+  const [pendingSplitPayload, setPendingSplitPayload] = useState<ManualShipmentPayload | null>(null)
 
   const [sender, setSender] = useState<ManualShipmentAddress>(defaultSender())
   const [recipient, setRecipient] = useState<ManualShipmentAddress>(blankAddress())
@@ -2019,6 +2027,36 @@ export default function NewShipmentPage() {
     return Object.values(node as Record<string, unknown>).flatMap(flattenErrors)
   }
 
+  // Commodity auto-split — invoked when the operator picks a strategy
+  // in SplitShipmentModal. Re-submits the original payload with the
+  // chosen strategy set; backend runs the N-way split. Same success/
+  // failure handling as the initial submit (success = navigate to
+  // /label/{orderNo}; error = toast).
+  const resubmitWithSplit = async (strategy: SplitStrategy) => {
+    if (!pendingSplitPayload) return
+    const nextPayload: ManualShipmentPayload = { ...pendingSplitPayload, splitStrategy: strategy }
+    setSplitPrompt(null)
+    setPendingSplitPayload(null)
+    setSubmitting(true)
+    try {
+      const res = fixOrderNo
+        ? await orderService.regenerateOrder(fixOrderNo, nextPayload)
+        : await orderService.generateManualLabel(nextPayload)
+      const orderNo = res.data?.orderNo
+      notify.success(res.message || `Shipment split into ${res.data?.orderNo ? 'multiple' : 'N'} labels.`)
+      navigate(orderNo ? `/label/${orderNo}` : '/orders')
+    } catch (e) {
+      const raw = e instanceof ApiError
+        ? e.message
+        : e instanceof Error
+          ? e.message
+          : 'Failed to generate split labels.'
+      notify.error(raw)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const submit = async () => {
     // Yup + Formik gate — validate the mirrored form values before anything else.
     setSubmitAttempted(true)
@@ -2208,6 +2246,15 @@ export default function NewShipmentPage() {
       notify.success(res.message || 'Shipment label generated.')
       navigate(orderNo ? `/label/${orderNo}` : '/orders')
     } catch (e) {
+      // Commodity auto-split — 422 SPLIT_REQUIRED. Open the modal with
+      // the strategy options instead of showing an error toast. Operator
+      // picks; picker calls resubmit with the strategy populated.
+      if (e instanceof ApiError && e.errorCode === 'SPLIT_REQUIRED'
+          && e.payload?.data) {
+        setSplitPrompt(e.payload.data as SplitRequiredPayload)
+        setPendingSplitPayload(payload)
+        return
+      }
       const raw = e instanceof ApiError
         ? e.message
         : e instanceof Error
@@ -3624,6 +3671,17 @@ export default function NewShipmentPage() {
             />
           </div>
         </div>
+      ) : null}
+
+      {splitPrompt ? (
+        <SplitShipmentModal
+          payload={splitPrompt}
+          onPick={resubmitWithSplit}
+          onCancel={() => {
+            setSplitPrompt(null)
+            setPendingSplitPayload(null)
+          }}
+        />
       ) : null}
     </div>
   )
