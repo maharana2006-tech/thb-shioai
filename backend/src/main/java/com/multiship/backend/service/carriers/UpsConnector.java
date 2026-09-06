@@ -2039,7 +2039,20 @@ public class UpsConnector implements CarrierConnector {
         weight.put("Weight", p.getWeight() != null ? p.getWeight().toPlainString() : "0");
         pkg.put("PackageWeight", weight);
 
-        if (p.getLength() != null || p.getWidth() != null || p.getHeight() != null) {
+        // UPS 120605 fix — branded UPS packaging (Letter/Pak/Tube/Express
+        // Box variants/10KG/25KG Box/Pallet) has FIXED dimensions
+        // baked into the Packaging.Code enum. UPS Ship API rejects any
+        // Dimensions block sent with a branded code that doesn't exactly
+        // match the branded dims:
+        //   120605 Mismatch package dimensions with package type.
+        // Only "02" (Customer Supplied Package) accepts operator-supplied
+        // Dimensions. For every other code, omit the block and let UPS
+        // apply the branded packaging's canonical dims. Prevents a common
+        // operator confusion where they enter the box's outer dims on the
+        // shipment form but pick a branded preset — the dims would
+        // conflict with UPS's own catalog.
+        if ("02".equalsIgnoreCase(upsPackageCode)
+                && (p.getLength() != null || p.getWidth() != null || p.getHeight() != null)) {
             String dimUnitCode = "CM".equalsIgnoreCase(
                     firstNonBlank(p.getDimUnit(), request.getDimUnit())) ? "CM" : "IN";
             Map<String, Object> dims = new LinkedHashMap<>();
