@@ -173,15 +173,34 @@ public class LabelArtifactResolver {
      * facsimile".
      */
     private String sniffFormat(byte[] bytes) {
-        if (startsWith(bytes, MAGIC_ZPL)) return "ZPL";
-        if (startsWith(bytes, MAGIC_PDF)) return "PDF";
+        int start = skipLeadingWhitespace(bytes);
+        if (startsWithAt(bytes, MAGIC_ZPL, start)) return "ZPL";
+        if (startsWithAt(bytes, MAGIC_PDF, start)) return "PDF";
         return null;
     }
 
-    private boolean startsWith(byte[] haystack, byte[] needle) {
-        if (haystack == null || haystack.length < needle.length) return false;
+    /**
+     * UPS's GraphicImage base64 decodes to bytes that begin with a
+     * newline before {@code ^XA} (their formatter wraps output). PDFs
+     * from other carriers occasionally have leading whitespace too.
+     * Skip these so the magic-byte check finds the real start of the
+     * payload instead of returning null and forcing a facsimile
+     * fallback.
+     */
+    private int skipLeadingWhitespace(byte[] bytes) {
+        if (bytes == null) return 0;
+        int i = 0;
+        while (i < bytes.length && (bytes[i] == '\n' || bytes[i] == '\r'
+                || bytes[i] == ' ' || bytes[i] == '\t')) {
+            i++;
+        }
+        return i;
+    }
+
+    private boolean startsWithAt(byte[] haystack, byte[] needle, int offset) {
+        if (haystack == null || haystack.length - offset < needle.length) return false;
         for (int i = 0; i < needle.length; i++) {
-            if (haystack[i] != needle[i]) return false;
+            if (haystack[offset + i] != needle[i]) return false;
         }
         return true;
     }
