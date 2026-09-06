@@ -151,7 +151,7 @@ public class LabelArtifactResolver {
             }
         }
         // Raw ZPL (some carriers persist plaintext ^XA...^XZ).
-        if (startsWith(trimmed.getBytes(), MAGIC_ZPL)) {
+        if (startsWithAt(trimmed.getBytes(), MAGIC_ZPL, 0)) {
             return trimmed.getBytes();
         }
         // Base64 branch — try decode, fall back to raw text bytes if it
