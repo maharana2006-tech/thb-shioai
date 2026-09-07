@@ -70,7 +70,7 @@ class CommercialInvoiceServiceImplTest {
         trackingRepo = mock(OrderTrackingRepository.class);
         accountRefRepo = mock(CarrierAccountRefRepository.class);
         service = new CommercialInvoiceServiceImpl(
-                orderRepo, orderCustomsRepo, clientRepo, profileRepo, trackingRepo, accountRefRepo);
+                orderRepo, orderCustomsRepo, clientRepo, profileRepo, trackingRepo, accountRefRepo, null);
     }
 
     // ===== helpers =====

@@ -3216,7 +3216,14 @@ public class CarrierServiceImpl implements CarrierService {
         int totalQty = items.stream()
                 .mapToInt(it -> it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1).sum();
         java.math.RoundingMode HU = java.math.RoundingMode.HALF_UP;
-        BigDecimal pkgWeight = req.getWeight();
+        // Spread base is the WHOLE shipment: req.weight is box 1 on a
+        // multi-package request, so a 45 × 2 lb order apportioned 2 lb
+        // across every commodity and declared 88 lb short to customs.
+        BigDecimal pkgWeight = req.getPackages() != null && !req.getPackages().isEmpty()
+                ? req.getPackages().stream()
+                        .map(p -> p.getWeight() != null ? p.getWeight() : (req.getWeight() != null ? req.getWeight() : BigDecimal.ZERO))
+                        .reduce(BigDecimal.ZERO, BigDecimal::add)
+                : req.getWeight();
         boolean canSpreadWeight = pkgWeight != null && pkgWeight.signum() > 0 && totalQty > 0;
 
         java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> commodities = items.stream()

@@ -1336,7 +1336,7 @@ export default function NewShipmentPage() {
     const def = accts.find((a) => a.clientDefault) || accts[0]
     if (def) {
       const canonical = canon(def.carrierCode)
-      if (carrierOptions.includes(canonical)) {
+      if (carrierOptions.includes(canonical) || svcCarrierSet.has(canonical)) {
         setCarrier(canonical)
         setAccountNumber(def.accountNumber || '')
       } else {
@@ -1671,7 +1671,11 @@ export default function NewShipmentPage() {
           // PR #558 — per-item weight; auto-computed from pkg weight when
           // operator left blank (see autoItemWeight). Falls to null when
           // pkg weight is also blank so BE fallback fires.
-          weight: autoItemWeight(it) || null,
+          // Typed weights only. The auto-apportioned figure is shown as the
+        // placeholder for transparency but NOT posted: persisting it made an
+        // estimate look like a declared per-item weight (no "(est)" on the
+        // invoice). The backend spreads the shipment weight for the carrier.
+        weight: it.weight ? Number(it.weight) || null : null,
         }))
       const isCustom = packageChoice === CUSTOM_PKG
       const payload = {
@@ -1823,12 +1827,16 @@ export default function NewShipmentPage() {
   // the entire page render on first mount if used before declaration.
   const totalItemQty = items.reduce((sum, it) => sum + (Number(it.quantity) || 0), 0) || 1
   const pkgWeightNumeric = Number(weight) || 0
+  // Apportion base is the WHOLE shipment (box 1 + every extra box) — using
+  // box 1 alone spread 2 lb across the commodities of a 45 × 2 lb order.
+  const shipmentWeightNumeric =
+    pkgWeightNumeric + extraPackages.reduce((s, p) => s + (Number((p as { weight?: string | number }).weight) || 0), 0)
   const autoItemWeight = (it: ItemRow): number => {
     if (it.weight) return Number(it.weight) || 0
     const qty = Number(it.quantity) || 0
-    if (pkgWeightNumeric <= 0 || qty <= 0) return 0
+    if (shipmentWeightNumeric <= 0 || qty <= 0) return 0
     // 3-decimal precision matches BE fallback in buildManualIntlBlock.
-    return Math.round((pkgWeightNumeric * qty / totalItemQty) * 1000) / 1000
+    return Math.round((shipmentWeightNumeric * qty / totalItemQty) * 1000) / 1000
   }
 
   // Wizard payload = a snapshot of the current inline state in the shape
@@ -1844,7 +1852,11 @@ export default function NewShipmentPage() {
         quantity: Number(it.quantity) || 1,
         unitValue: Number(it.unitValue) || 0,
         // PR #558 — per-item weight; auto-fill from pkg weight when blank.
-        weight: autoItemWeight(it) || null,
+        // Typed weights only. The auto-apportioned figure is shown as the
+        // placeholder for transparency but NOT posted: persisting it made an
+        // estimate look like a declared per-item weight (no "(est)" on the
+        // invoice). The backend spreads the shipment weight for the carrier.
+        weight: it.weight ? Number(it.weight) || null : null,
         sku: it.sku.trim() || null,
       })),
     incoterms,
@@ -1892,7 +1904,13 @@ export default function NewShipmentPage() {
 
   const patchItem = (i: number, patch: Partial<ItemRow>) =>
     setItems((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
-  const addItem = () => setItems((rows) => [blankItem(), ...rows])
+  const addItem = () => {
+    setItems((rows) => [blankItem(), ...rows])
+    // New rows are prepended; the virtualised list only paints the rows in
+    // its window, so scroll to the top or the new row is invisible and the
+    // click looks ignored (the stress test read that as a 16-row cap).
+    requestAnimationFrame(() => document.querySelector('[data-items-scroll]')?.scrollTo({ top: 0 }))
+  }
   const removeItem = (i: number) => setItems((rows) => (rows.length > 1 ? rows.filter((_, idx) => idx !== i) : rows))
   const invoiceTotal = items.reduce((sum, it) => sum + (Number(it.quantity) || 0) * (Number(it.unitValue) || 0), 0)
 
@@ -2117,7 +2135,11 @@ export default function NewShipmentPage() {
         quantity: it.quantity ? Number(it.quantity) : null,
         unitValue: it.unitValue ? Number(it.unitValue) : null,
         // PR #558 — per-item weight; auto-computed from pkg weight when blank.
-        weight: autoItemWeight(it) || null,
+        // Typed weights only. The auto-apportioned figure is shown as the
+        // placeholder for transparency but NOT posted: persisting it made an
+        // estimate look like a declared per-item weight (no "(est)" on the
+        // invoice). The backend spreads the shipment weight for the carrier.
+        weight: it.weight ? Number(it.weight) || null : null,
         // Sprint 48 B11 — assign item to a specific physical package;
         // backend derives per-box declared value from sum of items
         // when at least one item is assigned.
@@ -3043,7 +3065,7 @@ export default function NewShipmentPage() {
                       <select className={inputCls}
                               value={clearanceOption}
                               onChange={(e) => setClearanceOption(e.target.value)}>
-                        <option value="">-- Carrier default --</option>
+                        <option value="">Follow incoterm (DDP → sender pays, DAP/DDU → recipient pays)</option>
                         {clearanceOptionsForCarrier(canon(carrier)).map((o) => (
                           <option key={o.value} value={o.value}>{o.label}</option>
                         ))}
@@ -3289,7 +3311,10 @@ export default function NewShipmentPage() {
                   className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
                 >
                   <FiPlus className="h-3 w-3" />
-                  {extraPackages.length === 0 ? 'Add another box (multi-package shipment)' : 'Add another box'}
+                  Add another box
+                  <span className="ml-1 rounded-full bg-[#f4eede] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[#5a4526]" title="Boxes on this shipment">
+                    {1 + extraPackages.length}
+                  </span>
                 </button>
               </div>
               </SectionCard>
@@ -3439,6 +3464,9 @@ export default function NewShipmentPage() {
                       className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#cdbf9f] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
                     >
                       <FiPlus className="h-3.5 w-3.5" /> Add item
+                      <span className="ml-1 rounded-full bg-[#f4eede] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[#5a4526]" title="Commodity lines on this shipment">
+                        {items.length}
+                      </span>
                     </button>
                   </div>
                 }
@@ -3856,6 +3884,7 @@ export function VirtualizedNewShipmentItems({
   return (
     <div
       ref={parentRef}
+      data-items-scroll=""
       style={{ height: '60vh', overflowY: 'auto', contain: 'strict' }}
       className="rounded-xl border border-slate-200 bg-white"
     >

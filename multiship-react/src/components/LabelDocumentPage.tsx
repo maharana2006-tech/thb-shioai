@@ -237,7 +237,7 @@ export default function LabelDocumentPage() {
       // of the multi-package picker selection.
       return await orderService.getLabelZpl(orderNo, pkgIndex)
     } catch (err) {
-      notify.apiError(err, 'Failed to fetch the ZPL label.')
+      notify.apiError(err, `Couldn't fetch the ZPL${pkgCount > 1 ? ` for all ${pkgCount} packages` : ''} — retry, or use Copy ZPL / a single package from the picker.`)
       return null
     } finally {
       zplInFlightRef.current = false
@@ -289,7 +289,7 @@ export default function LabelDocumentPage() {
       URL.revokeObjectURL(url)
       notify.success(`${link.download} downloaded.`)
     } catch (err) {
-      notify.apiError(err, 'Failed to fetch the label PDF.')
+      notify.apiError(err, `Couldn't build the label PDF${pkgCount > 1 ? ` for all ${pkgCount} packages` : ''} — retry, or download a single package from the package picker.`)
     } finally {
       pdfInFlightRef.current = false
       setPdfBusy(false)
@@ -458,6 +458,15 @@ export default function LabelDocumentPage() {
 
   // Commercial-invoice lines: prefer the per-order customs items entered against
   // the order (manual/international shipments); fall back to the ERP order lines.
+  // Shipment gross = every package. order.weight is the PER-BOX weight on
+  // multi-package orders, which made the on-screen invoice apportion (and
+  // total) from one box while the label said 90 lb.
+  const shipmentGrossWeight = (() => {
+    const pkgs = order?.packages ?? []
+    const pieceSum = pkgs.reduce((s, p) => s + (p.weight ?? 0), 0)
+    if (pieceSum > 0) return pieceSum
+    return (order?.weight ?? 0) * Math.max(1, order?.packageCount ?? 1)
+  })()
   const customsItems = payload?.customs?.items ?? []
   // Total shipped units — used to distribute the parcel weight across lines
   // when the commodities carry no explicit per-item weight of their own.
@@ -475,8 +484,8 @@ export default function LabelDocumentPage() {
           const netWeight =
             it.weight != null
               ? it.weight * qty
-              : order?.weight != null && totalItemQty > 0
-                ? (order.weight * qty) / totalItemQty
+              : shipmentGrossWeight > 0 && totalItemQty > 0
+                ? (shipmentGrossWeight * qty) / totalItemQty
                 : null
           // The quantity split is an ESTIMATE (it apportions the parcel's
           // gross weight — packaging included — by unit count, so 12 steel
@@ -632,7 +641,7 @@ export default function LabelDocumentPage() {
   // Gross shipment weight sums each line's net (single weight per line);
   // falls back to the order's own weight when no per-item weights were entered.
   const lineWeightSum = lines.reduce((sum, line) => sum + ((line as { netWeight?: number | null }).netWeight ?? 0), 0)
-  const totalShipmentWeight = lineWeightSum > 0 ? lineWeightSum : (order?.weight ?? 0)
+  const totalShipmentWeight = shipmentGrossWeight > 0 ? shipmentGrossWeight : lineWeightSum
   const invoiceRef = `${accountNumber ? `${accountNumber}` : 'AC'}-${trackingNumber || orderDisplay}`
 
   // ---- carrier-form codes, derived deterministically like the real label carries ----

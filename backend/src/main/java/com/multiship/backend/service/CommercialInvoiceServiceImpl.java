@@ -55,13 +55,16 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     private final ClientCustomsProfileRepository customsProfileRepository;
     private final OrderTrackingRepository orderTrackingRepository;
     private final CarrierAccountRefRepository accountRefRepository;
+    private final com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
 
     public CommercialInvoiceServiceImpl(OrderRepository orderRepository,
                                         OrderCustomsRepository orderCustomsRepository,
                                         ClientRepository clientRepository,
                                         ClientCustomsProfileRepository customsProfileRepository,
                                         OrderTrackingRepository orderTrackingRepository,
-                                        CarrierAccountRefRepository accountRefRepository) {
+                                        CarrierAccountRefRepository accountRefRepository,
+                                        com.multiship.backend.repository.LabelPackageRepository labelPackageRepository) {
+        this.labelPackageRepository = labelPackageRepository;
         this.orderRepository = orderRepository;
         this.orderCustomsRepository = orderCustomsRepository;
         this.clientRepository = clientRepository;
@@ -180,6 +183,19 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         return new Party("IMPORTER OF RECORD (CONSIGNEE)", shipToLines(order));
     }
 
+    private BigDecimal shipmentGrossWeight(Order order) {
+        if (labelPackageRepository != null && order.getOrderNo() != null) {
+            BigDecimal sum = labelPackageRepository.findByOrderNoOrderBySequenceNumberAsc(order.getOrderNo()).stream()
+                    .map(p -> p.getWeight()).filter(java.util.Objects::nonNull)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (sum.signum() > 0) return sum;
+        }
+        // No piece rows (single box, or a legacy/un-generated order): the
+        // order weight is the shipment weight. Multiplying by packageCount
+        // here would be a guess — piece rows are the source of truth.
+        return order.getWeight();
+    }
+
     private static List<String> shipToLines(Order order) {
         // Consignee = person AND company: on a B2B entry the company is the
         // party customs clears to, and this PDF is what prints with the
@@ -200,7 +216,27 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         return lines;
     }
 
-    private static List<String> exporterLines(Client client) {
+    /**
+     * The exporter is where THIS parcel shipped from — the ship-from
+     * persisted on the order (operator's sender / client warehouse), which
+     * is what the label prints. The client's registered address is only the
+     * fallback: reading it first declared a Santa Monica export origin on
+     * the customs document for a parcel labelled from Austin.
+     */
+    private static List<String> exporterLines(Order order, Client client) {
+        if (order != null && hasText(order.getShipFromAddr1())) {
+            List<String> lines = new java.util.ArrayList<>(5);
+            lines.add(firstNonBlank(order.getShipFromName(), order.getShipFromCompany(),
+                    client == null ? "" : client.getName(), ""));
+            if (hasText(order.getShipFromCompany())
+                    && !order.getShipFromCompany().trim().equalsIgnoreCase(firstNonBlank(order.getShipFromName(), "").trim())) {
+                lines.add(order.getShipFromCompany().trim());
+            }
+            lines.add(order.getShipFromAddr1().trim());
+            lines.add(joinCityStateZip(order.getShipFromCity(), order.getShipFromState(), order.getShipFromZip()));
+            lines.add(safe(order.getShipFromCountryCd()));
+            return lines;
+        }
         if (client == null || client.getShipFrom() == null) {
             return List.of("—");
         }
@@ -342,9 +378,14 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                         StringBuilder summary = new StringBuilder();
                         summary.append("Packages: ").append(pkgs)
                                 .append("    Total quantity: ").append(totalQty);
-                        if (order.getWeight() != null) {
+                        // Gross = the whole shipment. Order.weight is the PER-BOX
+                        // weight on multi-package orders (a 45 × 2 lb shipment
+                        // printed "Gross weight: 2 LB"); sum the persisted pieces,
+                        // falling back to per-box × count, then the single weight.
+                        BigDecimal gross = shipmentGrossWeight(order);
+                        if (gross != null) {
                             summary.append("    Gross weight: ")
-                                    .append(order.getWeight().stripTrailingZeros().toPlainString())
+                                    .append(gross.stripTrailingZeros().toPlainString())
                                     .append(' ').append(weightUnit);
                         }
                         float sumY = y - 16f;
@@ -442,7 +483,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         y -= 26f;
         float leftCol = margin;
         float rightCol = pageWidth / 2f + 20f;
-        float leftY = drawParty(cs, "EXPORTER / SHIP FROM", exporterLines(client), leftCol, y);
+        float leftY = drawParty(cs, "EXPORTER / SHIP FROM", exporterLines(order, client), leftCol, y);
         float rightY = drawParty(cs, importer.title(), importer.lines(), rightCol, y);
         float consY = drawParty(cs, "CONSIGNEE / SHIP TO", shipToLines(order), leftCol, leftY - 8f);
         return Math.min(consY, rightY) - 12f;
