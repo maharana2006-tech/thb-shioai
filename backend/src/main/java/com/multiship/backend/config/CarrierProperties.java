@@ -196,6 +196,51 @@ public class CarrierProperties {
 
         @NotBlank
         private String labelResponseOption;
+
+        /**
+         * Auctane Stamps.com / Endicia has TWO wire APIs:
+         * <ul>
+         *   <li>{@code SWSIM} — legacy SOAP API at
+         *       {@code https://swsim.stamps.com/swsim/swsimv135.asmx}.
+         *       Auth is {@code AuthenticateUser} with a GUID
+         *       {@code IntegrationID}. All shipping / tracking / rating goes
+         *       through SOAP envelopes. This is what the connector historically
+         *       targeted and what legacy accounts still use.</li>
+         *   <li>{@code SERA} — the newer OAuth-2.0 REST API at
+         *       {@code https://api.stampsendicia.com/sera/v1} (auth host
+         *       {@code signin.stampsendicia.com}). Uses standard OAuth 2.0
+         *       tokens; the {@code client_id} is an opaque string, NOT a GUID.
+         *       Enable per-account by flipping this flag; the SWSIM path stays
+         *       untouched for accounts that haven't migrated.</li>
+         * </ul>
+         * Defaults to {@code SWSIM} so existing accounts keep working; a
+         * property override to {@code SERA} switches the auth wire.
+         */
+        @NotBlank
+        private String apiFlavor = "SWSIM";
+
+        /**
+         * SERA OAuth 2.0 token endpoint (production). Called with a
+         * {@code client_credentials} grant during "Verify credentials" when
+         * {@link #apiFlavor} is {@code SERA}. Ignored on SWSIM.
+         */
+        private String seraAuthUrl;
+
+        /**
+         * SERA OAuth 2.0 token endpoint (sandbox — {@code signin.testing.stampsendicia.com}).
+         * Selected when the caller's environment is SANDBOX so testing
+         * credentials never hit the production auth host.
+         */
+        private String seraSandboxAuthUrl;
+
+        /**
+         * SERA REST API base (production). Used for label / balance / manifest
+         * calls when {@link #apiFlavor} is {@code SERA}.
+         */
+        private String seraApiBaseUrl;
+
+        /** SERA REST API base (sandbox). */
+        private String seraSandboxApiBaseUrl;
     }
 
     @Getter
