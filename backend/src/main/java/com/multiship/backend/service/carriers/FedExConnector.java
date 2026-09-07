@@ -322,6 +322,7 @@ public class FedExConnector implements CarrierConnector {
 
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        normalizeUsTerritories(request);
         // F7 fix — recipient country is required. Pre-fix, blank silently
         // defaulted to "US" downstream in buildShipmentPayload (line ~955)
         // which shipped international parcels as US domestic. Fail at
@@ -412,6 +413,7 @@ public class FedExConnector implements CarrierConnector {
     public ValidateShipmentResult validateShipment(ShipmentRequestDTO request,
                                                     String accessToken,
                                                     String environment) {
+        normalizeUsTerritories(request);
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new ValidateShipmentResult(false, "NOT_SUPPORTED", "SHIPMENT",
                     java.util.List.of(), java.util.List.of(),
@@ -2699,6 +2701,32 @@ public class FedExConnector implements CarrierConnector {
                 yield "SOLD";
             }
         };
+    }
+
+    /**
+     * US-territory normalization (2026-09-07). FedEx treats PR/VI/GU/AS/
+     * MP/UM as separate countries for shipping, not US states. When the
+     * operator's address has {@code country=US} with {@code state=PR},
+     * mutate the request DTO in place so all downstream wire emits see
+     * the territory as the {@code countryCode}. Clears the state field
+     * (territory codes double as ISO country codes so a state slot
+     * would be redundant and, for FedEx, malformed). Preserves the
+     * operator's saved address row unchanged — we only touch the
+     * carrier-bound DTO.
+     */
+    private static void normalizeUsTerritories(ShipmentRequestDTO request) {
+        String rc = com.multiship.backend.util.UsTerritoryNormalizer.normalizeCountryCode(
+                request.getRecipientCountryCode(), request.getRecipientState());
+        if (!java.util.Objects.equals(rc, request.getRecipientCountryCode())) {
+            request.setRecipientCountryCode(rc);
+            request.setRecipientState("");
+        }
+        String sc = com.multiship.backend.util.UsTerritoryNormalizer.normalizeCountryCode(
+                request.getShipperCountryCode(), request.getShipperState());
+        if (!java.util.Objects.equals(sc, request.getShipperCountryCode())) {
+            request.setShipperCountryCode(sc);
+            request.setShipperState("");
+        }
     }
 
     private static String firstNonBlank(String... candidates) {
