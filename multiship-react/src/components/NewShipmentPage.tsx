@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
-import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch, FiX } from 'react-icons/fi'
+import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch, FiX, FiCopy, FiClipboard } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import {
   orderService,
@@ -36,6 +36,7 @@ import CustomFieldsSection from './shared/CustomFieldsSection'
 import { customFieldService } from '../api/customFieldService'
 import CustomsWizard from './shipment/CustomsWizard'
 import HsCodeCombobox from './shipment/HsCodeCombobox'
+import PasteItemsModal, { type PastedItem } from './modals/PasteItemsModal'
 import RatePickerModal from './shipment/RatePickerModal'
 import type { RateOption, RateShopRequest } from '../api/rateShopService'
 import DangerousGoodsWizard from './shipment/DangerousGoodsWizard'
@@ -142,7 +143,7 @@ const inputCls =
 function Field({ label, required, hint, error, title, children, className = '' }: { label: string; required?: boolean; hint?: string; error?: string | false | null; title?: string; children: ReactNode; className?: string }) {
   return (
     <label className={`block space-y-1 ${className}`} title={title}>
-      <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
+      <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
         {label}
         {required ? <span className="text-rose-500"> *</span> : null}
       </span>
@@ -163,7 +164,7 @@ function SectionCard({ icon, title, badge, note, className = '', wrapHeader = fa
       <div className={`flex min-h-[38px] items-center justify-between gap-2 border-b border-dashed border-[#e3d9c4] pb-2 ${wrapHeader ? 'flex-wrap' : ''}`}>
         <div className="flex items-center gap-2">
           <span className="text-[#8a7959]">{icon}</span>
-          <h3 className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#8a7959]">{title}</h3>
+          <h3 className="font-mono text-[11px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">{title}</h3>
         </div>
         {badge}
       </div>
@@ -214,6 +215,14 @@ function CountrySelect({ value, onChange }: { value: string; onChange: (code: st
                   type="button"
                   onMouseDown={(e) => {
                     e.preventDefault()
+                    onChange(code)
+                    setOpen(false)
+                    setQuery('')
+                  }}
+                  // Also commit on click: a pointer that lands after the
+                  // 120 ms blur-close missed mousedown and the field snapped
+                  // back to the previous country with no feedback.
+                  onClick={() => {
                     onChange(code)
                     setOpen(false)
                     setQuery('')
@@ -586,6 +595,19 @@ export default function NewShipmentPage() {
     packageType: '', declaredValue: '',
   })
   const [extraPackages, setExtraPackages] = useState<ExtraPackage[]>([])
+  // Bulk-entry contracts for multi-package orders (a 45-box shipment is a
+  // normal day, not an edge case): duplicate a box, add N like the last,
+  // apply box 1 everywhere, and collapse filled boxes to one-line summaries.
+  const [expandedBoxes, setExpandedBoxes] = useState<Set<number>>(new Set())
+  const [bulkAddCount, setBulkAddCount] = useState('5')
+  const toggleBox = (idx: number) =>
+    setExpandedBoxes((cur) => { const n = new Set(cur); if (n.has(idx)) n.delete(idx); else n.add(idx); return n })
+  const duplicateBox = (idx: number) =>
+    setExtraPackages((cur) => { const next = [...cur]; next.splice(idx + 1, 0, { ...cur[idx] }); return next })
+  const removeBox = (idx: number) => {
+    setExtraPackages((cur) => cur.filter((_, i) => i !== idx))
+    setExpandedBoxes(new Set())
+  }
 
   // Sprint 43 — custom field values keyed by fieldKey.
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({})
@@ -1904,6 +1926,15 @@ export default function NewShipmentPage() {
 
   const patchItem = (i: number, patch: Partial<ItemRow>) =>
     setItems((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
+  const [pasteOpen, setPasteOpen] = useState(false)
+  const importPastedItems = (rows: PastedItem[]) => {
+    setItems((cur) => {
+      const kept = cur.filter((r) => r.description.trim() || r.hsCode.trim())
+      return [...rows.map((r) => ({ ...blankItem(), ...r })), ...kept]
+    })
+    notify.success(`${rows.length} commodity line${rows.length === 1 ? '' : 's'} added.`)
+    requestAnimationFrame(() => document.querySelector('[data-items-scroll]')?.scrollTo({ top: 0 }))
+  }
   const addItem = () => {
     setItems((rows) => [blankItem(), ...rows])
     // New rows are prepended; the virtualised list only paints the rows in
@@ -3236,22 +3267,46 @@ export default function NewShipmentPage() {
                 ) : null}
 
                 {/* Sprint 29 — additional boxes. First box uses the fields
-                    above; extra rows collect per-box weight + dims. */}
-                {extraPackages.map((p, idx) => (
+                    above; extra rows collect per-box weight + dims. A filled
+                    box collapses to a one-line summary (click to edit). */}
+                {extraPackages.map((p, idx) => {
+                  const filled = !!(p.weight && p.length && p.width && p.height)
+                  const expanded = expandedBoxes.has(idx) || !filled
+                  const summary = `${p.weight || '—'} ${weightUnit.toLowerCase()} · ${p.length || '—'}×${p.width || '—'}×${p.height || '—'} ${dimUnit.toLowerCase()}`
+                  return (
                   <div key={idx} className="rounded-xl border border-dashed border-[#e3d9c4] bg-[#faf7f0]/60 p-3">
-                    <div className="mb-2 flex items-center justify-between">
-                      <p className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
-                        Box {idx + 2}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setExtraPackages((cur) => cur.filter((_, i) => i !== idx))}
-                        aria-label={`Remove box ${idx + 2}`}
-                        className="inline-flex h-6 w-6 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#8a7959] hover:bg-rose-50 hover:text-rose-600"
-                      >
-                        <FiTrash2 className="h-3 w-3" />
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <button type="button" onClick={() => toggleBox(idx)} aria-expanded={expanded} className="flex min-w-0 items-center gap-2 text-left">
+                        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
+                          Box {idx + 2}
+                        </p>
+                        {!expanded ? <span className="truncate text-[11.5px] text-[#5a4526]">{summary}</span> : null}
                       </button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => duplicateBox(idx)}
+                          title="Add a box with the same weight and dimensions"
+                          className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                        >
+                          <FiCopy className="h-3.5 w-3.5" /> Duplicate
+                        </button>
+                        {filled ? (
+                          <button type="button" onClick={() => toggleBox(idx)} className="inline-flex h-9 items-center rounded-lg border border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]">
+                            {expanded ? 'Collapse' : 'Edit'}
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => removeBox(idx)}
+                          aria-label={`Remove box ${idx + 2}`}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] hover:bg-rose-50 hover:text-rose-600"
+                        >
+                          <FiTrash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </div>
+                    {expanded ? (<>
                     <div className="grid grid-cols-2 gap-2">
                       <Field label={`Weight (${weightUnit.toLowerCase()})`} required>
                         <input
@@ -3303,19 +3358,56 @@ export default function NewShipmentPage() {
                         />
                       </Field>
                     </div>
+                    </>) : null}
                   </div>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => setExtraPackages((cur) => [...cur, blankExtraPackage()])}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
-                >
-                  <FiPlus className="h-3 w-3" />
-                  Add another box
-                  <span className="ml-1 rounded-full bg-[#f4eede] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[#5a4526]" title="Boxes on this shipment">
-                    {1 + extraPackages.length}
+                  )
+                })}
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setExtraPackages((cur) => [...cur, blankExtraPackage()])}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                  >
+                    <FiPlus className="h-3 w-3" />
+                    Add another box
+                    <span className="ml-1 rounded-full bg-[#f4eede] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[#5a4526]" title="Boxes on this shipment">
+                      {1 + extraPackages.length}
+                    </span>
+                  </button>
+                  <span className="inline-flex h-9 items-center gap-1 rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2 text-[11px] font-semibold text-[#5a4526]">
+                    Add
+                    <input
+                      type="number" min="1" max="200"
+                      value={bulkAddCount}
+                      onChange={(e) => setBulkAddCount(e.target.value)}
+                      aria-label="Number of boxes to add"
+                      className="w-12 rounded border border-[#e3d9c4] px-1 py-0.5 text-center text-[11px] tabular-nums"
+                    />
+                    <button
+                      type="button"
+                      title="Adds boxes copying the last box's weight and dimensions (box 1's when there is no extra box yet)"
+                      onClick={() => {
+                        const n = Math.max(1, Math.min(200, Number(bulkAddCount) || 1))
+                        const last = extraPackages[extraPackages.length - 1]
+                        const t: ExtraPackage = last && last.weight ? { ...last } : { ...blankExtraPackage(), weight, length, width, height }
+                        setExtraPackages((cur) => [...cur, ...Array.from({ length: n }, () => ({ ...t }))])
+                      }}
+                      className="rounded px-1 hover:bg-[#faf7f0]"
+                    >
+                      boxes like the last
+                    </button>
                   </span>
-                </button>
+                  {extraPackages.length > 0 ? (
+                    <button
+                      type="button"
+                      title="Copy box 1's weight and dimensions onto every extra box"
+                      onClick={() => setExtraPackages((cur) => cur.map((p) => ({ ...p, weight, length, width, height })))}
+                      className="inline-flex h-9 items-center rounded-lg border border-dashed border-[#e3d9c4] bg-white px-2.5 text-[11px] font-semibold text-[#5a4526] hover:bg-[#faf7f0]"
+                    >
+                      Apply box 1 to all
+                    </button>
+                  ) : null}
+                </div>
               </div>
               </SectionCard>
             </div>
@@ -3359,7 +3451,7 @@ export default function NewShipmentPage() {
                 {activeParties && vImp && vBrk ? (
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="rounded-xl border border-[#e3d9c4] bg-[#faf7f0]/60 p-3">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">Importer of record</p>
+                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">Importer of record</p>
                       <p className="mt-1 text-[13.5px] font-semibold text-[#1f150c]">{vImp.name || '—'}</p>
                       {joinParts([vImp.addressLine1, vImp.addressLine2]) ? (
                         <p className="text-[12px] text-[#5a4526]">{joinParts([vImp.addressLine1, vImp.addressLine2])}</p>
@@ -3396,7 +3488,7 @@ export default function NewShipmentPage() {
                       </span>
                     </div>
                     <div className="rounded-xl border border-[#e3d9c4] bg-[#faf7f0]/60 p-3">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">Customs broker</p>
+                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">Customs broker</p>
                       {vBrk.name || vBrk.company ? (
                         <>
                           <p className="mt-1 text-[13.5px] font-semibold text-[#1f150c]">{vBrk.name || vBrk.company}</p>
@@ -3439,6 +3531,15 @@ export default function NewShipmentPage() {
                     <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-amber-700">
                       Cross-border · required
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => setPasteOpen(true)}
+                      title="Paste rows copied from Excel / Sheets"
+                      className="inline-flex items-center gap-1 rounded-lg border border-[#412d15] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#412d15] transition hover:bg-[#faf7f0] shadow-sm"
+                    >
+                      <FiClipboard className="h-3.5 w-3.5" /> Paste from spreadsheet
+                    </button>
+                    {pasteOpen ? <PasteItemsModal onImport={importPastedItems} onClose={() => setPasteOpen(false)} /> : null}
                     <button
                       type="button"
                       onClick={() => setWizardOpen(true)}
@@ -3492,7 +3593,7 @@ export default function NewShipmentPage() {
                       Total packages available = primary box + extraPackages. */}
                   <div className="hidden min-w-[900px] grid-cols-[minmax(0,2fr)_1fr_0.9fr_0.55fr_0.55fr_1fr_0.7fr_1fr_0.6fr_44px] gap-2 sm:grid">
                     {['Description *', 'SKU', 'HS code', 'Origin', 'Qty', `Unit value (${currency}) *`, `Wt (${weightUnit.toLowerCase()})`, `Amount (${currency})`, 'Pkg #'].map((h) => (
-                      <span key={h} className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">{h}</span>
+                      <span key={h} className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">{h}</span>
                     ))}
                     <span />
                   </div>
@@ -3513,7 +3614,7 @@ export default function NewShipmentPage() {
 
                   {/* invoice total */}
                   <div className="flex min-w-[760px] items-center justify-end gap-3 border-t border-dashed border-[#e3d9c4] px-0.5 pt-2">
-                    <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">Total amount</span>
+                    <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">Total amount</span>
                     <span className="font-mono text-[14px] font-semibold tabular-nums text-[#1f150c]">
                       {invoiceTotal.toFixed(2)} {currency}
                     </span>
@@ -4011,7 +4112,7 @@ const NewShipmentItemsRow = memo(function NewShipmentItemsRow({
             type="button"
             onClick={remove}
             disabled={!canRemove}
-            className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#b6a684] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40"
             aria-label={`Remove item ${index + 1}`}
           >
             <FiTrash2 className="h-3.5 w-3.5" />
