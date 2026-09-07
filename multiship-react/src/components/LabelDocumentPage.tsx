@@ -298,15 +298,16 @@ export default function LabelDocumentPage() {
    * to the old page print so the operator is never left without a label.
    */
   const printLabel = async () => {
-    if (activeTab !== 'label') {
-      window.print()
-      return
-    }
     if (printInFlightRef.current) return
     printInFlightRef.current = true
     setPrintBusy(true)
     try {
-      const blob = await orderService.getLabelPdf(orderNo, undefined)
+      // Same treatment for the invoice tab: print the backend's commercial-
+      // invoice PDF (the document that travels with the parcel), not the
+      // on-screen HTML rendering of it.
+      const blob = activeTab === 'label'
+        ? await orderService.getLabelPdf(orderNo, undefined)
+        : await orderService.getCommercialInvoicePdf(orderNo)
       const url = URL.createObjectURL(blob)
       const frame = document.createElement('iframe')
       frame.setAttribute('aria-hidden', 'true')
@@ -326,7 +327,7 @@ export default function LabelDocumentPage() {
       }
       document.body.appendChild(frame)
     } catch (err) {
-      notify.apiError(err, 'Could not fetch the printable label — printing the on-screen preview instead.')
+      notify.apiError(err, `Could not fetch the printable ${activeTab === 'label' ? 'label' : 'invoice'} — printing the on-screen preview instead.`)
       window.print()
     } finally {
       printInFlightRef.current = false
@@ -819,7 +820,7 @@ export default function LabelDocumentPage() {
             disabled={loading || Boolean(error) || tenantBlocked || printBusy}
             title={activeTab === 'label'
               ? 'Prints the carrier label — the stored carrier artifact, or the ZPL rendered exactly as a Zebra would print it'
-              : undefined}
+              : 'Prints the commercial-invoice PDF that ships with the parcel'}
             className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3.5 py-1.5 text-[13px] font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             <FiPrinter className="h-3.5 w-3.5" />

@@ -867,6 +867,24 @@ export const orderService = {
   },
 
   /**
+   * The platform's commercial-invoice PDF (backend PDFBox render from the
+   * persisted customs data) — the document that ships with an international
+   * parcel. 422 means the order has no customs data (domestic).
+   */
+  getCommercialInvoicePdf: async (orderNo: number): Promise<Blob> => {
+    const response = await fetch(`${BASE_URL}/orders/${orderNo}/commercial-invoice`, {
+      credentials: 'include',
+    })
+    if (response.status === 422) {
+      throw new Error('This order has no customs data — there is no commercial invoice to print.')
+    }
+    if (!response.ok) {
+      throw new Error(`Commercial invoice PDF is unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`)
+    }
+    return response.blob()
+  },
+
+  /**
    * PR #538 — probe for the carrier-ZPL PNG preview endpoint. Returns
    * true iff the backend has label.render-carrier-zpl=true AND the
    * carrier stored parseable ZPL bytes for the order. 404 (flag off /

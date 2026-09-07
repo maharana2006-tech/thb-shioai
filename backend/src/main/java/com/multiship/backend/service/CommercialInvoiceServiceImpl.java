@@ -181,11 +181,23 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     }
 
     private static List<String> shipToLines(Order order) {
-        return List.of(
-                firstNonBlank(order.getShipName(), order.getShipAttn(), ""),
-                safe(order.getShipAddr1()),
-                joinCityStateZip(order.getShiptoCity(), order.getShiptoState(), order.getShiptoZip()),
-                firstNonBlank(order.getCountryName(), order.getShiptoCountryCd(), ""));
+        // Consignee = person AND company: on a B2B entry the company is the
+        // party customs clears to, and this PDF is what prints with the
+        // parcel now. It used to emit the name only (dropping "Kalpana
+        // Textiles Pvt Ltd" while the on-screen invoice showed it) and no
+        // address line 2.
+        String name = firstNonBlank(order.getShipName(), order.getShipAttn(), "");
+        String company = hasText(order.getShipAttn()) && !order.getShipAttn().trim().equalsIgnoreCase(name.trim())
+                ? order.getShipAttn().trim()
+                : null;
+        List<String> lines = new java.util.ArrayList<>(6);
+        lines.add(name);
+        if (company != null) lines.add(company);
+        lines.add(safe(order.getShipAddr1()));
+        if (hasText(order.getLocation())) lines.add(order.getLocation().trim());
+        lines.add(joinCityStateZip(order.getShiptoCity(), order.getShiptoState(), order.getShiptoZip()));
+        lines.add(firstNonBlank(order.getCountryName(), order.getShiptoCountryCd(), ""));
+        return lines;
     }
 
     private static List<String> exporterLines(Client client) {
