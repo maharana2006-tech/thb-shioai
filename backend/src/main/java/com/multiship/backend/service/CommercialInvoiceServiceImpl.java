@@ -207,86 +207,159 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         try (PDDocument doc = new PDDocument();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
-            PDPage page = new PDPage(PDRectangle.LETTER);
-            doc.addPage(page);
-            float pageWidth = PDRectangle.LETTER.getWidth();
-            float pageHeight = PDRectangle.LETTER.getHeight();
+            // Resolve paper size — client override (A4 default) per user
+            // direction 2026-09-07. Anonymous / MANUAL orders and invalid
+            // values fall to A4 to match the ISO standard used everywhere
+            // except US/CA/MX.
+            PDRectangle pageSize = resolvePageSize(client);
+            float pageWidth = pageSize.getWidth();
+            float pageHeight = pageSize.getHeight();
             float margin = 40f;
 
             String currency = firstNonBlank(customs.getCurrency(), "USD");
+            List<OrderCustomsItem> items = customs.getItems() == null
+                    ? List.of() : customs.getItems();
 
-            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
-                float y = pageHeight - margin;
+            // Row 1 of page 1 has less vertical space than a continuation
+            // page because we render the full-header (parties + meta). Row
+            // budgets are computed dynamically inside the loop — we start
+            // page 1, draw the full header, then feed items until the row
+            // cursor drops below `bottomReservedY`, at which point we close
+            // the page and open a new one with the compact header.
+            //
+            // "Bottom reserved" preserves room for:
+            //   - subtotal row  (~16f)
+            //   - shipment summary + declaration + signature on the LAST
+            //     page (~90f)
+            //   - Page N of M footer (~24f)
+            // Continuation pages only need footer + subtotal (~40f) so
+            // they fit more rows.
+            float footerReserve = 24f;
+            float lastPageReserve = 90f;
+            float subtotalReserve = 16f;
+            float rowH = 13f;
 
-                // Header
-                cs.setNonStrokingColor(PRIMARY);
-                drawText(cs, HELVETICA_BOLD, 20f, "COMMERCIAL INVOICE",
-                        pageWidth - margin - textWidth(HELVETICA_BOLD, 20f, "COMMERCIAL INVOICE"), y - 20f);
-                cs.setNonStrokingColor(Color.BLACK);
-                if (client != null) {
-                    drawText(cs, HELVETICA_BOLD, 12f, safe(client.getName()), margin, y - 12f);
+            // Two-pass render: pass 1 counts pages by simulating row
+            // placement, pass 2 emits actual pages with the known total
+            // page count for "Page N of M" footers.
+            int simPage = 1;
+            int simRowIdx = 0;
+            java.util.List<int[]> pageRanges = new java.util.ArrayList<>();
+            int rangeStart = 0;
+            float simY = pageHeight - margin - firstPageHeaderHeight();
+            while (simRowIdx < items.size()) {
+                float bottomReserve = (simRowIdx == items.size() - 1)
+                        ? lastPageReserve + subtotalReserve + footerReserve
+                        : subtotalReserve + footerReserve + rowH;
+                if (simY - rowH < margin + bottomReserve) {
+                    pageRanges.add(new int[]{rangeStart, simRowIdx});
+                    rangeStart = simRowIdx;
+                    simPage++;
+                    simY = pageHeight - margin - continuationHeaderHeight();
+                    continue;
                 }
-                y -= 40f;
-                rule(cs, margin, pageWidth - margin, y, PRIMARY, 1.2f);
+                simY -= rowH;
+                simRowIdx++;
+            }
+            pageRanges.add(new int[]{rangeStart, items.size()});
+            int totalPages = pageRanges.size();
 
-                // Invoice meta (key header fields over two lines)
-                y -= 18f;
-                String meta = "Invoice No: " + order.getOrderNo()
-                        + "    Date: " + (order.getCreatedDate() == null ? "-" : DATE_FMT.format(order.getCreatedDate()))
-                        + "    Incoterms: " + firstNonBlank(incoterms, "DAP")
-                        + "    Currency: " + currency
-                        + "    Reason: " + firstNonBlank(customs.getReasonForExport(), "SALE");
-                drawText(cs, HELVETICA, 9.5f, meta, margin, y);
-                y -= 12f;
-                String meta2 = "Carrier: " + firstNonBlank(carrier, "-")
-                        + "    Tracking: " + firstNonBlank(tracking, "-")
-                        + "    " + dutyTerms(incoterms);
-                drawText(cs, HELVETICA, 9.5f, meta2, margin, y);
+            // Pass 2 — actually emit each page.
+            BigDecimal runningTotal = BigDecimal.ZERO;
+            for (int p = 0; p < totalPages; p++) {
+                boolean firstPage = (p == 0);
+                boolean lastPage = (p == totalPages - 1);
+                int startIdx = pageRanges.get(p)[0];
+                int endIdx = pageRanges.get(p)[1];
 
-                // Three party blocks: exporter (left) + importer (right), consignee (left, lower)
-                y -= 26f;
-                float leftCol = margin;
-                float rightCol = pageWidth / 2f + 20f;
+                PDPage page = new PDPage(pageSize);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    float y;
+                    if (firstPage) {
+                        y = renderFullHeader(cs, order, customs, client, importer,
+                                tracking, carrier, incoterms, currency,
+                                pageWidth, pageHeight, margin);
+                    } else {
+                        y = renderContinuationHeader(cs, order, client,
+                                pageWidth, pageHeight, margin);
+                    }
+                    // Item table column header
+                    y = drawItemsTableHeader(cs, margin, pageWidth - margin, y);
+                    // Item rows for this page
+                    BigDecimal pageSubtotal = BigDecimal.ZERO;
+                    for (int i = startIdx; i < endIdx; i++) {
+                        OrderCustomsItem it = items.get(i);
+                        int qty = it.getQuantity() == null ? 1 : it.getQuantity();
+                        BigDecimal unit = it.getUnitValue() == null ? BigDecimal.ZERO : it.getUnitValue();
+                        BigDecimal amount = unit.multiply(BigDecimal.valueOf(qty));
+                        pageSubtotal = pageSubtotal.add(amount);
+                        drawItemRow(cs, margin, pageWidth - margin, y, it, qty, unit, amount);
+                        y -= rowH;
+                    }
+                    runningTotal = runningTotal.add(pageSubtotal);
 
-                float leftY = drawParty(cs, "EXPORTER / SHIP FROM", exporterLines(client), leftCol, y);
-                float rightY = drawParty(cs, importer.title(), importer.lines(), rightCol, y);
-                float consY = drawParty(cs, "CONSIGNEE / SHIP TO", shipToLines(order), leftCol, leftY - 8f);
+                    // Subtotal row (every page). Final total on last page.
+                    rule(cs, margin, pageWidth - margin, y - 2f, LIGHT_RULE, 0.5f);
+                    y -= subtotalReserve;
+                    String subtotalLabel = "SUBTOTAL page " + (p + 1) + " (" + currency + ")";
+                    cs.setNonStrokingColor(PRIMARY);
+                    drawText(cs, HELVETICA_BOLD, 9.5f, subtotalLabel,
+                            margin + 370f, y);
+                    drawRightText(cs, HELVETICA_BOLD, 9.5f, money(pageSubtotal),
+                            pageWidth - margin, y);
+                    cs.setNonStrokingColor(Color.BLACK);
 
-                // Items table
-                float tableTop = Math.min(consY, rightY) - 12f;
-                tableTop = drawItemsTable(cs, customs, currency, margin, pageWidth - margin, tableTop);
+                    if (lastPage) {
+                        y -= 16f;
+                        String totalLabel = "TOTAL (" + currency + ")";
+                        cs.setNonStrokingColor(PRIMARY);
+                        drawText(cs, HELVETICA_BOLD, 11f, totalLabel, margin + 370f, y);
+                        drawRightText(cs, HELVETICA_BOLD, 11f, money(runningTotal),
+                                pageWidth - margin, y);
+                        cs.setNonStrokingColor(Color.BLACK);
 
-                // Shipment summary: packages, total item quantity, gross weight —
-                // the customs-relevant totals a broker checks against the parcel.
-                int totalQty = 0;
-                for (OrderCustomsItem it : (customs.getItems() == null ? List.<OrderCustomsItem>of() : customs.getItems())) {
-                    totalQty += it.getQuantity() == null ? 1 : it.getQuantity();
+                        // Shipment summary + declaration + signature block.
+                        int totalQty = 0;
+                        for (OrderCustomsItem it : items) {
+                            totalQty += it.getQuantity() == null ? 1 : it.getQuantity();
+                        }
+                        int pkgs = order.getPackageCount() == null ? 1 : order.getPackageCount();
+                        String weightUnit = firstNonBlank(customs.getWeightUnit(),
+                                client == null ? null : client.getDefaultWeightUnit(), "KG");
+                        StringBuilder summary = new StringBuilder();
+                        summary.append("Packages: ").append(pkgs)
+                                .append("    Total quantity: ").append(totalQty);
+                        if (order.getWeight() != null) {
+                            summary.append("    Gross weight: ")
+                                    .append(order.getWeight().stripTrailingZeros().toPlainString())
+                                    .append(' ').append(weightUnit);
+                        }
+                        float sumY = y - 16f;
+                        cs.setNonStrokingColor(new Color(0x5a, 0x45, 0x26));
+                        drawText(cs, HELVETICA, 8.5f, summary.toString(), margin, sumY);
+                        cs.setNonStrokingColor(Color.BLACK);
+
+                        float decY = Math.max(sumY - 18f, margin + 46f);
+                        cs.setNonStrokingColor(new Color(0x5a, 0x45, 0x26));
+                        drawText(cs, HELVETICA_OBLIQUE, 8.5f,
+                                "I declare the information on this invoice to be true and correct to the best of my knowledge.",
+                                margin, decY);
+                        cs.setNonStrokingColor(Color.BLACK);
+                        rule(cs, pageWidth - margin - 180f, pageWidth - margin, margin + 24f, LIGHT_RULE, 0.6f);
+                        drawText(cs, HELVETICA, 8f, "Authorised signature / date",
+                                pageWidth - margin - 180f, margin + 12f);
+                    }
+
+                    // Page footer — "Invoice #N — Page X of Y".
+                    String footer = "Invoice #" + order.getOrderNo() + " - Page " + (p + 1)
+                            + " of " + totalPages;
+                    float footerWidth = textWidth(HELVETICA, 8f, footer);
+                    cs.setNonStrokingColor(new Color(0x5a, 0x45, 0x26));
+                    drawText(cs, HELVETICA, 8f, footer,
+                            (pageWidth - footerWidth) / 2f, margin - 12f);
+                    cs.setNonStrokingColor(Color.BLACK);
                 }
-                int pkgs = order.getPackageCount() == null ? 1 : order.getPackageCount();
-                String weightUnit = firstNonBlank(customs.getWeightUnit(),
-                        client == null ? null : client.getDefaultWeightUnit(), "KG");
-                StringBuilder summary = new StringBuilder();
-                summary.append("Packages: ").append(pkgs)
-                        .append("    Total quantity: ").append(totalQty);
-                if (order.getWeight() != null) {
-                    summary.append("    Gross weight: ")
-                            .append(order.getWeight().stripTrailingZeros().toPlainString())
-                            .append(' ').append(weightUnit);
-                }
-                float sumY = tableTop - 16f;
-                cs.setNonStrokingColor(new Color(0x5a, 0x45, 0x26));
-                drawText(cs, HELVETICA, 8.5f, summary.toString(), margin, sumY);
-                cs.setNonStrokingColor(Color.BLACK);
-
-                // Declaration + signature
-                float decY = Math.max(sumY - 18f, margin + 46f);
-                cs.setNonStrokingColor(new Color(0x5a, 0x45, 0x26));
-                drawText(cs, HELVETICA_OBLIQUE, 8.5f,
-                        "I declare the information on this invoice to be true and correct to the best of my knowledge.",
-                        margin, decY);
-                cs.setNonStrokingColor(Color.BLACK);
-                rule(cs, pageWidth - margin - 180f, pageWidth - margin, margin + 24f, LIGHT_RULE, 0.6f);
-                drawText(cs, HELVETICA, 8f, "Authorised signature / date", pageWidth - margin - 180f, margin + 12f);
             }
 
             doc.save(out);
@@ -295,6 +368,94 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             throw new IllegalStateException("Failed to render commercial invoice for order "
                     + order.getOrderNo(), e);
         }
+    }
+
+    /**
+     * Resolve paper size — {@link Client#getDefaultPaperSize()} when set
+     * ("A4" or "LETTER"), else A4. A4 default matches the ISO standard;
+     * US/CA/MX tenants override to LETTER via the Client settings.
+     */
+    private static PDRectangle resolvePageSize(Client client) {
+        if (client != null && client.getDefaultPaperSize() != null) {
+            String size = client.getDefaultPaperSize().trim().toUpperCase();
+            if ("LETTER".equals(size)) return PDRectangle.LETTER;
+        }
+        return PDRectangle.A4;
+    }
+
+    /** Approximate vertical space consumed by the page-1 full header
+     *  (parties + meta + spacing). Used in the two-pass pagination sim. */
+    private static float firstPageHeaderHeight() {
+        // Empirical: title(40) + rule(2) + meta 2 lines(30) + parties(90) + spacing(12) = ~174
+        return 190f;
+    }
+
+    /** Approximate vertical space consumed by the compact continuation
+     *  header ("Invoice #N — continued" title only). */
+    private static float continuationHeaderHeight() {
+        // Title(20) + client name(15) + rule(2) + spacing(12) = ~50
+        return 55f;
+    }
+
+    /**
+     * Full-header renderer for page 1. Emits title + client name +
+     * invoice meta line + 3 party blocks. Returns the y-cursor below.
+     */
+    private float renderFullHeader(PDPageContentStream cs, Order order, OrderCustoms customs,
+            Client client, Party importer, String tracking, String carrier, String incoterms,
+            String currency, float pageWidth, float pageHeight, float margin)
+            throws java.io.IOException {
+        float y = pageHeight - margin;
+        cs.setNonStrokingColor(PRIMARY);
+        drawText(cs, HELVETICA_BOLD, 20f, "COMMERCIAL INVOICE",
+                pageWidth - margin - textWidth(HELVETICA_BOLD, 20f, "COMMERCIAL INVOICE"), y - 20f);
+        cs.setNonStrokingColor(Color.BLACK);
+        if (client != null) {
+            drawText(cs, HELVETICA_BOLD, 12f, safe(client.getName()), margin, y - 12f);
+        }
+        y -= 40f;
+        rule(cs, margin, pageWidth - margin, y, PRIMARY, 1.2f);
+        y -= 18f;
+        String meta = "Invoice No: " + order.getOrderNo()
+                + "    Date: " + (order.getCreatedDate() == null ? "-" : DATE_FMT.format(order.getCreatedDate()))
+                + "    Incoterms: " + firstNonBlank(incoterms, "DAP")
+                + "    Currency: " + currency
+                + "    Reason: " + firstNonBlank(customs.getReasonForExport(), "SALE");
+        drawText(cs, HELVETICA, 9.5f, meta, margin, y);
+        y -= 12f;
+        String meta2 = "Carrier: " + firstNonBlank(carrier, "-")
+                + "    Tracking: " + firstNonBlank(tracking, "-")
+                + "    " + dutyTerms(incoterms);
+        drawText(cs, HELVETICA, 9.5f, meta2, margin, y);
+        y -= 26f;
+        float leftCol = margin;
+        float rightCol = pageWidth / 2f + 20f;
+        float leftY = drawParty(cs, "EXPORTER / SHIP FROM", exporterLines(client), leftCol, y);
+        float rightY = drawParty(cs, importer.title(), importer.lines(), rightCol, y);
+        float consY = drawParty(cs, "CONSIGNEE / SHIP TO", shipToLines(order), leftCol, leftY - 8f);
+        return Math.min(consY, rightY) - 12f;
+    }
+
+    /**
+     * Compact continuation-page header. Just "COMMERCIAL INVOICE #N —
+     * continued" + client name + rule. Enough context for a page that
+     * gets separated during handling; keeps continuation pages
+     * information-dense.
+     */
+    private float renderContinuationHeader(PDPageContentStream cs, Order order, Client client,
+            float pageWidth, float pageHeight, float margin) throws java.io.IOException {
+        float y = pageHeight - margin;
+        cs.setNonStrokingColor(PRIMARY);
+        String title = "COMMERCIAL INVOICE #" + order.getOrderNo() + " - continued";
+        drawText(cs, HELVETICA_BOLD, 12f, title,
+                pageWidth - margin - textWidth(HELVETICA_BOLD, 12f, title), y - 12f);
+        cs.setNonStrokingColor(Color.BLACK);
+        if (client != null) {
+            drawText(cs, HELVETICA, 10f, safe(client.getName()), margin, y - 12f);
+        }
+        y -= 20f;
+        rule(cs, margin, pageWidth - margin, y, PRIMARY, 0.8f);
+        return y - 18f;
     }
 
     /** Draws a titled address block; returns the y just below it. */
@@ -312,18 +473,18 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         return ly;
     }
 
-    /** Renders the line-item table + totals; returns the y below the totals. */
-    private float drawItemsTable(PDPageContentStream cs, OrderCustoms customs, String currency,
-                                 float left, float right, float top) throws java.io.IOException {
-        // Column x-positions.
+    /**
+     * Draw the item-table column header — repeated on every page so
+     * separated pages remain legible. Returns the y-cursor below.
+     */
+    private float drawItemsTableHeader(PDPageContentStream cs, float left, float right, float top)
+            throws java.io.IOException {
         float xDesc = left;
         float xHs = left + 210f;
         float xOrig = left + 275f;
         float xQty = left + 320f;
         float xUnit = left + 370f;
         float xAmt = right - textWidth(HELVETICA_BOLD, 9f, "AMOUNT");
-
-        // Header row.
         cs.setNonStrokingColor(PRIMARY);
         drawText(cs, HELVETICA_BOLD, 9f, "DESCRIPTION", xDesc, top);
         drawText(cs, HELVETICA_BOLD, 9f, "HS CODE", xHs, top);
@@ -333,34 +494,25 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         drawText(cs, HELVETICA_BOLD, 9f, "AMOUNT", xAmt, top);
         cs.setNonStrokingColor(Color.BLACK);
         rule(cs, left, right, top - 4f, LIGHT_RULE, 0.5f);
+        return top - 16f;
+    }
 
-        float rowY = top - 16f;
-        BigDecimal total = BigDecimal.ZERO;
-        List<OrderCustomsItem> items = customs.getItems() == null ? List.of() : customs.getItems();
-        for (OrderCustomsItem it : items) {
-            if (rowY < 90f) break; // preserve declaration/footer room
-            int qty = it.getQuantity() == null ? 1 : it.getQuantity();
-            BigDecimal unit = it.getUnitValue() == null ? BigDecimal.ZERO : it.getUnitValue();
-            BigDecimal amount = unit.multiply(BigDecimal.valueOf(qty));
-            total = total.add(amount);
-
-            drawText(cs, HELVETICA, 9f, truncate(safe(it.getDescription()), 42), xDesc, rowY);
-            drawText(cs, HELVETICA, 9f, safe(it.getHsCode()), xHs, rowY);
-            drawText(cs, HELVETICA, 9f, safe(it.getCountryOfOrigin()), xOrig, rowY);
-            drawText(cs, HELVETICA, 9f, String.valueOf(qty), xQty, rowY);
-            drawText(cs, HELVETICA, 9f, money(unit), xUnit, rowY);
-            drawRightText(cs, HELVETICA, 9f, money(amount), right, rowY);
-            rowY -= 13f;
-        }
-
-        rule(cs, left, right, rowY - 2f, LIGHT_RULE, 0.5f);
-        rowY -= 16f;
-        String totalLabel = "TOTAL (" + currency + ")";
-        cs.setNonStrokingColor(PRIMARY);
-        drawText(cs, HELVETICA_BOLD, 10f, totalLabel, xUnit, rowY);
-        drawRightText(cs, HELVETICA_BOLD, 10f, money(total), right, rowY);
-        cs.setNonStrokingColor(Color.BLACK);
-        return rowY;
+    /** Draw one item row at the given y using the column positions
+     *  matching {@link #drawItemsTableHeader}. */
+    private void drawItemRow(PDPageContentStream cs, float left, float right, float y,
+            OrderCustomsItem it, int qty, BigDecimal unit, BigDecimal amount)
+            throws java.io.IOException {
+        float xDesc = left;
+        float xHs = left + 210f;
+        float xOrig = left + 275f;
+        float xQty = left + 320f;
+        float xUnit = left + 370f;
+        drawText(cs, HELVETICA, 9f, truncate(safe(it.getDescription()), 42), xDesc, y);
+        drawText(cs, HELVETICA, 9f, safe(it.getHsCode()), xHs, y);
+        drawText(cs, HELVETICA, 9f, safe(it.getCountryOfOrigin()), xOrig, y);
+        drawText(cs, HELVETICA, 9f, String.valueOf(qty), xQty, y);
+        drawText(cs, HELVETICA, 9f, money(unit), xUnit, y);
+        drawRightText(cs, HELVETICA, 9f, money(amount), right, y);
     }
 
     // ---- low-level PDFBox + formatting helpers (mirrors PackingSlipServiceImpl) ----

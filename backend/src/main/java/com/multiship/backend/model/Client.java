@@ -125,6 +125,12 @@ public class Client {
     @Column(name = "default_origin_country", length = 2)
     private String defaultOriginCountry;
 
+    /** Commercial-invoice paper size: A4 (default) or LETTER. A4 is the
+     *  ISO standard used by every country except US/Canada/Mexico;
+     *  tenants shipping from those markets can flip to LETTER. */
+    @Column(name = "default_paper_size", length = 8)
+    private String defaultPaperSize;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
