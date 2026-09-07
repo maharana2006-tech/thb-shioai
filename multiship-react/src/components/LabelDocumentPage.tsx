@@ -4,6 +4,7 @@ import { notify } from '../utils/notify'
 import { FiActivity, FiArrowLeft, FiCopy, FiDownload, FiExternalLink, FiFileText, FiPrinter, FiTag } from 'react-icons/fi'
 import { orderService, type LabelDocumentPayload } from '../api/orderService'
 import PdfPagesPreview from './PdfPagesPreview'
+import PrintPreviewModal, { type PrintDocKind } from './modals/PrintPreviewModal'
 import TrackingTimelineModal from './tracking/TrackingTimelineModal'
 import { useAppSession } from '../hooks/useAppSession'
 import { getTenantIdForUser, normalizeRole } from '../utils/roles'
@@ -210,6 +211,7 @@ export default function LabelDocumentPage() {
   // rendered by the backend) and prints THAT — not the on-screen HTML.
   const [printBusy, setPrintBusy] = useState(false)
   const printInFlightRef = useRef(false)
+  const [printPreview, setPrintPreview] = useState<{ blob: Blob; kind: PrintDocKind } | null>(null)
   // The Shipping Label section shows the PRINTABLE document's pages — the
   // carrier's own PDF (all of its pages, e.g. FedEx's label + copies), or
   // our ZPL rendered by zebrash — instead of the HTML facsimile. 'unavailable'
@@ -319,24 +321,10 @@ export default function LabelDocumentPage() {
       const blob = activeTab === 'label'
         ? await orderService.getLabelPdf(orderNo, undefined, { main: true })
         : await orderService.getCommercialInvoicePdf(orderNo)
-      const url = URL.createObjectURL(blob)
-      const frame = document.createElement('iframe')
-      frame.setAttribute('aria-hidden', 'true')
-      frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;'
-      frame.src = url
-      // Chrome keeps the print dialog alive after onload returns; revoke
-      // late so the viewer never loses its source mid-spool.
-      const release = () => window.setTimeout(() => { frame.remove(); URL.revokeObjectURL(url) }, 60_000)
-      frame.onload = () => {
-        try {
-          frame.contentWindow?.focus()
-          frame.contentWindow?.print()
-        } catch {
-          window.open(url, '_blank', 'noopener')
-        }
-        release()
-      }
-      document.body.appendChild(frame)
+      // In-app preview modal; it prints from a same-origin image page sized
+      // to the sheet. (Printing the PDF through an iframe hit Chrome's
+      // PDF-viewer access denial and fell back to opening a new tab.)
+      setPrintPreview({ blob, kind: activeTab === 'label' ? 'label' : 'invoice' })
     } catch (err) {
       notify.apiError(err, `Could not fetch the printable ${activeTab === 'label' ? 'label' : 'invoice'} — printing the on-screen preview instead.`)
       window.print()
@@ -851,6 +839,14 @@ export default function LabelDocumentPage() {
             </>
           ) : null}
 
+          {printPreview ? (
+            <PrintPreviewModal
+              blob={printPreview.blob}
+              kind={printPreview.kind}
+              orderNo={orderNo}
+              onClose={() => setPrintPreview(null)}
+            />
+          ) : null}
           <button
             type="button"
             onClick={() => void printLabel()}
