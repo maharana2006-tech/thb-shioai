@@ -413,59 +413,6 @@ export default function LabelDocumentPage() {
   const carrierDisplay = formatCarrierName(accountCarrierCode)
   const shipDate = label?.generatedAt || order?.createdDate
 
-  // Commercial-invoice lines: prefer the per-order customs items entered against
-  // the order (manual/international shipments); fall back to the ERP order lines.
-  // Shipment gross = every package. order.weight is the PER-BOX weight on
-  // multi-package orders, which made the on-screen invoice apportion (and
-  // total) from one box while the label said 90 lb.
-  const shipmentGrossWeight = (() => {
-    const pkgs = order?.packages ?? []
-    const pieceSum = pkgs.reduce((s, p) => s + (p.weight ?? 0), 0)
-    if (pieceSum > 0) return pieceSum
-    return (order?.weight ?? 0) * Math.max(1, order?.packageCount ?? 1)
-  })()
-  const customsItems = payload?.customs?.items ?? []
-  // Total shipped units — used to distribute the parcel weight across lines
-  // when the commodities carry no explicit per-item weight of their own.
-  const totalItemQty = customsItems.reduce((s, it) => s + (it.quantity ?? 1), 0)
-      ? customsItems.map((it, i) => {
-          const qty = it.quantity ?? 1
-          const unit = it.unitValue ?? 0
-          // Per-line net weight. Prefer an explicit per-item weight (× qty);
-          // otherwise apportion the parcel's total weight by this line's share
-          // of the shipped units, so NET/GROSS populate and still sum to the
-          // parcel weight. Pack weight is 0 and gross = net (single weight per
-          // commodity), matching the FedEx CI commodity layout.
-          const netWeight =
-            it.weight != null
-              ? it.weight * qty
-              : shipmentGrossWeight > 0 && totalItemQty > 0
-                ? (shipmentGrossWeight * qty) / totalItemQty
-                : null
-          // The quantity split is an ESTIMATE (it apportions the parcel's
-          // gross weight — packaging included — by unit count, so 12 steel
-          // bottles can come out "lighter" than 30 cotton totes). Customs
-          // assesses on net weight, so when we didn't get real per-item
-          // weights the invoice must say the figure is estimated rather
-          // than presenting it as fact.
-          const netWeightEstimated = it.weight == null && netWeight != null
-          return {
-            id: i,
-            lineNo: i + 1,
-            itemNo: it.sku ?? null,
-            itemDescription: it.description ?? null,
-            description: it.description ?? null,
-            hsCode: it.hsCode ?? null,
-            countryOfOrigin: it.countryOfOrigin ?? null,
-            qtyShipped: qty,
-            unitPrice: unit,
-            totalPrice: qty * unit,
-            customsDeclValue: qty * unit,
-            netWeight,
-            netWeightEstimated,
-          }
-        })
-      : order?.orderLines || []
 
   // Some order feeds put a bare sequence digit in ship_name; prefer a plausible name.
   // Never falls back to custNo (client code) — that would render the tenant
