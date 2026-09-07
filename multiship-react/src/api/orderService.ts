@@ -855,8 +855,14 @@ export const orderService = {
    * pkgIndex through to `?pkg=N`; omit only when caller genuinely
    * wants the all-pkg file (pass `undefined`).
    */
-  getLabelPdf: async (orderNo: number, pkgIndex?: number): Promise<Blob> => {
-    const qs = pkgIndex && pkgIndex > 0 ? `?pkg=${pkgIndex}` : ''
+  getLabelPdf: async (orderNo: number, pkgIndex?: number, opts?: { main?: boolean }): Promise<Blob> => {
+    const params = new URLSearchParams()
+    if (pkgIndex && pkgIndex > 0) params.set('pkg', String(pkgIndex))
+    // main=true — page 1 of a carrier PDF cropped to the label and fitted to
+    // 4×6 (one label-sized sheet per package) instead of the carrier's full
+    // Letter-page set with copies/doc pages. What Print Label sends.
+    if (opts?.main) params.set('main', 'true')
+    const qs = params.size ? `?${params.toString()}` : ''
     const response = await fetch(`${BASE_URL}/orders/${orderNo}/label/pdf${qs}`, {
       credentials: 'include',
     })

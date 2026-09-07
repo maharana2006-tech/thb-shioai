@@ -56,6 +56,12 @@ public class OrderController {
     private com.multiship.backend.service.ZebrashPdfService zebrashPdfService;
     @Autowired
     private com.multiship.backend.service.ZebrashCompositor zebrashCompositor;
+    /** /label/pdf?main=true — page 1 of a carrier PDF, cropped to the label
+     *  and fitted to 4×6, so Print Label spools one label-sized sheet instead
+     *  of FedEx's 3–4 Letter pages. zebrash/facsimile output is already one
+     *  4×6 page per package and passes through untouched. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.multiship.backend.service.LabelMainPageCropper labelMainPageCropper;
 
     // PR #552 — concat carrier per-piece PDFs into one multi-page file
     // when the operator asks for the "all pkgs" PDF and the carrier
@@ -866,7 +872,9 @@ public class OrderController {
     @GetMapping(value = "/{orderNo}/label/pdf",
             produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
     public ResponseEntity<byte[]> getLabelPdf(@PathVariable Integer orderNo,
-            @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex) {
+            @org.springframework.web.bind.annotation.RequestParam(name = "pkg", required = false) Integer pkgIndex,
+            @org.springframework.web.bind.annotation.RequestParam(name = "main", required = false,
+                    defaultValue = "false") boolean mainOnly) {
         // Sprint 52 PR B — carrier passthrough. When the stored
         // label_file_path is a real carrier PDF, return those bytes
         // verbatim. Mirror of the /label/zpl passthrough block above.
@@ -879,7 +887,7 @@ public class OrderController {
                         .header("Content-Disposition", "attachment; filename=label-"
                                 + orderNo + "-pkg" + pkgIndex + ".pdf")
                         .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
-                        .body(single.get());
+                        .body(mainOnly ? labelMainPageCropper.mainLabelOnly(single.get()) : single.get());
             }
         } else {
             // pkg omitted → operator wants ALL packages in one file.
@@ -896,7 +904,8 @@ public class OrderController {
                             .ifPresent(perPiecePdfs::add);
                 }
                 if (!perPiecePdfs.isEmpty()) {
-                    byte[] merged = pdfMerger.mergeToOne(perPiecePdfs);
+                    byte[] merged = pdfMerger.mergeToOne(
+                            mainOnly ? labelMainPageCropper.mainLabelOnlyEach(perPiecePdfs) : perPiecePdfs);
                     String suffix = perPiecePdfs.size() > 1
                             ? "-all" + perPiecePdfs.size()
                             : "-pkg1";
@@ -915,7 +924,7 @@ public class OrderController {
                 return ResponseEntity.ok()
                         .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".pdf")
                         .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
-                        .body(passthrough.get());
+                        .body(mainOnly ? labelMainPageCropper.mainLabelOnly(passthrough.get()) : passthrough.get());
             }
         }
 

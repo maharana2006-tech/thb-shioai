@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import { FiActivity, FiArrowLeft, FiCopy, FiDownload, FiExternalLink, FiFileText, FiPrinter, FiTag } from 'react-icons/fi'
 import { orderService, type LabelDocumentPayload } from '../api/orderService'
+import PdfPagesPreview from './PdfPagesPreview'
 import TrackingTimelineModal from './tracking/TrackingTimelineModal'
 import { useAppSession } from '../hooks/useAppSession'
 import { getTenantIdForUser, normalizeRole } from '../utils/roles'
@@ -209,6 +210,14 @@ export default function LabelDocumentPage() {
   // rendered by the backend) and prints THAT — not the on-screen HTML.
   const [printBusy, setPrintBusy] = useState(false)
   const printInFlightRef = useRef(false)
+  // The Shipping Label section shows the PRINTABLE document's pages — the
+  // carrier's own PDF (all of its pages, e.g. FedEx's label + copies), or
+  // our ZPL rendered by zebrash — instead of the HTML facsimile. 'unavailable'
+  // (fetch/parse failure) falls through to the PNG/facsimile branches below.
+  const [printablePdf, setPrintablePdf] = useState<Blob | null>(null)
+  const [printableState, setPrintableState] = useState<'loading' | 'ready' | 'unavailable'>('loading')
+  const [printablePageCount, setPrintablePageCount] = useState(0)
+  // (fetch effect lives below the pkgIndex/pkgCount derivation it depends on)
   /** Audit R2 #390 — re-entrancy guard. The disabled={zplBusy} attribute
    *  on the two buttons stops a click after React commits the state update,
    *  but a fast double-click can fire twice before the first setZplBusy(true)
@@ -305,8 +314,10 @@ export default function LabelDocumentPage() {
       // Same treatment for the invoice tab: print the backend's commercial-
       // invoice PDF (the document that travels with the parcel), not the
       // on-screen HTML rendering of it.
+      // main:true — one 4×6 sheet per package (page 1 cropped to the
+      // label), not the carrier's 3–4 Letter pages of copies/doc pages.
       const blob = activeTab === 'label'
-        ? await orderService.getLabelPdf(orderNo, undefined)
+        ? await orderService.getLabelPdf(orderNo, undefined, { main: true })
         : await orderService.getCommercialInvoicePdf(orderNo)
       const url = URL.createObjectURL(blob)
       const frame = document.createElement('iframe')
@@ -556,6 +567,32 @@ export default function LabelDocumentPage() {
     packagesArrayLen > 0 ? packagesArrayLen : (Number(order?.packageCount) || 1))
   const rawPkg = Number(searchParams.get('pkg')) || 1
   const pkgIndex = Math.min(Math.max(1, rawPkg), pkgCount)
+  // Printable-document preview fetch (state declared with the print controls
+  // above). Follows the package picker on multi-box orders.
+  useEffect(() => {
+    // Wait for the order itself: pkgCount/pkgIndex settle only once it has
+    // loaded, and fetching earlier fired the PDF request several times per
+    // page view (each a carrier-PDF resolve on the backend).
+    if (loading || !order) return
+    let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset to 'loading' before the async fetch resolves; the previous package's pages must not linger while the next PDF loads
+    setPrintableState('loading')
+    setPrintablePdf(null)
+    setPrintablePageCount(0)
+    orderService
+      .getLabelPdf(orderNo, pkgCount > 1 ? pkgIndex : undefined)
+      .then((blob) => {
+        if (cancelled) return
+        setPrintablePdf(blob)
+        setPrintableState('ready')
+      })
+      .catch(() => {
+        if (!cancelled) setPrintableState('unavailable')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [orderNo, pkgIndex, pkgCount, loading, order])
 
   // PR #538/544 — HEAD probe for /label/preview.png. When the backend
   // feature flag label.render-carrier-zpl is on AND the carrier stored
@@ -989,7 +1026,31 @@ export default function LabelDocumentPage() {
           ) : null}
 
         <div className="flex flex-wrap justify-center gap-6 rounded-[26px] border border-slate-200/80 bg-slate-100/70 p-6 shadow-inner print:block print:border-0 print:bg-white print:p-0 print:shadow-none">
-          {activeTab === 'label' && carrierPreviewState === 'ready' ? (
+          {activeTab === 'label' && printableState === 'ready' && printablePdf ? (
+            /* The printable document itself — every page the carrier
+               returned (FedEx intl: label + consignee/agent copies + doc
+               pages), or the zebrash render of our ZPL. Page 1 is what
+               Print Label sends, cropped to 4×6. */
+            <div className="print-doc flex w-full flex-col items-center gap-3 print:block">
+              {printablePageCount > 1 ? (
+                <p className="text-[12px] text-slate-600">
+                  The carrier returned <span className="font-semibold">{printablePageCount} pages</span> — page 1 is
+                  the label; the rest are the carrier&rsquo;s copies and paperwork. <span className="font-semibold">Print Label</span> prints
+                  page 1 only, at 4&nbsp;×&nbsp;6&nbsp;in.
+                </p>
+              ) : null}
+              <PdfPagesPreview
+                blob={printablePdf}
+                firstPageCaption="Main label — this is what prints"
+                onLoaded={setPrintablePageCount}
+                onError={() => setPrintableState('unavailable')}
+              />
+            </div>
+          ) : activeTab === 'label' && printableState === 'loading' ? (
+            <div className="flex h-[400px] w-[430px] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white text-[12px] text-slate-500">
+              Loading printable label…
+            </div>
+          ) : activeTab === 'label' && carrierPreviewState === 'ready' ? (
             /* ==================== PR #538 — CARRIER-CANONICAL PNG (from backend zebrash render) ==================== */
             /* When the backend feature flag label.render-carrier-zpl is on
                AND the carrier stored parseable ZPL, backend renders the
