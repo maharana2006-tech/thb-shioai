@@ -37,6 +37,7 @@ import java.util.List;
  * lays them out on a single US-Letter page.
  */
 @Service
+@lombok.extern.slf4j.Slf4j
 public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
 
     private static final Color PRIMARY = new Color(0x1f, 0x15, 0x0c);
@@ -333,6 +334,10 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             }
             pageRanges.add(new int[]{rangeStart, items.size()});
             int totalPages = pageRanges.size();
+            log.info("CommercialInvoice pagination — order={} items={} pages={} pageSize={} (client.defaultPaperSize={})",
+                    order.getOrderNo(), items.size(), totalPages,
+                    pageSize == PDRectangle.A4 ? "A4" : "LETTER",
+                    client == null ? null : client.getDefaultPaperSize());
 
             // Pass 2 — actually emit each page.
             BigDecimal grossForLines = shipmentGrossWeight(order);
