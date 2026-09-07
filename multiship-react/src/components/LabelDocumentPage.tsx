@@ -205,6 +205,10 @@ export default function LabelDocumentPage() {
   // Sprint 52 PR A — same re-entrancy guard as the ZPL flow. Ref
   // checked synchronously so a fast double-click can't fire two fetches.
   const pdfInFlightRef = useRef(false)
+  // Print Label fetches the printable PDF (carrier artifact, or our ZPL
+  // rendered by the backend) and prints THAT — not the on-screen HTML.
+  const [printBusy, setPrintBusy] = useState(false)
+  const printInFlightRef = useRef(false)
   /** Audit R2 #390 — re-entrancy guard. The disabled={zplBusy} attribute
    *  on the two buttons stops a click after React commits the state update,
    *  but a fast double-click can fire twice before the first setZplBusy(true)
@@ -278,6 +282,55 @@ export default function LabelDocumentPage() {
     } finally {
       pdfInFlightRef.current = false
       setPdfBusy(false)
+    }
+  }
+
+  /**
+   * Print Label — prints the PRINTABLE label, not the on-screen HTML.
+   * The backend's /label/pdf is the carrier's own artifact when one was
+   * stored, otherwise our ZPL rendered by zebrash — i.e. exactly what a
+   * Zebra prints from Copy ZPL. window.print() on the page rendered the
+   * JSX facsimile, which is a third drawing that drifts from both.
+   * Multi-package orders print every box (same all-pkg semantics as
+   * Download PDF). Loaded into a hidden same-origin iframe so the print
+   * dialog opens directly; browsers that refuse scripting into their PDF
+   * viewer get the PDF in a new tab instead. Any fetch failure degrades
+   * to the old page print so the operator is never left without a label.
+   */
+  const printLabel = async () => {
+    if (activeTab !== 'label') {
+      window.print()
+      return
+    }
+    if (printInFlightRef.current) return
+    printInFlightRef.current = true
+    setPrintBusy(true)
+    try {
+      const blob = await orderService.getLabelPdf(orderNo, undefined)
+      const url = URL.createObjectURL(blob)
+      const frame = document.createElement('iframe')
+      frame.setAttribute('aria-hidden', 'true')
+      frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;'
+      frame.src = url
+      // Chrome keeps the print dialog alive after onload returns; revoke
+      // late so the viewer never loses its source mid-spool.
+      const release = () => window.setTimeout(() => { frame.remove(); URL.revokeObjectURL(url) }, 60_000)
+      frame.onload = () => {
+        try {
+          frame.contentWindow?.focus()
+          frame.contentWindow?.print()
+        } catch {
+          window.open(url, '_blank', 'noopener')
+        }
+        release()
+      }
+      document.body.appendChild(frame)
+    } catch (err) {
+      notify.apiError(err, 'Could not fetch the printable label — printing the on-screen preview instead.')
+      window.print()
+    } finally {
+      printInFlightRef.current = false
+      setPrintBusy(false)
     }
   }
 
@@ -762,12 +815,15 @@ export default function LabelDocumentPage() {
 
           <button
             type="button"
-            onClick={() => window.print()}
-            disabled={loading || Boolean(error) || tenantBlocked}
+            onClick={() => void printLabel()}
+            disabled={loading || Boolean(error) || tenantBlocked || printBusy}
+            title={activeTab === 'label'
+              ? 'Prints the carrier label — the stored carrier artifact, or the ZPL rendered exactly as a Zebra would print it'
+              : undefined}
             className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3.5 py-1.5 text-[13px] font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             <FiPrinter className="h-3.5 w-3.5" />
-            Print {activeTab === 'label' ? 'Label' : 'Invoice'}
+            {printBusy ? 'Preparing…' : `Print ${activeTab === 'label' ? 'Label' : 'Invoice'}`}
           </button>
         </div>
       </div>

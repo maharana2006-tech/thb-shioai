@@ -83,8 +83,14 @@ public class ZplLabelService {
         // to the shipment-level values when we don't have a per-pkg row.
         java.math.BigDecimal effectiveWeight = perPkg != null && perPkg.getWeight() != null
                 ? perPkg.getWeight() : order.getWeight();
+        // Unit follows the same precedence as the weight itself: the per-box
+        // row, then the ORDER's unit. It used to skip the order and drop to
+        // the "KG" last-resort, printing "2.00 KG" on a 2 LB single-box
+        // shipment — a wrong declared weight on every label without a
+        // per-package row.
         String effectiveWeightUnit = perPkg != null && StringUtils.hasText(perPkg.getWeightUnit())
-                ? perPkg.getWeightUnit() : null;
+                ? perPkg.getWeightUnit()
+                : StringUtils.hasText(order.getWeightUnit()) ? order.getWeightUnit() : null;
         String pkgTrackingOverride = perPkg != null && StringUtils.hasText(perPkg.getTrackingNumber())
                 ? perPkg.getTrackingNumber() : null;
 

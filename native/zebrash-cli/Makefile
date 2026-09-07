@@ -9,9 +9,18 @@
 BIN := zebrash-cli
 DIST := dist
 
-.PHONY: all clean linux-amd64 linux-arm64 darwin-arm64 windows-amd64
+.PHONY: all clean linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64
 
-all: linux-amd64 linux-arm64 darwin-arm64 windows-amd64
+all: linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64
+
+# Intel Macs (and x86_64 JDKs on Apple Silicon): ZebrashRenderer resolves the
+# slug from os.arch, so an x86_64 JVM looks for darwin-amd64 and, without this
+# build, the whole ZPL-render feature silently falls back to the facsimile on
+# those developer machines. Build locally and drop the binary into
+# backend/src/main/resources/native/darwin-amd64/ (gitignored).
+darwin-amd64:
+	@mkdir -p $(DIST)/darwin-amd64
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o $(DIST)/darwin-amd64/$(BIN) .
 
 linux-amd64:
 	@mkdir -p $(DIST)/linux-amd64

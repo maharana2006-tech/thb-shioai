@@ -999,9 +999,41 @@ public class OrderController {
         int firstPkg = allPkgs ? 1 : (pkgIndex == null || pkgIndex < 1 ? 1 : Math.min(pkgIndex, totalPkgs));
         int lastPkg = allPkgs ? totalPkgs : firstPkg;
 
-        byte[] pdf = pdfLabelService.buildMultiPagePdf(
-                orderResponse.getData(), resolution, labelDetails,
-                firstPkg, lastPkg, totalPkgs, allPackages);
+        // No carrier artifact — the printable is OUR ZPL. Render the exact
+        // ZPL the /label/zpl endpoint serves through zebrash so "Print
+        // Label" puts on paper what a Zebra would print from Copy ZPL; the
+        // PDFBox drawing below is a separate renderer and drifts from the
+        // ZPL (it is only the fallback when the native renderer is absent
+        // for this platform or the ZPL fails to parse).
+        byte[] pdf = null;
+        if (renderCarrierZplEnabled) {
+            try {
+                // Same incoterms threading as /label/zpl — keeps the two
+                // byte-identical.
+                orderCustomsRepository.findByOrderNoIgnoreCase(String.valueOf(orderNo))
+                        .ifPresent(c -> orderResponse.getData().setIncoterms(c.getIncoterms()));
+                java.util.List<byte[]> facsimileZpls = new java.util.ArrayList<>(lastPkg - firstPkg + 1);
+                for (int p = firstPkg; p <= lastPkg; p++) {
+                    final int currentPkg = p;
+                    com.multiship.backend.dto.LabelPackageDTO perPkg = allPackages.stream()
+                            .filter(x -> x.getSequenceNumber() != null && x.getSequenceNumber() == currentPkg)
+                            .findFirst().orElse(null);
+                    facsimileZpls.add(zplLabelService.buildLabel(orderResponse.getData(), resolution,
+                            labelDetails, currentPkg, totalPkgs, perPkg)
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+                pdf = zebrashPdfService.renderZplsToPdf(facsimileZpls);
+            } catch (RuntimeException ex) {
+                org.slf4j.LoggerFactory.getLogger(OrderController.class)
+                        .warn("zebrash render of the facsimile ZPL failed for order {} pkg={}, "
+                                + "falling back to the PDFBox drawing: {}", orderNo, pkgIndex, ex.getMessage());
+            }
+        }
+        if (pdf == null) {
+            pdf = pdfLabelService.buildMultiPagePdf(
+                    orderResponse.getData(), resolution, labelDetails,
+                    firstPkg, lastPkg, totalPkgs, allPackages);
+        }
 
         String filenameSuffix;
         if (totalPkgs <= 1) {
