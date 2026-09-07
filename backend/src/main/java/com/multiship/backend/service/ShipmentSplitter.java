@@ -179,6 +179,24 @@ public class ShipmentSplitter {
                 break;
         }
 
+        // Renumber sequenceNumber globally across all slices so
+        // label_package inserts don't collide on
+        // uk_label_package_order_seq (order_no, sequence_number).
+        // Even under SAME_PACKAGES — where the same physical box
+        // appears in every slice — each carrier-side shipment ends up
+        // as a distinct label + tracking + piece row; giving each row
+        // its own sequenceNumber preserves the DB invariant. Physical
+        // dims/weights on the cloned PackageDetailDTO stay identical.
+        int seq = 1;
+        for (int i = 0; i < packageSlices.size(); i++) {
+            List<PackageDetailDTO> slice = packageSlices.get(i);
+            List<PackageDetailDTO> renumbered = new ArrayList<>(slice.size());
+            for (PackageDetailDTO p : slice) {
+                renumbered.add(cloneWithSeq(p, seq++));
+            }
+            packageSlices.set(i, renumbered);
+        }
+
         // Build sub-requests, one per commodity slice.
         List<ShipmentRequestDTO> out = new ArrayList<>(splitCount);
         for (int i = 0; i < splitCount; i++) {
