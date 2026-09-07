@@ -126,6 +126,16 @@ class CommercialInvoiceServiceImplTest {
                 .build();
     }
 
+    /** Value cell printed directly under a meta-panel label in the extracted text. */
+    private static String metaValue(String text, String label) {
+        String nl = System.lineSeparator();
+        int i = text.indexOf(label + nl);
+        if (i < 0) return null;
+        int start = i + label.length() + nl.length();
+        int end = text.indexOf(nl, start);
+        return end < 0 ? text.substring(start) : text.substring(start, end);
+    }
+
     private String extractText(byte[] pdfBytes) throws Exception {
         try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
             return new PDFTextStripper().getText(doc);
@@ -175,7 +185,7 @@ class CommercialInvoiceServiceImplTest {
         String text = extractText(pdf);
         assertTrue(text.contains("COMMERCIAL INVOICE"), "must contain the header title");
         assertTrue(text.contains("Acme ACME"), "must contain the client name in the header block");
-        assertTrue(text.contains("Invoice No: 100"), "invoice number pulled from order number");
+        assertEquals("100", metaValue(text, "INVOICE NO."), "invoice number pulled from order number");
     }
 
     // ===== invoice meta line =====
@@ -194,12 +204,12 @@ class CommercialInvoiceServiceImplTest {
 
         String text = extractText(service.render(101));
 
-        assertTrue(text.contains("Incoterms: DDP"));
-        assertTrue(text.contains("Currency: EUR"));
-        assertTrue(text.contains("Reason: GIFT"));
+        assertEquals("DDP", metaValue(text, "INCOTERMS 2020"));
+        assertEquals("EUR", metaValue(text, "CURRENCY OF SALE"));
+        assertEquals("GIFT", metaValue(text, "REASON FOR EXPORT"));
         assertTrue(text.contains("15 Mar 2026"), "date formatted dd MMM yyyy");
         // DDP branch: shipper prepays duties.
-        assertTrue(text.contains("prepaid by shipper (DDP)"));
+        assertEquals("Prepaid by shipper (DDP)", metaValue(text, "DUTIES & TAXES"));
     }
 
     @Test
@@ -216,10 +226,10 @@ class CommercialInvoiceServiceImplTest {
         String text = extractText(service.render(102));
 
         // Defaults hard-coded in renderPdf + dutyTerms.
-        assertTrue(text.contains("Incoterms: DAP"), "DAP is the B2C default when unset");
-        assertTrue(text.contains("Currency: USD"), "USD is the default when unset");
-        assertTrue(text.contains("Reason: SALE"), "SALE is the default when unset");
-        assertTrue(text.contains("payable by consignee (DAP)"));
+        assertEquals("DAP", metaValue(text, "INCOTERMS 2020"), "DAP is the B2C default when unset");
+        assertEquals("USD", metaValue(text, "CURRENCY OF SALE"), "USD is the default when unset");
+        assertEquals("SALE", metaValue(text, "REASON FOR EXPORT"), "SALE is the default when unset");
+        assertEquals("Payable by consignee (DAP)", metaValue(text, "DUTIES & TAXES"));
     }
 
     // ===== importer 3-tier fallback =====
@@ -411,7 +421,7 @@ class CommercialInvoiceServiceImplTest {
 
         assertTrue(text.contains("T-shirt small"));
         assertTrue(text.contains("T-shirt large"));
-        assertTrue(text.contains("TOTAL (USD)"));
+        assertTrue(text.contains("TOTAL INVOICE VALUE (USD) 43.50"), "grand total row with currency");
         assertTrue(text.contains("43.50"), "line-item total must add up correctly (2*15 + 3*4.50)");
     }
 
@@ -431,8 +441,8 @@ class CommercialInvoiceServiceImplTest {
 
         String text = extractText(service.render(600));
 
-        assertTrue(text.contains("Packages: 3"));
-        assertTrue(text.contains("Total quantity: 10"), "4+6 items");
+        assertTrue(text.contains("Packages 3 pieces"));
+        assertTrue(text.contains("Total quantity 10 units"), "4+6 items");
         assertTrue(text.contains("2.5 KG"), "stripTrailingZeros drops 2.500 → 2.5 + unit");
     }
 
@@ -451,8 +461,9 @@ class CommercialInvoiceServiceImplTest {
 
         assertTrue(text.contains("I declare the information on this invoice"),
                 "customs-required declaration line must be present");
-        assertTrue(text.contains("Authorised signature"),
+        assertTrue(text.contains("AUTHORISED SIGNATURE OF EXPORTER"),
                 "signature block label must be present");
+        assertTrue(text.contains("Page 1 of 1"), "pages are numbered consecutively (19 CFR 141.86(h))");
         // Sanity: header rendered as the first identifying text.
         assertEquals(text.indexOf("COMMERCIAL INVOICE") >= 0, true);
     }

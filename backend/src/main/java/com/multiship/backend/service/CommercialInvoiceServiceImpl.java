@@ -1,12 +1,13 @@
 package com.multiship.backend.service;
 
 import com.multiship.backend.model.Address;
+import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.Client;
 import com.multiship.backend.model.ClientCustomsProfile;
 import com.multiship.backend.model.Order;
 import com.multiship.backend.model.OrderCustoms;
 import com.multiship.backend.model.OrderCustomsItem;
-import com.multiship.backend.model.CarrierAccountRef;
+import com.multiship.backend.model.OrderTracking;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.ClientCustomsProfileRepository;
 import com.multiship.backend.repository.ClientRepository;
@@ -23,32 +24,69 @@ import org.springframework.stereotype.Service;
 
 import java.awt.Color;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 /**
- * Sprint 51 fix #3 — in-house commercial-invoice PDF renderer (PDFBox),
- * modelled on {@link PackingSlipServiceImpl}. Assembles the three invoice
- * parties (exporter = client ship-from, importer of record = resolved from
- * the order's customs data / client profile / consignee, and the consignee =
- * order ship-to) plus the customs line items persisted on the order, and
- * lays them out on a single US-Letter page.
+ * The platform's commercial invoice — the customs declaration document
+ * that travels with every international parcel.
+ *
+ * <p>Content follows what the carriers (FedEx / UPS / DHL) and 19 CFR
+ * 141.86 ask of a commercial invoice: exporter and consignee with phone
+ * and tax IDs, importer of record and customs broker when they differ from
+ * the consignee, invoice number and date, order and customer references,
+ * carrier and air-waybill / tracking number, Incoterms, currency, reason
+ * for export, who settles duties and taxes, the export-declaration
+ * citation (AES ITN / FTR exemption / national reference), an itemised
+ * table (plain-language description, SKU, HS code, country of origin,
+ * quantity and unit, net weight, unit and total value), package count and
+ * gross / net weight, freight and insurance charges, the total invoice
+ * value, a signed declaration, and consecutively numbered pages.
+ *
+ * <p>Layout: espresso/cream, print-friendly (no solid dark bands), A4 by
+ * default with a per-client LETTER override. Every drawing routine runs
+ * in a dry "measure" mode (null content stream) so pagination is exact.
  */
 @Service
-@lombok.extern.slf4j.Slf4j
 public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
 
-    private static final Color PRIMARY = new Color(0x1f, 0x15, 0x0c);
-    private static final Color LIGHT_RULE = new Color(0xcc, 0xcc, 0xcc);
-    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd MMM yyyy");
+    // ---- palette (mirrors the app's espresso/cream theme) ----
+    private static final Color INK = new Color(0x1f, 0x15, 0x0c);
+    private static final Color ESPRESSO = new Color(0x3b, 0x2a, 0x16);
+    private static final Color TAUPE = new Color(0x6b, 0x5c, 0x42);
+    private static final Color RULE = new Color(0xd6, 0xcd, 0xbd);
+    private static final Color CREAM = new Color(0xf5, 0xf0, 0xe6);
+    private static final Color CREAM_DEEP = new Color(0xea, 0xe2, 0xd1);
+    private static final Color ZEBRA = new Color(0xfa, 0xf7, 0xf2);
+
+    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.US);
+    private static final DateTimeFormatter STAMP_FMT = DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm", Locale.US);
     private static final PDType1Font HELVETICA =
             new PDType1Font(Standard14Fonts.FontName.HELVETICA);
     private static final PDType1Font HELVETICA_BOLD =
             new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD);
     private static final PDType1Font HELVETICA_OBLIQUE =
             new PDType1Font(Standard14Fonts.FontName.HELVETICA_OBLIQUE);
+
+    private static final float MARGIN = 36f;
+    private static final float ROW_H = 14f;
+    private static final float FOOTER_H = 26f;
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(CommercialInvoiceServiceImpl.class);
 
     private final OrderRepository orderRepository;
     private final OrderCustomsRepository orderCustomsRepository;
@@ -86,7 +124,6 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                 && clientRepository.findByClientCodeIgnoreCase(code).isPresent()) {
             return code;
         }
-        // Fallback: order → tracking account number → account book → client.
         String acct = orderTrackingRepository.findByOrderNo(orderNo)
                 .map(t -> t.getAccountNumber()).orElse(null);
         if (hasText(acct)) {
@@ -95,8 +132,31 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                     .map(CarrierAccountRef::getCustomerNo).orElse(null);
             if (hasText(fromAccount)) return fromAccount;
         }
-        return code; // may be "MANUAL"/null — callers degrade gracefully
+        return code;
     }
+
+    // =====================================================================
+    // Model
+    // =====================================================================
+
+    /** A titled address block. */
+    private record Party(String title, List<String> lines) {}
+
+    /** One key/value cell of the meta panel. */
+    private record Meta(String label, String value) {}
+
+    /** One priced line of the items table. */
+    private record Line(int no, String description, String sku, String hs, String origin, int qty,
+                        String netWeight, boolean netEstimated, BigDecimal net, BigDecimal unit, BigDecimal amount) {}
+
+    /** Everything the renderer needs, resolved once. */
+    private record Model(Order order, OrderCustoms customs, Client client,
+                         String exporterName, Party exporter, Party consignee, Party importer, Party broker,
+                         List<Meta> meta, List<Line> lines, String currency,
+                         int packages, int totalQty, BigDecimal gross, String grossUnit,
+                         BigDecimal net, boolean netEstimated, String lineUnit,
+                         Set<String> origins, BigDecimal goods, BigDecimal freight, String freightNote,
+                         String notes, String signerName, String stamp) {}
 
     @Override
     public byte[] render(Integer orderNo) {
@@ -112,50 +172,212 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         String clientCode = resolveClientCode(order, orderNo);
         Client client = clientCode == null ? null
                 : clientRepository.findByClientCodeIgnoreCase(clientCode).orElse(null);
-
-        // Resolve the client's customs profile for this destination ONCE — it
-        // feeds both the importer-of-record block and the Incoterms fallback.
         ClientCustomsProfile profile = resolveProfile(clientCode, order.getShiptoCountryCd());
+        OrderTracking tracking = orderTrackingRepository.findByOrderNo(orderNo).orElse(null);
 
-        // Importer of record: the order's own customs importer wins; else the
-        // client's customs profile for the destination country; else fall back
-        // to the consignee (ship-to), which is the DAP default.
-        Party importer = resolveImporter(order, customs, profile);
-        // Named customs broker from the profile (Broker Select); null when the
-        // carrier's own brokerage clears — the on-screen invoice showed this
-        // block, the printed one never did.
-        Party broker = resolveBroker(profile);
-
-        // Sprint 51 wiring fix — the real tracking number lives on the
-        // order_label_tracking row, NOT label_batch.track (which stays null for
-        // bulk/manual orders), so the invoice always printed "Tracking: -".
-        String tracking = firstNonBlank(
-                orderTrackingRepository.findByOrderNo(orderNo)
-                        .map(t -> t.getTrackingNumber()).orElse(null),
-                order.getTrack());
-        String carrier = firstNonBlank(order.getShipVia(), order.getShipviaCd(),
-                orderTrackingRepository.findByOrderNo(orderNo)
-                        .map(t -> t.getShipViaCd()).orElse(null));
-        // Incoterms drive who pays duties; fall back to the client's profile,
-        // then DAP (duties payable by the consignee — the B2C default).
-        String incoterms = firstNonBlank(customs.getIncoterms(),
-                profile == null ? null : profile.getIncoterms(), "DAP");
-
-        return renderPdf(order, customs, client, importer, broker, tracking, carrier, incoterms);
+        return renderPdf(buildModel(order, customs, client, profile, tracking));
     }
 
-    /** The client's customs profile for a destination country, or null. */
-    private ClientCustomsProfile resolveProfile(String clientCode, String destCountry) {
-        if (customsProfileRepository == null || !hasText(clientCode) || !hasText(destCountry)) {
-            return null;
+    private Model buildModel(Order order, OrderCustoms customs, Client client,
+                             ClientCustomsProfile profile, OrderTracking tracking) {
+        String currency = firstNonBlank(customs.getCurrency(),
+                profile == null ? null : profile.getCurrency(), "USD");
+        String incoterms = firstNonBlank(customs.getIncoterms(),
+                profile == null ? null : profile.getIncoterms(), "DAP");
+        String trackingNo = firstNonBlank(tracking == null ? null : tracking.getTrackingNumber(), order.getTrack());
+        String carrier = carrierAndService(order, tracking);
+        LocalDateTime shippedAt = tracking == null ? null
+                : (tracking.getLabelGeneratedAt() != null ? tracking.getLabelGeneratedAt() : tracking.getCreatedAt());
+        String shipDate = shippedAt != null ? DATE_FMT.format(shippedAt)
+                : (order.getCreatedDate() == null ? "-" : DATE_FMT.format(order.getCreatedDate()));
+        String invoiceDate = order.getCreatedDate() == null ? "-" : DATE_FMT.format(order.getCreatedDate());
+
+        // --- weights -------------------------------------------------------
+        String lineUnit = firstNonBlank(customs.getWeightUnit(), order.getWeightUnit(),
+                client == null ? null : client.getDefaultWeightUnit(), "KG").toUpperCase();
+        String grossUnit = firstNonBlank(order.getWeightUnit(), lineUnit).toUpperCase();
+        BigDecimal gross = shipmentGrossWeight(order);
+        List<OrderCustomsItem> items = customs.getItems() == null ? List.of() : customs.getItems();
+        int totalQty = 0;
+        for (OrderCustomsItem it : items) totalQty += it.getQuantity() == null ? 1 : it.getQuantity();
+
+        // --- lines -----------------------------------------------------------
+        List<Line> lines = new ArrayList<>(items.size());
+        BigDecimal goods = BigDecimal.ZERO;
+        BigDecimal net = BigDecimal.ZERO;
+        boolean anyEstimated = false;
+        Set<String> origins = new LinkedHashSet<>();
+        // Lines without a declared per-unit weight share whatever part of the
+        // shipment gross the declared lines do not account for, by quantity —
+        // so declared + estimated never exceeds the gross.
+        BigDecimal declaredNet = BigDecimal.ZERO;
+        int undeclaredQty = 0;
+        for (OrderCustomsItem it : items) {
+            int qty = it.getQuantity() == null ? 1 : it.getQuantity();
+            if (it.getWeight() != null && it.getWeight().signum() > 0) {
+                declaredNet = declaredNet.add(it.getWeight().multiply(BigDecimal.valueOf(qty)));
+            } else {
+                undeclaredQty += qty;
+            }
         }
+        BigDecimal estPerUnit = null;
+        if (gross != null && gross.signum() > 0 && undeclaredQty > 0) {
+            BigDecimal remainder = gross.subtract(declaredNet);
+            if (remainder.signum() > 0) {
+                estPerUnit = remainder.divide(BigDecimal.valueOf(undeclaredQty), 4, RoundingMode.HALF_UP);
+            }
+        }
+        int n = 0;
+        for (OrderCustomsItem it : items) {
+            n++;
+            int qty = it.getQuantity() == null ? 1 : it.getQuantity();
+            BigDecimal unit = it.getUnitValue() == null ? BigDecimal.ZERO : it.getUnitValue();
+            BigDecimal amount = unit.multiply(BigDecimal.valueOf(qty));
+            goods = goods.add(amount);
+            BigDecimal lineNet;
+            boolean est;
+            if (it.getWeight() != null && it.getWeight().signum() > 0) {
+                lineNet = it.getWeight().multiply(BigDecimal.valueOf(qty)).setScale(2, RoundingMode.HALF_UP);
+                est = false;
+            } else if (estPerUnit != null) {
+                // Apportioned, and marked so — an estimate must never read as
+                // a declared figure.
+                lineNet = estPerUnit.multiply(BigDecimal.valueOf(qty)).setScale(2, RoundingMode.HALF_UP);
+                est = true;
+                anyEstimated = true;
+            } else {
+                lineNet = null;
+                est = false;
+            }
+            if (lineNet != null) net = net.add(lineNet);
+            String origin = safe(it.getCountryOfOrigin()).trim().toUpperCase();
+            if (hasText(origin)) origins.add(origin);
+            lines.add(new Line(n, safe(it.getDescription()), safe(it.getSku()), safe(it.getHsCode()),
+                    origin, qty, lineNet == null ? "" : lineNet.toPlainString() + (est ? "*" : ""),
+                    est, lineNet, unit, amount));
+        }
+
+        // --- freight / insurance ------------------------------------------
+        // The persisted freight cost is in the account's billing currency;
+        // only itemise it when that matches the invoice currency, otherwise
+        // state the Incoterm treatment so the charge is still declared.
+        BigDecimal freight = null;
+        String freightNote;
+        String billingCurrency = firstNonBlank(client == null ? null : client.getDefaultCurrency(), "USD");
+        boolean sellerPaysFreight = !Set.of("EXW", "FCA", "FAS", "FOB").contains(incoterms.toUpperCase());
+        if (order.getFreightCost() != null && order.getFreightCost().signum() > 0
+                && billingCurrency.equalsIgnoreCase(currency) && sellerPaysFreight) {
+            freight = order.getFreightCost().setScale(2, RoundingMode.HALF_UP);
+            freightNote = null;
+        } else {
+            freightNote = sellerPaysFreight ? "Prepaid by shipper (" + incoterms + ")" : "Collect (" + incoterms + ")";
+        }
+
+        // --- parties ----------------------------------------------------------
+        Party exporter = exporterParty(order, client);
+        String exporterName = hasText(order.getShipFromAddr1()) ? exporterEntity(order, client)
+                : exporter.lines().isEmpty() ? "" : exporter.lines().get(0);
+        Party consignee = new Party("CONSIGNEE / SHIP TO", shipToLines(order));
+        Party importer = resolveImporter(order, customs, profile);
+        Party broker = resolveBroker(order, profile);
+
+        // --- meta panel ---------------------------------------------------------
+        int packages = order.getPackageCount() == null ? 1 : Math.max(1, order.getPackageCount());
+        List<Meta> meta = new ArrayList<>();
+        meta.add(new Meta("Invoice no.", String.valueOf(order.getOrderNo())));
+        meta.add(new Meta("Invoice date", invoiceDate));
+        meta.add(new Meta("Order / reference", firstNonBlank(order.getWmsExternalId(), String.valueOf(order.getOrderNo()))));
+        meta.add(new Meta("Customer ref.", firstNonBlank(
+                "MANUAL".equalsIgnoreCase(order.getCustNo()) ? null : order.getCustNo(),
+                client == null ? null : client.getClientCode(), "-")));
+        meta.add(new Meta("Carrier / service", firstNonBlank(carrier, "-")));
+        meta.add(new Meta("Tracking / AWB no.", firstNonBlank(trackingNo, "-")));
+        meta.add(new Meta("Ship date", shipDate));
+        meta.add(new Meta("Packages", packages + (packages == 1 ? " piece" : " pieces")));
+        meta.add(new Meta("Incoterms 2020", incoterms.toUpperCase()));
+        meta.add(new Meta("Currency of sale", currency.toUpperCase()));
+        meta.add(new Meta("Reason for export", firstNonBlank(customs.getReasonForExport(),
+                profile == null ? null : profile.getReasonForExport(), "SALE").toUpperCase()));
+        meta.add(new Meta("Duties & taxes", dutyTerms(incoterms)));
+        String exportDecl = exportDeclaration(customs);
+        String dutiesAccount = dutiesAccount(incoterms, profile);
+        meta.add(new Meta("Export declaration", firstNonBlank(exportDecl, "None declared")));
+        meta.add(new Meta("Duties billed to", firstNonBlank(dutiesAccount, dutyPayer(incoterms))));
+        meta.add(new Meta("Country of destination", firstNonBlank(order.getCountryName(), order.getShiptoCountryCd(), "-")));
+        meta.add(new Meta("Country of export", firstNonBlank(order.getShipFromCountryCd(),
+                client == null || client.getShipFrom() == null ? null : client.getShipFrom().getCountry(), "-")));
+
+        String signer = firstNonBlank(order.getShipFromName(), client == null ? null : client.getName(), "");
+        String stamp = STAMP_FMT.format(LocalDateTime.now());
+        return new Model(order, customs, client, exporterName, exporter, consignee, importer, broker,
+                meta, lines, currency.toUpperCase(), packages, totalQty, gross, grossUnit, net, anyEstimated, lineUnit,
+                origins, goods, freight, freightNote, safe(customs.getNotes()).trim(), signer, stamp);
+    }
+
+    /**
+     * "UPS Worldwide Expedited" / "FedEx International Economy" rather than
+     * the raw service code ("08", "INTERNATIONAL_ECONOMY") the order stores.
+     * A human ship-via saved on the order wins; otherwise the carrier comes
+     * from the labelling account (then the connect-code map) and the service
+     * from the carrier's own naming.
+     */
+    private String carrierAndService(Order order, OrderTracking tracking) {
+        String via = safe(order.getShipVia()).trim();
+        if (hasText(via) && via.contains(" ") && !via.equals(via.toUpperCase(Locale.ROOT))) return via;
+        String code = firstNonBlank(order.getShipviaCd(), tracking == null ? null : tracking.getShipViaCd(), via);
+        String carrier = null;
+        if (tracking != null && hasText(tracking.getAccountNumber()) && accountRefRepository != null) {
+            carrier = accountRefRepository
+                    .findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(tracking.getAccountNumber().trim())
+                    .map(CarrierAccountRef::getCarrierCode).orElse(null);
+        }
+        if (!hasText(carrier)) {
+            String canon = ShippingConfigService.canonicalCarrierFor(code);
+            if (Set.of("UPS", "FEDEX", "USPS", "DHL", "STAMPS").contains(canon)) carrier = canon;
+        }
+        if (!hasText(code)) return hasText(carrier) ? carrierLabel(carrier) : "-";
+        String c = safe(carrier).trim().toUpperCase(Locale.ROOT);
+        if (c.equals("UPS")) return titleCase(ZplLabelService.upsService(code)[0]);
+        if (c.equals("FEDEX")) {
+            String svc = code.toUpperCase(Locale.ROOT).replaceFirst("^FEDEX[_ ]", "");
+            return "FedEx " + titleCase(svc.replace('_', ' '));
+        }
+        String label = hasText(carrier) ? carrierLabel(carrier) + " " : "";
+        return label + titleCase(code.replace('_', ' '));
+    }
+
+    private static String carrierLabel(String carrier) {
+        return switch (carrier.trim().toUpperCase(Locale.ROOT)) {
+            case "FEDEX" -> "FedEx";
+            case "UPS" -> "UPS";
+            case "USPS" -> "USPS";
+            case "DHL" -> "DHL";
+            default -> titleCase(carrier);
+        };
+    }
+
+    /** "WORLDWIDE EXPEDITED" → "Worldwide Expedited"; keeps UPS / FedEx / A.M. / 2nd intact. */
+    private static String titleCase(String s) {
+        if (s == null) return "";
+        StringBuilder out = new StringBuilder();
+        for (String w : s.trim().split("\\s+")) {
+            if (w.isEmpty()) continue;
+            if (out.length() > 0) out.append(' ');
+            String u = w.toUpperCase(Locale.ROOT);
+            if (u.equals("UPS") || u.equals("USPS") || u.equals("DHL") || u.equals("A.M.") || u.equals("P.M.")) out.append(u);
+            else if (u.equals("FEDEX")) out.append("FedEx");
+            else if (u.equals("2ND") || u.equals("3RD")) out.append(u.toLowerCase(Locale.ROOT));
+            else out.append(u.charAt(0)).append(u.substring(1).toLowerCase(Locale.ROOT));
+        }
+        return out.toString();
+    }
+
+    private ClientCustomsProfile resolveProfile(String clientCode, String destCountry) {
+        if (customsProfileRepository == null || !hasText(clientCode) || !hasText(destCountry)) return null;
         return customsProfileRepository.findByClientAndCountry(clientCode, destCountry).orElse(null);
     }
 
     // ---- party resolution ------------------------------------------------
-
-    /** A rendered address block: a name/company line plus street lines. */
-    private record Party(String title, List<String> lines) {}
 
     private Party resolveImporter(Order order, OrderCustoms customs, ClientCustomsProfile profile) {
         // 1) Explicit importer captured on the order's customs record.
@@ -163,490 +385,601 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         String iaName = ia == null ? null : ia.getName();
         if (hasText(iaName) || hasText(customs.getImporterCompany())
                 || (ia != null && hasText(ia.getLine1()))) {
-            return new Party("IMPORTER OF RECORD", List.of(
-                    firstNonBlank(iaName, customs.getImporterCompany(), ""),
-                    ia == null ? "" : safe(ia.getLine1()),
-                    ia == null ? "" : joinCityStateZip(ia.getCity(), ia.getState(), ia.getZip()),
-                    ia == null ? "" : safe(ia.getCountry()),
-                    taxLine(customs.getImporterTaxId(), customs.getImporterVat(), customs.getImporterEori())));
+            List<String> lines = new ArrayList<>(8);
+            String name = firstNonBlank(iaName, customs.getImporterCompany(), "");
+            lines.add(name);
+            if (hasText(customs.getImporterCompany())
+                    && !customs.getImporterCompany().trim().equalsIgnoreCase(name.trim())) {
+                lines.add(customs.getImporterCompany().trim());
+            }
+            if (ia != null) {
+                lines.add(safe(ia.getLine1()));
+                lines.add(safe(ia.getLine2()));
+                lines.add(joinCityStateZip(ia.getCity(), ia.getState(), ia.getZip()));
+                lines.add(safe(ia.getCountry()));
+                if (hasText(ia.getPhone())) lines.add("Tel " + ia.getPhone().trim());
+            }
+            lines.add(taxLine(customs.getImporterTaxId(), customs.getImporterVat(), customs.getImporterEori()));
+            return new Party("IMPORTER OF RECORD", lines);
         }
-
         // 2) Client's customs profile for the destination country.
         if (profile != null && (hasText(profile.getImporterName()) || hasText(profile.getImporterAddress1()))) {
-            String ids = taxLine(
-                    firstNonBlank(profile.getImporterGstin(), profile.getImporterIec(), profile.getImporterTaxId()),
-                    null, profile.getImporterEori());
-            return new Party("IMPORTER OF RECORD", List.of(
-                    safe(profile.getImporterName()),
-                    safe(profile.getImporterAddress1()),
-                    joinCityStateZip(profile.getImporterCity(), profile.getImporterState(), profile.getImporterPostcode()),
-                    safe(profile.getImporterCountry()),
-                    ids));
+            List<String> lines = new ArrayList<>(9);
+            lines.add(safe(profile.getImporterName()));
+            if (hasText(profile.getImporterContact())) lines.add("Attn " + profile.getImporterContact().trim());
+            lines.add(safe(profile.getImporterAddress1()));
+            lines.add(safe(profile.getImporterAddress2()));
+            lines.add(joinCityStateZip(profile.getImporterCity(), profile.getImporterState(), profile.getImporterPostcode()));
+            lines.add(safe(profile.getImporterCountry()));
+            if (hasText(profile.getImporterPhone())) lines.add("Tel " + profile.getImporterPhone().trim());
+            String idLabel = hasText(profile.getImporterTaxIdType()) ? profile.getImporterTaxIdType().trim() : "Tax ID";
+            StringBuilder ids = new StringBuilder();
+            if (hasText(profile.getImporterTaxId())) ids.append(idLabel).append(": ").append(profile.getImporterTaxId().trim());
+            if (hasText(profile.getImporterGstin())) { sep(ids); ids.append("GSTIN: ").append(profile.getImporterGstin().trim()); }
+            if (hasText(profile.getImporterIec())) { sep(ids); ids.append("IEC: ").append(profile.getImporterIec().trim()); }
+            if (hasText(profile.getImporterEori())) { sep(ids); ids.append("EORI: ").append(profile.getImporterEori().trim()); }
+            if (hasText(profile.getImporterIoss())) { sep(ids); ids.append("IOSS: ").append(profile.getImporterIoss().trim()); }
+            if (hasText(profile.getImporterCompanyReg())) { sep(ids); ids.append("Reg: ").append(profile.getImporterCompanyReg().trim()); }
+            lines.add(ids.toString());
+            return new Party("IMPORTER OF RECORD", lines);
         }
-
-        // 3) Consignee (ship-to) is the importer of record (DAP default).
+        // 3) Consignee is the importer of record (DAP default).
         return new Party("IMPORTER OF RECORD (CONSIGNEE)", shipToLines(order));
     }
 
     private BigDecimal shipmentGrossWeight(Order order) {
         if (labelPackageRepository != null && order.getOrderNo() != null) {
             BigDecimal sum = labelPackageRepository.findByOrderNoOrderBySequenceNumberAsc(order.getOrderNo()).stream()
-                    .map(p -> p.getWeight()).filter(java.util.Objects::nonNull)
+                    .map(p -> p.getWeight()).filter(Objects::nonNull)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             if (sum.signum() > 0) return sum;
         }
-        // No piece rows (single box, or a legacy/un-generated order): the
-        // order weight is the shipment weight. Multiplying by packageCount
-        // here would be a guess — piece rows are the source of truth.
         return order.getWeight();
     }
 
-    private Party resolveBroker(ClientCustomsProfile profile) {
+    /**
+     * Customs broker: the per-shipment override saved on the order wins,
+     * then the client's profile for the destination. Null when the
+     * carrier's own brokerage clears.
+     */
+    @SuppressWarnings("unchecked")
+    private Party resolveBroker(Order order, ClientCustomsProfile profile) {
+        if (hasText(order.getImporterBrokerOverride())) {
+            try {
+                Map<String, Object> ov = new com.fasterxml.jackson.databind.ObjectMapper()
+                        .readValue(order.getImporterBrokerOverride(), Map.class);
+                Object b = ov.get("broker");
+                if (b instanceof Map<?, ?> bm) {
+                    String name = firstNonBlank(str(bm.get("name")), str(bm.get("company")), "");
+                    if (hasText(name)) {
+                        return brokerParty(name, str(bm.get("company")), str(bm.get("addressLine1")),
+                                str(bm.get("addressLine2")), str(bm.get("city")), str(bm.get("state")),
+                                str(bm.get("postalCode")), str(bm.get("countryCode")), str(bm.get("phone")),
+                                firstNonBlank(str(bm.get("brokerId")), str(bm.get("license")), ""));
+                    }
+                }
+            } catch (Exception ignore) {
+                // malformed override → fall through to the profile
+            }
+        }
         if (profile == null) return null;
         String name = firstNonBlank(safe(profile.getBrokerName()), safe(profile.getBrokerCompany()), "");
         if (!hasText(name)) return null;
-        List<String> lines = new java.util.ArrayList<>(7);
-        lines.add(name);
-        String company = safe(profile.getBrokerCompany());
+        return brokerParty(name, profile.getBrokerCompany(), profile.getBrokerAddress1(), profile.getBrokerAddress2(),
+                profile.getBrokerCity(), profile.getBrokerState(), profile.getBrokerPostcode(), profile.getBrokerCountry(),
+                profile.getBrokerPhone(), firstNonBlank(safe(profile.getBrokerId()), safe(profile.getBrokerLicense()), ""));
+    }
+
+    private static Party brokerParty(String name, String company, String addr1, String addr2, String city,
+                                     String state, String postcode, String country, String phone, String id) {
+        List<String> lines = new ArrayList<>(8);
+        lines.add(name.trim());
         if (hasText(company) && !company.trim().equalsIgnoreCase(name.trim())) lines.add(company.trim());
-        lines.add(safe(profile.getBrokerAddress1()));
-        lines.add(joinCityStateZip(safe(profile.getBrokerCity()), safe(profile.getBrokerState()), safe(profile.getBrokerPostcode())));
-        lines.add(safe(profile.getBrokerCountry()));
-        String phone = safe(profile.getBrokerPhone());
-        if (hasText(phone)) lines.add("PH " + phone);
-        String ids = firstNonBlank(safe(profile.getBrokerId()), safe(profile.getBrokerLicense()), "");
-        if (hasText(ids)) lines.add("Broker ID " + ids);
+        lines.add(safe(addr1));
+        lines.add(safe(addr2));
+        lines.add(joinCityStateZip(city, state, postcode));
+        lines.add(safe(country));
+        if (hasText(phone)) lines.add("Tel " + phone.trim());
+        if (hasText(id)) lines.add("Broker ID / licence: " + id.trim());
         return new Party("CUSTOMS BROKER", lines);
     }
 
     private static List<String> shipToLines(Order order) {
-        // Consignee = person AND company: on a B2B entry the company is the
-        // party customs clears to, and this PDF is what prints with the
-        // parcel now. It used to emit the name only (dropping "Kalpana
-        // Textiles Pvt Ltd" while the on-screen invoice showed it) and no
-        // address line 2.
         String name = firstNonBlank(order.getShipName(), order.getShipAttn(), "");
         String company = hasText(order.getShipAttn()) && !order.getShipAttn().trim().equalsIgnoreCase(name.trim())
-                ? order.getShipAttn().trim()
-                : null;
-        List<String> lines = new java.util.ArrayList<>(6);
+                ? order.getShipAttn().trim() : null;
+        List<String> lines = new ArrayList<>(7);
         lines.add(name);
         if (company != null) lines.add(company);
         lines.add(safe(order.getShipAddr1()));
         if (hasText(order.getLocation())) lines.add(order.getLocation().trim());
         lines.add(joinCityStateZip(order.getShiptoCity(), order.getShiptoState(), order.getShiptoZip()));
         lines.add(firstNonBlank(order.getCountryName(), order.getShiptoCountryCd(), ""));
+        if (hasText(order.getPhone())) lines.add("Tel " + order.getPhone().trim());
         return lines;
     }
 
     /**
      * The exporter is where THIS parcel shipped from — the ship-from
-     * persisted on the order (operator's sender / client warehouse), which
-     * is what the label prints. The client's registered address is only the
-     * fallback: reading it first declared a Santa Monica export origin on
-     * the customs document for a parcel labelled from Austin.
+     * persisted on the order (what the label prints); the client's
+     * registered address is only the fallback.
      */
-    private static List<String> exporterLines(Order order, Client client) {
+    private static Party exporterParty(Order order, Client client) {
+        List<String> lines = new ArrayList<>(8);
         if (order != null && hasText(order.getShipFromAddr1())) {
-            List<String> lines = new java.util.ArrayList<>(5);
-            lines.add(firstNonBlank(order.getShipFromName(), order.getShipFromCompany(),
-                    client == null ? "" : client.getName(), ""));
-            if (hasText(order.getShipFromCompany())
-                    && !order.getShipFromCompany().trim().equalsIgnoreCase(firstNonBlank(order.getShipFromName(), "").trim())) {
-                lines.add(order.getShipFromCompany().trim());
+            // The exporter is the legal entity (ship-from company, else the
+            // client); the ship-from name is the sender / warehouse location.
+            String entity = exporterEntity(order, client);
+            lines.add(entity);
+            if (hasText(order.getShipFromName())
+                    && !order.getShipFromName().trim().equalsIgnoreCase(entity.trim())) {
+                lines.add(order.getShipFromName().trim());
             }
             lines.add(order.getShipFromAddr1().trim());
+            lines.add(safe(order.getShipFromAddr2()));
             lines.add(joinCityStateZip(order.getShipFromCity(), order.getShipFromState(), order.getShipFromZip()));
             lines.add(safe(order.getShipFromCountryCd()));
-            return lines;
-        }
-        if (client == null || client.getShipFrom() == null) {
-            return List.of("—");
-        }
-        Address a = client.getShipFrom();
-        return List.of(
-                firstNonBlank(a.getName(), client.getName(), ""),
-                safe(a.getLine1()),
-                joinCityStateZip(a.getCity(), a.getState(), a.getZip()),
-                safe(a.getCountry()));
-    }
-
-    // ---- rendering -------------------------------------------------------
-
-    private byte[] renderPdf(Order order, OrderCustoms customs, Client client, Party importer,
-                             Party broker, String tracking, String carrier, String incoterms) {
-        try (PDDocument doc = new PDDocument();
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-
-            // Resolve paper size — client override (A4 default) per user
-            // direction 2026-09-07. Anonymous / MANUAL orders and invalid
-            // values fall to A4 to match the ISO standard used everywhere
-            // except US/CA/MX.
-            PDRectangle pageSize = resolvePageSize(client);
-            float pageWidth = pageSize.getWidth();
-            float pageHeight = pageSize.getHeight();
-            float margin = 40f;
-
-            String currency = firstNonBlank(customs.getCurrency(), "USD");
-            List<OrderCustomsItem> items = customs.getItems() == null
-                    ? List.of() : customs.getItems();
-
-            // Row 1 of page 1 has less vertical space than a continuation
-            // page because we render the full-header (parties + meta). Row
-            // budgets are computed dynamically inside the loop — we start
-            // page 1, draw the full header, then feed items until the row
-            // cursor drops below `bottomReservedY`, at which point we close
-            // the page and open a new one with the compact header.
-            //
-            // "Bottom reserved" preserves room for:
-            //   - subtotal row  (~16f)
-            //   - shipment summary + declaration + signature on the LAST
-            //     page (~90f)
-            //   - Page N of M footer (~24f)
-            // Continuation pages only need footer + subtotal (~40f) so
-            // they fit more rows.
-            float footerReserve = 24f;
-            float lastPageReserve = 90f;
-            float subtotalReserve = 16f;
-            float rowH = 13f;
-
-            // Two-pass render: pass 1 counts pages by simulating row
-            // placement, pass 2 emits actual pages with the known total
-            // page count for "Page N of M" footers.
-            int simPage = 1;
-            int simRowIdx = 0;
-            java.util.List<int[]> pageRanges = new java.util.ArrayList<>();
-            int rangeStart = 0;
-            float simY = pageHeight - margin - firstPageHeaderHeight(broker != null);
-            while (simRowIdx < items.size()) {
-                float bottomReserve = (simRowIdx == items.size() - 1)
-                        ? lastPageReserve + subtotalReserve + footerReserve
-                        : subtotalReserve + footerReserve + rowH;
-                if (simY - rowH < margin + bottomReserve) {
-                    pageRanges.add(new int[]{rangeStart, simRowIdx});
-                    rangeStart = simRowIdx;
-                    simPage++;
-                    simY = pageHeight - margin - continuationHeaderHeight();
-                    continue;
-                }
-                simY -= rowH;
-                simRowIdx++;
+            String phone = firstNonBlank(order.getShipFromPhone(),
+                    client == null || client.getShipFrom() == null ? null : client.getShipFrom().getPhone(),
+                    client == null ? null : client.getPhone());
+            if (hasText(phone)) lines.add("Tel " + phone);
+        } else if (client != null && client.getShipFrom() != null) {
+            Address a = client.getShipFrom();
+            lines.add(firstNonBlank(a.getName(), client.getName(), ""));
+            if (hasText(a.getName()) && hasText(client.getName())
+                    && !a.getName().trim().equalsIgnoreCase(client.getName().trim())) {
+                lines.add(client.getName().trim());
             }
-            pageRanges.add(new int[]{rangeStart, items.size()});
-            int totalPages = pageRanges.size();
-            log.info("CommercialInvoice pagination — order={} items={} pages={} pageSize={} (client.defaultPaperSize={})",
-                    order.getOrderNo(), items.size(), totalPages,
-                    pageSize == PDRectangle.A4 ? "A4" : "LETTER",
-                    client == null ? null : client.getDefaultPaperSize());
-
-            // Pass 2 — actually emit each page.
-            BigDecimal grossForLines = shipmentGrossWeight(order);
-            int totalQtyForLines = 0;
-            for (OrderCustomsItem it : items) totalQtyForLines += it.getQuantity() == null ? 1 : it.getQuantity();
-            String lineWeightUnit = firstNonBlank(customs.getWeightUnit(),
-                    client == null ? null : client.getDefaultWeightUnit(), "KG");
-            BigDecimal runningTotal = BigDecimal.ZERO;
-            for (int p = 0; p < totalPages; p++) {
-                boolean firstPage = (p == 0);
-                boolean lastPage = (p == totalPages - 1);
-                int startIdx = pageRanges.get(p)[0];
-                int endIdx = pageRanges.get(p)[1];
-
-                PDPage page = new PDPage(pageSize);
-                doc.addPage(page);
-                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
-                    float y;
-                    if (firstPage) {
-                        y = renderFullHeader(cs, order, customs, client, importer, broker,
-                                tracking, carrier, incoterms, currency,
-                                pageWidth, pageHeight, margin);
-                    } else {
-                        y = renderContinuationHeader(cs, order, client,
-                                pageWidth, pageHeight, margin);
-                    }
-                    // Item table column header
-                    y = drawItemsTableHeader(cs, margin, pageWidth - margin, y, lineWeightUnit);
-                    // Item rows for this page
-                    BigDecimal pageSubtotal = BigDecimal.ZERO;
-                    for (int i = startIdx; i < endIdx; i++) {
-                        OrderCustomsItem it = items.get(i);
-                        int qty = it.getQuantity() == null ? 1 : it.getQuantity();
-                        BigDecimal unit = it.getUnitValue() == null ? BigDecimal.ZERO : it.getUnitValue();
-                        BigDecimal amount = unit.multiply(BigDecimal.valueOf(qty));
-                        pageSubtotal = pageSubtotal.add(amount);
-                        // Net weight per line: declared per-unit weight × qty, else the
-                        // line's share of the shipment gross by quantity, marked "(est)"
-                        // so an apportioned figure never reads as a declaration.
-                        String netWeight;
-                        if (it.getWeight() != null && it.getWeight().signum() > 0) {
-                            netWeight = it.getWeight().multiply(BigDecimal.valueOf(qty))
-                                    .setScale(2, RoundingMode.HALF_UP).toPlainString();
-                        } else if (grossForLines != null && grossForLines.signum() > 0 && totalQtyForLines > 0) {
-                            netWeight = grossForLines.multiply(BigDecimal.valueOf(qty))
-                                    .divide(BigDecimal.valueOf(totalQtyForLines), 2, RoundingMode.HALF_UP)
-                                    .toPlainString() + " (est)";
-                        } else {
-                            netWeight = "";
-                        }
-                        drawItemRow(cs, margin, pageWidth - margin, y, it, qty, unit, amount, netWeight);
-                        y -= rowH;
-                    }
-                    runningTotal = runningTotal.add(pageSubtotal);
-
-                    // Subtotal row (every page). Final total on last page.
-                    rule(cs, margin, pageWidth - margin, y - 2f, LIGHT_RULE, 0.5f);
-                    y -= subtotalReserve;
-                    String subtotalLabel = "SUBTOTAL page " + (p + 1) + " (" + currency + ")";
-                    cs.setNonStrokingColor(PRIMARY);
-                    drawText(cs, HELVETICA_BOLD, 9.5f, subtotalLabel,
-                            margin + 370f, y);
-                    drawRightText(cs, HELVETICA_BOLD, 9.5f, money(pageSubtotal),
-                            pageWidth - margin, y);
-                    cs.setNonStrokingColor(Color.BLACK);
-
-                    if (lastPage) {
-                        y -= 16f;
-                        String totalLabel = "TOTAL (" + currency + ")";
-                        cs.setNonStrokingColor(PRIMARY);
-                        drawText(cs, HELVETICA_BOLD, 11f, totalLabel, margin + 370f, y);
-                        drawRightText(cs, HELVETICA_BOLD, 11f, money(runningTotal),
-                                pageWidth - margin, y);
-                        cs.setNonStrokingColor(Color.BLACK);
-
-                        // Shipment summary + declaration + signature block.
-                        int totalQty = 0;
-                        for (OrderCustomsItem it : items) {
-                            totalQty += it.getQuantity() == null ? 1 : it.getQuantity();
-                        }
-                        int pkgs = order.getPackageCount() == null ? 1 : order.getPackageCount();
-                        String weightUnit = firstNonBlank(customs.getWeightUnit(),
-                                client == null ? null : client.getDefaultWeightUnit(), "KG");
-                        StringBuilder summary = new StringBuilder();
-                        summary.append("Packages: ").append(pkgs)
-                                .append("    Total quantity: ").append(totalQty);
-                        // Gross = the whole shipment. Order.weight is the PER-BOX
-                        // weight on multi-package orders (a 45 × 2 lb shipment
-                        // printed "Gross weight: 2 LB"); sum the persisted pieces,
-                        // falling back to per-box × count, then the single weight.
-                        BigDecimal gross = shipmentGrossWeight(order);
-                        if (gross != null) {
-                            summary.append("    Gross weight: ")
-                                    .append(gross.stripTrailingZeros().toPlainString())
-                                    .append(' ').append(weightUnit);
-                        }
-                        float sumY = y - 16f;
-                        cs.setNonStrokingColor(new Color(0x5a, 0x45, 0x26));
-                        drawText(cs, HELVETICA, 8.5f, summary.toString(), margin, sumY);
-                        cs.setNonStrokingColor(Color.BLACK);
-
-                        float decY = Math.max(sumY - 18f, margin + 46f);
-                        cs.setNonStrokingColor(new Color(0x5a, 0x45, 0x26));
-                        drawText(cs, HELVETICA_OBLIQUE, 8.5f,
-                                "I declare the information on this invoice to be true and correct to the best of my knowledge.",
-                                margin, decY);
-                        cs.setNonStrokingColor(Color.BLACK);
-                        rule(cs, pageWidth - margin - 180f, pageWidth - margin, margin + 24f, LIGHT_RULE, 0.6f);
-                        drawText(cs, HELVETICA, 8f, "Authorised signature / date",
-                                pageWidth - margin - 180f, margin + 12f);
-                    }
-
-                    // Page footer — "Invoice #N — Page X of Y".
-                    String footer = "Invoice #" + order.getOrderNo() + " - Page " + (p + 1)
-                            + " of " + totalPages;
-                    float footerWidth = textWidth(HELVETICA, 8f, footer);
-                    cs.setNonStrokingColor(new Color(0x5a, 0x45, 0x26));
-                    drawText(cs, HELVETICA, 8f, footer,
-                            (pageWidth - footerWidth) / 2f, margin - 12f);
-                    cs.setNonStrokingColor(Color.BLACK);
-                }
-            }
-
-            doc.save(out);
-            return out.toByteArray();
-        } catch (java.io.IOException e) {
-            throw new IllegalStateException("Failed to render commercial invoice for order "
-                    + order.getOrderNo(), e);
+            lines.add(safe(a.getLine1()));
+            lines.add(safe(a.getLine2()));
+            lines.add(joinCityStateZip(a.getCity(), a.getState(), a.getZip()));
+            lines.add(safe(a.getCountry()));
+            String phone = firstNonBlank(a.getPhone(), client.getPhone());
+            if (hasText(phone)) lines.add("Tel " + phone);
+        } else if (client != null) {
+            lines.add(safe(client.getName()));
+        } else {
+            lines.add("-");
         }
+        if (client != null && hasText(client.getEmail())) lines.add(client.getEmail().trim());
+        return new Party("EXPORTER / SHIPPER", lines);
     }
 
     /**
-     * Resolve paper size — {@link Client#getDefaultPaperSize()} when set
-     * ("A4" or "LETTER"), else A4. A4 default matches the ISO standard;
-     * US/CA/MX tenants override to LETTER via the Client settings.
+     * The exporting legal entity. The ship-from company when it is a real
+     * company; when the warehouse label was saved into both the name and
+     * company slots ("Main Fulfillment Center" twice) the client is the
+     * exporter and the warehouse becomes the location line.
      */
+    private static String exporterEntity(Order order, Client client) {
+        String company = safe(order.getShipFromCompany()).trim();
+        String name = safe(order.getShipFromName()).trim();
+        String clientName = client == null ? "" : safe(client.getName()).trim();
+        if (hasText(company) && !(company.equalsIgnoreCase(name) && hasText(clientName))) return company;
+        return firstNonBlank(clientName, company, name, "");
+    }
+
+    // =====================================================================
+    // Rendering
+    // =====================================================================
+
+    private byte[] renderPdf(Model m) {
+        try (PDDocument doc = new PDDocument();
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+
+            PDRectangle pageSize = resolvePageSize(m.client());
+            float pageW = pageSize.getWidth();
+            float pageH = pageSize.getHeight();
+            float contentW = pageW - 2 * MARGIN;
+            Table table = new Table(MARGIN, contentW, m.lineUnit());
+
+            // Pass 1 — measure the fixed blocks with a dry pen, then place
+            // rows page by page so the closing block always fits on the last.
+            Pen dry = new Pen(null);
+            float firstHeaderH = drawFirstHeader(dry, m, pageW, pageH);
+            float contHeaderH = drawContinuationHeader(dry, m, pageW, pageH);
+            float closingH = drawClosing(dry, m, pageW, MARGIN, contentW, 0f);
+            float carryH = 20f;
+            float bottom = MARGIN + FOOTER_H;
+
+            List<int[]> pages = new ArrayList<>();
+            int start = 0;
+            int idx = 0;
+            float y = pageH - MARGIN - firstHeaderH - table.headerH();
+            int rows = m.lines().size();
+            while (idx < rows) {
+                boolean lastRow = idx == rows - 1;
+                float reserve = lastRow ? closingH + carryH : carryH + ROW_H;
+                if (y - ROW_H < bottom + reserve) {
+                    if (idx == start) {
+                        // A page that cannot hold even one row: emit it empty
+                        // rather than loop forever (pathologically tall closing).
+                        idx++;
+                    }
+                    pages.add(new int[]{start, idx});
+                    start = idx;
+                    y = pageH - MARGIN - contHeaderH - table.headerH();
+                    continue;
+                }
+                y -= ROW_H;
+                idx++;
+            }
+            if (rows == 0 || start < rows || pages.isEmpty()) pages.add(new int[]{start, rows});
+            // The closing block may not fit under the final rows — push it to
+            // one more page in that case (measured, so it is exact).
+            {
+                int[] last = pages.get(pages.size() - 1);
+                float yEnd = pageH - MARGIN - (pages.size() == 1 ? firstHeaderH : contHeaderH)
+                        - table.headerH() - ROW_H * (last[1] - last[0]);
+                if (yEnd - carryH - closingH < bottom) pages.add(new int[]{rows, rows});
+            }
+            int totalPages = pages.size();
+            log.info("CommercialInvoice — order={} items={} pages={} paper={}", m.order().getOrderNo(),
+                    rows, totalPages, pageSize == PDRectangle.A4 ? "A4" : "LETTER");
+
+            // Pass 2 — emit.
+            BigDecimal carried = BigDecimal.ZERO;
+            for (int p = 0; p < totalPages; p++) {
+                int[] range = pages.get(p);
+                boolean first = p == 0;
+                boolean last = p == totalPages - 1;
+                PDPage page = new PDPage(pageSize);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    Pen pen = new Pen(cs);
+                    float top = pageH - MARGIN;
+                    y = top - (first ? drawFirstHeader(pen, m, pageW, pageH) : drawContinuationHeader(pen, m, pageW, pageH));
+                    y = table.drawHeader(pen, y);
+                    BigDecimal pageSum = BigDecimal.ZERO;
+                    for (int i = range[0]; i < range[1]; i++) {
+                        Line ln = m.lines().get(i);
+                        y = table.drawRow(pen, y, ln, (i - range[0]) % 2 == 1);
+                        pageSum = pageSum.add(ln.amount());
+                    }
+                    if (range[1] > range[0] || rows == 0) pen.rule(MARGIN, MARGIN + contentW, y, RULE, 0.5f);
+                    carried = carried.add(pageSum);
+                    // Carry line — page subtotal on every page so a separated
+                    // sheet still reconciles; the last page also gets totals.
+                    y -= 13f;
+                    pen.text(HELVETICA_BOLD, 8f, TAUPE,
+                            (last ? "SUBTOTAL THIS PAGE (" : "CARRIED FORWARD (") + m.currency() + ")",
+                            MARGIN + contentW - 200f, y, 0.4f);
+                    pen.rightText(HELVETICA_BOLD, 8.5f, INK, money(last ? pageSum : carried), MARGIN + contentW - 4f, y);
+                    y -= 7f;
+                    if (last) drawClosing(pen, m, pageW, MARGIN, contentW, y);
+                    drawFooter(pen, m, pageW, p + 1, totalPages);
+                }
+            }
+            doc.save(out);
+            return out.toByteArray();
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to render commercial invoice for order "
+                    + m.order().getOrderNo(), e);
+        }
+    }
+
     private static PDRectangle resolvePageSize(Client client) {
-        if (client != null && client.getDefaultPaperSize() != null) {
-            String size = client.getDefaultPaperSize().trim().toUpperCase();
-            if ("LETTER".equals(size)) return PDRectangle.LETTER;
+        if (client != null && client.getDefaultPaperSize() != null
+                && "LETTER".equals(client.getDefaultPaperSize().trim().toUpperCase())) {
+            return PDRectangle.LETTER;
         }
         return PDRectangle.A4;
     }
 
-    /** Approximate vertical space consumed by the page-1 full header
-     *  (parties + meta + spacing). Used in the two-pass pagination sim. */
-    private static float firstPageHeaderHeight(boolean hasBroker) {
-        // Empirical: title(40) + rule(2) + meta 2 lines(30) + parties(90) + spacing(12) = ~174;
-        // a named broker adds a second right-column party (~70).
-        return hasBroker ? 260f : 190f;
-    }
+    // ---- page 1 header: title, meta panel, party grid --------------------
 
-    /** Approximate vertical space consumed by the compact continuation
-     *  header ("Invoice #N — continued" title only). */
-    private static float continuationHeaderHeight() {
-        // Title(20) + client name(15) + rule(2) + spacing(12) = ~50
-        return 55f;
-    }
+    /** Draws (or measures) the page-1 header; returns its height. */
+    private float drawFirstHeader(Pen pen, Model m, float pageW, float pageH) throws IOException {
+        float contentW = pageW - 2 * MARGIN;
+        float top = pageH - MARGIN;
+        float y = top;
 
-    /**
-     * Full-header renderer for page 1. Emits title + client name +
-     * invoice meta line + 3 party blocks. Returns the y-cursor below.
-     */
-    private float renderFullHeader(PDPageContentStream cs, Order order, OrderCustoms customs,
-            Client client, Party importer, Party broker, String tracking, String carrier, String incoterms,
-            String currency, float pageWidth, float pageHeight, float margin)
-            throws java.io.IOException {
-        float y = pageHeight - margin;
-        cs.setNonStrokingColor(PRIMARY);
-        drawText(cs, HELVETICA_BOLD, 20f, "COMMERCIAL INVOICE",
-                pageWidth - margin - textWidth(HELVETICA_BOLD, 20f, "COMMERCIAL INVOICE"), y - 20f);
-        cs.setNonStrokingColor(Color.BLACK);
-        if (client != null) {
-            drawText(cs, HELVETICA_BOLD, 12f, safe(client.getName()), margin, y - 12f);
-        }
+        // Title row
+        pen.text(HELVETICA_BOLD, 21f, INK, "COMMERCIAL INVOICE", MARGIN, y - 18f, 0.3f);
+        pen.text(HELVETICA, 7.5f, TAUPE, "CUSTOMS DECLARATION FOR INTERNATIONAL SHIPMENT  -  ORIGINAL", MARGIN, y - 30f, 0.6f);
+        pen.rightText(HELVETICA_BOLD, 11f, ESPRESSO, m.exporterName(), MARGIN + contentW, y - 16f);
+        pen.rightText(HELVETICA, 7.5f, TAUPE, "Invoice no. " + m.order().getOrderNo()
+                + "   -   " + m.currency() + "   -   " + m.meta().get(1).value(), MARGIN + contentW, y - 29f);
         y -= 40f;
-        rule(cs, margin, pageWidth - margin, y, PRIMARY, 1.2f);
-        y -= 18f;
-        String meta = "Invoice No: " + order.getOrderNo()
-                + "    Date: " + (order.getCreatedDate() == null ? "-" : DATE_FMT.format(order.getCreatedDate()))
-                + "    Incoterms: " + firstNonBlank(incoterms, "DAP")
-                + "    Currency: " + currency
-                + "    Reason: " + firstNonBlank(customs.getReasonForExport(), "SALE");
-        drawText(cs, HELVETICA, 9.5f, meta, margin, y);
-        y -= 12f;
-        String meta2 = "Carrier: " + firstNonBlank(carrier, "-")
-                + "    Tracking: " + firstNonBlank(tracking, "-")
-                + "    " + dutyTerms(incoterms);
-        drawText(cs, HELVETICA, 9.5f, meta2, margin, y);
-        y -= 26f;
-        float leftCol = margin;
-        float rightCol = pageWidth / 2f + 20f;
-        float leftY = drawParty(cs, "EXPORTER / SHIP FROM", exporterLines(order, client), leftCol, y);
-        float rightY = drawParty(cs, importer.title(), importer.lines(), rightCol, y);
-        if (broker != null) {
-            rightY = drawParty(cs, broker.title(), broker.lines(), rightCol, rightY - 8f);
+        pen.rule(MARGIN, MARGIN + contentW, y, INK, 1.1f);
+        y -= 8f;
+
+        // Meta panel: 4 columns × N rows of label/value cells on cream.
+        int cols = 4;
+        int rowsN = (m.meta().size() + cols - 1) / cols;
+        float cellH = 27f;
+        float panelH = rowsN * cellH + 6f;
+        pen.fill(MARGIN, y - panelH, contentW, panelH, CREAM);
+        float colW = contentW / cols;
+        for (int i = 0; i < m.meta().size(); i++) {
+            Meta cell = m.meta().get(i);
+            float cx = MARGIN + 9f + (i % cols) * colW;
+            float cy = y - 3f - (i / cols) * cellH;
+            pen.text(HELVETICA_BOLD, 6.6f, TAUPE, cell.label().toUpperCase(), cx, cy - 9f, 0.55f);
+            // Shrink long values (service names, references) two steps before truncating.
+            float vs = 9f;
+            float maxW = colW - 14f;
+            if (textWidth(HELVETICA, vs, cell.value()) > maxW) vs = 8f;
+            if (textWidth(HELVETICA, vs, cell.value()) > maxW) vs = 7.2f;
+            pen.text(HELVETICA, vs, INK, fit(HELVETICA, vs, cell.value(), maxW), cx, cy - 21f, 0f);
         }
-        float consY = drawParty(cs, "CONSIGNEE / SHIP TO", shipToLines(order), leftCol, leftY - 8f);
-        return Math.min(consY, rightY) - 12f;
+        y -= panelH + 14f;
+
+        // Party grid: exporter | importer, consignee | broker (or sold-to).
+        float gap = 18f;
+        float colWp = (contentW - gap) / 2f;
+        Party rightBottom = m.broker() != null ? m.broker()
+                : new Party("SOLD TO / BUYER", List.of("Same as consignee"));
+        float h1 = Math.max(partyHeight(m.exporter()), partyHeight(m.importer()));
+        drawParty(pen, m.exporter(), MARGIN, y, colWp);
+        drawParty(pen, m.importer(), MARGIN + colWp + gap, y, colWp);
+        y -= h1 + 10f;
+        float h2 = Math.max(partyHeight(m.consignee()), partyHeight(rightBottom));
+        drawParty(pen, m.consignee(), MARGIN, y, colWp);
+        drawParty(pen, rightBottom, MARGIN + colWp + gap, y, colWp);
+        y -= h2 + 12f;
+        return top - y;
     }
 
-    /**
-     * Compact continuation-page header. Just "COMMERCIAL INVOICE #N —
-     * continued" + client name + rule. Enough context for a page that
-     * gets separated during handling; keeps continuation pages
-     * information-dense.
-     */
-    private float renderContinuationHeader(PDPageContentStream cs, Order order, Client client,
-            float pageWidth, float pageHeight, float margin) throws java.io.IOException {
-        float y = pageHeight - margin;
-        cs.setNonStrokingColor(PRIMARY);
-        String title = "COMMERCIAL INVOICE #" + order.getOrderNo() + " - continued";
-        drawText(cs, HELVETICA_BOLD, 12f, title,
-                pageWidth - margin - textWidth(HELVETICA_BOLD, 12f, title), y - 12f);
-        cs.setNonStrokingColor(Color.BLACK);
-        if (client != null) {
-            drawText(cs, HELVETICA, 10f, safe(client.getName()), margin, y - 12f);
-        }
-        y -= 20f;
-        rule(cs, margin, pageWidth - margin, y, PRIMARY, 0.8f);
-        return y - 18f;
+    private float drawContinuationHeader(Pen pen, Model m, float pageW, float pageH) throws IOException {
+        float contentW = pageW - 2 * MARGIN;
+        float top = pageH - MARGIN;
+        pen.text(HELVETICA_BOLD, 12.5f, INK, "COMMERCIAL INVOICE", MARGIN, top - 12f, 0.3f);
+        float tw = textWidth(HELVETICA_BOLD, 12.5f, "COMMERCIAL INVOICE") + 0.3f * 18;
+        pen.text(HELVETICA, 8.5f, TAUPE, "No. " + m.order().getOrderNo() + "  -  continued", MARGIN + tw + 8f, top - 12f, 0f);
+        pen.rightText(HELVETICA, 8.5f, ESPRESSO, m.exporterName() + "  -  " + m.meta().get(1).value(), MARGIN + contentW, top - 12f);
+        pen.rule(MARGIN, MARGIN + contentW, top - 20f, INK, 0.8f);
+        return 32f;
     }
 
-    /** Draws a titled address block; returns the y just below it. */
-    private float drawParty(PDPageContentStream cs, String title, List<String> lines, float x, float y)
-            throws java.io.IOException {
-        cs.setNonStrokingColor(PRIMARY);
-        drawText(cs, HELVETICA_BOLD, 9.5f, title, x, y);
-        cs.setNonStrokingColor(Color.BLACK);
-        float ly = y - 13f;
-        for (String line : lines) {
-            if (line == null || line.isBlank()) continue;
-            drawText(cs, HELVETICA, 9.5f, line, x, ly);
+    private static float partyHeight(Party p) {
+        int n = 0;
+        for (String l : p.lines()) if (hasText(l)) n++;
+        return 17f + n * 11f;
+    }
+
+    private void drawParty(Pen pen, Party p, float x, float y, float w) throws IOException {
+        pen.text(HELVETICA_BOLD, 6.8f, TAUPE, p.title(), x, y - 7f, 0.6f);
+        pen.rule(x, x + w, y - 11f, RULE, 0.6f);
+        float ly = y - 23f;
+        boolean firstLine = true;
+        for (String line : p.lines()) {
+            if (!hasText(line)) continue;
+            pen.text(firstLine ? HELVETICA_BOLD : HELVETICA, 8.8f, INK, fit(firstLine ? HELVETICA_BOLD : HELVETICA, 8.8f, line, w), x, ly, 0f);
+            firstLine = false;
+            ly -= 11f;
+        }
+    }
+
+    // ---- items table -----------------------------------------------------
+
+    /** Column geometry + header/row drawing for the itemised table. */
+    private static final class Table {
+        final float left;
+        final float width;
+        final String unit;
+        // x positions (left edge of each column) and widths
+        final float xNo, xDesc, xHs, xOrig, xQty, xUom, xNet, xUnit, xAmt;
+        final float wDesc, wHs, wOrig, wQty, wUom, wNet, wUnit, wAmt;
+
+        Table(float left, float width, String unit) {
+            this.left = left;
+            this.width = width;
+            this.unit = unit;
+            float pad = 5f;
+            wHs = 56f; wOrig = 36f; wQty = 30f; wUom = 28f; wNet = 56f; wUnit = 62f; wAmt = 68f;
+            float wNo = 18f;
+            wDesc = width - (wNo + wHs + wOrig + wQty + wUom + wNet + wUnit + wAmt);
+            xNo = left + pad;
+            xDesc = left + wNo;
+            xHs = xDesc + wDesc;
+            xOrig = xHs + wHs;
+            xQty = xOrig + wOrig;
+            xUom = xQty + wQty;
+            xNet = xUom + wUom;
+            xUnit = xNet + wNet;
+            xAmt = xUnit + wUnit;
+        }
+
+        float headerH() { return 20f; }
+
+        float drawHeader(Pen pen, float y) throws IOException {
+            float h = 18f;
+            pen.fill(left, y - h, width, h, CREAM_DEEP);
+            float ty = y - 12f;
+            pen.text(HELVETICA_BOLD, 6.6f, TAUPE, "#", xNo, ty, 0.5f);
+            pen.text(HELVETICA_BOLD, 6.6f, TAUPE, "DESCRIPTION OF GOODS", xDesc, ty, 0.5f);
+            pen.text(HELVETICA_BOLD, 6.6f, TAUPE, "HS CODE", xHs, ty, 0.5f);
+            pen.text(HELVETICA_BOLD, 6.6f, TAUPE, "ORIGIN", xOrig, ty, 0.5f);
+            pen.rightText(HELVETICA_BOLD, 6.6f, TAUPE, "QTY", xQty + wQty - 4f, ty);
+            pen.text(HELVETICA_BOLD, 6.6f, TAUPE, "UOM", xUom + 2f, ty, 0.5f);
+            pen.rightText(HELVETICA_BOLD, 6.6f, TAUPE, "NET WT " + unit, xNet + wNet - 4f, ty);
+            pen.rightText(HELVETICA_BOLD, 6.6f, TAUPE, "UNIT VALUE", xUnit + wUnit - 4f, ty);
+            pen.rightText(HELVETICA_BOLD, 6.6f, TAUPE, "TOTAL VALUE", xAmt + wAmt - 4f, ty);
+            return y - headerH();
+        }
+
+        float drawRow(Pen pen, float y, Line ln, boolean zebra) throws IOException {
+            if (zebra) pen.fill(left, y - ROW_H, width, ROW_H, ZEBRA);
+            float ty = y - 10f;
+            pen.text(HELVETICA, 7.5f, TAUPE, String.valueOf(ln.no()), xNo, ty, 0f);
+            float descW = wDesc - 8f;
+            if (hasText(ln.sku())) {
+                String sku = fit(HELVETICA, 7f, ln.sku(), 70f);
+                float skuW = textWidth(HELVETICA, 7f, sku);
+                pen.rightText(HELVETICA, 7f, TAUPE, sku, xDesc + wDesc - 6f, ty);
+                descW -= skuW + 8f;
+            }
+            pen.text(HELVETICA, 8.5f, INK, fit(HELVETICA, 8.5f, ln.description(), descW), xDesc, ty, 0f);
+            pen.text(HELVETICA, 8.5f, INK, fit(HELVETICA, 8.5f, ln.hs(), wHs - 6f), xHs, ty, 0f);
+            pen.text(HELVETICA, 8.5f, INK, ln.origin(), xOrig, ty, 0f);
+            pen.rightText(HELVETICA, 8.5f, INK, String.valueOf(ln.qty()), xQty + wQty - 4f, ty);
+            pen.text(HELVETICA, 8.5f, INK, "EA", xUom + 2f, ty, 0f);
+            pen.rightText(HELVETICA, 8.5f, ln.netEstimated() ? TAUPE : INK, ln.netWeight(), xNet + wNet - 4f, ty);
+            pen.rightText(HELVETICA, 8.5f, INK, money(ln.unit()), xUnit + wUnit - 4f, ty);
+            pen.rightText(HELVETICA_BOLD, 8.5f, INK, money(ln.amount()), xAmt + wAmt - 4f, ty);
+            return y - ROW_H;
+        }
+    }
+
+    // ---- closing: shipment summary, totals, declaration, signatures ------
+
+    /** Draws (or measures) the last-page closing block from y downward; returns its height. */
+    private float drawClosing(Pen pen, Model m, float pageW, float left, float contentW, float y) throws IOException {
+        float top = y;
+        y -= 6f;
+        pen.rule(left, left + contentW, y, INK, 0.9f);
+        y -= 6f;
+
+        float gap = 18f;
+        float leftW = contentW * 0.55f - gap / 2f;
+        float rightX = left + leftW + gap;
+        float rightW = contentW - leftW - gap;
+
+        // -- left: shipment summary + notes
+        float ly = y;
+        pen.text(HELVETICA_BOLD, 6.8f, TAUPE, "SHIPMENT SUMMARY", left, ly - 7f, 0.6f);
+        pen.rule(left, left + leftW, ly - 11f, RULE, 0.6f);
+        ly -= 23f;
+        List<String[]> summary = new ArrayList<>();
+        summary.add(new String[]{"Packages", m.packages() + (m.packages() == 1 ? " piece" : " pieces")});
+        summary.add(new String[]{"Total quantity", m.totalQty() + " units"});
+        if (m.gross() != null) {
+            summary.add(new String[]{"Gross weight", m.gross().stripTrailingZeros().toPlainString() + " " + m.grossUnit()});
+        }
+        if (m.net() != null && m.net().signum() > 0) {
+            summary.add(new String[]{"Net weight", m.net().setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+                    + " " + m.lineUnit() + (m.netEstimated() ? " *" : "")});
+        }
+        if (!m.origins().isEmpty()) summary.add(new String[]{"Country of origin", String.join(", ", m.origins())});
+        summary.add(new String[]{"Declared value for customs", money(m.goods()) + " " + m.currency()});
+        for (String[] kv : summary) {
+            pen.text(HELVETICA, 8.5f, TAUPE, kv[0], left, ly, 0f);
+            pen.text(HELVETICA_BOLD, 8.5f, INK, fit(HELVETICA_BOLD, 8.5f, kv[1], leftW - 132f), left + 128f, ly, 0f);
             ly -= 11.5f;
         }
-        return ly;
+        if (m.netEstimated()) {
+            ly -= 2f;
+            for (String w : wrap(HELVETICA_OBLIQUE, 7.2f,
+                    "* Net weight apportioned from the shipment gross by quantity where no per-item weight was declared.", leftW)) {
+                pen.text(HELVETICA_OBLIQUE, 7.2f, TAUPE, w, left, ly, 0f);
+                ly -= 9f;
+            }
+        }
+        if (hasText(m.notes())) {
+            ly -= 4f;
+            pen.text(HELVETICA_BOLD, 6.8f, TAUPE, "NOTES", left, ly, 0.6f);
+            ly -= 11f;
+            for (String w : wrap(HELVETICA, 8f, m.notes(), leftW)) {
+                pen.text(HELVETICA, 8f, INK, w, left, ly, 0f);
+                ly -= 10f;
+            }
+        }
+
+        // -- right: totals ladder
+        float ry = y;
+        pen.text(HELVETICA_BOLD, 6.8f, TAUPE, "INVOICE TOTALS", rightX, ry - 7f, 0.6f);
+        pen.rule(rightX, rightX + rightW, ry - 11f, RULE, 0.6f);
+        ry -= 23f;
+        BigDecimal total = m.goods();
+        pen.text(HELVETICA, 8.5f, TAUPE, "Subtotal - goods", rightX, ry, 0f);
+        pen.rightText(HELVETICA, 8.5f, INK, money(m.goods()), rightX + rightW - 4f, ry);
+        ry -= 11.5f;
+        pen.text(HELVETICA, 8.5f, TAUPE, "Freight", rightX, ry, 0f);
+        if (m.freight() != null) {
+            total = total.add(m.freight());
+            pen.rightText(HELVETICA, 8.5f, INK, money(m.freight()), rightX + rightW - 4f, ry);
+        } else {
+            pen.rightText(HELVETICA, 8f, TAUPE, m.freightNote(), rightX + rightW - 4f, ry);
+        }
+        ry -= 11.5f;
+        pen.text(HELVETICA, 8.5f, TAUPE, "Insurance", rightX, ry, 0f);
+        pen.rightText(HELVETICA, 8f, TAUPE, "Not declared", rightX + rightW - 4f, ry);
+        ry -= 8f;
+        float totalRowH = 22f;
+        pen.fill(rightX, ry - totalRowH, rightW, totalRowH, CREAM_DEEP);
+        pen.text(HELVETICA_BOLD, 8.2f, ESPRESSO, "TOTAL INVOICE VALUE (" + m.currency() + ")", rightX + 6f, ry - 14f, 0.4f);
+        pen.rightText(HELVETICA_BOLD, 11.5f, INK, money(total), rightX + rightW - 6f, ry - 15f);
+        ry -= totalRowH;
+
+        y = Math.min(ly, ry) - 14f;
+
+        // -- declaration + signatures (full width)
+        pen.rule(left, left + contentW, y, RULE, 0.6f);
+        y -= 12f;
+        String decl = "I declare the information on this invoice to be true and correct to the best of my knowledge, "
+                + "that the goods described are of the origin stated, and that this invoice shows the actual price of the "
+                + "goods and all charges relating to the sale.";
+        for (String w : wrap(HELVETICA_OBLIQUE, 8.2f, decl, contentW)) {
+            pen.text(HELVETICA_OBLIQUE, 8.2f, ESPRESSO, w, left, y, 0f);
+            y -= 10.5f;
+        }
+        y -= 22f;
+        float sigW = (contentW - 2 * gap) / 3f;
+        String[] sigLabels = {"Authorised signature of exporter", "Printed name and title", "Date"};
+        String[] sigValues = {"", "", ""};
+        for (int i = 0; i < 3; i++) {
+            float sx = left + i * (sigW + gap);
+            if (hasText(sigValues[i])) pen.text(HELVETICA, 8.5f, INK, fit(HELVETICA, 8.5f, sigValues[i], sigW), sx, y + 4f, 0f);
+            pen.rule(sx, sx + sigW, y, INK, 0.6f);
+            pen.text(HELVETICA, 6.8f, TAUPE, sigLabels[i].toUpperCase(), sx, y - 9f, 0.5f);
+        }
+        y -= 14f;
+        return top - y;
     }
 
-    /**
-     * Draw the item-table column header — repeated on every page so
-     * separated pages remain legible. Returns the y-cursor below.
-     */
-    private float drawItemsTableHeader(PDPageContentStream cs, float left, float right, float top,
-            String weightUnit) throws java.io.IOException {
-        float xDesc = left;
-        float xHs = left + 185f;
-        float xOrig = left + 250f;
-        float xQty = left + 288f;
-        float xWt = left + 322f;
-        float xUnit = left + 392f;
-        float xAmt = right - textWidth(HELVETICA_BOLD, 9f, "AMOUNT");
-        cs.setNonStrokingColor(PRIMARY);
-        drawText(cs, HELVETICA_BOLD, 9f, "DESCRIPTION", xDesc, top);
-        drawText(cs, HELVETICA_BOLD, 9f, "HS CODE", xHs, top);
-        drawText(cs, HELVETICA_BOLD, 9f, "ORIGIN", xOrig, top);
-        drawText(cs, HELVETICA_BOLD, 9f, "QTY", xQty, top);
-        drawText(cs, HELVETICA_BOLD, 9f, "NET WT (" + weightUnit + ")", xWt, top);
-        drawText(cs, HELVETICA_BOLD, 9f, "UNIT", xUnit, top);
-        drawText(cs, HELVETICA_BOLD, 9f, "AMOUNT", xAmt, top);
-        cs.setNonStrokingColor(Color.BLACK);
-        rule(cs, left, right, top - 4f, LIGHT_RULE, 0.5f);
-        return top - 16f;
+    private void drawFooter(Pen pen, Model m, float pageW, int pageNo, int totalPages) throws IOException {
+        float contentW = pageW - 2 * MARGIN;
+        float y = MARGIN + 6f;
+        pen.rule(MARGIN, MARGIN + contentW, y + 10f, RULE, 0.5f);
+        pen.text(HELVETICA, 7f, TAUPE, "Commercial invoice no. " + m.order().getOrderNo()
+                + "  -  " + m.exporterName() + "  -  generated " + m.stamp() + " by Multiship", MARGIN, y, 0f);
+        pen.rightText(HELVETICA_BOLD, 7.5f, INK, "Page " + pageNo + " of " + totalPages, MARGIN + contentW, y);
     }
 
-    /** Draw one item row at the given y using the column positions
-     *  matching {@link #drawItemsTableHeader}. */
-    private void drawItemRow(PDPageContentStream cs, float left, float right, float y,
-            OrderCustomsItem it, int qty, BigDecimal unit, BigDecimal amount, String netWeight)
-            throws java.io.IOException {
-        float xDesc = left;
-        float xHs = left + 185f;
-        float xOrig = left + 250f;
-        float xQty = left + 288f;
-        float xWt = left + 322f;
-        float xUnit = left + 392f;
-        drawText(cs, HELVETICA, 9f, truncate(safe(it.getDescription()), 36), xDesc, y);
-        drawText(cs, HELVETICA, 9f, safe(it.getHsCode()), xHs, y);
-        drawText(cs, HELVETICA, 9f, safe(it.getCountryOfOrigin()), xOrig, y);
-        drawText(cs, HELVETICA, 9f, String.valueOf(qty), xQty, y);
-        drawText(cs, HELVETICA, 9f, netWeight, xWt, y);
-        drawText(cs, HELVETICA, 9f, money(unit), xUnit, y);
-        drawRightText(cs, HELVETICA, 9f, money(amount), right, y);
-    }
+    // =====================================================================
+    // Low-level drawing (null stream = measure only)
+    // =====================================================================
 
-    // ---- low-level PDFBox + formatting helpers (mirrors PackingSlipServiceImpl) ----
+    private static final class Pen {
+        private final PDPageContentStream cs;
+        Pen(PDPageContentStream cs) { this.cs = cs; }
 
-    private static void rule(PDPageContentStream cs, float x1, float x2, float y, Color c, float w)
-            throws java.io.IOException {
-        cs.setStrokingColor(c);
-        cs.setLineWidth(w);
-        cs.moveTo(x1, y);
-        cs.lineTo(x2, y);
-        cs.stroke();
-        cs.setStrokingColor(Color.BLACK);
-    }
+        void text(PDType1Font font, float size, Color color, String text, float x, float y, float spacing) throws IOException {
+            if (cs == null || text == null || text.isBlank()) return;
+            cs.setNonStrokingColor(color);
+            cs.beginText();
+            cs.setFont(font, size);
+            if (spacing > 0f) cs.setCharacterSpacing(spacing);
+            cs.newLineAtOffset(x, y);
+            cs.showText(sanitise(text));
+            if (spacing > 0f) cs.setCharacterSpacing(0f);
+            cs.endText();
+            cs.setNonStrokingColor(Color.BLACK);
+        }
 
-    private static void drawText(PDPageContentStream cs, PDType1Font font, float size, String text,
-                                 float x, float y) throws java.io.IOException {
-        if (text == null || text.isBlank()) return;
-        cs.beginText();
-        cs.setFont(font, size);
-        cs.newLineAtOffset(x, y);
-        cs.showText(sanitise(text));
-        cs.endText();
-    }
+        void rightText(PDType1Font font, float size, Color color, String text, float rightX, float y) throws IOException {
+            if (text == null) return;
+            text(font, size, color, text, rightX - textWidth(font, size, text), y, 0f);
+        }
 
-    private static void drawRightText(PDPageContentStream cs, PDType1Font font, float size, String text,
-                                      float rightX, float y) throws java.io.IOException {
-        drawText(cs, font, size, text, rightX - textWidth(font, size, text), y);
+        void rule(float x1, float x2, float y, Color c, float w) throws IOException {
+            if (cs == null) return;
+            cs.setStrokingColor(c);
+            cs.setLineWidth(w);
+            cs.moveTo(x1, y);
+            cs.lineTo(x2, y);
+            cs.stroke();
+            cs.setStrokingColor(Color.BLACK);
+        }
+
+        void fill(float x, float y, float w, float h, Color c) throws IOException {
+            if (cs == null) return;
+            cs.setNonStrokingColor(c);
+            cs.addRect(x, y, w, h);
+            cs.fill();
+            cs.setNonStrokingColor(Color.BLACK);
+        }
     }
 
     private static float textWidth(PDType1Font font, float size, String text) {
@@ -657,6 +990,41 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         }
     }
 
+    /** Truncate with an ellipsis so the text fits within {@code maxW} points. */
+    private static String fit(PDType1Font font, float size, String text, float maxW) {
+        if (text == null) return "";
+        String t = text.trim();
+        if (textWidth(font, size, t) <= maxW) return t;
+        String ell = "...";
+        float ellW = textWidth(font, size, ell);
+        int lo = 0;
+        while (lo < t.length() && textWidth(font, size, t.substring(0, lo + 1)) + ellW <= maxW) lo++;
+        return t.substring(0, Math.max(0, lo)).stripTrailing() + ell;
+    }
+
+    /** Greedy word wrap to {@code maxW} points. */
+    private static List<String> wrap(PDType1Font font, float size, String text, float maxW) {
+        List<String> out = new ArrayList<>();
+        if (text == null) return out;
+        for (String para : text.replace("\r", "").split("\n")) {
+            StringBuilder line = new StringBuilder();
+            for (String word : para.trim().split("\\s+")) {
+                if (word.isEmpty()) continue;
+                String candidate = line.length() == 0 ? word : line + " " + word;
+                if (textWidth(font, size, candidate) <= maxW) {
+                    line.setLength(0);
+                    line.append(candidate);
+                } else {
+                    if (line.length() > 0) out.add(line.toString());
+                    line.setLength(0);
+                    line.append(fit(font, size, word, maxW));
+                }
+            }
+            if (line.length() > 0) out.add(line.toString());
+        }
+        return out;
+    }
+
     /** Standard-14 Helvetica only supports WinAnsi — strip anything else. */
     private static String sanitise(String s) {
         if (s == null) return "";
@@ -664,32 +1032,81 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
             if (c >= 32 && c <= 126) out.append(c);
-            else if (c == '–' || c == '—') out.append('-');
+            else if (c == '–' || c == '—' || c == '·' || c == '•') out.append('-');
+            else if (c == '…') out.append("...");
+            else if (c == ' ') out.append(' ');
             else out.append('?');
         }
         return out.toString();
     }
 
+    // =====================================================================
+    // Formatting helpers
+    // =====================================================================
+
+    private static final DecimalFormat MONEY =
+            new DecimalFormat("#,##0.00", DecimalFormatSymbols.getInstance(Locale.US));
+
     private static String money(BigDecimal v) {
         if (v == null) return "0.00";
-        return v.setScale(2, RoundingMode.HALF_UP).toPlainString();
+        synchronized (MONEY) {
+            return MONEY.format(v.setScale(2, RoundingMode.HALF_UP));
+        }
     }
 
-    /** Who settles duties &amp; taxes, derived from the Incoterm. DDP = shipper
-     *  prepays; everything else (DAP/DDU/…) = payable by the consignee. */
+    /** Who settles duties & taxes, derived from the Incoterm. */
     private static String dutyTerms(String incoterms) {
         String code = incoterms == null ? "" : incoterms.trim().toUpperCase();
-        if (code.equals("DDP")) return "Duties/Taxes: prepaid by shipper (DDP)";
-        return "Duties/Taxes: payable by consignee (" + (code.isEmpty() ? "DAP" : code) + ")";
+        if (code.equals("DDP")) return "Prepaid by shipper (DDP)";
+        return "Payable by consignee (" + (code.isEmpty() ? "DAP" : code) + ")";
+    }
+
+    private static String dutyPayer(String incoterms) {
+        return "DDP".equalsIgnoreCase(incoterms == null ? "" : incoterms.trim()) ? "Shipper" : "Consignee";
+    }
+
+    private static String dutiesAccount(String incoterms, ClientCustomsProfile profile) {
+        if (profile == null) return null;
+        String who = safe(profile.getDutiesBillTo()).trim();
+        String acct = safe(profile.getDutiesAccount()).trim();
+        if (!hasText(who) && !hasText(acct)) return null;
+        String whoLabel = switch (who.toUpperCase(Locale.ROOT)) {
+            case "SENDER", "SHIPPER" -> "Shipper";
+            case "RECIPIENT", "RECEIVER", "CONSIGNEE" -> "Consignee";
+            case "THIRD_PARTY", "THIRDPARTY" -> "Third party";
+            case "" -> dutyPayer(incoterms);
+            default -> titleCase(who.replace('_', ' '));
+        };
+        StringBuilder sb = new StringBuilder(whoLabel);
+        if (hasText(acct)) sb.append(" - acct ").append(acct);
+        return sb.toString();
+    }
+
+    private static String exportDeclaration(OrderCustoms c) {
+        if (hasText(c.getAesCitation())) return "AES ITN " + c.getAesCitation().trim();
+        if (hasText(c.getFtrExemption())) {
+            String code = c.getFtrExemption().trim();
+            String human = switch (code) {
+                case "NO_EEI_30_37_a" -> "NO EEI 30.37(a)";
+                case "NO_EEI_30_37_h" -> "NO EEI 30.37(h)";
+                case "NO_EEI_30_36" -> "NO EEI 30.36";
+                default -> code.replace('_', ' ');
+            };
+            return human + " (FTR exemption)";
+        }
+        if (hasText(c.getExportDeclarationReference())) return "Ref " + c.getExportDeclarationReference().trim();
+        return null;
     }
 
     private static String taxLine(String taxId, String vat, String eori) {
         StringBuilder sb = new StringBuilder();
         if (hasText(taxId)) sb.append("Tax ID: ").append(taxId.trim());
-        if (hasText(vat)) { if (sb.length() > 0) sb.append("  "); sb.append("VAT: ").append(vat.trim()); }
-        if (hasText(eori)) { if (sb.length() > 0) sb.append("  "); sb.append("EORI: ").append(eori.trim()); }
+        if (hasText(vat)) { sep(sb); sb.append("VAT: ").append(vat.trim()); }
+        if (hasText(eori)) { sep(sb); sb.append("EORI: ").append(eori.trim()); }
         return sb.toString();
     }
+
+    private static void sep(StringBuilder sb) { if (sb.length() > 0) sb.append("   "); }
 
     private static String joinCityStateZip(String city, String state, String zip) {
         StringBuilder sb = new StringBuilder();
@@ -699,6 +1116,8 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         return sb.toString();
     }
 
+    private static String str(Object o) { return o == null ? null : String.valueOf(o); }
+
     private static boolean hasText(String s) { return s != null && !s.isBlank(); }
 
     private static String safe(String v) { return v == null ? "" : v; }
@@ -707,10 +1126,5 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         if (vals == null) return null;
         for (String v : vals) if (hasText(v)) return v.trim();
         return null;
-    }
-
-    private static String truncate(String s, int max) {
-        if (s == null) return "";
-        return s.length() <= max ? s : s.substring(0, max - 1) + "…";
     }
 }
