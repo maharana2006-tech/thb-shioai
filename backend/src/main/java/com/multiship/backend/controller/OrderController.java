@@ -59,6 +59,9 @@ public class OrderController {
     /** Raster (GIF/PNG) carrier labels → 4×6 PDF pages; UPS returns GIF by default. */
     @org.springframework.beans.factory.annotation.Autowired
     private com.multiship.backend.service.LabelImagePdfService labelImagePdfService;
+    /** Raster carrier labels → ^GFA ZPL, so Copy ZPL is the carrier's real label. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.multiship.backend.service.LabelImageZplService labelImageZplService;
     /** /label/pdf?main=true — page 1 of a carrier PDF, cropped to the label
      *  and fitted to 4×6, so Print Label spools one label-sized sheet instead
      *  of FedEx's 3–4 Letter pages. zebrash/facsimile output is already one
@@ -791,6 +794,38 @@ public class OrderController {
                             .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".zpl")
                             .body(new String(passthrough.get()));
                 }
+            }
+        }
+
+        // Raster carrier labels (UPS's default GIF): convert the stored image
+        // into ^GFA ZPL rather than falling through to the platform
+        // facsimile — Copy ZPL / Download .zpl must be the carrier's label.
+        {
+            java.util.List<String> imageZpls = new java.util.ArrayList<>();
+            if (pkgIndex != null && pkgIndex > 0) {
+                labelArtifactResolver.resolveImage(orderNo, pkgIndex)
+                        .ifPresent(a -> imageZpls.add(labelImageZplService.imageToZpl(a.bytes())));
+            } else {
+                ApiResponse<OrderWithLinesDTO> peekImg = orderService.getOrderWithLines(orderNo);
+                int totalForImg = effectivePkgCount(peekImg.getData());
+                if (totalForImg > 1) {
+                    for (int i = 1; i <= totalForImg; i++) {
+                        labelArtifactResolver.resolveImage(orderNo, i)
+                                .ifPresent(a -> imageZpls.add(labelImageZplService.imageToZpl(a.bytes())));
+                    }
+                }
+                if (imageZpls.isEmpty()) {
+                    labelArtifactResolver.resolveImage(orderNo, null)
+                            .ifPresent(a -> imageZpls.add(labelImageZplService.imageToZpl(a.bytes())));
+                }
+            }
+            if (!imageZpls.isEmpty()) {
+                String suffix = pkgIndex != null && pkgIndex > 0
+                        ? "-pkg" + pkgIndex
+                        : (imageZpls.size() > 1 ? "-all" + imageZpls.size() : "");
+                return ResponseEntity.ok()
+                        .header("Content-Disposition", "attachment; filename=label-" + orderNo + suffix + ".zpl")
+                        .body(String.join("\n", imageZpls));
             }
         }
 
