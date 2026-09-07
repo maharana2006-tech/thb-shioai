@@ -761,21 +761,6 @@ export const orderService = {
   getDocuments: (limit = 200) =>
     apiClient.get<ApiResponse<OrderDocumentRow[]>>(`/orders/documents?limit=${limit}`),
 
-  /** Commercial-invoice PDF blob for an international order. */
-  getCommercialInvoicePdf: async (orderNo: number): Promise<Blob> => {
-    const response = await fetch(`${BASE_URL}/orders/${orderNo}/commercial-invoice`, {
-      credentials: 'include',
-    })
-    if (!response.ok) {
-      throw new Error(
-        response.status === 422
-          ? 'This order has no customs data — the commercial invoice only exists for international shipments.'
-          : `Commercial invoice unavailable (HTTP ${response.status}).`,
-      )
-    }
-    return response.blob()
-  },
-
   /**
    * THE order list: one server-side paginated, sorted, filtered endpoint
    * behind every order table in the app.
