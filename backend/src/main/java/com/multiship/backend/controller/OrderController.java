@@ -760,7 +760,7 @@ public class OrderController {
                 return ResponseEntity.ok()
                         .header("Content-Disposition", "attachment; filename=label-"
                                 + orderNo + "-pkg" + pkgIndex + ".zpl")
-                        .body(new String(single.get()));
+                        .body(com.multiship.backend.util.ZplText.stripUnsupportedCommands(new String(single.get())));
             }
         } else {
             // Peek at package count so a multi-pkg order concatenates. Uses
@@ -777,7 +777,7 @@ public class OrderController {
                             .resolveAsBytes(orderNo, "ZPL", i);
                     if (pz.isEmpty()) continue;
                     if (any) allZpl.append('\n');
-                    allZpl.append(new String(pz.get()));
+                    allZpl.append(com.multiship.backend.util.ZplText.stripUnsupportedCommands(new String(pz.get())));
                     any = true;
                 }
                 if (any) {
@@ -792,7 +792,7 @@ public class OrderController {
                 if (passthrough.isPresent()) {
                     return ResponseEntity.ok()
                             .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".zpl")
-                            .body(new String(passthrough.get()));
+                            .body(com.multiship.backend.util.ZplText.stripUnsupportedCommands(new String(passthrough.get())));
                 }
             }
         }

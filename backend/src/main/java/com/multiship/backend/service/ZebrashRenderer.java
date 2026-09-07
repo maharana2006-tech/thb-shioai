@@ -86,16 +86,50 @@ public class ZebrashRenderer {
      * {@link #timeoutSeconds} for the child process. Never returns
      * null or an empty array; failures throw.
      */
+    private static final java.util.regex.Pattern LL_RE = java.util.regex.Pattern.compile("\\^LL(\\d+)");
+    private static final java.util.regex.Pattern LH_RE = java.util.regex.Pattern.compile("\\^LH(\\d+),(\\d+)");
+    private static final java.util.regex.Pattern FO_RE = java.util.regex.Pattern.compile("\\^F[OT](\\d+),(\\d+)");
+    private static final double DOTS_PER_INCH = 203.2;
+    private static final int STOCK_DOTS = 1218;
+
+    /**
+     * Label height for the render canvas, in inches, as a string for the CLI.
+     * 6" unless the ZPL itself needs more: an explicit ^LL beyond the stock, or
+     * fields positioned (plus the ^LH vertical offset and room for a line of
+     * text) below the 6" edge. Rounded up to 0.05" and capped at 8" so a
+     * malformed field can't request a metre-tall bitmap.
+     */
+    static String canvasHeightInches(byte[] zpl) {
+        String text = new String(zpl, java.nio.charset.StandardCharsets.ISO_8859_1);
+        int needed = STOCK_DOTS;
+        java.util.regex.Matcher ll = LL_RE.matcher(text);
+        if (ll.find()) needed = Math.max(needed, Integer.parseInt(ll.group(1)));
+        int lhY = 0;
+        java.util.regex.Matcher lh = LH_RE.matcher(text);
+        if (lh.find()) lhY = Integer.parseInt(lh.group(2));
+        int maxY = 0;
+        java.util.regex.Matcher fo = FO_RE.matcher(text);
+        while (fo.find()) maxY = Math.max(maxY, Integer.parseInt(fo.group(2)));
+        if (maxY > 0) needed = Math.max(needed, maxY + lhY + 40);
+        if (needed <= STOCK_DOTS) return "6";
+        double inches = Math.min(8.0, Math.ceil(needed / DOTS_PER_INCH * 20) / 20.0);
+        return String.format(java.util.Locale.ROOT, "%.2f", inches);
+    }
+
     public byte[] renderPng(byte[] zpl) {
         if (zpl == null || zpl.length == 0) {
             throw new IllegalArgumentException("zpl bytes required");
         }
         ensureExtracted();
 
+        // Canvas height follows the ZPL's own extent. UPS's ZPL draws to
+        // y≈1203 under a ^LH10,12 offset — past a fixed 6" (1218-dot) canvas,
+        // which clipped its Purchase/Dept lines and version strings. The PDF
+        // wrapper fits whatever height comes back onto the 4×6 sheet.
         ProcessBuilder pb = new ProcessBuilder(
                 binaryPath.toString(),
                 "--width", "4",
-                "--height", "6",
+                "--height", canvasHeightInches(zpl),
                 "--dpmm", "8");
         // Explicit env prune — sidesteps macOS Spotlight quarantine and
         // avoids the child inheriting LC_ALL / TERM values that break

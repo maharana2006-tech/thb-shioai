@@ -58,8 +58,14 @@ public class ZebrashPdfService {
                         doc, png, "label-" + (i + 1));
                 PDPage page = new PDPage(new PDRectangle(PAGE_WIDTH_PT, PAGE_HEIGHT_PT));
                 doc.addPage(page);
+                // Fit preserving aspect (the renderer may hand back a canvas
+                // taller than 6" when the ZPL draws past the stock edge); a
+                // full-bleed stretch would squash the barcodes' module ratios.
+                float scale = Math.min(PAGE_WIDTH_PT / image.getWidth(), PAGE_HEIGHT_PT / image.getHeight());
+                float w = image.getWidth() * scale;
+                float h = image.getHeight() * scale;
                 try (PDPageContentStream stream = new PDPageContentStream(doc, page)) {
-                    stream.drawImage(image, 0, 0, PAGE_WIDTH_PT, PAGE_HEIGHT_PT);
+                    stream.drawImage(image, (PAGE_WIDTH_PT - w) / 2f, PAGE_HEIGHT_PT - h, w, h);
                 }
             }
             try (ByteArrayOutputStream out = new ByteArrayOutputStream(16384)) {
