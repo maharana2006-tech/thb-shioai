@@ -163,6 +163,18 @@ public class ZplLabelService {
                 + " (" + digits.substring(0, 3) + " " + digits.substring(3, 6) + " " + digits.substring(6, 10) + ")"
                 + " 0 00 " + digits.substring(0, 4) + " " + digits.substring(4, 8) + " " + digits.substring(8, 12);
 
+        // UPS has its own label anatomy (shipper block / weight + "1 OF N" /
+        // SHIP TO / MaxiCode + postal barcode / service band / 1Z Code 128 /
+        // billing + references). The layout below is FedEx's; stamping a
+        // "UPS" wordmark on it produced a label no UPS facility would
+        // recognise. Modelled on the label UPS's own sandbox returns.
+        if ("UPS".equals(carrierName)) {
+            return buildUpsLabel(new UpsCtx(order, resolution, perPkg, effectiveWeight, effectiveWeightUnit,
+                    trackingNumber, generated, sandbox, safeIndex, safeCount, shipDate,
+                    sfName, sfPhone, sfLine1, sfCity, sfState, sfZip,
+                    recipient, city, state, zip, destCountryCode, crossBorder));
+        }
+
         StringBuilder z = new StringBuilder();
         z.append("^XA\n^CI28\n^PW812\n^LL1218\n^LH0,0\n");
 
@@ -348,6 +360,204 @@ public class ZplLabelService {
             z.append("^CF0,26,26\n").append(text(160, bcTop + 34, "*** LABEL NOT GENERATED ***"));
         }
 
+        z.append("^XZ\n");
+        return z.toString();
+    }
+
+    /** Everything the UPS layout needs, computed once by {@link #buildLabel}. */
+    record UpsCtx(OrderWithLinesDTO order, OrderAccountResolutionDTO resolution,
+                  com.multiship.backend.dto.LabelPackageDTO perPkg,
+                  java.math.BigDecimal weight, String weightUnit,
+                  String trackingNumber, boolean generated, boolean sandbox,
+                  int pkgIndex, int pkgCount, String shipDate,
+                  String sfName, String sfPhone, String sfLine1, String sfCity, String sfState, String sfZip,
+                  String recipient, String city, String state, String zip,
+                  String destCountryCode, boolean crossBorder) {}
+
+    /**
+     * UPS service display name + MaxiCode class-of-service, keyed by the UPS
+     * numeric service code (what the catalog stores: 03, 12, 02, …) and by the
+     * long-form codes bulk/ERP feeds carry (UPS_GROUND, NEXT_DAY_AIR, …).
+     */
+    private static final java.util.Map<String, String[]> UPS_SERVICES = java.util.Map.ofEntries(
+            java.util.Map.entry("01", new String[]{"UPS NEXT DAY AIR", "001"}),
+            java.util.Map.entry("13", new String[]{"UPS NEXT DAY AIR SAVER", "013"}),
+            java.util.Map.entry("14", new String[]{"UPS NEXT DAY AIR EARLY", "014"}),
+            java.util.Map.entry("02", new String[]{"UPS 2ND DAY AIR", "002"}),
+            java.util.Map.entry("59", new String[]{"UPS 2ND DAY AIR A.M.", "059"}),
+            java.util.Map.entry("12", new String[]{"UPS 3 DAY SELECT", "012"}),
+            java.util.Map.entry("03", new String[]{"UPS GROUND", "003"}),
+            java.util.Map.entry("11", new String[]{"UPS STANDARD", "011"}),
+            java.util.Map.entry("07", new String[]{"UPS WORLDWIDE EXPRESS", "007"}),
+            java.util.Map.entry("54", new String[]{"UPS WORLDWIDE EXPRESS PLUS", "054"}),
+            java.util.Map.entry("08", new String[]{"UPS WORLDWIDE EXPEDITED", "008"}),
+            java.util.Map.entry("65", new String[]{"UPS WORLDWIDE SAVER", "065"}));
+
+    /** [display name, MaxiCode service class] for a UPS service code of either form. */
+    static String[] upsService(String serviceCode) {
+        String s = serviceCode == null ? "" : serviceCode.trim().toUpperCase(Locale.ROOT);
+        String[] direct = UPS_SERVICES.get(s);
+        if (direct != null) return direct;
+        if (s.contains("NEXT_DAY_AIR_SAVER")) return UPS_SERVICES.get("13");
+        if (s.contains("NEXT_DAY_AIR_EARLY")) return UPS_SERVICES.get("14");
+        if (s.contains("NEXT_DAY")) return UPS_SERVICES.get("01");
+        if (s.contains("2ND_DAY_AIR_AM") || s.contains("SECOND_DAY_AIR_AM")) return UPS_SERVICES.get("59");
+        if (s.contains("2ND_DAY") || s.contains("SECOND_DAY")) return UPS_SERVICES.get("02");
+        if (s.contains("3_DAY") || s.contains("THREE_DAY")) return UPS_SERVICES.get("12");
+        if (s.contains("EXPRESS_PLUS")) return UPS_SERVICES.get("54");
+        if (s.contains("WORLDWIDE_EXPRESS")) return UPS_SERVICES.get("07");
+        if (s.contains("EXPEDITED")) return UPS_SERVICES.get("08");
+        if (s.contains("SAVER")) return UPS_SERVICES.get("65");
+        if (s.contains("STANDARD")) return UPS_SERVICES.get("11");
+        return UPS_SERVICES.get("03");
+    }
+
+    /**
+     * UPS-anatomy 4×6 label. Geometry follows the label UPS's own API returns
+     * (see the sandbox GIF/ZPL for orders 900167/900168): shipper block
+     * top-left; weight, "n OF N" and DWT top-right; SHIP TO block with the
+     * city line large; rule; MaxiCode left of the postal Code 128; the black
+     * service band with the service name and "TRACKING #:"; the full-width
+     * 1Z Code 128; BILLING / Purchase No. / Dept No.; then our small
+     * warehouse footer. MaxiCode carries UPS's structured carrier message
+     * (Zebra ^BD, mode 2 for US destinations) when the label is generated.
+     */
+    private String buildUpsLabel(UpsCtx c) {
+        OrderWithLinesDTO order = c.order();
+        String[] svc = upsService(order.getShipviaCd());
+        String serviceName = svc[0];
+        String serviceClass = svc[1];
+        String orderDisplay = StringUtils.hasText(order.getDisplayOrderNo())
+                ? order.getDisplayOrderNo() : String.valueOf(order.getOrderNo());
+        String clientCode = zpl(firstNonBlank(order.getTenantId(), firstNonBlank(order.getCustNo(), "-")));
+        String weightStr = c.weight() != null ? c.weight().setScale(1, java.math.RoundingMode.HALF_UP).toPlainString() : "-";
+        String unit = c.weightUnit() != null ? c.weightUnit().toUpperCase(Locale.ROOT) : "LB";
+        String unitWord = unit.startsWith("K") ? "KGS" : "LBS";
+        String tracking = c.generated() ? zpl(c.trackingNumber()) : null;
+        boolean sandboxDummy = tracking != null && tracking.contains("XXXX");
+        String cityLine = c.city() + " " + c.state() + " " + c.zip();
+
+        StringBuilder z = new StringBuilder();
+        z.append("^XA\n^CI28\n^PW812\n^LL1218\n^LH0,0\n");
+
+        // ---- shipper block (top-left) ----
+        z.append("^CF0,22,22\n");
+        int y = 12;
+        for (String line : new String[]{c.sfName(), c.sfPhone(), c.sfLine1(),
+                zpl(c.sfCity()) + " " + zpl(c.sfState()) + " " + zpl(c.sfZip())}) {
+            if (StringUtils.hasText(line)) {
+                z.append(text(70, y, zpl(line)));
+                y += 24;
+            }
+        }
+
+        // ---- weight / n OF N / DWT (top-right) ----
+        z.append("^CF0,36,36\n").append(text(430, 12, weightStr + " " + unitWord));
+        z.append("^CF0,30,30\n").append("^FO560,12^FB190,1,0,R,0^FD")
+                .append(c.pkgIndex()).append(" OF ").append(c.pkgCount()).append("^FS\n");
+        com.multiship.backend.dto.LabelPackageDTO p = c.perPkg();
+        if (p != null && p.getLength() != null && p.getWidth() != null && p.getHeight() != null) {
+            z.append("^CF0,24,24\n").append(text(500, 54, "DWT: " + p.getLength().stripTrailingZeros().toPlainString()
+                    + "," + p.getWidth().stripTrailingZeros().toPlainString()
+                    + "," + p.getHeight().stripTrailingZeros().toPlainString()));
+        }
+
+        // ---- SHIP TO ----
+        z.append("^CF0,32,32\n").append(text(70, 128, "SHIP TO:"));
+        z.append("^CF0,30,30\n");
+        y = 164;
+        z.append(text(110, y, zpl(c.recipient()))); y += 30;
+        if (StringUtils.hasText(order.getPhone())) { z.append(text(110, y, zpl(order.getPhone()))); y += 30; }
+        String company = order.getShipAttn() != null ? order.getShipAttn().trim() : "";
+        if (StringUtils.hasText(company) && !company.equalsIgnoreCase(c.recipient().trim())) {
+            z.append(text(110, y, zpl(company))); y += 30;
+        }
+        if (StringUtils.hasText(order.getShipAddr1())) { z.append(text(110, y, zpl(order.getShipAddr1()))); y += 30; }
+        if (StringUtils.hasText(order.getShipAddr2())) { z.append(text(110, y, zpl(order.getShipAddr2()))); y += 30; }
+        z.append("^CF0,46,46\n").append(text(110, y + 4, cityLine));
+        if (c.crossBorder() && StringUtils.hasText(c.destCountryCode())) {
+            z.append("^CF0,30,30\n").append(text(110, y + 54, c.destCountryCode().toUpperCase(Locale.ROOT)));
+        }
+        if (c.sandbox()) {
+            // Top-right under DWT — clear of the city line, which can run
+            // the full width at 46px on long city names.
+            z.append("^FO430,90^FB320,1,0,R,0^CF0,34,34^FDSAMPLE^FS\n");
+        }
+
+        // ---- MaxiCode | postal barcode ----
+        z.append("^FO60,365^GB692,3,3^FS\n");
+        z.append("^FO310,365^GB3,235,3^FS\n");
+        if (tracking != null && !sandboxDummy && "US".equalsIgnoreCase(firstNonBlank(c.destCountryCode(), "US"))) {
+            String zip5 = c.zip().replaceAll("[^0-9]", "");
+            zip5 = zip5.length() >= 5 ? zip5.substring(0, 5) : String.format("%-5s", zip5).replace(' ', '0');
+            String julian = String.format("%03d", LocalDate.now().getDayOfYear());
+            String shipperNo = c.resolution() != null && StringUtils.hasText(c.resolution().getAccountNumber())
+                    ? zpl(c.resolution().getAccountNumber()) : "";
+            String lbs = c.weight() != null ? String.valueOf(c.weight().setScale(0, java.math.RoundingMode.UP).intValue()) : "";
+            // Zebra ^BD input shape for the UPS structured carrier message
+            // (ZPL guide, mode 2): the PRIMARY fields lead — class of service
+            // (3), country (840), postal (9 digits) — then the "[)>" RS "01"
+            // GS "96" header and the SECONDARY fields: tracking, SCAC UPSN,
+            // shipper number, julian day, shipment id, n/x, weight (lb),
+            // address-validated Y, street, city, state, RS EOT. ^FH_ makes
+            // the GS/RS/EOT bytes typeable in the copied text.
+            // Mode 2 holds ~84 chars of secondary message: the street is left
+            // blank (as UPS's own labels commonly do) and the city capped, or
+            // long addresses overflow the symbol and the encoder rejects it.
+            String cityForCode = c.city().length() > 20 ? c.city().substring(0, 20) : c.city();
+            String msg = serviceClass + "840" + zip5 + "0000" + "[)>_1E01_1D96" + tracking
+                    + "_1DUPSN_1D" + shipperNo + "_1D" + julian + "_1D" + orderDisplay
+                    + "_1D" + c.pkgIndex() + "/" + c.pkgCount() + "_1D" + lbs + "_1DY_1D"
+                    + "_1D" + cityForCode + "_1D" + c.state() + "_1E_04";
+            // ^BD takes mode, symbol number, total symbols — no orientation arg.
+            z.append("^FO72,378^BD2,1,1^FH_^FD").append(msg).append("^FS\n");
+        } else {
+            z.append("^CF0,26,26\n").append("^FO62,455^FB246,3,4,C,0^FDUPS\\&MAXICODE\\&PRINTS HERE^FS\n");
+        }
+        String zip5ForPostal = c.zip().replaceAll("[^0-9]", "");
+        if (zip5ForPostal.length() >= 5) {
+            z.append("^CF0,22,22\n").append(text(330, 378, "UPS POSTAL BARCODE"));
+            z.append("^FO330,406^BY2,3,110^BCN,110,N,N,N^FD420").append(zip5ForPostal.substring(0, 5)).append("^FS\n");
+        } else {
+            z.append("^CF0,26,26\n").append("^FO314,440^FB436,1,0,C,0^FDUPS ROUTING CODE PRINTS HERE^FS\n");
+        }
+
+        // ---- service band ----
+        z.append("^FO60,600^GB692,12,12^FS\n");
+        z.append("^FO652,600^GB100,112,112^FS\n");
+        z.append("^FO60,702^GB692,12,12^FS\n");
+        z.append("^CF0,54,54\n").append(text(70, 619, serviceName));
+        z.append("^CF0,24,24\n").append(text(70, 675, "TRACKING #: " + (tracking != null ? tracking : "PENDING")));
+
+        // ---- 1Z tracking barcode ----
+        if (tracking != null) {
+            // An 18-char 1Z at 3-dot modules is ~690 dots wide — start at the
+            // frame's left edge so it ends inside the 752 right rule.
+            z.append("^FO60,735^BY3,3,140^BCN,140,N,N,N^FD").append(tracking).append("^FS\n");
+        } else {
+            z.append("^FO90,745^GB632,120,2^FS\n");
+            z.append("^CF0,26,26\n").append("^FO90,793^FB632,1,0,C,0^FD*** LABEL NOT GENERATED ***^FS\n");
+        }
+        z.append("^FO60,885^GB692,8,8^FS\n");
+
+        // ---- billing + references ----
+        z.append("^CF0,24,24\n").append(text(70, 905, "BILLING: P/P"));
+        if (c.sandbox()) {
+            z.append("^FO420,897^FB330,1,0,R,0^CF0,40,40^FDSAMPLE^FS\n");
+        }
+        z.append("^CF0,22,22\n");
+        z.append(text(70, 960, "PURCHASE NO.: " + orderDisplay));
+        z.append(text(70, 986, "DEPT NO.: " + clientCode));
+        z.append(text(70, 1012, "REF: " + orderDisplay + (c.pkgCount() > 1 ? "-" + c.pkgIndex() : "")));
+
+        // ---- warehouse footer (ours; below UPS's content like its version strings) ----
+        z.append("^FO60,1050^GB692,2,2^FS\n");
+        z.append("^CF0,20,20\n");
+        z.append(text(64, 1062, "CLIENT: " + clientCode + " · ORDER: " + orderDisplay
+                + " · PKG " + c.pkgIndex() + " OF " + c.pkgCount() + " · " + c.shipDate()));
+        z.append(text(64, 1088, "SVC: " + serviceName + " (" + zpl(firstNonBlank(order.getShipviaCd(), "-")) + ")"
+                + " · WT: " + weightStr + " " + unit
+                + (c.sandbox() ? " · SANDBOX" : "")));
         z.append("^XZ\n");
         return z.toString();
     }
