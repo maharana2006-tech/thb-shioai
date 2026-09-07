@@ -120,6 +120,10 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         // client's customs profile for the destination country; else fall back
         // to the consignee (ship-to), which is the DAP default.
         Party importer = resolveImporter(order, customs, profile);
+        // Named customs broker from the profile (Broker Select); null when the
+        // carrier's own brokerage clears — the on-screen invoice showed this
+        // block, the printed one never did.
+        Party broker = resolveBroker(profile);
 
         // Sprint 51 wiring fix — the real tracking number lives on the
         // order_label_tracking row, NOT label_batch.track (which stays null for
@@ -136,7 +140,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         String incoterms = firstNonBlank(customs.getIncoterms(),
                 profile == null ? null : profile.getIncoterms(), "DAP");
 
-        return renderPdf(order, customs, client, importer, tracking, carrier, incoterms);
+        return renderPdf(order, customs, client, importer, broker, tracking, carrier, incoterms);
     }
 
     /** The client's customs profile for a destination country, or null. */
@@ -196,6 +200,24 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         return order.getWeight();
     }
 
+    private Party resolveBroker(ClientCustomsProfile profile) {
+        if (profile == null) return null;
+        String name = firstNonBlank(safe(profile.getBrokerName()), safe(profile.getBrokerCompany()), "");
+        if (!hasText(name)) return null;
+        List<String> lines = new java.util.ArrayList<>(7);
+        lines.add(name);
+        String company = safe(profile.getBrokerCompany());
+        if (hasText(company) && !company.trim().equalsIgnoreCase(name.trim())) lines.add(company.trim());
+        lines.add(safe(profile.getBrokerAddress1()));
+        lines.add(joinCityStateZip(safe(profile.getBrokerCity()), safe(profile.getBrokerState()), safe(profile.getBrokerPostcode())));
+        lines.add(safe(profile.getBrokerCountry()));
+        String phone = safe(profile.getBrokerPhone());
+        if (hasText(phone)) lines.add("PH " + phone);
+        String ids = firstNonBlank(safe(profile.getBrokerId()), safe(profile.getBrokerLicense()), "");
+        if (hasText(ids)) lines.add("Broker ID " + ids);
+        return new Party("CUSTOMS BROKER", lines);
+    }
+
     private static List<String> shipToLines(Order order) {
         // Consignee = person AND company: on a B2B entry the company is the
         // party customs clears to, and this PDF is what prints with the
@@ -251,7 +273,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     // ---- rendering -------------------------------------------------------
 
     private byte[] renderPdf(Order order, OrderCustoms customs, Client client, Party importer,
-                             String tracking, String carrier, String incoterms) {
+                             Party broker, String tracking, String carrier, String incoterms) {
         try (PDDocument doc = new PDDocument();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
@@ -294,7 +316,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             int simRowIdx = 0;
             java.util.List<int[]> pageRanges = new java.util.ArrayList<>();
             int rangeStart = 0;
-            float simY = pageHeight - margin - firstPageHeaderHeight();
+            float simY = pageHeight - margin - firstPageHeaderHeight(broker != null);
             while (simRowIdx < items.size()) {
                 float bottomReserve = (simRowIdx == items.size() - 1)
                         ? lastPageReserve + subtotalReserve + footerReserve
@@ -313,6 +335,11 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             int totalPages = pageRanges.size();
 
             // Pass 2 — actually emit each page.
+            BigDecimal grossForLines = shipmentGrossWeight(order);
+            int totalQtyForLines = 0;
+            for (OrderCustomsItem it : items) totalQtyForLines += it.getQuantity() == null ? 1 : it.getQuantity();
+            String lineWeightUnit = firstNonBlank(customs.getWeightUnit(),
+                    client == null ? null : client.getDefaultWeightUnit(), "KG");
             BigDecimal runningTotal = BigDecimal.ZERO;
             for (int p = 0; p < totalPages; p++) {
                 boolean firstPage = (p == 0);
@@ -325,7 +352,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                 try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
                     float y;
                     if (firstPage) {
-                        y = renderFullHeader(cs, order, customs, client, importer,
+                        y = renderFullHeader(cs, order, customs, client, importer, broker,
                                 tracking, carrier, incoterms, currency,
                                 pageWidth, pageHeight, margin);
                     } else {
@@ -333,7 +360,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                                 pageWidth, pageHeight, margin);
                     }
                     // Item table column header
-                    y = drawItemsTableHeader(cs, margin, pageWidth - margin, y);
+                    y = drawItemsTableHeader(cs, margin, pageWidth - margin, y, lineWeightUnit);
                     // Item rows for this page
                     BigDecimal pageSubtotal = BigDecimal.ZERO;
                     for (int i = startIdx; i < endIdx; i++) {
@@ -342,7 +369,21 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                         BigDecimal unit = it.getUnitValue() == null ? BigDecimal.ZERO : it.getUnitValue();
                         BigDecimal amount = unit.multiply(BigDecimal.valueOf(qty));
                         pageSubtotal = pageSubtotal.add(amount);
-                        drawItemRow(cs, margin, pageWidth - margin, y, it, qty, unit, amount);
+                        // Net weight per line: declared per-unit weight × qty, else the
+                        // line's share of the shipment gross by quantity, marked "(est)"
+                        // so an apportioned figure never reads as a declaration.
+                        String netWeight;
+                        if (it.getWeight() != null && it.getWeight().signum() > 0) {
+                            netWeight = it.getWeight().multiply(BigDecimal.valueOf(qty))
+                                    .setScale(2, RoundingMode.HALF_UP).toPlainString();
+                        } else if (grossForLines != null && grossForLines.signum() > 0 && totalQtyForLines > 0) {
+                            netWeight = grossForLines.multiply(BigDecimal.valueOf(qty))
+                                    .divide(BigDecimal.valueOf(totalQtyForLines), 2, RoundingMode.HALF_UP)
+                                    .toPlainString() + " (est)";
+                        } else {
+                            netWeight = "";
+                        }
+                        drawItemRow(cs, margin, pageWidth - margin, y, it, qty, unit, amount, netWeight);
                         y -= rowH;
                     }
                     runningTotal = runningTotal.add(pageSubtotal);
@@ -438,9 +479,10 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
 
     /** Approximate vertical space consumed by the page-1 full header
      *  (parties + meta + spacing). Used in the two-pass pagination sim. */
-    private static float firstPageHeaderHeight() {
-        // Empirical: title(40) + rule(2) + meta 2 lines(30) + parties(90) + spacing(12) = ~174
-        return 190f;
+    private static float firstPageHeaderHeight(boolean hasBroker) {
+        // Empirical: title(40) + rule(2) + meta 2 lines(30) + parties(90) + spacing(12) = ~174;
+        // a named broker adds a second right-column party (~70).
+        return hasBroker ? 260f : 190f;
     }
 
     /** Approximate vertical space consumed by the compact continuation
@@ -455,7 +497,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
      * invoice meta line + 3 party blocks. Returns the y-cursor below.
      */
     private float renderFullHeader(PDPageContentStream cs, Order order, OrderCustoms customs,
-            Client client, Party importer, String tracking, String carrier, String incoterms,
+            Client client, Party importer, Party broker, String tracking, String carrier, String incoterms,
             String currency, float pageWidth, float pageHeight, float margin)
             throws java.io.IOException {
         float y = pageHeight - margin;
@@ -485,6 +527,9 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         float rightCol = pageWidth / 2f + 20f;
         float leftY = drawParty(cs, "EXPORTER / SHIP FROM", exporterLines(order, client), leftCol, y);
         float rightY = drawParty(cs, importer.title(), importer.lines(), rightCol, y);
+        if (broker != null) {
+            rightY = drawParty(cs, broker.title(), broker.lines(), rightCol, rightY - 8f);
+        }
         float consY = drawParty(cs, "CONSIGNEE / SHIP TO", shipToLines(order), leftCol, leftY - 8f);
         return Math.min(consY, rightY) - 12f;
     }
@@ -530,19 +575,21 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
      * Draw the item-table column header — repeated on every page so
      * separated pages remain legible. Returns the y-cursor below.
      */
-    private float drawItemsTableHeader(PDPageContentStream cs, float left, float right, float top)
-            throws java.io.IOException {
+    private float drawItemsTableHeader(PDPageContentStream cs, float left, float right, float top,
+            String weightUnit) throws java.io.IOException {
         float xDesc = left;
-        float xHs = left + 210f;
-        float xOrig = left + 275f;
-        float xQty = left + 320f;
-        float xUnit = left + 370f;
+        float xHs = left + 185f;
+        float xOrig = left + 250f;
+        float xQty = left + 288f;
+        float xWt = left + 322f;
+        float xUnit = left + 392f;
         float xAmt = right - textWidth(HELVETICA_BOLD, 9f, "AMOUNT");
         cs.setNonStrokingColor(PRIMARY);
         drawText(cs, HELVETICA_BOLD, 9f, "DESCRIPTION", xDesc, top);
         drawText(cs, HELVETICA_BOLD, 9f, "HS CODE", xHs, top);
         drawText(cs, HELVETICA_BOLD, 9f, "ORIGIN", xOrig, top);
         drawText(cs, HELVETICA_BOLD, 9f, "QTY", xQty, top);
+        drawText(cs, HELVETICA_BOLD, 9f, "NET WT (" + weightUnit + ")", xWt, top);
         drawText(cs, HELVETICA_BOLD, 9f, "UNIT", xUnit, top);
         drawText(cs, HELVETICA_BOLD, 9f, "AMOUNT", xAmt, top);
         cs.setNonStrokingColor(Color.BLACK);
@@ -553,17 +600,19 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     /** Draw one item row at the given y using the column positions
      *  matching {@link #drawItemsTableHeader}. */
     private void drawItemRow(PDPageContentStream cs, float left, float right, float y,
-            OrderCustomsItem it, int qty, BigDecimal unit, BigDecimal amount)
+            OrderCustomsItem it, int qty, BigDecimal unit, BigDecimal amount, String netWeight)
             throws java.io.IOException {
         float xDesc = left;
-        float xHs = left + 210f;
-        float xOrig = left + 275f;
-        float xQty = left + 320f;
-        float xUnit = left + 370f;
-        drawText(cs, HELVETICA, 9f, truncate(safe(it.getDescription()), 42), xDesc, y);
+        float xHs = left + 185f;
+        float xOrig = left + 250f;
+        float xQty = left + 288f;
+        float xWt = left + 322f;
+        float xUnit = left + 392f;
+        drawText(cs, HELVETICA, 9f, truncate(safe(it.getDescription()), 36), xDesc, y);
         drawText(cs, HELVETICA, 9f, safe(it.getHsCode()), xHs, y);
         drawText(cs, HELVETICA, 9f, safe(it.getCountryOfOrigin()), xOrig, y);
         drawText(cs, HELVETICA, 9f, String.valueOf(qty), xQty, y);
+        drawText(cs, HELVETICA, 9f, netWeight, xWt, y);
         drawText(cs, HELVETICA, 9f, money(unit), xUnit, y);
         drawRightText(cs, HELVETICA, 9f, money(amount), right, y);
     }

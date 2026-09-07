@@ -85,7 +85,7 @@ export default function OrderDocumentsTable() {
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#eee6d6] px-4 py-3">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#b6a684]">Shipment documents</p>
-          <p className="text-[11.5px] text-[#8a7959]">
+          <p className="text-[11.5px] text-[#6b5c42]">
             Everything each label generation produced — tracking, label, invoice &amp; statement — in one table.
           </p>
         </div>
@@ -99,16 +99,16 @@ export default function OrderDocumentsTable() {
       </div>
 
       {loading ? (
-        <p className="px-4 py-10 text-center text-[12px] text-[#8a7959]">Loading documents…</p>
+        <p className="px-4 py-10 text-center text-[12px] text-[#6b5c42]">Loading documents…</p>
       ) : rows.length === 0 ? (
-        <p className="px-4 py-10 text-center text-[12px] text-[#8a7959]">
+        <p className="px-4 py-10 text-center text-[12px] text-[#6b5c42]">
           No labels generated yet — generate one and its documents appear here.
         </p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-[11.5px]">
             <thead>
-              <tr className="bg-[#faf7f0] text-left text-[9px] uppercase tracking-[0.1em] text-[#8a7959]">
+              <tr className="bg-[#faf7f0] text-left text-[9px] uppercase tracking-[0.1em] text-[#6b5c42]">
                 <th className="border-b border-[#e3d9c4] px-3 py-2 font-bold">Order</th>
                 <th className="border-b border-[#e3d9c4] px-3 py-2 font-bold">Client</th>
                 <th className="border-b border-[#e3d9c4] px-3 py-2 font-bold">Recipient</th>
@@ -198,7 +198,7 @@ export default function OrderDocumentsTable() {
                 type="button"
                 onClick={() => setStatementRow(null)}
                 aria-label="Close"
-                className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#8a7959] transition hover:bg-[#faf7f0]"
+                className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#6b5c42] transition hover:bg-[#faf7f0]"
               >
                 <FiX className="h-3.5 w-3.5" />
               </button>

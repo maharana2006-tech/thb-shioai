@@ -231,7 +231,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#b6a684]">Bulk import</p>
               <h3 className="text-[16px] font-semibold text-[#1f150c]">Import orders from CSV / Excel</h3>
-              <p className="mt-0.5 text-[11.5px] text-[#8a7959]">
+              <p className="mt-0.5 text-[11.5px] text-[#6b5c42]">
                 One order per row — upload (saved automatically), fix what needs fixing, generate.
               </p>
             </div>
@@ -241,7 +241,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
               type="button"
               onClick={onClose}
               aria-label="Close"
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#8a7959] transition hover:bg-[#faf7f0] hover:text-[#412d15]"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] transition hover:bg-[#faf7f0] hover:text-[#412d15]"
             >
               <FiX className="h-4 w-4" />
             </button>
@@ -285,7 +285,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
             {step === 2 && preview ? (
               <span>
                 {batchId != null ? (
-                  <span className="font-semibold text-[#8a7959]">Draft #{batchId} saved automatically</span>
+                  <span className="font-semibold text-[#6b5c42]">Draft #{batchId} saved automatically</span>
                 ) : null}
                 {preview.invalidRows > 0
                   ? ` · ${preview.invalidRows} row(s) need fixes — they stay in the draft until fixed`
@@ -512,7 +512,7 @@ function UploadStep({
         <p className="mt-3 text-[13px] font-semibold text-[#1f150c]">
           Drag &amp; drop your file here, or <span className="text-[#412d15] underline underline-offset-2">browse</span>
         </p>
-        <p className="mt-1 text-[11px] text-[#8a7959]">CSV or Excel (.csv, .xlsx) · one order per row</p>
+        <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx) · one order per row</p>
         <input
           type="file"
           accept=".csv,.xlsx,.txt"
@@ -535,14 +535,14 @@ function UploadStep({
             </span>
             <div className="min-w-0">
               <p className="truncate text-[12.5px] font-semibold text-[#1f150c]">{file.name}</p>
-              <p className="text-[10.5px] text-[#8a7959]">{prettySize(file.size)}</p>
+              <p className="text-[10.5px] text-[#6b5c42]">{prettySize(file.size)}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => onFileChange(null)}
-              className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#8a7959] transition hover:bg-[#faf7f0] hover:text-rose-600"
+              className="rounded-lg border border-[#e3d9c4] bg-white p-1.5 text-[#6b5c42] transition hover:bg-[#faf7f0] hover:text-rose-600"
               aria-label="Remove file"
             >
               <FiX className="h-3.5 w-3.5" />
@@ -558,10 +558,10 @@ function UploadStep({
       {/* Template helper */}
       <div>
         <div className="rounded-xl border border-[#e3d9c4] bg-white p-4">
-          <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#8a7959]">
+          <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#6b5c42]">
             <FiDownload className="h-3.5 w-3.5" /> Templates
           </p>
-          <p className="mt-1.5 text-[11.5px] text-[#8a7959]">
+          <p className="mt-1.5 text-[11.5px] text-[#6b5c42]">
             The Excel template has cascading dropdowns to pick each row's client, carrier &amp; account.
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -571,7 +571,7 @@ function UploadStep({
             </button>
             <a
               href={csvHref}
-              className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-[#8a7959] transition hover:text-[#1f150c]"
+              className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-[#6b5c42] transition hover:text-[#1f150c]"
               title="Flat CSV template — no validation, no dropdowns."
             >
               <FiDownload className="h-3 w-3" /> Plain CSV
@@ -858,7 +858,7 @@ function PreviewStep({
       <div className="overflow-x-auto rounded-xl border border-[#e3d9c4]">
         <table className="w-full border-collapse text-[11px]">
           <thead>
-            <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.08em] text-[#8a7959]">
+            <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.08em] text-[#6b5c42]">
               <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
               {PREVIEW_COLUMNS.map((c) => (
                 <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">
@@ -889,7 +889,7 @@ function PreviewStep({
                       bleed through a gap between two separate sticky columns. */}
                   <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
                     <div className="flex items-center gap-1.5">
-                      <span className="font-mono text-[10px] font-bold text-[#8a7959]">{r.rowNumber}</span>
+                      <span className="font-mono text-[10px] font-bold text-[#6b5c42]">{r.rowNumber}</span>
                       {ok ? (
                         <span
                           title={warnCount > 0 ? statusTitle : 'Ready to generate'}
@@ -967,10 +967,10 @@ function PreviewStep({
                     }`}
                   >
                     <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${rOk ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-                    <span className="font-mono text-[9.5px] font-bold text-[#8a7959]">R{r.rowNumber}</span>
+                    <span className="font-mono text-[9.5px] font-bold text-[#6b5c42]">R{r.rowNumber}</span>
                     <span className="min-w-0 flex-1 truncate">
                       <span className="font-semibold text-[#1f150c]">{r.orderRef || r.recipientName || '—'}</span>
-                      {r.clientCode ? <span className="ml-1 font-mono text-[9.5px] text-[#8a7959]">{r.clientCode}</span> : null}
+                      {r.clientCode ? <span className="ml-1 font-mono text-[9.5px] text-[#6b5c42]">{r.clientCode}</span> : null}
                     </span>
                     {!rOk ? (
                       <span className="shrink-0 rounded-full bg-rose-100 px-1.5 text-[9px] font-bold text-rose-700">
@@ -985,11 +985,11 @@ function PreviewStep({
             {/* Right — detail editor for the selected row */}
             <div className="min-w-0 flex-1 overflow-y-auto p-4">
               {!selected ? (
-                <p className="py-10 text-center text-[12px] text-[#8a7959]">Select a row on the left.</p>
+                <p className="py-10 text-center text-[12px] text-[#6b5c42]">Select a row on the left.</p>
               ) : (
                 <>
                   <div className="flex flex-wrap items-center gap-2 border-b border-dashed border-[#eee6d6] pb-2.5">
-                    <span className="font-mono text-[11px] font-bold text-[#8a7959]">Row {selected.rowNumber}</span>
+                    <span className="font-mono text-[11px] font-bold text-[#6b5c42]">Row {selected.rowNumber}</span>
                     {selected.orderRef ? <span className="font-mono text-[13px] font-semibold text-[#1f150c]">{selected.orderRef}</span> : null}
                     {selected.clientCode ? (
                       <span className="rounded bg-[#faf7f0] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#5a4526]">{selected.clientCode}</span>

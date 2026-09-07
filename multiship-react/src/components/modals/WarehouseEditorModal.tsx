@@ -354,7 +354,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
                     ? `Edit warehouse ${warehouse!.code}`
                     : 'Add warehouse'}
               </h2>
-              <p className="mt-0.5 text-[11.5px] text-[#8a7959]">
+              <p className="mt-0.5 text-[11.5px] text-[#6b5c42]">
                 {created
                   ? 'Optional — pick the clients that should see this warehouse.'
                   : 'Ship-from locations attach to clients; each client picks one default.'}
@@ -365,7 +365,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
             type="button"
             aria-label="Close"
             onClick={closeAction}
-            className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#8a7959] transition hover:bg-[#faf7f0]"
+            className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:bg-[#faf7f0]"
           >
             <FiX className="h-4 w-4" />
           </button>
@@ -387,7 +387,7 @@ export default function WarehouseEditorModal({ warehouse, onClose, onSaved, defa
                 placeholder="3PL-EAST"
                 maxLength={FIELD_LIMITS.clientCode}
                 aria-invalid={!isEdit && err('code') ? true : undefined}
-                className={inputCls('code', 'font-semibold disabled:cursor-not-allowed disabled:bg-[#faf7f0] disabled:text-[#8a7959]')}
+                className={inputCls('code', 'font-semibold disabled:cursor-not-allowed disabled:bg-[#faf7f0] disabled:text-[#6b5c42]')}
               />
             </Field>
             <Field label="Name" required error={err('name')}>

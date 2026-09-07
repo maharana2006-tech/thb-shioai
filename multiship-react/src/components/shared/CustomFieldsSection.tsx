@@ -66,16 +66,16 @@ export default function CustomFieldsSection({
     >
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
-          <FiTag className="text-[#8a7959]" />
+          <FiTag className="text-[#6b5c42]" />
           <h3 className="text-[13px] font-semibold text-[#1f150c]">Custom fields</h3>
         </div>
-        <span className="inline-flex items-center gap-1 text-[11px] text-[#8a7959]">
+        <span className="inline-flex items-center gap-1 text-[11px] text-[#6b5c42]">
           <FiInfo /> Tenant-defined metadata
         </span>
       </div>
 
       {loading ? (
-        <p className="text-[12px] text-[#8a7959]">Loading fields…</p>
+        <p className="text-[12px] text-[#6b5c42]">Loading fields…</p>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {defs.map((d) => (
@@ -111,7 +111,7 @@ function FieldInput({
 
   return (
     <div>
-      <label className="mb-1 flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
+      <label className="mb-1 flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
         {def.label}
         {def.required ? <span className="text-rose-500">*</span> : null}
       </label>

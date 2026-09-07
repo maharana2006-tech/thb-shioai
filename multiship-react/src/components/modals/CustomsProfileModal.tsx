@@ -535,7 +535,7 @@ export default function CustomsProfileModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#8a7959] transition hover:bg-[#faf7f0]"
+              className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:bg-[#faf7f0]"
               aria-label="Close"
             >
               <FiX className="h-4 w-4" />
@@ -689,7 +689,7 @@ export default function CustomsProfileModal({
                 }`}
               >
                 <p className="text-[12px] font-semibold text-[#1f150c]">Carrier clears customs <span className="ml-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-emerald-700">Recommended</span></p>
-                <p className="mt-0.5 text-[11px] text-[#8a7959]">UPS/FedEx brokerage is included with international shipments — nothing to set up.</p>
+                <p className="mt-0.5 text-[11px] text-[#6b5c42]">UPS/FedEx brokerage is included with international shipments — nothing to set up.</p>
               </button>
               <button
                 type="button"
@@ -699,7 +699,7 @@ export default function CustomsProfileModal({
                 }`}
               >
                 <p className="text-[12px] font-semibold text-[#1f150c]">Own broker (Broker Select)</p>
-                <p className="mt-0.5 text-[11px] text-[#8a7959]">The carrier hands the shipment to your named broker at the border.</p>
+                <p className="mt-0.5 text-[11px] text-[#6b5c42]">The carrier hands the shipment to your named broker at the border.</p>
               </button>
             </div>
 

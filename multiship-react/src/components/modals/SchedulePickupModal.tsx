@@ -217,13 +217,13 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
       >
         <div className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
           <div>
-            <p className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#8a7959]">
+            <p className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">
               <FiTruck className="h-3 w-3" /> Pickup
             </p>
             <h3 className="mt-1 text-[15px] font-semibold text-[#1f150c]">
               Schedule courier pickup
             </h3>
-            <p className="mt-1 text-[11.5px] text-[#8a7959]">
+            <p className="mt-1 text-[11.5px] text-[#6b5c42]">
               Books a driver to collect the parcels at your ship-from address.
             </p>
           </div>
@@ -231,7 +231,7 @@ export default function SchedulePickupModal({ onClose, defaults }: SchedulePicku
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#8a7959] transition hover:bg-[#faf7f0]"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] transition hover:bg-[#faf7f0]"
           >
             <FiX className="h-3.5 w-3.5" />
           </button>
@@ -468,7 +468,7 @@ function ResultBanner({ result }: { result: PickupResponse }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section>
-      <h4 className="mb-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
+      <h4 className="mb-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
         {title}
       </h4>
       {children}

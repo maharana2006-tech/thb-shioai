@@ -271,7 +271,7 @@ export default function LabelTemplateEditorPage() {
           <div className="flex items-center gap-2 bg-[#1f150c] px-4 py-2.5">
             <FiSliders className="h-3.5 w-3.5 text-[#b6a684]" />
             <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-[#e3d9c4]">Edit</span>
-            <span className="ml-auto font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
+            <span className="ml-auto font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
               {humanType(templateType)}
             </span>
           </div>
@@ -354,7 +354,7 @@ export default function LabelTemplateEditorPage() {
                   <button
                     type="button"
                     onClick={removeLogo}
-                    className="mt-1.5 inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[10.5px] font-semibold text-[#8a7959] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+                    className="mt-1.5 inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[10.5px] font-semibold text-[#6b5c42] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
                   >
                     <FiTrash2 className="h-3 w-3" /> Remove logo
                   </button>
@@ -475,7 +475,7 @@ export default function LabelTemplateEditorPage() {
                   if (!window.confirm('Clear the whole layout? The branding header / footer / logo will be used at render time until you rebuild.')) return
                   setTemplate((prev) => ({ ...prev, layoutJson: null }))
                 }}
-                className="mb-2 inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[10.5px] font-semibold text-[#8a7959] transition hover:bg-[#faf7f0]"
+                className="mb-2 inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2 py-1 text-[10.5px] font-semibold text-[#6b5c42] transition hover:bg-[#faf7f0]"
               >
                 <FiTrash2 className="h-3 w-3" /> Clear layout
               </button>
@@ -516,7 +516,7 @@ export default function LabelTemplateEditorPage() {
                 <FiCheck className="mt-0.5 h-3 w-3 shrink-0 text-emerald-600" />
                 Tenant-scoped — each client can override the platform default.
               </li>
-              <li className="flex items-start gap-1.5 text-[#8a7959]">
+              <li className="flex items-start gap-1.5 text-[#6b5c42]">
                 <FiInfo className="mt-0.5 h-3 w-3 shrink-0" />
                 The carrier's shipping label itself is <strong>not</strong> customisable.
               </li>
@@ -564,7 +564,7 @@ function Panel({ id, icon, title, summary, badge, open, onToggle, aside, childre
         <span className="ml-auto flex items-center gap-2">
           {aside}
           {!open && summary ? (
-            <span className="max-w-[160px] truncate font-mono text-[10px] font-semibold text-[#8a7959]">{summary}</span>
+            <span className="max-w-[160px] truncate font-mono text-[10px] font-semibold text-[#6b5c42]">{summary}</span>
           ) : null}
         </span>
       </button>
@@ -605,7 +605,7 @@ function FieldCell({ label, disabled, chevron, aside, children }: {
       </span>
       {children}
       {chevron ? (
-        <FiChevronDown className="pointer-events-none absolute bottom-2 right-2 h-3 w-3 text-[#8a7959]" />
+        <FiChevronDown className="pointer-events-none absolute bottom-2 right-2 h-3 w-3 text-[#6b5c42]" />
       ) : null}
     </div>
   )
@@ -650,7 +650,7 @@ function TemplatePreview({ logo, color, header, footer, showItems, typeLabel }: 
                 <p>221B Baker Street</p>
                 <p>London NW1 6XE, GB</p>
               </div>
-              <div className="text-right text-[#8a7959]">
+              <div className="text-right text-[#6b5c42]">
                 <p className="font-bold" style={{ color: c }}>ORDER</p>
                 <p className="mt-0.5">#100482</p>
                 <p>Aug 11, 2026</p>
@@ -672,7 +672,7 @@ function TemplatePreview({ logo, color, header, footer, showItems, typeLabel }: 
               </table>
             ) : null}
             {footer ? (
-              <p className="whitespace-pre-line border-t border-[#eee6d6] pt-1.5 text-[7.5px] text-[#8a7959]">{footer}</p>
+              <p className="whitespace-pre-line border-t border-[#eee6d6] pt-1.5 text-[7.5px] text-[#6b5c42]">{footer}</p>
             ) : (
               <p className="border-t border-[#eee6d6] pt-1.5 text-[7.5px] italic text-[#cdbf9f]">Footer text appears here…</p>
             )}

@@ -507,7 +507,7 @@ export default function DataHistoryPage() {
                   </span>
                 ) : null}
               </span>
-              <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#8a7959]">
+              <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#6b5c42]">
                 <span>
                   {fmtDate(b.createdAt)} · {b.createdBy || '—'}
                 </span>
@@ -719,7 +719,7 @@ export default function DataHistoryPage() {
                       disabled={trashBusyId === b.id}
                       title="Move this import to Trash (recoverable)"
                       aria-label="Delete import"
-                      className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#8a7959] transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {trashBusyId === b.id ? (
                         <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300/40 border-t-rose-500" />
@@ -746,9 +746,9 @@ export default function DataHistoryPage() {
     return (
       <div className="border-t border-dashed border-[#eee6d6] bg-[#faf7f0]/50 px-5 py-3">
         {rows === 'loading' || rows === undefined ? (
-          <p className="py-4 text-center text-[12px] text-[#8a7959]">Loading rows…</p>
+          <p className="py-4 text-center text-[12px] text-[#6b5c42]">Loading rows…</p>
         ) : rows.length === 0 ? (
-          <p className="py-4 text-center text-[12px] text-[#8a7959]">No rows stored for this import.</p>
+          <p className="py-4 text-center text-[12px] text-[#6b5c42]">No rows stored for this import.</p>
         ) : (
           <>
             <p className="mb-1.5 text-[10.5px] text-[#b6a684]">
@@ -757,7 +757,7 @@ export default function DataHistoryPage() {
             <div className="overflow-x-auto rounded-xl border border-[#e3d9c4] bg-white">
               <table className="w-full border-collapse text-[11px] text-[#3f3527]">
                 <thead>
-                  <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.1em] text-[#8a7959]">
+                  <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.1em] text-[#6b5c42]">
                     <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
                     {DH_COLUMNS.map((c) => (
                       <th key={c.key} className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">{c.key}</th>
@@ -790,7 +790,7 @@ export default function DataHistoryPage() {
                       <tr className={ok ? 'bg-white' : 'bg-rose-50/40'}>
                         <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
                           <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-[10px] font-bold text-[#8a7959]">{r.rowNumber}</span>
+                            <span className="font-mono text-[10px] font-bold text-[#6b5c42]">{r.rowNumber}</span>
                             {generated ? (
                               <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Generated</span>
                             ) : failed ? (
@@ -839,14 +839,14 @@ export default function DataHistoryPage() {
                           {generated ? (
                             <span className="inline-flex flex-col gap-0.5">
                               {r.generatedTrackingNumber ? (
-                                <span className="font-mono text-[9.5px] text-[#8a7959]">{r.generatedTrackingNumber}</span>
+                                <span className="font-mono text-[9.5px] text-[#6b5c42]">{r.generatedTrackingNumber}</span>
                               ) : (
-                                <span className="text-[9.5px] text-[#8a7959]">—</span>
+                                <span className="text-[9.5px] text-[#6b5c42]">—</span>
                               )}
                             </span>
                           ) : rowIsWms ? (
                             <span
-                              className="text-[9.5px] text-[#8a7959]"
+                              className="text-[9.5px] text-[#6b5c42]"
                               title="Imported from WMS as a PENDING order — generate the label in the Shipments workspace"
                             >
                               {r.generatedOrderNo ? `Order #${r.generatedOrderNo} · label in Shipments` : 'Label in Shipments'}
@@ -1079,7 +1079,7 @@ export default function DataHistoryPage() {
                     {s.label}
                     <span
                       className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9.5px] font-bold ${
-                        active ? 'bg-[#f4eede]/25 text-[#f4eede]' : 'bg-white text-[#8a7959] ring-1 ring-[#e3d9c4]'
+                        active ? 'bg-[#f4eede]/25 text-[#f4eede]' : 'bg-white text-[#6b5c42] ring-1 ring-[#e3d9c4]'
                       }`}
                     >
                       {n}
@@ -1092,7 +1092,7 @@ export default function DataHistoryPage() {
               <button
                 type="button"
                 onClick={clearFilters}
-                className="inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#8a7959] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+                className="inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#6b5c42] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
               >
                 <FiX className="h-3.5 w-3.5" /> Clear filters
               </button>
@@ -1193,7 +1193,7 @@ export default function DataHistoryPage() {
           ) : null}
 
           {/* Result summary */}
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#8a7959]">
+          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#6b5c42]">
             <FiFilter className="h-3 w-3 text-[#b6a684]" />
             <span className="font-semibold text-[#5a4526]">{filtered.length}</span>
             <span>of {batches.length} {batches.length === 1 ? 'import' : 'imports'} shown</span>
@@ -1205,9 +1205,9 @@ export default function DataHistoryPage() {
 
       <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
         {loading ? (
-          <p className="px-5 py-14 text-center text-sm text-[#8a7959]">Loading…</p>
+          <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">Loading…</p>
         ) : batches.length === 0 ? (
-          <p className="px-5 py-14 text-center text-sm text-[#8a7959]">
+          <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">
             {viewTrash
               ? 'Trash is empty — no deleted imports.'
               : 'No saved imports yet. Import a CSV/Excel from the Import CSV/Excel tab, then click Save.'}
@@ -1223,7 +1223,7 @@ export default function DataHistoryPage() {
             caption={viewTrash ? 'Trash — deleted imports · click a row to view its rows' : 'Saved imports · click a row to view & edit its rows'}
             emptyState={
               <div className="px-5 py-10 text-center">
-                <p className="text-sm text-[#8a7959]">No imports match your filters.</p>
+                <p className="text-sm text-[#6b5c42]">No imports match your filters.</p>
                 <button
                   type="button"
                   onClick={clearFilters}

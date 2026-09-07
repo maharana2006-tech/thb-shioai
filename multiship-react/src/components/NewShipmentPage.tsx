@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
-import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch, FiX, FiCopy, FiClipboard } from 'react-icons/fi'
+import { FiZap, FiArrowRight, FiArrowLeft, FiTruck, FiPackage, FiMapPin, FiHome, FiUsers, FiFileText, FiPlus, FiTrash2, FiRotateCcw, FiGlobe, FiEdit3, FiCheckCircle, FiAlertTriangle, FiSearch, FiX, FiCopy, FiClipboard, FiAlertCircle } from 'react-icons/fi'
 import { ApiError } from '../api/apiClient'
 import {
   orderService,
@@ -138,7 +138,36 @@ const defaultSender = (): ManualShipmentAddress => ({
 })
 
 const inputCls =
-  'w-full rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-4 focus:ring-[#f4eede] disabled:cursor-not-allowed disabled:bg-[#faf7f0] disabled:text-[#8a7959]'
+  'w-full rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:ring-4 focus:ring-[#f4eede] disabled:cursor-not-allowed disabled:bg-[#faf7f0] disabled:text-[#6b5c42]'
+
+/** Sticky section rail — where am I, what's still missing, jump there.
+ *  The page is one long scroll (a 45-box international order runs past
+ *  4,000 px); blockers like "fill in unit prices" used to sit 1,500 px
+ *  from the field that fixes them. */
+function SectionRail({ sections }: { sections: { id: string; label: string; done: boolean; show?: boolean }[] }) {
+  const visible = sections.filter((x) => x.show !== false)
+  const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  return (
+    <nav aria-label="Shipment sections" className="sticky top-2 z-30 -mx-1 mb-3 flex flex-wrap items-center gap-1.5 rounded-2xl border border-[#e3d9c4] bg-[#fdfbf6]/95 px-2 py-1.5 shadow-sm backdrop-blur">
+      {visible.map((x, i) => (
+        <button
+          key={x.id}
+          type="button"
+          onClick={() => jump(x.id)}
+          aria-label={`${x.label}${x.done ? ' — complete' : ' — needs attention'}`}
+          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+            x.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100' : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:bg-[#faf7f0]'
+          }`}
+        >
+          <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${x.done ? 'bg-emerald-600 text-white' : 'bg-[#f4eede] text-[#6b5c42]'}`}>
+            {x.done ? '✓' : i + 1}
+          </span>
+          {x.label}
+        </button>
+      ))}
+    </nav>
+  )
+}
 
 function Field({ label, required, hint, error, title, children, className = '' }: { label: string; required?: boolean; hint?: string; error?: string | false | null; title?: string; children: ReactNode; className?: string }) {
   return (
@@ -158,17 +187,17 @@ function Field({ label, required, hint, error, title, children, className = '' }
 }
 
 /** Espresso section shell used across the page. */
-function SectionCard({ icon, title, badge, note, className = '', wrapHeader = false, children }: { icon: ReactNode; title: string; badge?: ReactNode; note?: ReactNode; className?: string; wrapHeader?: boolean; children: ReactNode }) {
+function SectionCard({ id, icon, title, badge, note, className = '', wrapHeader = false, children }: { id?: string; icon: ReactNode; title: string; badge?: ReactNode; note?: ReactNode; className?: string; wrapHeader?: boolean; children: ReactNode }) {
   return (
-    <section className={`rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ${className}`}>
+    <section id={id} className={`scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ${className}`}>
       <div className={`flex min-h-[38px] items-center justify-between gap-2 border-b border-dashed border-[#e3d9c4] pb-2 ${wrapHeader ? 'flex-wrap' : ''}`}>
         <div className="flex items-center gap-2">
-          <span className="text-[#8a7959]">{icon}</span>
+          <span className="text-[#6b5c42]">{icon}</span>
           <h3 className="font-mono text-[11px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">{title}</h3>
         </div>
         {badge}
       </div>
-      {note ? <p className="mt-2 text-[11px] text-[#8a7959]">{note}</p> : null}
+      {note ? <p className="mt-2 text-[11px] text-[#6b5c42]">{note}</p> : null}
       <div className="mt-3">{children}</div>
     </section>
   )
@@ -2383,7 +2412,7 @@ export default function NewShipmentPage() {
       ) : null}
       <div className="w-full space-y-4">
         {loading ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-[#8a7959] shadow-sm">
+          <section className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-[#6b5c42] shadow-sm">
             Loading carriers, services and packaging…
           </section>
         ) : (
@@ -2456,7 +2485,7 @@ export default function NewShipmentPage() {
                   ))}
                 </div>
                 {isReturn ? (
-                  <span className="text-[12px] text-[#8a7959]">
+                  <span className="text-[12px] text-[#6b5c42]">
                     Reverse label — the customer ships back to your address. Billed to your account.
                   </span>
                 ) : null}
@@ -2495,6 +2524,16 @@ export default function NewShipmentPage() {
               </div>
             ) : null}
 
+            <SectionRail
+              sections={[
+                { id: 'sec-shipment', label: 'Shipment', done: !!clientCode },
+                { id: 'sec-addresses', label: 'Addresses', done: !!(sender.name && sender.addressLine1 && sender.postalCode && recipient.name && recipient.addressLine1 && recipient.postalCode) },
+                { id: 'sec-service', label: 'Service', done: !!carrier && (serviceId !== '' || !!accountNumber) },
+                { id: 'sec-packages', label: 'Packages', done: Number(weight) > 0 },
+                { id: 'sec-customs', label: 'Customs', done: !!incoterms && !!activeParties, show: isInternational },
+                { id: 'sec-items', label: 'Items', done: items.some((it) => it.description.trim() && Number(it.unitValue) > 0), show: isInternational },
+              ]}
+            />
             {/* ── Top: client · reason of export · currency ──
                 Compact single-row layout for both Shipment + Return
                 modes: flex-wrap row so fields sit inline on lg+ and
@@ -2503,7 +2542,8 @@ export default function NewShipmentPage() {
                 horizontal band. */}
             <SectionCard
               icon={<FiUsers className="h-3.5 w-3.5" />}
-              title="Shipment"
+              id="sec-shipment"
+                title="Shipment"
             >
               <div
                 className="flex flex-wrap items-end gap-3 [&>*]:min-w-[160px] [&>*]:flex-1"
@@ -2746,6 +2786,7 @@ export default function NewShipmentPage() {
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
               <SectionCard
                 icon={<FiHome className="h-3.5 w-3.5" />}
+                id="sec-addresses"
                 title={isReturn ? 'Return from · customer' : 'Ship from · sender'}
                 className="xl:row-span-2"
               >
@@ -2755,6 +2796,25 @@ export default function NewShipmentPage() {
                 icon={<FiMapPin className="h-3.5 w-3.5" />}
                 title={isReturn ? 'Return to · your address' : 'Ship to · recipient'}
                 className="xl:row-span-2"
+                note={isInternational ? (
+                  // Surface the customs gate the moment the lane turns
+                  // international — it used to appear only 1,500 px further
+                  // down, after the operator had filled everything else.
+                  activeParties ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10.5px] font-semibold text-emerald-800">
+                      <FiCheckCircle className="h-3 w-3" /> Importer/broker resolved for {destCountry}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => document.getElementById('sec-customs')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10.5px] font-semibold text-amber-800 hover:bg-amber-100"
+                      title="International shipments need an importer/broker profile for the destination before a label can generate"
+                    >
+                      <FiAlertCircle className="h-3 w-3" /> No importer/broker profile for {destCountry} — set one up
+                    </button>
+                  )
+                ) : undefined}
               >
                 <AddressBlock
                   value={recipient}
@@ -2784,7 +2844,7 @@ export default function NewShipmentPage() {
                           placeholder="Search address book (name, city, postal code)…"
                           className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 pl-8 text-[12px] outline-none focus:border-[#1f150c]"
                         />
-                        <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[#8a7959]" />
+                        <FiSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[#6b5c42]" />
                       </div>
                       {recipientDropdownOpen && recipientSuggestions.length > 0 ? (
                         <ul className="absolute z-10 mt-0.5 max-h-64 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
@@ -2975,6 +3035,7 @@ export default function NewShipmentPage() {
               </SectionCard>
               <SectionCard
                 icon={<FiTruck className="h-3.5 w-3.5" />}
+                id="sec-service"
                 title="Account & service"
                 badge={
                   <div className="flex items-center gap-2">
@@ -3109,7 +3170,8 @@ export default function NewShipmentPage() {
             {/* ── Package & weight ── */}
             <SectionCard
               icon={<FiPackage className="h-3.5 w-3.5" />}
-              title="Package & weight"
+              id="sec-packages"
+                title="Package & weight"
               wrapHeader
               badge={
                 <div className="flex flex-1 items-center justify-end gap-2">
@@ -3416,6 +3478,7 @@ export default function NewShipmentPage() {
             {isInternational ? (
               <SectionCard
                 icon={<FiGlobe className="h-3.5 w-3.5" />}
+                id="sec-customs"
                 title="Importer of record & customs broker"
                 badge={
                   <div className="flex items-center gap-2">
@@ -3440,7 +3503,7 @@ export default function NewShipmentPage() {
                       <button
                         type="button"
                         onClick={() => setOverride(null)}
-                        className="text-[11px] font-semibold text-[#8a7959] underline-offset-2 hover:underline"
+                        className="text-[11px] font-semibold text-[#6b5c42] underline-offset-2 hover:underline"
                       >
                         Reset
                       </button>
@@ -3459,7 +3522,7 @@ export default function NewShipmentPage() {
                       <p className="text-[12px] text-[#5a4526]">
                         {joinParts([vImp.city, vImp.state, vImp.postalCode, vImp.countryCode])}
                       </p>
-                      {vImp.phone ? <p className="text-[11.5px] text-[#8a7959]">PH: {vImp.phone}</p> : null}
+                      {vImp.phone ? <p className="text-[11.5px] text-[#6b5c42]">PH: {vImp.phone}</p> : null}
                       {joinParts(
                         [
                           vImp.iec ? `IEC ${vImp.iec}` : '',
@@ -3470,7 +3533,7 @@ export default function NewShipmentPage() {
                         ],
                         ' · ',
                       ) ? (
-                        <p className="mt-1 font-mono text-[11px] text-[#8a7959]">
+                        <p className="mt-1 font-mono text-[11px] text-[#6b5c42]">
                           {joinParts(
                             [
                               vImp.iec ? `IEC ${vImp.iec}` : '',
@@ -3504,7 +3567,7 @@ export default function NewShipmentPage() {
                         </>
                       ) : (
                         <p className="mt-1 text-[12.5px] text-[#5a4526]">
-                          Carrier clears customs <span className="text-[#8a7959]">(carrier default brokerage)</span>
+                          Carrier clears customs <span className="text-[#6b5c42]">(carrier default brokerage)</span>
                         </p>
                       )}
                     </div>
@@ -3525,6 +3588,7 @@ export default function NewShipmentPage() {
             {isInternational ? (
               <SectionCard
                 icon={<FiFileText className="h-3.5 w-3.5" />}
+                id="sec-items"
                 title="Items · commercial invoice"
                 badge={
                   <div className="flex items-center gap-2">
@@ -3648,7 +3712,7 @@ export default function NewShipmentPage() {
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-[#5a4526]">
                   <FiZap className="h-3.5 w-3.5" /> AI pre-ship review
                 </span>
-                <button type="button" onClick={() => setReviewWarnings(null)} className="text-[11px] font-semibold text-[#8a7959] hover:text-[#412d15]">
+                <button type="button" onClick={() => setReviewWarnings(null)} className="text-[11px] font-semibold text-[#6b5c42] hover:text-[#412d15]">
                   Dismiss
                 </button>
               </div>
@@ -3682,7 +3746,7 @@ export default function NewShipmentPage() {
             </div>
           ) : null}
           <div className="flex items-center justify-between gap-3 rounded-2xl border border-[#e3d9c4] bg-white px-5 py-3 shadow-[0_18px_50px_rgba(31,21,12,0.16)]">
-            <span className="hidden text-[11.5px] text-[#8a7959] sm:block">
+            <span className="hidden text-[11.5px] text-[#6b5c42] sm:block">
               The label is purchased immediately on the selected account.
               {isInternational ? ' Commercial invoice included for this cross-border lane.' : ''}
             </span>

@@ -429,7 +429,7 @@ export default function MultiWarehouseSplitModal({
         </div>
 
         <div className="flex items-center justify-between gap-2 border-t border-[#eee6d6] px-5 py-3">
-          <span className={`text-[11px] ${showAll && errorCount > 0 ? 'font-semibold text-rose-600' : 'text-[#8a7959]'}`}>
+          <span className={`text-[11px] ${showAll && errorCount > 0 ? 'font-semibold text-rose-600' : 'text-[#6b5c42]'}`}>
             {showAll && errorCount > 0
               ? `${errorCount} field${errorCount === 1 ? '' : 's'} need${errorCount === 1 ? 's' : ''} attention.`
               : 'Ready — preview to see the split.'}
@@ -499,13 +499,13 @@ function ModalHeader({ onClose }: { onClose: () => void }) {
   return (
     <div className="flex items-start justify-between gap-3 border-b border-[#eee6d6] px-5 py-4">
       <div>
-        <p className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#8a7959]">
+        <p className="inline-flex items-center gap-1 text-[10.5px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">
           <FiTruck className="h-3 w-3" /> Split shipment
         </p>
         <h3 className="mt-1 text-[15px] font-semibold text-[#1f150c]">
           Ship one order from multiple warehouses
         </h3>
-        <p className="mt-1 text-[11.5px] text-[#8a7959]">
+        <p className="mt-1 text-[11.5px] text-[#6b5c42]">
           Assign a warehouse per line, preview the split, then buy every label at once. Either
           every label is bought or none are — the backend rolls back on any failure.
         </p>
@@ -514,7 +514,7 @@ function ModalHeader({ onClose }: { onClose: () => void }) {
         type="button"
         onClick={onClose}
         aria-label="Close"
-        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#8a7959] transition hover:bg-[#faf7f0]"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#e3d9c4] bg-white text-[#6b5c42] transition hover:bg-[#faf7f0]"
       >
         <FiX className="h-3.5 w-3.5" />
       </button>
@@ -555,7 +555,7 @@ function HeaderFields({
         <FieldError message={err('clientCode')} />
       </label>
       <label className="flex flex-col gap-1 text-[11.5px] font-semibold text-[#412d15]">
-        Parent order # <span className="font-normal text-[#8a7959]">(optional)</span>
+        Parent order # <span className="font-normal text-[#6b5c42]">(optional)</span>
         <input
           type="number"
           min={1}
@@ -590,7 +590,7 @@ function RecipientBlock({
     setRecipient({ ...recipient, [key]: value })
   return (
     <fieldset className="rounded-xl border border-[#e3d9c4] bg-[#faf7f0]/40 p-3">
-      <legend className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
+      <legend className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
         Recipient
       </legend>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -643,7 +643,7 @@ function RecipientBlock({
           maxLength={2}
         />
       </div>
-      <p className="mt-2 text-[10.5px] text-[#8a7959]">
+      <p className="mt-2 text-[10.5px] text-[#6b5c42]">
         The G3 selector uses country + postal to pick a nearest warehouse for lines you leave
         without one. Providing both improves auto-assignment accuracy.
       </p>
@@ -722,7 +722,7 @@ function LinesTable({
 
   return (
     <fieldset className="rounded-xl border border-[#e3d9c4] p-3">
-      <legend className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">
+      <legend className="px-1 text-[11px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">
         Lines
       </legend>
       {warehousesError ? (
@@ -734,7 +734,7 @@ function LinesTable({
       <div className="overflow-x-auto">
         <table className="w-full text-[12px]">
           <thead>
-            <tr className="text-left text-[10.5px] font-bold uppercase tracking-wide text-[#8a7959]">
+            <tr className="text-left text-[10.5px] font-bold uppercase tracking-wide text-[#6b5c42]">
               <th className="pb-1.5 pr-2">Item *</th>
               <th className="pb-1.5 pr-2">Description</th>
               <th className="pb-1.5 pr-2 text-right">Qty *</th>
@@ -830,7 +830,7 @@ function LinesTable({
                       onClick={() => removeLine(line.key)}
                       disabled={lines.length === 1}
                       aria-label="Remove line"
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#e3d9c4] text-[#8a7959] hover:bg-[#faf7f0] disabled:opacity-30"
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[#e3d9c4] text-[#6b5c42] hover:bg-[#faf7f0] disabled:opacity-30"
                     >
                       <FiTrash2 className="h-3 w-3" />
                     </button>
@@ -851,7 +851,7 @@ function LinesTable({
           <FiPlus className="h-3 w-3" />
           Add line
         </button>
-        <span className="text-[10.5px] text-[#8a7959]">
+        <span className="text-[10.5px] text-[#6b5c42]">
           {clientCode
             ? `${options.length} warehouse${options.length === 1 ? '' : 's'} attached to ${clientCode}.`
             : 'Enter a client code to load its warehouses.'}
@@ -895,7 +895,7 @@ function PreviewPanel({ preview }: { preview: MultiWarehousePreviewResponse }) {
               <span className="font-semibold text-[#412d15]">
                 {g.warehouseCode ?? 'Unassigned'}
                 {g.warehouseName ? (
-                  <span className="ml-1 font-normal text-[#8a7959]">— {g.warehouseName}</span>
+                  <span className="ml-1 font-normal text-[#6b5c42]">— {g.warehouseName}</span>
                 ) : null}
               </span>
               <span className="rounded-full bg-[#eee6d6] px-2 py-0.5 font-semibold text-[#412d15]">
@@ -913,7 +913,7 @@ function PreviewPanel({ preview }: { preview: MultiWarehousePreviewResponse }) {
         <div className="mt-1 max-h-40 overflow-y-auto rounded-md border border-[#e3d9c4] bg-white">
           <table className="w-full text-[11px]">
             <thead>
-              <tr className="border-b border-[#eee6d6] text-left text-[10px] font-bold uppercase tracking-wide text-[#8a7959]">
+              <tr className="border-b border-[#eee6d6] text-left text-[10px] font-bold uppercase tracking-wide text-[#6b5c42]">
                 <th className="px-2 py-1">#</th>
                 <th className="px-2 py-1">Item</th>
                 <th className="px-2 py-1">Warehouse</th>
@@ -924,13 +924,13 @@ function PreviewPanel({ preview }: { preview: MultiWarehousePreviewResponse }) {
             <tbody>
               {preview.lines.map((l) => (
                 <tr key={l.lineIndex} className="border-t border-[#eee6d6]">
-                  <td className="px-2 py-0.5 text-[#8a7959]">{l.lineIndex + 1}</td>
+                  <td className="px-2 py-0.5 text-[#6b5c42]">{l.lineIndex + 1}</td>
                   <td className="px-2 py-0.5">{l.itemNo ?? '—'}</td>
                   <td className="px-2 py-0.5 font-semibold">{l.assignedWarehouseCode ?? '—'}</td>
                   <td className="px-2 py-0.5">
                     <SourceBadge source={l.source} />
                   </td>
-                  <td className="px-2 py-0.5 text-[#8a7959]">{l.matchReason ?? '—'}</td>
+                  <td className="px-2 py-0.5 text-[#6b5c42]">{l.matchReason ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -971,7 +971,7 @@ function ResultPanel({ result }: { result: MultiWarehouseLabelResponse }) {
             <span className="font-semibold text-[#412d15]">
               {s.warehouseCode}
               {s.carrierCode ? (
-                <span className="ml-1 font-normal text-[#8a7959]">{s.carrierCode}</span>
+                <span className="ml-1 font-normal text-[#6b5c42]">{s.carrierCode}</span>
               ) : null}
             </span>
             <span className="font-mono text-[#412d15]">{s.trackingNumber ?? '—'}</span>

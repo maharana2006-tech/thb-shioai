@@ -267,7 +267,7 @@ export default function ApiBatchList() {
     <div className="space-y-3">
       {/* Toolbar */}
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[12px] text-[#8a7959]">
+        <p className="text-[12px] text-[#6b5c42]">
           {loading
             ? 'Loading…'
             : `${batches.length} ${batches.length === 1 ? 'batch' : 'batches'} · each fetch is one batch — open to edit & generate`}
@@ -295,7 +295,7 @@ export default function ApiBatchList() {
       </div>
 
       {loading ? null : batches.length === 0 ? (
-        <p className="rounded-2xl border border-dashed border-[#e3d9c4] bg-white px-5 py-14 text-center text-sm text-[#8a7959]">
+        <p className="rounded-2xl border border-dashed border-[#e3d9c4] bg-white px-5 py-14 text-center text-sm text-[#6b5c42]">
           No API batches yet. Use <span className="font-semibold text-[#5a4526]">Fetch from WMS</span> to pull the
           warehouse&rsquo;s current shippable orders in as a batch.
         </p>
@@ -323,7 +323,7 @@ export default function ApiBatchList() {
                     className="flex min-w-0 flex-1 items-center gap-3 text-left"
                   >
                     <span
-                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[#e3d9c4] text-[#8a7959] transition ${open ? 'rotate-90 bg-[#1f150c] text-[#f4eede]' : ''}`}
+                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[#e3d9c4] text-[#6b5c42] transition ${open ? 'rotate-90 bg-[#1f150c] text-[#f4eede]' : ''}`}
                       aria-hidden
                     >
                       ›
@@ -356,7 +356,7 @@ export default function ApiBatchList() {
                           </span>
                         ) : null}
                       </span>
-                      <span className="mt-0.5 block text-[11px] text-[#8a7959]">
+                      <span className="mt-0.5 block text-[11px] text-[#6b5c42]">
                         {fmtDateTime(b.createdAt)} · {b.createdBy || '—'} · {st.replace('_', ' ').toLowerCase()}
                       </span>
                     </span>
@@ -470,10 +470,10 @@ export default function ApiBatchList() {
                 {open ? (
                   <div className="border-t border-[#f2ecdf] bg-[#fdfbf6]">
                     {rowsBusy ? (
-                      <p className="px-4 py-6 text-center text-[12px] text-[#8a7959]">Loading shipments…</p>
+                      <p className="px-4 py-6 text-center text-[12px] text-[#6b5c42]">Loading shipments…</p>
                     ) : rows && rows.length ? (
                       <div className="overflow-x-auto">
-                        <p className="px-4 pt-3 text-[11px] text-[#8a7959]">
+                        <p className="px-4 pt-3 text-[11px] text-[#6b5c42]">
                           Click any cell to edit — it saves and re-validates on blur. Fix the flagged cells, then generate.
                         </p>
                         <table className="w-full text-left text-[12px]">
@@ -507,7 +507,7 @@ export default function ApiBatchList() {
                                 <tr className={ok && !failed ? 'bg-white' : 'bg-rose-50/40'}>
                                   <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok && !failed ? 'bg-white' : 'bg-rose-50'}`}>
                                     <div className="flex items-center gap-1.5">
-                                      <span className="font-mono text-[10px] font-bold text-[#8a7959]">{r.rowNumber}</span>
+                                      <span className="font-mono text-[10px] font-bold text-[#6b5c42]">{r.rowNumber}</span>
                                       {generated ? (
                                         <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Generated</span>
                                       ) : failed ? (
@@ -555,9 +555,9 @@ export default function ApiBatchList() {
                                   <td className="whitespace-nowrap border-b border-[#f2ecdf] px-3 py-1">
                                     {generated ? (
                                       r.generatedTrackingNumber ? (
-                                        <span className="font-mono text-[9.5px] text-[#8a7959]">{r.generatedTrackingNumber}</span>
+                                        <span className="font-mono text-[9.5px] text-[#6b5c42]">{r.generatedTrackingNumber}</span>
                                       ) : (
-                                        <span className="text-[9.5px] text-[#8a7959]">—</span>
+                                        <span className="text-[9.5px] text-[#6b5c42]">—</span>
                                       )
                                     ) : (ok || failed) ? (
                                       <button
@@ -598,7 +598,7 @@ export default function ApiBatchList() {
                         </table>
                       </div>
                     ) : (
-                      <p className="px-4 py-6 text-center text-[12px] text-[#8a7959]">No shipments in this batch.</p>
+                      <p className="px-4 py-6 text-center text-[12px] text-[#6b5c42]">No shipments in this batch.</p>
                     )}
                   </div>
                 ) : null}

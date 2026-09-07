@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { notify } from '../utils/notify'
 import { FiActivity, FiArrowLeft, FiCopy, FiDownload, FiExternalLink, FiFileText, FiPrinter, FiTag } from 'react-icons/fi'
@@ -40,45 +40,9 @@ const labelDate = (value?: string | null) => {
   return `${String(d.getDate()).padStart(2, '0')}${months[d.getMonth()]}${String(d.getFullYear()).slice(-2)}`
 }
 
-const money = (value: number | null | undefined) => (typeof value === 'number' ? value.toFixed(2) : '0.00')
 
-/** Commercial-invoice date: 18 MAY 2026 — unambiguous for customs officers
- *  in any locale (05/18 vs 18/05 reads differently in the destination
- *  country), and matches the backend PDF invoice + the label's date style. */
-const CI_MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
-const ciDate = (value?: string | null) => {
-  const parsed = value ? new Date(value) : new Date()
-  const d = Number.isNaN(parsed.getTime()) ? new Date() : parsed
-  return `${String(d.getDate()).padStart(2, '0')} ${CI_MONTHS[d.getMonth()]} ${d.getFullYear()}`
-}
 
-/** Reason-for-export code → the human "Purpose" a customs invoice prints. */
-const PURPOSE_LABELS: Record<string, string> = {
-  SOLD: 'Commercial / Sold',
-  COMMERCIAL: 'Commercial / Sold',
-  SALE: 'Commercial / Sold',
-  NOT_SOLD: 'Commercial / Not Sold',
-  GIFT: 'Gift / Personal',
-  PERSONAL: 'Gift / Personal',
-  PERSONAL_EFFECTS: 'Personal Effects',
-  SAMPLE: 'Commercial Sample',
-  REPAIR: 'Repair / Return',
-  RETURN: 'Repair / Return',
-  REPAIR_AND_RETURN: 'Repair / Return',
-  INTERCOMPANY: 'Intercompany Data',
-}
-const purposeLabel = (reason?: string | null) => {
-  const key = (reason || '').trim().toUpperCase().replace(/[\s-]+/g, '_')
-  return PURPOSE_LABELS[key] || (reason ? reason.trim() : 'Commercial / Sold')
-}
 
-/** A titled label:value line as the FedEx commercial invoice lays them out. */
-const KV = ({ label, value }: { label: string; value?: ReactNode }) => (
-  <div className="flex gap-1">
-    <span className="shrink-0 font-semibold text-slate-500">{label} :</span>
-    <span className="min-w-0 break-words text-slate-900">{value ?? ''}</span>
-  </div>
-)
 
 /**
  * PR #535 — E.164-style label phone formatting. Carriers prefix the
@@ -425,8 +389,6 @@ export default function LabelDocumentPage() {
      stripped down to just the carrier PNG per operator ask. */
   // Customs blocks resolved from the client's Importer/Broker profile.
   const importer = payload?.importer ?? null
-  const broker = payload?.broker ?? null
-  const brokerage = payload?.brokerage ?? null
   const customsDefaults = payload?.customsDefaults ?? null
   // Terms of sale: the ORDER's own incoterm (what the operator picked on this
   // shipment) must beat the customs profile's tenant-wide default — the old
@@ -436,10 +398,6 @@ export default function LabelDocumentPage() {
   const profileSaysReceiver = !importer || importer.type === 'RECEIVER'
   const termsOfSale = payload?.customs?.incoterms || customsDefaults?.incoterms
     || (profileSaysReceiver ? 'DAP' : 'DDP')
-  // Importer of record follows the INCOTERM, not just the profile: under DDP
-  // the seller/shipper clears customs and pays duties, so "receiver is the
-  // importer" would be wrong even when no importer profile is configured.
-  const receiverIsImporter = termsOfSale === 'DDP' ? false : profileSaysReceiver
 
   // TENANT users may only open their own orders.
   const ownTenant = getTenantIdForUser(normalizeRole(role), username)
@@ -447,7 +405,6 @@ export default function LabelDocumentPage() {
 
   // Account details from the cascade resolution (falls back to legacy payloads).
   const accountCarrierCode = resolution?.carrierCode || legacyAccount?.carrierCode || order?.shipviaCd || null
-  const accountNumber = resolution?.accountNumber || legacyAccount?.accountNumber || null
   const environment = (resolution?.environment || legacyAccount?.environment || 'SANDBOX').toUpperCase()
   const isSandbox = environment !== 'PRODUCTION'
 
@@ -471,8 +428,6 @@ export default function LabelDocumentPage() {
   // Total shipped units — used to distribute the parcel weight across lines
   // when the commodities carry no explicit per-item weight of their own.
   const totalItemQty = customsItems.reduce((s, it) => s + (it.quantity ?? 1), 0)
-  const lines =
-    customsItems.length > 0
       ? customsItems.map((it, i) => {
           const qty = it.quantity ?? 1
           const unit = it.unitValue ?? 0
@@ -511,7 +466,6 @@ export default function LabelDocumentPage() {
           }
         })
       : order?.orderLines || []
-  const customsTotal = lines.reduce((sum, line) => sum + (line.customsDeclValue ?? 0), 0)
 
   // Some order feeds put a bare sequence digit in ship_name; prefer a plausible name.
   // Never falls back to custNo (client code) — that would render the tenant
@@ -548,6 +502,25 @@ export default function LabelDocumentPage() {
   // customs document even if `tab` state is 'invoice' (the tab button that sets
   // it is itself hidden when domestic).
   const activeTab: DocumentTab = isInternational ? tab : 'label'
+  // Commercial-invoice tab shows the printed PDF itself (single renderer).
+  const [invoicePdf, setInvoicePdf] = useState<Blob | null>(null)
+  const [invoiceState, setInvoiceState] = useState<'idle' | 'ready' | 'none' | 'error'>('idle')
+  // One fetch per order, kicked off the first time the tab opens; state is
+  // only written from the async callbacks (no synchronous setState in the
+  // effect body).
+  const invoiceRequestedRef = useRef(false)
+  useEffect(() => {
+    if (activeTab !== 'invoice' || invoiceRequestedRef.current) return
+    invoiceRequestedRef.current = true
+    let cancelled = false
+    orderService.getCommercialInvoicePdf(orderNo)
+      .then((blob) => { if (!cancelled) { setInvoicePdf(blob); setInvoiceState('ready') } })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setInvoiceState(/no customs data/i.test(String((err as Error)?.message)) ? 'none' : 'error')
+      })
+    return () => { cancelled = true }
+  }, [activeTab, orderNo])
   const originCountry = (shipper?.countryCode || '').toUpperCase()
   const isUsExport = isInternational && originCountry === 'US'
   // Multi-package: total M comes from the order's package_count column;
@@ -629,20 +602,6 @@ export default function LabelDocumentPage() {
   const perPkgWeight = perPkg?.weight ?? null
   const perPkgWeightUnit = perPkg?.weightUnit || null
 
-  // ---- commercial-invoice header + totals ----------------------------------
-  const ciWeightUnit = (payload?.customs?.weightUnit || order?.weightUnit || 'LB').toLowerCase()
-  // Order-specific values beat profile defaults (same inversion as incoterms).
-  const ciCurrency = (payload?.charges?.currency || payload?.customs?.currency || customsDefaults?.currency || 'USD').toUpperCase()
-  const purpose = purposeLabel(payload?.customs?.reasonForExport || customsDefaults?.reasonForExport)
-  const freightAmount = payload?.charges?.freight ?? 0
-  const insuranceAmount = 0
-  const otherAmount = 0
-  const totalInvoice = customsTotal + freightAmount + insuranceAmount + otherAmount
-  // Gross shipment weight sums each line's net (single weight per line);
-  // falls back to the order's own weight when no per-item weights were entered.
-  const lineWeightSum = lines.reduce((sum, line) => sum + ((line as { netWeight?: number | null }).netWeight ?? 0), 0)
-  const totalShipmentWeight = shipmentGrossWeight > 0 ? shipmentGrossWeight : lineWeightSum
-  const invoiceRef = `${accountNumber ? `${accountNumber}` : 'AC'}-${trackingNumber || orderDisplay}`
 
   // ---- carrier-form codes, derived deterministically like the real label carries ----
   const formCode = `${hash36(`${orderNo}${order?.shiptoZip || ''}`, 5)}/${hash36(`${order?.shiptoZip || ''}${orderNo}`, 4)}/${hash36(`${order?.custNo || ''}${orderNo}`, 4)}`
@@ -1358,209 +1317,26 @@ export default function LabelDocumentPage() {
               them — this UI simply no longer renders them. */}
 
           {activeTab === 'label' ? null : (
-            /* ==================== COMMERCIAL INVOICE (Letter) ==================== */
-            <div className="print-doc w-full max-w-[820px] bg-white p-8 text-[11px] leading-5 text-slate-900 shadow-xl print:max-w-none print:p-0 print:shadow-none">
-              {/* Header — title + shipment meta, as the FedEx CI lays it out. */}
-              <div className="flex items-start justify-between gap-6 border-b-2 border-slate-900 pb-3">
-                <div>
-                  <h1 className="text-2xl font-black tracking-tight">Commercial Invoice</h1>
-                  <p className="mt-0.5 text-[11px] text-slate-500">International shipping document — customs declaration</p>
-                  <p className="mt-1 font-mono text-[11px] font-semibold text-slate-600">{invoiceRef}</p>
-                </div>
-                <div className="w-64 shrink-0 space-y-0.5">
-                  <KV label="Ship Date" value={ciDate(shipDate)} />
-                  <KV label="International Tracking#" value={trackingNumber || 'Pending'} />
-                  <KV label="Purpose" value={purpose} />
-                  <KV label="Nbr pkgs" value={pkgCount} />
-                  <KV label="Invoice #" value={`INV-${orderDisplay}`} />
-                </div>
-              </div>
-
-              {/* Parties: Shipper + Consignee, then Broker + Importer. */}
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <div className="border border-slate-300 p-3">
-                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Shipper</p>
-                  <p className="font-bold">{shipper?.name || '—'}</p>
-                  {shipper?.addressLine1 ? <p>{shipper.addressLine1}</p> : null}
-                  {shipper?.addressLine2 ? <p>{shipper.addressLine2}</p> : null}
-                  <p>{[shipper?.city, shipper?.postalCode, shipper?.state, shipper?.countryCode].filter(Boolean).join(', ')}</p>
-                  <div className="mt-1"><KV label="PH" value={shipper?.phone} /></div>
-                </div>
-                <div className="border border-slate-300 p-3">
-                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Consignee</p>
-                  <p className="font-bold">{order.shipAttn || recipientName}</p>
-                  {order.shipAttn && order.shipAttn !== recipientName ? <p>{recipientName}</p> : null}
-                  {order.shipAddr1 ? <p>{order.shipAddr1}</p> : null}
-                  {order.shipAddr2 ? <p>{order.shipAddr2}</p> : null}
-                  <p>{[order.shiptoCity, order.shiptoZip, order.shiptoState, destCountry].filter(Boolean).join(', ')}</p>
-                  <div className="mt-1 space-y-0.5">
-                    <KV label="PH" value={order.phone} />
-                    {/* Destination-specific tax identifiers render only when
-                        present — printing empty GSTIN / IRS-EIN / PN-KN labels
-                        on every invoice was template bleed from the India lane
-                        (GSTIN is an Indian identifier; it means nothing on a
-                        CA or EU entry). */}
-                    {importer?.gstin ? <KV label="GSTIN" value={importer.gstin} /> : null}
-                    {importer?.taxIdType === 'EIN' && importer?.taxId ? <KV label="IRS/EIN" value={importer.taxId} /> : null}
-                    <KV label="Food Shipment" value="N" />
-                  </div>
-                </div>
-                <div className="border border-slate-300 p-3">
-                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Broker</p>
-                  {/* A broker row with no name/company is not a designated
-                      broker — it printed a bare "—" with an empty PH line.
-                      Fall through to the carrier-brokerage sentence, matching
-                      the form's own "Carrier clears customs" wording. */}
-                  {brokerage === 'BROKER_SELECT' && broker && (broker.name || broker.company) ? (
-                    <>
-                      <p className="font-bold">{broker.name || broker.company || '—'}</p>
-                      {/* Collapse when name and company are the same string —
-                          a brokerage entered in both fields printed twice. */}
-                      {broker.company && broker.name
-                        && broker.company.trim().toLowerCase() !== broker.name.trim().toLowerCase()
-                        ? <p>{broker.company}</p>
-                        : null}
-                      {broker.addressLine1 ? <p>{broker.addressLine1}{broker.addressLine2 ? `, ${broker.addressLine2}` : ''}</p> : null}
-                      <p>{[broker.city, broker.postalCode, broker.state, broker.countryCode].filter(Boolean).join(', ')}</p>
-                      <div className="mt-1 space-y-0.5">
-                        <KV label="PH" value={broker.phone} />
-                        {broker.brokerId ? <KV label="Broker ID" value={broker.brokerId} /> : null}
-                        {broker.license ? <KV label="License" value={broker.license} /> : null}
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-slate-700">
-                      <span className="font-bold">{carrierDisplay} brokerage</span> — included with the international
-                      service; no third-party broker designated.
-                    </p>
-                  )}
-                </div>
-                <div className="border border-slate-300 p-3">
-                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-500">Importer</p>
-                  {receiverIsImporter ? (
-                    <p className="text-slate-700">
-                      <span className="font-bold">Same as consignee</span> — {termsOfSale}: the receiver is the
-                      importer of record; the carrier collects identity documents at destination.
-                    </p>
-                  ) : !importer ? (
-                    /* DDP with no importer profile: duty liability sits with the
-                       seller — never claim the receiver imports under DDP. */
-                    <p className="text-slate-700">
-                      <span className="font-bold">Shipper / seller</span> — {termsOfSale}: the sender is the
-                      importer of record and pays duties &amp; taxes at destination.
-                    </p>
-                  ) : (
-                    <>
-                      <p className="font-bold">{importer?.name || '—'}</p>
-                      {importer?.contact ? <p>{importer.contact}</p> : null}
-                      {importer?.addressLine1 ? <p>{importer.addressLine1}{importer.addressLine2 ? `, ${importer.addressLine2}` : ''}</p> : null}
-                      <p>{[importer?.city, importer?.postalCode, importer?.state, importer?.countryCode].filter(Boolean).join(', ')}</p>
-                      <div className="mt-1 space-y-0.5">
-                        <KV label="PH" value={importer?.phone} />
-                        {importer?.taxId ? <KV label={importer?.taxIdType || 'Tax ID'} value={importer.taxId} /> : null}
-                        {importer?.eori ? <KV label="EORI" value={importer.eori} /> : null}
-                        {importer?.ioss ? <KV label="IOSS" value={importer.ioss} /> : null}
-                        {importer?.iec ? <KV label="IEC" value={importer.iec} /> : null}
-                        {importer?.gstin ? <KV label="GSTIN" value={importer.gstin} /> : null}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* Commodities — one detailed block per line, FedEx CI layout. */}
-              <div className="mt-3 border border-slate-300">
-                <div className="bg-slate-900 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-white">
-                  Commodities
-                </div>
-                {lines.length ? (
-                  lines.map((line, i) => {
-                    const net = (line as { netWeight?: number | null }).netWeight
-                    const netEst = (line as { netWeightEstimated?: boolean }).netWeightEstimated
-                    const estSuffix = netEst ? ' (est)' : ''
-                    return (
-                      <div key={line.id} className={`px-3 py-2 ${i > 0 ? 'border-t border-slate-200' : ''}`}>
-                        <div className="grid grid-cols-3 gap-x-4 gap-y-0.5">
-                          {/* SKU renders only when entered — same no-empty-label
-                              rule as the consignee tax identifiers. */}
-                          {line.itemNo ? <KV label="MARK/NBRS" value={line.itemNo} /> : null}
-                          <KV label="HS CODE" value={line.hsCode} />
-                          <KV label="CTRY MFG" value={line.countryOfOrigin} />
-                          <KV label="NET WT" value={net != null ? `${money(net)} ${ciWeightUnit}${estSuffix}` : ''} />
-                          <KV label="PACK WT" value={`${money(0)} ${ciWeightUnit}`} />
-                          <KV label="GROSS WT" value={net != null ? `${money(net)} ${ciWeightUnit}${estSuffix}` : ''} />
-                          <KV label="UNIT QTY" value={`${line.qtyShipped ?? 0} EA`} />
-                          <KV label="UNIT VALUE" value={`$${money(line.unitPrice)}`} />
-                          <KV label="COMMODITY VALUE" value={`$${money(line.totalPrice)} ${ciCurrency}`} />
-                          <KV label="LICENSE" value="" />
-                          <KV label="EX DATE" value="" />
-                        </div>
-                        <div className="mt-0.5"><KV label="DESCRIPTION" value={line.itemDescription || line.description || order.goodsDesc} /></div>
-                      </div>
-                    )
-                  })
-                ) : (
-                  <div className="px-3 py-6 text-center text-slate-500">
-                    No line items recorded — declared as {order.goodsDesc || 'general merchandise'}.
-                  </div>
-                )}
-              </div>
-
-              {/* Totals. */}
-              <div className="mt-3 flex justify-end">
-                <div className="w-80 space-y-0.5">
-                  <div className="flex justify-between border-b border-slate-200 py-0.5">
-                    <span className="font-semibold text-slate-500">TOTAL SHIPMENT WEIGHT :</span>
-                    <span className="font-semibold tabular-nums">{money(totalShipmentWeight)} {ciWeightUnit}</span>
-                  </div>
-                  <div className="flex justify-between border-b border-slate-200 py-0.5">
-                    <span className="font-semibold text-slate-500">TOTAL COMMODITY VALUE :</span>
-                    <span className="font-semibold tabular-nums">${money(customsTotal)}</span>
-                  </div>
-                  <div className="flex justify-between border-b border-slate-200 py-0.5">
-                    <span className="font-semibold text-slate-500">FREIGHT AMOUNT :</span>
-                    <span className="font-semibold tabular-nums">${money(freightAmount)}</span>
-                  </div>
-                  <div className="flex justify-between border-b border-slate-200 py-0.5">
-                    <span className="font-semibold text-slate-500">INSURANCE AMOUNT :</span>
-                    <span className="font-semibold tabular-nums">${money(insuranceAmount)}</span>
-                  </div>
-                  <div className="flex justify-between border-b border-slate-200 py-0.5">
-                    <span className="font-semibold text-slate-500">OTHER AMOUNT :</span>
-                    <span className="font-semibold tabular-nums">${money(otherAmount)}</span>
-                  </div>
-                  <div className="mt-1 flex justify-between bg-slate-900 px-2 py-1.5 text-white">
-                    <span className="font-bold">TOTAL INVOICE :</span>
-                    <span className="font-bold tabular-nums">${money(totalInvoice)} {ciCurrency}</span>
-                  </div>
-                  <div className="flex justify-between py-0.5">
-                    <span className="font-semibold text-slate-500">TERMS OF SALE :</span>
-                    <span className="font-bold">{termsOfSale}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Legal + declaration + signature. */}
-              <div className="mt-5 border-t border-slate-300 pt-3 text-slate-600">
-                <p>
-                  {isUsExport
-                    ? 'These items are controlled by the U.S. Government and authorized for export only to the country of ultimate destination for use by the ultimate consignee or end-user(s) herein identified. They may not be resold, transferred, or otherwise disposed of, to any other country or to any person other than the authorized ultimate consignee or end-user(s), either in their original form or after being incorporated into other items, without first obtaining approval from the U.S. Government or as otherwise authorized by U.S. law and regulations.'
-                    : 'These items are authorized for export only to the country of ultimate destination for use by the ultimate consignee herein identified. They may not be resold, transferred, or otherwise disposed of to any other country or person other than the authorized ultimate consignee.'}
+            /* ONE invoice renderer. The commercial invoice shown here IS the
+               PDF that prints and travels with the parcel (backend PDFBox
+               render). The previous HTML re-implementation drifted from it —
+               different exporter address, different gross weight — which is
+               how a wrong customs document shipped while the screen looked
+               right. */
+            <div className="w-full max-w-[820px]">
+              {invoiceState === 'none' ? (
+                <p className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-10 text-center text-[13px] text-slate-500">
+                  This order has no customs data — a commercial invoice applies to international shipments only.
                 </p>
-                <div className="mt-2"><KV label="COMMENTS" value={payload?.customs?.notes} /></div>
-                <p className="mt-2 font-semibold text-slate-800">I declare all information in this invoice to be true and correct.</p>
-                <div className="mt-6 flex items-end justify-between gap-6">
-                  <div className="min-w-0">
-                    <p className="font-semibold text-slate-800">{shipper?.name || ''}</p>
-                    <p className="text-slate-600">{ciDate(shipDate)}</p>
-                    <div className="mt-1 w-56 border-t border-slate-900 pt-1 text-[10px]">Signature of shipper / company</div>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <KV label="Date" value={ciDate(shipDate)} />
-                    <KV label="Page Number" value="1" />
-                  </div>
-                </div>
-              </div>
+              ) : invoiceState === 'error' ? (
+                <p className="rounded-2xl border border-rose-200 bg-rose-50 px-6 py-10 text-center text-[13px] text-rose-700">
+                  Couldn't render the commercial invoice — retry, or use Download PDF.
+                </p>
+              ) : invoicePdf ? (
+                <PdfPagesPreview blob={invoicePdf} pageWidthPx={760} />
+              ) : (
+                <p className="px-6 py-10 text-center text-[13px] text-slate-500">Rendering the commercial invoice…</p>
+              )}
             </div>
           )}
         </div>

@@ -10,7 +10,7 @@ const inputCls =
 function Field({ label, children, className = '' }: { label: string; children: ReactNode; className?: string }) {
   return (
     <label className={`block space-y-1 ${className}`}>
-      <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#8a7959]">{label}</span>
+      <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#6b5c42]">{label}</span>
       {children}
     </label>
   )
@@ -74,7 +74,7 @@ export default function ShipmentPartiesOverrideModal({
 
           {/* Importer */}
           <section className="space-y-3">
-            <h3 className="border-b border-dashed border-[#e3d9c4] pb-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#8a7959]">
+            <h3 className="border-b border-dashed border-[#e3d9c4] pb-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">
               Importer of record
             </h3>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -128,7 +128,7 @@ export default function ShipmentPartiesOverrideModal({
 
           {/* Broker */}
           <section className="space-y-3">
-            <h3 className="border-b border-dashed border-[#e3d9c4] pb-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#8a7959]">
+            <h3 className="border-b border-dashed border-[#e3d9c4] pb-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#6b5c42]">
               Customs broker <span className="font-sans normal-case tracking-normal text-[#b6a684]">— leave name blank for carrier-default brokerage</span>
             </h3>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

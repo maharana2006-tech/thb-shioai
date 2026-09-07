@@ -186,7 +186,7 @@ export default function AllOrdersHistory() {
         id: 'created',
         header: 'Created',
         accessorFn: (o) => o.orderDetails.createdDate,
-        cell: ({ row }) => <span className="text-[#8a7959]">{fmtDate(row.original.orderDetails.createdDate)}</span>,
+        cell: ({ row }) => <span className="text-[#6b5c42]">{fmtDate(row.original.orderDetails.createdDate)}</span>,
         meta: { headerLabel: 'Created' },
       },
       {
@@ -254,7 +254,7 @@ export default function AllOrdersHistory() {
                 : `Showing ${rows.length ? page * pageSize + 1 : 0}–${page * pageSize + rows.length} of ${total} orders`
             }
             emptyState={
-              <p className="px-5 py-14 text-center text-sm text-[#8a7959]">
+              <p className="px-5 py-14 text-center text-sm text-[#6b5c42]">
                 No orders match {source === 'ALL' ? 'your search' : `source “${SOURCE_LABEL[source]}”`}.
               </p>
             }

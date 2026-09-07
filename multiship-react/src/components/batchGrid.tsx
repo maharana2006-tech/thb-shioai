@@ -197,7 +197,7 @@ export function GridCell({
       onClick={begin}
       title={tooltip}
       className={`block w-full truncate rounded-[5px] px-1.5 py-0.5 text-left text-[10.5px] transition ${mono ? 'font-mono' : ''} ${
-        readOnly ? 'cursor-default text-[#8a7959]'
+        readOnly ? 'cursor-default text-[#6b5c42]'
           : bad ? 'cursor-text bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-300 hover:ring-rose-400'
           : 'cursor-text text-[#3f3527] hover:bg-[#efe7d4]'
       }`}

@@ -275,7 +275,7 @@ export default function UniversalSearch() {
       {showDropdown ? (
         <div className="absolute right-0 top-[calc(100%+6px)] z-50 max-h-[420px] w-[26rem] overflow-y-auto rounded-xl border border-[#e3d9c4] bg-white p-1.5 shadow-[0_20px_50px_rgba(31,21,12,0.22)]">
           {hits.length === 0 ? (
-            <p className="px-3 py-4 text-center text-[11.5px] text-[#8a7959]">
+            <p className="px-3 py-4 text-center text-[11.5px] text-[#6b5c42]">
               {loading ? 'Searching…' : `No matches for “${term.trim()}”`}
             </p>
           ) : (
@@ -297,7 +297,7 @@ export default function UniversalSearch() {
                     <span className="min-w-0">
                       <span className="block truncate text-[12.5px] font-semibold text-[#1f150c]">{hit.title}</span>
                       {hit.subtitle ? (
-                        <span className="block truncate text-[10.5px] text-[#8a7959]">{hit.subtitle}</span>
+                        <span className="block truncate text-[10.5px] text-[#6b5c42]">{hit.subtitle}</span>
                       ) : null}
                     </span>
                     {index === active ? (

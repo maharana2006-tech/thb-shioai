@@ -56,7 +56,7 @@ function ToastStack({ toasts }: { toasts: NotifyMessage[] }) {
         <button
           type="button"
           onClick={() => newestFirst.slice(MAX_VISIBLE).forEach((t) => notifyStore.dismiss(t.id, false))}
-          className="pointer-events-auto rounded-full border border-[#e3d9c4] bg-white/95 px-3 py-1 text-[10.5px] font-semibold text-[#8a7959] shadow-sm backdrop-blur transition hover:bg-[#faf7f0]"
+          className="pointer-events-auto rounded-full border border-[#e3d9c4] bg-white/95 px-3 py-1 text-[10.5px] font-semibold text-[#6b5c42] shadow-sm backdrop-blur transition hover:bg-[#faf7f0]"
         >
           +{hidden} more · clear
         </button>
@@ -70,7 +70,7 @@ function ToastStack({ toasts }: { toasts: NotifyMessage[] }) {
         <button
           type="button"
           onClick={() => toasts.forEach((t) => notifyStore.dismiss(t.id, false))}
-          className="pointer-events-auto rounded-full border border-[#e3d9c4] bg-white/95 px-3 py-1 text-[10.5px] font-semibold text-[#8a7959] shadow-sm backdrop-blur transition hover:bg-[#faf7f0]"
+          className="pointer-events-auto rounded-full border border-[#e3d9c4] bg-white/95 px-3 py-1 text-[10.5px] font-semibold text-[#6b5c42] shadow-sm backdrop-blur transition hover:bg-[#faf7f0]"
         >
           Dismiss all
         </button>

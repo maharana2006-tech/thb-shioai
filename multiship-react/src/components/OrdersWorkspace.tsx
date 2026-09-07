@@ -1045,7 +1045,7 @@ export default function OrdersWorkspace() {
         size: 100,
         cell: ({ row }) => (
           <span
-            className="whitespace-nowrap text-[12px] text-[#8a7959]"
+            className="whitespace-nowrap text-[12px] text-[#6b5c42]"
             title={row.original.orderDetails.createdDate || 'unknown creation date'}
           >
             {formatCreated(row.original.orderDetails.createdDate)}
@@ -1099,7 +1099,7 @@ export default function OrdersWorkspace() {
         size: 84,
         cell: ({ row }) => (
           <span
-            className="whitespace-nowrap text-[12px] text-[#8a7959]"
+            className="whitespace-nowrap text-[12px] text-[#6b5c42]"
             title={row.original.labelDetails.generatedAt || 'not generated yet'}
           >
             {relativeTime(row.original.labelDetails.generatedAt) || '—'}
@@ -1181,7 +1181,7 @@ export default function OrdersWorkspace() {
               type="button"
               onClick={() => setDetailsOrderNo(orderNo)}
               aria-label={`Details for order ${orderNo}`}
-              className="rounded-lg border border-[#e6dcc7] bg-[#faf7f0] p-1.5 text-[#8a7959] transition hover:border-[#dccfb4] hover:bg-[#f2ebda] hover:text-[#412d15]"
+              className="rounded-lg border border-[#e6dcc7] bg-[#faf7f0] p-1.5 text-[#6b5c42] transition hover:border-[#dccfb4] hover:bg-[#f2ebda] hover:text-[#412d15]"
             >
               <FiFileText className="h-3.5 w-3.5" />
             </button>
@@ -1279,14 +1279,14 @@ export default function OrdersWorkspace() {
                 className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-semibold transition ${
                   view === t.key
                     ? 'bg-white text-[#1f150c] shadow-sm ring-1 ring-[#e3d9c4]'
-                    : 'text-[#8a7959] hover:text-[#412d15]'
+                    : 'text-[#6b5c42] hover:text-[#412d15]'
                 }`}
               >
                 {t.tone !== 'slate' ? <span className={`h-1.5 w-1.5 rounded-full ${dotTone[t.tone]}`} /> : null}
                 {t.label}
                 <span
                   className={`font-mono text-[11px] font-semibold tabular-nums ${
-                    view === t.key ? 'text-[#8a7959]' : 'text-[#b6a684]'
+                    view === t.key ? 'text-[#6b5c42]' : 'text-[#b6a684]'
                   }`}
                 >
                   {t.count}
@@ -1353,7 +1353,7 @@ export default function OrdersWorkspace() {
                   ))}
                 </select>
 
-                <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#8a7959]">
+                <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#6b5c42]">
                   From
                   <input
                     type="date"
@@ -1364,7 +1364,7 @@ export default function OrdersWorkspace() {
                     aria-label="Created from date"
                   />
                 </label>
-                <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#8a7959]">
+                <label className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#6b5c42]">
                   To
                   <input
                     type="date"
@@ -1421,7 +1421,7 @@ export default function OrdersWorkspace() {
                         type="button"
                         onClick={clearColumnFilters}
                         disabled={!activeFilterCount}
-                        className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#8a7959] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#e3d9c4] disabled:hover:bg-white disabled:hover:text-[#8a7959]"
+                        className="inline-flex items-center gap-1 rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#6b5c42] transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#e3d9c4] disabled:hover:bg-white disabled:hover:text-[#6b5c42]"
                       >
                         <FiX className="h-3.5 w-3.5" /> Clear all
                       </button>
@@ -1625,7 +1625,7 @@ export default function OrdersWorkspace() {
                   type="button"
                   onClick={() => setSelectedOrderNos([])}
                   aria-label="Clear selection"
-                  className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#8a7959] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+                  className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
                 >
                   <FiX className="h-3.5 w-3.5" />
                 </button>
