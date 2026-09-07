@@ -172,10 +172,32 @@ public class LabelArtifactResolver {
      * one we serve as passthrough. Callers treat null as "fall back to
      * facsimile".
      */
+    /** GIF87a / GIF89a — UPS's default LabelImageFormat comes back this way. */
+    private static final byte[] MAGIC_GIF = "GIF8".getBytes();
+    /** PNG signature — some carriers / label stocks hand back PNG. */
+    private static final byte[] MAGIC_PNG = {(byte) 0x89, 'P', 'N', 'G'};
+
+    /**
+     * The stored artifact as an image (GIF or PNG), for carriers that return
+     * a raster label instead of ZPL/PDF. UPS's GIF was being stored and then
+     * ignored — the sniffer only knew ZPL and PDF, so every surface fell
+     * through to the facsimile while the real label sat in the row.
+     */
+    public Optional<ImageArtifact> resolveImage(Integer orderNo, Integer pkgIndex) {
+        Optional<byte[]> gif = resolveAsBytes(orderNo, "GIF", pkgIndex);
+        if (gif.isPresent()) return Optional.of(new ImageArtifact(gif.get(), "image/gif"));
+        Optional<byte[]> png = resolveAsBytes(orderNo, "PNG", pkgIndex);
+        return png.map(b -> new ImageArtifact(b, "image/png"));
+    }
+
+    public record ImageArtifact(byte[] bytes, String mimeType) {}
+
     private String sniffFormat(byte[] bytes) {
         int start = skipLeadingWhitespace(bytes);
         if (startsWithAt(bytes, MAGIC_ZPL, start)) return "ZPL";
         if (startsWithAt(bytes, MAGIC_PDF, start)) return "PDF";
+        if (startsWithAt(bytes, MAGIC_GIF, start)) return "GIF";
+        if (startsWithAt(bytes, MAGIC_PNG, start)) return "PNG";
         return null;
     }
 

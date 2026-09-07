@@ -56,6 +56,9 @@ public class OrderController {
     private com.multiship.backend.service.ZebrashPdfService zebrashPdfService;
     @Autowired
     private com.multiship.backend.service.ZebrashCompositor zebrashCompositor;
+    /** Raster (GIF/PNG) carrier labels → 4×6 PDF pages; UPS returns GIF by default. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.multiship.backend.service.LabelImagePdfService labelImagePdfService;
     /** /label/pdf?main=true — page 1 of a carrier PDF, cropped to the label
      *  and fitted to 4×6, so Print Label spools one label-sized sheet instead
      *  of FedEx's 3–4 Letter pages. zebrash/facsimile output is already one
@@ -925,6 +928,39 @@ public class OrderController {
                         .header("Content-Disposition", "attachment; filename=label-" + orderNo + ".pdf")
                         .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
                         .body(mainOnly ? labelMainPageCropper.mainLabelOnly(passthrough.get()) : passthrough.get());
+            }
+        }
+
+        // Raster carrier labels. UPS returns its label as a GIF (default
+        // LabelImageFormat) and the sniffer only knew ZPL/PDF, so the real
+        // label sat in the row while every surface fell through to the
+        // facsimile. Wrap image artifacts into 4×6 pages — one per package.
+        {
+            java.util.List<byte[]> images = new java.util.ArrayList<>();
+            if (pkgIndex != null && pkgIndex > 0) {
+                labelArtifactResolver.resolveImage(orderNo, pkgIndex)
+                        .ifPresent(a -> images.add(a.bytes()));
+            } else {
+                ApiResponse<OrderWithLinesDTO> peekImg = orderService.getOrderWithLines(orderNo);
+                int totalForImg = effectivePkgCount(peekImg.getData());
+                if (totalForImg > 1) {
+                    for (int i = 1; i <= totalForImg; i++) {
+                        labelArtifactResolver.resolveImage(orderNo, i).ifPresent(a -> images.add(a.bytes()));
+                    }
+                }
+                if (images.isEmpty()) {
+                    labelArtifactResolver.resolveImage(orderNo, null).ifPresent(a -> images.add(a.bytes()));
+                }
+            }
+            if (!images.isEmpty()) {
+                byte[] pdf = labelImagePdfService.imagesToPdf(images);
+                String suffix = pkgIndex != null && pkgIndex > 0
+                        ? "-pkg" + pkgIndex
+                        : (images.size() > 1 ? "-all" + images.size() : "");
+                return ResponseEntity.ok()
+                        .header("Content-Disposition", "attachment; filename=label-" + orderNo + suffix + ".pdf")
+                        .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+                        .body(pdf);
             }
         }
 
