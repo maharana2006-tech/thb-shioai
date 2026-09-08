@@ -147,10 +147,12 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
 
     /** One priced line of the items table. */
     private record Line(int no, String description, String sku, String hs, String origin, int qty,
-                        String netWeight, boolean netEstimated, BigDecimal net, BigDecimal unit, BigDecimal amount) {}
+                        String netWeight, boolean netEstimated, BigDecimal net, BigDecimal unit, BigDecimal amount,
+                        Integer box) {}
 
     /** One physical piece of a multi-package shipment (label_package row). */
-    private record Pkg(int seq, String tracking, String packaging, String dims, String weight, String contents) {}
+    private record Pkg(int seq, String tracking, String packaging, String dims, String weight, String contents,
+                       String value) {}
 
     /** Everything the renderer needs, resolved once. */
     private record Model(Order order, OrderCustoms customs, Client client,
@@ -257,7 +259,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             if (hasText(origin)) origins.add(origin);
             lines.add(new Line(n, safe(it.getDescription()), safe(it.getSku()), safe(it.getHsCode()),
                     origin, qty, lineNet == null ? "" : lineNet.toPlainString() + (est ? "*" : ""),
-                    est, lineNet, unit, amount));
+                    est, lineNet, unit, amount, it.getBoxSeq()));
         }
 
         // --- freight / insurance ------------------------------------------
@@ -388,9 +390,15 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                 labelPackageRepository.findByOrderNoOrderBySequenceNumberAsc(order.getOrderNo());
         if (rows == null || rows.isEmpty()) return List.of();
         Map<Integer, List<Integer>> linesByBox = new java.util.HashMap<>();
+        Map<Integer, BigDecimal> valueByBox = new java.util.HashMap<>();
         for (int i = 0; i < items.size(); i++) {
-            Integer box = items.get(i).getBoxSeq();
-            if (box != null) linesByBox.computeIfAbsent(box, k -> new ArrayList<>()).add(i + 1);
+            OrderCustomsItem it = items.get(i);
+            Integer box = it.getBoxSeq();
+            if (box == null) continue;
+            linesByBox.computeIfAbsent(box, k -> new ArrayList<>()).add(i + 1);
+            BigDecimal unit = it.getUnitValue() == null ? BigDecimal.ZERO : it.getUnitValue();
+            int qty = it.getQuantity() == null ? 1 : it.getQuantity();
+            valueByBox.merge(box, unit.multiply(BigDecimal.valueOf(qty)), BigDecimal::add);
         }
         List<Pkg> out = new ArrayList<>(rows.size());
         int n = 0;
@@ -407,7 +415,8 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                     ? titleCase(r.getPackageType().replace('_', ' ')) : "-";
             List<Integer> ls = linesByBox.get(seq);
             String contents = ls == null || ls.isEmpty() ? "-" : "Lines " + compactRanges(ls);
-            out.add(new Pkg(seq, firstNonBlank(r.getTrackingNumber(), "-"), packaging, dims.trim(), weight.trim(), contents));
+            String value = valueByBox.containsKey(seq) ? money(valueByBox.get(seq)) : "-";
+            out.add(new Pkg(seq, firstNonBlank(r.getTrackingNumber(), "-"), packaging, dims.trim(), weight.trim(), contents, value));
         }
         return out;
     }
@@ -625,9 +634,9 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     // Rendering
     // =====================================================================
 
-    /** One placeable row of the body: an item, a package, or a section header. */
+    /** One placeable row of the body. {@code line} is set on item rows only. */
     private interface RowDrawer { float draw(Pen pen, float y) throws IOException; }
-    private record Row(String section, boolean header, float height, RowDrawer drawer) {}
+    private record Row(String section, boolean header, boolean keepWithNext, float height, RowDrawer drawer, Line line) {}
 
     private byte[] renderPdf(Model m) {
         try (PDDocument doc = new PDDocument();
@@ -640,24 +649,94 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             Table table = new Table(MARGIN, contentW, m.lineUnit());
             PkgTable pkgTable = new PkgTable(MARGIN, contentW);
 
-            // The body is a flat list of rows: items header, items, then (for a
-            // multi-piece shipment) the packages header and one row per piece.
-            // Section headers repeat at the top of every page they continue on.
+            // The body is a flat list of rows. Items come first — grouped per
+            // package (band, lines, package subtotal) when the customs lines are
+            // assigned to boxes, flat otherwise — then the per-piece annex for a
+            // multi-package shipment. Section headers repeat on continuation
+            // pages; bands never strand at a page foot.
             List<Row> rows = new ArrayList<>();
-            rows.add(new Row("items", true, table.headerH(), table::drawHeader));
-            int lastItemRow = -1;
-            for (int i = 0; i < m.lines().size(); i++) {
-                Line ln = m.lines().get(i);
-                boolean zebra = i % 2 == 1;
-                rows.add(new Row("items", false, ROW_H, (pen, y) -> table.drawRow(pen, y, ln, zebra)));
-                lastItemRow = rows.size() - 1;
+            rows.add(new Row("items", true, false, table.headerH(), table::drawHeader, null));
+            Map<Integer, Pkg> pieceBySeq = new java.util.LinkedHashMap<>();
+            for (Pkg pk : m.pieces()) pieceBySeq.put(pk.seq(), pk);
+            boolean anyBox = m.lines().stream().anyMatch(l -> l.box() != null);
+            if (anyBox && !pieceBySeq.isEmpty()) {
+                // Lines in box order (pieces ascending), unassigned / unknown boxes last.
+                List<List<Line>> groups = new ArrayList<>();
+                List<String> titles = new ArrayList<>();
+                List<String> details = new ArrayList<>();
+                for (Pkg pk : m.pieces()) {
+                    List<Line> in = new ArrayList<>();
+                    for (Line l : m.lines()) if (l.box() != null && l.box() == pk.seq()) in.add(l);
+                    if (in.isEmpty()) continue;
+                    groups.add(in);
+                    titles.add("PACKAGE " + pk.seq() + " OF " + m.packages());
+                    details.add(pk.tracking() + "   " + pk.weight() + "   " + pk.dims()
+                            + (pk.packaging().equals("-") ? "" : "   " + pk.packaging()));
+                }
+                List<Line> rest = new ArrayList<>();
+                for (Line l : m.lines()) if (l.box() == null || !pieceBySeq.containsKey(l.box())) rest.add(l);
+                if (!rest.isEmpty()) {
+                    groups.add(rest);
+                    titles.add("NOT ASSIGNED TO A SPECIFIC PACKAGE");
+                    details.add("");
+                }
+                for (int g = 0; g < groups.size(); g++) {
+                    String title = titles.get(g);
+                    String detail = details.get(g);
+                    float bandH = 17f;
+                    rows.add(new Row("items", false, true, bandH, (pen, y) -> {
+                        pen.fill(MARGIN, y - bandH, contentW, bandH, CREAM);
+                        pen.text(HELVETICA_BOLD, 7.4f, ESPRESSO, title, MARGIN + 5f, y - 11.5f, 0.5f);
+                        float tw = textWidth(HELVETICA_BOLD, 7.4f, title) + 0.5f * title.length();
+                        pen.text(HELVETICA, 7.6f, TAUPE, fit(HELVETICA, 7.6f, detail, contentW - tw - 24f), MARGIN + 5f + tw + 12f, y - 11.5f, 0f);
+                        return y - bandH;
+                    }, null));
+                    int qty = 0;
+                    BigDecimal value = BigDecimal.ZERO;
+                    BigDecimal net = BigDecimal.ZERO;
+                    boolean netKnown = true;
+                    List<Line> in = groups.get(g);
+                    for (int i = 0; i < in.size(); i++) {
+                        Line ln = in.get(i);
+                        boolean zebra = i % 2 == 1;
+                        rows.add(new Row("items", false, false, ROW_H, (pen, y) -> table.drawRow(pen, y, ln, zebra), ln));
+                        qty += ln.qty();
+                        value = value.add(ln.amount());
+                        if (ln.net() == null) netKnown = false; else net = net.add(ln.net());
+                    }
+                    String sub = title.startsWith("PACKAGE") ? "Package " + title.substring(8, title.indexOf(" OF")) + " subtotal:  "
+                            : "Unassigned lines subtotal:  ";
+                    String subText = sub + qty + " units"
+                            + (netKnown ? ",  " + net.setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString() + " " + m.lineUnit() : "")
+                            + ",  " + money(value) + " " + m.currency();
+                    rows.add(new Row("items", false, false, 13f, (pen, y) -> {
+                        pen.rightText(HELVETICA_BOLD, 7.4f, TAUPE, subText, MARGIN + contentW - 4f, y - 9.5f);
+                        return y - 13f;
+                    }, null));
+                }
+            } else {
+                for (int i = 0; i < m.lines().size(); i++) {
+                    Line ln = m.lines().get(i);
+                    boolean zebra = i % 2 == 1;
+                    rows.add(new Row("items", false, false, ROW_H, (pen, y) -> table.drawRow(pen, y, ln, zebra), ln));
+                }
             }
+            int lastItemRow = -1;
+            for (int i = 0; i < rows.size(); i++) if ("items".equals(rows.get(i).section()) && !rows.get(i).header()) lastItemRow = i;
             if (!m.pieces().isEmpty()) {
-                rows.add(new Row("pkgs", true, pkgTable.headerH(), pkgTable::drawHeader));
+                rows.add(new Row("pkgs", true, false, pkgTable.headerH(), pkgTable::drawHeader, null));
                 for (int i = 0; i < m.pieces().size(); i++) {
                     Pkg pk = m.pieces().get(i);
                     boolean zebra = i % 2 == 1;
-                    rows.add(new Row("pkgs", false, ROW_H, (pen, y) -> pkgTable.drawRow(pen, y, pk, zebra)));
+                    rows.add(new Row("pkgs", false, false, ROW_H, (pen, y) -> pkgTable.drawRow(pen, y, pk, zebra), null));
+                }
+                if (!anyBox) {
+                    String note = "Line-to-package allocation was not declared for this shipment; the item lines above cover all "
+                            + m.packages() + " packages together.";
+                    rows.add(new Row("pkgs", false, false, 13f, (pen, y) -> {
+                        pen.text(HELVETICA_OBLIQUE, 7.2f, TAUPE, fit(HELVETICA_OBLIQUE, 7.2f, note, contentW), MARGIN, y - 10f, 0f);
+                        return y - 13f;
+                    }, null));
                 }
             }
 
@@ -676,12 +755,12 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             float y = pageH - MARGIN - firstHeaderH;
             while (idx < rows.size()) {
                 Row r = rows.get(idx);
-                boolean isItem = "items".equals(r.section()) && !r.header();
+                boolean itemsBody = "items".equals(r.section()) && !r.header();
                 boolean lastRow = idx == rows.size() - 1;
-                float reserve = (isItem ? carryH : 0f) + (lastRow ? closingH : 0f);
+                float reserve = (itemsBody ? carryH : 0f) + (lastRow ? closingH : 0f);
                 float need = r.height();
-                // Never strand a section header at the foot of a page.
-                if (r.header() && idx + 1 < rows.size()) need += rows.get(idx + 1).height();
+                // Never strand a section header or a package band at a page foot.
+                if ((r.header() || r.keepWithNext()) && idx + 1 < rows.size()) need += rows.get(idx + 1).height();
                 if (y - need < bottom + reserve && idx > start) {
                     pages.add(new int[]{start, idx});
                     start = idx;
@@ -707,8 +786,8 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                 if (yEnd - closingH < bottom) pages.add(new int[]{rows.size(), rows.size()});
             }
             int totalPages = pages.size();
-            log.info("CommercialInvoice — order={} items={} pieces={} pages={} paper={}", m.order().getOrderNo(),
-                    m.lines().size(), m.pieces().size(), totalPages, pageSize == PDRectangle.A4 ? "A4" : "LETTER");
+            log.info("CommercialInvoice — order={} items={} pieces={} grouped={} pages={} paper={}", m.order().getOrderNo(),
+                    m.lines().size(), m.pieces().size(), anyBox, totalPages, pageSize == PDRectangle.A4 ? "A4" : "LETTER");
 
             // Pass 2 — emit.
             BigDecimal carried = BigDecimal.ZERO;
@@ -716,6 +795,10 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                 int[] range = pages.get(p);
                 boolean first = p == 0;
                 boolean last = p == totalPages - 1;
+                int lastItemsRowOnPage = -1;
+                for (int i = range[0]; i < range[1]; i++) {
+                    if ("items".equals(rows.get(i).section()) && !rows.get(i).header()) lastItemsRowOnPage = i;
+                }
                 PDPage page = new PDPage(pageSize);
                 doc.addPage(page);
                 try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
@@ -727,18 +810,12 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                         y = "items".equals(rows.get(range[0]).section()) ? table.drawHeader(pen, y) : pkgTable.drawHeader(pen, y);
                     }
                     BigDecimal pageSum = BigDecimal.ZERO;
-                    boolean pageHasItems = false;
                     for (int i = range[0]; i < range[1]; i++) {
                         Row r = rows.get(i);
                         y = r.drawer().draw(pen, y);
-                        if ("items".equals(r.section()) && !r.header()) {
-                            pageHasItems = true;
-                            pageSum = pageSum.add(m.lines().get(i - 1).amount());
-                        }
-                        // Carry line straight after the last item row on this page.
-                        boolean lastItemOnPage = "items".equals(r.section()) && !r.header()
-                                && (i + 1 >= range[1] || !"items".equals(rows.get(i + 1).section()) || rows.get(i + 1).header());
-                        if (lastItemOnPage) {
+                        if (r.line() != null) pageSum = pageSum.add(r.line().amount());
+                        if (i == lastItemsRowOnPage) {
+                            // Carry line straight after the items on this page.
                             carried = carried.add(pageSum);
                             boolean finalItems = i == lastItemRow;
                             pen.rule(MARGIN, MARGIN + contentW, y, RULE, 0.5f);
@@ -750,7 +827,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                             y -= 7f;
                         }
                     }
-                    if (!pageHasItems && range[1] > range[0] && "pkgs".equals(rows.get(range[1] - 1).section())) {
+                    if (range[1] > range[0] && "pkgs".equals(rows.get(range[1] - 1).section())) {
                         pen.rule(MARGIN, MARGIN + contentW, y, RULE, 0.5f);
                     }
                     if (m.lines().isEmpty() && first) pen.rule(MARGIN, MARGIN + contentW, y, RULE, 0.5f);
@@ -937,20 +1014,21 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     /** Per-piece annex table for multi-package shipments. */
     private static final class PkgTable {
         final float left, width;
-        final float xNo, xTrack, xPack, xDims, xWt, xCont;
-        final float wNo, wTrack, wPack, wDims, wWt, wCont;
+        final float xNo, xTrack, xPack, xDims, xWt, xCont, xVal;
+        final float wNo, wTrack, wPack, wDims, wWt, wCont, wVal;
 
         PkgTable(float left, float width) {
             this.left = left;
             this.width = width;
-            wNo = 30f; wTrack = 150f; wPack = 92f; wDims = 104f; wWt = 62f;
-            wCont = width - (wNo + wTrack + wPack + wDims + wWt);
+            wNo = 30f; wTrack = 132f; wPack = 84f; wDims = 96f; wWt = 56f; wVal = 64f;
+            wCont = width - (wNo + wTrack + wPack + wDims + wWt + wVal);
             xNo = left + 5f;
             xTrack = left + wNo;
             xPack = xTrack + wTrack;
             xDims = xPack + wPack;
             xWt = xDims + wDims;
             xCont = xWt + wWt;
+            xVal = xCont + wCont;
         }
 
         float headerH() { return 34f; }
@@ -967,6 +1045,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             pen.text(HELVETICA_BOLD, 6.6f, TAUPE, "DIMENSIONS", xDims, ty, 0.5f);
             pen.rightText(HELVETICA_BOLD, 6.6f, TAUPE, "WEIGHT", xWt + wWt - 4f, ty);
             pen.text(HELVETICA_BOLD, 6.6f, TAUPE, "CONTENTS", xCont + 4f, ty, 0.5f);
+            pen.rightText(HELVETICA_BOLD, 6.6f, TAUPE, "VALUE", xVal + wVal - 4f, ty);
             return y - 20f;
         }
 
@@ -979,6 +1058,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             pen.text(HELVETICA, 8.5f, INK, fit(HELVETICA, 8.5f, pk.dims(), wDims - 6f), xDims, ty, 0f);
             pen.rightText(HELVETICA, 8.5f, INK, pk.weight(), xWt + wWt - 4f, ty);
             pen.text(HELVETICA, 8.5f, INK, fit(HELVETICA, 8.5f, pk.contents(), wCont - 8f), xCont + 4f, ty, 0f);
+            pen.rightText(HELVETICA, 8.5f, INK, pk.value(), xVal + wVal - 4f, ty);
             return y - ROW_H;
         }
     }
