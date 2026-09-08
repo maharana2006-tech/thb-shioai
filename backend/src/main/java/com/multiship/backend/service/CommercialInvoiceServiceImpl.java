@@ -386,9 +386,11 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
      */
     private List<Pkg> pieces(Order order, List<OrderCustomsItem> items) {
         if (labelPackageRepository == null || order.getOrderNo() == null) return List.of();
-        List<com.multiship.backend.model.LabelPackage> rows =
+        List<com.multiship.backend.model.LabelPackage> allRows =
                 labelPackageRepository.findByOrderNoOrderBySequenceNumberAsc(order.getOrderNo());
-        if (rows == null || rows.isEmpty()) return List.of();
+        List<com.multiship.backend.model.LabelPackage> rows = physicalPieces(order);
+        if (rows.isEmpty()) return List.of();
+        int packageCount = rows.size();
         Map<Integer, List<Integer>> linesByBox = new java.util.HashMap<>();
         Map<Integer, BigDecimal> valueByBox = new java.util.HashMap<>();
         Map<Integer, Integer> unitsByBox = new java.util.HashMap<>();
@@ -406,7 +408,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         int n = 0;
         for (com.multiship.backend.model.LabelPackage r : rows) {
             n++;
-            int seq = r.getSequenceNumber() == null ? n : r.getSequenceNumber();
+            int seq = n; // physical box index — label rows beyond packageCount are re-labels of these boxes
             String dims = (r.getLength() != null && r.getWidth() != null && r.getHeight() != null)
                     ? plain(r.getLength()) + " x " + plain(r.getWidth()) + " x " + plain(r.getHeight())
                       + " " + firstNonBlank(r.getDimUnit(), "").toUpperCase(Locale.ROOT)
@@ -419,7 +421,9 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             String contents = ls == null || ls.isEmpty() ? "-"
                     : "Lines " + compactRanges(ls) + " (" + unitsByBox.getOrDefault(seq, 0) + " units)";
             String value = valueByBox.containsKey(seq) ? money(valueByBox.get(seq)) : "-";
-            out.add(new Pkg(seq, firstNonBlank(r.getTrackingNumber(), "-"), packaging, dims.trim(), weight.trim(), contents, value));
+            List<String> trackings = trackingsForBox(allRows == null ? rows : allRows, packageCount, seq);
+            String tracking = trackings.isEmpty() ? "-" : String.join(", ", trackings);
+            out.add(new Pkg(seq, tracking, packaging, dims.trim(), weight.trim(), contents, value));
         }
         return out;
     }
@@ -502,13 +506,43 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     }
 
     private BigDecimal shipmentGrossWeight(Order order) {
-        if (labelPackageRepository != null && order.getOrderNo() != null) {
-            BigDecimal sum = labelPackageRepository.findByOrderNoOrderBySequenceNumberAsc(order.getOrderNo()).stream()
+        List<com.multiship.backend.model.LabelPackage> physical = physicalPieces(order);
+        if (!physical.isEmpty()) {
+            BigDecimal sum = physical.stream()
                     .map(p -> p.getWeight()).filter(Objects::nonNull)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             if (sum.signum() > 0) return sum;
         }
         return order.getWeight();
+    }
+
+    /**
+     * The shipment's PHYSICAL boxes. When a carrier commodity cap forces the
+     * booking to be split (UPS: 50 lines), the SAME_PACKAGES strategy books
+     * every box once per sub-shipment, so label_package holds N × packageCount
+     * rows numbered globally — the same boxes labelled again, not more boxes.
+     * Row r maps to physical box ((r - 1) mod packageCount) + 1; the first
+     * cycle carries the physical weights and dimensions.
+     */
+    private List<com.multiship.backend.model.LabelPackage> physicalPieces(Order order) {
+        if (labelPackageRepository == null || order.getOrderNo() == null) return List.of();
+        List<com.multiship.backend.model.LabelPackage> rows =
+                labelPackageRepository.findByOrderNoOrderBySequenceNumberAsc(order.getOrderNo());
+        if (rows == null) return List.of();
+        int n = order.getPackageCount() == null ? 0 : order.getPackageCount();
+        if (n > 0 && rows.size() > n) return new ArrayList<>(rows.subList(0, n));
+        return rows;
+    }
+
+    /** All tracking numbers issued for physical box {@code box} (1-based), in label order. */
+    private static List<String> trackingsForBox(List<com.multiship.backend.model.LabelPackage> allRows, int packageCount, int box) {
+        List<String> out = new ArrayList<>(2);
+        for (int r = 0; r < allRows.size(); r++) {
+            int physical = packageCount > 0 ? (r % packageCount) + 1 : r + 1;
+            String t = allRows.get(r).getTrackingNumber();
+            if (physical == box && hasText(t) && !out.contains(t.trim())) out.add(t.trim());
+        }
+        return out;
     }
 
     /**
