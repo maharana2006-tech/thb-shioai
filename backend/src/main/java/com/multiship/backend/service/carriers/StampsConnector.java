@@ -249,33 +249,160 @@ public class StampsConnector implements CarrierConnector {
     }
 
     /**
-     * Stamps.com uses SWSIM (SOAP), not REST/OAuth. Credential check calls
-     * {@code AuthenticateUser} on the SWSIM endpoint with:
+     * Stamps.com / Endicia has TWO wire APIs — the connector picks between
+     * them via {@code carrier.stamps.api-flavor}:
      * <ul>
-     *   <li>{@code IntegrationID} = the "Client ID" from the Stamps.com
-     *       developer portal (a GUID).</li>
-     *   <li>{@code Username} = the Stamps.com account number.</li>
-     *   <li>{@code Password} = the "Client Secret" from the developer portal.</li>
+     *   <li><b>SWSIM (SOAP)</b> — legacy, still what most existing accounts
+     *       use. Credential check calls {@code AuthenticateUser} on the SWSIM
+     *       endpoint with:
+     *       <ul>
+     *         <li>{@code IntegrationID} = "Client ID" from the developer
+     *             portal (must be a GUID; SWSIM's XML schema enforces this).</li>
+     *         <li>{@code Username} = Stamps.com account number.</li>
+     *         <li>{@code Password} = "Client Secret" from the developer portal.</li>
+     *       </ul>
+     *       SWSIM returns an {@code Authenticator} GUID that persists for a
+     *       session and stands in as our "access token".</li>
+     *   <li><b>SERA (OAuth 2.0 REST)</b> — Auctane's newer API at
+     *       {@code signin.stampsendicia.com} / {@code api.stampsendicia.com}.
+     *       {@code client_id} is an opaque string, NOT a GUID; the GUID
+     *       validator is skipped on this path. We POST a client-credentials
+     *       grant to the token endpoint and return the bearer token. SERA's
+     *       public docs highlight the authorization-code flow, but the token
+     *       endpoint is a plain OAuth 2.0 server — if the account has been
+     *       provisioned for machine-to-machine, {@code client_credentials}
+     *       works; if not, the server returns a proper
+     *       {@code unsupported_grant_type} error that the operator sees on
+     *       the Carriers page (much better UX than a hardcoded pre-flight
+     *       rejection).</li>
      * </ul>
-     * SWSIM returns an {@code Authenticator} GUID that persists for a session
-     * and stands in as our "access token" — we cache it via the same path as
-     * every other connector. On failure SWSIM sends a SOAP Fault; we parse the
-     * {@code faultstring} and either throw (config errors like a bad URL) or
-     * fall back to a {@code -local-*} token (credential rejection surfaces via
-     * runCredentialCheck's "-local-" detection).
      *
-     * <p>Environment routing: SANDBOX hits {@code swsim.testing.stamps.com},
-     * everything else hits production {@code swsim.stamps.com}.
+     * <p>On failure both flavors fall back to a {@code -local-*} token so the
+     * caller's "-local-" detection surfaces credential rejection uniformly.
+     *
+     * <p>Environment routing: SANDBOX hits {@code swsim.testing.stamps.com}
+     * (SWSIM) or {@code signin.testing.stampsendicia.com} (SERA); everything
+     * else hits the production hosts.
      */
     @Override
     public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
+        if (isSeraFlavor()) {
+            return getAccessTokenSera(clientId, clientSecret, environment);
+        }
+        return getAccessTokenSwsim(clientId, clientSecret, accountNumber, environment);
+    }
+
+    /** @return true when {@code carrier.stamps.api-flavor=SERA} (case-insensitive). */
+    private boolean isSeraFlavor() {
+        String flavor = carrierProperties.getStamps().getApiFlavor();
+        return flavor != null && "SERA".equalsIgnoreCase(flavor.trim());
+    }
+
+    /**
+     * SERA OAuth 2.0 path — a plain {@code client_credentials} grant against
+     * {@code signin.stampsendicia.com/oauth/token} (or the sandbox host on
+     * SANDBOX). {@code client_id} is opaque; no GUID validation. accountNumber
+     * is not part of the OAuth exchange (SERA scopes token authority via the
+     * client_id itself), so a blank accountNumber is allowed here — unlike
+     * SWSIM which needs it as the Username. Any 2xx-with-access_token is a
+     * successful verification; anything else falls back to a -local-* token
+     * with the server's error surfaced via LAST_AUTH_DETAIL.
+     */
+    String getAccessTokenSera(String clientId, String clientSecret, String environment) {
+        if (!StringUtils.hasText(clientId) || !StringUtils.hasText(clientSecret)) {
+            LAST_AUTH_DETAIL.set("SERA requires a non-blank Client ID and Client Secret. "
+                    + "Copy the values from your Stamps.com / Endicia developer portal.");
+            return buildFallbackToken(clientId, clientSecret);
+        }
+        CarrierProperties.Stamps cfg = carrierProperties.getStamps();
+        String tokenUrl = isSandbox(environment) ? cfg.getSeraSandboxAuthUrl() : cfg.getSeraAuthUrl();
+        if (!StringUtils.hasText(tokenUrl)) {
+            LAST_AUTH_DETAIL.set("SERA is enabled (carrier.stamps.api-flavor=SERA) but the "
+                    + (isSandbox(environment) ? "sandbox" : "production")
+                    + " token URL is not configured. Set carrier.stamps.sera-"
+                    + (isSandbox(environment) ? "sandbox-" : "") + "auth-url.");
+            log.warn("Stamps SERA: token URL is blank on {} — cannot verify credentials.",
+                    isSandbox(environment) ? "SANDBOX" : "PRODUCTION");
+            return buildFallbackToken(clientId, clientSecret);
+        }
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("grant_type", "client_credentials");
+        form.add("client_id", clientId.trim());
+        form.add("client_secret", clientSecret);
+        try {
+            String response = HttpClients.newBuilder().baseUrl(tokenUrl).build()
+                    .post()
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .body(form)
+                    .retrieve()
+                    .body(String.class);
+            JsonNode json = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
+            String accessToken = json.path("access_token").asText(null);
+            if (StringUtils.hasText(accessToken)) {
+                LAST_AUTH_DETAIL.remove();
+                return accessToken;
+            }
+            String err = json.path("error_description").asText(json.path("error").asText("no error field"));
+            LAST_AUTH_DETAIL.set("Stamps.com SERA returned no access_token: " + err);
+            log.warn("Stamps SERA {} returned no access_token: {}", tokenUrl, safeHead(response));
+            return buildFallbackToken(clientId, clientSecret);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            String body = ex.getResponseBodyAsString();
+            String errMsg = extractOAuthError(body);
+            log.warn("Stamps SERA token endpoint {} rejected (HTTP {}): {} · body head: {}",
+                    tokenUrl, status, errMsg, safeHead(body));
+            LAST_AUTH_DETAIL.set(StringUtils.hasText(errMsg)
+                    ? "Stamps.com SERA rejected the credentials (HTTP " + status + "): " + errMsg
+                    : "Stamps.com SERA returned HTTP " + status + ".");
+            return buildFallbackToken(clientId, clientSecret);
+        } catch (Exception ex) {
+            log.warn("Stamps SERA token call to {} failed; using local fallback token. Reason: {}",
+                    tokenUrl, ex.getMessage());
+            LAST_AUTH_DETAIL.set("could not reach the Stamps.com SERA token endpoint (" + ex.getMessage() + ")");
+            return buildFallbackToken(clientId, clientSecret);
+        }
+    }
+
+    /**
+     * Extract a human-readable message from an OAuth 2.0 error body.
+     * Standard shape (RFC 6749 §5.2) is a JSON object with
+     * {@code error} and optional {@code error_description}; some servers
+     * return HTML on infrastructure failures. Never throws — returns null
+     * when the body is blank or not JSON.
+     */
+    private String extractOAuthError(String body) {
+        if (!StringUtils.hasText(body)) return null;
+        try {
+            JsonNode j = objectMapper.readTree(body);
+            String desc = j.path("error_description").asText(null);
+            if (StringUtils.hasText(desc)) return desc;
+            String err = j.path("error").asText(null);
+            if (StringUtils.hasText(err)) return err;
+        } catch (Exception parseIgnored) {
+            // Fall through to raw-body truncation.
+        }
+        return safeHead(body);
+    }
+
+    /**
+     * SWSIM SOAP path — historical behaviour. Requires accountNumber (used as
+     * SWSIM Username) and a GUID IntegrationID (Stamps.com's XML schema
+     * enforces the {@code 8-4-4-4-12} hex shape at request-parse time). The
+     * GUID validator here catches non-GUID input up-front with an actionable
+     * message instead of firing a doomed SOAP call.
+     */
+    String getAccessTokenSwsim(String clientId, String clientSecret, String accountNumber, String environment) {
         CarrierProperties.Stamps cfg = carrierProperties.getStamps();
         String swsimUrl = isSandbox(environment) ? cfg.getSandboxAuthUrl() : cfg.getAuthUrl();
 
         if (!StringUtils.hasText(accountNumber)) {
             throw new CarrierConnectionException(
                     "Stamps.com verification needs the account number as the SWSIM Username. "
-                            + "Enter the Stamps.com account number in the Account number field.");
+                            + "Enter the Stamps.com account number in the Account number field. "
+                            + "(If your account is on the newer SERA REST API, set "
+                            + "carrier.stamps.api-flavor=SERA — SERA doesn't need an account number.)");
         }
 
         // Stamps.com rejects a non-GUID IntegrationID at XML-schema validation
@@ -288,11 +415,12 @@ public class StampsConnector implements CarrierConnector {
         // Windows, which the strict pattern used to reject.
         String normalisedGuid = normaliseIntegrationId(clientId);
         if (normalisedGuid == null) {
-            LAST_AUTH_DETAIL.set("the Stamps.com Client ID (IntegrationID) must be a GUID like "
+            LAST_AUTH_DETAIL.set("the Stamps.com SWSIM Client ID (IntegrationID) must be a GUID like "
                     + "\"01234567-89ab-cdef-0123-456789abcdef\" (braces {...}, urn:uuid: prefix, "
                     + "or 32-hex-no-hyphens are also accepted and auto-normalised). The value entered "
                     + "isn't recognisable as a GUID — copy the IntegrationID from your Stamps.com "
-                    + "developer portal.");
+                    + "developer portal, OR if your account is on the newer SERA REST API set "
+                    + "carrier.stamps.api-flavor=SERA (SERA client_ids are opaque strings, not GUIDs).");
             log.warn("Stamps SWSIM: IntegrationID '{}' is not a GUID after normalisation; "
                     + "skipping call and returning fallback token.", clientId);
             return buildFallbackToken(clientId, clientSecret);
