@@ -858,15 +858,18 @@ export default function OrdersWorkspace() {
 
     defs.push({
       id: 'source',
-      accessorFn: (o) => `${o.orderDetails.source ?? 'API'} ${o.orderDetails.channel ?? ''}`.trim(),
+      accessorFn: (o) => {
+        const src = (o.orderDetails.source ?? 'API').toUpperCase()
+        return src === 'API' && o.orderDetails.channel ? `${src} ${o.orderDetails.channel}` : src
+      },
       header: 'Src',
       enableSorting: false,
       // ONE column for source + channel (client request: the two single-letter
       // chip columns read as duplicates side by side). Source chip (M/A/B)
       // first, channel chip (D/B) beside it when the order is classified.
       // Full labels preserved on hover; server folds WMS/ERP/legacy into API.
-      // Channel is spelled out (B2B / D2C) — a lone "B" / "D" was read as
-      // unclassified.
+      // Channel is spelled out (B2B / D2C) on API rows only — a lone "B" / "D"
+      // was read as unclassified.
       size: 92,
       cell: ({ row }) => {
         const s = (row.original.orderDetails.source || 'API').toUpperCase()
@@ -881,7 +884,9 @@ export default function OrdersWorkspace() {
           BULK: 'Bulk — imported via CSV/Excel',
         }
         const c = (row.original.orderDetails.channel || '').toUpperCase()
-        const classified = c === 'D2C' || c === 'B2B'
+        // Client request: the D2C / B2B classification is shown for API
+        // (partner / WMS) orders only — manual and bulk rows show the source.
+        const classified = s === 'API' && (c === 'D2C' || c === 'B2B')
         const cTone = c === 'B2B'
           ? 'bg-indigo-50 text-indigo-700 ring-indigo-200'
           : 'bg-sky-50 text-sky-700 ring-sky-200'
@@ -907,8 +912,10 @@ export default function OrdersWorkspace() {
       },
       meta: {
         headerLabel: 'Source / Channel',
-        exportValue: (o: Order) =>
-          `${(o.orderDetails.source ?? 'API').toUpperCase()}${o.orderDetails.channel ? ` ${o.orderDetails.channel.toUpperCase()}` : ''}`,
+        exportValue: (o: Order) => {
+          const src = (o.orderDetails.source ?? 'API').toUpperCase()
+          return src === 'API' && o.orderDetails.channel ? `${src} ${o.orderDetails.channel.toUpperCase()}` : src
+        },
       },
     })
 
