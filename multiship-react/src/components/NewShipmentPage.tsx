@@ -922,10 +922,40 @@ export default function NewShipmentPage() {
   const sameTerritory = (a: string, b: string) =>
     a === b
     || (EU.has(a) && EU.has(b))
+  // US-territory detection has to happen BEFORE isInternational so that
+  // country=US + state=PR (or VI/GU/AS/MP/UM) opts the shipment into the
+  // intl UI path (commercial invoice, FTR/AES, incoterms). Pre-fix, the
+  // banner + service filter used this predicate but isInternational did
+  // not, so the customs UI stayed hidden and the wire went out with
+  // country=PR but no commodities → UPS 120502.
+  const US_TERRITORY_CODES = new Set(['PR', 'VI', 'GU', 'AS', 'MP', 'UM'])
+  const recipientTerritoryEarly = useMemo<string | null>(() => {
+    const c = (recipient.countryCode || '').trim().toUpperCase()
+    const s = (recipient.state || '').trim().toUpperCase()
+    if ((c === 'US' || c === '') && US_TERRITORY_CODES.has(s)) return s
+    if (US_TERRITORY_CODES.has(c)) return c
+    return null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipient.countryCode, recipient.state])
+  const senderTerritoryEarly = useMemo<string | null>(() => {
+    const c = (sender.countryCode || '').trim().toUpperCase()
+    const s = (sender.state || '').trim().toUpperCase()
+    if ((c === 'US' || c === '') && US_TERRITORY_CODES.has(s)) return s
+    if (US_TERRITORY_CODES.has(c)) return c
+    return null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sender.countryCode, sender.state])
+  // "Effective country" for classification purposes — treat a US-territory
+  // state as if it were the territory country code, mirroring what the
+  // wire payload actually sends (per UsTerritoryNormalizer on the backend).
+  const senderEffectiveCountry = senderTerritoryEarly
+    ?? (sender.countryCode || '').toUpperCase()
+  const recipientEffectiveCountry = recipientTerritoryEarly
+    ?? (recipient.countryCode || '').toUpperCase()
   const isInternational =
     !!sender.countryCode &&
     !!recipient.countryCode &&
-    !sameTerritory(sender.countryCode.toUpperCase(), recipient.countryCode.toUpperCase())
+    !sameTerritory(senderEffectiveCountry, recipientEffectiveCountry)
   const neededScope: 'DOMESTIC' | 'INTERNATIONAL' = isInternational ? 'INTERNATIONAL' : 'DOMESTIC'
   const scopeFits = (scope?: string | null) => !scope || scope === 'BOTH' || scope === neededScope
 
@@ -1069,17 +1099,10 @@ export default function NewShipmentPage() {
   // MP/UM as separate countries for shipping; operator's `country=US`
   // with a territory state won't ship on Ground / Home Delivery /
   // SmartPost / UPS Ground / 3 Day Select. Backend rewrites the
-  // countryCode at wire time (safety net); FE nudges the operator
-  // AND hides the incompatible services here.
-  const US_TERRITORY_CODES = new Set(['PR', 'VI', 'GU', 'AS', 'MP', 'UM'])
-  const recipientTerritory = useMemo<string | null>(() => {
-    const c = (recipient.countryCode || '').trim().toUpperCase()
-    const s = (recipient.state || '').trim().toUpperCase()
-    if ((c === 'US' || c === '') && US_TERRITORY_CODES.has(s)) return s
-    if (US_TERRITORY_CODES.has(c)) return c
-    return null
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recipient.countryCode, recipient.state])
+  // countryCode at wire time (safety net); FE nudges the operator,
+  // hides the incompatible services here, AND opts the shipment into
+  // the intl UI path via `isInternational` (see above).
+  const recipientTerritory = recipientTerritoryEarly
   const isRecipientUsTerritory = recipientTerritory !== null
 
   const servicesForCarrier = useMemo(
