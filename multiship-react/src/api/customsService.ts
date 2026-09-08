@@ -12,6 +12,8 @@ export interface CustomsItem {
   unitValue?: number | null
   weight?: number | null
   sku?: string | null
+  /** 1-based package index the line travels in; null on legacy rows. */
+  boxSeq?: number | null
 }
 
 /** An order's full customs declaration (importer of record + goods). */

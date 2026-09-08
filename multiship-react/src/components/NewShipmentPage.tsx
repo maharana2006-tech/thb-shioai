@@ -687,7 +687,9 @@ export default function NewShipmentPage() {
   // from sum(unitValue × quantity in that box). null boxSeq = unassigned
   // (falls into box 1 by default; treated as legacy single-box CI).
   type ItemRow = NewShipmentItemRow
-  const blankItem = (): ItemRow => ({ description: '', sku: '', hsCode: '', countryOfOrigin: '', quantity: '1', unitValue: '', boxSeq: '', weight: '' })
+  // Every line belongs to a box from the start (box 1 by default) so the
+  // commercial invoice can always say which package holds which lines.
+  const blankItem = (): ItemRow => ({ description: '', sku: '', hsCode: '', countryOfOrigin: '', quantity: '1', unitValue: '', boxSeq: '1', weight: '' })
   const [items, setItems] = useState<ItemRow[]>([blankItem()])
   // Reason of export prefills from `CarrierAccountRef.shippingPurpose`
   // (see prefill useEffect below). Sticky read removed — force-pick
@@ -1252,7 +1254,8 @@ export default function NewShipmentPage() {
             setItems(customs.items.map((it) => ({
               description: it.description ?? '', sku: it.sku ?? '', hsCode: it.hsCode ?? '',
               countryOfOrigin: it.countryOfOrigin ?? '', quantity: String(it.quantity ?? 1),
-              unitValue: it.unitValue != null ? String(it.unitValue) : '', boxSeq: '',
+              unitValue: it.unitValue != null ? String(it.unitValue) : '',
+              boxSeq: it.boxSeq != null && Number(it.boxSeq) > 0 ? String(it.boxSeq) : '1',
               // PR #558 — hydrate per-item weight when the customs record
               // carries it; blank string when null so the auto-fill
               // placeholder (pkgWeight × qty / totalQty) shows.
@@ -1986,7 +1989,7 @@ export default function NewShipmentPage() {
       countryOfOrigin: it.countryOfOrigin ?? '',
       quantity: String(it.quantity ?? 1),
       unitValue: it.unitValue != null ? String(it.unitValue) : '',
-      boxSeq: '', // Sprint 48 B11 — wizard doesn't collect boxSeq yet; preserved as blank
+      boxSeq: '1', // wizard doesn't collect the box; default to box 1
       weight: it.weight != null ? String(it.weight) : '', // PR #558 — wizard doesn't collect weight yet; fallback fills.
     }))
     // Keep at least one row so the inline form isn't blank after a Save
@@ -2029,6 +2032,17 @@ export default function NewShipmentPage() {
     requestAnimationFrame(() => document.querySelector('[data-items-scroll]')?.scrollTo({ top: 0 }))
   }
   const removeItem = (i: number) => setItems((rows) => (rows.length > 1 ? rows.filter((_, idx) => idx !== i) : rows))
+  /** Put every line in box 1 (single-carton shipments, or a reset before re-assigning). */
+  const assignAllToBox1 = () => {
+    setItems((rows) => rows.map((r) => ({ ...r, boxSeq: '1' })))
+    notify.success('Every line assigned to box 1.')
+  }
+  /** Split the lines into N consecutive runs, one per box, in the order they are listed. */
+  const spreadItemsAcrossBoxes = () => {
+    const boxes = 1 + extraPackages.length
+    setItems((rows) => rows.map((r, i) => ({ ...r, boxSeq: String(Math.min(boxes, Math.floor((i * boxes) / rows.length) + 1)) })))
+    notify.success(`Lines spread across ${boxes} boxes in order — adjust any line's Pkg # if needed.`)
+  }
   const invoiceTotal = items.reduce((sum, it) => sum + (Number(it.quantity) || 0) * (Number(it.unitValue) || 0), 0)
 
   // PR #558 — for international shipments, keep the `declaredValue`
@@ -2260,7 +2274,7 @@ export default function NewShipmentPage() {
         // Sprint 48 B11 — assign item to a specific physical package;
         // backend derives per-box declared value from sum of items
         // when at least one item is assigned.
-        boxSeq: it.boxSeq ? Number(it.boxSeq) : undefined,
+        boxSeq: it.boxSeq && Number(it.boxSeq) > 0 ? Number(it.boxSeq) : 1,
       }))
 
     // Match the typed bill-to number to a known account on this carrier (for credentials);
@@ -3688,6 +3702,17 @@ export default function NewShipmentPage() {
                     >
                       <FiZap className="h-3.5 w-3.5" /> Landed cost
                     </button>
+                    {extraPackages.length > 0 ? (
+                      <span className="inline-flex items-center overflow-hidden rounded-lg border border-[#e3d9c4] bg-white text-[11px] font-semibold text-[#5a4526] shadow-sm" title="Which box each line travels in — printed per package on the commercial invoice">
+                        <span className="bg-[#f4eede] px-2 py-1 text-[10px] font-bold uppercase tracking-[0.1em] text-[#6b5c42]">Boxes</span>
+                        <button type="button" onClick={assignAllToBox1} className="px-2.5 py-1 transition hover:bg-[#faf7f0]" title="Every line in box 1">
+                          All in box 1
+                        </button>
+                        <button type="button" onClick={spreadItemsAcrossBoxes} className="border-l border-[#e3d9c4] px-2.5 py-1 transition hover:bg-[#faf7f0]" title={`Split the lines in order into ${1 + extraPackages.length} runs, one per box`}>
+                          Spread across {1 + extraPackages.length} boxes
+                        </button>
+                      </span>
+                    ) : null}
                     <button
                       type="button"
                       onClick={addItem}
