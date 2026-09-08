@@ -574,6 +574,56 @@ public interface CarrierConnector {
     ) {
     }
 
+    /**
+     * Reprint / retrieve a previously-created label. The tracking number
+     * identifies the shipment; the connector is responsible for resolving
+     * its own carrier-side identifier (SERA {@code label_id}, FedEx
+     * {@code labelSpecification.reprintLabel}, ...) — callers don't need
+     * to know per-carrier addressing schemes.
+     *
+     * <p>Default returns NOT_SUPPORTED so this stays additive over past
+     * sprints — every existing connector inherits the honest no-op until
+     * its per-carrier reprint endpoint is wired.
+     *
+     * @param labelSize   Output size code (e.g. {@code 4x6}, {@code letter}).
+     *                    Nullable — the connector picks a sensible default.
+     * @param labelFormat Output format ({@code pdf}, {@code png}, {@code zpl}).
+     *                    Nullable — connector default (PDF for SERA).
+     */
+    default LabelReprintResult reprintLabel(String trackingNumber, String labelSize, String labelFormat,
+                                             String accessToken, String environment) {
+        return new LabelReprintResult(
+                getCarrierCode(), null, null, "NOT_SUPPORTED",
+                "Label reprint isn't implemented for " + getCarrierCode() + " on this instance.",
+                null);
+    }
+
+    /**
+     * Result of a label reprint / retrieve call.
+     *
+     * @param carrierCode    Carrier that produced the reprinted label.
+     * @param labelUrl       Signed URL to the reprinted label document
+     *                       when the carrier returned one (SERA
+     *                       {@code label_output_type=url}). Null when the
+     *                       carrier only returns inline bytes.
+     * @param labelBase64    Base64-encoded label bytes when the carrier
+     *                       inlines them (SERA
+     *                       {@code label_output_type=base64}). Null when
+     *                       only a URL was returned.
+     * @param status         OK | NOT_SUPPORTED | ERROR.
+     * @param message        Operator-facing summary sentence.
+     * @param rawResponse    Full carrier response for the audit trail.
+     */
+    record LabelReprintResult(
+            String carrierCode,
+            String labelUrl,
+            String labelBase64,
+            String status,
+            String message,
+            String rawResponse
+    ) {
+    }
+
     default PickupResult schedulePickup(PickupRequest request, String accessToken, String environment) {
         return new PickupResult(
                 getCarrierCode(),
