@@ -1727,6 +1727,127 @@ public class StampsConnector implements CarrierConnector {
                 "SERA confirmed void for label_id " + labelId + ".", responseJson);
     }
 
+    /**
+     * Balance query. SWSIM {@code GetAccountInfo} exposes a
+     * {@code PostageBalance} field but this connector never wired it —
+     * SWSIM-flavored callers see NOT_SUPPORTED with a hint about the
+     * dashboard, matching the pre-SERA behaviour. SERA has a first-class
+     * {@code GET /sera/v1/balance} endpoint that returns
+     * {@code amount_available} / {@code max_balance_amount_allowed} in
+     * {@code currency} — this dispatches to it.
+     */
+    @Override
+    public BalanceResult getAccountBalance(String accessToken, String environment) {
+        if (isSeraFlavor()) {
+            return getAccountBalanceSera(accessToken, environment);
+        }
+        return new BalanceResult(
+                CARRIER_CODE, null, null, null,
+                "NOT_SUPPORTED",
+                "USPS via Stamps.com (SWSIM): balance query not wired on this connector. "
+                        + "Check the Stamps.com dashboard for account balance, or flip "
+                        + "carrier.stamps.api-flavor=SERA for a live balance endpoint.",
+                null);
+    }
+
+    /**
+     * SERA {@code GET /sera/v1/balance}. Response shape (per
+     * developer.stamps.com/rest-api/reference/serav1.html):
+     * <pre>
+     * {
+     *   "amount_available": number,
+     *   "max_balance_amount_allowed": number,
+     *   "currency": "usd"
+     * }
+     * </pre>
+     *
+     * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED matching
+     * the sibling-parity guard every other SERA branch uses.
+     */
+    BalanceResult getAccountBalanceSera(String accessToken, String environment) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new BalanceResult(
+                    CARRIER_CODE, null, null, null,
+                    "NOT_SUPPORTED",
+                    "SERA balance needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        String baseUrl = seraApiBaseUrl(environment);
+        try {
+            String response = HttpClients.newBuilder().baseUrl(baseUrl + "/balance").build()
+                    .get()
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(String.class);
+            return parseSeraBalanceResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            String err = extractSeraError(ex.getResponseBodyAsString());
+            log.warn("Stamps SERA /balance rejected (HTTP {}): {}", status, err);
+            return new BalanceResult(
+                    CARRIER_CODE, null, null, null, "ERROR",
+                    "SERA balance rejected (HTTP " + status + "): " + err,
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps SERA /balance call failed: {}", ex.getMessage());
+            return new BalanceResult(
+                    CARRIER_CODE, null, null, null, "ERROR",
+                    "SERA balance call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse the SERA balance response. Currency is uppercased to match
+     * ISO-4217 convention downstream (SERA emits lowercase "usd" per its
+     * doc; the rest of our system speaks "USD"). Missing / unparseable
+     * amount fields surface as ERROR rather than a bogus zero balance —
+     * silent zero would look like an empty account.
+     */
+    BalanceResult parseSeraBalanceResponse(String responseJson) {
+        if (!StringUtils.hasText(responseJson)) {
+            return new BalanceResult(CARRIER_CODE, null, null, null, "ERROR",
+                    "SERA /balance returned an empty response.", null);
+        }
+        try {
+            JsonNode j = objectMapper.readTree(responseJson);
+            java.math.BigDecimal available = readSeraMoney(j.path("amount_available"));
+            java.math.BigDecimal maxBalance = readSeraMoney(j.path("max_balance_amount_allowed"));
+            String currency = j.path("currency").asText(null);
+            if (StringUtils.hasText(currency)) currency = currency.toUpperCase(Locale.ROOT);
+            if (available == null) {
+                return new BalanceResult(CARRIER_CODE, null, null, currency, "ERROR",
+                        "SERA /balance response missing amount_available: " + safeHead(responseJson),
+                        responseJson);
+            }
+            return new BalanceResult(CARRIER_CODE, available, maxBalance, currency, "OK",
+                    "USPS via Stamps.com balance: "
+                            + available.toPlainString()
+                            + (StringUtils.hasText(currency) ? " " + currency : "")
+                            + (maxBalance != null ? " (cap " + maxBalance.toPlainString() + ")" : ""),
+                    responseJson);
+        } catch (Exception ex) {
+            return new BalanceResult(CARRIER_CODE, null, null, null, "ERROR",
+                    "SERA /balance returned non-JSON or malformed body: " + ex.getMessage(),
+                    responseJson);
+        }
+    }
+
+    /** Read a SERA money field. Accepts JSON number or string ("1.23")
+     *  — SERA is documented as number but some carrier gateways proxy
+     *  the response as strings. Null when the node is missing or blank. */
+    private static java.math.BigDecimal readSeraMoney(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) return null;
+        if (node.isNumber()) return node.decimalValue();
+        if (node.isTextual()) {
+            String s = node.asText();
+            if (!StringUtils.hasText(s)) return null;
+            try { return new java.math.BigDecimal(s); }
+            catch (NumberFormatException ignored) { return null; }
+        }
+        return null;
+    }
+
     /** Build the SWSIM CancelIndicium SOAP envelope. */
     String buildCancelIndiciumEnvelope(String trackingNumber, String authenticator) {
         StringBuilder xml = new StringBuilder(512);
