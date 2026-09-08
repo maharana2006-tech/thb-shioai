@@ -1848,6 +1848,150 @@ public class StampsConnector implements CarrierConnector {
         return null;
     }
 
+    /**
+     * Reprint / retrieve a label. SERA {@code GET /sera/v1/labels/{label_id}}
+     * with query-string {@code label_size}, {@code label_format},
+     * {@code label_output_type}. SWSIM has no first-class reprint endpoint
+     * — the SWSIM branch returns NOT_SUPPORTED with a note pointing
+     * operators to the URL persisted on the original label response
+     * (label_url in label_batch.master_label_url / label_package.label_file_path).
+     */
+    @Override
+    public LabelReprintResult reprintLabel(String trackingNumber, String labelSize, String labelFormat,
+                                            String accessToken, String environment) {
+        if (isSeraFlavor()) {
+            return reprintLabelSera(trackingNumber, labelSize, labelFormat, accessToken, environment);
+        }
+        return new LabelReprintResult(
+                CARRIER_CODE, null, null, "NOT_SUPPORTED",
+                "USPS via Stamps.com (SWSIM) has no reprint endpoint. The original label URL is "
+                        + "persisted in label_batch.master_label_url / label_package.label_file_path; "
+                        + "print from there, or flip carrier.stamps.api-flavor=SERA for a live reprint API.",
+                null);
+    }
+
+    /**
+     * SERA {@code GET /sera/v1/labels/{label_id}}. Response shape:
+     * <pre>
+     * {
+     *   "labels": [{"href": "https://..." | "BASE64..."}],
+     *   "forms":  [{"href": "https://..."}]
+     * }
+     * </pre>
+     * We request {@code label_output_type=base64} to match the persistence
+     * convention (bytes on disk survive URL expiry — see PR #550).
+     */
+    LabelReprintResult reprintLabelSera(String trackingNumber, String labelSize, String labelFormat,
+                                         String accessToken, String environment) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new LabelReprintResult(
+                    CARRIER_CODE, null, null, "NOT_SUPPORTED",
+                    "SERA reprint needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        String labelId = resolveSeraLabelId(trackingNumber);
+        if (!StringUtils.hasText(labelId)) {
+            return new LabelReprintResult(
+                    CARRIER_CODE, null, null, "ERROR",
+                    "SERA reprint needs the label_id (persisted in label_package.carrier_label_ref); "
+                            + "none found for tracking " + trackingNumber
+                            + ". Labels created before SERA support shipped can only be reprinted from the persisted label_url.",
+                    null);
+        }
+        String baseUrl = seraApiBaseUrl(environment);
+        // SERA accepts query params on GET /labels/{id}: label_size,
+        // label_format, label_output_type. Build them via a MultiValueMap
+        // so RestClient handles URL-encoding.
+        String size = normaliseSeraLabelSize(labelSize);
+        String format = normaliseSeraLabelFormat(labelFormat);
+        String url = baseUrl + "/labels/" + labelId
+                + "?label_size=" + size
+                + "&label_format=" + format
+                + "&label_output_type=base64";
+        try {
+            String response = HttpClients.newBuilder().baseUrl(url).build()
+                    .get()
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(String.class);
+            return parseSeraReprintResponse(labelId, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            String err = extractSeraError(ex.getResponseBodyAsString());
+            log.warn("Stamps SERA reprint rejected for label_id {} (HTTP {}): {}",
+                    labelId, status, err);
+            return new LabelReprintResult(
+                    CARRIER_CODE, null, null, "ERROR",
+                    "SERA reprint rejected (HTTP " + status + "): " + err,
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps SERA reprint call failed for label_id {}: {}", labelId, ex.getMessage());
+            return new LabelReprintResult(
+                    CARRIER_CODE, null, null, "ERROR",
+                    "SERA reprint call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** Parse SERA's reprint response. {@code labels[0].href} carries the
+     *  document — either a signed URL (when output_type=url) or base64
+     *  bytes (when output_type=base64). We always request base64 in
+     *  {@link #reprintLabelSera} so the bytes path is the common case,
+     *  but we tolerate the URL shape for cases where operators paste a
+     *  pre-built request. Heuristic: if the value starts with "http" we
+     *  treat as URL, otherwise as base64. */
+    LabelReprintResult parseSeraReprintResponse(String labelId, String responseJson) {
+        if (!StringUtils.hasText(responseJson)) {
+            return new LabelReprintResult(
+                    CARRIER_CODE, null, null, "ERROR",
+                    "SERA reprint returned an empty response for label_id " + labelId + ".",
+                    null);
+        }
+        try {
+            JsonNode j = objectMapper.readTree(responseJson);
+            JsonNode labels = j.path("labels");
+            if (!labels.isArray() || labels.size() == 0) {
+                return new LabelReprintResult(
+                        CARRIER_CODE, null, null, "ERROR",
+                        "SERA reprint response missing labels[]: " + safeHead(responseJson),
+                        responseJson);
+            }
+            String href = labels.get(0).path("href").asText(null);
+            if (!StringUtils.hasText(href)) {
+                return new LabelReprintResult(
+                        CARRIER_CODE, null, null, "ERROR",
+                        "SERA reprint response missing labels[0].href: " + safeHead(responseJson),
+                        responseJson);
+            }
+            String url = null;
+            String base64 = null;
+            if (href.startsWith("http://") || href.startsWith("https://")) {
+                url = href;
+            } else {
+                base64 = href;
+            }
+            return new LabelReprintResult(
+                    CARRIER_CODE, url, base64, "OK",
+                    "SERA reprint delivered label for label_id " + labelId + ".",
+                    responseJson);
+        } catch (Exception ex) {
+            return new LabelReprintResult(
+                    CARRIER_CODE, null, null, "ERROR",
+                    "SERA reprint returned malformed body: " + ex.getMessage(), responseJson);
+        }
+    }
+
+    /** Normalise a label-size input to SERA's vocabulary. Blank → 4x6
+     *  (the SERA default for thermal shipping labels). */
+    static String normaliseSeraLabelSize(String raw) {
+        if (!StringUtils.hasText(raw)) return "4x6";
+        String v = raw.trim().toLowerCase(Locale.ROOT);
+        return switch (v) {
+            case "4x6", "4x6.75-doctab", "4x8.25-doctab", "letter" -> v;
+            default -> "4x6";
+        };
+    }
+
     /** Build the SWSIM CancelIndicium SOAP envelope. */
     String buildCancelIndiciumEnvelope(String trackingNumber, String authenticator) {
         StringBuilder xml = new StringBuilder(512);
