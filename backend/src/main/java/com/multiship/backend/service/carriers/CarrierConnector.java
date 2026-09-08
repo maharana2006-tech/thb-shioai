@@ -524,6 +524,56 @@ public interface CarrierConnector {
     ) {
     }
 
+    /**
+     * Query the carrier account's prepaid postage balance. Applies to
+     * carriers that operate a prepaid model (Stamps.com / Endicia deposit
+     * an account with USPS ahead of shipping); a call-and-owe carrier
+     * (FedEx / UPS / DHL bills monthly) returns NOT_SUPPORTED with a
+     * message rather than an accidental zero.
+     *
+     * <p>Default returns NOT_SUPPORTED so this stays additive over past
+     * sprints — every existing connector inherits the honest no-op until
+     * its per-carrier balance endpoint is wired.
+     */
+    default BalanceResult getAccountBalance(String accessToken, String environment) {
+        return new BalanceResult(
+                getCarrierCode(),
+                null, null, null,
+                "NOT_SUPPORTED",
+                "Balance query isn't implemented for " + getCarrierCode() + " on this instance.",
+                null);
+    }
+
+    /**
+     * Result of a balance query.
+     *
+     * @param carrierCode      Carrier the balance belongs to.
+     * @param amountAvailable  Currently-available prepaid balance, in
+     *                         {@link #currency}. Null on NOT_SUPPORTED /
+     *                         ERROR.
+     * @param maxBalance       Maximum balance the carrier permits on the
+     *                         account (SERA sets this on prepaid accounts;
+     *                         null when the carrier doesn't cap).
+     * @param currency         ISO-4217 currency the amounts are quoted in
+     *                         ({@code USD}, {@code EUR}, …).
+     * @param status           OK | NOT_SUPPORTED | ERROR.
+     * @param message          Operator-facing summary. On NOT_SUPPORTED it
+     *                         explains why (call-and-owe carrier / API
+     *                         doesn't expose balance / …).
+     * @param rawResponse      Full carrier response for the audit trail;
+     *                         null on NOT_SUPPORTED (no call was made).
+     */
+    record BalanceResult(
+            String carrierCode,
+            BigDecimal amountAvailable,
+            BigDecimal maxBalance,
+            String currency,
+            String status,
+            String message,
+            String rawResponse
+    ) {
+    }
+
     default PickupResult schedulePickup(PickupRequest request, String accessToken, String environment) {
         return new PickupResult(
                 getCarrierCode(),
