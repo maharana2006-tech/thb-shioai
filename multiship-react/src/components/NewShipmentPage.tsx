@@ -1134,12 +1134,21 @@ export default function NewShipmentPage() {
       // PR accepts domestic Air but rejects Ground family. See
       // utils/usTerritoryServices for the validated per-territory map;
       // recipientTerritory=null falls through as pass-through.
+      //
+      // Territory-lane fix (2026-09-08): skip scopeFits on territory
+      // lanes and let the per-territory allowlist be the SOLE gate. The
+      // catalog seeds UPS Worldwide (07/08/54/65) + FedEx INTERNATIONAL_*
+      // with scope=INTERNATIONAL; with neededScope=DOMESTIC for territory
+      // lanes those services were dropped BEFORE the allowlist ran, so
+      // the picker only saw the domestic half. On non-territory lanes
+      // scopeFits stays authoritative (unchanged).
       services
-        .filter((s) => canon(s.carrier) === carrier && originMatch(s.originCountry) && scopeFits(s.scope))
+        .filter((s) => canon(s.carrier) === carrier && originMatch(s.originCountry))
+        .filter((s) => isTerritoryLane || scopeFits(s.scope))
         .filter((s) => !allowedServiceIds || allowedServiceIds.has(s.id))
         .filter((s) => isServiceAllowedForUsTerritory(recipientTerritory, carrier, s.serviceCode)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [services, carrier, sender.countryCode, neededScope, allowedServiceIds, recipientTerritory],
+    [services, carrier, sender.countryCode, neededScope, allowedServiceIds, recipientTerritory, isTerritoryLane],
   )
   // Sprint 52 PR 2 — service_package compatibility. Empty set for a
   // service means "admin hasn't linked any preset to this service yet"
@@ -1154,8 +1163,15 @@ export default function NewShipmentPage() {
 
   const packagesForCarrier = useMemo(
     () =>
+      // Territory-lane fix (2026-09-08): mirror the servicesForCarrier
+      // rule — skip scopeFits when the recipient is a US territory so
+      // INTERNATIONAL-scoped carrier packages (needed for the intl
+      // service family that PR/VI/etc. actually accept) stay visible.
+      // The service_package linkage below is still the authoritative
+      // per-service package gate.
       packages
-        .filter((p) => p.kind === 'CARRIER' && canon(p.carrier) === carrier && originMatch(p.originCountry) && scopeFits(p.scope))
+        .filter((p) => p.kind === 'CARRIER' && canon(p.carrier) === carrier && originMatch(p.originCountry))
+        .filter((p) => isTerritoryLane || scopeFits(p.scope))
         .filter((p) => !allowedPackageIds || p.id == null || allowedPackageIds.has(p.id))
         // Sprint 52 PR 2 — hide CARRIER presets not linked to the picked
         // service. CUSTOM presets ("Your boxes") are in a separate memo
@@ -1163,7 +1179,7 @@ export default function NewShipmentPage() {
         // via the kind=CUSTOM short-circuit). Null set = no filter.
         .filter((p) => !compatiblePresetIdsForService || p.id == null || compatiblePresetIdsForService.has(p.id)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [packages, carrier, sender.countryCode, neededScope, allowedPackageIds, compatiblePresetIdsForService],
+    [packages, carrier, sender.countryCode, neededScope, allowedPackageIds, compatiblePresetIdsForService, isTerritoryLane],
   )
   const customBoxes = useMemo(
     () =>
