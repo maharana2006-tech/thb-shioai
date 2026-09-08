@@ -585,4 +585,95 @@ class FedExConnectorPayloadTest {
         assertNull(contact.get("emailAddress"),
                 "blank shipperEmail must NOT add an emailAddress key on the wire");
     }
+
+    // ===== customsClearanceDetail.customsValue guard (US->PR "Customs Value is required" fix) =====
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void customsValue_falls_back_to_declaredValue_when_commodity_sum_zero() throws Exception {
+        // US -> PR (via UsTerritoryNormalizer) intl block populated but every
+        // commodity has a null unitValue (operator entered descriptions/HS
+        // codes but skipped prices). The pre-fix path emitted customsValue=0
+        // and FedEx rejected with "Customs Value is required". Post-fix,
+        // buildCustomsClearanceDetail falls back to request.declaredValue.
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientCountryCode("PR");
+        r.setRecipientState("");
+        r.setRecipientPostalCode("00901");
+        r.setDeclaredValue(new BigDecimal("250.00"));
+        r.setDeclaredValueCurrency("USD");
+        IntlShipmentBlockDTO intl = IntlShipmentBlockDTO.builder()
+                .international(true)
+                .incoterms("DAP")
+                .customsCurrency("USD")
+                // customsTotalValue intentionally null — populator couldn't
+                // compute one because no unit values were entered.
+                .reasonForExport("SALE")
+                .weightUnit("LB")
+                .commodities(List.of(CustomsCommodityDTO.builder()
+                        .description("Sample widget")
+                        .quantity(2)
+                        // .unitValue(null) — the exact bug condition
+                        .build()))
+                .build();
+        r.setIntl(intl);
+
+        Map<String, Object> ccd = (Map<String, Object>) requestedShipment(r).get("customsClearanceDetail");
+        Map<String, Object> cv = (Map<String, Object>) ccd.get("customsValue");
+        assertEquals(new BigDecimal("250.00"), cv.get("amount"),
+                "commodity sum is 0; declaredValue must fill the customs value slot");
+        assertEquals("USD", cv.get("currency"));
+    }
+
+    @Test
+    void customsValue_throws_actionable_message_when_sum_and_declaredValue_both_zero() {
+        // The exact operator-facing error path: US -> PR, commodities entered
+        // without unit values, declared value 0. Pre-fix: FedEx 400 with
+        // "Customs Value is required. Please update and try again." (opaque).
+        // Post-fix: IllegalArgumentException naming the two fields that
+        // would fix it (unit value OR declared value).
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientCountryCode("PR");
+        r.setRecipientState("");
+        r.setRecipientPostalCode("00901");
+        r.setDeclaredValue(BigDecimal.ZERO);
+        r.setReferenceNumber("MAN12345");
+        IntlShipmentBlockDTO intl = IntlShipmentBlockDTO.builder()
+                .international(true)
+                .incoterms("DAP")
+                .customsCurrency("USD")
+                .reasonForExport("SALE")
+                .weightUnit("LB")
+                .commodities(List.of(CustomsCommodityDTO.builder()
+                        .description("Sample widget")
+                        .quantity(2)
+                        .build()))
+                .build();
+        r.setIntl(intl);
+
+        IllegalArgumentException ex = expectBlankAccountThrow(() -> requestedShipment(r));
+        String msg = ex.getMessage();
+        assertTrue(msg.contains("MAN12345"),
+                "must name the order for triage; got: " + msg);
+        assertTrue(msg.contains("unit value") || msg.contains("Declared Value"),
+                "must name the field the operator needs to fill; got: " + msg);
+        assertTrue(msg.contains("Customs Value"),
+                "must reference the exact FedEx error text so ops can grep; got: " + msg);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void customsValue_prefers_commodity_sum_over_declaredValue() throws Exception {
+        // Commodity sum is the invoice authority; declaredValue is the
+        // fallback. When both are present the sum wins so the customs
+        // block, the commercial invoice, and the per-line customsValue
+        // entries all agree on the same total.
+        ShipmentRequestDTO r = baseRequest();
+        r.setDeclaredValue(new BigDecimal("999.00")); // deliberately different
+        r.setIntl(baseIntl()); // 10 x 50 = 500 commodity sum
+        Map<String, Object> ccd = (Map<String, Object>) requestedShipment(r).get("customsClearanceDetail");
+        Map<String, Object> cv = (Map<String, Object>) ccd.get("customsValue");
+        assertEquals(new BigDecimal("500.00"), cv.get("amount"),
+                "commodity sum must win; declaredValue is fallback only");
+    }
 }
