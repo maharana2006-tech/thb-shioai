@@ -865,7 +865,9 @@ export default function OrdersWorkspace() {
       // chip columns read as duplicates side by side). Source chip (M/A/B)
       // first, channel chip (D/B) beside it when the order is classified.
       // Full labels preserved on hover; server folds WMS/ERP/legacy into API.
-      size: 64,
+      // Channel is spelled out (B2B / D2C) — a lone "B" / "D" was read as
+      // unclassified.
+      size: 92,
       cell: ({ row }) => {
         const s = (row.original.orderDetails.source || 'API').toUpperCase()
         const sTone: Record<string, string> = {
@@ -894,9 +896,10 @@ export default function OrdersWorkspace() {
             {classified ? (
               <span
                 title={c === 'B2B' ? 'B2B — business-to-business shipment' : 'D2C — direct-to-consumer shipment'}
-                className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ring-1 ${cTone}`}
+                data-testid="order-channel-chip"
+                className={`inline-flex h-5 items-center rounded-full px-1.5 text-[9px] font-bold uppercase tracking-wide ring-1 ${cTone}`}
               >
-                {c.charAt(0)}
+                {c}
               </span>
             ) : null}
           </span>
