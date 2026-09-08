@@ -108,7 +108,12 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                 ELSE 'API'
             END as order_source,
             b.batch_id,
-            b.order_channel
+            COALESCE(b.order_channel, CASE
+                WHEN NULLIF(BTRIM(b.ship_attn), '') IS NOT NULL
+                 AND NULLIF(BTRIM(b.ship_name), '') IS NOT NULL
+                 AND LOWER(BTRIM(b.ship_attn)) <> LOWER(BTRIM(b.ship_name)) THEN 'B2B'
+                ELSE 'D2C'
+            END) as order_channel
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
@@ -302,7 +307,12 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                        THEN UPPER(COALESCE(b.order_source, CASE WHEN b.is_manual = 'Y' THEN 'MANUAL' ELSE 'API' END))
                      ELSE 'API'
                    END) = :source)
-          AND (:channel = '' OR UPPER(COALESCE(b.order_channel, '')) = :channel)
+          AND (:channel = '' OR UPPER(COALESCE(b.order_channel, CASE
+              WHEN NULLIF(BTRIM(b.ship_attn), '') IS NOT NULL
+               AND NULLIF(BTRIM(b.ship_name), '') IS NOT NULL
+               AND LOWER(BTRIM(b.ship_attn)) <> LOWER(BTRIM(b.ship_name)) THEN 'B2B'
+              ELSE 'D2C'
+          END)) = :channel)
           AND (:resolution = ''
                OR (:resolution = 'READY' AND """ + RESOLUTION_READY_SQL + """
                )
@@ -341,7 +351,12 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                 ELSE 'API'
             END as order_source,
             b.batch_id,
-            b.order_channel
+            COALESCE(b.order_channel, CASE
+                WHEN NULLIF(BTRIM(b.ship_attn), '') IS NOT NULL
+                 AND NULLIF(BTRIM(b.ship_name), '') IS NOT NULL
+                 AND LOWER(BTRIM(b.ship_attn)) <> LOWER(BTRIM(b.ship_name)) THEN 'B2B'
+                ELSE 'D2C'
+            END) as order_channel
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
