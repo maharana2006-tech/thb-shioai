@@ -129,8 +129,18 @@ public class ShipmentValidationService {
                     from.getCountryCode(), from.getPostalCode(), from.getState(), "sender"));
         }
 
-        String senderCountry = from != null ? normCountry(from.getCountryCode()) : null;
-        String recipientCountry = normCountry(to.getCountryCode());
+        // Normalize US territories BEFORE the international check —
+        // operator entering country=US + state=PR is really international
+        // per the carriers' routing (UsTerritoryNormalizer rewrites the
+        // wire payload the same way). Pre-fix, this service returned
+        // intl=false so the customs check was skipped and no intl block
+        // reached the connector, which then hit UPS 120502 on the wire.
+        String senderCountry = from != null ? normCountry(
+                com.multiship.backend.util.UsTerritoryNormalizer.normalizeCountryCode(
+                        from.getCountryCode(), from.getState())) : null;
+        String recipientCountry = normCountry(
+                com.multiship.backend.util.UsTerritoryNormalizer.normalizeCountryCode(
+                        to.getCountryCode(), to.getState()));
         boolean international = isInternational(senderCountry, recipientCountry);
 
         // ─── Ship-to allowlist gate (clientCode-scoped) ─────────────────────
@@ -429,8 +439,15 @@ public class ShipmentValidationService {
         if (req.getRecipient() != null && StringUtils.hasText(req.getRecipient().getCountryCode())) {
             // Reuse the same intl block adaptForValidators computed —
             // avoids duplicating the commodities mapping.
-            String senderCountry = req.getSender() != null ? req.getSender().getCountryCode() : null;
-            String recipientCountry = req.getRecipient().getCountryCode();
+            // Same territory-normalization rationale as line 132-137 —
+            // US territory state → territory country for the intl check.
+            String senderCountry = req.getSender() != null
+                    ? com.multiship.backend.util.UsTerritoryNormalizer.normalizeCountryCode(
+                            req.getSender().getCountryCode(), req.getSender().getState())
+                    : null;
+            String recipientCountry = com.multiship.backend.util.UsTerritoryNormalizer
+                    .normalizeCountryCode(req.getRecipient().getCountryCode(),
+                            req.getRecipient().getState());
             com.multiship.backend.dto.ShipmentRequestDTO withIntl = adaptForValidators(
                     req, isInternational(senderCountry, recipientCountry));
             adaptedRequest.setIntl(withIntl.getIntl());
