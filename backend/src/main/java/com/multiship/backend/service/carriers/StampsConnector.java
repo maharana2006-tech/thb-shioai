@@ -97,6 +97,14 @@ public class StampsConnector implements CarrierConnector {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.CarrierPackageCatalogRepository packageCatalogRepository;
 
+    /** Field injection — same pattern as {@link #packageCatalogRepository}.
+     *  Required by the SERA void + reprint paths to resolve a
+     *  {@code label_id} from a tracking number (SERA voids by label_id,
+     *  not by tracking, so the DB lookup bridges the two). Tests that
+     *  drive SERA branches directly can set the field via reflection. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
+
     /** Per-thread reason the last getAccessToken fell back — read by verify. */
     private static final ThreadLocal<String> LAST_AUTH_DETAIL = new ThreadLocal<>();
 
@@ -806,25 +814,49 @@ public class StampsConnector implements CarrierConnector {
         return aggregateStampsShipmentResults(perPackage);
     }
 
-    /** Best-effort rollback for SERA. PR 2 will implement void by
-     *  {@code label_id}; until then this is a no-op stub that logs the
-     *  labels the operator will need to void manually. */
+    /**
+     * Best-effort rollback for SERA — voids every already-created piece
+     * by its {@code label_id}. Same compensating-transaction pattern as
+     * {@link #rollbackSuccessfulPieces} (the SWSIM path), except we call
+     * SERA's {@code /labels/{label_id}/void} directly instead of going
+     * through the tracking-based path (piece rows haven't been persisted
+     * to {@code label_package} yet at rollback time, so
+     * {@link #resolveSeraLabelId} would return null — bypass the DB and
+     * use the label_id we already have from the create response).
+     */
     void rollbackSuccessfulPiecesSera(java.util.List<ShipmentResult> succeeded,
                                        String accessToken, String environment) {
         if (succeeded == null || succeeded.isEmpty()) return;
-        StringBuilder ids = new StringBuilder();
-        for (ShipmentResult r : succeeded) {
+        log.warn("Stamps SERA MPS partial failure: rolling back {} successful piece(s) via /labels/{{label_id}}/void.",
+                succeeded.size());
+        String baseUrl;
+        try {
+            baseUrl = seraApiBaseUrl(environment);
+        } catch (Exception ex) {
+            log.warn("Stamps SERA rollback: cannot resolve base URL ({}), skipping — "
+                    + "operator must void the pieces manually.", ex.getMessage());
+            return;
+        }
+        for (ShipmentResult piece : succeeded) {
             String labelId = null;
-            if (r.packages() != null && !r.packages().isEmpty()) {
-                labelId = r.packages().get(0).carrierLabelRef();
+            if (piece != null && piece.packages() != null && !piece.packages().isEmpty()) {
+                labelId = piece.packages().get(0).carrierLabelRef();
             }
-            if (StringUtils.hasText(labelId)) {
-                if (ids.length() > 0) ids.append(", ");
-                ids.append(labelId);
+            if (!StringUtils.hasText(labelId)) continue;
+            try {
+                HttpClients.newBuilder().baseUrl(baseUrl + "/labels/" + labelId + "/void").build()
+                        .post()
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .retrieve()
+                        .body(String.class);
+            } catch (Exception cancelEx) {
+                // Log and continue — see the SWSIM rollback pattern for
+                // why we don't propagate cancel failures.
+                log.warn("Stamps SERA rollback void failed for label_id {}: {}",
+                        labelId, cancelEx.getMessage());
             }
         }
-        log.warn("Stamps SERA MPS partial failure: manual void needed for label_id(s) [{}] — "
-                + "SERA void by label_id lands in follow-up PR.", ids);
     }
 
     /** Resolve the SERA REST base URL for the given environment. Falls back
@@ -1541,7 +1573,18 @@ public class StampsConnector implements CarrierConnector {
     @Override
     public VoidResult voidShipment(String trackingNumber, String accessToken, String environment,
                                     String accountNumber, String senderCountryCode) {
-        // Stamps cancel doesn't need accountNumber/senderCountry — kept for signature parity.
+        if (isSeraFlavor()) {
+            return voidShipmentSera(trackingNumber, accessToken, environment);
+        }
+        return voidShipmentSwsim(trackingNumber, accessToken, environment);
+    }
+
+    /**
+     * SWSIM {@code CancelIndicium} path — legacy. Unchanged from the
+     * pre-SERA behaviour. Both accountNumber and senderCountryCode are
+     * ignored (SWSIM keys off the Authenticator token).
+     */
+    VoidResult voidShipmentSwsim(String trackingNumber, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "USPS void needs live credentials; the account is on a fallback token.",
@@ -1570,6 +1613,118 @@ public class StampsConnector implements CarrierConnector {
             return new VoidResult(trackingNumber, false, "ERROR",
                     "SWSIM CancelIndicium call failed: " + ex.getMessage(), null);
         }
+    }
+
+    /**
+     * SERA {@code POST /sera/v1/labels/{label_id}/void} — cancels a label
+     * SERA previously issued. Idempotent: voiding an already-voided label
+     * returns success. Post-scan cancels succeed but SERA won't refund
+     * postage.
+     *
+     * <p>Tracking-vs-label_id resolution: SERA keys the void call off the
+     * {@code label_id} UUID returned from {@code POST /sera/v1/labels}, NOT
+     * the tracking number. We look up {@code label_id} from
+     * {@code label_package.carrier_label_ref} (persisted by PR 1's V44
+     * migration) using the tracking as the search key.
+     */
+    VoidResult voidShipmentSera(String trackingNumber, String accessToken, String environment) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
+                    "USPS via Stamps.com (SERA) void needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        String labelId = resolveSeraLabelId(trackingNumber);
+        if (!StringUtils.hasText(labelId)) {
+            // SERA can't void by tracking — without the UUID from the create
+            // response, the call has no legal input shape. Surface an
+            // actionable message so operators know why the void didn't
+            // fire (typical cause: label was created BEFORE PR 1's V44
+            // rolled out, so carrier_label_ref is null).
+            log.warn("Stamps SERA void: no carrier_label_ref persisted for tracking {} — cannot call /labels/{{label_id}}/void.",
+                    trackingNumber);
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "SERA void needs the label_id (persisted in label_package.carrier_label_ref); "
+                            + "none found for tracking " + trackingNumber
+                            + ". Labels created before SERA support shipped can only be voided manually via the Stamps.com dashboard.",
+                    null);
+        }
+        String baseUrl = seraApiBaseUrl(environment);
+        try {
+            // SERA's void endpoint is POST (per developer.stamps.com/rest-api/reference/serav1.html);
+            // some third-party clients document PUT — verified against the
+            // referenced JSON body which shows "POST /sera/v1/labels/{label_id}/void".
+            String response = HttpClients.newBuilder()
+                    .baseUrl(baseUrl + "/labels/" + labelId + "/void").build()
+                    .post()
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(String.class);
+            return parseSeraVoidResponse(trackingNumber, labelId, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            String err = extractSeraError(ex.getResponseBodyAsString());
+            // 404 on a legit label_id usually means already voided — treat
+            // as ALREADY_VOIDED (idempotent semantics the interface doc
+            // promises) rather than a real error.
+            if (status == 404) {
+                log.info("Stamps SERA void: label_id {} not found (already voided?) — returning ALREADY_VOIDED.",
+                        labelId);
+                return new VoidResult(trackingNumber, true, "ALREADY_VOIDED",
+                        "SERA reported label_id " + labelId + " as not found — treating as already voided.",
+                        ex.getResponseBodyAsString());
+            }
+            log.warn("Stamps SERA void rejected for label_id {} (HTTP {}): {}",
+                    labelId, status, err);
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "SERA void rejected (HTTP " + status + "): " + err,
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps SERA void call failed for label_id {}: {}", labelId, ex.getMessage());
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "SERA void call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** Resolve the SERA {@code label_id} for a tracking number by reading
+     *  {@code label_package.carrier_label_ref} (V44). Returns null when the
+     *  repository isn't wired (unit tests) or no row matches. */
+    String resolveSeraLabelId(String trackingNumber) {
+        if (!StringUtils.hasText(trackingNumber) || labelPackageRepository == null) return null;
+        return labelPackageRepository.findByTrackingNumber(trackingNumber)
+                .map(com.multiship.backend.model.LabelPackage::getCarrierLabelRef)
+                .filter(StringUtils::hasText)
+                .orElse(null);
+    }
+
+    /**
+     * Parse SERA's void response. The documented success shape is
+     * {@code {"status": "success"}} but the endpoint may return a
+     * plain 200 with no body — treat both as VOIDED. Non-200 paths land
+     * in the RestClientResponseException branch above.
+     */
+    VoidResult parseSeraVoidResponse(String trackingNumber, String labelId, String responseJson) {
+        // Empty body on 200 → success (SERA's success responses are minimal).
+        if (!StringUtils.hasText(responseJson)) {
+            return new VoidResult(trackingNumber, true, "VOIDED",
+                    "SERA confirmed void for label_id " + labelId + ".", null);
+        }
+        try {
+            JsonNode j = objectMapper.readTree(responseJson);
+            String status = j.path("status").asText(null);
+            // Explicit non-success status → surface as ERROR.
+            if (StringUtils.hasText(status) && !"success".equalsIgnoreCase(status)) {
+                return new VoidResult(trackingNumber, false, "ERROR",
+                        "SERA void status=" + status + ": " + extractSeraError(responseJson),
+                        responseJson);
+            }
+        } catch (Exception parseIgnored) {
+            // Non-JSON 200 body — treat as success (SERA's own error paths
+            // 4xx/5xx which are handled above; a 200 with weird body is
+            // reliably success).
+        }
+        return new VoidResult(trackingNumber, true, "VOIDED",
+                "SERA confirmed void for label_id " + labelId + ".", responseJson);
     }
 
     /** Build the SWSIM CancelIndicium SOAP envelope. */
