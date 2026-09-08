@@ -1,6 +1,7 @@
 package com.multiship.backend.util;
 
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -24,6 +25,14 @@ import java.util.Set;
  *   <li>MP — Northern Mariana Islands</li>
  *   <li>UM — US Minor Outlying Islands</li>
  * </ul>
+ *
+ * <p>Also exposes a per-territory service allowlist ({@link
+ * #isServiceAllowedForTerritory}) — every territory is served by a
+ * different subset of carrier services (VI accepts UPS Worldwide only;
+ * PR accepts UPS domestic Air AND Worldwide; ground family serves none
+ * of them). Mirrors {@code multiship-react/src/utils/usTerritoryServices.ts}
+ * on the FE — keep the two in sync or the FE will show an operator a
+ * service the backend rejects a hop later.
  */
 public final class UsTerritoryNormalizer {
 
@@ -33,6 +42,49 @@ public final class UsTerritoryNormalizer {
      *  helper resolves. */
     public static final Set<String> US_TERRITORY_CODES = Set.of(
             "PR", "VI", "GU", "AS", "MP", "UM");
+
+    /** UPS service codes that deliver to Puerto Rico from a US-mainland
+     *  origin. Includes domestic Air family (UPS bills PR at domestic
+     *  rates but still accepts Worldwide codes for the same lane).
+     *  Denied: 03 Ground, 11 Standard, 12 3 Day Select. */
+    private static final Set<String> UPS_ALLOWED_PR = Set.of(
+            "01", "02", "13", "14", "59",   // Domestic Air
+            "07", "08", "54", "65");         // Worldwide family
+
+    /** UPS service codes that deliver to the other five US territories
+     *  (VI/GU/AS/MP/UM). Only Worldwide-family — domestic Air is what
+     *  triggers UPS error 121100 "service invalid for origin". */
+    private static final Set<String> UPS_ALLOWED_INTL = Set.of(
+            "07", "08", "54", "65");
+
+    /** FedEx service codes that deliver to Puerto Rico. Domestic
+     *  Express family plus intl-family — FedEx requires an intl service
+     *  selection at domestic rates for PR customs clearance. */
+    private static final Set<String> FEDEX_ALLOWED_PR = Set.of(
+            "FIRST_OVERNIGHT", "PRIORITY_OVERNIGHT", "STANDARD_OVERNIGHT",
+            "FEDEX_2_DAY", "FEDEX_2_DAY_AM", "FEDEX_EXPRESS_SAVER",
+            "INTERNATIONAL_PRIORITY", "INTERNATIONAL_ECONOMY",
+            "INTERNATIONAL_FIRST", "INTERNATIONAL_PRIORITY_EXPRESS");
+
+    /** FedEx service codes for VI/GU/AS/MP/UM — intl-family only. */
+    private static final Set<String> FEDEX_ALLOWED_INTL = Set.of(
+            "INTERNATIONAL_PRIORITY", "INTERNATIONAL_ECONOMY",
+            "INTERNATIONAL_FIRST", "INTERNATIONAL_PRIORITY_EXPRESS");
+
+    /** Legacy ground-family denylist. Fallback for carriers with no
+     *  validated per-territory allowlist (currently DHL + USPS). */
+    private static final Set<String> GROUND_FAMILY_DENIED = Set.of(
+            "FEDEX_GROUND", "GROUND_HOME_DELIVERY", "SMART_POST",
+            "03", "11", "12");
+
+    /** Territory → carrier → allowed-service-code set. */
+    private static final Map<String, Map<String, Set<String>>> ALLOWLIST = Map.of(
+            "PR", Map.of("UPS", UPS_ALLOWED_PR,   "FEDEX", FEDEX_ALLOWED_PR),
+            "VI", Map.of("UPS", UPS_ALLOWED_INTL, "FEDEX", FEDEX_ALLOWED_INTL),
+            "GU", Map.of("UPS", UPS_ALLOWED_INTL, "FEDEX", FEDEX_ALLOWED_INTL),
+            "AS", Map.of("UPS", UPS_ALLOWED_INTL, "FEDEX", FEDEX_ALLOWED_INTL),
+            "MP", Map.of("UPS", UPS_ALLOWED_INTL, "FEDEX", FEDEX_ALLOWED_INTL),
+            "UM", Map.of("UPS", UPS_ALLOWED_INTL, "FEDEX", FEDEX_ALLOWED_INTL));
 
     private UsTerritoryNormalizer() {
         // static-only
@@ -64,5 +116,37 @@ public final class UsTerritoryNormalizer {
             return state.trim().toUpperCase(Locale.ROOT);
         }
         return country;
+    }
+
+    /**
+     * Fast-fail check: is {@code serviceCode} deliverable to
+     * {@code territory} on {@code carrier}?
+     *
+     * <ul>
+     *   <li>{@code territory} not in {@link #US_TERRITORY_CODES} → true
+     *       (no filter — this isn't a territory lane).</li>
+     *   <li>Territory has a validated per-carrier allowlist → the code
+     *       must be in it.</li>
+     *   <li>Territory has no per-carrier allowlist (DHL / USPS) → fall
+     *       back to legacy ground-family denylist.</li>
+     * </ul>
+     *
+     * Runs pre-wire on the manual label path so operators get an
+     * actionable "VI needs Worldwide services" error instead of the
+     * carrier's cryptic {@code 121100} several seconds later.
+     */
+    public static boolean isServiceAllowedForTerritory(
+            String territory, String carrier, String serviceCode) {
+        if (territory == null || carrier == null || serviceCode == null) return true;
+        String t = territory.trim().toUpperCase(Locale.ROOT);
+        if (!US_TERRITORY_CODES.contains(t)) return true;
+        String c = carrier.trim().toUpperCase(Locale.ROOT);
+        String s = serviceCode.trim();
+        Map<String, Set<String>> perCarrier = ALLOWLIST.get(t);
+        Set<String> allow = perCarrier == null ? null : perCarrier.get(c);
+        if (allow != null) return allow.contains(s);
+        // No validated allowlist for this carrier — legacy ground-hide
+        // fallback keeps behavior stable for DHL / USPS.
+        return !GROUND_FAMILY_DENIED.contains(s);
     }
 }
