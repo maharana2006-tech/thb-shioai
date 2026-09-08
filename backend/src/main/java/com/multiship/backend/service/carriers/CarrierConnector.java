@@ -746,8 +746,24 @@ public interface CarrierConnector {
             String trackingUrl,
             String labelUrl,
             String labelPdf,
-            BigDecimal netCharge
+            BigDecimal netCharge,
+            /**
+             * Carrier-side label identifier that isn't the tracking
+             * number — e.g. Stamps.com / Endicia SERA {@code label_id}
+             * UUID that void + reprint key off. Null for carriers that
+             * void/reprint by tracking (SWSIM, FedEx, UPS, DHL). See
+             * {@link com.multiship.backend.model.LabelPackage#getCarrierLabelRef()}
+             * for the persistence column that stores it.
+             */
+            String carrierLabelRef
     ) {
+        /** Backwards-compatible 6-arg constructor for connectors that
+         *  don't carry a separate carrier-side label ref (SWSIM, FedEx,
+         *  UPS, DHL). Preserves every existing call site. */
+        public PackageTracking(int sequenceNumber, String trackingNumber, String trackingUrl,
+                                String labelUrl, String labelPdf, BigDecimal netCharge) {
+            this(sequenceNumber, trackingNumber, trackingUrl, labelUrl, labelPdf, netCharge, null);
+        }
     }
 
     /**

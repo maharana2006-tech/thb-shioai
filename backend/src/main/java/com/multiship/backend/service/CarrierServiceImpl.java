@@ -763,6 +763,12 @@ public class CarrierServiceImpl implements CarrierService {
                         .declaredValue(p.getDeclaredValue())
                         .reference(p.getReference())
                         .description(p.getDescription())
+                        // SERA — persist carrier-side label id when the
+                        // connector populated it. Null for every carrier
+                        // that voids/reprints by tracking (SWSIM, FedEx,
+                        // UPS, DHL). Enables PR 2 (SERA void) + PR 5
+                        // (SERA reprint) to key off the id from the DB.
+                        .carrierLabelRef(pieceMatch != null ? pieceMatch.carrierLabelRef() : null)
                         .createdAt(now)
                         .updatedAt(now)
                         .build());
@@ -1714,6 +1720,12 @@ public class CarrierServiceImpl implements CarrierService {
                         .declaredValue(p.getDeclaredValue() != null ? p.getDeclaredValue() : req.getDeclaredValue())
                         .reference(p.getReference())
                         .description(p.getDescription())
+                        // SERA — persist carrier-side label id when the
+                        // connector populated it. Null for every carrier
+                        // that voids/reprints by tracking (SWSIM, FedEx,
+                        // UPS, DHL). Enables PR 2 (SERA void) + PR 5
+                        // (SERA reprint) to key off the id from the DB.
+                        .carrierLabelRef(pieceMatch != null ? pieceMatch.carrierLabelRef() : null)
                         .createdAt(now)
                         .updatedAt(now)
                         .build();
