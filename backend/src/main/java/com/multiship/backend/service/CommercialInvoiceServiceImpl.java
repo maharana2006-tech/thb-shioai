@@ -149,6 +149,9 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     private record Line(int no, String description, String sku, String hs, String origin, int qty,
                         String netWeight, boolean netEstimated, BigDecimal net, BigDecimal unit, BigDecimal amount) {}
 
+    /** One physical piece of a multi-package shipment (label_package row). */
+    private record Pkg(int seq, String tracking, String packaging, String dims, String weight, String contents) {}
+
     /** Everything the renderer needs, resolved once. */
     private record Model(Order order, OrderCustoms customs, Client client,
                          String exporterName, Party exporter, Party consignee, Party importer, Party broker,
@@ -156,7 +159,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                          int packages, int totalQty, BigDecimal gross, String grossUnit,
                          BigDecimal net, boolean netEstimated, String lineUnit,
                          Set<String> origins, BigDecimal goods, BigDecimal freight, String freightNote,
-                         String notes, String signerName, String stamp) {}
+                         String notes, String signerName, String stamp, List<Pkg> pieces) {}
 
     @Override
     public byte[] render(Integer orderNo) {
@@ -311,7 +314,8 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         String stamp = STAMP_FMT.format(LocalDateTime.now());
         return new Model(order, customs, client, exporterName, exporter, consignee, importer, broker,
                 meta, lines, currency.toUpperCase(), packages, totalQty, gross, grossUnit, net, anyEstimated, lineUnit,
-                origins, goods, freight, freightNote, safe(customs.getNotes()).trim(), signer, stamp);
+                origins, goods, freight, freightNote, safe(customs.getNotes()).trim(), signer, stamp,
+                packages > 1 ? pieces(order, items) : List.of());
     }
 
     /**
@@ -370,6 +374,64 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             else out.append(u.charAt(0)).append(u.substring(1).toLowerCase(Locale.ROOT));
         }
         return out.toString();
+    }
+
+    /**
+     * Per-piece annex for multi-package shipments — 19 CFR 141.86(e) wants
+     * the contents of each package; carriers want the piece tracking numbers
+     * on the paperwork. Contents come from the customs items' box index
+     * (boxSeq); pieces with no assigned lines print "-".
+     */
+    private List<Pkg> pieces(Order order, List<OrderCustomsItem> items) {
+        if (labelPackageRepository == null || order.getOrderNo() == null) return List.of();
+        List<com.multiship.backend.model.LabelPackage> rows =
+                labelPackageRepository.findByOrderNoOrderBySequenceNumberAsc(order.getOrderNo());
+        if (rows == null || rows.isEmpty()) return List.of();
+        Map<Integer, List<Integer>> linesByBox = new java.util.HashMap<>();
+        for (int i = 0; i < items.size(); i++) {
+            Integer box = items.get(i).getBoxSeq();
+            if (box != null) linesByBox.computeIfAbsent(box, k -> new ArrayList<>()).add(i + 1);
+        }
+        List<Pkg> out = new ArrayList<>(rows.size());
+        int n = 0;
+        for (com.multiship.backend.model.LabelPackage r : rows) {
+            n++;
+            int seq = r.getSequenceNumber() == null ? n : r.getSequenceNumber();
+            String dims = (r.getLength() != null && r.getWidth() != null && r.getHeight() != null)
+                    ? plain(r.getLength()) + " x " + plain(r.getWidth()) + " x " + plain(r.getHeight())
+                      + " " + firstNonBlank(r.getDimUnit(), "").toUpperCase(Locale.ROOT)
+                    : "-";
+            String weight = r.getWeight() == null ? "-"
+                    : plain(r.getWeight()) + " " + firstNonBlank(r.getWeightUnit(), order.getWeightUnit(), "").toUpperCase(Locale.ROOT);
+            String packaging = hasText(r.getPackageType())
+                    ? titleCase(r.getPackageType().replace('_', ' ')) : "-";
+            List<Integer> ls = linesByBox.get(seq);
+            String contents = ls == null || ls.isEmpty() ? "-" : "Lines " + compactRanges(ls);
+            out.add(new Pkg(seq, firstNonBlank(r.getTrackingNumber(), "-"), packaging, dims.trim(), weight.trim(), contents));
+        }
+        return out;
+    }
+
+    private static String plain(BigDecimal v) {
+        return v.stripTrailingZeros().scale() <= 0 ? v.stripTrailingZeros().toPlainString()
+                : v.setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+    }
+
+    /** [1,2,3,7,9,10] → "1-3, 7, 9-10". */
+    private static String compactRanges(List<Integer> sorted) {
+        List<Integer> xs = new ArrayList<>(sorted);
+        java.util.Collections.sort(xs);
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (i < xs.size()) {
+            int start = xs.get(i), end = start;
+            while (i + 1 < xs.size() && xs.get(i + 1) == end + 1) { end = xs.get(++i); }
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(start);
+            if (end != start) sb.append('-').append(end);
+            i++;
+        }
+        return sb.toString();
     }
 
     private ClientCustomsProfile resolveProfile(String clientCode, String destCountry) {
@@ -563,6 +625,10 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
     // Rendering
     // =====================================================================
 
+    /** One placeable row of the body: an item, a package, or a section header. */
+    private interface RowDrawer { float draw(Pen pen, float y) throws IOException; }
+    private record Row(String section, boolean header, float height, RowDrawer drawer) {}
+
     private byte[] renderPdf(Model m) {
         try (PDDocument doc = new PDDocument();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
@@ -572,9 +638,31 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             float pageH = pageSize.getHeight();
             float contentW = pageW - 2 * MARGIN;
             Table table = new Table(MARGIN, contentW, m.lineUnit());
+            PkgTable pkgTable = new PkgTable(MARGIN, contentW);
 
-            // Pass 1 — measure the fixed blocks with a dry pen, then place
-            // rows page by page so the closing block always fits on the last.
+            // The body is a flat list of rows: items header, items, then (for a
+            // multi-piece shipment) the packages header and one row per piece.
+            // Section headers repeat at the top of every page they continue on.
+            List<Row> rows = new ArrayList<>();
+            rows.add(new Row("items", true, table.headerH(), table::drawHeader));
+            int lastItemRow = -1;
+            for (int i = 0; i < m.lines().size(); i++) {
+                Line ln = m.lines().get(i);
+                boolean zebra = i % 2 == 1;
+                rows.add(new Row("items", false, ROW_H, (pen, y) -> table.drawRow(pen, y, ln, zebra)));
+                lastItemRow = rows.size() - 1;
+            }
+            if (!m.pieces().isEmpty()) {
+                rows.add(new Row("pkgs", true, pkgTable.headerH(), pkgTable::drawHeader));
+                for (int i = 0; i < m.pieces().size(); i++) {
+                    Pkg pk = m.pieces().get(i);
+                    boolean zebra = i % 2 == 1;
+                    rows.add(new Row("pkgs", false, ROW_H, (pen, y) -> pkgTable.drawRow(pen, y, pk, zebra)));
+                }
+            }
+
+            // Pass 1 — measure the fixed blocks with a dry pen, then place rows
+            // page by page so the closing block always fits on the last page.
             Pen dry = new Pen(null);
             float firstHeaderH = drawFirstHeader(dry, m, pageW, pageH);
             float contHeaderH = drawContinuationHeader(dry, m, pageW, pageH);
@@ -585,37 +673,42 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             List<int[]> pages = new ArrayList<>();
             int start = 0;
             int idx = 0;
-            float y = pageH - MARGIN - firstHeaderH - table.headerH();
-            int rows = m.lines().size();
-            while (idx < rows) {
-                boolean lastRow = idx == rows - 1;
-                float reserve = lastRow ? closingH + carryH : carryH + ROW_H;
-                if (y - ROW_H < bottom + reserve) {
-                    if (idx == start) {
-                        // A page that cannot hold even one row: emit it empty
-                        // rather than loop forever (pathologically tall closing).
-                        idx++;
-                    }
+            float y = pageH - MARGIN - firstHeaderH;
+            while (idx < rows.size()) {
+                Row r = rows.get(idx);
+                boolean isItem = "items".equals(r.section()) && !r.header();
+                boolean lastRow = idx == rows.size() - 1;
+                float reserve = (isItem ? carryH : 0f) + (lastRow ? closingH : 0f);
+                float need = r.height();
+                // Never strand a section header at the foot of a page.
+                if (r.header() && idx + 1 < rows.size()) need += rows.get(idx + 1).height();
+                if (y - need < bottom + reserve && idx > start) {
                     pages.add(new int[]{start, idx});
                     start = idx;
-                    y = pageH - MARGIN - contHeaderH - table.headerH();
+                    y = pageH - MARGIN - contHeaderH;
+                    if (!r.header()) y -= headerFor(r.section(), table, pkgTable); // repeated header
                     continue;
                 }
-                y -= ROW_H;
+                y -= r.height();
+                if (idx == lastItemRow) y -= carryH;
                 idx++;
             }
-            if (rows == 0 || start < rows || pages.isEmpty()) pages.add(new int[]{start, rows});
-            // The closing block may not fit under the final rows — push it to
-            // one more page in that case (measured, so it is exact).
+            pages.add(new int[]{start, rows.size()});
             {
+                // The closing block may still not fit under the final rows —
+                // push it to one more page (measured, so it is exact).
                 int[] last = pages.get(pages.size() - 1);
-                float yEnd = pageH - MARGIN - (pages.size() == 1 ? firstHeaderH : contHeaderH)
-                        - table.headerH() - ROW_H * (last[1] - last[0]);
-                if (yEnd - carryH - closingH < bottom) pages.add(new int[]{rows, rows});
+                float yEnd = pageH - MARGIN - (pages.size() == 1 ? firstHeaderH : contHeaderH);
+                if (last[0] < rows.size() && !rows.get(last[0]).header()) yEnd -= headerFor(rows.get(last[0]).section(), table, pkgTable);
+                for (int i = last[0]; i < last[1]; i++) {
+                    yEnd -= rows.get(i).height();
+                    if (i == lastItemRow) yEnd -= carryH;
+                }
+                if (yEnd - closingH < bottom) pages.add(new int[]{rows.size(), rows.size()});
             }
             int totalPages = pages.size();
-            log.info("CommercialInvoice — order={} items={} pages={} paper={}", m.order().getOrderNo(),
-                    rows, totalPages, pageSize == PDRectangle.A4 ? "A4" : "LETTER");
+            log.info("CommercialInvoice — order={} items={} pieces={} pages={} paper={}", m.order().getOrderNo(),
+                    m.lines().size(), m.pieces().size(), totalPages, pageSize == PDRectangle.A4 ? "A4" : "LETTER");
 
             // Pass 2 — emit.
             BigDecimal carried = BigDecimal.ZERO;
@@ -629,23 +722,38 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                     Pen pen = new Pen(cs);
                     float top = pageH - MARGIN;
                     y = top - (first ? drawFirstHeader(pen, m, pageW, pageH) : drawContinuationHeader(pen, m, pageW, pageH));
-                    y = table.drawHeader(pen, y);
-                    BigDecimal pageSum = BigDecimal.ZERO;
-                    for (int i = range[0]; i < range[1]; i++) {
-                        Line ln = m.lines().get(i);
-                        y = table.drawRow(pen, y, ln, (i - range[0]) % 2 == 1);
-                        pageSum = pageSum.add(ln.amount());
+                    if (range[0] < rows.size() && !rows.get(range[0]).header()) {
+                        // Continuation of a section: repeat its header.
+                        y = "items".equals(rows.get(range[0]).section()) ? table.drawHeader(pen, y) : pkgTable.drawHeader(pen, y);
                     }
-                    if (range[1] > range[0] || rows == 0) pen.rule(MARGIN, MARGIN + contentW, y, RULE, 0.5f);
-                    carried = carried.add(pageSum);
-                    // Carry line — page subtotal on every page so a separated
-                    // sheet still reconciles; the last page also gets totals.
-                    y -= 13f;
-                    pen.text(HELVETICA_BOLD, 8f, TAUPE,
-                            (last ? "SUBTOTAL THIS PAGE (" : "CARRIED FORWARD (") + m.currency() + ")",
-                            MARGIN + contentW - 200f, y, 0.4f);
-                    pen.rightText(HELVETICA_BOLD, 8.5f, INK, money(last ? pageSum : carried), MARGIN + contentW - 4f, y);
-                    y -= 7f;
+                    BigDecimal pageSum = BigDecimal.ZERO;
+                    boolean pageHasItems = false;
+                    for (int i = range[0]; i < range[1]; i++) {
+                        Row r = rows.get(i);
+                        y = r.drawer().draw(pen, y);
+                        if ("items".equals(r.section()) && !r.header()) {
+                            pageHasItems = true;
+                            pageSum = pageSum.add(m.lines().get(i - 1).amount());
+                        }
+                        // Carry line straight after the last item row on this page.
+                        boolean lastItemOnPage = "items".equals(r.section()) && !r.header()
+                                && (i + 1 >= range[1] || !"items".equals(rows.get(i + 1).section()) || rows.get(i + 1).header());
+                        if (lastItemOnPage) {
+                            carried = carried.add(pageSum);
+                            boolean finalItems = i == lastItemRow;
+                            pen.rule(MARGIN, MARGIN + contentW, y, RULE, 0.5f);
+                            y -= 13f;
+                            pen.text(HELVETICA_BOLD, 8f, TAUPE,
+                                    (finalItems ? "SUBTOTAL THIS PAGE (" : "CARRIED FORWARD (") + m.currency() + ")",
+                                    MARGIN + contentW - 200f, y, 0.4f);
+                            pen.rightText(HELVETICA_BOLD, 8.5f, INK, money(finalItems ? pageSum : carried), MARGIN + contentW - 4f, y);
+                            y -= 7f;
+                        }
+                    }
+                    if (!pageHasItems && range[1] > range[0] && "pkgs".equals(rows.get(range[1] - 1).section())) {
+                        pen.rule(MARGIN, MARGIN + contentW, y, RULE, 0.5f);
+                    }
+                    if (m.lines().isEmpty() && first) pen.rule(MARGIN, MARGIN + contentW, y, RULE, 0.5f);
                     if (last) drawClosing(pen, m, pageW, MARGIN, contentW, y);
                     drawFooter(pen, m, pageW, p + 1, totalPages);
                 }
@@ -656,6 +764,10 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             throw new IllegalStateException("Failed to render commercial invoice for order "
                     + m.order().getOrderNo(), e);
         }
+    }
+
+    private static float headerFor(String section, Table table, PkgTable pkgTable) {
+        return "items".equals(section) ? table.headerH() : pkgTable.headerH();
     }
 
     private static PDRectangle resolvePageSize(Client client) {
@@ -818,6 +930,55 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             pen.rightText(HELVETICA, 8.5f, ln.netEstimated() ? TAUPE : INK, ln.netWeight(), xNet + wNet - 4f, ty);
             pen.rightText(HELVETICA, 8.5f, INK, money(ln.unit()), xUnit + wUnit - 4f, ty);
             pen.rightText(HELVETICA_BOLD, 8.5f, INK, money(ln.amount()), xAmt + wAmt - 4f, ty);
+            return y - ROW_H;
+        }
+    }
+
+    /** Per-piece annex table for multi-package shipments. */
+    private static final class PkgTable {
+        final float left, width;
+        final float xNo, xTrack, xPack, xDims, xWt, xCont;
+        final float wNo, wTrack, wPack, wDims, wWt, wCont;
+
+        PkgTable(float left, float width) {
+            this.left = left;
+            this.width = width;
+            wNo = 30f; wTrack = 150f; wPack = 92f; wDims = 104f; wWt = 62f;
+            wCont = width - (wNo + wTrack + wPack + wDims + wWt);
+            xNo = left + 5f;
+            xTrack = left + wNo;
+            xPack = xTrack + wTrack;
+            xDims = xPack + wPack;
+            xWt = xDims + wDims;
+            xCont = xWt + wWt;
+        }
+
+        float headerH() { return 34f; }
+
+        float drawHeader(Pen pen, float y) throws IOException {
+            pen.text(HELVETICA_BOLD, 6.8f, TAUPE, "PACKAGES IN THIS SHIPMENT", left, y - 9f, 0.6f);
+            y -= 14f;
+            float h = 18f;
+            pen.fill(left, y - h, width, h, CREAM_DEEP);
+            float ty = y - 12f;
+            pen.text(HELVETICA_BOLD, 6.6f, TAUPE, "PIECE", xNo, ty, 0.5f);
+            pen.text(HELVETICA_BOLD, 6.6f, TAUPE, "TRACKING NO.", xTrack, ty, 0.5f);
+            pen.text(HELVETICA_BOLD, 6.6f, TAUPE, "PACKAGING", xPack, ty, 0.5f);
+            pen.text(HELVETICA_BOLD, 6.6f, TAUPE, "DIMENSIONS", xDims, ty, 0.5f);
+            pen.rightText(HELVETICA_BOLD, 6.6f, TAUPE, "WEIGHT", xWt + wWt - 4f, ty);
+            pen.text(HELVETICA_BOLD, 6.6f, TAUPE, "CONTENTS", xCont + 4f, ty, 0.5f);
+            return y - 20f;
+        }
+
+        float drawRow(Pen pen, float y, Pkg pk, boolean zebra) throws IOException {
+            if (zebra) pen.fill(left, y - ROW_H, width, ROW_H, ZEBRA);
+            float ty = y - 10f;
+            pen.text(HELVETICA, 8.5f, INK, String.valueOf(pk.seq()), xNo, ty, 0f);
+            pen.text(HELVETICA, 8.5f, INK, fit(HELVETICA, 8.5f, pk.tracking(), wTrack - 6f), xTrack, ty, 0f);
+            pen.text(HELVETICA, 8.5f, INK, fit(HELVETICA, 8.5f, pk.packaging(), wPack - 6f), xPack, ty, 0f);
+            pen.text(HELVETICA, 8.5f, INK, fit(HELVETICA, 8.5f, pk.dims(), wDims - 6f), xDims, ty, 0f);
+            pen.rightText(HELVETICA, 8.5f, INK, pk.weight(), xWt + wWt - 4f, ty);
+            pen.text(HELVETICA, 8.5f, INK, fit(HELVETICA, 8.5f, pk.contents(), wCont - 8f), xCont + 4f, ty, 0f);
             return y - ROW_H;
         }
     }

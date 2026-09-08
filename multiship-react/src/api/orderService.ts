@@ -876,6 +876,24 @@ export const orderService = {
   },
 
   /**
+   * The whole document set for a shipment in ONE PDF: the commercial
+   * invoice (with its per-piece annex) followed by the main 4×6 label of
+   * every package. 422 = no customs data (domestic order).
+   */
+  getShipmentDocumentsPdf: async (orderNo: number): Promise<Blob> => {
+    const response = await fetch(`${BASE_URL}/orders/${orderNo}/shipment-documents`, {
+      credentials: 'include',
+    })
+    if (response.status === 422) {
+      throw new Error('This order has no customs data — there is no commercial invoice to bundle.')
+    }
+    if (!response.ok) {
+      throw new Error(`Shipment documents are unavailable (HTTP ${response.status}) — restart the backend if it was just updated.`)
+    }
+    return response.blob()
+  },
+
+  /**
    * PR #538 — probe for the carrier-ZPL PNG preview endpoint. Returns
    * true iff the backend has label.render-carrier-zpl=true AND the
    * carrier stored parseable ZPL bytes for the order. 404 (flag off /

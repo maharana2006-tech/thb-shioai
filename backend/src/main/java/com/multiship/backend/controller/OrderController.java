@@ -1257,6 +1257,49 @@ public class OrderController {
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Commercial invoice PDF")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Order not found")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "Order has no customs data")
+    /**
+     * Shipment document set as ONE file: the commercial invoice (all pages,
+     * including the per-piece annex) followed by the main 4x6 label of
+     * every package. What an operator hands over with a multi-piece
+     * international parcel, downloadable in one click instead of N + 1.
+     * 422 when the order has no customs data; labels are best-effort —
+     * if none can be resolved the invoice alone is returned.
+     */
+    @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
+    @GetMapping(value = "/{orderNo}/shipment-documents",
+            produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> getShipmentDocuments(@PathVariable Integer orderNo) {
+        byte[] invoice;
+        try {
+            invoice = commercialInvoiceService.render(orderNo);
+        } catch (IllegalArgumentException notFound) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.NOT_FOUND).build();
+        } catch (IllegalStateException noCustoms) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY).build();
+        }
+        java.util.List<byte[]> parts = new java.util.ArrayList<>(2);
+        parts.add(invoice);
+        int pkgs = 1;
+        try {
+            ApiResponse<OrderWithLinesDTO> peek = orderService.getOrderWithLines(orderNo);
+            pkgs = effectivePkgCount(peek.getData());
+            ResponseEntity<byte[]> labels = getLabelPdf(orderNo, null, true);
+            if (labels.getStatusCode().is2xxSuccessful() && labels.getBody() != null && labels.getBody().length > 0) {
+                parts.add(labels.getBody());
+            }
+        } catch (RuntimeException ex) {
+            org.slf4j.LoggerFactory.getLogger(OrderController.class).warn(
+                    "shipment-documents: labels unavailable for order {} — returning invoice only: {}",
+                    orderNo, ex.getMessage());
+        }
+        byte[] merged = pdfMerger.mergeToOne(parts);
+        String name = "shipment-documents-" + orderNo + (pkgs > 1 ? "-all" + pkgs : "") + ".pdf";
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=" + name)
+                .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
+                .body(merged);
+    }
+
     @PreAuthorize("@orderAccess.canViewOrder(authentication, #orderNo)")
     @GetMapping(value = "/{orderNo}/commercial-invoice",
             produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)

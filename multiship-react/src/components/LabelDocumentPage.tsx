@@ -168,6 +168,7 @@ export default function LabelDocumentPage() {
     useState<'unknown' | 'ready' | 'unavailable'>('unknown')
   const [zplBusy, setZplBusy] = useState(false)
   const [pdfBusy, setPdfBusy] = useState(false)
+  const [docsBusy, setDocsBusy] = useState(false)
   // Sprint 52 PR A — same re-entrancy guard as the ZPL flow. Ref
   // checked synchronously so a fast double-click can't fire two fetches.
   const pdfInFlightRef = useRef(false)
@@ -295,6 +296,50 @@ export default function LabelDocumentPage() {
     } finally {
       printInFlightRef.current = false
       setPrintBusy(false)
+    }
+  }
+
+  /** Commercial Invoice tab — the invoice PDF on its own. */
+  const downloadInvoicePdf = async () => {
+    setDocsBusy(true)
+    try {
+      const blob = await orderService.getCommercialInvoicePdf(orderNo)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `commercial-invoice-${orderNo}.pdf`
+      link.click()
+      URL.revokeObjectURL(url)
+      notify.success(`${link.download} downloaded.`)
+    } catch (err) {
+      notify.apiError(err, "Couldn't download the commercial invoice — retry.")
+    } finally {
+      setDocsBusy(false)
+    }
+  }
+
+  /**
+   * Commercial Invoice tab — the whole document set in one file: the
+   * invoice (all pages + per-piece annex) followed by every package's 4×6
+   * label. One click for a multi-piece shipment instead of N + 1 downloads.
+   */
+  const downloadShipmentDocuments = async () => {
+    setDocsBusy(true)
+    try {
+      const blob = await orderService.getShipmentDocumentsPdf(orderNo)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = pkgCount > 1
+        ? `shipment-documents-${orderNo}-all${pkgCount}.pdf`
+        : `shipment-documents-${orderNo}.pdf`
+      link.click()
+      URL.revokeObjectURL(url)
+      notify.success(`${link.download} downloaded — invoice plus ${pkgCount > 1 ? `all ${pkgCount} labels` : 'the label'}.`)
+    } catch (err) {
+      notify.apiError(err, `Couldn't build the document set${pkgCount > 1 ? ` for all ${pkgCount} packages` : ''} — retry, or download the invoice and labels separately.`)
+    } finally {
+      setDocsBusy(false)
     }
   }
 
@@ -751,6 +796,39 @@ export default function LabelDocumentPage() {
                   Track
                 </a>
               ) : null}
+            </>
+          ) : null}
+
+          {activeTab === 'invoice' ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  void downloadInvoicePdf()
+                }}
+                disabled={loading || Boolean(error) || tenantBlocked || docsBusy || invoiceState === 'none'}
+                title="The commercial-invoice PDF on its own"
+                data-testid="download-invoice-pdf-btn"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiDownload className="h-3.5 w-3.5" />
+                {docsBusy ? 'Fetching…' : 'Download invoice'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void downloadShipmentDocuments()
+                }}
+                disabled={loading || Boolean(error) || tenantBlocked || docsBusy || invoiceState === 'none'}
+                title={pkgCount > 1
+                  ? `One PDF: the commercial invoice (with the packages annex) followed by the 4x6 label of every package — ${pkgCount} packages, one download.`
+                  : 'One PDF: the commercial invoice followed by the 4x6 label.'}
+                data-testid="download-shipment-documents-btn"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#1f150c] bg-[#f5f0e6] px-3 py-1.5 text-[13px] font-semibold text-[#1f150c] transition hover:bg-[#eae2d1] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiDownload className="h-3.5 w-3.5" />
+                {docsBusy ? 'Fetching…' : (pkgCount > 1 ? `Download all (invoice + ${pkgCount} labels)` : 'Download all (invoice + label)')}
+              </button>
             </>
           ) : null}
 
@@ -1277,7 +1355,7 @@ export default function LabelDocumentPage() {
                 </p>
               ) : invoiceState === 'error' ? (
                 <p className="rounded-2xl border border-rose-200 bg-rose-50 px-6 py-10 text-center text-[13px] text-rose-700">
-                  Couldn't render the commercial invoice — retry, or use Download PDF.
+                  Couldn't render the commercial invoice — retry, or use Download invoice.
                 </p>
               ) : invoicePdf ? (
                 <PdfPagesPreview blob={invoicePdf} pageWidthPx={760} />
