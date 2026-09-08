@@ -53,11 +53,6 @@ public class ShipmentValidationService {
 
     private static final Logger log = LoggerFactory.getLogger(ShipmentValidationService.class);
 
-    /** US and its outlying territories — treated as one territory per
-     *  the "US → PR is domestic" UX rule (Sprint 52 shipment-validation
-     *  design pick). Mirrors the FE sameTerritory helper. */
-    private static final Set<String> US_FAMILY = Set.of("US", "PR", "VI", "GU", "AS", "MP");
-
     /** Same EU set the FE uses to treat intra-EU shipments as domestic. */
     private static final Set<String> EU_FAMILY = Set.of(
             "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR",
@@ -773,10 +768,16 @@ public class ShipmentValidationService {
         return StringUtils.hasText(primary) ? primary : fallback;
     }
 
+    /**
+     * True when the shipment crosses a customs border. Only the EU customs
+     * union collapses to "domestic" — a US→PR shipment IS international for
+     * customs purposes (UPS + FedEx both require a full commercial invoice
+     * on those lanes even when the service level is a US domestic service).
+     * Mirrors the FE {@code sameTerritory} helper in NewShipmentPage.tsx.
+     */
     private boolean isInternational(String sender, String recipient) {
         if (sender == null || recipient == null) return false;
         if (sender.equals(recipient)) return false;
-        if (US_FAMILY.contains(sender) && US_FAMILY.contains(recipient)) return false;
         if (EU_FAMILY.contains(sender) && EU_FAMILY.contains(recipient)) return false;
         return true;
     }
