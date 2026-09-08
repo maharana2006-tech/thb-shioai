@@ -322,6 +322,7 @@ public class FedExConnector implements CarrierConnector {
 
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        normalizeUsTerritories(request);
         // F7 fix — recipient country is required. Pre-fix, blank silently
         // defaulted to "US" downstream in buildShipmentPayload (line ~955)
         // which shipped international parcels as US domestic. Fail at
@@ -412,6 +413,7 @@ public class FedExConnector implements CarrierConnector {
     public ValidateShipmentResult validateShipment(ShipmentRequestDTO request,
                                                     String accessToken,
                                                     String environment) {
+        normalizeUsTerritories(request);
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new ValidateShipmentResult(false, "NOT_SUPPORTED", "SHIPMENT",
                     java.util.List.of(), java.util.List.of(),
@@ -2338,13 +2340,15 @@ public class FedExConnector implements CarrierConnector {
         detail.put("dutiesPayment", buildDutiesPayment(intl, request));
 
         // Customs total value — FedEx rejects an international shipment with a
-        // zero/blank value (TOTALCUSTOMSVALUE.REQUIRED). Prefer the intl block's
-        // total (commodity sum), fall back to the shipment's declared value.
-        BigDecimal total = intl.getCustomsTotalValue();
-        if (total == null || total.signum() == 0) total = request.getDeclaredValue();
-        if (total == null) total = BigDecimal.ZERO;
+        // zero/blank value ("Customs Value is required" / TOTALCUSTOMSVALUE.REQUIRED).
+        // Reuse the shared helper so all three call sites (this method + the
+        // customsValue emit above + any future emitter) agree on precedence:
+        // commodity sum > declaredValue > throw. Throwing here turns FedEx's
+        // opaque "Customs Value is required" into an actionable message that
+        // names the fix (fill unit values or set a positive Declared Value).
         String currency = StringUtils.hasText(intl.getCustomsCurrency())
                 ? intl.getCustomsCurrency().toUpperCase() : "USD";
+        BigDecimal total = computeCustomsInvoiceTotal(request);
         detail.put("customsValue", Map.of("amount", total, "currency", currency));
 
         detail.put("commercialInvoice", Map.of(
@@ -2443,6 +2447,62 @@ public class FedExConnector implements CarrierConnector {
         }
         // RECIPIENT: no payor block; FedEx bills the consignee at delivery.
         return duties;
+    }
+
+    /**
+     * Customs invoice total for FedEx {@code customsClearanceDetail.customsValue}.
+     * Mirrors {@code UpsConnector.computeIntlInvoiceTotal} — precedence:
+     * <ol>
+     *   <li>Sum of {@code quantity × unitValue} across all commodities on the
+     *       intl block (the invoice authority for international shipments;
+     *       commodity rows are what customs adjudicates against).</li>
+     *   <li>{@link ShipmentRequestDTO#getDeclaredValue()} when the sum is 0
+     *       (e.g. commodities entered without unit values — the shipment-level
+     *       declared value is a valid fallback for customs' own purposes).</li>
+     *   <li>Throw {@link IllegalArgumentException} when BOTH are 0.</li>
+     * </ol>
+     *
+     * <p>Throwing turns FedEx's opaque "Customs Value is required. Please
+     * update and try again." rejection into an actionable message the
+     * operator can act on immediately — surfaced at the connector boundary,
+     * before the wire call, matching the {@link com.multiship.backend.service.DangerousGoodsValidator}
+     * pattern of catching gaps upstream of the carrier's HTTP 400.
+     *
+     * <p>Real-world trigger: US → PR shipments where the operator enters
+     * commodity descriptions/HS codes but leaves unit values blank AND the
+     * package-level declared value is 0 (either because the operator skipped
+     * it OR the FE didn't wire it in). PR #610 flips {@code countryCode=US} →
+     * {@code PR} at the wire; PR #613 classifies the lane as international
+     * on both surfaces; without unit values / declared value, FedEx still
+     * rejects on the customs-value gate.
+     */
+    private BigDecimal computeCustomsInvoiceTotal(ShipmentRequestDTO request) {
+        com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
+        BigDecimal fromCommodities = intl == null || intl.getCommodities() == null
+                ? BigDecimal.ZERO
+                : intl.getCommodities().stream()
+                        .map(com.multiship.backend.dto.CustomsCommodityDTO::lineTotalValue)
+                        .filter(java.util.Objects::nonNull)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (fromCommodities.signum() > 0) return fromCommodities;
+        // Fall back to the pre-computed customsTotalValue (some intl-block
+        // populators, e.g. buildManualIntlBlock, sum unit values themselves
+        // and store the total; when unit values were absent for the sum but
+        // the total was set via another path, honour it).
+        if (intl != null && intl.getCustomsTotalValue() != null
+                && intl.getCustomsTotalValue().signum() > 0) {
+            return intl.getCustomsTotalValue();
+        }
+        BigDecimal declared = request.getDeclaredValue();
+        if (declared != null && declared.signum() > 0) return declared;
+        throw new IllegalArgumentException(
+                "FedEx international shipment (order " + request.getReferenceNumber()
+                + ") requires a positive customs invoice total. Both the sum "
+                + "of commodity (Qty × Unit Value) AND the shipment Declared "
+                + "Value came to 0 — FedEx rejects with \"Customs Value is "
+                + "required. Please update and try again.\" Fill in each "
+                + "item's unit value (or set a positive Declared Value) "
+                + "before generating the label.");
     }
 
     /** Commodity → FedEx line. */
@@ -2699,6 +2759,32 @@ public class FedExConnector implements CarrierConnector {
                 yield "SOLD";
             }
         };
+    }
+
+    /**
+     * US-territory normalization (2026-09-07). FedEx treats PR/VI/GU/AS/
+     * MP/UM as separate countries for shipping, not US states. When the
+     * operator's address has {@code country=US} with {@code state=PR},
+     * mutate the request DTO in place so all downstream wire emits see
+     * the territory as the {@code countryCode}. Clears the state field
+     * (territory codes double as ISO country codes so a state slot
+     * would be redundant and, for FedEx, malformed). Preserves the
+     * operator's saved address row unchanged — we only touch the
+     * carrier-bound DTO.
+     */
+    private static void normalizeUsTerritories(ShipmentRequestDTO request) {
+        String rc = com.multiship.backend.util.UsTerritoryNormalizer.normalizeCountryCode(
+                request.getRecipientCountryCode(), request.getRecipientState());
+        if (!java.util.Objects.equals(rc, request.getRecipientCountryCode())) {
+            request.setRecipientCountryCode(rc);
+            request.setRecipientState("");
+        }
+        String sc = com.multiship.backend.util.UsTerritoryNormalizer.normalizeCountryCode(
+                request.getShipperCountryCode(), request.getShipperState());
+        if (!java.util.Objects.equals(sc, request.getShipperCountryCode())) {
+            request.setShipperCountryCode(sc);
+            request.setShipperState("");
+        }
     }
 
     private static String firstNonBlank(String... candidates) {

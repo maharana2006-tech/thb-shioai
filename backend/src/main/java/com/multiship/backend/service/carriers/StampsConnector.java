@@ -97,6 +97,14 @@ public class StampsConnector implements CarrierConnector {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.CarrierPackageCatalogRepository packageCatalogRepository;
 
+    /** Field injection — same pattern as {@link #packageCatalogRepository}.
+     *  Required by the SERA void + reprint paths to resolve a
+     *  {@code label_id} from a tracking number (SERA voids by label_id,
+     *  not by tracking, so the DB lookup bridges the two). Tests that
+     *  drive SERA branches directly can set the field via reflection. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
+
     /** Per-thread reason the last getAccessToken fell back — read by verify. */
     private static final ThreadLocal<String> LAST_AUTH_DETAIL = new ThreadLocal<>();
 
@@ -249,33 +257,160 @@ public class StampsConnector implements CarrierConnector {
     }
 
     /**
-     * Stamps.com uses SWSIM (SOAP), not REST/OAuth. Credential check calls
-     * {@code AuthenticateUser} on the SWSIM endpoint with:
+     * Stamps.com / Endicia has TWO wire APIs — the connector picks between
+     * them via {@code carrier.stamps.api-flavor}:
      * <ul>
-     *   <li>{@code IntegrationID} = the "Client ID" from the Stamps.com
-     *       developer portal (a GUID).</li>
-     *   <li>{@code Username} = the Stamps.com account number.</li>
-     *   <li>{@code Password} = the "Client Secret" from the developer portal.</li>
+     *   <li><b>SWSIM (SOAP)</b> — legacy, still what most existing accounts
+     *       use. Credential check calls {@code AuthenticateUser} on the SWSIM
+     *       endpoint with:
+     *       <ul>
+     *         <li>{@code IntegrationID} = "Client ID" from the developer
+     *             portal (must be a GUID; SWSIM's XML schema enforces this).</li>
+     *         <li>{@code Username} = Stamps.com account number.</li>
+     *         <li>{@code Password} = "Client Secret" from the developer portal.</li>
+     *       </ul>
+     *       SWSIM returns an {@code Authenticator} GUID that persists for a
+     *       session and stands in as our "access token".</li>
+     *   <li><b>SERA (OAuth 2.0 REST)</b> — Auctane's newer API at
+     *       {@code signin.stampsendicia.com} / {@code api.stampsendicia.com}.
+     *       {@code client_id} is an opaque string, NOT a GUID; the GUID
+     *       validator is skipped on this path. We POST a client-credentials
+     *       grant to the token endpoint and return the bearer token. SERA's
+     *       public docs highlight the authorization-code flow, but the token
+     *       endpoint is a plain OAuth 2.0 server — if the account has been
+     *       provisioned for machine-to-machine, {@code client_credentials}
+     *       works; if not, the server returns a proper
+     *       {@code unsupported_grant_type} error that the operator sees on
+     *       the Carriers page (much better UX than a hardcoded pre-flight
+     *       rejection).</li>
      * </ul>
-     * SWSIM returns an {@code Authenticator} GUID that persists for a session
-     * and stands in as our "access token" — we cache it via the same path as
-     * every other connector. On failure SWSIM sends a SOAP Fault; we parse the
-     * {@code faultstring} and either throw (config errors like a bad URL) or
-     * fall back to a {@code -local-*} token (credential rejection surfaces via
-     * runCredentialCheck's "-local-" detection).
      *
-     * <p>Environment routing: SANDBOX hits {@code swsim.testing.stamps.com},
-     * everything else hits production {@code swsim.stamps.com}.
+     * <p>On failure both flavors fall back to a {@code -local-*} token so the
+     * caller's "-local-" detection surfaces credential rejection uniformly.
+     *
+     * <p>Environment routing: SANDBOX hits {@code swsim.testing.stamps.com}
+     * (SWSIM) or {@code signin.testing.stampsendicia.com} (SERA); everything
+     * else hits the production hosts.
      */
     @Override
     public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
+        if (isSeraFlavor()) {
+            return getAccessTokenSera(clientId, clientSecret, environment);
+        }
+        return getAccessTokenSwsim(clientId, clientSecret, accountNumber, environment);
+    }
+
+    /** @return true when {@code carrier.stamps.api-flavor=SERA} (case-insensitive). */
+    private boolean isSeraFlavor() {
+        String flavor = carrierProperties.getStamps().getApiFlavor();
+        return flavor != null && "SERA".equalsIgnoreCase(flavor.trim());
+    }
+
+    /**
+     * SERA OAuth 2.0 path — a plain {@code client_credentials} grant against
+     * {@code signin.stampsendicia.com/oauth/token} (or the sandbox host on
+     * SANDBOX). {@code client_id} is opaque; no GUID validation. accountNumber
+     * is not part of the OAuth exchange (SERA scopes token authority via the
+     * client_id itself), so a blank accountNumber is allowed here — unlike
+     * SWSIM which needs it as the Username. Any 2xx-with-access_token is a
+     * successful verification; anything else falls back to a -local-* token
+     * with the server's error surfaced via LAST_AUTH_DETAIL.
+     */
+    String getAccessTokenSera(String clientId, String clientSecret, String environment) {
+        if (!StringUtils.hasText(clientId) || !StringUtils.hasText(clientSecret)) {
+            LAST_AUTH_DETAIL.set("SERA requires a non-blank Client ID and Client Secret. "
+                    + "Copy the values from your Stamps.com / Endicia developer portal.");
+            return buildFallbackToken(clientId, clientSecret);
+        }
+        CarrierProperties.Stamps cfg = carrierProperties.getStamps();
+        String tokenUrl = isSandbox(environment) ? cfg.getSeraSandboxAuthUrl() : cfg.getSeraAuthUrl();
+        if (!StringUtils.hasText(tokenUrl)) {
+            LAST_AUTH_DETAIL.set("SERA is enabled (carrier.stamps.api-flavor=SERA) but the "
+                    + (isSandbox(environment) ? "sandbox" : "production")
+                    + " token URL is not configured. Set carrier.stamps.sera-"
+                    + (isSandbox(environment) ? "sandbox-" : "") + "auth-url.");
+            log.warn("Stamps SERA: token URL is blank on {} — cannot verify credentials.",
+                    isSandbox(environment) ? "SANDBOX" : "PRODUCTION");
+            return buildFallbackToken(clientId, clientSecret);
+        }
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("grant_type", "client_credentials");
+        form.add("client_id", clientId.trim());
+        form.add("client_secret", clientSecret);
+        try {
+            String response = HttpClients.newBuilder().baseUrl(tokenUrl).build()
+                    .post()
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .body(form)
+                    .retrieve()
+                    .body(String.class);
+            JsonNode json = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
+            String accessToken = json.path("access_token").asText(null);
+            if (StringUtils.hasText(accessToken)) {
+                LAST_AUTH_DETAIL.remove();
+                return accessToken;
+            }
+            String err = json.path("error_description").asText(json.path("error").asText("no error field"));
+            LAST_AUTH_DETAIL.set("Stamps.com SERA returned no access_token: " + err);
+            log.warn("Stamps SERA {} returned no access_token: {}", tokenUrl, safeHead(response));
+            return buildFallbackToken(clientId, clientSecret);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            String body = ex.getResponseBodyAsString();
+            String errMsg = extractOAuthError(body);
+            log.warn("Stamps SERA token endpoint {} rejected (HTTP {}): {} · body head: {}",
+                    tokenUrl, status, errMsg, safeHead(body));
+            LAST_AUTH_DETAIL.set(StringUtils.hasText(errMsg)
+                    ? "Stamps.com SERA rejected the credentials (HTTP " + status + "): " + errMsg
+                    : "Stamps.com SERA returned HTTP " + status + ".");
+            return buildFallbackToken(clientId, clientSecret);
+        } catch (Exception ex) {
+            log.warn("Stamps SERA token call to {} failed; using local fallback token. Reason: {}",
+                    tokenUrl, ex.getMessage());
+            LAST_AUTH_DETAIL.set("could not reach the Stamps.com SERA token endpoint (" + ex.getMessage() + ")");
+            return buildFallbackToken(clientId, clientSecret);
+        }
+    }
+
+    /**
+     * Extract a human-readable message from an OAuth 2.0 error body.
+     * Standard shape (RFC 6749 §5.2) is a JSON object with
+     * {@code error} and optional {@code error_description}; some servers
+     * return HTML on infrastructure failures. Never throws — returns null
+     * when the body is blank or not JSON.
+     */
+    private String extractOAuthError(String body) {
+        if (!StringUtils.hasText(body)) return null;
+        try {
+            JsonNode j = objectMapper.readTree(body);
+            String desc = j.path("error_description").asText(null);
+            if (StringUtils.hasText(desc)) return desc;
+            String err = j.path("error").asText(null);
+            if (StringUtils.hasText(err)) return err;
+        } catch (Exception parseIgnored) {
+            // Fall through to raw-body truncation.
+        }
+        return safeHead(body);
+    }
+
+    /**
+     * SWSIM SOAP path — historical behaviour. Requires accountNumber (used as
+     * SWSIM Username) and a GUID IntegrationID (Stamps.com's XML schema
+     * enforces the {@code 8-4-4-4-12} hex shape at request-parse time). The
+     * GUID validator here catches non-GUID input up-front with an actionable
+     * message instead of firing a doomed SOAP call.
+     */
+    String getAccessTokenSwsim(String clientId, String clientSecret, String accountNumber, String environment) {
         CarrierProperties.Stamps cfg = carrierProperties.getStamps();
         String swsimUrl = isSandbox(environment) ? cfg.getSandboxAuthUrl() : cfg.getAuthUrl();
 
         if (!StringUtils.hasText(accountNumber)) {
             throw new CarrierConnectionException(
                     "Stamps.com verification needs the account number as the SWSIM Username. "
-                            + "Enter the Stamps.com account number in the Account number field.");
+                            + "Enter the Stamps.com account number in the Account number field. "
+                            + "(If your account is on the newer SERA REST API, set "
+                            + "carrier.stamps.api-flavor=SERA — SERA doesn't need an account number.)");
         }
 
         // Stamps.com rejects a non-GUID IntegrationID at XML-schema validation
@@ -288,11 +423,12 @@ public class StampsConnector implements CarrierConnector {
         // Windows, which the strict pattern used to reject.
         String normalisedGuid = normaliseIntegrationId(clientId);
         if (normalisedGuid == null) {
-            LAST_AUTH_DETAIL.set("the Stamps.com Client ID (IntegrationID) must be a GUID like "
+            LAST_AUTH_DETAIL.set("the Stamps.com SWSIM Client ID (IntegrationID) must be a GUID like "
                     + "\"01234567-89ab-cdef-0123-456789abcdef\" (braces {...}, urn:uuid: prefix, "
                     + "or 32-hex-no-hyphens are also accepted and auto-normalised). The value entered "
                     + "isn't recognisable as a GUID — copy the IntegrationID from your Stamps.com "
-                    + "developer portal.");
+                    + "developer portal, OR if your account is on the newer SERA REST API set "
+                    + "carrier.stamps.api-flavor=SERA (SERA client_ids are opaque strings, not GUIDs).");
             log.warn("Stamps SWSIM: IntegrationID '{}' is not a GUID after normalisation; "
                     + "skipping call and returning fallback token.", clientId);
             return buildFallbackToken(clientId, clientSecret);
@@ -407,6 +543,20 @@ public class StampsConnector implements CarrierConnector {
      */
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        if (isSeraFlavor()) {
+            return createShipmentSera(request, accessToken, environment);
+        }
+        return createShipmentSwsim(request, accessToken, environment);
+    }
+
+    /**
+     * Legacy SWSIM {@code CreateIndicium} path — untouched from the pre-SERA
+     * shape. Every existing tenant that hasn't flipped
+     * {@code carrier.stamps.api-flavor=SERA} continues to hit this. See the
+     * class-level SERA doc on {@link #getAccessToken} for background on the
+     * two wire APIs Stamps.com / Endicia exposes and why the branch is here.
+     */
+    ShipmentResult createShipmentSwsim(ShipmentRequestDTO request, String accessToken, String environment) {
         // Sibling-parity guard (F4 fix): trackShipment, getRates, voidShipment,
         // validateAddress, schedulePickup, closeOutDay all short-circuit when
         // the accessToken is a `-local-*` fallback (unverified/rejected creds).
@@ -540,12 +690,19 @@ public class StampsConnector implements CarrierConnector {
 
         // Per-piece list — one PackageTracking per SWSIM CreateIndicium
         // response. Sequence number matches the request's package order.
+        // Preserve carrierLabelRef from the piece's own PackageTracking
+        // when present (SERA populates it with the label_id UUID; SWSIM
+        // leaves it null since it voids by tracking).
         java.util.List<PackageTracking> pieces = new java.util.ArrayList<>();
         for (int i = 0; i < perPackage.size(); i++) {
             ShipmentResult r = perPackage.get(i);
+            String labelRef = null;
+            if (r.packages() != null && !r.packages().isEmpty()) {
+                labelRef = r.packages().get(0).carrierLabelRef();
+            }
             pieces.add(new PackageTracking(i + 1,
                     r.trackingNumber(), r.trackingUrl(),
-                    r.labelUrl(), r.labelPdf(), r.shippingCost()));
+                    r.labelUrl(), r.labelPdf(), r.shippingCost(), labelRef));
         }
 
         ShipmentResult first = perPackage.get(0);
@@ -558,6 +715,548 @@ public class StampsConnector implements CarrierConnector {
                 first.estimatedDelivery(),
                 raw.toString(),
                 pieces);
+    }
+
+    // ==========================================================================
+    // SERA REST API — the newer Auctane / Stamps.com wire.
+    //
+    // Wire shape (per developer.stamps.com/rest-api/reference/serav1.html):
+    //   Endpoint:     POST {base}/labels
+    //   Auth:         Authorization: Bearer {access_token}
+    //   Content-Type: application/json
+    //
+    // Request envelope (only the fields we populate — the API accepts more):
+    //   from_address / to_address / return_address (SERA uses these, not
+    //     "sender"/"recipient" — the docs' inline table names differ from
+    //     the request shape; the request payload uses from_address /
+    //     to_address, verified against the reference JSON on the page).
+    //   service_type   → snake-case service code (usps_priority_mail, ...)
+    //   package        → packaging_type / weight / weight_unit /
+    //                    length / width / height / dimension_unit
+    //   customs        → contents_type / contents_description /
+    //                    non_delivery_option / customs_items[]
+    //   insurance      → insurance_provider ("stamps_com" or "carrier") +
+    //                    insured_value.amount + insured_value.currency
+    //   delivery_confirmation_type → none | tracking | signature | adult_signature
+    //   label_options  → label_size / label_format / label_output_type
+    //   ship_date      → ISO date (shipper timezone)
+    //   is_return_label
+    //
+    // Response envelope fields we consume:
+    //   label_id           → UUID for void + reprint (persisted into
+    //                        LabelPackage.carrier_label_ref via V44)
+    //   tracking_number    → carrier tracking id
+    //   labels[0].href     → base64 blob (when label_output_type=base64)
+    //                        or a signed URL (when label_output_type=url)
+    //   shipment_cost.total_amount / .currency → net charge
+    //   estimated_delivery_date → ISO datetime
+    // ==========================================================================
+
+    /**
+     * SERA {@code POST /sera/v1/labels} — creates a live label and returns
+     * a base64-encoded PDF/ZPL/PNG plus the SERA {@code label_id} UUID
+     * that void + reprint key off. Multi-package by design: SERA is
+     * single-package per call (same as SWSIM CreateIndicium), so we loop
+     * N calls and aggregate per-piece results into one {@link ShipmentResult}
+     * exactly like {@link #createShipmentSwsim}.
+     *
+     * <p>Rollback: if piece K fails after 1..K-1 succeeded, we call SERA
+     * void on the succeeded pieces before propagating the exception —
+     * same compensating-transaction pattern as the SWSIM path uses via
+     * {@link #rollbackSuccessfulPieces}.
+     */
+    ShipmentResult createShipmentSera(ShipmentRequestDTO request, String accessToken, String environment) {
+        // Same fallback-token guard as the SWSIM path — a `-local-*` token
+        // is a rejected credential, calling SERA with it just wastes an
+        // API call and returns a bewildering 401 to the operator.
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            throw new com.multiship.backend.exception.CarrierConnectionException(
+                    "USPS via Stamps.com (SERA): this account's credentials aren't verified "
+                            + "(no live SERA access_token). Re-verify the account on the "
+                            + "Carriers page before shipping.");
+        }
+        if (!StringUtils.hasText(request.getRecipientCountryCode())) {
+            throw new IllegalArgumentException(
+                    "USPS shipment requires a recipient country code (order "
+                            + request.getReferenceNumber() + "). Set the "
+                            + "recipient's country on the Order before generating a label.");
+        }
+        String baseUrl = seraApiBaseUrl(environment);
+        java.util.List<com.multiship.backend.dto.PackageDetailDTO> packages = request.effectivePackages();
+        java.util.List<ShipmentResult> perPackage = new java.util.ArrayList<>();
+        for (int i = 0; i < packages.size(); i++) {
+            String jsonBody = buildSeraCreateLabelBody(request, packages.get(i),
+                    i + 1, packages.size());
+            try {
+                String response = HttpClients.newBuilder().baseUrl(baseUrl + "/labels").build()
+                        .post()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .body(jsonBody)
+                        .retrieve()
+                        .body(String.class);
+                perPackage.add(parseSeraCreateLabelResponse(response, request));
+            } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
+                rollbackSuccessfulPiecesSera(perPackage, accessToken, environment);
+                throw cex;
+            } catch (Exception ex) {
+                String errMsg = ex instanceof org.springframework.web.client.RestClientResponseException resp
+                        ? extractSeraError(resp.getResponseBodyAsString())
+                        : ex.getMessage();
+                log.warn("Stamps SERA /labels failed for package {}/{}: {}",
+                        i + 1, packages.size(), errMsg);
+                rollbackSuccessfulPiecesSera(perPackage, accessToken, environment);
+                throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                        .map("STAMPS", ex, "createShipmentSera[pkg " + (i + 1) + "/" + packages.size() + "]");
+            }
+        }
+        return aggregateStampsShipmentResults(perPackage);
+    }
+
+    /**
+     * Best-effort rollback for SERA — voids every already-created piece
+     * by its {@code label_id}. Same compensating-transaction pattern as
+     * {@link #rollbackSuccessfulPieces} (the SWSIM path), except we call
+     * SERA's {@code /labels/{label_id}/void} directly instead of going
+     * through the tracking-based path (piece rows haven't been persisted
+     * to {@code label_package} yet at rollback time, so
+     * {@link #resolveSeraLabelId} would return null — bypass the DB and
+     * use the label_id we already have from the create response).
+     */
+    void rollbackSuccessfulPiecesSera(java.util.List<ShipmentResult> succeeded,
+                                       String accessToken, String environment) {
+        if (succeeded == null || succeeded.isEmpty()) return;
+        log.warn("Stamps SERA MPS partial failure: rolling back {} successful piece(s) via /labels/{{label_id}}/void.",
+                succeeded.size());
+        String baseUrl;
+        try {
+            baseUrl = seraApiBaseUrl(environment);
+        } catch (Exception ex) {
+            log.warn("Stamps SERA rollback: cannot resolve base URL ({}), skipping — "
+                    + "operator must void the pieces manually.", ex.getMessage());
+            return;
+        }
+        for (ShipmentResult piece : succeeded) {
+            String labelId = null;
+            if (piece != null && piece.packages() != null && !piece.packages().isEmpty()) {
+                labelId = piece.packages().get(0).carrierLabelRef();
+            }
+            if (!StringUtils.hasText(labelId)) continue;
+            try {
+                HttpClients.newBuilder().baseUrl(baseUrl + "/labels/" + labelId + "/void").build()
+                        .post()
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .retrieve()
+                        .body(String.class);
+            } catch (Exception cancelEx) {
+                // Log and continue — see the SWSIM rollback pattern for
+                // why we don't propagate cancel failures.
+                log.warn("Stamps SERA rollback void failed for label_id {}: {}",
+                        labelId, cancelEx.getMessage());
+            }
+        }
+    }
+
+    /** Resolve the SERA REST base URL for the given environment. Falls back
+     *  to production when the caller passed a blank env. */
+    String seraApiBaseUrl(String environment) {
+        CarrierProperties.Stamps cfg = carrierProperties.getStamps();
+        String base = isSandbox(environment) ? cfg.getSeraSandboxApiBaseUrl() : cfg.getSeraApiBaseUrl();
+        if (!StringUtils.hasText(base)) {
+            throw new com.multiship.backend.exception.CarrierConnectionException(
+                    "Stamps.com SERA is enabled (carrier.stamps.api-flavor=SERA) but the "
+                            + (isSandbox(environment) ? "sandbox" : "production")
+                            + " REST API base URL is not configured. Set carrier.stamps.sera-"
+                            + (isSandbox(environment) ? "sandbox-" : "") + "api-base-url.");
+        }
+        // Strip trailing slash so callers can concatenate paths without
+        // producing double-slashes.
+        return base.endsWith("/") ? base.substring(0, base.length() - 1) : base;
+    }
+
+    /**
+     * Build the JSON body for {@code POST /sera/v1/labels} for ONE package
+     * in a multi-piece shipment. Uses Jackson so downstream field-name
+     * changes are easy to audit and quoting/escaping is centralised.
+     */
+    String buildSeraCreateLabelBody(ShipmentRequestDTO request,
+                                     com.multiship.backend.dto.PackageDetailDTO pkg,
+                                     int packageIndex, int packageTotal) {
+        Map<String, Object> body = new LinkedHashMap<>();
+
+        // Addresses. SERA uses from_address / to_address (snake_case, mirroring
+        // the reference JSON body on the SERA v1 endpoint doc).
+        body.put("from_address", buildSeraAddress(
+                request.getShipperName(), request.getShipperCompany(),
+                request.getShipperAddressLine1(), request.getShipperAddressLine2(), null,
+                request.getShipperCity(), request.getShipperState(),
+                request.getShipperPostalCode(), request.getShipperCountryCode(),
+                request.getShipperPhone(), request.getShipperEmail(),
+                null));
+        body.put("to_address", buildSeraAddress(
+                request.getRecipientName(), request.getRecipientCompany(),
+                request.getRecipientAddressLine1(), request.getRecipientAddressLine2(),
+                request.getRecipientAddressLine3(),
+                request.getRecipientCity(), request.getRecipientState(),
+                request.getRecipientPostalCode(), request.getRecipientCountryCode(),
+                request.getRecipientPhone(), request.getRecipientEmail(),
+                Boolean.TRUE.equals(request.getRecipientResidential()) ? "residential" : null));
+
+        // Service code — SERA speaks a snake-case vocabulary
+        // (usps_priority_mail, usps_ground_advantage, ...). We map when the
+        // request carries a SWSIM-style code, otherwise pass the value
+        // through so operators using SERA-native codes aren't punished.
+        String service = mapSwsimServiceToSera(request.getServiceType());
+        if (StringUtils.hasText(service)) body.put("service_type", service);
+
+        // Package block: SERA's packaging_type + dimensional fields.
+        Map<String, Object> pkgBlock = new LinkedHashMap<>();
+        String packagingType = mapPackagingTypeToSera(
+                nonBlank(pkg.getPackageType(), request.getPackageType()));
+        if (StringUtils.hasText(packagingType)) pkgBlock.put("packaging_type", packagingType);
+        // Weight — SERA accepts pound / ounce / gram / kilogram. Our DTO
+        // carries lb/oz/kg/g; normalise to the SERA vocabulary.
+        java.math.BigDecimal weight = pkg.getWeight();
+        String weightUnit = nonBlank(pkg.getWeightUnit(), request.getWeightUnit());
+        if (weight != null) {
+            pkgBlock.put("weight", weight);
+            pkgBlock.put("weight_unit", normaliseSeraWeightUnit(weightUnit));
+        }
+        if (pkg.getLength() != null) pkgBlock.put("length", pkg.getLength());
+        if (pkg.getWidth() != null) pkgBlock.put("width", pkg.getWidth());
+        if (pkg.getHeight() != null) pkgBlock.put("height", pkg.getHeight());
+        String dimUnit = nonBlank(pkg.getDimUnit(), request.getDimUnit());
+        if (StringUtils.hasText(dimUnit)) pkgBlock.put("dimension_unit", normaliseSeraDimUnit(dimUnit));
+        body.put("package", pkgBlock);
+
+        // Signature options — SERA's delivery_confirmation_type enum.
+        String sig = mapSignatureToSera(request.getSignatureOption());
+        if (StringUtils.hasText(sig)) body.put("delivery_confirmation_type", sig);
+
+        // Insurance — SERA's insurance block. Only emit when the caller
+        // supplied a positive insured value; SERA rejects zero-value blocks.
+        if (request.getInsuredValue() != null && request.getInsuredValue().signum() > 0) {
+            Map<String, Object> ins = new LinkedHashMap<>();
+            ins.put("insurance_provider", "stamps_com");
+            Map<String, Object> val = new LinkedHashMap<>();
+            val.put("amount", request.getInsuredValue());
+            val.put("currency", nonBlank(request.getInsuredValueCurrency(), "usd")
+                    .toLowerCase(Locale.ROOT));
+            ins.put("insured_value", val);
+            body.put("insurance", ins);
+        }
+
+        // Customs — international only, and only when the block is ready.
+        if (request.getIntl() != null && request.getIntl().isReadyForCarrier()) {
+            body.put("customs", buildSeraCustoms(request));
+        }
+
+        // Ship date — SERA-side calendar convention matches the shipper's
+        // local day (same as SWSIM's ShipDate). LabelDates.today reads the
+        // shipper's timezone if present. Emit as ISO-8601 string
+        // (yyyy-MM-dd) so the wire body doesn't depend on Jackson's
+        // JavaTimeModule being registered on the ObjectMapper.
+        body.put("ship_date", com.multiship.backend.util.LabelDates
+                .today(request.getShipperTimezone()).toString());
+
+        if (Boolean.TRUE.equals(request.getIsReturn())) body.put("is_return_label", true);
+
+        // Label preferences — size / format / output type. Format follows
+        // the request's labelImageFormat override; default is 4x6 PDF as
+        // base64 so the downstream persister writes bytes to disk (matches
+        // pre-SERA SWSIM behaviour where the label URL was pre-fetched to
+        // base64 by PR #550).
+        Map<String, Object> labelOpts = new LinkedHashMap<>();
+        labelOpts.put("label_size", nonBlank(request.getLabelStockType(), "4x6"));
+        labelOpts.put("label_format", normaliseSeraLabelFormat(request.getLabelImageFormat()));
+        labelOpts.put("label_output_type", "base64");
+        body.put("label_options", labelOpts);
+
+        // Multi-package: SERA's request envelope has no equivalent of
+        // SWSIM's IntegratorTxID (idempotency key) — every call is a
+        // fresh label id from the server. If the same request replays,
+        // SERA will happily print a second label. Callers must dedupe
+        // upstream. Nothing to add here beyond a diagnostic hint on the
+        // wire body so operators can see which piece failed if the
+        // response gets logged verbatim.
+        if (packageTotal > 1) {
+            body.put("_x_piece_context", packageIndex + "/" + packageTotal);
+        }
+
+        try {
+            return objectMapper.writeValueAsString(body);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            // Jackson only throws for cycles / non-serializable objects; every
+            // field above is a String/Number/Boolean/Map so this is unreachable
+            // in practice. Re-throw as unchecked so the caller's exception
+            // mapper can classify it uniformly.
+            throw new IllegalStateException("Failed to serialize SERA label body", ex);
+        }
+    }
+
+    /** SERA address block — snake-case field names matching the SERA
+     *  v1 reference. Nulls omitted so the wire body is tight. */
+    private Map<String, Object> buildSeraAddress(String name, String company,
+                                                  String line1, String line2, String line3,
+                                                  String city, String state, String postal,
+                                                  String country, String phone, String email,
+                                                  String residentialIndicator) {
+        Map<String, Object> a = new LinkedHashMap<>();
+        if (StringUtils.hasText(name)) a.put("name", name);
+        if (StringUtils.hasText(company)) a.put("company_name", company);
+        if (StringUtils.hasText(line1)) a.put("address_line1", line1);
+        if (StringUtils.hasText(line2)) a.put("address_line2", line2);
+        if (StringUtils.hasText(line3)) a.put("address_line3", line3);
+        if (StringUtils.hasText(city)) a.put("city", city);
+        if (StringUtils.hasText(state)) a.put("state_province", state);
+        if (StringUtils.hasText(postal)) a.put("postal_code", postal);
+        if (StringUtils.hasText(country)) a.put("country_code", country);
+        if (StringUtils.hasText(phone)) a.put("phone", phone);
+        if (StringUtils.hasText(email)) a.put("email", email);
+        if (StringUtils.hasText(residentialIndicator)) a.put("residential_indicator", residentialIndicator);
+        return a;
+    }
+
+    /** SERA customs block. Auto-picks {@code contents_type} from the
+     *  request's reason-for-export; commodities go into {@code customs_items[]}
+     *  with per-item value/weight/HS/COO/SKU fields. */
+    private Map<String, Object> buildSeraCustoms(ShipmentRequestDTO request) {
+        com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
+        Map<String, Object> customs = new LinkedHashMap<>();
+        customs.put("contents_type", mapContentsTypeToSera(intl.getReasonForExport()));
+        // SERA gives us free-form contents_description — surface the
+        // consolidated summary the operator entered on the order, else the
+        // first commodity's description as a sensible fallback.
+        String contentsDesc = null;
+        if (intl.getCommodities() != null && !intl.getCommodities().isEmpty()) {
+            contentsDesc = intl.getCommodities().get(0).getDescription();
+        }
+        if (StringUtils.hasText(contentsDesc)) customs.put("contents_description", contentsDesc);
+        // non_delivery_option — default to return-to-sender (safer than abandon).
+        customs.put("non_delivery_option", "return_to_sender");
+        java.util.List<Map<String, Object>> items = new java.util.ArrayList<>();
+        String weightUnit = normaliseSeraWeightUnit(intl.getWeightUnit());
+        for (com.multiship.backend.dto.CustomsCommodityDTO c : intl.getCommodities()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("item_description", nonBlank(c.getDescription(), ""));
+            row.put("quantity", c.getQuantity() != null ? c.getQuantity() : 1);
+            java.math.BigDecimal unitVal = c.getUnitValue();
+            if (unitVal != null) {
+                Map<String, Object> uv = new LinkedHashMap<>();
+                uv.put("amount", unitVal);
+                uv.put("currency", nonBlank(intl.getCustomsCurrency(), "usd").toLowerCase(Locale.ROOT));
+                row.put("unit_value", uv);
+            }
+            if (c.getUnitWeight() != null) {
+                row.put("item_weight", c.getUnitWeight());
+                row.put("weight_unit", weightUnit);
+            }
+            if (StringUtils.hasText(c.getHsCode())) row.put("harmonized_tariff_code", c.getHsCode());
+            if (StringUtils.hasText(c.getCountryOfOrigin())) row.put("country_of_origin", c.getCountryOfOrigin());
+            if (StringUtils.hasText(c.getSku())) row.put("sku", c.getSku());
+            items.add(row);
+        }
+        customs.put("customs_items", items);
+        return customs;
+    }
+
+    /** Map a SWSIM-style service code ("USPS PM", "USPS GA", ...) to
+     *  SERA's snake-case vocabulary. When the input is already snake_case
+     *  (SERA-native), pass through. Blank input → null. */
+    static String mapSwsimServiceToSera(String service) {
+        if (!StringUtils.hasText(service)) return null;
+        String v = service.trim();
+        // Pass through if it already looks SERA-shaped (has an underscore
+        // and no space, e.g. "usps_priority_mail").
+        if (v.contains("_") && !v.contains(" ")) return v.toLowerCase(Locale.ROOT);
+        return switch (v.toUpperCase(Locale.ROOT)) {
+            case "USPS PM", "PRIORITY" -> "usps_priority_mail";
+            case "USPS PME", "PRIORITY_EXPRESS" -> "usps_priority_mail_express";
+            case "USPS GA", "GROUND_ADVANTAGE" -> "usps_ground_advantage";
+            case "USPS FCM" -> "usps_first_class_mail";
+            case "USPS MM" -> "usps_media_mail";
+            case "USPS PMI", "PRIORITY_INTL" -> "usps_priority_mail_international";
+            case "USPS PMEI", "EXPRESS_INTL" -> "usps_priority_mail_express_international";
+            case "USPS GXG" -> "usps_global_express_guaranteed";
+            case "USPS FCMI" -> "usps_first_class_mail_international";
+            case "USPS FCPIS", "FIRST_CLASS_INTL" -> "usps_first_class_package_international_service";
+            default -> v.toLowerCase(Locale.ROOT).replace(' ', '_');
+        };
+    }
+
+    /** Map a SWSIM-style packaging code to SERA. Pass-through when
+     *  snake-case, else best-effort translate. */
+    static String mapPackagingTypeToSera(String pt) {
+        if (!StringUtils.hasText(pt)) return "package";
+        String v = pt.trim();
+        if (v.contains("_") && !v.contains(" ")) return v.toLowerCase(Locale.ROOT);
+        return switch (v.toUpperCase(Locale.ROOT)) {
+            case "PACKAGE", "YOUR_PACKAGING" -> "package";
+            case "LETTER" -> "letter";
+            case "LARGE_ENVELOPE", "LARGEENVELOPE" -> "large_envelope";
+            case "SMALL_FLAT_RATE_BOX" -> "usps_small_flat_rate_box";
+            case "MEDIUM_FLAT_RATE_BOX" -> "usps_medium_flat_rate_box";
+            case "LARGE_FLAT_RATE_BOX" -> "usps_large_flat_rate_box";
+            case "REGIONAL_RATE_BOX_A" -> "usps_regional_rate_box_a";
+            case "REGIONAL_RATE_BOX_B" -> "usps_regional_rate_box_b";
+            case "FLAT_RATE_ENVELOPE" -> "usps_flat_rate_envelope";
+            default -> v.toLowerCase(Locale.ROOT).replace(' ', '_');
+        };
+    }
+
+    /** Map a signature-option code to SERA's delivery_confirmation_type. */
+    static String mapSignatureToSera(String raw) {
+        if (raw == null) return null;
+        String v = raw.trim().toUpperCase(Locale.ROOT);
+        if (v.isEmpty() || "NONE".equals(v)) return null;
+        return switch (v) {
+            case "INDIRECT", "DIRECT" -> "signature";
+            case "ADULT" -> "adult_signature";
+            case "TRACKING" -> "tracking";
+            default -> null;
+        };
+    }
+
+    /** Weight unit normalisation. Our DTO uses lb/oz/kg/g; SERA speaks
+     *  pound/ounce/kilogram/gram. */
+    static String normaliseSeraWeightUnit(String raw) {
+        if (!StringUtils.hasText(raw)) return "ounce";
+        return switch (raw.trim().toUpperCase(Locale.ROOT)) {
+            case "LB", "LBS", "POUND", "POUNDS" -> "pound";
+            case "OZ", "OUNCE", "OUNCES" -> "ounce";
+            case "KG", "KILOGRAM", "KILOGRAMS" -> "kilogram";
+            case "G", "GRAM", "GRAMS" -> "gram";
+            default -> "ounce";
+        };
+    }
+
+    /** Dim unit normalisation. IN → inch; CM → centimeter. */
+    static String normaliseSeraDimUnit(String raw) {
+        if (!StringUtils.hasText(raw)) return "inch";
+        return switch (raw.trim().toUpperCase(Locale.ROOT)) {
+            case "IN", "INCH", "INCHES" -> "inch";
+            case "CM", "CENTIMETER", "CENTIMETERS", "CENTIMETRE", "CENTIMETRES" -> "centimeter";
+            default -> "inch";
+        };
+    }
+
+    /** Label format normalisation. Our request carries PDF / PNG / ZPL /
+     *  GIF; SERA speaks pdf / png / zpl / zpl_ascii. GIF and JPG have no
+     *  SERA equivalent — silently default to PDF (the safe universal). */
+    static String normaliseSeraLabelFormat(String raw) {
+        if (!StringUtils.hasText(raw)) return "pdf";
+        return switch (raw.trim().toUpperCase(Locale.ROOT)) {
+            case "PDF" -> "pdf";
+            case "PNG" -> "png";
+            case "ZPL" -> "zpl";
+            case "ZPL_ASCII" -> "zpl_ascii";
+            default -> "pdf";
+        };
+    }
+
+    /** Reason-for-export → SERA contents_type enum. */
+    static String mapContentsTypeToSera(String reason) {
+        if (reason == null) return "merchandise";
+        return switch (reason.trim().toUpperCase(Locale.ROOT)) {
+            case "SALE" -> "merchandise";
+            case "GIFT" -> "gift";
+            case "SAMPLE" -> "sample";
+            case "RETURN" -> "returned_goods";
+            case "DOCUMENTS" -> "documents";
+            case "REPAIR" -> "other";
+            default -> "merchandise";
+        };
+    }
+
+    /**
+     * Parse a SERA {@code POST /sera/v1/labels} response into a
+     * single-piece {@link ShipmentResult}. The label_id UUID is stashed
+     * in the piece's {@link PackageTracking#carrierLabelRef()} so
+     * downstream persistence (V44 column) can key void + reprint off it.
+     *
+     * <p>Fault-first: SERA returns a plain JSON body with a
+     * {@code label_id} + {@code tracking_number} on success. Missing
+     * either field means the server didn't produce a live label; we
+     * throw so the createShipment loop routes through the exception
+     * mapper + rollback, matching the SWSIM parseCreateIndicium contract.
+     */
+    ShipmentResult parseSeraCreateLabelResponse(String responseJson, ShipmentRequestDTO request) {
+        if (!StringUtils.hasText(responseJson)) {
+            throw new IllegalStateException(
+                    "SERA /labels returned an empty response for order "
+                            + (request == null ? "?" : request.getReferenceNumber()));
+        }
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(responseJson);
+        } catch (Exception ex) {
+            throw new IllegalStateException(
+                    "SERA /labels returned non-JSON: " + safeHead(responseJson), ex);
+        }
+        String labelId = root.path("label_id").asText(null);
+        String tracking = root.path("tracking_number").asText(null);
+        if (!StringUtils.hasText(tracking) || !StringUtils.hasText(labelId)) {
+            String err = extractSeraError(responseJson);
+            throw new IllegalStateException(
+                    "SERA /labels returned no tracking_number/label_id for order "
+                            + (request == null ? "?" : request.getReferenceNumber())
+                            + ". Detail: " + err);
+        }
+        String labelHref = null;
+        JsonNode labels = root.path("labels");
+        if (labels.isArray() && labels.size() > 0) {
+            labelHref = labels.get(0).path("href").asText(null);
+        }
+        java.math.BigDecimal cost = null;
+        JsonNode costNode = root.path("shipment_cost").path("total_amount");
+        if (costNode.isNumber()) cost = costNode.decimalValue();
+        else if (costNode.isTextual()) {
+            try { cost = new java.math.BigDecimal(costNode.asText()); }
+            catch (NumberFormatException ignored) { /* leave null */ }
+        }
+        LocalDateTime estimatedDelivery = parseSeraTimestamp(
+                root.path("estimated_delivery_date").asText(null));
+        String trackingUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + tracking;
+
+        // Attach carrier_label_ref to the single-piece PackageTracking so
+        // aggregateStampsShipmentResults preserves it downstream.
+        PackageTracking piece = new PackageTracking(1, tracking, trackingUrl,
+                labelHref, labelHref, cost, labelId);
+        return new ShipmentResult(tracking, trackingUrl, labelHref, labelHref, cost,
+                estimatedDelivery, responseJson, java.util.List.of(piece));
+    }
+
+    /** SERA error extraction. RFC-7807-ish problem+json shape or plain
+     *  {@code {"error": "..."}}; falls back to a truncated raw body when
+     *  neither shape matches. */
+    String extractSeraError(String body) {
+        if (!StringUtils.hasText(body)) return "empty response";
+        try {
+            JsonNode j = objectMapper.readTree(body);
+            String detail = j.path("detail").asText(null);
+            if (StringUtils.hasText(detail)) return detail;
+            String message = j.path("message").asText(null);
+            if (StringUtils.hasText(message)) return message;
+            String error = j.path("error").asText(null);
+            if (StringUtils.hasText(error)) return error;
+            JsonNode errors = j.path("errors");
+            if (errors.isArray() && errors.size() > 0) {
+                String first = errors.get(0).path("message").asText(
+                        errors.get(0).path("detail").asText(null));
+                if (StringUtils.hasText(first)) return first;
+            }
+        } catch (Exception parseIgnored) {
+            // Fall through to raw-body truncation.
+        }
+        return safeHead(body);
+    }
+
+    /** SERA emits ISO-8601 timestamps (with offset). Reuse the SWSIM parser
+     *  which already handles both LocalDateTime and OffsetDateTime shapes. */
+    private LocalDateTime parseSeraTimestamp(String value) {
+        return parseSwsimTimestamp(value);
     }
 
     @Override
@@ -874,7 +1573,18 @@ public class StampsConnector implements CarrierConnector {
     @Override
     public VoidResult voidShipment(String trackingNumber, String accessToken, String environment,
                                     String accountNumber, String senderCountryCode) {
-        // Stamps cancel doesn't need accountNumber/senderCountry — kept for signature parity.
+        if (isSeraFlavor()) {
+            return voidShipmentSera(trackingNumber, accessToken, environment);
+        }
+        return voidShipmentSwsim(trackingNumber, accessToken, environment);
+    }
+
+    /**
+     * SWSIM {@code CancelIndicium} path — legacy. Unchanged from the
+     * pre-SERA behaviour. Both accountNumber and senderCountryCode are
+     * ignored (SWSIM keys off the Authenticator token).
+     */
+    VoidResult voidShipmentSwsim(String trackingNumber, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
                     "USPS void needs live credentials; the account is on a fallback token.",
@@ -903,6 +1613,383 @@ public class StampsConnector implements CarrierConnector {
             return new VoidResult(trackingNumber, false, "ERROR",
                     "SWSIM CancelIndicium call failed: " + ex.getMessage(), null);
         }
+    }
+
+    /**
+     * SERA {@code POST /sera/v1/labels/{label_id}/void} — cancels a label
+     * SERA previously issued. Idempotent: voiding an already-voided label
+     * returns success. Post-scan cancels succeed but SERA won't refund
+     * postage.
+     *
+     * <p>Tracking-vs-label_id resolution: SERA keys the void call off the
+     * {@code label_id} UUID returned from {@code POST /sera/v1/labels}, NOT
+     * the tracking number. We look up {@code label_id} from
+     * {@code label_package.carrier_label_ref} (persisted by PR 1's V44
+     * migration) using the tracking as the search key.
+     */
+    VoidResult voidShipmentSera(String trackingNumber, String accessToken, String environment) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new VoidResult(trackingNumber, false, "NOT_SUPPORTED",
+                    "USPS via Stamps.com (SERA) void needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        String labelId = resolveSeraLabelId(trackingNumber);
+        if (!StringUtils.hasText(labelId)) {
+            // SERA can't void by tracking — without the UUID from the create
+            // response, the call has no legal input shape. Surface an
+            // actionable message so operators know why the void didn't
+            // fire (typical cause: label was created BEFORE PR 1's V44
+            // rolled out, so carrier_label_ref is null).
+            log.warn("Stamps SERA void: no carrier_label_ref persisted for tracking {} — cannot call /labels/{{label_id}}/void.",
+                    trackingNumber);
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "SERA void needs the label_id (persisted in label_package.carrier_label_ref); "
+                            + "none found for tracking " + trackingNumber
+                            + ". Labels created before SERA support shipped can only be voided manually via the Stamps.com dashboard.",
+                    null);
+        }
+        String baseUrl = seraApiBaseUrl(environment);
+        try {
+            // SERA's void endpoint is POST (per developer.stamps.com/rest-api/reference/serav1.html);
+            // some third-party clients document PUT — verified against the
+            // referenced JSON body which shows "POST /sera/v1/labels/{label_id}/void".
+            String response = HttpClients.newBuilder()
+                    .baseUrl(baseUrl + "/labels/" + labelId + "/void").build()
+                    .post()
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(String.class);
+            return parseSeraVoidResponse(trackingNumber, labelId, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            String err = extractSeraError(ex.getResponseBodyAsString());
+            // 404 on a legit label_id usually means already voided — treat
+            // as ALREADY_VOIDED (idempotent semantics the interface doc
+            // promises) rather than a real error.
+            if (status == 404) {
+                log.info("Stamps SERA void: label_id {} not found (already voided?) — returning ALREADY_VOIDED.",
+                        labelId);
+                return new VoidResult(trackingNumber, true, "ALREADY_VOIDED",
+                        "SERA reported label_id " + labelId + " as not found — treating as already voided.",
+                        ex.getResponseBodyAsString());
+            }
+            log.warn("Stamps SERA void rejected for label_id {} (HTTP {}): {}",
+                    labelId, status, err);
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "SERA void rejected (HTTP " + status + "): " + err,
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps SERA void call failed for label_id {}: {}", labelId, ex.getMessage());
+            return new VoidResult(trackingNumber, false, "ERROR",
+                    "SERA void call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** Resolve the SERA {@code label_id} for a tracking number by reading
+     *  {@code label_package.carrier_label_ref} (V44). Returns null when the
+     *  repository isn't wired (unit tests) or no row matches. */
+    String resolveSeraLabelId(String trackingNumber) {
+        if (!StringUtils.hasText(trackingNumber) || labelPackageRepository == null) return null;
+        return labelPackageRepository.findByTrackingNumber(trackingNumber)
+                .map(com.multiship.backend.model.LabelPackage::getCarrierLabelRef)
+                .filter(StringUtils::hasText)
+                .orElse(null);
+    }
+
+    /**
+     * Parse SERA's void response. The documented success shape is
+     * {@code {"status": "success"}} but the endpoint may return a
+     * plain 200 with no body — treat both as VOIDED. Non-200 paths land
+     * in the RestClientResponseException branch above.
+     */
+    VoidResult parseSeraVoidResponse(String trackingNumber, String labelId, String responseJson) {
+        // Empty body on 200 → success (SERA's success responses are minimal).
+        if (!StringUtils.hasText(responseJson)) {
+            return new VoidResult(trackingNumber, true, "VOIDED",
+                    "SERA confirmed void for label_id " + labelId + ".", null);
+        }
+        try {
+            JsonNode j = objectMapper.readTree(responseJson);
+            String status = j.path("status").asText(null);
+            // Explicit non-success status → surface as ERROR.
+            if (StringUtils.hasText(status) && !"success".equalsIgnoreCase(status)) {
+                return new VoidResult(trackingNumber, false, "ERROR",
+                        "SERA void status=" + status + ": " + extractSeraError(responseJson),
+                        responseJson);
+            }
+        } catch (Exception parseIgnored) {
+            // Non-JSON 200 body — treat as success (SERA's own error paths
+            // 4xx/5xx which are handled above; a 200 with weird body is
+            // reliably success).
+        }
+        return new VoidResult(trackingNumber, true, "VOIDED",
+                "SERA confirmed void for label_id " + labelId + ".", responseJson);
+    }
+
+    /**
+     * Balance query. SWSIM {@code GetAccountInfo} exposes a
+     * {@code PostageBalance} field but this connector never wired it —
+     * SWSIM-flavored callers see NOT_SUPPORTED with a hint about the
+     * dashboard, matching the pre-SERA behaviour. SERA has a first-class
+     * {@code GET /sera/v1/balance} endpoint that returns
+     * {@code amount_available} / {@code max_balance_amount_allowed} in
+     * {@code currency} — this dispatches to it.
+     */
+    @Override
+    public BalanceResult getAccountBalance(String accessToken, String environment) {
+        if (isSeraFlavor()) {
+            return getAccountBalanceSera(accessToken, environment);
+        }
+        return new BalanceResult(
+                CARRIER_CODE, null, null, null,
+                "NOT_SUPPORTED",
+                "USPS via Stamps.com (SWSIM): balance query not wired on this connector. "
+                        + "Check the Stamps.com dashboard for account balance, or flip "
+                        + "carrier.stamps.api-flavor=SERA for a live balance endpoint.",
+                null);
+    }
+
+    /**
+     * SERA {@code GET /sera/v1/balance}. Response shape (per
+     * developer.stamps.com/rest-api/reference/serav1.html):
+     * <pre>
+     * {
+     *   "amount_available": number,
+     *   "max_balance_amount_allowed": number,
+     *   "currency": "usd"
+     * }
+     * </pre>
+     *
+     * <p>{@code -local-*} tokens short-circuit to NOT_SUPPORTED matching
+     * the sibling-parity guard every other SERA branch uses.
+     */
+    BalanceResult getAccountBalanceSera(String accessToken, String environment) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new BalanceResult(
+                    CARRIER_CODE, null, null, null,
+                    "NOT_SUPPORTED",
+                    "SERA balance needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        String baseUrl = seraApiBaseUrl(environment);
+        try {
+            String response = HttpClients.newBuilder().baseUrl(baseUrl + "/balance").build()
+                    .get()
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(String.class);
+            return parseSeraBalanceResponse(response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            String err = extractSeraError(ex.getResponseBodyAsString());
+            log.warn("Stamps SERA /balance rejected (HTTP {}): {}", status, err);
+            return new BalanceResult(
+                    CARRIER_CODE, null, null, null, "ERROR",
+                    "SERA balance rejected (HTTP " + status + "): " + err,
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps SERA /balance call failed: {}", ex.getMessage());
+            return new BalanceResult(
+                    CARRIER_CODE, null, null, null, "ERROR",
+                    "SERA balance call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Parse the SERA balance response. Currency is uppercased to match
+     * ISO-4217 convention downstream (SERA emits lowercase "usd" per its
+     * doc; the rest of our system speaks "USD"). Missing / unparseable
+     * amount fields surface as ERROR rather than a bogus zero balance —
+     * silent zero would look like an empty account.
+     */
+    BalanceResult parseSeraBalanceResponse(String responseJson) {
+        if (!StringUtils.hasText(responseJson)) {
+            return new BalanceResult(CARRIER_CODE, null, null, null, "ERROR",
+                    "SERA /balance returned an empty response.", null);
+        }
+        try {
+            JsonNode j = objectMapper.readTree(responseJson);
+            java.math.BigDecimal available = readSeraMoney(j.path("amount_available"));
+            java.math.BigDecimal maxBalance = readSeraMoney(j.path("max_balance_amount_allowed"));
+            String currency = j.path("currency").asText(null);
+            if (StringUtils.hasText(currency)) currency = currency.toUpperCase(Locale.ROOT);
+            if (available == null) {
+                return new BalanceResult(CARRIER_CODE, null, null, currency, "ERROR",
+                        "SERA /balance response missing amount_available: " + safeHead(responseJson),
+                        responseJson);
+            }
+            return new BalanceResult(CARRIER_CODE, available, maxBalance, currency, "OK",
+                    "USPS via Stamps.com balance: "
+                            + available.toPlainString()
+                            + (StringUtils.hasText(currency) ? " " + currency : "")
+                            + (maxBalance != null ? " (cap " + maxBalance.toPlainString() + ")" : ""),
+                    responseJson);
+        } catch (Exception ex) {
+            return new BalanceResult(CARRIER_CODE, null, null, null, "ERROR",
+                    "SERA /balance returned non-JSON or malformed body: " + ex.getMessage(),
+                    responseJson);
+        }
+    }
+
+    /** Read a SERA money field. Accepts JSON number or string ("1.23")
+     *  — SERA is documented as number but some carrier gateways proxy
+     *  the response as strings. Null when the node is missing or blank. */
+    private static java.math.BigDecimal readSeraMoney(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) return null;
+        if (node.isNumber()) return node.decimalValue();
+        if (node.isTextual()) {
+            String s = node.asText();
+            if (!StringUtils.hasText(s)) return null;
+            try { return new java.math.BigDecimal(s); }
+            catch (NumberFormatException ignored) { return null; }
+        }
+        return null;
+    }
+
+    /**
+     * Reprint / retrieve a label. SERA {@code GET /sera/v1/labels/{label_id}}
+     * with query-string {@code label_size}, {@code label_format},
+     * {@code label_output_type}. SWSIM has no first-class reprint endpoint
+     * — the SWSIM branch returns NOT_SUPPORTED with a note pointing
+     * operators to the URL persisted on the original label response
+     * (label_url in label_batch.master_label_url / label_package.label_file_path).
+     */
+    @Override
+    public LabelReprintResult reprintLabel(String trackingNumber, String labelSize, String labelFormat,
+                                            String accessToken, String environment) {
+        if (isSeraFlavor()) {
+            return reprintLabelSera(trackingNumber, labelSize, labelFormat, accessToken, environment);
+        }
+        return new LabelReprintResult(
+                CARRIER_CODE, null, null, "NOT_SUPPORTED",
+                "USPS via Stamps.com (SWSIM) has no reprint endpoint. The original label URL is "
+                        + "persisted in label_batch.master_label_url / label_package.label_file_path; "
+                        + "print from there, or flip carrier.stamps.api-flavor=SERA for a live reprint API.",
+                null);
+    }
+
+    /**
+     * SERA {@code GET /sera/v1/labels/{label_id}}. Response shape:
+     * <pre>
+     * {
+     *   "labels": [{"href": "https://..." | "BASE64..."}],
+     *   "forms":  [{"href": "https://..."}]
+     * }
+     * </pre>
+     * We request {@code label_output_type=base64} to match the persistence
+     * convention (bytes on disk survive URL expiry — see PR #550).
+     */
+    LabelReprintResult reprintLabelSera(String trackingNumber, String labelSize, String labelFormat,
+                                         String accessToken, String environment) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new LabelReprintResult(
+                    CARRIER_CODE, null, null, "NOT_SUPPORTED",
+                    "SERA reprint needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        String labelId = resolveSeraLabelId(trackingNumber);
+        if (!StringUtils.hasText(labelId)) {
+            return new LabelReprintResult(
+                    CARRIER_CODE, null, null, "ERROR",
+                    "SERA reprint needs the label_id (persisted in label_package.carrier_label_ref); "
+                            + "none found for tracking " + trackingNumber
+                            + ". Labels created before SERA support shipped can only be reprinted from the persisted label_url.",
+                    null);
+        }
+        String baseUrl = seraApiBaseUrl(environment);
+        // SERA accepts query params on GET /labels/{id}: label_size,
+        // label_format, label_output_type. Build them via a MultiValueMap
+        // so RestClient handles URL-encoding.
+        String size = normaliseSeraLabelSize(labelSize);
+        String format = normaliseSeraLabelFormat(labelFormat);
+        String url = baseUrl + "/labels/" + labelId
+                + "?label_size=" + size
+                + "&label_format=" + format
+                + "&label_output_type=base64";
+        try {
+            String response = HttpClients.newBuilder().baseUrl(url).build()
+                    .get()
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(String.class);
+            return parseSeraReprintResponse(labelId, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            String err = extractSeraError(ex.getResponseBodyAsString());
+            log.warn("Stamps SERA reprint rejected for label_id {} (HTTP {}): {}",
+                    labelId, status, err);
+            return new LabelReprintResult(
+                    CARRIER_CODE, null, null, "ERROR",
+                    "SERA reprint rejected (HTTP " + status + "): " + err,
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps SERA reprint call failed for label_id {}: {}", labelId, ex.getMessage());
+            return new LabelReprintResult(
+                    CARRIER_CODE, null, null, "ERROR",
+                    "SERA reprint call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /** Parse SERA's reprint response. {@code labels[0].href} carries the
+     *  document — either a signed URL (when output_type=url) or base64
+     *  bytes (when output_type=base64). We always request base64 in
+     *  {@link #reprintLabelSera} so the bytes path is the common case,
+     *  but we tolerate the URL shape for cases where operators paste a
+     *  pre-built request. Heuristic: if the value starts with "http" we
+     *  treat as URL, otherwise as base64. */
+    LabelReprintResult parseSeraReprintResponse(String labelId, String responseJson) {
+        if (!StringUtils.hasText(responseJson)) {
+            return new LabelReprintResult(
+                    CARRIER_CODE, null, null, "ERROR",
+                    "SERA reprint returned an empty response for label_id " + labelId + ".",
+                    null);
+        }
+        try {
+            JsonNode j = objectMapper.readTree(responseJson);
+            JsonNode labels = j.path("labels");
+            if (!labels.isArray() || labels.size() == 0) {
+                return new LabelReprintResult(
+                        CARRIER_CODE, null, null, "ERROR",
+                        "SERA reprint response missing labels[]: " + safeHead(responseJson),
+                        responseJson);
+            }
+            String href = labels.get(0).path("href").asText(null);
+            if (!StringUtils.hasText(href)) {
+                return new LabelReprintResult(
+                        CARRIER_CODE, null, null, "ERROR",
+                        "SERA reprint response missing labels[0].href: " + safeHead(responseJson),
+                        responseJson);
+            }
+            String url = null;
+            String base64 = null;
+            if (href.startsWith("http://") || href.startsWith("https://")) {
+                url = href;
+            } else {
+                base64 = href;
+            }
+            return new LabelReprintResult(
+                    CARRIER_CODE, url, base64, "OK",
+                    "SERA reprint delivered label for label_id " + labelId + ".",
+                    responseJson);
+        } catch (Exception ex) {
+            return new LabelReprintResult(
+                    CARRIER_CODE, null, null, "ERROR",
+                    "SERA reprint returned malformed body: " + ex.getMessage(), responseJson);
+        }
+    }
+
+    /** Normalise a label-size input to SERA's vocabulary. Blank → 4x6
+     *  (the SERA default for thermal shipping labels). */
+    static String normaliseSeraLabelSize(String raw) {
+        if (!StringUtils.hasText(raw)) return "4x6";
+        String v = raw.trim().toLowerCase(Locale.ROOT);
+        return switch (v) {
+            case "4x6", "4x6.75-doctab", "4x8.25-doctab", "letter" -> v;
+            default -> "4x6";
+        };
     }
 
     /** Build the SWSIM CancelIndicium SOAP envelope. */
@@ -1249,6 +2336,14 @@ public class StampsConnector implements CarrierConnector {
      */
     @Override
     public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken, String environment) {
+        if (isSeraFlavor()) {
+            return closeOutDaySera(request, accessToken, environment);
+        }
+        return closeOutDaySwsim(request, accessToken, environment);
+    }
+
+    /** SWSIM {@code CreateScanForm} path — legacy behaviour, unchanged. */
+    CloseOutResult closeOutDaySwsim(CloseOutRequest request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new CloseOutResult("USPS", null, null, null, 0, "NOT_SUPPORTED",
                     "USPS SCAN Form needs live credentials; the account is on a fallback token.",
@@ -1282,6 +2377,155 @@ public class StampsConnector implements CarrierConnector {
             log.warn("Stamps CreateScanForm failed: {}", ex.getMessage());
             return new CloseOutResult("USPS", null, null, null, tracking.size(), "ERROR",
                     "SWSIM CreateScanForm call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * SERA {@code POST /sera/v1/manifests} — end-of-day manifest. SERA
+     * supports two shapes: by list of {@code label_ids} (preferred, exact
+     * label targeting) or by carrier + ship_date (broader, catches any
+     * unmanifested labels for that day). We use the label_ids path when
+     * we can resolve them from {@code label_package.carrier_label_ref}
+     * (the V44 column) and fall back to carrier + ship_date otherwise —
+     * this keeps legacy pre-V44 labels manifestable via the same
+     * endpoint. Response shape:
+     * <pre>
+     * {
+     *   "manifest_id": "uuid",
+     *   "carrier": "usps",
+     *   "ship_date": "2026-09-08",
+     *   "number_of_items_in_manifest": 12,
+     *   "labels": [{"href": "https://..."}]
+     * }
+     * </pre>
+     * {@code labels[0].href} is the manifest form (PDF or PNG); we save
+     * it into {@link CloseOutResult#manifestPdfUrl()}.
+     */
+    CloseOutResult closeOutDaySera(CloseOutRequest request, String accessToken, String environment) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new CloseOutResult("USPS", null, null, null, 0, "NOT_SUPPORTED",
+                    "USPS via Stamps.com (SERA) manifest needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        java.util.List<String> tracking = request.trackingNumbers();
+        if (tracking == null || tracking.isEmpty()) {
+            return new CloseOutResult("USPS", null, null, null, 0, "ERROR",
+                    "SERA manifest requires at least one tracking number (to resolve label_ids).",
+                    null);
+        }
+        String baseUrl = seraApiBaseUrl(environment);
+        Map<String, Object> body = buildSeraManifestBody(request);
+        String jsonBody;
+        try {
+            jsonBody = objectMapper.writeValueAsString(body);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException("Failed to serialize SERA manifest body", ex);
+        }
+        try {
+            String response = HttpClients.newBuilder().baseUrl(baseUrl + "/manifests").build()
+                    .post()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .body(jsonBody)
+                    .retrieve()
+                    .body(String.class);
+            return parseSeraManifestResponse(request, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            String err = extractSeraError(ex.getResponseBodyAsString());
+            log.warn("Stamps SERA /manifests rejected (HTTP {}): {}", status, err);
+            return new CloseOutResult("USPS", null, null, null, tracking.size(), "ERROR",
+                    "SERA manifest rejected (HTTP " + status + "): " + err,
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps SERA /manifests call failed: {}", ex.getMessage());
+            return new CloseOutResult("USPS", null, null, null, tracking.size(), "ERROR",
+                    "SERA manifest call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Build the JSON body for SERA {@code POST /sera/v1/manifests}. Prefers
+     * the by-label_ids path when every tracking has a persisted
+     * {@code carrier_label_ref}; falls back to the by-carrier+ship_date
+     * shape when any tracking is missing its label_id (legacy labels).
+     */
+    Map<String, Object> buildSeraManifestBody(CloseOutRequest request) {
+        java.util.List<String> tracking = request.trackingNumbers();
+        java.util.List<String> labelIds = new java.util.ArrayList<>();
+        if (labelPackageRepository != null) {
+            for (String t : tracking) {
+                String id = resolveSeraLabelId(t);
+                if (StringUtils.hasText(id)) labelIds.add(id);
+            }
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        Map<String, Object> labelOpts = new LinkedHashMap<>();
+        labelOpts.put("label_format", "pdf");
+        labelOpts.put("print_instructions", false);
+        // If we got a label_id for every tracking, use the exact-target path.
+        // Otherwise fall back to carrier + ship_date so legacy pre-V44 labels
+        // still manifest (SERA sweeps every unmanifested USPS label for the
+        // day at the shipper address).
+        if (labelIds.size() == tracking.size() && !labelIds.isEmpty()) {
+            body.put("label_ids", labelIds);
+        } else {
+            log.info("Stamps SERA manifest: {} of {} tracking numbers had a persisted label_id; "
+                    + "falling back to by-carrier+ship_date manifest.",
+                    labelIds.size(), tracking.size());
+            body.put("carrier", "usps");
+            String shipDate = request.closeDate() != null
+                    ? request.closeDate().toString()
+                    : com.multiship.backend.util.LabelDates.today(null).toString();
+            body.put("ship_date", shipDate);
+            if (request.address() != null) {
+                body.put("from_address", buildSeraAddress(
+                        request.address().name(), null,
+                        request.address().addressLine1(),
+                        request.address().addressLine2(),
+                        request.address().addressLine3(),
+                        request.address().city(),
+                        request.address().state(),
+                        request.address().postalCode(),
+                        request.address().countryCode(),
+                        null, null, null));
+            }
+        }
+        body.put("label_options", labelOpts);
+        return body;
+    }
+
+    /**
+     * Parse SERA's manifest response. Missing {@code manifest_id} counts as
+     * ERROR (mirrors parseSeraCreateLabelResponse's fault-first pattern).
+     */
+    CloseOutResult parseSeraManifestResponse(CloseOutRequest request, String responseJson) {
+        int count = request.trackingNumbers() == null ? 0 : request.trackingNumbers().size();
+        if (!StringUtils.hasText(responseJson)) {
+            return new CloseOutResult("USPS", null, null, null, count, "ERROR",
+                    "SERA /manifests returned an empty response.", null);
+        }
+        try {
+            JsonNode j = objectMapper.readTree(responseJson);
+            String manifestId = j.path("manifest_id").asText(null);
+            if (!StringUtils.hasText(manifestId)) {
+                return new CloseOutResult("USPS", null, null, null, count, "ERROR",
+                        "SERA /manifests returned no manifest_id: " + extractSeraError(responseJson),
+                        responseJson);
+            }
+            String manifestUrl = null;
+            JsonNode labels = j.path("labels");
+            if (labels.isArray() && labels.size() > 0) {
+                manifestUrl = labels.get(0).path("href").asText(null);
+            }
+            int items = j.path("number_of_items_in_manifest").asInt(count);
+            return new CloseOutResult("USPS", manifestId, manifestUrl, null, items, "MANIFESTED",
+                    "SERA manifest " + manifestId + " covers " + items + " shipment(s)",
+                    responseJson);
+        } catch (Exception ex) {
+            return new CloseOutResult("USPS", null, null, null, count, "ERROR",
+                    "SERA /manifests returned malformed body: " + ex.getMessage(), responseJson);
         }
     }
 

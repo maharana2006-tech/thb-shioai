@@ -524,6 +524,106 @@ public interface CarrierConnector {
     ) {
     }
 
+    /**
+     * Query the carrier account's prepaid postage balance. Applies to
+     * carriers that operate a prepaid model (Stamps.com / Endicia deposit
+     * an account with USPS ahead of shipping); a call-and-owe carrier
+     * (FedEx / UPS / DHL bills monthly) returns NOT_SUPPORTED with a
+     * message rather than an accidental zero.
+     *
+     * <p>Default returns NOT_SUPPORTED so this stays additive over past
+     * sprints — every existing connector inherits the honest no-op until
+     * its per-carrier balance endpoint is wired.
+     */
+    default BalanceResult getAccountBalance(String accessToken, String environment) {
+        return new BalanceResult(
+                getCarrierCode(),
+                null, null, null,
+                "NOT_SUPPORTED",
+                "Balance query isn't implemented for " + getCarrierCode() + " on this instance.",
+                null);
+    }
+
+    /**
+     * Result of a balance query.
+     *
+     * @param carrierCode      Carrier the balance belongs to.
+     * @param amountAvailable  Currently-available prepaid balance, in
+     *                         {@link #currency}. Null on NOT_SUPPORTED /
+     *                         ERROR.
+     * @param maxBalance       Maximum balance the carrier permits on the
+     *                         account (SERA sets this on prepaid accounts;
+     *                         null when the carrier doesn't cap).
+     * @param currency         ISO-4217 currency the amounts are quoted in
+     *                         ({@code USD}, {@code EUR}, …).
+     * @param status           OK | NOT_SUPPORTED | ERROR.
+     * @param message          Operator-facing summary. On NOT_SUPPORTED it
+     *                         explains why (call-and-owe carrier / API
+     *                         doesn't expose balance / …).
+     * @param rawResponse      Full carrier response for the audit trail;
+     *                         null on NOT_SUPPORTED (no call was made).
+     */
+    record BalanceResult(
+            String carrierCode,
+            BigDecimal amountAvailable,
+            BigDecimal maxBalance,
+            String currency,
+            String status,
+            String message,
+            String rawResponse
+    ) {
+    }
+
+    /**
+     * Reprint / retrieve a previously-created label. The tracking number
+     * identifies the shipment; the connector is responsible for resolving
+     * its own carrier-side identifier (SERA {@code label_id}, FedEx
+     * {@code labelSpecification.reprintLabel}, ...) — callers don't need
+     * to know per-carrier addressing schemes.
+     *
+     * <p>Default returns NOT_SUPPORTED so this stays additive over past
+     * sprints — every existing connector inherits the honest no-op until
+     * its per-carrier reprint endpoint is wired.
+     *
+     * @param labelSize   Output size code (e.g. {@code 4x6}, {@code letter}).
+     *                    Nullable — the connector picks a sensible default.
+     * @param labelFormat Output format ({@code pdf}, {@code png}, {@code zpl}).
+     *                    Nullable — connector default (PDF for SERA).
+     */
+    default LabelReprintResult reprintLabel(String trackingNumber, String labelSize, String labelFormat,
+                                             String accessToken, String environment) {
+        return new LabelReprintResult(
+                getCarrierCode(), null, null, "NOT_SUPPORTED",
+                "Label reprint isn't implemented for " + getCarrierCode() + " on this instance.",
+                null);
+    }
+
+    /**
+     * Result of a label reprint / retrieve call.
+     *
+     * @param carrierCode    Carrier that produced the reprinted label.
+     * @param labelUrl       Signed URL to the reprinted label document
+     *                       when the carrier returned one (SERA
+     *                       {@code label_output_type=url}). Null when the
+     *                       carrier only returns inline bytes.
+     * @param labelBase64    Base64-encoded label bytes when the carrier
+     *                       inlines them (SERA
+     *                       {@code label_output_type=base64}). Null when
+     *                       only a URL was returned.
+     * @param status         OK | NOT_SUPPORTED | ERROR.
+     * @param message        Operator-facing summary sentence.
+     * @param rawResponse    Full carrier response for the audit trail.
+     */
+    record LabelReprintResult(
+            String carrierCode,
+            String labelUrl,
+            String labelBase64,
+            String status,
+            String message,
+            String rawResponse
+    ) {
+    }
+
     default PickupResult schedulePickup(PickupRequest request, String accessToken, String environment) {
         return new PickupResult(
                 getCarrierCode(),
@@ -746,8 +846,24 @@ public interface CarrierConnector {
             String trackingUrl,
             String labelUrl,
             String labelPdf,
-            BigDecimal netCharge
+            BigDecimal netCharge,
+            /**
+             * Carrier-side label identifier that isn't the tracking
+             * number — e.g. Stamps.com / Endicia SERA {@code label_id}
+             * UUID that void + reprint key off. Null for carriers that
+             * void/reprint by tracking (SWSIM, FedEx, UPS, DHL). See
+             * {@link com.multiship.backend.model.LabelPackage#getCarrierLabelRef()}
+             * for the persistence column that stores it.
+             */
+            String carrierLabelRef
     ) {
+        /** Backwards-compatible 6-arg constructor for connectors that
+         *  don't carry a separate carrier-side label ref (SWSIM, FedEx,
+         *  UPS, DHL). Preserves every existing call site. */
+        public PackageTracking(int sequenceNumber, String trackingNumber, String trackingUrl,
+                                String labelUrl, String labelPdf, BigDecimal netCharge) {
+            this(sequenceNumber, trackingNumber, trackingUrl, labelUrl, labelPdf, netCharge, null);
+        }
     }
 
     /**

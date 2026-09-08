@@ -270,18 +270,24 @@ class ShipmentValidationServiceTest {
     }
 
     @Test
-    void usToPR_sameFamilyTerritory_classifiedDomestic_customsSkipped() {
-        // Sprint 52 design pick — US → PR/VI/GU/AS/MP is domestic.
+    void usToPR_requiresCustoms_classifiedInternational() {
+        // 2026-09-08 fix — US → PR/VI/GU/AS/MP is INTERNATIONAL for
+        // customs purposes. UPS + FedEx both require a full commercial
+        // invoice on those lanes (UPS docs: set countryCode=PR AND
+        // include the customs object; missing → UPS 120502). Service
+        // level stays US-domestic; only the customs UI + intl block
+        // changes.
         ManualShipmentRequest req = fullDomesticRequest();
         req.getRecipient().setCountryCode("PR");
         stubServiceAndPreset();
 
         ApiResponse<ShipmentValidationResult> res = service.validate(req);
 
-        assertTrue(!res.getData().isInternational(),
-                "US → PR must be domestic under the US-family sameTerritory rule");
-        assertTrue(res.getData().getSkipped().stream()
-                .anyMatch(s -> "customs".equals(s.getName())));
+        assertTrue(res.getData().isInternational(),
+                "US → PR must be classified international so customs paperwork is required");
+        assertTrue(res.getData().getLocalErrors().stream()
+                .anyMatch(e -> e.getCode().contains("commodities")),
+                "US → PR without commodities must fail with customs.commodities.empty");
     }
 
     // ─── Markup required (Sprint 50 Tier 1 finding #11) ───────────────

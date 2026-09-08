@@ -105,6 +105,17 @@ public class LabelPackage {
     @Column(name = "description", length = 500)
     private String description;
 
+    /**
+     * Carrier-side label identifier that isn't the tracking number.
+     * Populated for carriers whose void/reprint APIs key off a
+     * separate UUID (Stamps.com / Endicia SERA {@code label_id}).
+     * Null for carriers that void/reprint by tracking number (SWSIM,
+     * FedEx, UPS, DHL) — additive-only, no behaviour change for
+     * legacy flows.
+     */
+    @Column(name = "carrier_label_ref", length = 128)
+    private String carrierLabelRef;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
