@@ -75,9 +75,13 @@ class UsTerritoryNormalizerTest {
     }
 
     @Test
-    void pr_ups_worldwideFamily_allowed() {
+    void pr_ups_worldwideFamily_denied() {
+        // Operator confirmed 2026-09-08: UPS Rating API rejects Worldwide
+        // services (07/08/54/65) for US → PR with 121100 "service invalid
+        // for the shipment origin" — even though older docs suggested
+        // both families valid. PR moves on the UPS domestic network only.
         for (String code : new String[] {"07", "08", "54", "65"}) {
-            assertTrue(UsTerritoryNormalizer.isServiceAllowedForTerritory("PR", "UPS", code),
+            assertFalse(UsTerritoryNormalizer.isServiceAllowedForTerritory("PR", "UPS", code),
                     "PR/UPS/" + code);
         }
     }
@@ -90,13 +94,27 @@ class UsTerritoryNormalizerTest {
     }
 
     @Test
-    void pr_fedex_domesticExpress_allowed() {
+    void pr_fedex_intlFamily_allowed() {
+        // FedEx PR = INTL network (asymmetric with UPS which uses
+        // domestic Air). Operator confirmed 2026-09-08: FedEx rejects
+        // domestic services for US → PR with "This service type is
+        // not available for the destination."
         for (String code : new String[] {
-                "PRIORITY_OVERNIGHT", "STANDARD_OVERNIGHT", "FIRST_OVERNIGHT",
-                "FEDEX_2_DAY", "FEDEX_2_DAY_AM", "FEDEX_EXPRESS_SAVER",
-                "INTERNATIONAL_PRIORITY", "INTERNATIONAL_ECONOMY"
+                "INTERNATIONAL_PRIORITY", "INTERNATIONAL_ECONOMY",
+                "INTERNATIONAL_FIRST", "INTERNATIONAL_PRIORITY_EXPRESS"
         }) {
             assertTrue(UsTerritoryNormalizer.isServiceAllowedForTerritory("PR", "FEDEX", code),
+                    "PR/FEDEX/" + code);
+        }
+    }
+
+    @Test
+    void pr_fedex_domesticExpress_denied() {
+        for (String code : new String[] {
+                "PRIORITY_OVERNIGHT", "STANDARD_OVERNIGHT", "FIRST_OVERNIGHT",
+                "FEDEX_2_DAY", "FEDEX_2_DAY_AM", "FEDEX_EXPRESS_SAVER"
+        }) {
+            assertFalse(UsTerritoryNormalizer.isServiceAllowedForTerritory("PR", "FEDEX", code),
                     "PR/FEDEX/" + code);
         }
     }

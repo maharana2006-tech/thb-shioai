@@ -47,9 +47,14 @@ public final class UsTerritoryNormalizer {
      *  origin. Includes domestic Air family (UPS bills PR at domestic
      *  rates but still accepts Worldwide codes for the same lane).
      *  Denied: 03 Ground, 11 Standard, 12 3 Day Select. */
+    /** UPS service codes that deliver to Puerto Rico. Domestic Air only —
+     *  UPS moves PR shipments on its domestic network. Worldwide family
+     *  (07/08/54/65) is REJECTED by the UPS Rating API with 121100
+     *  "service invalid for the shipment origin" for US → PR lanes,
+     *  even though older docs suggested both were valid. Confirmed by
+     *  operator 2026-09-08. */
     private static final Set<String> UPS_ALLOWED_PR = Set.of(
-            "01", "02", "13", "14", "59",   // Domestic Air
-            "07", "08", "54", "65");         // Worldwide family
+            "01", "02", "13", "14", "59"); // Domestic Air only
 
     /** UPS service codes that deliver to the other five US territories
      *  (VI/GU/AS/MP/UM). Only Worldwide-family — domestic Air is what
@@ -57,12 +62,14 @@ public final class UsTerritoryNormalizer {
     private static final Set<String> UPS_ALLOWED_INTL = Set.of(
             "07", "08", "54", "65");
 
-    /** FedEx service codes that deliver to Puerto Rico. Domestic
-     *  Express family plus intl-family — FedEx requires an intl service
-     *  selection at domestic rates for PR customs clearance. */
+    /** FedEx service codes that deliver to Puerto Rico. INTERNATIONAL
+     *  family only. The carrier rule is asymmetric with UPS: UPS moves
+     *  US → PR on its DOMESTIC network; FedEx treats PR as a true
+     *  international destination. Operator confirmed 2026-09-08 that
+     *  FedEx rejects every domestic service (Express Saver / 2Day /
+     *  Overnight variants) for US → PR with "This service type is not
+     *  available for the destination." */
     private static final Set<String> FEDEX_ALLOWED_PR = Set.of(
-            "FIRST_OVERNIGHT", "PRIORITY_OVERNIGHT", "STANDARD_OVERNIGHT",
-            "FEDEX_2_DAY", "FEDEX_2_DAY_AM", "FEDEX_EXPRESS_SAVER",
             "INTERNATIONAL_PRIORITY", "INTERNATIONAL_ECONOMY",
             "INTERNATIONAL_FIRST", "INTERNATIONAL_PRIORITY_EXPRESS");
 

@@ -51,12 +51,16 @@ export type UsTerritory = typeof US_TERRITORY_CODES[number]
 //   13 Next Day Air Saver, 14 Next Day Air Early, 54 Worldwide Express Plus,
 //   59 2nd Day Air A.M., 65 Worldwide Saver.
 
-/** PR keeps every domestic Air code (Ground family excluded) plus the
- *  full Worldwide family — UPS bills PR shipments at domestic rates but
- *  the Rating API also accepts intl service codes for the same lane. */
+/** PR — domestic Air codes only. Empirically the UPS Rating API
+ *  REJECTS the Worldwide family (07/08/54/65) for US → PR with error
+ *  121100 "service invalid for the shipment origin" even though older
+ *  docs suggested both families are valid. UPS moves PR shipments on
+ *  the domestic network; Worldwide services target true cross-border
+ *  destinations. Ground family (03/11/12) already excluded via the
+ *  earlier catalog filter. Confirmed by operator 2026-09-08:
+ *  Worldwide Saver → 121100; 2nd Day Air + Next Day Air → accepted. */
 const UPS_PR = new Set([
-  '01', '02', '13', '14', '59', // domestic Air (all delivery windows)
-  '07', '08', '54', '65',         // Worldwide family
+  '01', '02', '13', '14', '59', // domestic Air only
 ])
 
 /** VI, GU, AS, MP, UM — Worldwide-family only. Domestic Air codes trip
@@ -71,14 +75,18 @@ const UPS_INTL_ONLY = new Set(['07', '08', '54', '65'])
 //   INTERNATIONAL_PRIORITY, INTERNATIONAL_ECONOMY, INTERNATIONAL_FIRST,
 //   INTERNATIONAL_PRIORITY_EXPRESS.
 
-/** PR gets the domestic Express family (2Day, Overnight variants) plus
- *  the intl-family — FedEx requires a customs declaration for PR even at
- *  domestic rates, and the ID selected on the wire is one of these. */
+/** PR — FedEx INTERNATIONAL family only. The carrier rule is asymmetric
+ *  with UPS: UPS moves US → PR on its DOMESTIC network (Air codes
+ *  only); FedEx treats PR as an INTERNATIONAL destination (Priority /
+ *  Economy / First / PriorityExpress). Operator confirmed 2026-09-08:
+ *  FedEx rejects EVERY domestic service (Express Saver / 2Day /
+ *  Overnight variants) for US → PR with "This service type is not
+ *  available for the destination." Both carriers still require the
+ *  customs declaration — that's what makes it a US-territory lane —
+ *  but the service catalogue is per-carrier network. */
 const FEDEX_PR = new Set([
-  'FIRST_OVERNIGHT', 'PRIORITY_OVERNIGHT', 'STANDARD_OVERNIGHT',
-  'FEDEX_2_DAY', 'FEDEX_2_DAY_AM', 'FEDEX_EXPRESS_SAVER',
-  'INTERNATIONAL_PRIORITY', 'INTERNATIONAL_ECONOMY', 'INTERNATIONAL_FIRST',
-  'INTERNATIONAL_PRIORITY_EXPRESS',
+  'INTERNATIONAL_PRIORITY', 'INTERNATIONAL_ECONOMY',
+  'INTERNATIONAL_FIRST', 'INTERNATIONAL_PRIORITY_EXPRESS',
 ])
 
 /** VI, GU, AS, MP, UM — FedEx intl-family only. FedEx routes these via
