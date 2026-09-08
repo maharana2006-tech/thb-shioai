@@ -64,8 +64,32 @@ public final class CarrierErrorMessages {
         boolean looksLikePayload = raw.contains("{") || raw.contains("}")
                 || java.util.regex.Pattern.compile("HTTP\\s*\\d{3}").matcher(up).find();
         if (looksLikePayload) {
-            return carrierName + " rejected this shipment." + tail;
+            // Keep the carrier's own sentence when the payload carries one —
+            // "rejected this shipment." alone left operators opening orders one
+            // by one to learn that 300 rows failed for the same reason.
+            String reason = extractReason(raw);
+            return carrierName + " rejected this shipment" + (reason != null ? ": " + reason : ".") + tail;
         }
         return raw;
+    }
+
+    private static final java.util.regex.Pattern[] REASON_PATTERNS = {
+            java.util.regex.Pattern.compile("\"(?:message|Description|description|errorDescription|detail)\"\\s*:\\s*\"([^\"]{3,220})\""),
+            java.util.regex.Pattern.compile("(?i)(the service is currently unavailable[^\"}{]{0,120})"),
+            java.util.regex.Pattern.compile("(?i)(missing or invalid [^\"}{]{3,120})"),
+    };
+
+    /** First human sentence inside a carrier payload, or null. */
+    static String extractReason(String raw) {
+        if (raw == null) return null;
+        for (java.util.regex.Pattern p : REASON_PATTERNS) {
+            java.util.regex.Matcher m = p.matcher(raw);
+            if (m.find()) {
+                String r = m.group(1).replace("\\n", " ").replaceAll("\\s+", " ").trim();
+                r = r.replaceAll("\\(saved as order \\d+\\)", "").trim();
+                if (r.length() > 3) return r.endsWith(".") ? r.substring(0, r.length() - 1) : r;
+            }
+        }
+        return null;
     }
 }

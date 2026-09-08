@@ -1292,6 +1292,26 @@ public class CarrierServiceImpl implements CarrierService {
                                     + " profile in Settings → Importer/Broker, then generate again.");
                 }
             }
+            // Bulk / API rows may omit Incoterms and reason for export; the form
+            // always sends them. Without Incoterms the intl block is "not ready",
+            // so no customs forms or invoice total go to the carrier and UPS
+            // answers 120502 "InvoiceLineTotal must be greater than 0". Default
+            // from the client's customs profile for the destination, then
+            // DAP / SALE — exactly what the commercial invoice prints.
+            if (!StringUtils.hasText(req.getIncoterms()) || !StringUtils.hasText(req.getReasonForExport())) {
+                com.multiship.backend.model.ClientCustomsProfile defaultsProfile = null;
+                if (StringUtils.hasText(resolvedClient) && StringUtils.hasText(to.getCountryCode())) {
+                    defaultsProfile = clientCustomsProfileRepository
+                            .findByClientAndCountry(resolvedClient, to.getCountryCode().trim().toUpperCase(Locale.ROOT))
+                            .orElse(null);
+                }
+                if (!StringUtils.hasText(req.getIncoterms())) {
+                    req.setIncoterms(firstNonBlank(defaultsProfile == null ? null : defaultsProfile.getIncoterms(), "DAP"));
+                }
+                if (!StringUtils.hasText(req.getReasonForExport())) {
+                    req.setReasonForExport(firstNonBlank(defaultsProfile == null ? null : defaultsProfile.getReasonForExport(), "SALE"));
+                }
+            }
             shipmentRequest.setIntl(buildManualIntlBlock(
                     req, firstNonBlank(req.getCurrency(), "USD"), req.getDeclaredValue()));
         }
@@ -1444,8 +1464,10 @@ public class CarrierServiceImpl implements CarrierService {
                     errOrder.setIsError(true);
                     errOrder.setIsManual("Y");
                     errOrder.setIsReturn(Boolean.TRUE.equals(req.getIsReturn()) ? "Y" : "N");
-                    errOrder.setSource(firstNonBlank(req.getSource(), "MANUAL"));
+                    // A retried BULK/API order keeps its source (see the success path).
+                    errOrder.setSource(firstNonBlank(errOrder.getSource(), req.getSource(), "MANUAL"));
                     errOrder.setOrderChannel(resolveOrderChannel(req, to));
+                    errOrder.setCustomerRef(truncate(firstNonBlank(req.getReference(), errOrder.getCustomerRef()), 80));
                     errOrder.setCustNo(firstNonBlank(req.getClientCode(), "MANUAL"));
                     errOrder.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : null);
                     errOrder.setShipviaCd( finalService != null ? finalService.getServiceCode() : serviceType);
@@ -1615,8 +1637,11 @@ public class CarrierServiceImpl implements CarrierService {
         // MANUAL (which would move it to another partition and wipe its client).
         // For a new order the loaded entity's getters are null, so this is the
         // same as before.
-        order.setSource(firstNonBlank(req.getSource(), order.getSource(), "MANUAL"));
+        // The persisted source wins: 'Fix & regenerate' posts the manual form's
+        // payload (source MANUAL) for a BULK order and used to reclassify it.
+        order.setSource(firstNonBlank(order.getSource(), req.getSource(), "MANUAL"));
         order.setOrderChannel(resolveOrderChannel(req, to));
+        order.setCustomerRef(truncate(firstNonBlank(req.getReference(), order.getCustomerRef()), 80));
         order.setCustNo(firstNonBlank(req.getClientCode(), order.getCustNo(), "MANUAL"));
         order.setTenantId(StringUtils.hasText(req.getClientCode()) ? req.getClientCode().trim() : order.getTenantId());
         order.setShipviaCd(service != null ? service.getServiceCode() : serviceType);

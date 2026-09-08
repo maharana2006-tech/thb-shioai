@@ -819,10 +819,12 @@ export default function LabelDocumentPage() {
                 onClick={() => {
                   void downloadShipmentDocuments()
                 }}
-                disabled={loading || Boolean(error) || tenantBlocked || docsBusy || invoiceState === 'none'}
-                title={pkgCount > 1
+                disabled={loading || Boolean(error) || tenantBlocked || docsBusy || invoiceState === 'none' || !trackingNumber}
+                title={!trackingNumber
+                  ? 'Generate the label first — the document set is the invoice plus the real carrier label.'
+                  : pkgCount > 1
                   ? `One PDF: the commercial invoice (with the packages annex) followed by the 4x6 label of every package — ${pkgCount} packages, one download.`
-                  : 'One PDF: the commercial invoice followed by the 4x6 label.'}
+                    : 'One PDF: the commercial invoice followed by the 4x6 label.'}
                 data-testid="download-shipment-documents-btn"
                 className="inline-flex items-center gap-1.5 rounded-xl border border-[#1f150c] bg-[#f5f0e6] px-3 py-1.5 text-[13px] font-semibold text-[#1f150c] transition hover:bg-[#eae2d1] disabled:cursor-not-allowed disabled:opacity-50"
               >

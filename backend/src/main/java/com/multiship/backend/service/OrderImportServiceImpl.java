@@ -326,7 +326,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             "addressLine1", "addressLine2",
             "city", "state", "postalCode", "countryCode",
             "carrierCode", "accountNumber", "serviceType", "packageType",
-            "weight", "weightUnit", "currency",
+            "weight", "weightUnit", "length", "width", "height", "dimUnit",
+            "currency", "incoterms",
             "reference",
             // Sprint 48 revision — declaredValue derived at commit as
             // SUM(itemUnitValue × itemQuantity) so operators don't type
@@ -601,8 +602,9 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (service != null && carrier != null && KNOWN_CARRIERS.contains(carrier)) {
                 java.util.Set<String> known = servicesByCarrier.getOrDefault(carrier, java.util.Set.of());
                 if (!known.isEmpty() && !known.contains(service)) {
-                    warnings.add("serviceType '" + service + "' is not in the " + carrier
-                            + " service catalog; the carrier may reject it");
+                    errors.add("serviceType '" + service + "' is not in the " + carrier
+                            + " service catalog — use a code from Settings → Shipping services, "
+                            + "or leave it blank for the client's default service");
                 }
             }
 
@@ -752,6 +754,108 @@ public class OrderImportServiceImpl implements OrderImportService {
                 : "__row_" + row.getRowNumber();
     }
 
+    /** Same-order rows must agree on shipment-level fields; see validateBusinessRules. */
+    private static void checkGroupField(OrderImportRowDTO r, OrderImportRowDTO leader, String field,
+                                        String value, String leaderValue, boolean error) {
+        if (!StringUtils.hasText(value) || !StringUtils.hasText(leaderValue)) return;
+        if (value.trim().equalsIgnoreCase(leaderValue.trim())) return;
+        String msg = field + " '" + value.trim() + "' differs from the first row of order "
+                + leader.getOrderRef() + " ('" + leaderValue.trim() + "') — every row of one order must agree";
+        if (error) addError(r, msg);
+        else addWarning(r, msg + "; only the first row's value is used");
+    }
+
+    /**
+     * An orderRef that already produced a label in an earlier import is
+     * almost always a re-upload. Duplicate-file detection (name / content
+     * hash) misses a file edited by one character; this catches the order.
+     */
+    private void flagOrderRefsAlreadyGenerated(List<OrderImportRowDTO> rows) {
+        if (importBatchRepository == null || rows == null || rows.isEmpty()) return;
+        Map<String, List<OrderImportRowDTO>> byRef = new LinkedHashMap<>();
+        for (OrderImportRowDTO r : rows) {
+            if (StringUtils.hasText(r.getOrderRef())) {
+                byRef.computeIfAbsent(r.getOrderRef().trim().toUpperCase(Locale.ROOT), k -> new ArrayList<>()).add(r);
+            }
+        }
+        if (byRef.isEmpty()) return;
+        try {
+            int scanned = 0;
+            java.util.Set<String> flagged = new java.util.HashSet<>();
+            for (com.multiship.backend.model.ImportBatch b : importBatchRepository.findAllByDeletedAtIsNullOrderByIdDesc()) {
+                if (scanned++ >= 60 || flagged.size() == byRef.size()) break;
+                for (OrderImportRowDTO prev : parseBatchRows(b)) {
+                    if (!StringUtils.hasText(prev.getOrderRef()) || prev.getGeneratedOrderNo() == null
+                            || !"GENERATED".equalsIgnoreCase(prev.getGeneratedStatus())) continue;
+                    String key = prev.getOrderRef().trim().toUpperCase(Locale.ROOT);
+                    List<OrderImportRowDTO> mine = byRef.get(key);
+                    if (mine == null || flagged.contains(key)) continue;
+                    // Re-running the batch that created the order is not a duplicate.
+                    if (mine.stream().anyMatch(m -> prev.getGeneratedOrderNo().equals(m.getGeneratedOrderNo()))) continue;
+                    flagged.add(key);
+                    for (OrderImportRowDTO m : mine) {
+                        addWarning(m, "orderRef " + prev.getOrderRef().trim() + " was already generated as order "
+                                + prev.getGeneratedOrderNo() + " in import #" + b.getId()
+                                + " — generating again creates a duplicate shipment");
+                    }
+                }
+            }
+        } catch (Exception ignore) {
+            // advisory only — never block a preview on history parsing
+        }
+    }
+
+    /** Blank warehouseCode → the client's default warehouse (what the New Shipment form pre-selects). */
+    private void applyDefaultWarehouse(com.multiship.backend.dto.ManualShipmentRequest req, String clientCode) {
+        if (StringUtils.hasText(req.getWarehouseCode()) || !StringUtils.hasText(clientCode)) return;
+        if (clientWarehouseRepository == null || warehouseRepository == null) return;
+        try {
+            clientWarehouseRepository.findByClientCodeIgnoreCaseAndIsDefaultTrue(clientCode.trim())
+                    .flatMap(link -> warehouseRepository.findById(link.getWarehouseId()))
+                    .filter(w -> !Boolean.FALSE.equals(w.getActive()) && StringUtils.hasText(w.getCode()))
+                    .ifPresent(w -> req.setWarehouseCode(w.getCode()));
+        } catch (Exception ignore) {
+            // fall back to the client's registered address (applyClientOrigin)
+        }
+    }
+
+    /**
+     * Resolve the row's serviceType (a catalog code such as 03 / 08 /
+     * INTERNATIONAL_PRIORITY, or a display name) to the catalog service and
+     * put its id on the request. Returns an error message when the value
+     * cannot be honoured; null when it was applied or left blank (blank →
+     * the client / carrier default cascade, as before).
+     */
+    private String applyRequestedService(com.multiship.backend.dto.ManualShipmentRequest req, OrderImportRowDTO leader) {
+        String code = normalizeOrNull(leader.getServiceType());
+        if (code == null || shippingServiceRepository == null) return null;
+        String carrier = normalizeOrNull(leader.getCarrierCode());
+        if (carrier == null) return null;
+        String canon = ShippingConfigService.canonicalCarrierFor(carrier);
+        String origin = req.getSender() == null ? null : normalizeOrNull(req.getSender().getCountryCode());
+        List<com.multiship.backend.model.ShippingService> candidates = new ArrayList<>();
+        for (com.multiship.backend.model.ShippingService s : shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()) {
+            if (s.getCarrier() == null || !s.getCarrier().equalsIgnoreCase(canon)) continue;
+            boolean codeMatch = s.getServiceCode() != null && s.getServiceCode().equalsIgnoreCase(code);
+            boolean nameMatch = s.getName() != null && s.getName().equalsIgnoreCase(leader.getServiceType().trim());
+            if (codeMatch || nameMatch) candidates.add(s);
+        }
+        if (candidates.isEmpty()) {
+            return "serviceType '" + leader.getServiceType().trim() + "' is not in the " + canon
+                    + " service catalog — use a code from Settings → Shipping services, or leave it blank for the default";
+        }
+        com.multiship.backend.model.ShippingService pick = candidates.stream()
+                .filter(s -> origin != null && s.getOriginCountry() != null && s.getOriginCountry().equalsIgnoreCase(origin))
+                .findFirst()
+                .orElse(candidates.get(0));
+        if (!pick.isEnabled()) {
+            return "serviceType '" + leader.getServiceType().trim() + "' (" + pick.getName() + ") is disabled in the "
+                    + canon + " service catalog";
+        }
+        req.setServiceId(pick.getId());
+        return null;
+    }
+
     private static void addError(OrderImportRowDTO row, String message) {
         List<String> errs = new ArrayList<>(row.getErrors() == null ? List.of() : row.getErrors());
         if (!errs.contains(message)) errs.add(message);
@@ -788,6 +892,7 @@ public class OrderImportServiceImpl implements OrderImportService {
      * handle, or that merely costs money, is a WARNING.
      */
     void validateBusinessRules(List<OrderImportRowDTO> rows) {
+        flagOrderRefsAlreadyGenerated(rows);
         if (rows.isEmpty() || shippingServiceRepository == null) return;
 
         // --- snapshot the rule tables once ---
@@ -895,6 +1000,23 @@ public class OrderImportServiceImpl implements OrderImportService {
                     addWarning(r, "carrierCode differs from the first row of order " + leader.getOrderRef()
                             + "; only the first row's carrier is used");
                 }
+                // Shipment-level fields must agree across every row of one
+                // order — a USD row and a EUR row used to be summed as one
+                // currency onto the customs value.
+                checkGroupField(r, leader, "addressLine1", r.getAddressLine1(), leader.getAddressLine1(), true);
+                checkGroupField(r, leader, "city", r.getCity(), leader.getCity(), true);
+                checkGroupField(r, leader, "postalCode", r.getPostalCode(), leader.getPostalCode(), true);
+                checkGroupField(r, leader, "countryCode", r.getCountryCode(), leader.getCountryCode(), true);
+                checkGroupField(r, leader, "accountNumber", r.getAccountNumber(), leader.getAccountNumber(), true);
+                checkGroupField(r, leader, "serviceType", r.getServiceType(), leader.getServiceType(), true);
+                checkGroupField(r, leader, "currency", r.getCurrency(), leader.getCurrency(), true);
+                checkGroupField(r, leader, "weightUnit", r.getWeightUnit(), leader.getWeightUnit(), true);
+                checkGroupField(r, leader, "billTo", r.getBillTo(), leader.getBillTo(), true);
+                checkGroupField(r, leader, "incoterms", r.getIncoterms(), leader.getIncoterms(), true);
+                checkGroupField(r, leader, "clientCode", r.getClientCode(), leader.getClientCode(), true);
+                checkGroupField(r, leader, "recipientCompany", r.getRecipientCompany(), leader.getRecipientCompany(), false);
+                checkGroupField(r, leader, "recipientPhone", r.getRecipientPhone(), leader.getRecipientPhone(), false);
+                checkGroupField(r, leader, "recipientEmail", r.getRecipientEmail(), leader.getRecipientEmail(), false);
             }
 
             if (carrierLimitRepository == null) continue;
@@ -2056,8 +2178,17 @@ public class OrderImportServiceImpl implements OrderImportService {
         req.setWarehouseCode(leader.getWarehouseCode());
         req.setWeight(leader.getWeight());
         req.setWeightUnit(leader.getWeightUnit());
+        req.setLength(leader.getLength());
+        req.setWidth(leader.getWidth());
+        req.setHeight(leader.getHeight());
+        req.setDimUnit(leader.getDimUnit());
         req.setCurrency(leader.getCurrency());
-        req.setReference(leader.getReference());
+        req.setIncoterms(leader.getIncoterms());
+        // The customer's own reference travels with the order (Ref # column,
+        // commercial invoice). The orderRef is the fallback so a bulk order is
+        // always traceable back to the file that created it.
+        req.setReference(StringUtils.hasText(leader.getReference())
+                ? leader.getReference().trim() : leader.getOrderRef());
         // Sprint 48 revision — declaredValue is derived from item rows
         // rather than a per-row column. Sum unitValue × quantity across
         // every row in the group that carries item data; blank when the
@@ -2220,15 +2351,64 @@ public class OrderImportServiceImpl implements OrderImportService {
         // operators see all the columns exercised in one go. Column
         // ordering must match HEADERS exactly (Sprint 48 revision:
         // declaredValue + goodsDescription no longer present).
-        sb.append("ORD-2001,")                              // orderRef
-                .append("MA1885,SENDER,WH-EAST,")           // clientCode, billTo, warehouseCode
-                .append("Ava Chen,,4402071234567,ava.chen@example.co.uk,")  // recipient
-                .append("221B Baker Street,,London,LDN,NW1 6XE,GB,")         // address
-                .append("FEDEX,F98765,INTERNATIONAL_PRIORITY,YOUR_PACKAGING,")// carrier + service
-                .append("3.2,LB,USD,")                                        // weight + currency
-                .append("ORD-2001,")                                          // reference
-                .append("Silk lining natural,SKU-100,2,45.00,5007.20,IT\n"); // per-item customs
+        // Three sample rows that pass the importer's own validation: a domestic
+        // parcel, and a two-line international order (rows sharing an orderRef
+        // fold into one shipment). Client / warehouse / account are left blank
+        // so the sample never names entities that don't exist on this install
+        // — blank values resolve through the client default cascade.
+        for (Map<String, String> row : sampleRows(sampleClientCode())) {
+            List<String> cells = new ArrayList<>(HEADERS.size());
+            for (String h : HEADERS) cells.add(row.getOrDefault(h, ""));
+            sb.append(String.join(",", cells)).append('\n');
+        }
         return sb.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static Map<String, String> sampleRow(String... kv) {
+        Map<String, String> m = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < kv.length; i += 2) m.put(kv[i], kv[i + 1]);
+        return m;
+    }
+
+    /** First active client on this install, so the sample rows validate as shipped. */
+    private String sampleClientCode() {
+        if (clientRepository == null) return "";
+        try {
+            return clientRepository.findAll().stream()
+                    .filter(c -> c != null && Client.STATUS_ACTIVE.equalsIgnoreCase(c.getStatus()))
+                    .map(Client::getClientCode)
+                    .filter(StringUtils::hasText)
+                    .sorted()
+                    .findFirst()
+                    .orElse("");
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    static List<Map<String, String>> sampleRows(String clientCode) {
+        return List.of(
+                sampleRow("orderRef", "SAMPLE-1001", "clientCode", clientCode, "billTo", "SENDER",
+                        "recipientName", "Jordan Lee", "recipientPhone", "2125550101",
+                        "recipientEmail", "jordan.lee@example.com",
+                        "addressLine1", "1600 Amphitheatre Pkwy", "city", "Mountain View", "state", "CA",
+                        "postalCode", "94043", "countryCode", "US",
+                        "carrierCode", "FEDEX", "serviceType", "FEDEX_GROUND", "packageType", "YOUR_PACKAGING",
+                        "weight", "2.5", "weightUnit", "LB", "length", "12", "width", "10", "height", "8", "dimUnit", "IN",
+                        "currency", "USD", "reference", "SAMPLE-1001"),
+                sampleRow("orderRef", "SAMPLE-1002", "clientCode", clientCode, "billTo", "SENDER",
+                        "recipientName", "Ava Chen", "recipientCompany", "Chen & Co Ltd",
+                        "recipientPhone", "442071234567", "recipientEmail", "ava.chen@example.co.uk",
+                        "addressLine1", "221B Baker Street", "city", "London",
+                        "postalCode", "NW1 6XE", "countryCode", "GB",
+                        "carrierCode", "FEDEX", "serviceType", "INTERNATIONAL_PRIORITY", "packageType", "YOUR_PACKAGING",
+                        "weight", "3.2", "weightUnit", "LB", "length", "14", "width", "12", "height", "10", "dimUnit", "IN",
+                        "currency", "USD", "incoterms", "DAP", "reference", "SAMPLE-1002",
+                        "itemDescription", "Silk lining natural", "itemSku", "SKU-100", "itemQuantity", "2",
+                        "itemUnitValue", "45.00", "hsCode", "5007.20.00", "countryOfOrigin", "IT"),
+                sampleRow("orderRef", "SAMPLE-1002",
+                        "itemDescription", "Cotton scarf", "itemSku", "SKU-101", "itemQuantity", "3",
+                        "itemUnitValue", "12.00", "hsCode", "6214.90.00", "countryOfOrigin", "IN"));
     }
 
     /* -------------------------- Parsers -------------------------- */
@@ -2256,12 +2436,14 @@ public class OrderImportServiceImpl implements OrderImportService {
                      .setIgnoreEmptyLines(true).setTrim(true)
                      .build().parse(reader)) {
             Map<String, Integer> headerMap = lowerCasedHeaderMap(parser.getHeaderMap());
+            Map<String, OrderImportRowDTO> leaders = new LinkedHashMap<>();
             int rowNo = 0;
             for (CSVRecord rec : parser) {
                 rowNo++;
                 if (isBlank(rec)) continue;
                 ColumnReader csvReader = name -> get(rec, headerMap, name);
                 OrderImportRowDTO built = buildRow(rowNo, csvReader);
+                inheritFromLeader(built, leaders);
                 captureExtraColumns(built, headerMap, csvReader);
                 out.add(built);
             }
@@ -2288,6 +2470,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             }
 
             int rowNo = 0;
+            Map<String, OrderImportRowDTO> xlsxLeaders = new LinkedHashMap<>();
             for (int i = sheet.getFirstRowNum() + 1; i <= sheet.getLastRowNum(); i++) {
                 Row row = sheet.getRow(i);
                 if (row == null) continue;
@@ -2302,11 +2485,64 @@ public class OrderImportServiceImpl implements OrderImportService {
                 int finalI = i;
                 ColumnReader xlsxReader = name -> readCell(sheet, finalI, capturedHeader, name, fmt);
                 OrderImportRowDTO built = buildRow(rowNo, xlsxReader);
+                inheritFromLeader(built, xlsxLeaders);
                 captureExtraColumns(built, capturedHeader, xlsxReader);
                 out.add(built);
             }
         }
         return out;
+    }
+
+    /**
+     * Rows after the first of an orderRef may carry only the item columns
+     * (the documented multi-line contract). Blank shipment-level fields
+     * inherit the leader's values and the row is validated again — before
+     * this, a two-line order needed every recipient field retyped on the
+     * second line or it failed with "recipientName is required".
+     */
+    private void inheritFromLeader(OrderImportRowDTO row, Map<String, OrderImportRowDTO> leaders) {
+        if (row == null || !StringUtils.hasText(row.getOrderRef())) return;
+        String key = row.getOrderRef().trim().toUpperCase(Locale.ROOT);
+        OrderImportRowDTO leader = leaders.get(key);
+        if (leader == null) {
+            leaders.put(key, row);
+            return;
+        }
+        if (!StringUtils.hasText(row.getClientCode())) row.setClientCode(leader.getClientCode());
+        if (!StringUtils.hasText(row.getBillTo())) row.setBillTo(leader.getBillTo());
+        if (!StringUtils.hasText(row.getWarehouseCode())) row.setWarehouseCode(leader.getWarehouseCode());
+        if (!StringUtils.hasText(row.getRecipientName())) row.setRecipientName(leader.getRecipientName());
+        if (!StringUtils.hasText(row.getRecipientCompany())) row.setRecipientCompany(leader.getRecipientCompany());
+        if (!StringUtils.hasText(row.getRecipientPhone())) row.setRecipientPhone(leader.getRecipientPhone());
+        if (!StringUtils.hasText(row.getRecipientEmail())) row.setRecipientEmail(leader.getRecipientEmail());
+        if (!StringUtils.hasText(row.getAddressLine1())) row.setAddressLine1(leader.getAddressLine1());
+        if (!StringUtils.hasText(row.getAddressLine2())) row.setAddressLine2(leader.getAddressLine2());
+        if (!StringUtils.hasText(row.getCity())) row.setCity(leader.getCity());
+        if (!StringUtils.hasText(row.getState())) row.setState(leader.getState());
+        if (!StringUtils.hasText(row.getPostalCode())) row.setPostalCode(leader.getPostalCode());
+        if (!StringUtils.hasText(row.getCountryCode())) row.setCountryCode(leader.getCountryCode());
+        if (!StringUtils.hasText(row.getCarrierCode())) row.setCarrierCode(leader.getCarrierCode());
+        if (!StringUtils.hasText(row.getAccountNumber())) row.setAccountNumber(leader.getAccountNumber());
+        if (!StringUtils.hasText(row.getServiceType())) row.setServiceType(leader.getServiceType());
+        if (!StringUtils.hasText(row.getPackageType())) row.setPackageType(leader.getPackageType());
+        if (row.getWeight() == null) row.setWeight(leader.getWeight());
+        if (!StringUtils.hasText(row.getWeightUnit())) row.setWeightUnit(leader.getWeightUnit());
+        if (row.getLength() == null) row.setLength(leader.getLength());
+        if (row.getWidth() == null) row.setWidth(leader.getWidth());
+        if (row.getHeight() == null) row.setHeight(leader.getHeight());
+        if (!StringUtils.hasText(row.getDimUnit())) row.setDimUnit(leader.getDimUnit());
+        if (!StringUtils.hasText(row.getCurrency())) row.setCurrency(leader.getCurrency());
+        if (!StringUtils.hasText(row.getIncoterms())) row.setIncoterms(leader.getIncoterms());
+        if (!StringUtils.hasText(row.getReference())) row.setReference(leader.getReference());
+        // Re-validate with the inherited values; keep the parse errors
+        // ("… is not a number") that only buildRow can see.
+        List<String> keep = new ArrayList<>();
+        for (String e : row.getErrors() == null ? List.<String>of() : row.getErrors()) {
+            if (e.contains("is not a")) keep.add(e);
+        }
+        List<String> errors = new ArrayList<>(validateRow(row));
+        errors.addAll(keep);
+        row.setErrors(errors);
     }
 
     private static boolean isBlank(CSVRecord rec) {
@@ -2410,7 +2646,12 @@ public class OrderImportServiceImpl implements OrderImportService {
         String rawUnitValue = s.read("itemUnitValue");
         out.setWeight(parseDecimal(rawWeight));
         out.setWeightUnit(upper(s.read("weightUnit")));
+        out.setLength(parseDecimal(s.read("length")));
+        out.setWidth(parseDecimal(s.read("width")));
+        out.setHeight(parseDecimal(s.read("height")));
+        out.setDimUnit(upper(s.read("dimUnit")));
         out.setCurrency(upper(s.read("currency")));
+        out.setIncoterms(upper(s.read("incoterms")));
         out.setReference(s.read("reference"));
         // Sprint 48 revision — declaredValue + goodsDescription removed
         // from HEADERS; derived at commit time from item rows.
@@ -2971,6 +3212,25 @@ public class OrderImportServiceImpl implements OrderImportService {
             // warehouse still wins: the manual path overrides `from` with the
             // warehouse address when warehouseCode is set.
             applyClientOrigin(req, leader.getClientCode());
+            // A blank warehouseCode means the client's DEFAULT warehouse — the
+            // same one the New Shipment form pre-selects — not the client's
+            // registered address (which put a Santa Monica exporter on a
+            // parcel that ships from Austin).
+            applyDefaultWarehouse(req, leader.getClientCode());
+            // The CSV's serviceType is honoured or the row fails. It used to be
+            // dropped on the floor (the request only carries a service id), so
+            // every row silently shipped on the carrier default (ground) —
+            // including international rows.
+            String serviceError = applyRequestedService(req, leader);
+            if (serviceError != null) {
+                List<String> ce = new ArrayList<>(leader.getErrors() == null ? List.of() : leader.getErrors());
+                ce.add(serviceError);
+                leader.setErrors(ce);
+                for (int i = 1; i < group.size(); i++) {
+                    group.get(i).setErrors(List.of("orderRef leader failed validation"));
+                }
+                return new GroupOutcome(0, group.size(), 0);
+            }
 
             // Sprint 51 fix #1 — when the CSV leaves the bill-to account blank,
             // resolve it the way the operator-facing flow would instead of

@@ -71,8 +71,13 @@ const canon = (c?: string | null) => {
   if (v.startsWith('UPS') || v.includes('WORLDWIDE') || v.includes('NEXT_DAY_AIR')) return 'UPS'
   if (v.startsWith('USPS')) return 'USPS'
   if (v.startsWith('DHL')) return 'DHL'
+  // UPS's catalog stores numeric service codes (03 Ground, 08 Worldwide
+  // Expedited …) — the only carrier that does.
+  if (/^\d{2}$/.test(v)) return 'UPS'
   return v
 }
+
+const KNOWN_CARRIERS = ['UPS', 'FEDEX', 'USPS', 'DHL']
 
 const COUNTRIES: [string, string][] = [
   ['US', 'United States'], ['CA', 'Canada'], ['MX', 'Mexico'], ['GB', 'United Kingdom'],
@@ -1240,7 +1245,16 @@ export default function NewShipmentPage() {
         // no-client sentinel, not a real client.
         const orderClient = (o.tenantId || o.custNo || '').trim().toUpperCase()
         if (orderClient && orderClient !== 'MANUAL') setClientCode(orderClient)
-        const carrierCanon = canon(String(o.shipviaCd ?? ''))
+        // Carrier: from the ship-via (a service code) when it identifies one,
+        // else from the account the label was booked on. A stored value the
+        // catalog doesn't know (e.g. a legacy "GROUND") used to become the
+        // carrier itself, so the Service picker offered nothing but
+        // "Carrier default" and the order could not be repaired.
+        const fromShipVia = canon(String(o.shipviaCd ?? ''))
+        const fromAccount = canon(details.data.carrierAccount?.carrierCode ?? '')
+        const carrierCanon = KNOWN_CARRIERS.includes(fromShipVia)
+          ? fromShipVia
+          : KNOWN_CARRIERS.includes(fromAccount) ? fromAccount : fromShipVia
         if (carrierCanon) setCarrier(carrierCanon)
         if (customs) {
           if (customs.currency) setCurrency(customs.currency)

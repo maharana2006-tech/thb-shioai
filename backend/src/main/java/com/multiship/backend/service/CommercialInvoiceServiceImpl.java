@@ -291,7 +291,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         List<Meta> meta = new ArrayList<>();
         meta.add(new Meta("Invoice no.", String.valueOf(order.getOrderNo())));
         meta.add(new Meta("Invoice date", invoiceDate));
-        meta.add(new Meta("Order / reference", firstNonBlank(order.getWmsExternalId(), String.valueOf(order.getOrderNo()))));
+        meta.add(new Meta("Order / reference", firstNonBlank(order.getCustomerRef(), order.getWmsExternalId(), String.valueOf(order.getOrderNo()))));
         meta.add(new Meta("Customer ref.", firstNonBlank(
                 "MANUAL".equalsIgnoreCase(order.getCustNo()) ? null : order.getCustNo(),
                 client == null ? null : client.getClientCode(), "-")));

@@ -60,6 +60,8 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
   const [file, setFile] = useState<File | null>(null)
   /** The auto-saved draft under review (rows + counts). Non-null = step 2. */
   const [preview, setPreview] = useState<OrderImportPreview | null>(null)
+  // Billing, capacity and the carrier all count SHIPMENTS; the grid counts rows.
+  const readyOrders = preview ? orderCount(preview.rows.filter((r) => (r.errors?.length ?? 0) === 0)) : 0
   /** The draft's Import-history id — minted by the auto-save at upload. */
   const [batchId, setBatchId] = useState<number | null>(null)
   /** Generation outcome. Non-null = step 3. */
@@ -393,8 +395,8 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                       {preview.validRows === 0
                         ? 'Fix rows to generate'
                         : preview.invalidRows > 0
-                          ? `Generate ${preview.validRows} ready label(s)`
-                          : `Generate all ${preview.validRows} label(s)`}
+                          ? `Generate ${readyOrders} ready order${readyOrders === 1 ? '' : 's'} (${preview.validRows} rows)`
+                          : `Generate all ${readyOrders} order${readyOrders === 1 ? '' : 's'} (${preview.validRows} rows)`}
                     </button>
                   )}
                 </>
@@ -605,7 +607,7 @@ const FIELD_KEYS = [
   'recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail',
   'addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode',
   'carrierCode', 'accountNumber', 'serviceType', 'packageType',
-  'weight', 'weightUnit', 'currency', 'reference',
+  'weight', 'weightUnit', 'length', 'width', 'height', 'dimUnit', 'currency', 'incoterms', 'reference',
   'itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue',
   'hsCode', 'countryOfOrigin',
 ] as const
@@ -741,7 +743,12 @@ const PREVIEW_COLUMNS: PreviewColumn[] = [
   { key: 'packageType', mono: true, w: 'w-24' },
   { key: 'weight', numeric: true, w: 'w-16' },
   { key: 'weightUnit', mono: true, upper: true, w: 'w-16' },
+  { key: 'length', numeric: true, w: 'w-14' },
+  { key: 'width', numeric: true, w: 'w-14' },
+  { key: 'height', numeric: true, w: 'w-14' },
+  { key: 'dimUnit', mono: true, upper: true, w: 'w-14' },
   { key: 'currency', mono: true, upper: true, w: 'w-16' },
+  { key: 'incoterms', mono: true, upper: true, w: 'w-20' },
   { key: 'reference', mono: true, w: 'w-28' },
   { key: 'itemDescription', w: 'w-48' },
   { key: 'itemSku', mono: true, w: 'w-24' },
@@ -781,7 +788,7 @@ const CARD_GROUPS: { title: string; keys: string[] }[] = [
   { title: 'Order', keys: ['orderRef', 'clientCode', 'billTo', 'warehouseCode'] },
   { title: 'Recipient', keys: ['recipientName', 'recipientCompany', 'recipientPhone', 'recipientEmail'] },
   { title: 'Ship to', keys: ['addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'countryCode'] },
-  { title: 'Shipment', keys: ['carrierCode', 'accountNumber', 'serviceType', 'packageType', 'weight', 'weightUnit', 'currency', 'reference'] },
+  { title: 'Shipment', keys: ['carrierCode', 'accountNumber', 'serviceType', 'packageType', 'weight', 'weightUnit', 'length', 'width', 'height', 'dimUnit', 'currency', 'incoterms', 'reference'] },
   { title: 'Customs', keys: ['itemDescription', 'itemSku', 'itemQuantity', 'itemUnitValue', 'hsCode', 'countryOfOrigin'] },
 ]
 
@@ -1087,6 +1094,13 @@ function PreviewStep({
  * rows still held in the draft by validation errors. The user never has to
  * discover Import history on their own — but the batch lives there for later.
  */
+/** Rows sharing an orderRef are one shipment; a row without one is its own. */
+function orderCount(rows: OrderImportRow[]): number {
+  const keys = new Set<string>()
+  rows.forEach((r) => keys.add(r.orderRef?.trim() ? r.orderRef.trim().toUpperCase() : `__row_${r.rowNumber}`))
+  return keys.size
+}
+
 function ResultStep({ result }: { result: ImportBatchDetail }) {
   const rows = result.rows ?? []
   const generated = rows.filter((r) => (r.generatedStatus ?? '').toUpperCase() === 'GENERATED')
@@ -1110,7 +1124,8 @@ function ResultStep({ result }: { result: ImportBatchDetail }) {
           {generated.length > 0 ? <FiCheck className="h-6 w-6" /> : <FiAlertCircle className="h-6 w-6" />}
         </span>
         <p className="mt-3 text-[14px] font-semibold text-[#1f150c]">
-          {generated.length} of {rows.length} label(s) generated
+          {orderCount(generated)} of {orderCount(rows)} order{orderCount(rows) === 1 ? '' : 's'} labelled
+          <span className="ml-1 font-normal text-[#5a4526]">({generated.length} of {rows.length} rows)</span>
         </p>
         <p className="mt-1 text-[11.5px] text-[#5a4526]">
           {failed.length > 0 ? `${failed.length} rejected by the carrier — retry from Import history. ` : ''}

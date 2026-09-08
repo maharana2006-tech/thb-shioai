@@ -175,6 +175,11 @@ public class Order {
     @Column(name = "wms_external_id", length = 100)
     private String wmsExternalId;
 
+    /** The customer's own reference: a bulk file's reference / orderRef, or the
+     *  reference typed on a manual shipment. Shown as Ref # and on the invoice. */
+    @Column(name = "customer_ref", length = 80)
+    private String customerRef;
+
     /** Per-shipment importer/broker override (JSON) — used INSTEAD of the client's saved
      *  profile for this one label, without changing the profile. Null = use the profile. */
     @Column(name = "importer_broker_override", columnDefinition = "text")

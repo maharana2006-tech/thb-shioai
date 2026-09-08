@@ -1283,9 +1283,17 @@ public class OrderController {
         try {
             ApiResponse<OrderWithLinesDTO> peek = orderService.getOrderWithLines(orderNo);
             pkgs = effectivePkgCount(peek.getData());
-            ResponseEntity<byte[]> labels = getLabelPdf(orderNo, null, true);
-            if (labels.getStatusCode().is2xxSuccessful() && labels.getBody() != null && labels.getBody().length > 0) {
-                parts.add(labels.getBody());
+            // Only a GENERATED label belongs in the document set — the
+            // facsimile for an unlabelled order prints "LABEL NOT GENERATED".
+            boolean labelled = orderTrackingRepository.findByOrderNo(orderNo)
+                    .map(t -> Boolean.TRUE.equals(t.getIsLabelGenerated())
+                            && t.getTrackingNumber() != null && !t.getTrackingNumber().isBlank())
+                    .orElse(false);
+            if (labelled) {
+                ResponseEntity<byte[]> labels = getLabelPdf(orderNo, null, true);
+                if (labels.getStatusCode().is2xxSuccessful() && labels.getBody() != null && labels.getBody().length > 0) {
+                    parts.add(labels.getBody());
+                }
             }
         } catch (RuntimeException ex) {
             org.slf4j.LoggerFactory.getLogger(OrderController.class).warn(

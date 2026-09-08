@@ -30,6 +30,13 @@ export interface OrderImportRow {
   packageType?: string | null
   weight?: number | null
   weightUnit?: string | null
+  /** Box dimensions — optional, but the single-order fix screen requires them. */
+  length?: number | null
+  width?: number | null
+  height?: number | null
+  dimUnit?: string | null
+  /** Incoterms 2020 for international rows (DAP default). */
+  incoterms?: string | null
   declaredValue?: number | null
   currency?: string | null
   reference?: string | null

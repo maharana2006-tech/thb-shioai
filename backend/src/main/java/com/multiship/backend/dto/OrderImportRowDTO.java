@@ -81,7 +81,16 @@ public class OrderImportRowDTO {
     private String packageType;
     private BigDecimal weight;
     private String weightUnit;
+    /** Box dimensions (optional). Carriers need them for dimensional weight
+     *  and the single-order fix screen requires them — without columns here
+     *  a bulk order could never be repaired in place. */
+    private BigDecimal length;
+    private BigDecimal width;
+    private BigDecimal height;
+    private String dimUnit;
     private String currency;
+    /** Incoterms 2020 code for international rows (DAP default, DDP = shipper pays duties). */
+    private String incoterms;
     private String reference;
     // Sprint 48 revision — declaredValue + goodsDescription removed from
     // the import schema. Backend derives them at commit time from the
