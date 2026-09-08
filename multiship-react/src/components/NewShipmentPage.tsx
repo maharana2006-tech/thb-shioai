@@ -904,16 +904,24 @@ export default function NewShipmentPage() {
     'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT',
     'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE',
   ])
-  // Sprint 52 — US and its outlying territories. US → PR / VI / GU / AS / MP
-  // is intranational customs-wise (no customs form, no duties, no HS codes).
-  const US_FAMILY = new Set(['US', 'PR', 'VI', 'GU', 'AS', 'MP'])
-  // Sprint 52 — US and its outlying territories treated as one territory
-  // (matches the backend ShipmentValidationService.US_FAMILY rule + the
-  // FE UX pick that "US→PR is domestic" — no customs UI, no incoterms).
+  // 2026-09-08 fix — US and its outlying territories are NOT one customs
+  // territory. UPS Ship API (and FedEx) require a full customs object
+  // (InternationalForms + InvoiceLineTotal + commodity lines) for US→PR/
+  // VI/GU/AS/MP shipments even though the service level is a US domestic
+  // service. Ref: docs.shippingapi.pitneybowes.com/carriers/ups.html —
+  // "For US→PR set toAddress.countryCode=PR AND include the customs
+  // object." PR #610 normalizes the wire country to PR at the connector
+  // boundary; the FE must then let operators enter commodities or UPS
+  // rejects with 120502 (InvoiceLineTotal MonetaryValue must be > 0).
+  //
+  // sameTerritory now only groups exact-match countries plus the EU
+  // customs union. US→any US territory is treated as INTERNATIONAL for
+  // customs-UI purposes (commodities section visible, incoterms + reason
+  // for export required). Service-level "domestic-lite" routing is still
+  // handled server-side by CarrierServiceImpl + ServiceLevelResolver.
   const sameTerritory = (a: string, b: string) =>
     a === b
     || (EU.has(a) && EU.has(b))
-    || (US_FAMILY.has(a) && US_FAMILY.has(b))
   const isInternational =
     !!sender.countryCode &&
     !!recipient.countryCode &&

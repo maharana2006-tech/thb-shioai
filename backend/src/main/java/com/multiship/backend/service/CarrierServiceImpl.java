@@ -1208,8 +1208,22 @@ public class CarrierServiceImpl implements CarrierService {
         // and were rejected (FedEx: TOTALCUSTOMSVALUE.REQUIRED). The commercial-
         // invoice items are also persisted separately below (for the CI doc);
         // this attaches them to the request the connector sends.
-        boolean isCrossBorder = to.getCountryCode() != null && fromCountry != null
-                && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
+        //
+        // 2026-09-08 fix — normalize BEFORE comparing so US→PR (operator
+        // enters country=US, state=PR) is recognized as cross-border. UPS
+        // + FedEx both require the full customs object on those lanes
+        // even when the service level stays US-domestic; without this the
+        // connector-side normalizeUsTerritories flipped country=US→PR at
+        // the wire but the intl block was never built → UPS 120502
+        // ("InvoiceLineTotal MonetaryValue must be > 0"). Mirrors the FE
+        // sameTerritory rule in NewShipmentPage.tsx (US territories are
+        // NOT one customs territory).
+        String normFromCountry = com.multiship.backend.util.UsTerritoryNormalizer
+                .normalizeCountryCode(fromCountry, from != null ? from.getState() : null);
+        String normToCountry = com.multiship.backend.util.UsTerritoryNormalizer
+                .normalizeCountryCode(to.getCountryCode(), to.getState());
+        boolean isCrossBorder = normToCountry != null && normFromCountry != null
+                && !normToCountry.trim().equalsIgnoreCase(normFromCountry.trim());
         if (isCrossBorder) {
             // BUSINESS (commercial/DDP) importer profiles must carry the
             // importer's tax registration — e.g. the CBSA Business Number
@@ -1247,6 +1261,12 @@ public class CarrierServiceImpl implements CarrierService {
         // its own master tracking + label. Splitting is skipped when the
         // feature flag is off (safety kill-switch: over-cap requests then
         // fail at the carrier with a 4xx, which the try/catch below surfaces).
+        //
+        // NOTE: intlForLimit uses raw country codes (not the territory-
+        // normalized codes used for isCrossBorder) — UPS treats US→PR as
+        // domestic for MPS-cap purposes (see maybeUpsUsPrReturnService
+        // below). The customs-block gate needs the customs semantic;
+        // this cap gate needs the raw wire semantic.
         boolean intlForLimit = to.getCountryCode() != null && fromCountry != null
                 && !to.getCountryCode().trim().equalsIgnoreCase(fromCountry.trim());
         // Sprint 52 — direction-aware limit resolution. ManualShipmentRequest
