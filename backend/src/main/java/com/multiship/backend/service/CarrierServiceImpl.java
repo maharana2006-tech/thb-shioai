@@ -2146,8 +2146,16 @@ public class CarrierServiceImpl implements CarrierService {
             }
         }
         String dest = order.getShiptoCountryCd();
-        return StringUtils.hasText(origin) && StringUtils.hasText(dest)
-                && !origin.trim().equalsIgnoreCase(dest.trim());
+        // Territory-normalize both sides — country=US + state=PR is really
+        // country=PR for shipping. Otherwise US → PR falls through as
+        // "same country" (domestic) and downstream customs / intl-forms
+        // gates skip, producing UPS 120502 on the wire.
+        String origNorm = com.multiship.backend.util.UsTerritoryNormalizer
+                .normalizeCountryCode(origin, carrierProperties.getShipper().getState());
+        String destNorm = com.multiship.backend.util.UsTerritoryNormalizer
+                .normalizeCountryCode(dest, order.getShiptoState());
+        return StringUtils.hasText(origNorm) && StringUtils.hasText(destNorm)
+                && !origNorm.trim().equalsIgnoreCase(destNorm.trim());
     }
 
     /**
