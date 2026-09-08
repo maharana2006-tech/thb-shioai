@@ -964,7 +964,20 @@ export default function NewShipmentPage() {
     !!sender.countryCode &&
     !!recipient.countryCode &&
     !sameTerritory(senderEffectiveCountry, recipientEffectiveCountry)
-  const neededScope: 'DOMESTIC' | 'INTERNATIONAL' = isInternational ? 'INTERNATIONAL' : 'DOMESTIC'
+  // Territory lanes are the awkward middle case: customs paperwork is
+  // international (isInternational=true → commercial invoice + FTR/AES
+  // required) but the carrier moves them on the DOMESTIC network — so
+  // service scope stays DOMESTIC to keep Air / Overnight products
+  // visible. Pre-fix, isInternational=true forced neededScope=
+  // INTERNATIONAL which dropped 2nd Day / Next Day Air off the picker
+  // for US→PR, leaving only Worldwide services that UPS rejects with
+  // 121100 "service invalid for origin". Decoupling: territory ⇒
+  // customs docs, but keep the domestic catalogue.
+  const isTerritoryLane =
+    (senderTerritoryEarly !== null || (sender.countryCode || '').toUpperCase() === 'US')
+    && recipientTerritoryEarly !== null
+  const neededScope: 'DOMESTIC' | 'INTERNATIONAL' =
+    isInternational && !isTerritoryLane ? 'INTERNATIONAL' : 'DOMESTIC'
   const scopeFits = (scope?: string | null) => !scope || scope === 'BOTH' || scope === neededScope
 
   // Compare a catalog row's origin country to the sender's selected country.
