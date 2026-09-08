@@ -2192,6 +2192,14 @@ public class StampsConnector implements CarrierConnector {
      */
     @Override
     public CloseOutResult closeOutDay(CloseOutRequest request, String accessToken, String environment) {
+        if (isSeraFlavor()) {
+            return closeOutDaySera(request, accessToken, environment);
+        }
+        return closeOutDaySwsim(request, accessToken, environment);
+    }
+
+    /** SWSIM {@code CreateScanForm} path — legacy behaviour, unchanged. */
+    CloseOutResult closeOutDaySwsim(CloseOutRequest request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
             return new CloseOutResult("USPS", null, null, null, 0, "NOT_SUPPORTED",
                     "USPS SCAN Form needs live credentials; the account is on a fallback token.",
@@ -2225,6 +2233,155 @@ public class StampsConnector implements CarrierConnector {
             log.warn("Stamps CreateScanForm failed: {}", ex.getMessage());
             return new CloseOutResult("USPS", null, null, null, tracking.size(), "ERROR",
                     "SWSIM CreateScanForm call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * SERA {@code POST /sera/v1/manifests} — end-of-day manifest. SERA
+     * supports two shapes: by list of {@code label_ids} (preferred, exact
+     * label targeting) or by carrier + ship_date (broader, catches any
+     * unmanifested labels for that day). We use the label_ids path when
+     * we can resolve them from {@code label_package.carrier_label_ref}
+     * (the V44 column) and fall back to carrier + ship_date otherwise —
+     * this keeps legacy pre-V44 labels manifestable via the same
+     * endpoint. Response shape:
+     * <pre>
+     * {
+     *   "manifest_id": "uuid",
+     *   "carrier": "usps",
+     *   "ship_date": "2026-09-08",
+     *   "number_of_items_in_manifest": 12,
+     *   "labels": [{"href": "https://..."}]
+     * }
+     * </pre>
+     * {@code labels[0].href} is the manifest form (PDF or PNG); we save
+     * it into {@link CloseOutResult#manifestPdfUrl()}.
+     */
+    CloseOutResult closeOutDaySera(CloseOutRequest request, String accessToken, String environment) {
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            return new CloseOutResult("USPS", null, null, null, 0, "NOT_SUPPORTED",
+                    "USPS via Stamps.com (SERA) manifest needs live credentials; the account is on a fallback token.",
+                    null);
+        }
+        java.util.List<String> tracking = request.trackingNumbers();
+        if (tracking == null || tracking.isEmpty()) {
+            return new CloseOutResult("USPS", null, null, null, 0, "ERROR",
+                    "SERA manifest requires at least one tracking number (to resolve label_ids).",
+                    null);
+        }
+        String baseUrl = seraApiBaseUrl(environment);
+        Map<String, Object> body = buildSeraManifestBody(request);
+        String jsonBody;
+        try {
+            jsonBody = objectMapper.writeValueAsString(body);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
+            throw new IllegalStateException("Failed to serialize SERA manifest body", ex);
+        }
+        try {
+            String response = HttpClients.newBuilder().baseUrl(baseUrl + "/manifests").build()
+                    .post()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .body(jsonBody)
+                    .retrieve()
+                    .body(String.class);
+            return parseSeraManifestResponse(request, response);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            int status = ex.getStatusCode().value();
+            String err = extractSeraError(ex.getResponseBodyAsString());
+            log.warn("Stamps SERA /manifests rejected (HTTP {}): {}", status, err);
+            return new CloseOutResult("USPS", null, null, null, tracking.size(), "ERROR",
+                    "SERA manifest rejected (HTTP " + status + "): " + err,
+                    ex.getResponseBodyAsString());
+        } catch (Exception ex) {
+            log.warn("Stamps SERA /manifests call failed: {}", ex.getMessage());
+            return new CloseOutResult("USPS", null, null, null, tracking.size(), "ERROR",
+                    "SERA manifest call failed: " + ex.getMessage(), null);
+        }
+    }
+
+    /**
+     * Build the JSON body for SERA {@code POST /sera/v1/manifests}. Prefers
+     * the by-label_ids path when every tracking has a persisted
+     * {@code carrier_label_ref}; falls back to the by-carrier+ship_date
+     * shape when any tracking is missing its label_id (legacy labels).
+     */
+    Map<String, Object> buildSeraManifestBody(CloseOutRequest request) {
+        java.util.List<String> tracking = request.trackingNumbers();
+        java.util.List<String> labelIds = new java.util.ArrayList<>();
+        if (labelPackageRepository != null) {
+            for (String t : tracking) {
+                String id = resolveSeraLabelId(t);
+                if (StringUtils.hasText(id)) labelIds.add(id);
+            }
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        Map<String, Object> labelOpts = new LinkedHashMap<>();
+        labelOpts.put("label_format", "pdf");
+        labelOpts.put("print_instructions", false);
+        // If we got a label_id for every tracking, use the exact-target path.
+        // Otherwise fall back to carrier + ship_date so legacy pre-V44 labels
+        // still manifest (SERA sweeps every unmanifested USPS label for the
+        // day at the shipper address).
+        if (labelIds.size() == tracking.size() && !labelIds.isEmpty()) {
+            body.put("label_ids", labelIds);
+        } else {
+            log.info("Stamps SERA manifest: {} of {} tracking numbers had a persisted label_id; "
+                    + "falling back to by-carrier+ship_date manifest.",
+                    labelIds.size(), tracking.size());
+            body.put("carrier", "usps");
+            String shipDate = request.closeDate() != null
+                    ? request.closeDate().toString()
+                    : com.multiship.backend.util.LabelDates.today(null).toString();
+            body.put("ship_date", shipDate);
+            if (request.address() != null) {
+                body.put("from_address", buildSeraAddress(
+                        request.address().name(), null,
+                        request.address().addressLine1(),
+                        request.address().addressLine2(),
+                        request.address().addressLine3(),
+                        request.address().city(),
+                        request.address().state(),
+                        request.address().postalCode(),
+                        request.address().countryCode(),
+                        null, null, null));
+            }
+        }
+        body.put("label_options", labelOpts);
+        return body;
+    }
+
+    /**
+     * Parse SERA's manifest response. Missing {@code manifest_id} counts as
+     * ERROR (mirrors parseSeraCreateLabelResponse's fault-first pattern).
+     */
+    CloseOutResult parseSeraManifestResponse(CloseOutRequest request, String responseJson) {
+        int count = request.trackingNumbers() == null ? 0 : request.trackingNumbers().size();
+        if (!StringUtils.hasText(responseJson)) {
+            return new CloseOutResult("USPS", null, null, null, count, "ERROR",
+                    "SERA /manifests returned an empty response.", null);
+        }
+        try {
+            JsonNode j = objectMapper.readTree(responseJson);
+            String manifestId = j.path("manifest_id").asText(null);
+            if (!StringUtils.hasText(manifestId)) {
+                return new CloseOutResult("USPS", null, null, null, count, "ERROR",
+                        "SERA /manifests returned no manifest_id: " + extractSeraError(responseJson),
+                        responseJson);
+            }
+            String manifestUrl = null;
+            JsonNode labels = j.path("labels");
+            if (labels.isArray() && labels.size() > 0) {
+                manifestUrl = labels.get(0).path("href").asText(null);
+            }
+            int items = j.path("number_of_items_in_manifest").asInt(count);
+            return new CloseOutResult("USPS", manifestId, manifestUrl, null, items, "MANIFESTED",
+                    "SERA manifest " + manifestId + " covers " + items + " shipment(s)",
+                    responseJson);
+        } catch (Exception ex) {
+            return new CloseOutResult("USPS", null, null, null, count, "ERROR",
+                    "SERA /manifests returned malformed body: " + ex.getMessage(), responseJson);
         }
     }
 
