@@ -53,6 +53,7 @@ import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddress
 import { compatiblePresetIds } from '../utils/servicePackageCompatibility'
 import { shipmentValidationService, type ShipmentValidationResult } from '../api/shipmentValidationService'
 import { SHIPPING_PURPOSES, clearanceOptionsForCarrier, FTR_EXEMPTIONS, EEI_THRESHOLD_USD } from '../utils/customsOptions'
+import { isServiceAllowedForUsTerritory, usTerritoryBannerHint } from '../utils/usTerritoryServices'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -1106,21 +1107,19 @@ export default function NewShipmentPage() {
   const isRecipientUsTerritory = recipientTerritory !== null
 
   const servicesForCarrier = useMemo(
-    () => {
-      // Ground-family service codes that DO NOT serve US territories.
-      const groundCodesToHide = new Set([
-        'FEDEX_GROUND', 'GROUND_HOME_DELIVERY', 'SMART_POST',
-        '03',  // UPS Ground
-        '12',  // UPS 3 Day Select (ground-hybrid)
-        '11',  // UPS Standard
-      ])
-      return services
+    () =>
+      // Per-territory service allowlist (2026-09-08). UPS + FedEx don't
+      // serve every US territory with the same services — VI/GU/AS/MP/UM
+      // reject domestic Air (UPS 121100 "service invalid for origin"),
+      // PR accepts domestic Air but rejects Ground family. See
+      // utils/usTerritoryServices for the validated per-territory map;
+      // recipientTerritory=null falls through as pass-through.
+      services
         .filter((s) => canon(s.carrier) === carrier && originMatch(s.originCountry) && scopeFits(s.scope))
         .filter((s) => !allowedServiceIds || allowedServiceIds.has(s.id))
-        .filter((s) => !isRecipientUsTerritory || !groundCodesToHide.has(s.serviceCode))
-    },
+        .filter((s) => isServiceAllowedForUsTerritory(recipientTerritory, carrier, s.serviceCode)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [services, carrier, sender.countryCode, neededScope, allowedServiceIds, isRecipientUsTerritory],
+    [services, carrier, sender.countryCode, neededScope, allowedServiceIds, recipientTerritory],
   )
   // Sprint 52 PR 2 — service_package compatibility. Empty set for a
   // service means "admin hasn't linked any preset to this service yet"
@@ -3344,7 +3343,7 @@ export default function NewShipmentPage() {
                   <div className="mt-2 flex items-start gap-2 rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-[12px] text-sky-800">
                     <FiAlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span>
-                      {`Shipping to ${recipientTerritory}. FedEx + UPS treat this US territory as a separate country — Ground / Home Delivery / SmartPost / 3 Day Select don’t serve it and have been hidden. The wire payload will send countryCode=${recipientTerritory}.`}
+                      {`Shipping to ${recipientTerritory}. FedEx + UPS treat this US territory as a separate country — ${usTerritoryBannerHint(recipientTerritory)}. The wire payload will send countryCode=${recipientTerritory}.`}
                     </span>
                   </div>
                 ) : null}

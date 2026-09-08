@@ -1174,6 +1174,41 @@ public class CarrierServiceImpl implements CarrierService {
 
         String serviceType = service != null ? service.getServiceCode()
                 : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");
+        // US-territory service allowlist (2026-09-08). Fast-fail before
+        // the wire so operators get an actionable message instead of the
+        // carrier's cryptic error a few seconds later. Bug case: US → VI
+        // on UPS 2nd Day Air (02) reached the carrier and came back as
+        // 121100 "The requested service is invalid for the shipment
+        // origin"; PR + VI accept different service sets — see the
+        // per-territory allowlist on UsTerritoryNormalizer. Skips when
+        // the destination isn't a US territory or the operator didn't
+        // pick an explicit service (connector default handles that).
+        {
+            String destTerritory = to.getState() != null
+                    ? com.multiship.backend.util.UsTerritoryNormalizer
+                            .normalizeCountryCode(to.getCountryCode(), to.getState())
+                    : to.getCountryCode();
+            boolean toIsTerritory = destTerritory != null
+                    && com.multiship.backend.util.UsTerritoryNormalizer.US_TERRITORY_CODES
+                            .contains(destTerritory.trim().toUpperCase(Locale.ROOT));
+            if (toIsTerritory && service != null && StringUtils.hasText(serviceType)) {
+                boolean ok = com.multiship.backend.util.UsTerritoryNormalizer
+                        .isServiceAllowedForTerritory(destTerritory, carrier, serviceType);
+                if (!ok) {
+                    return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                            carrier + " " + serviceType + " does not deliver to "
+                                    + destTerritory.trim().toUpperCase(Locale.ROOT)
+                                    + ". "
+                                    + ("VI".equalsIgnoreCase(destTerritory)
+                                            || "GU".equalsIgnoreCase(destTerritory)
+                                            || "AS".equalsIgnoreCase(destTerritory)
+                                            || "MP".equalsIgnoreCase(destTerritory)
+                                            || "UM".equalsIgnoreCase(destTerritory)
+                                        ? "Pick a Worldwide / International service."
+                                        : "Pick a different service — Ground family (Ground / Home Delivery / SmartPost / 3 Day Select) does not serve US territories."));
+                }
+            }
+        }
         String packageType = preset != null
                 ? ("CARRIER".equalsIgnoreCase(preset.getKind()) ? preset.getCarrierPackageCode() : "YOUR_PACKAGING")
                 : firstNonBlank(connector.getConfiguration().defaultPackageType(), "YOUR_PACKAGING");
