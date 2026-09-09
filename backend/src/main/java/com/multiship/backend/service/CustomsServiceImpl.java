@@ -125,7 +125,7 @@ public class CustomsServiceImpl implements CustomsService {
         }
         // Sprint 50 Tier 0.5 PR H - belt-and-braces tenant guard: reject
         // a scoped USER trying to touch a foreign tenant's order customs.
-        // Mirrors VoidServiceImpl:62. Prefer tenantId, fall back to custNo.
+        // Mirrors VoidServiceImpl:62. Prefer tenantId, fall back to customerReferenceId.
         if (tenantScope != null) {
             com.multiship.backend.model.Order order = loaded.get();
             tenantScope.requireTenantMatch(

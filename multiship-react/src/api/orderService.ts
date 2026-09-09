@@ -142,7 +142,7 @@ export interface OrderWithLines {
   orderNo: number
   orderSuffix: number | null
   orderStatus: string | null
-  custNo: string | null
+  customerReferenceId: string | null
   shipName: string | null
   shipAttn: string | null
   shipAddr1: string | null
@@ -737,7 +737,7 @@ export interface QueueStats {
 /** One row of the unified Documents table (GET /orders/documents). */
 export interface OrderDocumentRow {
   orderNo: number
-  custNo: string | null
+  customerReferenceId: string | null
   recipientName: string | null
   city: string | null
   countryCode: string | null

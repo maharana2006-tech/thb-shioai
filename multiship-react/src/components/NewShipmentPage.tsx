@@ -1281,14 +1281,14 @@ export default function NewShipmentPage() {
           if (p0.weightUnit === 'LB' || p0.weightUnit === 'KG') setWeightUnit(p0.weightUnit)
         }
         if (o.declaredValue != null) setDeclaredValue(String(o.declaredValue))
-        // Prefill the CLIENT from the order (tenantId, custNo fallback) —
+        // Prefill the CLIENT from the order (tenantId, customerReferenceId fallback) —
         // its absence left two required fields empty (CLIENT, and CARRIER
         // whose option pool is client-derived) and forced the operator
         // through applyClient, which overwrites the faithfully-prefilled
         // ship-from with the client's warehouse default. Direct setClientCode
         // keeps every prefilled field intact. "MANUAL" is the legacy
         // no-client sentinel, not a real client.
-        const orderClient = (o.tenantId || o.custNo || '').trim().toUpperCase()
+        const orderClient = (o.tenantId || o.customerReferenceId || '').trim().toUpperCase()
         if (orderClient && orderClient !== 'MANUAL') setClientCode(orderClient)
         // Carrier: from the ship-via (a service code) when it identifies one,
         // else from the account the label was booked on. A stored value the

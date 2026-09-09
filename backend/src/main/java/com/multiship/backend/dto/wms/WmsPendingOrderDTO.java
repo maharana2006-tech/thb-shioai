@@ -19,7 +19,7 @@ public class WmsPendingOrderDTO {
     private Long orderId;
     private String orderNo;
     private String poNumber;
-    private String custNo;
+    private String customerReferenceId;
     private Long shipmentTransactionId;
     private String shipmentNumber;
     private Integer backorderNumber;

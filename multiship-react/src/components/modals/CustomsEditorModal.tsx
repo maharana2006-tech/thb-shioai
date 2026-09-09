@@ -59,7 +59,7 @@ export default function CustomsEditorModal({ orderNo, onClose }: CustomsEditorMo
         if (cancelled) return
         const o = res.data?.order
         setLines(res.data?.order?.orderLines ?? [])
-        const code = (o?.tenantId?.trim() || o?.custNo?.trim() || '').toUpperCase()
+        const code = (o?.tenantId?.trim() || o?.customerReferenceId?.trim() || '').toUpperCase()
         const dest = (o?.shiptoCountryCd?.trim() || '').toUpperCase()
         setClientCode(code)
         setCountry(dest)

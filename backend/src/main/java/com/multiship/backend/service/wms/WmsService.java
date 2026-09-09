@@ -153,7 +153,7 @@ public class WmsService {
         r.setOrderRef(firstNonBlank(src.getOrderNo(), src.getShipmentNumber()));
         // WMS gives no customer number in the pending feed — the operator picks
         // the billing client in the grid (validateRow flags it as required).
-        r.setClientCode(trimOrNull(src.getCustNo()));
+        r.setClientCode(trimOrNull(src.getCustomerReferenceId()));
         if (to != null) {
             r.setRecipientName(firstNonBlank(to.getName(), to.getAttn()));
             r.setRecipientCompany(to.getAttn());

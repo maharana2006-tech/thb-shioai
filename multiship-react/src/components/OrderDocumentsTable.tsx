@@ -133,7 +133,7 @@ export default function OrderDocumentsTable() {
                       <span className="ml-1.5 rounded-full bg-slate-200 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wide text-slate-600">Voided</span>
                     ) : null}
                   </td>
-                  <td className="whitespace-nowrap border-b border-[#f2ecdf] px-3 py-2 font-mono text-[10.5px] text-[#5a4526]">{r.custNo ?? '—'}</td>
+                  <td className="whitespace-nowrap border-b border-[#f2ecdf] px-3 py-2 font-mono text-[10.5px] text-[#5a4526]">{r.customerReferenceId ?? '—'}</td>
                   <td className="border-b border-[#f2ecdf] px-3 py-2 font-semibold text-[#1f150c]">{r.recipientName ?? '—'}</td>
                   <td className="whitespace-nowrap border-b border-[#f2ecdf] px-3 py-2 text-[#5a4526]">
                     {r.city ?? '—'}{r.countryCode ? ` · ${r.countryCode}` : ''}
@@ -205,7 +205,7 @@ export default function OrderDocumentsTable() {
             </div>
             <div className="space-y-2.5 px-5 py-4 text-[12px]">
               {[
-                ['Client', statementRow.custNo ?? '—'],
+                ['Client', statementRow.customerReferenceId ?? '—'],
                 ['Recipient', statementRow.recipientName ?? '—'],
                 ['Carrier / Tracking', `${statementRow.carrier ?? '—'} · ${statementRow.trackingNumber ?? '—'}`],
                 ['Billed to account', statementRow.accountNumber ?? '—'],

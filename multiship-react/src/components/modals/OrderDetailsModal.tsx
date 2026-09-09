@@ -146,7 +146,7 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
   // Recipient name: some feeds put a bare sequence digit in ship_name.
   const shipName = order?.shipName?.trim()
   const recipient =
-    (shipName && shipName.length > 2 ? shipName : order?.shipAttn) || order?.custNo || 'Consignee'
+    (shipName && shipName.length > 2 ? shipName : order?.shipAttn) || order?.customerReferenceId || 'Consignee'
   const attnDiffers = order?.shipAttn && order.shipAttn !== recipient
   const country = order?.shiptoCountryCd
     ? COUNTRY_NAMES[order.shiptoCountryCd.toUpperCase()] || order.shiptoCountryCd.toUpperCase()
@@ -378,7 +378,7 @@ export default function OrderDetailsModal({ orderNo, onClose }: OrderDetailsModa
 
                   <Card label="Order">
                     <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[12.5px]">
-                      <Meta k="Customer" v={order.custNo} />
+                      <Meta k="Customer" v={order.customerReferenceId} />
                       <Meta k="Ship via" v={order.shipviaCd} />
                       <Meta k="Weight" v={order.weight != null ? `${order.weight} ${(order.weightUnit || 'LB').toLowerCase()}` : '—'} />
                       <Meta k="Declared value" v={order.declaredValue != null ? `$${Number(order.declaredValue).toFixed(2)}` : '—'} />

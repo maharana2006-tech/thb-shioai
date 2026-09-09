@@ -446,7 +446,7 @@ export default function LabelDocumentPage() {
 
   // TENANT users may only open their own orders.
   const ownTenant = getTenantIdForUser(normalizeRole(role), username)
-  const tenantBlocked = Boolean(ownTenant && order && (order.tenantId || order.custNo)?.toUpperCase() !== ownTenant)
+  const tenantBlocked = Boolean(ownTenant && order && (order.tenantId || order.customerReferenceId)?.toUpperCase() !== ownTenant)
 
   // Account details from the cascade resolution (falls back to legacy payloads).
   const accountCarrierCode = resolution?.carrierCode || legacyAccount?.carrierCode || order?.shipviaCd || null
@@ -460,7 +460,7 @@ export default function LabelDocumentPage() {
 
 
   // Some order feeds put a bare sequence digit in ship_name; prefer a plausible name.
-  // Never falls back to custNo (client code) — that would render the tenant
+  // Never falls back to customerReferenceId (client code) — that would render the tenant
   // identifier as the parcel's addressee. Placeholder is a literal '-' so
   // mis-populated shipments are visibly broken.
   const rawShipName = order?.shipName?.trim()
@@ -596,7 +596,7 @@ export default function LabelDocumentPage() {
 
 
   // ---- carrier-form codes, derived deterministically like the real label carries ----
-  const formCode = `${hash36(`${orderNo}${order?.shiptoZip || ''}`, 5)}/${hash36(`${order?.shiptoZip || ''}${orderNo}`, 4)}/${hash36(`${order?.custNo || ''}${orderNo}`, 4)}`
+  const formCode = `${hash36(`${orderNo}${order?.shiptoZip || ''}`, 5)}/${hash36(`${order?.shiptoZip || ''}${orderNo}`, 4)}/${hash36(`${order?.customerReferenceId || ''}${orderNo}`, 4)}`
   const meterCode = `J${String(orderNo).padStart(9, '0')}${(order?.shiptoZip || '000').slice(0, 3)}uv`
   const ursaCode = `XQ ${(order?.shiptoCity || 'DEST').replace(/[^A-Za-z]/g, '').slice(0, 4).toUpperCase()}`
   const airportCode = (order?.shiptoCity || 'DST').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase()
@@ -1176,7 +1176,7 @@ export default function LabelDocumentPage() {
                     {recipientCompany ? (
                       <p className="text-[18px] font-black uppercase leading-[22px]">{recipientCompany}</p>
                     ) : null}
-                    {/* custNo used to render here as a big uppercase line — read as part
+                    {/* customerReferenceId used to render here as a big uppercase line — read as part
                         of the address. Moved to the warehouse footer below the label. */}
                     {order.shipAddr1 ? (
                       <p className="text-[18px] font-black uppercase leading-[22px]">{order.shipAddr1}</p>
@@ -1229,7 +1229,7 @@ export default function LabelDocumentPage() {
                     if (src === 'WMS') return (order as { wmsExternalId?: string | null }).wmsExternalId || orderNoStr
                     return orderNoStr
                   })()}</span>
-                  <span>DEPT: {order.custNo || ''}</span>
+                  <span>DEPT: {order.customerReferenceId || ''}</span>
                 </div>
               </div>
               <div className="mx-1 h-px bg-black" />
@@ -1291,7 +1291,7 @@ export default function LabelDocumentPage() {
               <div className="mx-1 h-px bg-black" />
               <div className="px-2 py-1 text-[9px] font-bold uppercase leading-[12px] tracking-wide">
                 <p>
-                  CLIENT: {order.custNo || '-'} · ORDER: {orderDisplay}
+                  CLIENT: {order.customerReferenceId || '-'} · ORDER: {orderDisplay}
                   {order.orderSuffix ? `-${order.orderSuffix}` : ''}
                   {` · PKG ${pkgIndex} OF ${pkgCount} · `}
                   {formatDate(shipDate)}
