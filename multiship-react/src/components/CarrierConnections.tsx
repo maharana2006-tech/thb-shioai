@@ -440,6 +440,21 @@ export default function CarrierConnections({
     setBusyId(account.id)
     try {
       const response = await accountRefService.verifyAccount(account.id)
+      // Stamps.com SERA 3-legged OAuth (PR #628): when the backend
+      // signals `needsAuthorization`, the account has no refresh_token
+      // yet. Kick off the browser consent flow in a new tab — the
+      // callback endpoint stores the refresh_token and next verify
+      // succeeds. Same pattern for authorization_code servers that
+      // don't support client_credentials.
+      if (response.data?.needsAuthorization) {
+        const url = response.data.authorizeUrl
+          || accountRefService.authorizeStampsSera(account.id)
+        notify.info(
+          'Opening Stamps.com in a new tab. Complete the consent flow, then click Verify again.',
+        )
+        window.open(url, '_blank', 'noopener,noreferrer')
+        return
+      }
       if (response.data?.verified) notify.success(response.message)
       else notify.error(response.message)
       await loadAccounts()
