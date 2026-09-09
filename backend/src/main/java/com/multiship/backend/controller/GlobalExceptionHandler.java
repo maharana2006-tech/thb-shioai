@@ -126,6 +126,18 @@ public class GlobalExceptionHandler {
      * specific handler (validation, carrier, order, etc.) lands here.
      * Existing narrower handlers keep precedence.
      */
+    /** Webhooks / stored secrets need SECRETS_ENCRYPTION_KEY: say so instead of a generic 500. */
+    @ExceptionHandler(com.multiship.backend.config.CryptoUnavailableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleCryptoUnavailable(com.multiship.backend.config.CryptoUnavailableException ex) {
+        log.warn("Secrets encryption unavailable: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(ApiResponse.<Void>builder()
+                .status("error").code(503)
+                .message("This feature stores a secret and the server has no SECRETS_ENCRYPTION_KEY configured. "
+                        + "Set the environment variable (base64 32-byte AES-256 key) and restart the backend.")
+                .errorCode(ErrorCode.INTERNAL_ERROR.name())
+                .build());
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpectedRuntime(RuntimeException ex) {
         String correlationId = UUID.randomUUID().toString().substring(0, 8);

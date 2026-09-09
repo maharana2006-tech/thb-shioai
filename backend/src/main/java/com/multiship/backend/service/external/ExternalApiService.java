@@ -169,6 +169,21 @@ public class ExternalApiService {
         if (StringUtils.hasText(req.getCarrierCode())) {
             carrier = req.getCarrierCode().trim().toUpperCase(Locale.ROOT);
             resolvedVia = "CARRIER_OVERRIDE";
+            // The shipMethod still names the service (03, UPS_GROUND, GROUND,
+            // "UPS Ground"); it used to be ignored on this branch, so the label
+            // was booked with no service and UPS answered 120500.
+            if (StringUtils.hasText(req.getShipMethod())) {
+                Optional<ShippingService> svc = shippingConfigService.resolveServiceCode(carrier, req.getShipMethod(), originCountry);
+                if (svc.isPresent()) {
+                    serviceId = svc.get().getId();
+                    serviceCode = svc.get().getServiceCode();
+                    resolvedVia = "CARRIER_OVERRIDE+SHIPMETHOD";
+                } else if (shippingConfigService.hasCatalogFor(carrier)) {
+                    throw new ExternalApiException(422, ErrorCode.VALIDATION_ERROR,
+                            "shipMethod '" + req.getShipMethod().trim() + "' is not a " + carrier
+                            + " service on this platform — send the carrier's code (UPS 03/08, FEDEX_GROUND…) or a catalog name.");
+                }
+            }
         } else if (translatedShipviaService != null) {
             // Phase 5c — client has a direct shipvia alias, use it and skip
             // the rule resolver entirely.

@@ -81,6 +81,9 @@ public class OrderImportRowDTO {
     private String packageType;
     private BigDecimal weight;
     private String weightUnit;
+    /** True when the weight was copied from the order's first row (an item line,
+     *  not a parcel) — see OrderImportServiceImpl.inheritFromLeader. */
+    private Boolean weightInherited;
     /** Box dimensions (optional). Carriers need them for dimensional weight
      *  and the single-order fix screen requires them — without columns here
      *  a bulk order could never be repaired in place. */

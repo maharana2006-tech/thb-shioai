@@ -143,7 +143,7 @@ public class ApiKeyService {
                 .environment(env)
                 .keyPrefix(prefix)
                 .keyHash(passwordEncoder.encode(secret))
-                .scopes(StringUtils.hasText(scopes) ? scopes.trim() : DEFAULT_SCOPES)
+                .scopes(StringUtils.hasText(scopes) ? scopes.trim().replaceAll("[\\s,]+", " ") : DEFAULT_SCOPES)
                 .active(true)
                 .createdBy(createdBy)
                 .expiresAt(expiresAt)

@@ -3085,6 +3085,14 @@ public class CarrierServiceImpl implements CarrierService {
                         order.getShiptoCountryCd(), international, shipperCountry, originWarehouseId)
                 .orElse(null);
         com.multiship.backend.model.ShippingService resolvedService = route != null ? route.service() : null;
+        // No rule / alias matched: the stored ship-via may still name a service
+        // in the carrier's own or a generic vocabulary ("GROUND", "UPS_GROUND",
+        // "03") — resolve it against the catalog instead of sending it raw.
+        if (resolvedService == null && StringUtils.hasText(order.getShipviaCd())) {
+            resolvedService = shippingConfigService
+                    .resolveServiceCode(connector.getCarrierCode(), order.getShipviaCd(), shipperCountry)
+                    .orElse(null);
+        }
         Long resolvedRuleId = route != null ? route.ruleId() : null;
         String serviceType = resolvedService != null ? resolvedService.getServiceCode()
                 : firstNonBlank(connector.getConfiguration().defaultServiceType(), "GROUND");

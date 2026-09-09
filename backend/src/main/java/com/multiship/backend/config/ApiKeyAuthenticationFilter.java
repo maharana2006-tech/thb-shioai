@@ -179,7 +179,10 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     private static Set<String> scopesOf(ApiKey key) {
         if (!StringUtils.hasText(key.getScopes())) return Set.of();
-        return Arrays.stream(key.getScopes().trim().split("\\s+")).collect(Collectors.toSet());
+        // Scopes are stored space-separated, but integrators (and the admin UI) often
+        // paste "shipments,rates" — accept commas too instead of a confusing 403.
+        return Arrays.stream(key.getScopes().trim().split("[\\s,]+"))
+                .filter(StringUtils::hasText).collect(Collectors.toSet());
     }
 
     private void writeError(HttpServletResponse response, String errorCode, String message) throws IOException {

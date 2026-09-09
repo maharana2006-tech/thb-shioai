@@ -90,6 +90,86 @@ public class ShippingConfigService {
      * CarrierServiceImpl — keep both in sync). Lets display surfaces run the
      * FULL service resolution incl. the scope fallback.
      */
+    /**
+     * Resolve what an operator, a WMS or a partner sent as a "service" to a
+     * catalog service of {@code carrier}: the exact code (03, FEDEX_GROUND),
+     * the display name ("UPS Ground"), a carrier-prefixed code (UPS_GROUND),
+     * or a generic word every source uses — GROUND, 2DAY, OVERNIGHT,
+     * EXPEDITED, EXPRESS, SAVER, STANDARD. Prefers the service catalogued for
+     * {@code originCountry}. Empty when nothing matches; callers turn that
+     * into an error naming the carrier's catalog rather than sending an
+     * unknown code to the carrier (UPS answers 120500 "Missing or invalid
+     * service code" and every row fails).
+     */
+    public java.util.Optional<com.multiship.backend.model.ShippingService> resolveServiceCode(
+            String carrier, String raw, String originCountry) {
+        if (carrier == null || carrier.isBlank() || raw == null || raw.isBlank()) return java.util.Optional.empty();
+        String canon = canonicalCarrierFor(carrier);
+        String value = raw.trim().toUpperCase(Locale.ROOT);
+        java.util.List<com.multiship.backend.model.ShippingService> all = serviceRepository.findAllByOrderByCarrierAscSortOrderAsc();
+        java.util.List<com.multiship.backend.model.ShippingService> mine = all.stream()
+                .filter(s -> s.getCarrier() != null && s.getCarrier().equalsIgnoreCase(canon))
+                .toList();
+        if (mine.isEmpty()) return java.util.Optional.empty();
+        java.util.function.Function<java.util.List<com.multiship.backend.model.ShippingService>,
+                java.util.Optional<com.multiship.backend.model.ShippingService>> pick = list -> {
+            if (list.isEmpty()) return java.util.Optional.empty();
+            return list.stream()
+                    .filter(s -> originCountry != null && s.getOriginCountry() != null
+                            && s.getOriginCountry().equalsIgnoreCase(originCountry.trim()))
+                    .findFirst()
+                    .or(() -> list.stream().filter(com.multiship.backend.model.ShippingService::isEnabled).findFirst())
+                    .or(() -> java.util.Optional.of(list.get(0)));
+        };
+        // 1) exact code
+        java.util.Optional<com.multiship.backend.model.ShippingService> hit = pick.apply(mine.stream()
+                .filter(s -> s.getServiceCode() != null && s.getServiceCode().equalsIgnoreCase(value)).toList());
+        if (hit.isPresent()) return hit;
+        // 2) display name
+        hit = pick.apply(mine.stream().filter(s -> s.getName() != null && s.getName().equalsIgnoreCase(raw.trim())).toList());
+        if (hit.isPresent()) return hit;
+        // 3) carrier-prefixed code ("UPS_GROUND", "FEDEX GROUND")
+        String stripped = value.replaceFirst("^(UPS|FEDEX|USPS|DHL)[_ ]+", "");
+        if (!stripped.equals(value)) {
+            hit = pick.apply(mine.stream().filter(s -> s.getServiceCode() != null && s.getServiceCode().equalsIgnoreCase(stripped)).toList());
+            if (hit.isPresent()) return hit;
+        }
+        // 4) generic aliases → carrier code
+        String alias = serviceAlias(canon, stripped.replace('-', '_').replace(' ', '_'));
+        if (alias != null) {
+            hit = pick.apply(mine.stream().filter(s -> s.getServiceCode() != null && s.getServiceCode().equalsIgnoreCase(alias)).toList());
+            if (hit.isPresent()) return hit;
+        }
+        // 5) name contains all the words sent ("WORLDWIDE EXPEDITED" ⊂ "UPS Worldwide Expedited")
+        String[] words = stripped.split("[_ ]+");
+        hit = pick.apply(mine.stream().filter(s -> s.getName() != null && java.util.Arrays.stream(words)
+                .allMatch(w -> s.getName().toUpperCase(Locale.ROOT).contains(w))).toList());
+        return hit;
+    }
+
+    /** True when at least one catalog service exists for the carrier (so an unresolvable code is a real error). */
+    public boolean hasCatalogFor(String carrier) {
+        if (carrier == null || carrier.isBlank()) return false;
+        String canon = canonicalCarrierFor(carrier);
+        return serviceRepository.findAllByOrderByCarrierAscSortOrderAsc().stream()
+                .anyMatch(s -> s.getCarrier() != null && s.getCarrier().equalsIgnoreCase(canon));
+    }
+
+    /** Generic service words → the carrier's own code. Null when no alias applies. */
+    static String serviceAlias(String carrier, String v) {
+        boolean ups = "UPS".equals(carrier), fedex = "FEDEX".equals(carrier);
+        if (v.matches("GROUND|GND|GROUND_HOME|HOME")) return ups ? "03" : fedex ? (v.contains("HOME") ? "GROUND_HOME_DELIVERY" : "FEDEX_GROUND") : null;
+        if (v.matches("2ND_DAY(_AIR)?|2DAY|2_DAY|SECOND_DAY(_AIR)?|TWO_DAY")) return ups ? "02" : fedex ? "FEDEX_2_DAY" : null;
+        if (v.matches("3_DAY(_SELECT)?|3DAY|THREE_DAY|EXPRESS_SAVER")) return ups ? "12" : fedex ? "FEDEX_EXPRESS_SAVER" : null;
+        if (v.matches("NEXT_DAY(_AIR)?|NEXTDAY|1DAY|1_DAY|OVERNIGHT|STANDARD_OVERNIGHT")) return ups ? "01" : fedex ? "STANDARD_OVERNIGHT" : null;
+        if (v.matches("PRIORITY_OVERNIGHT|NEXT_DAY_AIR_EARLY|EARLY")) return ups ? "14" : fedex ? "PRIORITY_OVERNIGHT" : null;
+        if (v.matches("EXPEDITED|WORLDWIDE_EXPEDITED|INTL_ECONOMY|INTERNATIONAL_ECONOMY|ECONOMY")) return ups ? "08" : fedex ? "INTERNATIONAL_ECONOMY" : null;
+        if (v.matches("EXPRESS|WORLDWIDE_EXPRESS|INTL_PRIORITY|INTERNATIONAL_PRIORITY|PRIORITY")) return ups ? "07" : fedex ? "INTERNATIONAL_PRIORITY" : null;
+        if (v.matches("SAVER|WORLDWIDE_SAVER")) return ups ? "65" : null;
+        if (v.matches("STANDARD")) return ups ? "11" : null;
+        return null;
+    }
+
     public static String canonicalCarrierFor(String shipviaCd) {
         if (shipviaCd == null || shipviaCd.isBlank()) return "";
         String s = shipviaCd.trim().toUpperCase(Locale.ROOT);

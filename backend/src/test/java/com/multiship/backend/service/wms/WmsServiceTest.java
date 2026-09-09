@@ -60,7 +60,7 @@ class WmsServiceTest {
         dto.setOrderNo("ORD-64596");
         dto.setPoNumber("PO-9876");
         dto.setShipmentNumber(shipmentNumber);
-        dto.setCustNo(custNo);
+        dto.setCustomerReferenceId(custNo);
         dto.setShipVia("U11");
         WmsAddress to = new WmsAddress();
         to.setName("Jane Recipient");

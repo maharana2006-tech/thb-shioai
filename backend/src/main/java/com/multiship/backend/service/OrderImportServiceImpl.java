@@ -117,6 +117,13 @@ public class OrderImportServiceImpl implements OrderImportService {
     /** Saved-import store for "Save to Data History" (commit-without-labels). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
+
+    /** Live tracking for the retry sync (optional — unit-test constructors don't wire it). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
+    /** Catalog-aware service resolution (optional for the same reason). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ShippingConfigService shippingConfigService;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.fasterxml.jackson.databind.ObjectMapper importObjectMapper;
 
@@ -381,6 +388,19 @@ public class OrderImportServiceImpl implements OrderImportService {
                     }
                 }
             }
+            // Anything still not a catalog code ("GROUND" from a WMS,
+            // "UPS_GROUND" from an ERP) → the carrier's own code, so the row
+            // validates, the grid shows the real service, and the carrier is
+            // never sent a word it doesn't know.
+            if (shippingConfigService != null && StringUtils.hasText(row.getServiceType())) {
+                String cur = row.getServiceType().trim();
+                boolean isCode = services.stream().anyMatch(s -> carrierU.equalsIgnoreCase(s.getCarrier())
+                        && s.getServiceCode() != null && s.getServiceCode().equalsIgnoreCase(cur));
+                if (!isCode) {
+                    shippingConfigService.resolveServiceCode(carrierU, cur, null)
+                            .ifPresent(s -> row.setServiceType(s.getServiceCode()));
+                }
+            }
             // Package: (carrier, name) match against PackagePreset.name;
             // carrierPackageCode wins when present, else fall back to name.
             String pkgRaw = row.getPackageType();
@@ -562,8 +582,9 @@ public class OrderImportServiceImpl implements OrderImportService {
                 String owner = owners.get(account);
                 String rowClient = normalizeOrNull(row.getClientCode());
                 if (owner == null) {
-                    errors.add("accountNumber " + account + " is not a registered "
-                            + carrier + " account in the platform");
+                    errors.add("accountNumber " + account + " is not a registered " + carrier
+                            + " account for client " + (rowClient == null ? "(blank)" : rowClient)
+                            + " or the platform");
                 } else if (!owner.isEmpty() && rowClient != null && !owner.equals(rowClient)) {
                     errors.add("accountNumber " + account + " belongs to client " + owner
                             + ", not " + rowClient);
@@ -623,6 +644,11 @@ public class OrderImportServiceImpl implements OrderImportService {
             row.setErrors(errors);
             row.setWarnings(warnings);
         }
+    }
+
+    private static String firstNonBlankStr(String... vals) {
+        for (String v : vals) if (StringUtils.hasText(v)) return v.trim();
+        return null;
     }
 
     private static String normalizeOrNull(String v) {
@@ -895,6 +921,29 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
     }
 
+    /** See generateLabelsForBatch: rows whose order is already labelled become GENERATED and are left alone. */
+    private void syncRowsWithLiveOrders(List<OrderImportRowDTO> rows) {
+        if (orderRepository == null || rows == null) return;
+        for (OrderImportRowDTO r : rows) {
+            if (r.getGeneratedOrderNo() == null || "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) continue;
+            try {
+                Integer no = r.getGeneratedOrderNo();
+                boolean live = orderRepository.findByOrderNo(no)
+                        .map(o -> "GENERATED".equalsIgnoreCase(o.getOrderStatus())).orElse(false);
+                if (!live) continue;
+                r.setGeneratedStatus("GENERATED");
+                if (orderTrackingRepository != null) {
+                    orderTrackingRepository.findByOrderNo(no).ifPresent(t -> {
+                        if (StringUtils.hasText(t.getTrackingNumber())) r.setGeneratedTrackingNumber(t.getTrackingNumber());
+                    });
+                }
+                r.setGeneratedMessage("Labelled from the Orders grid (order #" + no + ") — not re-sent.");
+            } catch (Exception ignore) {
+                // best effort; the row keeps its stored status
+            }
+        }
+    }
+
     private boolean orderIsLabelled(Integer orderNo) {
         if (orderRepository == null || orderNo == null) return false;
         try {
@@ -933,21 +982,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (carrier == null) return null;
         String canon = ShippingConfigService.canonicalCarrierFor(carrier);
         String origin = req.getSender() == null ? null : normalizeOrNull(req.getSender().getCountryCode());
-        List<com.multiship.backend.model.ShippingService> candidates = new ArrayList<>();
-        for (com.multiship.backend.model.ShippingService s : shippingServiceRepository.findAllByOrderByCarrierAscSortOrderAsc()) {
-            if (s.getCarrier() == null || !s.getCarrier().equalsIgnoreCase(canon)) continue;
-            boolean codeMatch = s.getServiceCode() != null && s.getServiceCode().equalsIgnoreCase(code);
-            boolean nameMatch = s.getName() != null && s.getName().equalsIgnoreCase(leader.getServiceType().trim());
-            if (codeMatch || nameMatch) candidates.add(s);
-        }
-        if (candidates.isEmpty()) {
+        if (shippingConfigService == null) return null;
+        java.util.Optional<com.multiship.backend.model.ShippingService> resolved =
+                shippingConfigService.resolveServiceCode(canon, leader.getServiceType(), origin);
+        if (resolved.isEmpty()) {
             return "serviceType '" + leader.getServiceType().trim() + "' is not in the " + canon
                     + " service catalog — use a code from Settings → Shipping services, or leave it blank for the default";
         }
-        com.multiship.backend.model.ShippingService pick = candidates.stream()
-                .filter(s -> origin != null && s.getOriginCountry() != null && s.getOriginCountry().equalsIgnoreCase(origin))
-                .findFirst()
-                .orElse(candidates.get(0));
+        com.multiship.backend.model.ShippingService pick = resolved.get();
         if (!pick.isEnabled()) {
             return "serviceType '" + leader.getServiceType().trim() + "' (" + pick.getName() + ") is disabled in the "
                     + canon + " service catalog";
@@ -1923,6 +1965,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         // GENERATED so we don't re-bill the carrier for successful ones.
         // Filtered rows keep their existing generatedStatus/tracking on
         // save; only the not-yet-generated subset is re-processed.
+        // A row's status is frozen at generation time. If its order was since
+        // repaired from the Orders grid (Edit → Fix & regenerate), it is live
+        // at the carrier — re-sending the stale row would buy a second label
+        // and flip the order back to ERROR. Sync from the order first.
+        syncRowsWithLiveOrders(rows);
         List<OrderImportRowDTO> rowsToProcess = onlyFailed
                 ? rows.stream()
                         .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
@@ -2310,6 +2357,38 @@ public class OrderImportServiceImpl implements OrderImportService {
         req.setWarehouseCode(leader.getWarehouseCode());
         req.setWeight(leader.getWeight());
         req.setWeightUnit(leader.getWeightUnit());
+        // Rows that carry their OWN weight are parcels: a WMS sends one row
+        // per shipment/container of an order, so two rows of 0.24 + 0.22 LB
+        // must ship as two packages, not one 0.24 LB box. Continuation rows
+        // that merely inherited the leader's weight are item lines, not boxes.
+        List<OrderImportRowDTO> parcelRows = new ArrayList<>();
+        for (OrderImportRowDTO row : group) {
+            if (row.getWeight() != null && row.getWeight().signum() > 0 && !Boolean.TRUE.equals(row.getWeightInherited())) {
+                parcelRows.add(row);
+            }
+        }
+        if (parcelRows.size() > 1) {
+            List<com.multiship.backend.dto.PackageDetailDTO> pkgs = new ArrayList<>(parcelRows.size());
+            java.math.BigDecimal total = java.math.BigDecimal.ZERO;
+            int seq = 0;
+            for (OrderImportRowDTO row : parcelRows) {
+                seq++;
+                total = total.add(row.getWeight());
+                pkgs.add(com.multiship.backend.dto.PackageDetailDTO.builder()
+                        .sequenceNumber(seq)
+                        .weight(row.getWeight())
+                        .weightUnit(firstNonBlankStr(row.getWeightUnit(), leader.getWeightUnit()))
+                        .length(row.getLength() != null ? row.getLength() : leader.getLength())
+                        .width(row.getWidth() != null ? row.getWidth() : leader.getWidth())
+                        .height(row.getHeight() != null ? row.getHeight() : leader.getHeight())
+                        .dimUnit(firstNonBlankStr(row.getDimUnit(), leader.getDimUnit()))
+                        .packageType(firstNonBlankStr(row.getPackageType(), leader.getPackageType()))
+                        .reference(firstNonBlankStr(row.getReference(), leader.getReference()))
+                        .build());
+            }
+            req.setPackages(pkgs);
+            req.setWeight(total);
+        }
         req.setLength(leader.getLength());
         req.setWidth(leader.getWidth());
         req.setHeight(leader.getHeight());
@@ -2365,6 +2444,10 @@ public class OrderImportServiceImpl implements OrderImportService {
             if (!rowHasItemData(row)) continue;
             com.multiship.backend.dto.ManualShipmentRequest.Item it =
                     new com.multiship.backend.dto.ManualShipmentRequest.Item();
+            if (parcelRows.size() > 1) {
+                int idx = parcelRows.indexOf(row);
+                it.setBoxSeq(idx >= 0 ? idx + 1 : 1);
+            }
             it.setDescription(row.getItemDescription());
             it.setHsCode(row.getHsCode());
             it.setCountryOfOrigin(row.getCountryOfOrigin());
@@ -2657,7 +2740,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (!StringUtils.hasText(row.getAccountNumber())) row.setAccountNumber(leader.getAccountNumber());
         if (!StringUtils.hasText(row.getServiceType())) row.setServiceType(leader.getServiceType());
         if (!StringUtils.hasText(row.getPackageType())) row.setPackageType(leader.getPackageType());
-        if (row.getWeight() == null) row.setWeight(leader.getWeight());
+        if (row.getWeight() == null) { row.setWeight(leader.getWeight()); row.setWeightInherited(true); }
         if (!StringUtils.hasText(row.getWeightUnit())) row.setWeightUnit(leader.getWeightUnit());
         if (row.getLength() == null) row.setLength(leader.getLength());
         if (row.getWidth() == null) row.setWidth(leader.getWidth());
