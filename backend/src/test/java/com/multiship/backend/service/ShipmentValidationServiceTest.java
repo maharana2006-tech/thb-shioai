@@ -858,6 +858,67 @@ class ShipmentValidationServiceTest {
         assertEquals(ErrorCode.VALIDATION_ERROR.name(), res.getErrorCode());
     }
 
+    // ─── PR A — postal-code optional whitelist ─────────────────────────
+
+    @Test
+    void hongKongRecipient_blankPostal_doesNotError() {
+        // Live 49-country audit — HK has no national postal-code system.
+        // UPS's wire returned "Recipient postal code is required.
+        // [recipient.postalCode]" until we skipped the presence check
+        // for HK. Now: blank postal + country=HK passes.
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setCountryCode("HK");
+        req.getRecipient().setState("");
+        req.getRecipient().setCity("Kowloon");
+        req.getRecipient().setPostalCode("");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .noneMatch(e -> "recipient.postalCode".equals(e.getField())),
+                "HK is on the no-postal-code whitelist; blank postal must not error");
+    }
+
+    @Test
+    void uaeRecipient_blankPostal_doesNotError() {
+        // Same audit — UAE. UPS 128115 lineage: some destinations reject
+        // even a blank postal on the wire. Our whitelist matches the
+        // carriers that DO accept it (UPS / FedEx / DHL all accept
+        // PostalCode="" for these destinations).
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setCountryCode("AE");
+        req.getRecipient().setState("");
+        req.getRecipient().setCity("Dubai");
+        req.getRecipient().setPostalCode("");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .noneMatch(e -> "recipient.postalCode".equals(e.getField())),
+                "AE is on the no-postal-code whitelist; blank postal must not error");
+    }
+
+    @Test
+    void germanyRecipient_blankPostal_stillErrors_regressionGuard() {
+        // Regression: whitelist must not accidentally include a country
+        // with a real postal system. Germany still hard-errors on blank
+        // postal — pre-PR-A behavior preserved for the 99% case.
+        ManualShipmentRequest req = fullDomesticRequest();
+        req.getRecipient().setCountryCode("DE");
+        req.getRecipient().setState("");
+        req.getRecipient().setCity("Berlin");
+        req.getRecipient().setPostalCode("");
+        stubServiceAndPreset();
+
+        ApiResponse<ShipmentValidationResult> res = service.validate(req);
+
+        assertTrue(res.getData().getLocalErrors().stream()
+                        .anyMatch(e -> "recipient.postalCode".equals(e.getField())),
+                "DE has a real postal system; blank must still error");
+    }
+
     // ─── Helpers ───────────────────────────────────────────────────────
 
     private ManualShipmentRequest fullDomesticRequest() {

@@ -18,6 +18,7 @@ import com.multiship.backend.service.resolution.ShipmentResolutionService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -94,6 +95,16 @@ public class ShipmentValidationService {
      *  GB CDS, AU EDN, JP declaration, IN SB). Registry-lookup by
      *  shipper country ISO. */
     private final com.multiship.backend.service.intl.ExportDeclarationPolicyRegistry exportDeclarationPolicyRegistry;
+
+    /**
+     * PR A — env-configurable extension for the built-in no-postal-code
+     * country list. Comma-separated ISO alpha-2 codes; unioned with
+     * {@link AddressFormatValidator#NO_POSTAL_CODE_COUNTRIES} at check
+     * time. Default empty. Non-final so {@code @Value} injects; not
+     * picked up by {@code @RequiredArgsConstructor}.
+     */
+    @Value("${carrier.postal-code.optional-countries:}")
+    private String postalOptionalCountriesCsv;
 
     @Transactional(readOnly = true)
     public ApiResponse<ShipmentValidationResult> validate(ManualShipmentRequest req) {
@@ -548,19 +559,51 @@ public class ShipmentValidationService {
     private java.util.List<String> missingWireRequiredFields(
             com.multiship.backend.dto.ShipmentRequestDTO dto) {
         java.util.List<String> missing = new java.util.ArrayList<>();
+        java.util.Set<String> extraOptional = parseOptionalCountriesCsv();
         if (!StringUtils.hasText(dto.getRecipientName())) missing.add("recipient.name");
         if (!StringUtils.hasText(dto.getRecipientAddressLine1())) missing.add("recipient.addressLine1");
         if (!StringUtils.hasText(dto.getRecipientCity())) missing.add("recipient.city");
-        if (!StringUtils.hasText(dto.getRecipientPostalCode())) missing.add("recipient.postalCode");
+        // PR A — postal-code optional for countries with no national
+        // postal system (HK, AE, IE, etc.). Skip the wire-side error
+        // when recipient country is in the whitelist; carriers accept
+        // an empty PostalCode for those destinations.
+        if (!StringUtils.hasText(dto.getRecipientPostalCode())
+                && AddressFormatValidator.postalCodeRequiredFor(
+                        dto.getRecipientCountryCode(), extraOptional)) {
+            missing.add("recipient.postalCode");
+        }
         if (!StringUtils.hasText(dto.getRecipientCountryCode())) missing.add("recipient.countryCode");
         if (!StringUtils.hasText(dto.getShipperName())) missing.add("shipper.name");
         if (!StringUtils.hasText(dto.getShipperAddressLine1())) missing.add("shipper.addressLine1");
         if (!StringUtils.hasText(dto.getShipperCity())) missing.add("shipper.city");
-        if (!StringUtils.hasText(dto.getShipperPostalCode())) missing.add("shipper.postalCode");
+        if (!StringUtils.hasText(dto.getShipperPostalCode())
+                && AddressFormatValidator.postalCodeRequiredFor(
+                        dto.getShipperCountryCode(), extraOptional)) {
+            missing.add("shipper.postalCode");
+        }
         if (!StringUtils.hasText(dto.getShipperCountryCode())) missing.add("shipper.countryCode");
         if (!StringUtils.hasText(dto.getServiceType())) missing.add("serviceType");
         if (!StringUtils.hasText(dto.getPackageType())) missing.add("packageType");
         return missing;
+    }
+
+    /**
+     * PR A — parse the {@code carrier.postal-code.optional-countries}
+     * property (comma-separated ISO alpha-2). Trims + uppercases. Blank
+     * property → empty set. Non-alpha-2 tokens are dropped silently
+     * rather than throwing at startup (a bad config value shouldn't
+     * take down the endpoint).
+     */
+    private java.util.Set<String> parseOptionalCountriesCsv() {
+        if (!StringUtils.hasText(postalOptionalCountriesCsv)) return java.util.Set.of();
+        java.util.Set<String> out = new java.util.HashSet<>();
+        for (String token : postalOptionalCountriesCsv.split(",")) {
+            String t = token.trim().toUpperCase(Locale.ROOT);
+            if (t.length() == 2 && t.chars().allMatch(Character::isLetter)) {
+                out.add(t);
+            }
+        }
+        return out;
     }
 
     /** 3-tier credential resolution — mirrors AddressValidationServiceImpl. */
@@ -603,12 +646,25 @@ public class ShipmentValidationService {
         if (!StringUtils.hasText(to.getCity())) {
             errors.add(issue(ErrorCode.VALIDATION_ERROR, "Recipient city is required.", "recipient.city"));
         }
-        if (!StringUtils.hasText(to.getPostalCode())) {
-            errors.add(issue(ErrorCode.VALIDATION_ERROR, "Recipient postal code is required.", "recipient.postalCode"));
-        }
+        // PR A — postal code is optional for countries with no national
+        // postal system (HK, AE, IE, and ~50 others per Wikipedia). Skip
+        // the "postal code is required" error when the recipient country
+        // is in the built-in list OR the env-extension list. Country
+        // must be checked BEFORE postal so we know the country when
+        // deciding postal-required.
         if (!StringUtils.hasText(to.getCountryCode())) {
             errors.add(issue(ErrorCode.VALIDATION_ERROR, "Recipient country is required.", "recipient.countryCode"));
+            // Also err on postal if blank — no country to check the
+            // whitelist against, default to strict.
+            if (!StringUtils.hasText(to.getPostalCode())) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR, "Recipient postal code is required.", "recipient.postalCode"));
+            }
             return; // country-conditional checks below need this to be non-blank
+        }
+        if (!StringUtils.hasText(to.getPostalCode())
+                && AddressFormatValidator.postalCodeRequiredFor(
+                        to.getCountryCode(), parseOptionalCountriesCsv())) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR, "Recipient postal code is required.", "recipient.postalCode"));
         }
         String country = normCountry(to.getCountryCode());
         // State — required by most carriers for US / CA / AU / MX / BR.
@@ -655,12 +711,20 @@ public class ShipmentValidationService {
         if (!StringUtils.hasText(from.getCity())) {
             errors.add(issue(ErrorCode.VALIDATION_ERROR, "Sender city is required.", "sender.city"));
         }
-        if (!StringUtils.hasText(from.getPostalCode())) {
-            errors.add(issue(ErrorCode.VALIDATION_ERROR, "Sender postal code is required.", "sender.postalCode"));
-        }
+        // PR A — same postal-optional whitelist as recipient. Sender
+        // country almost always has a postal (US/CA/GB/etc.), but treat
+        // symmetrically so an HK/AE ship-from doesn't hard-error.
         if (!StringUtils.hasText(from.getCountryCode())) {
             errors.add(issue(ErrorCode.VALIDATION_ERROR, "Sender country is required.", "sender.countryCode"));
+            if (!StringUtils.hasText(from.getPostalCode())) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR, "Sender postal code is required.", "sender.postalCode"));
+            }
         } else {
+            if (!StringUtils.hasText(from.getPostalCode())
+                    && AddressFormatValidator.postalCodeRequiredFor(
+                            from.getCountryCode(), parseOptionalCountriesCsv())) {
+                errors.add(issue(ErrorCode.VALIDATION_ERROR, "Sender postal code is required.", "sender.postalCode"));
+            }
             String country = normCountry(from.getCountryCode());
             if (STATE_REQUIRED_COUNTRIES.contains(country) && !StringUtils.hasText(from.getState())) {
                 errors.add(issue(ErrorCode.VALIDATION_ERROR,
