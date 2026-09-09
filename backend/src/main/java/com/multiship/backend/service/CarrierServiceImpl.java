@@ -1989,8 +1989,8 @@ public class CarrierServiceImpl implements CarrierService {
                 .markupValue(markup.value())
                 .markupCurrency(markup.currency())
                 .dispatchNextBusinessDay(nextBusinessDay)
-                .message("Manual shipment #" + orderNo + " labelled on "
-                        + billToNumber + ".")
+                .message(("BULK".equalsIgnoreCase(req.getSource()) ? "Bulk" : "API".equalsIgnoreCase(req.getSource()) ? "API" : "Manual")
+                        + " shipment #" + orderNo + " labelled on " + billToNumber + ".")
                 .build();
         return success("Label generated successfully.", response);
     }

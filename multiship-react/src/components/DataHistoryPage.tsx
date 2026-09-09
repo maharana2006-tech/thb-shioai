@@ -838,6 +838,18 @@ export default function DataHistoryPage() {
                         <td className="whitespace-nowrap border-b border-[#f2ecdf] px-2 py-1">
                           {generated ? (
                             <span className="inline-flex flex-col gap-0.5">
+                              {/* Order number first — masked sandbox tracking (1ZXXXX…) is
+                                  identical on every UPS row, so it alone cannot say which
+                                  rows share an order. */}
+                              {r.generatedOrderNo ? (
+                                <a
+                                  href={`/label/${r.generatedOrderNo}`}
+                                  className="font-mono text-[10px] font-semibold text-[#1f150c] underline-offset-2 hover:underline"
+                                  title="Open this order"
+                                >
+                                  #{r.generatedOrderNo}
+                                </a>
+                              ) : null}
                               {r.generatedTrackingNumber ? (
                                 <span className="font-mono text-[9.5px] text-[#6b5c42]">{r.generatedTrackingNumber}</span>
                               ) : (

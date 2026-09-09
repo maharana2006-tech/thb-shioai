@@ -62,9 +62,11 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
   const [preview, setPreview] = useState<OrderImportPreview | null>(null)
   // Billing, capacity and the carrier all count SHIPMENTS; the grid counts rows.
   const readyOrders = preview ? orderCount(preview.rows.filter((r) => (r.errors?.length ?? 0) === 0)) : 0
-  const dupRows = preview
-    ? preview.rows.filter((r) => (r.warnings ?? []).some((w) => /already generated as order|already has a labelled order/.test(w))).length
-    : 0
+  const dupFlagged = preview
+    ? preview.rows.filter((r) => (r.warnings ?? []).some((w) => /already generated as order|already has a labelled order/.test(w)))
+    : []
+  const dupRows = dupFlagged.length
+  const dupOrders = orderCount(dupFlagged)
   /** The draft's Import-history id — minted by the auto-save at upload. */
   const [batchId, setBatchId] = useState<number | null>(null)
   /** Generation outcome. Non-null = step 3. */
@@ -394,7 +396,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                   {confirmDup ? (
                     <span className="inline-flex flex-wrap items-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-3 py-1.5 text-[11.5px] text-rose-800">
                       <FiAlertCircle className="h-3.5 w-3.5 shrink-0" />
-                      {dupRows} row{dupRows === 1 ? '' : 's'} already {dupRows === 1 ? 'has' : 'have'} a labelled order — generating again buys duplicate labels.
+                      {dupOrders} order{dupOrders === 1 ? '' : 's'} ({dupRows} row{dupRows === 1 ? '' : 's'}) already {dupOrders === 1 ? 'has' : 'have'} a label — generating again buys duplicate labels.
                       <button
                         type="button"
                         onClick={() => { setConfirmDup(false); if (billing === 'PLATFORM') setConfirmPlatform(true); else void generate() }}
@@ -560,7 +562,7 @@ function UploadStep({
         <p className="mt-3 text-[13px] font-semibold text-[#1f150c]">
           Drag &amp; drop your file here, or <span className="text-[#412d15] underline underline-offset-2">browse</span>
         </p>
-        <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx) · one order per row</p>
+        <p className="mt-1 text-[11px] text-[#6b5c42]">CSV or Excel (.csv, .xlsx) · one order per orderRef — extra item lines repeat the orderRef</p>
         <input
           type="file"
           accept=".csv,.xlsx,.txt"

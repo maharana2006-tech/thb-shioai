@@ -226,10 +226,13 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             }
         }
         BigDecimal estPerUnit = null;
+        BigDecimal estRemaining = BigDecimal.ZERO;   // what the estimated lines may still add up to
+        int estQtyLeft = undeclaredQty;
         if (gross != null && gross.signum() > 0 && undeclaredQty > 0) {
             BigDecimal remainder = gross.subtract(declaredNet);
             if (remainder.signum() > 0) {
                 estPerUnit = remainder.divide(BigDecimal.valueOf(undeclaredQty), 4, RoundingMode.HALF_UP);
+                estRemaining = remainder.setScale(2, RoundingMode.DOWN);
             }
         }
         int n = 0;
@@ -246,8 +249,14 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                 est = false;
             } else if (estPerUnit != null) {
                 // Apportioned, and marked so — an estimate must never read as
-                // a declared figure.
-                lineNet = estPerUnit.multiply(BigDecimal.valueOf(qty)).setScale(2, RoundingMode.HALF_UP);
+                // a declared figure. The last estimated line takes whatever is
+                // left, so rounding can never push net above gross (12.01 LB
+                // net on a 12 LB gross is the kind of thing customs queries).
+                BigDecimal share = estPerUnit.multiply(BigDecimal.valueOf(qty)).setScale(2, RoundingMode.HALF_UP);
+                lineNet = estQtyLeft <= qty ? estRemaining : share.min(estRemaining);
+                if (lineNet.signum() < 0) lineNet = BigDecimal.ZERO;
+                estRemaining = estRemaining.subtract(lineNet);
+                estQtyLeft -= qty;
                 est = true;
                 anyEstimated = true;
             } else {
