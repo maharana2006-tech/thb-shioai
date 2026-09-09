@@ -648,8 +648,19 @@ export default function LabelDocumentPage() {
             </h2>
             {label?.history && label.history.length > 0 ? (
               <p className="mt-1 text-[11px] text-[#6b5c42]" title="Superseded labels on this order">
-                Previous label{label.history.length === 1 ? '' : 's'}:{' '}
-                {label.history.map((h) => `${h.trackingNumber} (${h.event.toLowerCase()} ${new Date(h.at).toLocaleString()}${h.replacedBy ? ` → ${h.replacedBy}` : ''})`).join(' · ')}
+                {(() => {
+                  // One entry per superseded label: "T1 (voided 10:14, reissued 15:45 → T2)"
+                  const byNo = new Map<string, string[]>()
+                  for (const h of label.history) {
+                    const when = new Date(h.at).toLocaleString()
+                    const bit = h.event.toLowerCase() === 'reissued'
+                      ? `reissued ${when}${h.replacedBy ? ` → ${h.replacedBy}` : ''}`
+                      : `${h.event.toLowerCase()} ${when}`
+                    byNo.set(h.trackingNumber, [...(byNo.get(h.trackingNumber) ?? []), bit])
+                  }
+                  const items = [...byNo.entries()].map(([no, bits]) => `${no} (${bits.join(', ')})`)
+                  return `Previous label${items.length === 1 ? '' : 's'}: ${items.join(' · ')}`
+                })()}
               </p>
             ) : null}
           </div>
@@ -851,7 +862,7 @@ export default function LabelDocumentPage() {
           <button
             type="button"
             onClick={() => void printLabel()}
-            disabled={loading || Boolean(error) || tenantBlocked || printBusy}
+            disabled={loading || Boolean(error) || tenantBlocked || printBusy || (activeTab === 'label' && labelVoided)}
             title={activeTab === 'label'
               ? 'Prints the carrier label — the stored carrier artifact, or the ZPL rendered exactly as a Zebra would print it'
               : 'Prints the commercial-invoice PDF that ships with the parcel'}
@@ -1038,7 +1049,7 @@ export default function LabelDocumentPage() {
               ) : null}
               <PdfPagesPreview
                 blob={printablePdf}
-                firstPageCaption="Main label — this is what prints"
+                firstPageCaption={labelVoided ? 'Voided label — do not print or use' : 'Main label — this is what prints'}
                 onLoaded={setPrintablePageCount}
                 onError={() => setPrintableState('unavailable')}
               />

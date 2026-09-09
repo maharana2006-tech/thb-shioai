@@ -51,6 +51,8 @@ public class OrderResponseDTO {
         private String channel;
         /** The WMS's own order number, as sent on the external shipment request. */
         private String refOrderNumber;
+        /** Boxes in the shipment (null / 1 for single-box orders). */
+        private Integer packageCount;
         /** Id shared by every order generated from the same CSV/XLSX import upload. Null for non-import orders. */
         private Integer batchId;
     }

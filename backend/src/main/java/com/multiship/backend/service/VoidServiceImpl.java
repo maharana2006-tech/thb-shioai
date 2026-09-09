@@ -219,8 +219,10 @@ public class VoidServiceImpl implements VoidService {
             tracking.setStatus("VOIDED");
             tracking.setIsLabelGenerated(false);
             tracking.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
+            // Local clock, like labelGeneratedAt and the REISSUED entry — a UTC stamp
+            // here printed the void hours away from the reissue that followed it.
             com.multiship.backend.util.LabelHistory.append(tracking, "VOIDED", tracking.getTrackingNumber(), null,
-                    LocalDateTime.now(ZoneOffset.UTC));
+                    LocalDateTime.now());
             orderTrackingRepository.save(tracking);
             // Logs page: shipment-lifecycle trail. Carry the money figures so
             // the void reads as the reversal of the LABEL_GENERATED charge —

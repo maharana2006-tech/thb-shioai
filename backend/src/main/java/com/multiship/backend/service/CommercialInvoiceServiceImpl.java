@@ -1320,7 +1320,9 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         return switch (who) {
             case "SENDER" -> "Prepaid by shipper (" + code + ")";
             case "THIRD_PARTY" -> "Billed to third party" + (hasText(account) ? " acct " + maskAccount(account) : "") + " (" + code + ")";
-            default -> "Payable by consignee (" + code + ")" + (code.equals("DDP") ? " - carrier bills the consignee" : "");
+            // Keep it short enough for the meta cell: the 'Duties billed to' cell
+            // beside it names the consignee, so no suffix is needed.
+            default -> "Payable by consignee (" + code + ")";
         };
     }
 

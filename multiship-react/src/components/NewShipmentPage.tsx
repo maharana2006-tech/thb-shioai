@@ -586,6 +586,9 @@ export default function NewShipmentPage() {
   const [weight, setWeight] = useState('')
   const [weightUnit, setWeightUnit] = useState<'LB' | 'KG'>('LB')
   const [declaredValue, setDeclaredValue] = useState('')
+  /** Customer reference / PO — stored as the order's Ref #, printed on the label and invoice,
+   *  and what the importer's duplicate guard matches on. */
+  const [reference, setReference] = useState('')
   const [clientCode, setClientCode] = useState('')
   // Sprint 35 — signature at delivery + insured value beyond the
   // carrier's free tier. Signature is a per-shipment enum; insured
@@ -1329,6 +1332,7 @@ export default function NewShipmentPage() {
         }
         setFixError(byId?.data?.errorDetails?.errorMessage ?? null)
         setFixVoided((byId?.data?.labelDetails?.status ?? '').toUpperCase() === 'VOIDED')
+        if (byId?.data?.orderDetails?.refOrderNumber) setReference(byId.data.orderDetails.refOrderNumber)
       } catch (err) {
         if (!cancelled) notify.apiError(err, `Could not load order ${fixOrderNo} to fix.`)
       } finally {
@@ -1470,7 +1474,10 @@ export default function NewShipmentPage() {
     if (isInternational && /THIRD/.test(clearanceOption.toUpperCase()) && !dutiesAccount.trim()) missing.push('Duties payor account')
     return missing
   }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport, incoterms,
-      sender.countryCode, recipient.countryCode, recipientEffectiveCountry, currency, declaredValue, ftrExemption, aesCitation])
+      sender.countryCode, recipient.countryCode, recipientEffectiveCountry, currency, declaredValue, ftrExemption, aesCitation,
+      // typed fields the list checks — without these the memo kept reporting
+      // "Duties payor account" after the operator had typed one
+      clearanceOption, dutiesAccount])
 
   /**
    * Select a client: fill YOUR address on the correct side and auto-pick its
@@ -1840,7 +1847,9 @@ export default function NewShipmentPage() {
     if (missingLabelFields.length > 0) {
       setSubmitAttempted(true)
       notify.error(
-        `Pick ${missingLabelFields.join(' + ')} before validating — the selected account has no saved default.`,
+        missingLabelFields.includes('Duties payor account')
+          ? `Enter the Duties payor account (the third party's ${canon(carrier) || 'carrier'} account) before validating.`
+          : `Pick ${missingLabelFields.join(' + ')} before validating — the selected account has no saved default.`,
       )
       scrollToFirstError()
       return
@@ -2313,7 +2322,9 @@ export default function NewShipmentPage() {
     // purpose fields (they're not in the form schema).
     if (missingLabelFields.length > 0) {
       showToast(
-        `Pick ${missingLabelFields.join(' + ')} — no saved default for this client / account.`,
+        missingLabelFields.includes('Duties payor account')
+          ? `Enter the Duties payor account (the third party's ${canon(carrier) || 'carrier'} account).`
+          : `Pick ${missingLabelFields.join(' + ')} — no saved default for this client / account.`,
         `${missingLabelFields.length} field${missingLabelFields.length === 1 ? ' needs' : 's need'} attention`,
       )
       scrollToFirstError()
@@ -2375,6 +2386,7 @@ export default function NewShipmentPage() {
       sender,
       recipient,
       isReturn,
+      reference: reference.trim() || undefined,
       carrierCode: carrier,
       accountNumber: accountNumber.trim(),
       accountId: matched?.id ?? null,
@@ -2779,6 +2791,9 @@ export default function NewShipmentPage() {
                       </optgroup>
                     ) : null}
                   </select>
+                </Field>
+                <Field label="Reference / PO" hint="Your own order or PO number — shows as Ref # and on the label and invoice.">
+                  <input className={inputCls} value={reference} onChange={(e) => setReference(e.target.value)} placeholder="PO-12345" maxLength={80} />
                 </Field>
                 {isInternational ? (
                   <Field label="Reason of export" required

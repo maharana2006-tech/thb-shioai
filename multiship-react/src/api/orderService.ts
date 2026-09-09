@@ -19,6 +19,8 @@ export interface OrderDetails {
   refOrderNumber?: string | null
   /** Id shared by every order generated from the same CSV/XLSX import upload. Null for non-import orders. */
   batchId?: number | null
+  /** Boxes in the shipment (null / 1 for single-box orders). */
+  packageCount?: number | null
 }
 
 export interface ShippingDetails {
