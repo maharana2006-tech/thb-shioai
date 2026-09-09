@@ -2078,7 +2078,7 @@ function RowActionsMenu({
             the same window.open as handleVerify's needsAuthorization
             path (PR #637) but exposes it as an explicit action so
             operators aren't dependent on the popup-triggering flow. */}
-        {admin && normalizeCarrierCode(account.carrierCode) === 'USPS'
+        {admin && normalizeCarrierCode(account.carrierCode) === 'usps'
             && account.verified !== true ? (
           <a
             role="menuitem"
