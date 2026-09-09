@@ -159,6 +159,13 @@ public class SecurityConfig {
                         // caller authenticates with client credentials in the
                         // body, not with a Bearer token.
                         .requestMatchers("/api/v1/oauth/token").permitAll()
+                        // Stamps.com SERA 3-legged OAuth callback — the redirect
+                        // arrives from signin.stampsendicia.com and can't carry
+                        // our JWT cookie. Security is the HMAC-signed state
+                        // (verified inside the controller) + Stamps.com's own
+                        // redirect-URI whitelist on the client_id.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/carrier-accounts/stamps-sera/callback")
+                            .permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         // CSV template is static schema (headers + one dummy row) — safe

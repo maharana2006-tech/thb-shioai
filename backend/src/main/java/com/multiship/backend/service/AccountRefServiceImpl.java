@@ -12,6 +12,8 @@ import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
 import com.multiship.backend.repository.OrderTrackingRepository;
 import com.multiship.backend.service.carriers.CarrierConnector;
+import com.multiship.backend.service.carriers.StampsConnector;
+import com.multiship.backend.service.carriers.StampsSeraOAuthService;
 import com.multiship.backend.service.events.CarrierConfigChangedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -49,6 +51,13 @@ public class AccountRefServiceImpl implements AccountRefService {
      *  service via the RequiredArgsConstructor still compile. */
     @Autowired(required = false)
     private TenantScopeEnforcer tenantScope;
+
+    /** Stamps.com SERA 3-legged OAuth support — builds the authorize URL
+     *  surfaced on {@link CredentialCheckDTO#getAuthorizeUrl()} when the
+     *  account still needs the operator's browser consent. Optional so
+     *  unit tests that don't drive the SERA branch stay compilable. */
+    @Autowired(required = false)
+    private StampsSeraOAuthService seraOAuthService;
 
     /** Null-safe wrapper around {@link TenantScopeEnforcer#clampClientCode(String)}.
      *  Returns the input unchanged when the enforcer isn't wired (tests). */
@@ -147,8 +156,13 @@ public class AccountRefServiceImpl implements AccountRefService {
                     "Account " + account.getAccountNumber() + " has no credentials to verify.");
         }
 
+        // Push the account's persisted SERA refresh_token (if any) onto the
+        // thread-local so the StampsConnector's SERA branch uses the
+        // refresh_token grant. Null / blank → connector flags
+        // needsAuthorization so the operator kicks off the browser flow.
+        StampsConnector.pushSeraRefreshToken(account.getStampsRefreshToken());
         CredentialCheckDTO check = runCredentialCheck(account.getCarrierCode(), account.getClientId(),
-                account.getClientSecret(), account.getAccountNumber(), account.getEnvironment());
+                account.getClientSecret(), account.getAccountNumber(), account.getEnvironment(), accountId);
         account.setVerified(check.getVerified());
         account.setLastVerifiedAt(check.getCheckedAt());
         carrierAccountRefRepository.save(account);
@@ -164,8 +178,13 @@ public class AccountRefServiceImpl implements AccountRefService {
 
     @Override
     public ApiResponse<CredentialCheckDTO> verifyCredentials(VerifyCredentialsRequest request) {
+        // Pre-save credential check: no accountId yet, so no persisted
+        // refresh_token to push. The StampsConnector's SERA branch will
+        // therefore return needsAuthorization=true; the FE surfaces an
+        // "Authorize with Stamps.com" button and, after the account is
+        // saved, calls GET /carrier-accounts/{id}/stamps-sera/authorize.
         CredentialCheckDTO check = runCredentialCheck(request.getCarrierCode(), request.getClientId(),
-                request.getClientSecret(), request.getAccountNumber(), request.getEnvironment());
+                request.getClientSecret(), request.getAccountNumber(), request.getEnvironment(), null);
         return success(check.getMessage(), check);
     }
 
@@ -179,7 +198,7 @@ public class AccountRefServiceImpl implements AccountRefService {
      * Other carriers ignore both via the interface defaults.
      */
     private CredentialCheckDTO runCredentialCheck(String carrierCode, String clientId, String clientSecret,
-                                                  String accountNumber, String environment) {
+                                                  String accountNumber, String environment, Long accountId) {
         LocalDateTime now = LocalDateTime.now();
 
         try {
@@ -193,16 +212,45 @@ public class AccountRefServiceImpl implements AccountRefService {
             // non-GUID Stamps IntegrationID, env mismatch) instead of a generic
             // "rejected the credentials".
             String detail = realToken ? null : connector.consumeAuthFailureDetail();
-            String message = realToken
-                    ? "Credentials verified — " + connector.getCarrierName() + " issued a live token."
-                    : StringUtils.hasText(detail)
-                            ? connector.getCarrierName() + " rejected the credentials — " + detail
-                            : connector.getCarrierName() + " rejected the credentials.";
+
+            // SERA 3-legged OAuth branch: when the connector flagged
+            // needsAuthorization, surface an authorizeUrl the FE can open
+            // in a popup instead of showing "rejected". The URL is only
+            // build-able post-save (needs accountId to sign the state);
+            // pre-save the FE gets needsAuthorization=true with a null URL
+            // and prompts the operator to save the account first.
+            boolean needsAuth = StampsConnector.consumeSeraNeedsAuthorization();
+            String authorizeUrl = null;
+            if (needsAuth && accountId != null && seraOAuthService != null
+                    && StringUtils.hasText(clientId)) {
+                try {
+                    authorizeUrl = seraOAuthService.buildAuthorizeUrl(accountId, clientId, environment);
+                } catch (Exception ex) {
+                    log.warn("SERA authorize URL build failed for account {}: {}", accountId, ex.getMessage());
+                }
+            }
+
+            String message;
+            if (realToken) {
+                message = "Credentials verified — " + connector.getCarrierName() + " issued a live token.";
+            } else if (needsAuth) {
+                message = accountId != null
+                        ? "Stamps.com SERA needs a one-time browser authorization. "
+                                + "Click 'Authorize with Stamps.com' to complete the OAuth consent flow."
+                        : "Stamps.com SERA requires the account to be saved first, "
+                                + "then click 'Authorize with Stamps.com' to complete the OAuth consent flow.";
+            } else if (StringUtils.hasText(detail)) {
+                message = connector.getCarrierName() + " rejected the credentials — " + detail;
+            } else {
+                message = connector.getCarrierName() + " rejected the credentials.";
+            }
 
             return CredentialCheckDTO.builder()
                     .verified(realToken)
                     .checkedAt(now)
                     .message(message)
+                    .needsAuthorization(needsAuth ? Boolean.TRUE : null)
+                    .authorizeUrl(authorizeUrl)
                     .build();
         } catch (Exception ex) {
             log.warn("Credential check failed for carrier {}: {}", carrierCode, ex.getMessage());
