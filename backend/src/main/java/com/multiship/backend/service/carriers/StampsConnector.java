@@ -788,11 +788,15 @@ public class StampsConnector implements CarrierConnector {
             String jsonBody = buildSeraCreateLabelBody(request, packages.get(i),
                     i + 1, packages.size());
             try {
+                // Audit: SERA requires Idempotency-Key on POSTs (developer.stamps.com
+                // §Idempotency). A v4 UUID scoped per-piece keeps a network retry
+                // from double-charging postage. 24-hour window per SERA docs.
                 String response = HttpClients.newBuilder().baseUrl(baseUrl + "/labels").build()
                         .post()
                         .contentType(MediaType.APPLICATION_JSON)
                         .accept(MediaType.APPLICATION_JSON)
                         .header("Authorization", "Bearer " + accessToken)
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .body(jsonBody)
                         .retrieve()
                         .body(String.class);
@@ -844,8 +848,10 @@ public class StampsConnector implements CarrierConnector {
             }
             if (!StringUtils.hasText(labelId)) continue;
             try {
+                // Audit: SERA void is PUT /v1/labels/{label_id}/void per
+                // developer.stamps.com — POST returns 405 Method Not Allowed.
                 HttpClients.newBuilder().baseUrl(baseUrl + "/labels/" + labelId + "/void").build()
-                        .post()
+                        .put()
                         .accept(MediaType.APPLICATION_JSON)
                         .header("Authorization", "Bearer " + accessToken)
                         .retrieve()
@@ -1616,7 +1622,7 @@ public class StampsConnector implements CarrierConnector {
     }
 
     /**
-     * SERA {@code POST /sera/v1/labels/{label_id}/void} — cancels a label
+     * SERA {@code PUT /sera/v1/labels/{label_id}/void} — cancels a label
      * SERA previously issued. Idempotent: voiding an already-voided label
      * returns success. Post-scan cancels succeed but SERA won't refund
      * postage.
@@ -1650,12 +1656,14 @@ public class StampsConnector implements CarrierConnector {
         }
         String baseUrl = seraApiBaseUrl(environment);
         try {
-            // SERA's void endpoint is POST (per developer.stamps.com/rest-api/reference/serav1.html);
-            // some third-party clients document PUT — verified against the
-            // referenced JSON body which shows "POST /sera/v1/labels/{label_id}/void".
+            // Audit: SERA void endpoint is PUT /v1/labels/{label_id}/void per
+            // developer.stamps.com/rest-api/reference/serav1.html — the previous
+            // POST returned 405 Method Not Allowed. The endpoint takes no body
+            // and is idempotent (repeated calls return 200/404 without
+            // side-effects), so no Idempotency-Key needed here.
             String response = HttpClients.newBuilder()
                     .baseUrl(baseUrl + "/labels/" + labelId + "/void").build()
-                    .post()
+                    .put()
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
@@ -2422,11 +2430,14 @@ public class StampsConnector implements CarrierConnector {
             throw new IllegalStateException("Failed to serialize SERA manifest body", ex);
         }
         try {
+            // Audit: Idempotency-Key required on SERA POSTs. Manifests are
+            // safe to retry — SERA dedupes on the key for 24h.
             String response = HttpClients.newBuilder().baseUrl(baseUrl + "/manifests").build()
                     .post()
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + accessToken)
+                    .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                     .body(jsonBody)
                     .retrieve()
                     .body(String.class);
