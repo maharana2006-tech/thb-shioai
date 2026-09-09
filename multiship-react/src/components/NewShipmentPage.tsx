@@ -1431,8 +1431,11 @@ export default function NewShipmentPage() {
     // CODE_EEI_REQUIRED). US-origin + non-Canada dest + USD invoice
     // >= $2,500 without FTR exemption or AES ITN → forcing pick keeps
     // the operator from a FedEx server-side reject.
+    // 2026-09-09 — use recipientEffectiveCountry so US → PR/VI/GU/AS/MP/UM
+    // lanes fire the gate (matches the reversed UsFtr30_37Policy set:
+    // no territory is exempt from EEI above $2,500).
     const originIsUs = (sender.countryCode ?? '').trim().toUpperCase() === 'US'
-    const destCcNorm = (recipient.countryCode ?? '').trim().toUpperCase()
+    const destCcNorm = recipientEffectiveCountry
     if (isInternational
         && originIsUs
         && destCcNorm && destCcNorm !== 'CA' && destCcNorm !== 'US'
@@ -1447,7 +1450,7 @@ export default function NewShipmentPage() {
     if (isInternational && !incoterms) missing.push('Incoterms')
     return missing
   }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport, incoterms,
-      sender.countryCode, recipient.countryCode, currency, declaredValue, ftrExemption, aesCitation])
+      sender.countryCode, recipient.countryCode, recipientEffectiveCountry, currency, declaredValue, ftrExemption, aesCitation])
 
   /**
    * Select a client: fill YOUR address on the correct side and auto-pick its
@@ -2754,10 +2757,19 @@ export default function NewShipmentPage() {
                     carriers). Empty on shipments where the rule doesn't
                     apply keeps the form terse. Mutually-exclusive picker:
                     filling one disables the other so the wire payload can
-                    never carry both. */}
+                    never carry both.
+                    2026-09-09 — gate now uses recipientEffectiveCountry
+                    (territory state → territory ISO) so US → PR/VI/GU/
+                    AS/MP/UM lanes DO render the FTR/AES inputs. Operator
+                    compliance stance is PR/VI ALSO require EEI filing
+                    above $2,500 — fields need to be visible any time
+                    an EEI could apply so an operator can enter an ITN
+                    preemptively. Fields aren't hard-required under
+                    threshold; the field-level error above still gates on
+                    the $2,500 mark. */}
                 {isInternational
                     && (sender.countryCode ?? '').trim().toUpperCase() === 'US'
-                    && !['CA', 'US', ''].includes((recipient.countryCode ?? '').trim().toUpperCase()) ? (
+                    && !['CA', 'US', ''].includes(recipientEffectiveCountry) ? (
                   <>
                     <Field label="FTR exemption"
                            error={submitAttempted

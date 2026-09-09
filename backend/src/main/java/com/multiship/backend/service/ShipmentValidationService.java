@@ -876,25 +876,16 @@ public class ShipmentValidationService {
     private void checkHighValueExportDeclaration(ManualShipmentRequest req,
                                                   List<ValidationIssue> warnings) {
         if (req == null) return;
-        // Suppress the generic advisory when the origin+destination pair
-        // is a US-customs-territory exemption (US → PR/VI). Per 15 CFR
-        // §30.1(c) these are NOT exports and no filing is required —
-        // the advisory would misleadingly suggest "verify" when the
-        // answer is definitively "none required." US → GU/AS/MP/UM
-        // are outside customs territory and DO fire the hard EEI gate
-        // upstream (UsFtr30_37Policy).
-        if (req.getSender() != null && req.getRecipient() != null) {
-            String senderCountry = com.multiship.backend.util.UsTerritoryNormalizer
-                    .normalizeCountryCode(req.getSender().getCountryCode(), req.getSender().getState());
-            String recipientCountry = com.multiship.backend.util.UsTerritoryNormalizer
-                    .normalizeCountryCode(req.getRecipient().getCountryCode(), req.getRecipient().getState());
-            senderCountry = senderCountry == null ? "" : senderCountry.trim().toUpperCase();
-            recipientCountry = recipientCountry == null ? "" : recipientCountry.trim().toUpperCase();
-            if ("US".equals(senderCountry)
-                    && java.util.Set.of("PR", "VI").contains(recipientCountry)) {
-                return;
-            }
-        }
+        // 2026-09-09 — advisory now fires for US → PR/VI too. Prior
+        // suppression (PR #626, 2026-09-08) read §30.1(c) as putting
+        // PR/VI within the US customs territory and skipped the
+        // advisory as misleadingly recommending "verify" when the
+        // answer was "none required." Operator compliance stance is
+        // the safer position — PR/VI ALSO require EEI filing above
+        // $2,500 (matches how FedEx + UPS surface the FTR box in
+        // their tools). Sign-off required before reintroducing the
+        // suppression. See UsFtr30_37Policy for the parallel hard-gate
+        // change and its REGULATORY_REFERENCE.
         String currency = resolveCustomsCurrency(req);
         if (currency == null) return;
         java.math.BigDecimal total = req.getDeclaredValue();
