@@ -35,8 +35,41 @@ public class UpsConnector implements CarrierConnector {
 
     private static final String CARRIER_CODE = "UPS";
 
+    /**
+     * PR C (2026-09-09) — ISO alpha-2 destination codes where UPS does
+     * NOT accept Paperless Invoice / Paperless Trade. Emitting
+     * {@code ShipmentServiceOptions.InternationalForms} for these
+     * destinations gets rejected with
+     * {@code 120372 The selected origin and destination pair does not
+     * accept paperless invoice}. Live 49-country audit flagged EG + BR
+     * as alerts (operator-clickthrough); adding CN + SA + IN as known
+     * historically-unsupported destinations. Ops can extend via
+     * {@code carrier.ups.paperless-invoice-denied-countries} property
+     * without a JAR redeploy.
+     *
+     * <p>When paperless is disabled, the operator's printed commercial
+     * invoice remains available on demand via
+     * {@code GET /orders/{n}/commercial-invoice} — that endpoint reads
+     * the same customs data the label pipeline persists.
+     */
+    static final java.util.Set<String> PAPERLESS_INVOICE_DENIED_COUNTRIES = java.util.Set.of(
+            "EG", // Egypt — 49-country matrix alert 2026-09-09
+            "BR"  // Brazil — 49-country matrix alert 2026-09-09
+    );
+
     private final CarrierProperties carrierProperties;
     private final ObjectMapper objectMapper;
+
+    /**
+     * PR C — env-configurable extension for the paperless-invoice deny
+     * list. Comma-separated ISO alpha-2 codes; unioned with the built-in
+     * {@link #PAPERLESS_INVOICE_DENIED_COUNTRIES}. Empty = built-in only.
+     * Non-final so {@code @Value} injects; not picked up by
+     * {@code @RequiredArgsConstructor}.
+     */
+    @org.springframework.beans.factory.annotation.Value(
+            "${carrier.ups.paperless-invoice-denied-countries:}")
+    private String paperlessInvoiceDeniedCsv;
 
     /** Field injection (not constructor) so the many unit tests that build
      *  this connector directly with the two-arg constructor keep compiling;
@@ -1759,10 +1792,28 @@ public class UpsConnector implements CarrierConnector {
             shipment.put("InvoiceLineTotal", Map.of(
                     "CurrencyCode", intlCurrency,
                     "MonetaryValue", intlTotal.toPlainString()));
-            Map<String, Object> forms = buildInternationalForms(request);
-            Map<String, Object> serviceOptions = new LinkedHashMap<>();
-            serviceOptions.put("InternationalForms", forms);
-            shipment.put("ShipmentServiceOptions", serviceOptions);
+            // PR C (2026-09-09) — auto-flip to printed CI for destinations
+            // where UPS doesn't accept paperless invoice. Skip emitting
+            // ShipmentServiceOptions.InternationalForms entirely for
+            // EG / BR (and any additions via
+            // carrier.ups.paperless-invoice-denied-countries). UPS
+            // otherwise rejects with "120372 The selected origin and
+            // destination pair does not accept paperless invoice."
+            // The Shipment.InvoiceLineTotal above is still emitted (UPS
+            // requires it for intl regardless of paperless status), and
+            // the operator's printed CI is available on demand via
+            // GET /orders/{n}/commercial-invoice.
+            if (paperlessInvoiceAcceptedFor(request.getRecipientCountryCode())) {
+                Map<String, Object> forms = buildInternationalForms(request);
+                Map<String, Object> serviceOptions = new LinkedHashMap<>();
+                serviceOptions.put("InternationalForms", forms);
+                shipment.put("ShipmentServiceOptions", serviceOptions);
+            } else {
+                log.info("UPS paperless-invoice denied for destination country '{}' — "
+                        + "omitting ShipmentServiceOptions.InternationalForms; operator "
+                        + "must print the commercial invoice via GET /orders/{}/commercial-invoice.",
+                        request.getRecipientCountryCode(), request.getReferenceNumber());
+            }
             // PR B (2026-09-09) — SoldTo is now ALWAYS emitted for intl.
             // Turkey (TR) and a growing set of destinations reject
             // "128115 Invalid or missing sold to phone number" when the
@@ -2632,6 +2683,29 @@ public class UpsConnector implements CarrierConnector {
      * to 5 chars. If nothing valid remains → "" (UPS accepts empty
      * for jurisdictions without formal province codes).
      */
+    /**
+     * PR C — true when UPS accepts paperless invoice for the recipient
+     * country. Union of the built-in
+     * {@link #PAPERLESS_INVOICE_DENIED_COUNTRIES} and the runtime
+     * extension from
+     * {@code carrier.ups.paperless-invoice-denied-countries}. Case-
+     * insensitive; blank / null country defaults to accepted (safest —
+     * don't reject a well-formed intl payload because the country is
+     * missing, upstream presence checks will catch that).
+     */
+    boolean paperlessInvoiceAcceptedFor(String countryCode) {
+        if (!StringUtils.hasText(countryCode)) return true;
+        String key = countryCode.trim().toUpperCase(Locale.ROOT);
+        if (PAPERLESS_INVOICE_DENIED_COUNTRIES.contains(key)) return false;
+        if (StringUtils.hasText(paperlessInvoiceDeniedCsv)) {
+            for (String token : paperlessInvoiceDeniedCsv.split(",")) {
+                String t = token.trim().toUpperCase(Locale.ROOT);
+                if (t.equals(key)) return false;
+            }
+        }
+        return true;
+    }
+
     private static String sanitizeUpsStateCode(String raw) {
         if (!StringUtils.hasText(raw)) return "";
         String cleaned = raw.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT);
