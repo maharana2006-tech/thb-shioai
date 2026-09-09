@@ -1633,7 +1633,7 @@ export default function NewShipmentPage() {
           unitValue: it.unitValue,
           // Destination country rides on each item so the HS-code rule can key
           // its required digit-length off the importing country.
-          destCountry: (recipient.countryCode || '').toUpperCase(),
+          destCountry: (recipientTerritoryEarly ?? recipient.countryCode ?? '').toUpperCase(),
         })
         const started = items.filter((it) => it.description?.trim() || it.unitValue?.trim()
           || it.hsCode?.trim() || it.sku?.trim() || it.countryOfOrigin?.trim())
@@ -1703,7 +1703,11 @@ export default function NewShipmentPage() {
   }
 
   // Importer/broker resolve from the client's profile covering the destination country.
-  const destCountry = (recipient.countryCode || '').toUpperCase()
+  // Territory-aware destination — when recipient is a US territory
+  // (country=US + state=PR/VI/GU/AS/MP/UM), the effective destination
+  // for customs / importer purposes is the territory code, not "US".
+  // Keeps the importer chip + modal + banner in sync with the wire.
+  const destCountry = (recipientTerritoryEarly ?? recipient.countryCode ?? '').toUpperCase()
   const importerProfile = useMemo(
     () =>
       isInternational && clientCode
@@ -3167,7 +3171,7 @@ export default function NewShipmentPage() {
                       Recommend
                     </button>
                     <span className="rounded-full bg-[#efe7d4] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[#5a4526]">
-                      {sender.countryCode || '—'} → {recipient.countryCode || '—'} · {isInternational ? 'Intl' : 'Domestic'}
+                      {(senderTerritoryEarly ?? sender.countryCode) || '—'} → {(recipientTerritoryEarly ?? recipient.countryCode) || '—'} · {isInternational ? 'Intl' : 'Domestic'}
                     </span>
                   </div>
                 }
@@ -3769,7 +3773,7 @@ export default function NewShipmentPage() {
                 }
                 note={
                   <>
-                    {sender.countryCode} → {recipient.countryCode} crosses a customs border. These lines print on the
+                    {(senderTerritoryEarly ?? sender.countryCode)} → {(recipientTerritoryEarly ?? recipient.countryCode)} crosses a customs border. These lines print on the
                     commercial invoice customs uses to assess duty &amp; tax. Importer/broker resolve from the client's
                     customs profile.
                   </>

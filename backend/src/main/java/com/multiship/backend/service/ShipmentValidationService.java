@@ -828,6 +828,25 @@ public class ShipmentValidationService {
     private void checkHighValueExportDeclaration(ManualShipmentRequest req,
                                                   List<ValidationIssue> warnings) {
         if (req == null) return;
+        // Suppress the generic advisory when the origin+destination pair
+        // is a US-customs-territory exemption (US → PR/VI). Per 15 CFR
+        // §30.1(c) these are NOT exports and no filing is required —
+        // the advisory would misleadingly suggest "verify" when the
+        // answer is definitively "none required." US → GU/AS/MP/UM
+        // are outside customs territory and DO fire the hard EEI gate
+        // upstream (UsFtr30_37Policy).
+        if (req.getSender() != null && req.getRecipient() != null) {
+            String senderCountry = com.multiship.backend.util.UsTerritoryNormalizer
+                    .normalizeCountryCode(req.getSender().getCountryCode(), req.getSender().getState());
+            String recipientCountry = com.multiship.backend.util.UsTerritoryNormalizer
+                    .normalizeCountryCode(req.getRecipient().getCountryCode(), req.getRecipient().getState());
+            senderCountry = senderCountry == null ? "" : senderCountry.trim().toUpperCase();
+            recipientCountry = recipientCountry == null ? "" : recipientCountry.trim().toUpperCase();
+            if ("US".equals(senderCountry)
+                    && java.util.Set.of("PR", "VI").contains(recipientCountry)) {
+                return;
+            }
+        }
         String currency = resolveCustomsCurrency(req);
         if (currency == null) return;
         java.math.BigDecimal total = req.getDeclaredValue();
