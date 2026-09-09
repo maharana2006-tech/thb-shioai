@@ -278,6 +278,125 @@ class IntlShipmentValidatorTest {
                 "Non-US origin is out of scope for the US FTR policy");
     }
 
+    // ===== 2026-09-09 — US territory lanes require EEI over threshold =====
+    // Operator compliance stance reverses PR #626's PR/VI exemption:
+    // every US territory (PR/VI/GU/AS/MP/UM) fires the hard EEI gate
+    // above $2,500 USD. See UsFtr30_37Policy.CUSTOMS_TERRITORY_EXEMPT
+    // (empty set) + its REGULATORY_REFERENCE javadoc for the compliance
+    // trail. §30.1(c) reading (PR/VI within US customs territory) is
+    // defensible but doesn't match how FedEx + UPS actually surface
+    // the FTR box in their tools.
+
+    /** Build a US → territory request. Two entry patterns: country=US +
+     *  state=territory (operator-picked in NewShipmentPage.tsx) OR
+     *  country=territory directly (wire-side rewrite). Both must fire
+     *  the gate the same way. */
+    private static ShipmentRequestDTO usToTerritoryByState(String territory, IntlShipmentBlockDTO intl) {
+        return ShipmentRequestDTO.builder()
+                .shipperCountryCode("US")
+                .recipientCountryCode("US")
+                .recipientState(territory)
+                .intl(intl).build();
+    }
+
+    private static ShipmentRequestDTO usToTerritoryByCountry(String territory, IntlShipmentBlockDTO intl) {
+        return ShipmentRequestDTO.builder()
+                .shipperCountryCode("US")
+                .recipientCountryCode(territory)
+                .intl(intl).build();
+    }
+
+    @Test
+    void eeiRequiredForUsToPuertoRicoOverThreshold() {
+        // country=US + state=PR (operator-side entry) — normalizer
+        // rewrites to recipientCountry=PR, threshold gate fires.
+        var errors = IntlShipmentValidator.validatePolicies(
+                usToTerritoryByState("PR",
+                        validIntl().customsTotalValue(new BigDecimal("3000.00")).build()),
+                null, usRegistry());
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "US → PR at $3,000 must fire CODE_EEI_REQUIRED (PR is no longer §30.1(c)-exempt)");
+    }
+
+    @Test
+    void eeiRequiredForUsToVirginIslandsOverThreshold() {
+        var errors = IntlShipmentValidator.validatePolicies(
+                usToTerritoryByCountry("VI",
+                        validIntl().customsTotalValue(new BigDecimal("3000.00")).build()),
+                null, usRegistry());
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "US → VI at $3,000 must fire CODE_EEI_REQUIRED (VI is no longer §30.1(c)-exempt)");
+    }
+
+    @Test
+    void eeiRequiredForUsToGuamOverThreshold() {
+        // Regression guard — GU was already firing per PR #626; verify
+        // that behaviour is preserved under the reversal.
+        var errors = IntlShipmentValidator.validatePolicies(
+                usToTerritoryByState("GU",
+                        validIntl().customsTotalValue(new BigDecimal("3000.00")).build()),
+                null, usRegistry());
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "US → GU at $3,000 must fire CODE_EEI_REQUIRED");
+    }
+
+    @Test
+    void eeiRequiredForUsToAmericanSamoaOverThreshold() {
+        var errors = IntlShipmentValidator.validatePolicies(
+                usToTerritoryByState("AS",
+                        validIntl().customsTotalValue(new BigDecimal("3000.00")).build()),
+                null, usRegistry());
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "US → AS at $3,000 must fire CODE_EEI_REQUIRED");
+    }
+
+    @Test
+    void eeiRequiredForUsToNorthernMarianaOverThreshold() {
+        var errors = IntlShipmentValidator.validatePolicies(
+                usToTerritoryByState("MP",
+                        validIntl().customsTotalValue(new BigDecimal("3000.00")).build()),
+                null, usRegistry());
+        assertTrue(errors.stream().anyMatch(
+                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "US → MP at $3,000 must fire CODE_EEI_REQUIRED");
+    }
+
+    @Test
+    void eeiSatisfiedForTerritoryLaneByFtrExemption() {
+        // Territory gate is satisfied by an FTR exemption or AES ITN
+        // the same way any other US-origin lane is — the reversal only
+        // affects whether the gate fires, not how it's satisfied.
+        var errors = IntlShipmentValidator.validatePolicies(
+                usToTerritoryByState("PR",
+                        validIntl()
+                                .customsTotalValue(new BigDecimal("3000.00"))
+                                .ftrExemption("NO_EEI_30_37_h")
+                                .build()),
+                null, usRegistry());
+        assertTrue(errors.stream().noneMatch(
+                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "30.37(h) exemption at $3,000 satisfies the EEI rule on US → PR");
+    }
+
+    @Test
+    void eeiNotRequiredForTerritoryLaneUnderThreshold() {
+        // Operator's territory-testing matrix at $2,334 sits just under
+        // the threshold on the same lane — the gate must NOT fire even
+        // after the reversal (only the FE field render + advisory
+        // change under threshold; the hard gate stays value-gated).
+        var errors = IntlShipmentValidator.validatePolicies(
+                usToTerritoryByState("PR",
+                        validIntl().customsTotalValue(new BigDecimal("2334.00")).build()),
+                null, usRegistry());
+        assertTrue(errors.stream().noneMatch(
+                e -> IntlShipmentValidator.CODE_EEI_REQUIRED.equals(e.code())),
+                "$2,334 sits under the threshold — rule must not fire even on territory lanes");
+    }
+
     @Test
     void eeiNotGatedOnNonUsdCurrency_whenFxAbsent() {
         // No FX plumbed → non-USD declarations skip the deterministic

@@ -34,9 +34,13 @@ describe('isServiceAllowedForUsTerritory — PR (Puerto Rico)', () => {
       expect(isServiceAllowedForUsTerritory('PR', 'UPS', code)).toBe(true)
     }
   })
-  it('accepts UPS Worldwide family (07, 08, 54, 65)', () => {
+  it('REJECTS UPS Worldwide family — PR is domestic-network only', () => {
+    // Operator confirmed 2026-09-08: UPS returns 121100 for
+    // Worldwide Saver on US → PR. Docs suggested both families
+    // valid but empirical UPS behavior contradicts. Filter must
+    // hide 07/08/54/65 for PR.
     for (const code of ['07', '08', '54', '65']) {
-      expect(isServiceAllowedForUsTerritory('PR', 'UPS', code)).toBe(true)
+      expect(isServiceAllowedForUsTerritory('PR', 'UPS', code)).toBe(false)
     }
   })
   it('rejects UPS Ground family (03, 11, 12)', () => {
@@ -44,13 +48,23 @@ describe('isServiceAllowedForUsTerritory — PR (Puerto Rico)', () => {
       expect(isServiceAllowedForUsTerritory('PR', 'UPS', code)).toBe(false)
     }
   })
-  it('accepts FedEx overnight + 2-Day + intl-family', () => {
+  it('accepts FedEx intl-family only — asymmetric with UPS', () => {
+    // FedEx PR = INTL network (Priority/Economy/First/Priority
+    // Express). UPS PR = DOMESTIC network. Operator confirmed
+    // 2026-09-08: FedEx rejects EVERY domestic service for US → PR.
     for (const code of [
-      'PRIORITY_OVERNIGHT', 'STANDARD_OVERNIGHT', 'FIRST_OVERNIGHT',
-      'FEDEX_2_DAY', 'FEDEX_2_DAY_AM',
       'INTERNATIONAL_PRIORITY', 'INTERNATIONAL_ECONOMY',
+      'INTERNATIONAL_FIRST', 'INTERNATIONAL_PRIORITY_EXPRESS',
     ]) {
       expect(isServiceAllowedForUsTerritory('PR', 'FEDEX', code)).toBe(true)
+    }
+  })
+  it('REJECTS FedEx domestic Express family — PR ships intl on FedEx', () => {
+    for (const code of [
+      'PRIORITY_OVERNIGHT', 'STANDARD_OVERNIGHT', 'FIRST_OVERNIGHT',
+      'FEDEX_2_DAY', 'FEDEX_2_DAY_AM', 'FEDEX_EXPRESS_SAVER',
+    ]) {
+      expect(isServiceAllowedForUsTerritory('PR', 'FEDEX', code)).toBe(false)
     }
   })
   it('rejects FedEx Ground family', () => {

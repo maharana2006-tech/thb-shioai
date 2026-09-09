@@ -51,12 +51,16 @@ export type UsTerritory = typeof US_TERRITORY_CODES[number]
 //   13 Next Day Air Saver, 14 Next Day Air Early, 54 Worldwide Express Plus,
 //   59 2nd Day Air A.M., 65 Worldwide Saver.
 
-/** PR keeps every domestic Air code (Ground family excluded) plus the
- *  full Worldwide family — UPS bills PR shipments at domestic rates but
- *  the Rating API also accepts intl service codes for the same lane. */
+/** PR — domestic Air codes only. Empirically the UPS Rating API
+ *  REJECTS the Worldwide family (07/08/54/65) for US → PR with error
+ *  121100 "service invalid for the shipment origin" even though older
+ *  docs suggested both families are valid. UPS moves PR shipments on
+ *  the domestic network; Worldwide services target true cross-border
+ *  destinations. Ground family (03/11/12) already excluded via the
+ *  earlier catalog filter. Confirmed by operator 2026-09-08:
+ *  Worldwide Saver → 121100; 2nd Day Air + Next Day Air → accepted. */
 const UPS_PR = new Set([
-  '01', '02', '13', '14', '59', // domestic Air (all delivery windows)
-  '07', '08', '54', '65',         // Worldwide family
+  '01', '02', '13', '14', '59', // domestic Air only
 ])
 
 /** VI, GU, AS, MP, UM — Worldwide-family only. Domestic Air codes trip
@@ -71,14 +75,18 @@ const UPS_INTL_ONLY = new Set(['07', '08', '54', '65'])
 //   INTERNATIONAL_PRIORITY, INTERNATIONAL_ECONOMY, INTERNATIONAL_FIRST,
 //   INTERNATIONAL_PRIORITY_EXPRESS.
 
-/** PR gets the domestic Express family (2Day, Overnight variants) plus
- *  the intl-family — FedEx requires a customs declaration for PR even at
- *  domestic rates, and the ID selected on the wire is one of these. */
+/** PR — FedEx INTERNATIONAL family only. The carrier rule is asymmetric
+ *  with UPS: UPS moves US → PR on its DOMESTIC network (Air codes
+ *  only); FedEx treats PR as an INTERNATIONAL destination (Priority /
+ *  Economy / First / PriorityExpress). Operator confirmed 2026-09-08:
+ *  FedEx rejects EVERY domestic service (Express Saver / 2Day /
+ *  Overnight variants) for US → PR with "This service type is not
+ *  available for the destination." Both carriers still require the
+ *  customs declaration — that's what makes it a US-territory lane —
+ *  but the service catalogue is per-carrier network. */
 const FEDEX_PR = new Set([
-  'FIRST_OVERNIGHT', 'PRIORITY_OVERNIGHT', 'STANDARD_OVERNIGHT',
-  'FEDEX_2_DAY', 'FEDEX_2_DAY_AM', 'FEDEX_EXPRESS_SAVER',
-  'INTERNATIONAL_PRIORITY', 'INTERNATIONAL_ECONOMY', 'INTERNATIONAL_FIRST',
-  'INTERNATIONAL_PRIORITY_EXPRESS',
+  'INTERNATIONAL_PRIORITY', 'INTERNATIONAL_ECONOMY',
+  'INTERNATIONAL_FIRST', 'INTERNATIONAL_PRIORITY_EXPRESS',
 ])
 
 /** VI, GU, AS, MP, UM — FedEx intl-family only. FedEx routes these via
@@ -146,6 +154,35 @@ export function isServiceAllowedForUsTerritory(
   // No validated allowlist for this carrier — fall back to the legacy
   // ground-family denylist.
   return !US_TERRITORY_GROUND_DENYLIST.has(serviceCode)
+}
+
+/** UPS carrier restriction — DDP (Delivered Duty Paid) is NOT offered to
+ *  the smaller US Pacific territories (American Samoa + Northern Mariana
+ *  Islands). Operator's territory-testing matrix on 2026-09-09 hit UPS
+ *  wire error 121213 "The requested billing option is unavailable
+ *  between the selected locations" the moment incoterms=DDP was set
+ *  for either lane; switching to DAP made both pass. FedEx has no
+ *  restriction. GU (Guam) is deliberately NOT in the deny set — UPS'
+ *  Rate & Service Guide for Guam lists DDP as an available billing
+ *  option (Guam is a larger US Pacific territory with dedicated UPS
+ *  ground infrastructure). PR and VI stay off the list too (both
+ *  within the US customs territory per 15 CFR §30.1(c) so DDP isn't
+ *  applicable at all — no customs bill to prepay). */
+export const UPS_DDP_DISALLOWED_TERRITORIES: ReadonlySet<UsTerritory> =
+  new Set<UsTerritory>(['AS', 'MP'])
+
+/**
+ * True when carrier=UPS AND recipient territory is one UPS refuses to
+ * accept DDP for (AS or MP). Callers use this to remove DDP from the
+ * incoterm picker and to show an inline hint pointing to DAP instead.
+ */
+export function isUpsDdpDisallowedForTerritory(
+  carrier: string | null | undefined,
+  territory: string | null | undefined,
+): boolean {
+  if (!carrier || !isUsTerritory(territory)) return false
+  if (carrier.toUpperCase() !== 'UPS') return false
+  return UPS_DDP_DISALLOWED_TERRITORIES.has(territory)
 }
 
 /**

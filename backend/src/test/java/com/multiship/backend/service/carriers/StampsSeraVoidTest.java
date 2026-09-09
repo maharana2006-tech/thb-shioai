@@ -20,7 +20,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * Focused unit tests for the SERA {@code POST /sera/v1/labels/{label_id}/void}
+ * Focused unit tests for the SERA {@code PUT /sera/v1/labels/{label_id}/void}
  * branch. Three shapes need pinning:
  * <ol>
  *   <li><b>label_id resolution</b> — SERA voids by {@code label_id}, not

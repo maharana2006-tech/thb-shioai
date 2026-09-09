@@ -236,6 +236,22 @@ public class CarrierAccountRef {
     @Column(name = "third_party_country", length = 10)
     private String thirdPartyCountry;
 
+    /**
+     * Stamps.com SERA 3-legged OAuth refresh token — populated after the
+     * operator completes the browser authorize flow on the account.
+     * Encrypted at rest via {@link com.multiship.backend.config.EncryptedStringConverter}
+     * (same {@code enc:v1:} + AES-GCM shape as {@link #clientSecret}).
+     *
+     * <p>Presence is what tells {@code getAccessTokenSera} to use the
+     * {@code grant_type=refresh_token} grant instead of the doomed
+     * {@code client_credentials} attempt. Legacy SWSIM accounts leave
+     * this NULL; SERA accounts that haven't completed the authorize
+     * redirect also leave it NULL until the callback fires.
+     */
+    @Column(name = "stamps_refresh_token", columnDefinition = "text")
+    @jakarta.persistence.Convert(converter = com.multiship.backend.config.EncryptedStringConverter.class)
+    private String stampsRefreshToken;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;

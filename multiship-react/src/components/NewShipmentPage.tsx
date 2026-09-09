@@ -53,7 +53,7 @@ import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddress
 import { compatiblePresetIds } from '../utils/servicePackageCompatibility'
 import { shipmentValidationService, type ShipmentValidationResult } from '../api/shipmentValidationService'
 import { SHIPPING_PURPOSES, clearanceOptionsForCarrier, FTR_EXEMPTIONS, EEI_THRESHOLD_USD } from '../utils/customsOptions'
-import { isServiceAllowedForUsTerritory, usTerritoryBannerHint } from '../utils/usTerritoryServices'
+import { isServiceAllowedForUsTerritory, usTerritoryBannerHint, isUpsDdpDisallowedForTerritory } from '../utils/usTerritoryServices'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -964,7 +964,20 @@ export default function NewShipmentPage() {
     !!sender.countryCode &&
     !!recipient.countryCode &&
     !sameTerritory(senderEffectiveCountry, recipientEffectiveCountry)
-  const neededScope: 'DOMESTIC' | 'INTERNATIONAL' = isInternational ? 'INTERNATIONAL' : 'DOMESTIC'
+  // Territory lanes are the awkward middle case: customs paperwork is
+  // international (isInternational=true → commercial invoice + FTR/AES
+  // required) but the carrier moves them on the DOMESTIC network — so
+  // service scope stays DOMESTIC to keep Air / Overnight products
+  // visible. Pre-fix, isInternational=true forced neededScope=
+  // INTERNATIONAL which dropped 2nd Day / Next Day Air off the picker
+  // for US→PR, leaving only Worldwide services that UPS rejects with
+  // 121100 "service invalid for origin". Decoupling: territory ⇒
+  // customs docs, but keep the domestic catalogue.
+  const isTerritoryLane =
+    (senderTerritoryEarly !== null || (sender.countryCode || '').toUpperCase() === 'US')
+    && recipientTerritoryEarly !== null
+  const neededScope: 'DOMESTIC' | 'INTERNATIONAL' =
+    isInternational && !isTerritoryLane ? 'INTERNATIONAL' : 'DOMESTIC'
   const scopeFits = (scope?: string | null) => !scope || scope === 'BOTH' || scope === neededScope
 
   // Compare a catalog row's origin country to the sender's selected country.
@@ -1121,12 +1134,21 @@ export default function NewShipmentPage() {
       // PR accepts domestic Air but rejects Ground family. See
       // utils/usTerritoryServices for the validated per-territory map;
       // recipientTerritory=null falls through as pass-through.
+      //
+      // Territory-lane fix (2026-09-08): skip scopeFits on territory
+      // lanes and let the per-territory allowlist be the SOLE gate. The
+      // catalog seeds UPS Worldwide (07/08/54/65) + FedEx INTERNATIONAL_*
+      // with scope=INTERNATIONAL; with neededScope=DOMESTIC for territory
+      // lanes those services were dropped BEFORE the allowlist ran, so
+      // the picker only saw the domestic half. On non-territory lanes
+      // scopeFits stays authoritative (unchanged).
       services
-        .filter((s) => canon(s.carrier) === carrier && originMatch(s.originCountry) && scopeFits(s.scope))
+        .filter((s) => canon(s.carrier) === carrier && originMatch(s.originCountry))
+        .filter((s) => isTerritoryLane || scopeFits(s.scope))
         .filter((s) => !allowedServiceIds || allowedServiceIds.has(s.id))
         .filter((s) => isServiceAllowedForUsTerritory(recipientTerritory, carrier, s.serviceCode)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [services, carrier, sender.countryCode, neededScope, allowedServiceIds, recipientTerritory],
+    [services, carrier, sender.countryCode, neededScope, allowedServiceIds, recipientTerritory, isTerritoryLane],
   )
   // Sprint 52 PR 2 — service_package compatibility. Empty set for a
   // service means "admin hasn't linked any preset to this service yet"
@@ -1141,8 +1163,15 @@ export default function NewShipmentPage() {
 
   const packagesForCarrier = useMemo(
     () =>
+      // Territory-lane fix (2026-09-08): mirror the servicesForCarrier
+      // rule — skip scopeFits when the recipient is a US territory so
+      // INTERNATIONAL-scoped carrier packages (needed for the intl
+      // service family that PR/VI/etc. actually accept) stay visible.
+      // The service_package linkage below is still the authoritative
+      // per-service package gate.
       packages
-        .filter((p) => p.kind === 'CARRIER' && canon(p.carrier) === carrier && originMatch(p.originCountry) && scopeFits(p.scope))
+        .filter((p) => p.kind === 'CARRIER' && canon(p.carrier) === carrier && originMatch(p.originCountry))
+        .filter((p) => isTerritoryLane || scopeFits(p.scope))
         .filter((p) => !allowedPackageIds || p.id == null || allowedPackageIds.has(p.id))
         // Sprint 52 PR 2 — hide CARRIER presets not linked to the picked
         // service. CUSTOM presets ("Your boxes") are in a separate memo
@@ -1150,7 +1179,7 @@ export default function NewShipmentPage() {
         // via the kind=CUSTOM short-circuit). Null set = no filter.
         .filter((p) => !compatiblePresetIdsForService || p.id == null || compatiblePresetIdsForService.has(p.id)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [packages, carrier, sender.countryCode, neededScope, allowedPackageIds, compatiblePresetIdsForService],
+    [packages, carrier, sender.countryCode, neededScope, allowedPackageIds, compatiblePresetIdsForService, isTerritoryLane],
   )
   const customBoxes = useMemo(
     () =>
@@ -1413,8 +1442,11 @@ export default function NewShipmentPage() {
     // CODE_EEI_REQUIRED). US-origin + non-Canada dest + USD invoice
     // >= $2,500 without FTR exemption or AES ITN → forcing pick keeps
     // the operator from a FedEx server-side reject.
+    // 2026-09-09 — use recipientEffectiveCountry so US → PR/VI/GU/AS/MP/UM
+    // lanes fire the gate (matches the reversed UsFtr30_37Policy set:
+    // no territory is exempt from EEI above $2,500).
     const originIsUs = (sender.countryCode ?? '').trim().toUpperCase() === 'US'
-    const destCcNorm = (recipient.countryCode ?? '').trim().toUpperCase()
+    const destCcNorm = recipientEffectiveCountry
     if (isInternational
         && originIsUs
         && destCcNorm && destCcNorm !== 'CA' && destCcNorm !== 'US'
@@ -1429,7 +1461,7 @@ export default function NewShipmentPage() {
     if (isInternational && !incoterms) missing.push('Incoterms')
     return missing
   }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport, incoterms,
-      sender.countryCode, recipient.countryCode, currency, declaredValue, ftrExemption, aesCitation])
+      sender.countryCode, recipient.countryCode, recipientEffectiveCountry, currency, declaredValue, ftrExemption, aesCitation])
 
   /**
    * Select a client: fill YOUR address on the correct side and auto-pick its
@@ -1615,7 +1647,7 @@ export default function NewShipmentPage() {
           unitValue: it.unitValue,
           // Destination country rides on each item so the HS-code rule can key
           // its required digit-length off the importing country.
-          destCountry: (recipient.countryCode || '').toUpperCase(),
+          destCountry: (recipientTerritoryEarly ?? recipient.countryCode ?? '').toUpperCase(),
         })
         const started = items.filter((it) => it.description?.trim() || it.unitValue?.trim()
           || it.hsCode?.trim() || it.sku?.trim() || it.countryOfOrigin?.trim())
@@ -1685,7 +1717,11 @@ export default function NewShipmentPage() {
   }
 
   // Importer/broker resolve from the client's profile covering the destination country.
-  const destCountry = (recipient.countryCode || '').toUpperCase()
+  // Territory-aware destination — when recipient is a US territory
+  // (country=US + state=PR/VI/GU/AS/MP/UM), the effective destination
+  // for customs / importer purposes is the territory code, not "US".
+  // Keeps the importer chip + modal + banner in sync with the wire.
+  const destCountry = (recipientTerritoryEarly ?? recipient.countryCode ?? '').toUpperCase()
   const importerProfile = useMemo(
     () =>
       isInternational && clientCode
@@ -1714,6 +1750,21 @@ export default function NewShipmentPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- prefill incoterms from resolved customs profile on lane change (matches accountNumber / label-field reset semantic).
     if (isInternational) setIncoterms((cur) => importerProfile?.incoterms ?? cur)
   }, [importerProfile, isInternational])
+
+  /**
+   * Reset incoterms to blank if the operator lands on a UPS+AS/MP lane
+   * with DDP prefilled from the customs profile (or set earlier). The
+   * FE hides DDP from the picker on that lane per PR of 2026-09-09
+   * (UPS wire error 121213); leaving stale "DDP" behind would let the
+   * form submit with an unsupported billing option and the backend
+   * pre-flight would reject a hop later.
+   */
+  useEffect(() => {
+    if (incoterms === 'DDP' && isUpsDdpDisallowedForTerritory(canon(carrier), recipientTerritory)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- lane-change reset; matches label-field reset semantic above.
+      setIncoterms('')
+    }
+  }, [carrier, recipientTerritory, incoterms])
 
   /** Map a saved profile into the flat importer/broker shape (label-document keys). */
   const partiesFromProfile = (p: CustomsProfile): { importer: Party; broker: Party } => ({
@@ -2720,10 +2771,19 @@ export default function NewShipmentPage() {
                     carriers). Empty on shipments where the rule doesn't
                     apply keeps the form terse. Mutually-exclusive picker:
                     filling one disables the other so the wire payload can
-                    never carry both. */}
+                    never carry both.
+                    2026-09-09 — gate now uses recipientEffectiveCountry
+                    (territory state → territory ISO) so US → PR/VI/GU/
+                    AS/MP/UM lanes DO render the FTR/AES inputs. Operator
+                    compliance stance is PR/VI ALSO require EEI filing
+                    above $2,500 — fields need to be visible any time
+                    an EEI could apply so an operator can enter an ITN
+                    preemptively. Fields aren't hard-required under
+                    threshold; the field-level error above still gates on
+                    the $2,500 mark. */}
                 {isInternational
                     && (sender.countryCode ?? '').trim().toUpperCase() === 'US'
-                    && !['CA', 'US', ''].includes((recipient.countryCode ?? '').trim().toUpperCase()) ? (
+                    && !['CA', 'US', ''].includes(recipientEffectiveCountry) ? (
                   <>
                     <Field label="FTR exemption"
                            error={submitAttempted
@@ -3152,7 +3212,7 @@ export default function NewShipmentPage() {
                       Recommend
                     </button>
                     <span className="rounded-full bg-[#efe7d4] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] text-[#5a4526]">
-                      {sender.countryCode || '—'} → {recipient.countryCode || '—'} · {isInternational ? 'Intl' : 'Domestic'}
+                      {(senderTerritoryEarly ?? sender.countryCode) || '—'} → {(recipientTerritoryEarly ?? recipient.countryCode) || '—'} · {isInternational ? 'Intl' : 'Domestic'}
                     </span>
                   </div>
                 }
@@ -3222,17 +3282,34 @@ export default function NewShipmentPage() {
                       </button>
                     ) : null}
                   </Field>
-                  {isInternational ? (
-                    <Field label="Incoterms" required
-                           error={submitAttempted && !incoterms ? 'Required — pick an incoterm.' : errAt('incoterms')}>
-                      <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
-                        <option value="">-- Select --</option>
-                        <option value="DDP">DDP — sender pays duties</option>
-                        <option value="DAP">DAP — receiver pays duties</option>
-                        <option value="DDU">DDU — receiver pays duties only</option>
-                      </select>
-                    </Field>
-                  ) : null}
+                  {isInternational ? (() => {
+                    // 2026-09-09 — UPS won't accept DDP (sender-paid duties)
+                    // to American Samoa or Northern Mariana Islands
+                    // (wire error 121213 "billing option unavailable
+                    // between the selected locations"). Hide DDP entirely
+                    // on those lanes and show an inline hint so the
+                    // operator picks DAP instead. GU is deliberately NOT
+                    // in the deny set — UPS supports DDP to Guam per its
+                    // Rate & Service Guide (larger territory, dedicated
+                    // ground infrastructure).
+                    const upsDdpBlocked = isUpsDdpDisallowedForTerritory(canon(carrier), recipientTerritory)
+                    return (
+                      <Field label="Incoterms" required
+                             hint={upsDdpBlocked
+                               ? `UPS doesn't offer DDP to ${recipientTerritory === 'AS' ? 'American Samoa' : 'Northern Mariana Islands'} — pick DAP or a different carrier.`
+                               : undefined}
+                             error={submitAttempted && !incoterms ? 'Required — pick an incoterm.' : errAt('incoterms')}>
+                        <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
+                          <option value="">-- Select --</option>
+                          {upsDdpBlocked ? null : (
+                            <option value="DDP">DDP — sender pays duties</option>
+                          )}
+                          <option value="DAP">DAP — receiver pays duties</option>
+                          <option value="DDU">DDU — receiver pays duties only</option>
+                        </select>
+                      </Field>
+                    )
+                  })() : null}
                   {/* F6-C — clearanceOption dropdown. Per-carrier
                       vocabulary (customsOptions.ts). Blank = backend
                       connector picks its own default. Hidden when the
@@ -3754,7 +3831,7 @@ export default function NewShipmentPage() {
                 }
                 note={
                   <>
-                    {sender.countryCode} → {recipient.countryCode} crosses a customs border. These lines print on the
+                    {(senderTerritoryEarly ?? sender.countryCode)} → {(recipientTerritoryEarly ?? recipient.countryCode)} crosses a customs border. These lines print on the
                     commercial invoice customs uses to assess duty &amp; tax. Importer/broker resolve from the client's
                     customs profile.
                   </>

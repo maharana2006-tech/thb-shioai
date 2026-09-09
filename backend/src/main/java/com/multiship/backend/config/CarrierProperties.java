@@ -241,6 +241,40 @@ public class CarrierProperties {
 
         /** SERA REST API base (sandbox). */
         private String seraSandboxApiBaseUrl;
+
+        /**
+         * SERA authorization endpoint (production) — the browser-redirect
+         * entry point for the {@code authorization_code} flow. Per
+         * developer.stamps.com the URL is
+         * {@code https://signin.stampsendicia.com/authorize} (production) or
+         * {@code https://signin.testing.stampsendicia.com/authorize}
+         * (sandbox). We redirect the operator here with
+         * {@code response_type=code} and a signed {@code state} value; on
+         * consent the server 302s back to {@link #seraRedirectUri} with a
+         * {@code code} query parameter that we exchange at
+         * {@link #seraAuthUrl} for the access + refresh tokens.
+         */
+        private String seraAuthorizeUrl;
+
+        /** SERA authorization endpoint (sandbox). */
+        private String seraSandboxAuthorizeUrl;
+
+        /**
+         * Callback endpoint the operator's browser is redirected to after
+         * consent. Must be registered as an allowed redirect URI on the
+         * Stamps.com developer portal for the client_id in question.
+         * Typical dev value: {@code http://localhost:8081/api/v1/carrier-accounts/stamps-sera/callback}.
+         * Env-configurable via {@code carrier.stamps.sera-redirect-uri}.
+         */
+        private String seraRedirectUri;
+
+        /**
+         * OAuth scopes requested during the authorize step. Per SERA docs,
+         * {@code offline_access} is required to receive a refresh token;
+         * without it the token exchange returns access_token only and the
+         * connector can't refresh past its 1-hour expiry.
+         */
+        private String seraScope = "offline_access";
     }
 
     @Getter

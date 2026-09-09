@@ -129,8 +129,18 @@ public class ShipmentValidationService {
                     from.getCountryCode(), from.getPostalCode(), from.getState(), "sender"));
         }
 
-        String senderCountry = from != null ? normCountry(from.getCountryCode()) : null;
-        String recipientCountry = normCountry(to.getCountryCode());
+        // Normalize US territories BEFORE the international check —
+        // operator entering country=US + state=PR is really international
+        // per the carriers' routing (UsTerritoryNormalizer rewrites the
+        // wire payload the same way). Pre-fix, this service returned
+        // intl=false so the customs check was skipped and no intl block
+        // reached the connector, which then hit UPS 120502 on the wire.
+        String senderCountry = from != null ? normCountry(
+                com.multiship.backend.util.UsTerritoryNormalizer.normalizeCountryCode(
+                        from.getCountryCode(), from.getState())) : null;
+        String recipientCountry = normCountry(
+                com.multiship.backend.util.UsTerritoryNormalizer.normalizeCountryCode(
+                        to.getCountryCode(), to.getState()));
         boolean international = isInternational(senderCountry, recipientCountry);
 
         // ─── Ship-to allowlist gate (clientCode-scoped) ─────────────────────
@@ -219,6 +229,19 @@ public class ShipmentValidationService {
             // fabricated fallbacks — every missing REQUIRED field surfaces
             // as a local error before the carrier hop.
             checkIntlRequiredFields(req, recipientCountry, errors);
+            // 2026-09-09 — UPS refuses DDP (sender-paid duties) to
+            // American Samoa or Northern Mariana Islands, returning
+            // wire error 121213 "The requested billing option is
+            // unavailable between the selected locations." Operator's
+            // territory matrix on the same day confirmed switching to
+            // DAP passes both lanes with nothing else changed. Mirrors
+            // the FE hide-DDP guard on the incoterm picker so the
+            // pre-flight blocks before the carrier hop even fires.
+            // Guam (GU) is deliberately NOT in the deny set — UPS' Rate
+            // & Service Guide for Guam lists DDP as available; PR/VI
+            // aren't in scope either (within the US customs territory
+            // per 15 CFR §30.1(c), no cross-border duties to prepay).
+            checkUpsDdpTerritoryRestriction(req, recipientCountry, errors);
             for (IntlShipmentValidator.ValidationError ve : IntlShipmentValidator.validate(adapted, fxRateService)) {
                 errors.add(ValidationIssue.builder()
                         .code(ve.code()).message(ve.message()).build());
@@ -429,8 +452,15 @@ public class ShipmentValidationService {
         if (req.getRecipient() != null && StringUtils.hasText(req.getRecipient().getCountryCode())) {
             // Reuse the same intl block adaptForValidators computed —
             // avoids duplicating the commodities mapping.
-            String senderCountry = req.getSender() != null ? req.getSender().getCountryCode() : null;
-            String recipientCountry = req.getRecipient().getCountryCode();
+            // Same territory-normalization rationale as line 132-137 —
+            // US territory state → territory country for the intl check.
+            String senderCountry = req.getSender() != null
+                    ? com.multiship.backend.util.UsTerritoryNormalizer.normalizeCountryCode(
+                            req.getSender().getCountryCode(), req.getSender().getState())
+                    : null;
+            String recipientCountry = com.multiship.backend.util.UsTerritoryNormalizer
+                    .normalizeCountryCode(req.getRecipient().getCountryCode(),
+                            req.getRecipient().getState());
             com.multiship.backend.dto.ShipmentRequestDTO withIntl = adaptForValidators(
                     req, isInternational(senderCountry, recipientCountry));
             adaptedRequest.setIntl(withIntl.getIntl());
@@ -757,6 +787,41 @@ public class ShipmentValidationService {
         }
     }
 
+    /** UPS-specific carrier restriction — DDP (Delivered Duty Paid) is
+     *  not offered to American Samoa or Northern Mariana Islands.
+     *  Mirrored on the FE incoterm picker in NewShipmentPage.tsx. */
+    private static final Set<String> UPS_DDP_DISALLOWED_TERRITORIES = Set.of("AS", "MP");
+
+    /**
+     * 2026-09-09 — pre-flight guard for UPS refusing DDP to AS/MP. Fires
+     * as a hard local error (equivalent to a 422 response) with an
+     * actionable message pointing the operator at DAP so they never see
+     * UPS wire error 121213.
+     *
+     * <p>Runs only when {@code international=true} so it never fires on
+     * domestic shipments. Skips silently when the carrier isn't UPS, the
+     * recipient territory isn't AS/MP, or incoterms isn't DDP.
+     */
+    private void checkUpsDdpTerritoryRestriction(ManualShipmentRequest req,
+                                                  String recipientCountry,
+                                                  List<ValidationIssue> errors) {
+        if (req == null) return;
+        String carrier = req.getCarrierCode();
+        if (!StringUtils.hasText(carrier)) return;
+        if (!"UPS".equalsIgnoreCase(carrier.trim())) return;
+        String territory = recipientCountry == null ? "" : recipientCountry.trim().toUpperCase(Locale.ROOT);
+        if (!UPS_DDP_DISALLOWED_TERRITORIES.contains(territory)) return;
+        String incoterms = resolveIncoterms(req, recipientCountry);
+        if (incoterms == null || !"DDP".equalsIgnoreCase(incoterms)) return;
+        String label = "AS".equals(territory) ? "American Samoa" : "Northern Mariana Islands";
+        errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                "UPS doesn't offer DDP (sender-paid duties) to " + label
+                        + " — pick DAP or a different carrier. UPS returns wire error "
+                        + "121213 \"billing option unavailable between the selected locations\" "
+                        + "on these lanes.",
+                "incoterms"));
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────────────
 
     /**
@@ -811,6 +876,16 @@ public class ShipmentValidationService {
     private void checkHighValueExportDeclaration(ManualShipmentRequest req,
                                                   List<ValidationIssue> warnings) {
         if (req == null) return;
+        // 2026-09-09 — advisory now fires for US → PR/VI too. Prior
+        // suppression (PR #626, 2026-09-08) read §30.1(c) as putting
+        // PR/VI within the US customs territory and skipped the
+        // advisory as misleadingly recommending "verify" when the
+        // answer was "none required." Operator compliance stance is
+        // the safer position — PR/VI ALSO require EEI filing above
+        // $2,500 (matches how FedEx + UPS surface the FTR box in
+        // their tools). Sign-off required before reintroducing the
+        // suppression. See UsFtr30_37Policy for the parallel hard-gate
+        // change and its REGULATORY_REFERENCE.
         String currency = resolveCustomsCurrency(req);
         if (currency == null) return;
         java.math.BigDecimal total = req.getDeclaredValue();
