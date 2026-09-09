@@ -32,6 +32,21 @@ const POSTAL_RULES: Record<string, RegExp> = {
 }
 const GENERIC_POSTAL = /^[A-Za-z0-9][A-Za-z0-9 -]{1,10}$/
 
+/**
+ * PR A — ISO alpha-2 codes for countries with no national postal-code
+ * system. Empty postal code is accepted for these destinations. Kept
+ * in sync with the backend {@code AddressFormatValidator.NO_POSTAL_CODE_COUNTRIES}
+ * (Wikipedia "List of postal codes" 2026-09-09 snapshot).
+ */
+const NO_POSTAL_CODE_COUNTRIES = new Set([
+  'AO', 'AG', 'AW', 'BS', 'BW', 'BZ', 'BJ', 'BF', 'BI', 'CM',
+  'CF', 'TD', 'KM', 'CG', 'CD', 'CK', 'CI', 'DJ', 'DM', 'GQ',
+  'ER', 'FJ', 'GA', 'GM', 'GN', 'GD', 'GY', 'HM', 'HK', 'KI',
+  'KP', 'LY', 'ML', 'MR', 'NR', 'NU', 'QA', 'RW', 'SC', 'SL',
+  'SX', 'SB', 'SS', 'SY', 'TG', 'TK', 'TO', 'TV', 'UG', 'AE',
+  'VU', 'YE', 'ZW',
+])
+
 /** States/provinces are required for these countries (matches the import gate). */
 const STATE_REQUIRED = new Set(['US', 'CA', 'AU', 'IN', 'BR', 'MX'])
 
@@ -124,11 +139,19 @@ export const addressSchema = Yup.object({
       otherwise: (s) => s.max(35, 'Max 35 characters'),
     }),
   postalCode: Yup.string()
-    .required('Postal code is required')
     .matches(SAFE_TEXT_RE, { excludeEmptyString: true, message: SAFE_TEXT_MSG })
+    // PR A — postal is required except for countries with no national
+    // postal system (HK, AE, IE, etc.). Empty blank passes for those;
+    // strict format check still fires when a value is entered.
     .test('postal', 'Invalid postal code for this country', function (value) {
-      if (!value) return false
       const country = ((this.parent as { countryCode?: string }).countryCode || '').toUpperCase()
+      const isOptional = NO_POSTAL_CODE_COUNTRIES.has(country)
+      if (!value || !value.trim()) {
+        // Blank OK for no-postal-code countries; required otherwise.
+        return isOptional
+          ? true
+          : this.createError({ message: 'Postal code is required' })
+      }
       const rule = POSTAL_RULES[country] ?? GENERIC_POSTAL
       return rule.test(value.trim())
     }),

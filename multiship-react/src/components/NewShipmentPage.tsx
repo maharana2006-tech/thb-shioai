@@ -47,7 +47,7 @@ import type { CustomsItem, OrderCustomsPayload } from '../api/customsService'
 import { parseIntlValidationMessage } from '../utils/intlValidationErrors'
 import { useFormik, getIn } from 'formik'
 import { shipmentSchema, hsExampleFor, type ShipmentFormValues } from '../validation/yup/shipmentSchema'
-import { dialCodeFor, postalPlaceholderFor, phoneHintFor } from '../utils/countryFormats'
+import { dialCodeFor, postalPlaceholderFor, postalCodeOptionalFor, phoneHintFor } from '../utils/countryFormats'
 import { STATE_CODE_OPTIONS } from '../utils/stateCodes'
 import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddressFields'
 import { compatiblePresetIds } from '../utils/servicePackageCompatibility'
@@ -479,7 +479,10 @@ function AddressBlock({
         <Field label="City" required error={errors?.city}>
           <input className={inputCls} value={value.city} onChange={(e) => onChange({ city: e.target.value })} placeholder="Buffalo" />
         </Field>
-        <Field label="Postal code" required error={errors?.postalCode}>
+        {/* PR A — postal is optional for countries with no national
+            postal system (HK, AE, etc.). Skip the asterisk and let a
+            blank value pass the schema for those destinations. */}
+        <Field label="Postal code" required={!postalCodeOptionalFor(value.countryCode)} error={errors?.postalCode}>
           <input className={inputCls} value={value.postalCode} onChange={(e) => onChange({ postalCode: e.target.value })} placeholder={postalPlaceholderFor(value.countryCode)} />
         </Field>
       </div>
@@ -2662,7 +2665,7 @@ export default function NewShipmentPage() {
             <SectionRail
               sections={[
                 { id: 'sec-shipment', label: 'Shipment', done: !!clientCode },
-                { id: 'sec-addresses', label: 'Addresses', done: !!(sender.name && sender.addressLine1 && sender.postalCode && recipient.name && recipient.addressLine1 && recipient.postalCode) },
+                { id: 'sec-addresses', label: 'Addresses', done: !!(sender.name && sender.addressLine1 && (sender.postalCode || postalCodeOptionalFor(sender.countryCode)) && recipient.name && recipient.addressLine1 && (recipient.postalCode || postalCodeOptionalFor(recipient.countryCode))) },
                 { id: 'sec-service', label: 'Service', done: !!carrier && (serviceId !== '' || !!accountNumber) },
                 { id: 'sec-packages', label: 'Packages', done: Number(weight) > 0 },
                 { id: 'sec-customs', label: 'Customs', done: !!incoterms && !!activeParties, show: isInternational },

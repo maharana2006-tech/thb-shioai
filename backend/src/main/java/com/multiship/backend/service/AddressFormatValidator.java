@@ -41,6 +41,34 @@ import java.util.regex.Pattern;
  */
 public final class AddressFormatValidator {
 
+    /**
+     * ISO alpha-2 codes for countries that have no national postal-code
+     * system. Sourced from Wikipedia's "List of postal codes" (2026-09-09
+     * snapshot — see the "no postal code" rows) plus the Universal Postal
+     * Union addressing reference. Live-49-country audit added HK / AE
+     * after operator hit UPS's "Recipient postal code is required" on
+     * the wire — the field is a hard-required NotBlank on every party
+     * block, but UPS / FedEx / DHL all accept an empty PostalCode for
+     * this set of destinations.
+     *
+     * <p>Extend via the {@code carrier.postal-code.optional-countries}
+     * env property when a new market comes online without repackaging
+     * the JAR — see {@link #withOptionalCountries}.
+     *
+     * <p>Sources:
+     * <ul>
+     *   <li>https://en.wikipedia.org/wiki/List_of_postal_codes</li>
+     *   <li>https://www.upu.int/en/Postal-Solutions/Programmes-Services/Addressing-Solutions</li>
+     * </ul>
+     */
+    public static final Set<String> NO_POSTAL_CODE_COUNTRIES = Set.of(
+            "AO", "AG", "AW", "BS", "BW", "BZ", "BJ", "BF", "BI", "CM",
+            "CF", "TD", "KM", "CG", "CD", "CK", "CI", "DJ", "DM", "GQ",
+            "ER", "FJ", "GA", "GM", "GN", "GD", "GY", "HM", "HK", "KI",
+            "KP", "LY", "ML", "MR", "NR", "NU", "QA", "RW", "SC", "SL",
+            "SX", "SB", "SS", "SY", "TG", "TK", "TO", "TV", "UG", "AE",
+            "VU", "YE", "ZW");
+
     /** US ZIP: 5 digits, optional ZIP+4 suffix. */
     private static final Pattern ZIP_US = Pattern.compile("^\\d{5}(-\\d{4})?$");
 
@@ -105,6 +133,43 @@ public final class AddressFormatValidator {
             "MX", STATES_MX, "BR", STATES_BR);
 
     private AddressFormatValidator() { /* static utility */ }
+
+    /**
+     * True when the country's own postal system exists — i.e. an empty
+     * postal code should trigger a "Recipient postal code is required"
+     * error. Countries in {@link #NO_POSTAL_CODE_COUNTRIES} return
+     * {@code false}: the operator can leave the postal field blank and
+     * downstream carriers accept the wire.
+     *
+     * @param countryCode ISO alpha-2 (case-insensitive; null returns {@code true}
+     *                    so missing country defaults to the strict path).
+     */
+    public static boolean postalCodeRequiredFor(String countryCode) {
+        return postalCodeRequiredFor(countryCode, Set.of());
+    }
+
+    /**
+     * Variant that unions the built-in {@link #NO_POSTAL_CODE_COUNTRIES}
+     * with an operator-provided extension set (fed via the
+     * {@code carrier.postal-code.optional-countries} env property). Lets
+     * a deployment opt-out of the postal-required check for markets not
+     * yet baked into the JAR — a market change (e.g. Ireland dropping
+     * Eircode requirement) can ship as a property flip, no code deploy.
+     *
+     * @param countryCode ISO alpha-2 (case-insensitive; null → required).
+     * @param extraOptional additional ISO codes to treat as no-postal.
+     */
+    public static boolean postalCodeRequiredFor(String countryCode, Set<String> extraOptional) {
+        if (!StringUtils.hasText(countryCode)) return true;
+        String key = countryCode.trim().toUpperCase(Locale.ROOT);
+        if (NO_POSTAL_CODE_COUNTRIES.contains(key)) return false;
+        if (extraOptional != null) {
+            for (String c : extraOptional) {
+                if (c != null && key.equalsIgnoreCase(c.trim())) return false;
+            }
+        }
+        return true;
+    }
 
     /**
      * Validate one address (postal + state format). Returns a mutable
