@@ -116,3 +116,28 @@ export function postalPlaceholderFor(code?: string | null): string {
   }
   return GENERIC_POSTAL_PLACEHOLDER
 }
+
+/**
+ * PR A — ISO alpha-2 codes for countries with no national postal-code
+ * system. Kept in sync with the backend
+ * {@code AddressFormatValidator.NO_POSTAL_CODE_COUNTRIES} + the Yup
+ * schema list. Sourced from Wikipedia's "List of postal codes"
+ * (2026-09-09 snapshot).
+ */
+export const NO_POSTAL_CODE_COUNTRIES: ReadonlySet<string> = new Set([
+  'AO', 'AG', 'AW', 'BS', 'BW', 'BZ', 'BJ', 'BF', 'BI', 'CM',
+  'CF', 'TD', 'KM', 'CG', 'CD', 'CK', 'CI', 'DJ', 'DM', 'GQ',
+  'ER', 'FJ', 'GA', 'GM', 'GN', 'GD', 'GY', 'HM', 'HK', 'KI',
+  'KP', 'LY', 'ML', 'MR', 'NR', 'NU', 'QA', 'RW', 'SC', 'SL',
+  'SX', 'SB', 'SS', 'SY', 'TG', 'TK', 'TO', 'TV', 'UG', 'AE',
+  'VU', 'YE', 'ZW',
+])
+
+/**
+ * True when the country has no national postal system → the postal-code
+ * form field should be marked optional. Live 49-country audit added HK
+ * and AE explicitly; extend via the Wikipedia reference list.
+ */
+export function postalCodeOptionalFor(code?: string | null): boolean {
+  return NO_POSTAL_CODE_COUNTRIES.has((code || '').toUpperCase())
+}

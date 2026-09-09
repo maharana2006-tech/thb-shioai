@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -181,5 +182,60 @@ class AddressFormatValidatorTest {
         assertTrue(AddressFormatValidator.validate("US", "", "CA", "recipient").isEmpty());
         assertTrue(AddressFormatValidator.validate("US", "94105", "", "recipient").isEmpty());
         assertTrue(AddressFormatValidator.validate("US", null, null, "recipient").isEmpty());
+    }
+
+    // ─── PR A — postalCodeRequiredFor whitelist ────────────────────────
+
+    @org.junit.jupiter.api.Test
+    void postalCodeRequired_isTrueForRegularCountries() {
+        assertTrue(AddressFormatValidator.postalCodeRequiredFor("US"));
+        assertTrue(AddressFormatValidator.postalCodeRequiredFor("gb"));
+        assertTrue(AddressFormatValidator.postalCodeRequiredFor("DE"));
+        assertTrue(AddressFormatValidator.postalCodeRequiredFor("JP"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void postalCodeRequired_isFalseForHongKong() {
+        // Live 49-country audit — HK is the biggest miss. UPS
+        // "Recipient postal code is required" fires on the wire; we
+        // catch it upstream now.
+        assertFalse(AddressFormatValidator.postalCodeRequiredFor("HK"));
+        assertFalse(AddressFormatValidator.postalCodeRequiredFor("hk"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void postalCodeRequired_isFalseForUae() {
+        // UAE also flagged by the 49-country matrix — no street-address
+        // postal system.
+        assertFalse(AddressFormatValidator.postalCodeRequiredFor("AE"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void postalCodeRequired_isTrueForBlankCountry() {
+        // Missing country → strict path (safe default; the presence check
+        // for country runs alongside so this doesn't double-error).
+        assertTrue(AddressFormatValidator.postalCodeRequiredFor(""));
+        assertTrue(AddressFormatValidator.postalCodeRequiredFor(null));
+    }
+
+    @org.junit.jupiter.api.Test
+    void postalCodeRequired_env_extension_addsCountryToWhitelist() {
+        // Config-driven extension: JP hasn't dropped its postal system,
+        // but if a future deployment wants to skip the check for a
+        // corridor (e.g. carrier accepts blank experimentally), the
+        // property lets us opt-out without a code deploy.
+        assertTrue(AddressFormatValidator.postalCodeRequiredFor("JP"));
+        assertFalse(AddressFormatValidator.postalCodeRequiredFor("JP", java.util.Set.of("JP")));
+        assertFalse(AddressFormatValidator.postalCodeRequiredFor("jp", java.util.Set.of("JP")));
+    }
+
+    @org.junit.jupiter.api.Test
+    void noPostalCodeCountries_containsCoreList() {
+        // Wikipedia-sourced core list — pin a few important ones.
+        assertTrue(AddressFormatValidator.NO_POSTAL_CODE_COUNTRIES.contains("HK"));
+        assertTrue(AddressFormatValidator.NO_POSTAL_CODE_COUNTRIES.contains("AE"));
+        assertTrue(AddressFormatValidator.NO_POSTAL_CODE_COUNTRIES.contains("QA"));
+        assertTrue(AddressFormatValidator.NO_POSTAL_CODE_COUNTRIES.contains("BS"));
+        assertTrue(AddressFormatValidator.NO_POSTAL_CODE_COUNTRIES.contains("FJ"));
     }
 }
