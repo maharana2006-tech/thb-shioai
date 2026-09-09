@@ -102,6 +102,16 @@ public class VoidServiceImpl implements VoidService {
         }
 
         String canonicalCarrier = TrackingServiceImpl.canonicalizeCarrierCode(tracking.getShipViaCd());
+        // The stored ship-via is a SERVICE code; when it doesn't name a known
+        // carrier, the account the label was billed on does.
+        if (!java.util.Set.of("UPS", "FEDEX", "USPS", "DHL", "STAMPS").contains(
+                canonicalCarrier == null ? "" : canonicalCarrier.toUpperCase(java.util.Locale.ROOT))
+                && StringUtils.hasText(tracking.getAccountNumber())) {
+            String fromAccount = carrierAccountRefRepository
+                    .findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(tracking.getAccountNumber().trim())
+                    .map(CarrierAccountRef::getCarrierCode).orElse(null);
+            if (StringUtils.hasText(fromAccount)) canonicalCarrier = fromAccount.trim().toUpperCase(java.util.Locale.ROOT);
+        }
         if (!StringUtils.hasText(canonicalCarrier)) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT,
                     "Order " + orderNo + " has no carrier code; can't resolve credentials.");

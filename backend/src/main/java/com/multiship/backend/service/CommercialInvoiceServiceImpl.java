@@ -747,8 +747,21 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                 boolean lastRow = idx == rows.size() - 1;
                 float reserve = (itemsBody ? carryH : 0f) + (lastRow ? closingH : 0f);
                 float need = r.height();
-                // Never strand a section header or a package band at a page foot.
-                if ((r.header() || r.keepWithNext()) && idx + 1 < rows.size()) need += rows.get(idx + 1).height();
+                // Never strand a section header or a package band at a page foot;
+                // a section header also needs room for a few rows (a two-row
+                // annex split 2 + 1 across pages reads as two tables).
+                if ((r.header() || r.keepWithNext()) && idx + 1 < rows.size()) {
+                    int keep = r.header() ? 3 : 1;
+                    for (int k = 1; k <= keep && idx + k < rows.size(); k++) need += rows.get(idx + k).height();
+                    // A short packages annex (the final section) moves as one
+                    // unit together with the closing block — otherwise the
+                    // closing reserve strands its last row on the next page.
+                    if ("pkgs".equals(r.section()) && r.header() && rows.size() - idx - 1 <= 6) {
+                        need = r.height();
+                        for (int k = idx + 1; k < rows.size(); k++) need += rows.get(k).height();
+                        need += closingH;
+                    }
+                }
                 if (y - need < bottom + reserve && idx > start) {
                     pages.add(new int[]{start, idx});
                     start = idx;

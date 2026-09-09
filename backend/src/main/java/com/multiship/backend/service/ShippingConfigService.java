@@ -124,6 +124,12 @@ public class ShippingConfigService {
                 || s.contains("WORLDWIDE_EXPEDITED")) return "UPS";
         if (s.contains("PRIORITY_MAIL") || s.equals("FIRST_CLASS")
                 || s.contains("PARCEL_SELECT") || s.equals("MEDIA_MAIL")) return "USPS";
+        // UPS is the only carrier whose catalog stores numeric service codes
+        // (03 Ground, 08 Worldwide Expedited …). A bulk UPS order stores that
+        // code in ship_via_cd, and the void / tracking paths canonicalise it —
+        // without this they asked for a "03" connector and reported
+        // "Carrier 03 isn't configured on this instance".
+        if (s.matches("\\d{2}")) return "UPS";
         // Fallback: return input verbatim so downstream lookups can still try.
         return s;
     }
