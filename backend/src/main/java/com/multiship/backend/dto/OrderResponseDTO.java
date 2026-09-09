@@ -79,6 +79,8 @@ public class OrderResponseDTO {
         private String trackingUrl;
         private String labelFilePath;
         private LocalDateTime generatedAt;
+        /** Superseded labels (void / reissue trail), newest last. */
+        private java.util.List<java.util.Map<String, Object>> history;
     }
 
     @Data

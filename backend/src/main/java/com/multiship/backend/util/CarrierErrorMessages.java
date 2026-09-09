@@ -80,7 +80,7 @@ public final class CarrierErrorMessages {
     };
 
     /** First human sentence inside a carrier payload, or null. */
-    static String extractReason(String raw) {
+    public static String extractReason(String raw) {
         if (raw == null) return null;
         for (java.util.regex.Pattern p : REASON_PATTERNS) {
             java.util.regex.Matcher m = p.matcher(raw);

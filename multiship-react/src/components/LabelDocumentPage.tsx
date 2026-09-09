@@ -646,6 +646,12 @@ export default function LabelDocumentPage() {
               ) : null}
               {order?.tenantId ? <span className="text-xs font-medium text-slate-500">Tenant {order.tenantId}</span> : null}
             </h2>
+            {label?.history && label.history.length > 0 ? (
+              <p className="mt-1 text-[11px] text-[#6b5c42]" title="Superseded labels on this order">
+                Previous label{label.history.length === 1 ? '' : 's'}:{' '}
+                {label.history.map((h) => `${h.trackingNumber} (${h.event.toLowerCase()} ${new Date(h.at).toLocaleString()}${h.replacedBy ? ` → ${h.replacedBy}` : ''})`).join(' · ')}
+              </p>
+            ) : null}
           </div>
         </div>
 

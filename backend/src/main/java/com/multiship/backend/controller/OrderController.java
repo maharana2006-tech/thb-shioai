@@ -406,7 +406,12 @@ public class OrderController {
         }
 
         ApiResponse<OrderResponseDTO> trackingResponse = orderService.getOrderWithTracking(orderNo);
-        Object labelDetails = trackingResponse.getData() != null ? trackingResponse.getData().getLabelDetails() : null;
+        OrderResponseDTO.LabelDetails labelDetails = trackingResponse.getData() != null ? trackingResponse.getData().getLabelDetails() : null;
+        if (labelDetails != null) {
+            final OrderResponseDTO.LabelDetails ld = labelDetails;
+            orderTrackingRepository.findByOrderNo(orderNo).ifPresent(t ->
+                    ld.setHistory(com.multiship.backend.util.LabelHistory.parse(t.getLabelHistory())));
+        }
 
         // FROM block: the order's client ship-from when it has one, else the
         // company warehouse. Return block: the client's effective return address.
@@ -847,6 +852,11 @@ public class OrderController {
         OrderResponseDTO.LabelDetails labelDetails = trackingResponse.getData() != null
                 ? trackingResponse.getData().getLabelDetails()
                 : null;
+        if (labelDetails != null) {
+            final OrderResponseDTO.LabelDetails ld = labelDetails;
+            orderTrackingRepository.findByOrderNo(orderNo).ifPresent(t ->
+                    ld.setHistory(com.multiship.backend.util.LabelHistory.parse(t.getLabelHistory())));
+        }
 
         // Incoterms ride on order_customs, not the order row — thread them onto
         // the DTO so the ZPL prints the shipment's actual term (the facsimile
@@ -1068,6 +1078,11 @@ public class OrderController {
         OrderResponseDTO.LabelDetails labelDetails = trackingResponse.getData() != null
                 ? trackingResponse.getData().getLabelDetails()
                 : null;
+        if (labelDetails != null) {
+            final OrderResponseDTO.LabelDetails ld = labelDetails;
+            orderTrackingRepository.findByOrderNo(orderNo).ifPresent(t ->
+                    ld.setHistory(com.multiship.backend.util.LabelHistory.parse(t.getLabelHistory())));
+        }
 
         int totalPkgs = effectivePkgCount(orderResponse.getData());
         java.util.List<com.multiship.backend.dto.LabelPackageDTO> allPackages =

@@ -37,6 +37,8 @@ export interface LabelDetails {
   trackingUrl: string | null
   labelFilePath: string | null
   generatedAt: string | null
+  /** Superseded labels (void / reissue trail), newest last. */
+  history?: { event: string; trackingNumber: string; replacedBy?: string | null; at: string }[] | null
 }
 
 export interface ErrorDetails {

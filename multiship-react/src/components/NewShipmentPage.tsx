@@ -527,6 +527,8 @@ export default function NewShipmentPage() {
     return Number.isInteger(n) && n > 0 ? n : null
   })()
   const [fixError, setFixError] = useState<string | null>(null)
+  /** True when the order being reopened is a VOIDED (reissue) rather than a failed one. */
+  const [fixVoided, setFixVoided] = useState(false)
   const [fixLoading, setFixLoading] = useState<boolean>(!!fixOrderNo)
 
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
@@ -1326,6 +1328,7 @@ export default function NewShipmentPage() {
           accountNumber: details.data.carrierAccount?.accountNumber ?? null,
         }
         setFixError(byId?.data?.errorDetails?.errorMessage ?? null)
+        setFixVoided((byId?.data?.labelDetails?.status ?? '').toUpperCase() === 'VOIDED')
       } catch (err) {
         if (!cancelled) notify.apiError(err, `Could not load order ${fixOrderNo} to fix.`)
       } finally {
@@ -2659,7 +2662,22 @@ export default function NewShipmentPage() {
 
             {/* Fix-a-failed-order banner: the order's data is pre-filled below;
                 correct what the carrier rejected and re-generate in place. */}
-            {fixOrderNo ? (
+            {fixOrderNo && fixVoided ? (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+                <div className="flex items-start gap-2.5">
+                  <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-amber-900">
+                      Reissuing label for order #{fixOrderNo}{fixLoading ? ' — loading…' : ''}
+                    </p>
+                    <p className="mt-0.5 text-[12px] text-amber-800">
+                      The previous label was voided. Adjust anything below and regenerate — the order keeps its number and the
+                      voided label stays on its history.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : fixOrderNo ? (
               <div className="rounded-xl border border-rose-300 bg-rose-50 px-4 py-3">
                 <div className="flex items-start gap-2.5">
                   <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
@@ -4001,7 +4019,7 @@ export default function NewShipmentPage() {
                 ) : (
                   <>
                     <FiZap className="h-3.5 w-3.5" />
-                    {fixOrderNo ? 'Fix & regenerate' : isReturn ? 'Generate return label' : 'Generate label'}
+                    {fixOrderNo ? (fixVoided ? 'Regenerate label' : 'Fix & regenerate') : isReturn ? 'Generate return label' : 'Generate label'}
                     <FiArrowRight className="h-3.5 w-3.5" />
                   </>
                 )}
