@@ -527,6 +527,8 @@ export default function NewShipmentPage() {
     return Number.isInteger(n) && n > 0 ? n : null
   })()
   const [fixError, setFixError] = useState<string | null>(null)
+  /** True when the order being reopened is a VOIDED (reissue) rather than a failed one. */
+  const [fixVoided, setFixVoided] = useState(false)
   const [fixLoading, setFixLoading] = useState<boolean>(!!fixOrderNo)
 
   const [accounts, setAccounts] = useState<CarrierAccountRef[]>([])
@@ -584,6 +586,9 @@ export default function NewShipmentPage() {
   const [weight, setWeight] = useState('')
   const [weightUnit, setWeightUnit] = useState<'LB' | 'KG'>('LB')
   const [declaredValue, setDeclaredValue] = useState('')
+  /** Customer reference / PO — stored as the order's Ref #, printed on the label and invoice,
+   *  and what the importer's duplicate guard matches on. */
+  const [reference, setReference] = useState('')
   const [clientCode, setClientCode] = useState('')
   // Sprint 35 — signature at delivery + insured value beyond the
   // carrier's free tier. Signature is a per-shipment enum; insured
@@ -1326,6 +1331,8 @@ export default function NewShipmentPage() {
           accountNumber: details.data.carrierAccount?.accountNumber ?? null,
         }
         setFixError(byId?.data?.errorDetails?.errorMessage ?? null)
+        setFixVoided((byId?.data?.labelDetails?.status ?? '').toUpperCase() === 'VOIDED')
+        if (byId?.data?.orderDetails?.refOrderNumber) setReference(byId.data.orderDetails.refOrderNumber)
       } catch (err) {
         if (!cancelled) notify.apiError(err, `Could not load order ${fixOrderNo} to fix.`)
       } finally {
@@ -1467,7 +1474,10 @@ export default function NewShipmentPage() {
     if (isInternational && /THIRD/.test(clearanceOption.toUpperCase()) && !dutiesAccount.trim()) missing.push('Duties payor account')
     return missing
   }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport, incoterms,
-      sender.countryCode, recipient.countryCode, recipientEffectiveCountry, currency, declaredValue, ftrExemption, aesCitation])
+      sender.countryCode, recipient.countryCode, recipientEffectiveCountry, currency, declaredValue, ftrExemption, aesCitation,
+      // typed fields the list checks — without these the memo kept reporting
+      // "Duties payor account" after the operator had typed one
+      clearanceOption, dutiesAccount])
 
   /**
    * Select a client: fill YOUR address on the correct side and auto-pick its
@@ -1837,7 +1847,9 @@ export default function NewShipmentPage() {
     if (missingLabelFields.length > 0) {
       setSubmitAttempted(true)
       notify.error(
-        `Pick ${missingLabelFields.join(' + ')} before validating — the selected account has no saved default.`,
+        missingLabelFields.includes('Duties payor account')
+          ? `Enter the Duties payor account (the third party's ${canon(carrier) || 'carrier'} account) before validating.`
+          : `Pick ${missingLabelFields.join(' + ')} before validating — the selected account has no saved default.`,
       )
       scrollToFirstError()
       return
@@ -2310,7 +2322,9 @@ export default function NewShipmentPage() {
     // purpose fields (they're not in the form schema).
     if (missingLabelFields.length > 0) {
       showToast(
-        `Pick ${missingLabelFields.join(' + ')} — no saved default for this client / account.`,
+        missingLabelFields.includes('Duties payor account')
+          ? `Enter the Duties payor account (the third party's ${canon(carrier) || 'carrier'} account).`
+          : `Pick ${missingLabelFields.join(' + ')} — no saved default for this client / account.`,
         `${missingLabelFields.length} field${missingLabelFields.length === 1 ? ' needs' : 's need'} attention`,
       )
       scrollToFirstError()
@@ -2372,6 +2386,7 @@ export default function NewShipmentPage() {
       sender,
       recipient,
       isReturn,
+      reference: reference.trim() || undefined,
       carrierCode: carrier,
       accountNumber: accountNumber.trim(),
       accountId: matched?.id ?? null,
@@ -2659,7 +2674,22 @@ export default function NewShipmentPage() {
 
             {/* Fix-a-failed-order banner: the order's data is pre-filled below;
                 correct what the carrier rejected and re-generate in place. */}
-            {fixOrderNo ? (
+            {fixOrderNo && fixVoided ? (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+                <div className="flex items-start gap-2.5">
+                  <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-amber-900">
+                      Reissuing label for order #{fixOrderNo}{fixLoading ? ' — loading…' : ''}
+                    </p>
+                    <p className="mt-0.5 text-[12px] text-amber-800">
+                      The previous label was voided. Adjust anything below and regenerate — the order keeps its number and the
+                      voided label stays on its history.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : fixOrderNo ? (
               <div className="rounded-xl border border-rose-300 bg-rose-50 px-4 py-3">
                 <div className="flex items-start gap-2.5">
                   <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
@@ -2761,6 +2791,9 @@ export default function NewShipmentPage() {
                       </optgroup>
                     ) : null}
                   </select>
+                </Field>
+                <Field label="Reference / PO" hint="Your own order or PO number — shows as Ref # and on the label and invoice.">
+                  <input className={inputCls} value={reference} onChange={(e) => setReference(e.target.value)} placeholder="PO-12345" maxLength={80} />
                 </Field>
                 {isInternational ? (
                   <Field label="Reason of export" required
@@ -4001,7 +4034,7 @@ export default function NewShipmentPage() {
                 ) : (
                   <>
                     <FiZap className="h-3.5 w-3.5" />
-                    {fixOrderNo ? 'Fix & regenerate' : isReturn ? 'Generate return label' : 'Generate label'}
+                    {fixOrderNo ? (fixVoided ? 'Regenerate label' : 'Fix & regenerate') : isReturn ? 'Generate return label' : 'Generate label'}
                     <FiArrowRight className="h-3.5 w-3.5" />
                   </>
                 )}

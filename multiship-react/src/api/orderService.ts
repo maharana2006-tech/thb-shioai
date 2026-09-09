@@ -19,6 +19,8 @@ export interface OrderDetails {
   refOrderNumber?: string | null
   /** Id shared by every order generated from the same CSV/XLSX import upload. Null for non-import orders. */
   batchId?: number | null
+  /** Boxes in the shipment (null / 1 for single-box orders). */
+  packageCount?: number | null
 }
 
 export interface ShippingDetails {
@@ -37,6 +39,8 @@ export interface LabelDetails {
   trackingUrl: string | null
   labelFilePath: string | null
   generatedAt: string | null
+  /** Superseded labels (void / reissue trail), newest last. */
+  history?: { event: string; trackingNumber: string; replacedBy?: string | null; at: string }[] | null
 }
 
 export interface ErrorDetails {

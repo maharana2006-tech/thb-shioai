@@ -826,8 +826,11 @@ public class UpsConnector implements CarrierConnector {
             String body = ex.getResponseBodyAsString();
             log.warn("UPS void rejected for {} (HTTP {}): {}",
                     trackingNumber, ex.getStatusCode().value(), body);
+            // Relay UPS's own sentence ("No shipment found within the allowed
+            // void period") — a bare HTTP status told the operator nothing.
+            String reason = com.multiship.backend.util.CarrierErrorMessages.extractReason(body);
             return new VoidResult(trackingNumber, false, "ERROR",
-                    "UPS void rejected: HTTP " + ex.getStatusCode().value(), body);
+                    "UPS void rejected: " + (reason != null ? reason : "HTTP " + ex.getStatusCode().value()), body);
         } catch (Exception ex) {
             log.warn("UPS void call failed for {}: {}", trackingNumber, ex.getMessage());
             return new VoidResult(trackingNumber, false, "ERROR",

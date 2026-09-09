@@ -1936,6 +1936,14 @@ public class CarrierServiceImpl implements CarrierService {
         tracking.setOrderNo(orderNo);
         tracking.setOrderSuffix(0);
         tracking.setErrorMessage(null);
+        // Reissue: keep the superseded label on the order's history before the
+        // new tracking number replaces it.
+        if (StringUtils.hasText(tracking.getTrackingNumber()) && StringUtils.hasText(result.trackingNumber())
+                && !tracking.getTrackingNumber().equals(result.trackingNumber())
+                && "VOIDED".equalsIgnoreCase(tracking.getStatus())) {
+            com.multiship.backend.util.LabelHistory.append(tracking, "REISSUED", tracking.getTrackingNumber(),
+                    result.trackingNumber(), LocalDateTime.now());
+        }
         tracking.setTrackingNumber(result.trackingNumber());
         tracking.setTrackingUrl(result.trackingUrl());
         tracking.setShipViaCd(order.getShipviaCd());

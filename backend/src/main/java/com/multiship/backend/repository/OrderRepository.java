@@ -114,7 +114,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                  AND LOWER(BTRIM(b.ship_attn)) <> LOWER(BTRIM(b.ship_name)) THEN 'B2B'
                 ELSE 'D2C'
             END) as order_channel,
-            b.customer_ref
+            b.customer_ref,
+            b.package_count
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
@@ -358,7 +359,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                  AND LOWER(BTRIM(b.ship_attn)) <> LOWER(BTRIM(b.ship_name)) THEN 'B2B'
                 ELSE 'D2C'
             END) as order_channel,
-            b.customer_ref
+            b.customer_ref,
+            b.package_count
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd

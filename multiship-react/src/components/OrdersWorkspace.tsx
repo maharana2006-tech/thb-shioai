@@ -315,7 +315,7 @@ export default function OrdersWorkspace() {
    *  was unstyleable, inconsistent with the app's modal pattern, and blocked
    *  the tab for automation. The modal carries the context that matters:
    *  tracking number, irreversibility, and the refund caveat. */
-  const [confirmVoid, setConfirmVoid] = useState<{ orderNo: number; trackingNumber: string; reissue?: boolean } | null>(null)
+  const [confirmVoid, setConfirmVoid] = useState<{ orderNo: number; trackingNumber: string; reissue?: boolean; packages?: number } | null>(null)
 
   // Escape closes the void confirmation (parity with every other modal).
   useEffect(() => {
@@ -331,9 +331,9 @@ export default function OrdersWorkspace() {
   }
 
   /** Edit & reissue: void the live label, then open the pre-filled form to regenerate in place. */
-  const handleEditReissue = (orderNo: number, trackingNumber: string | null) => {
+  const handleEditReissue = (orderNo: number, trackingNumber: string | null, packages?: number | null) => {
     if (!trackingNumber) return
-    setConfirmVoid({ orderNo, trackingNumber, reissue: true })
+    setConfirmVoid({ orderNo, trackingNumber, reissue: true, packages: packages ?? undefined })
   }
 
   const executeVoid = async (orderNo: number) => {
@@ -653,7 +653,7 @@ export default function OrdersWorkspace() {
               (regenerate accepts a VOIDED order; it refuses a live one). */}
           <button
             type="button"
-            onClick={() => handleEditReissue(orderNo, order.labelDetails.trackingNumber ?? null)}
+            onClick={() => handleEditReissue(orderNo, order.labelDetails.trackingNumber ?? null, order.orderDetails.packageCount ?? null)}
             disabled={voidingOrderNo === orderNo}
             title="Void this label and reopen the order pre-filled to fix and regenerate it"
             className={`${ACTION_BASE} ${ACTION_RETRY}`}
@@ -723,6 +723,23 @@ export default function OrdersWorkspace() {
         >
           <FiEdit3 className="h-3 w-3" />
           Fill Details
+        </button>
+      )
+    }
+
+    if (status === 'VOIDED') {
+      // The label was cancelled: the way back is the reissue form (adjust,
+      // then regenerate under the same number, with the void on its history)
+      // — not a bare re-generate through the account chooser.
+      return (
+        <button
+          type="button"
+          onClick={() => navigate(`/orders/new?fixOrder=${orderNo}`)}
+          className={`${ACTION_BASE} ${ACTION_RETRY}`}
+          title="Reopen this order pre-filled and regenerate a new label"
+        >
+          <FiEdit3 className="h-3 w-3" />
+          Reissue label
         </button>
       )
     }
@@ -1731,6 +1748,11 @@ export default function OrdersWorkspace() {
                     Void order #{confirmVoid.orderNo}?
                   </h3>
                   <p className="mt-0.5 font-mono text-[11px] text-rose-700">{confirmVoid.trackingNumber}</p>
+                  {confirmVoid.packages && confirmVoid.packages > 1 ? (
+                    <p className="mt-0.5 text-[11px] font-semibold text-rose-700">
+                      All {confirmVoid.packages} package labels of this shipment will be voided together.
+                    </p>
+                  ) : null}
                 </div>
               </div>
               <div className="space-y-2 px-5 py-4 text-[12.5px] leading-relaxed text-[#5a4526]">

@@ -755,6 +755,59 @@ public class OrderImportServiceImpl implements OrderImportService {
                 : "__row_" + row.getRowNumber();
     }
 
+    /** Shipment-level fields an order shares across its rows (item columns excluded). */
+    private static final List<java.util.function.Function<OrderImportRowDTO, String>> GROUP_GETTERS = List.of(
+            OrderImportRowDTO::getClientCode, OrderImportRowDTO::getBillTo, OrderImportRowDTO::getWarehouseCode,
+            OrderImportRowDTO::getRecipientName, OrderImportRowDTO::getRecipientCompany, OrderImportRowDTO::getRecipientPhone,
+            OrderImportRowDTO::getRecipientEmail, OrderImportRowDTO::getAddressLine1, OrderImportRowDTO::getAddressLine2,
+            OrderImportRowDTO::getCity, OrderImportRowDTO::getState, OrderImportRowDTO::getPostalCode,
+            OrderImportRowDTO::getCountryCode, OrderImportRowDTO::getCarrierCode, OrderImportRowDTO::getAccountNumber,
+            OrderImportRowDTO::getServiceType, OrderImportRowDTO::getPackageType, OrderImportRowDTO::getWeightUnit,
+            OrderImportRowDTO::getDimUnit, OrderImportRowDTO::getCurrency, OrderImportRowDTO::getIncoterms,
+            OrderImportRowDTO::getReference);
+    private static final List<java.util.function.BiConsumer<OrderImportRowDTO, String>> GROUP_SETTERS = List.of(
+            OrderImportRowDTO::setClientCode, OrderImportRowDTO::setBillTo, OrderImportRowDTO::setWarehouseCode,
+            OrderImportRowDTO::setRecipientName, OrderImportRowDTO::setRecipientCompany, OrderImportRowDTO::setRecipientPhone,
+            OrderImportRowDTO::setRecipientEmail, OrderImportRowDTO::setAddressLine1, OrderImportRowDTO::setAddressLine2,
+            OrderImportRowDTO::setCity, OrderImportRowDTO::setState, OrderImportRowDTO::setPostalCode,
+            OrderImportRowDTO::setCountryCode, OrderImportRowDTO::setCarrierCode, OrderImportRowDTO::setAccountNumber,
+            OrderImportRowDTO::setServiceType, OrderImportRowDTO::setPackageType, OrderImportRowDTO::setWeightUnit,
+            OrderImportRowDTO::setDimUnit, OrderImportRowDTO::setCurrency, OrderImportRowDTO::setIncoterms,
+            OrderImportRowDTO::setReference);
+
+    private static boolean sameText(String a, String b) {
+        return (a == null ? "" : a.trim()).equalsIgnoreCase(b == null ? "" : b.trim());
+    }
+
+    /** See updateBatchRow: changed shipment-level fields follow to the order's other, not-yet-shipped rows. */
+    private static void propagateGroupEdit(List<OrderImportRowDTO> rows, OrderImportRowDTO before, OrderImportRowDTO after) {
+        if (after == null || before == null || !StringUtils.hasText(after.getOrderRef())) return;
+        for (OrderImportRowDTO other : rows) {
+            if (other == after || other == before) continue;
+            if (!StringUtils.hasText(other.getOrderRef()) || !sameText(other.getOrderRef(), after.getOrderRef())) continue;
+            if ("GENERATED".equalsIgnoreCase(other.getGeneratedStatus())) continue;
+            boolean touched = false;
+            for (int i = 0; i < GROUP_GETTERS.size(); i++) {
+                String was = GROUP_GETTERS.get(i).apply(before);
+                String now = GROUP_GETTERS.get(i).apply(after);
+                if (sameText(was, now)) continue;                       // field not edited
+                String theirs = GROUP_GETTERS.get(i).apply(other);
+                if (sameText(theirs, was)) {                            // they carried the old value
+                    GROUP_SETTERS.get(i).accept(other, now);
+                    touched = true;
+                }
+            }
+            if (touched) {
+                // weight follows the same rule (numeric)
+                if (before.getWeight() != null && after.getWeight() != null && before.getWeight().compareTo(after.getWeight()) != 0
+                        && other.getWeight() != null && other.getWeight().compareTo(before.getWeight()) == 0) {
+                    other.setWeight(after.getWeight());
+                }
+                if (!"FAILED".equalsIgnoreCase(other.getGeneratedStatus())) other.setGeneratedStatus(null);
+            }
+        }
+    }
+
     /** Same-order rows must agree on shipment-level fields; see validateBusinessRules. */
     private static void checkGroupField(OrderImportRowDTO r, OrderImportRowDTO leader, String field,
                                         String value, String leaderValue, boolean error) {
@@ -1875,6 +1928,14 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
                         .toList()
                 : rows;
+        // A retry stays in the file's label batch: rows edited in the grid
+        // may have lost their stamp, and the commit would mint a new batch
+        // for them (import #29 said batch 24, its repaired order said 25).
+        if (batch.getLabelBatchId() != null) {
+            for (OrderImportRowDTO r : rowsToProcess) {
+                if (r.getBatchId() == null) r.setBatchId(batch.getLabelBatchId());
+            }
+        }
         // Honor the persisted billing mode too, so the platform-account choice
         // survives reloads/retries even when the caller omits the flag.
         boolean platform = usePlatformAccount || "PLATFORM".equalsIgnoreCase(
@@ -2095,8 +2156,16 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (edited == null) edited = new OrderImportRowDTO();
         edited.setRowNumber(rowNumber);
         edited.setGeneratedStatus(null);
-        edited.setBatchId(null);
+        // Keep the label batch the file was uploaded under — nulling it made a
+        // later Retry mint a second batch number for the same file.
+        edited.setBatchId(current.getBatchId());
         rows.set(index, edited);
+        // A shipment-level change on one row of an order applies to the order:
+        // every other row of the same orderRef that still carried the OLD
+        // value (typically inherited from this row) follows it, so fixing a
+        // bad account once fixes the whole order instead of erroring every
+        // continuation row with "differs from the first row".
+        propagateGroupEdit(rows, current, edited);
 
         // Re-validate the whole batch — mutates each row's errors/warnings
         // in place through the same pipeline preview/commit use.
@@ -3378,7 +3447,12 @@ public class OrderImportServiceImpl implements OrderImportService {
                 String raw = resp == null ? "no response" : resp.getMessage();
                 if (raw != null) log.warn("Order import group (leader row {}) carrier rejection: {}",
                         leader.getRowNumber(), raw);
-                String msg = humanizeCarrierError(raw, leader);
+                // A platform validation failure ("accountNumber 999999 is not a
+                // registered UPS account…") is already an operator sentence —
+                // the carrier humanizer turned it into "UPS rejected the billing
+                // account", which points at the wrong place (no carrier was called).
+                String code = resp == null || resp.getErrorCode() == null ? "" : String.valueOf(resp.getErrorCode());
+                String msg = code.contains("VALIDATION") ? raw : humanizeCarrierError(raw, leader);
                 // The ERROR order's number comes back in the failure data — record
                 // it on every row of the group so a retry reuses it (no duplicate
                 // INSERT), and attach it to this batch so failed orders aren't

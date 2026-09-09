@@ -102,6 +102,16 @@ public class VoidServiceImpl implements VoidService {
         }
 
         String canonicalCarrier = TrackingServiceImpl.canonicalizeCarrierCode(tracking.getShipViaCd());
+        // The stored ship-via is a SERVICE code; when it doesn't name a known
+        // carrier, the account the label was billed on does.
+        if (!java.util.Set.of("UPS", "FEDEX", "USPS", "DHL", "STAMPS").contains(
+                canonicalCarrier == null ? "" : canonicalCarrier.toUpperCase(java.util.Locale.ROOT))
+                && StringUtils.hasText(tracking.getAccountNumber())) {
+            String fromAccount = carrierAccountRefRepository
+                    .findFirstByAccountNumberIgnoreCaseOrderByUpdatedAtDesc(tracking.getAccountNumber().trim())
+                    .map(CarrierAccountRef::getCarrierCode).orElse(null);
+            if (StringUtils.hasText(fromAccount)) canonicalCarrier = fromAccount.trim().toUpperCase(java.util.Locale.ROOT);
+        }
         if (!StringUtils.hasText(canonicalCarrier)) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT,
                     "Order " + orderNo + " has no carrier code; can't resolve credentials.");
@@ -209,6 +219,10 @@ public class VoidServiceImpl implements VoidService {
             tracking.setStatus("VOIDED");
             tracking.setIsLabelGenerated(false);
             tracking.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
+            // Local clock, like labelGeneratedAt and the REISSUED entry — a UTC stamp
+            // here printed the void hours away from the reissue that followed it.
+            com.multiship.backend.util.LabelHistory.append(tracking, "VOIDED", tracking.getTrackingNumber(), null,
+                    LocalDateTime.now());
             orderTrackingRepository.save(tracking);
             // Logs page: shipment-lifecycle trail. Carry the money figures so
             // the void reads as the reversal of the LABEL_GENERATED charge —

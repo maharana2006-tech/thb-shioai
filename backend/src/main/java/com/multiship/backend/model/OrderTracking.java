@@ -103,6 +103,15 @@ public class OrderTracking {
     @Column(name = "dispatch_next_business_day")
     private Boolean dispatchNextBusinessDay;
 
+    /**
+     * Superseded labels, newest last — JSON list of
+     * {event: VOIDED | REISSUED, trackingNumber, replacedBy?, at}. The live
+     * tracking number lives in {@link #trackingNumber}; this is the audit
+     * trail a customs or refund query needs after a reissue.
+     */
+    @Column(name = "label_history", columnDefinition = "text")
+    private String labelHistory;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 

@@ -605,6 +605,7 @@ public class OrderServiceImpl implements OrderService {
                         .batchId((Integer) row[20])
                         .channel(row.length > 21 ? (String) row[21] : null)
                         .refOrderNumber(row.length > 22 ? (String) row[22] : null)
+                        .packageCount(row.length > 23 && row[23] != null ? ((Number) row[23]).intValue() : null)
                         .build())
                 .shippingDetails(OrderResponseDTO.ShippingDetails.builder()
                         .city((String) row[4])

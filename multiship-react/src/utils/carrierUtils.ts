@@ -17,7 +17,7 @@ const carrierRegistry: Record<
   },
   usps: {
     displayName: 'USPS',
-    aliases: ['usps', 'postal', 'l01'],
+    aliases: ['usps', 'postal', 'l01', 'stamps', 'endicia'],
   },
   dhl: {
     displayName: 'DHL',
