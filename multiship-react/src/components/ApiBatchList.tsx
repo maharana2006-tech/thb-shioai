@@ -4,6 +4,7 @@ import { wmsService } from '../api/wmsService'
 import { orderImportService } from '../api/orderImportService'
 import type { ImportBatchSummary, OrderImportRow } from '../api/orderImportService'
 import { notify } from '../utils/notify'
+import { ApiError } from '../api/apiClient'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import { BTN_PRIMARY, BTN_GHOST, BTN_PRIMARY_SM } from './ui/buttons'
 
@@ -163,12 +164,25 @@ export default function ApiBatchList() {
     }
   }
 
+  /** 409 from generate = the server found rows whose orders already have a live
+   *  label (fetched again after the batch was trashed, or labelled from another
+   *  import). Ask before shipping them a second time; true = the user confirmed. */
+  const confirmDuplicates = async (e: unknown): Promise<boolean> => {
+    if (!(e instanceof ApiError) || e.status !== 409) return false
+    return notify.confirm(`${e.message}\n\nGenerate anyway?`, {
+      title: 'These orders are already labelled',
+      confirmLabel: 'Generate anyway',
+      cancelLabel: 'Cancel',
+      danger: true,
+    })
+  }
+
   /** Generate a label for one row. */
-  const generateRow = async (batchId: number, rowNumber: number) => {
+  const generateRow = async (batchId: number, rowNumber: number, allowDuplicate = false) => {
     const key = `${batchId}-${rowNumber}`
     setGenRowKey(key)
     try {
-      const res = await orderImportService.generateRowLabel(batchId, rowNumber)
+      const res = await orderImportService.generateRowLabel(batchId, rowNumber, allowDuplicate)
       applyUpdate(batchId, res.data)
       const thisRow = res.data?.rows?.find((r) => r.rowNumber === rowNumber)
       if ((thisRow?.generatedStatus ?? '').toUpperCase() === 'GENERATED') {
@@ -180,6 +194,11 @@ export default function ApiBatchList() {
         })
       }
     } catch (e) {
+      if (!allowDuplicate && (await confirmDuplicates(e))) {
+        setGenRowKey(null)
+        await generateRow(batchId, rowNumber, true)
+        return
+      }
       notify.apiError(e, 'Label generation failed.')
     } finally {
       setGenRowKey(null)
@@ -220,7 +239,7 @@ export default function ApiBatchList() {
     }
   }
 
-  const generateBatch = async (batchId: number, isRetry: boolean) => {
+  const generateBatch = async (batchId: number, isRetry: boolean, allowDuplicate = false) => {
     const platform = batches.find((b) => b.id === batchId)?.billingMode === 'PLATFORM'
     setConfirmGenId(null)
     setGeneratingId(batchId)
@@ -246,10 +265,16 @@ export default function ApiBatchList() {
     }
     void pollProgress()
     try {
-      const res = await orderImportService.generateLabels(batchId, { onlyFailed: isRetry, usePlatformAccount: platform })
+      const res = await orderImportService.generateLabels(batchId, { onlyFailed: isRetry, usePlatformAccount: platform, allowDuplicate })
       applyUpdate(batchId, res.data)
       notifyForStatus(res.data?.status, res.message ?? 'Label generation finished.')
     } catch (e) {
+      if (!allowDuplicate && (await confirmDuplicates(e))) {
+        polling = false
+        setGeneratingId(null)
+        await generateBatch(batchId, isRetry, true)
+        return
+      }
       notify.apiError(e, 'Label generation failed.')
       await load()
     } finally {

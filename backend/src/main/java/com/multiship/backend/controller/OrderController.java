@@ -1284,16 +1284,17 @@ public class OrderController {
     @GetMapping(value = "/{orderNo}/shipment-documents",
             produces = org.springframework.http.MediaType.APPLICATION_PDF_VALUE)
     public ResponseEntity<byte[]> getShipmentDocuments(@PathVariable Integer orderNo) {
-        byte[] invoice;
+        byte[] invoice = null;
         try {
             invoice = commercialInvoiceService.render(orderNo);
         } catch (IllegalArgumentException notFound) {
             return ResponseEntity.status(org.springframework.http.HttpStatus.NOT_FOUND).build();
         } catch (IllegalStateException noCustoms) {
-            return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY).build();
+            // Domestic (no customs data): the document set is the labels alone.
+            invoice = null;
         }
         java.util.List<byte[]> parts = new java.util.ArrayList<>(2);
-        parts.add(invoice);
+        if (invoice != null) parts.add(invoice);
         int pkgs = 1;
         try {
             ApiResponse<OrderWithLinesDTO> peek = orderService.getOrderWithLines(orderNo);
@@ -1315,8 +1316,12 @@ public class OrderController {
                     "shipment-documents: labels unavailable for order {} — returning invoice only: {}",
                     orderNo, ex.getMessage());
         }
-        byte[] merged = pdfMerger.mergeToOne(parts);
-        String name = "shipment-documents-" + orderNo + (pkgs > 1 ? "-all" + pkgs : "") + ".pdf";
+        if (parts.isEmpty()) {
+            // Neither an invoice (domestic) nor a generated label — nothing to hand over.
+            return ResponseEntity.status(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY).build();
+        }
+        byte[] merged = parts.size() == 1 ? parts.get(0) : pdfMerger.mergeToOne(parts);
+        String name = (invoice == null ? "labels-" : "shipment-documents-") + orderNo + (pkgs > 1 ? "-all" + pkgs : "") + ".pdf";
         return ResponseEntity.ok()
                 .header("Content-Disposition", "attachment; filename=" + name)
                 .header("Content-Type", org.springframework.http.MediaType.APPLICATION_PDF_VALUE)

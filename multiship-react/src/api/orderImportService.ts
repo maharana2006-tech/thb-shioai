@@ -193,21 +193,23 @@ export const orderImportService = {
    *   when RETRYING a PARTIAL_COMPLETE batch — no duplicate carrier calls/billing.
    * - usePlatformAccount=true forces the platform (house) account for every row.
    */
-  generateLabels: (id: number, opts?: { onlyFailed?: boolean; usePlatformAccount?: boolean }) =>
+  generateLabels: (id: number, opts?: { onlyFailed?: boolean; usePlatformAccount?: boolean; allowDuplicate?: boolean }) =>
     apiClient.post<ApiResponse<ImportBatchDetail>>(
       `/orders/import/history/${id}/generate${(() => {
         const p: string[] = []
         if (opts?.onlyFailed) p.push('onlyFailed=true')
         if (opts?.usePlatformAccount) p.push('usePlatformAccount=true')
+        // allowDuplicate=true confirms re-shipping orders the server flagged as already labelled (409 otherwise).
+        if (opts?.allowDuplicate) p.push('allowDuplicate=true')
         return p.length ? `?${p.join('&')}` : ''
       })()}`,
       {},
     ),
 
   /** Generate a carrier label for a single row of a saved batch. */
-  generateRowLabel: (id: number, rowNumber: number) =>
+  generateRowLabel: (id: number, rowNumber: number, allowDuplicate = false) =>
     apiClient.post<ApiResponse<ImportBatchDetail>>(
-      `/orders/import/history/${id}/generate/${rowNumber}`,
+      `/orders/import/history/${id}/generate/${rowNumber}${allowDuplicate ? '?allowDuplicate=true' : ''}`,
       {},
     ),
 

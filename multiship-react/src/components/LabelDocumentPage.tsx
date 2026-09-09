@@ -655,7 +655,7 @@ export default function LabelDocumentPage() {
                     const when = new Date(h.at).toLocaleString()
                     const bit = h.event.toLowerCase() === 'reissued'
                       ? `reissued ${when}${h.replacedBy ? ` → ${h.replacedBy}` : ''}`
-                      : `${h.event.toLowerCase()} ${when}`
+                      : `${h.event.toLowerCase().replace(/_/g, ' ')} ${when}`
                     byNo.set(h.trackingNumber, [...(byNo.get(h.trackingNumber) ?? []), bit])
                   }
                   const items = [...byNo.entries()].map(([no, bits]) => `${no} (${bits.join(', ')})`)

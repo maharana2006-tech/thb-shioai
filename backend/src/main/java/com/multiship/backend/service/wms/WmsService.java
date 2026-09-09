@@ -52,6 +52,9 @@ public class WmsService {
     private com.multiship.backend.repository.ClientShipviaCodeMapRepository clientShipviaCodeMapRepository;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.ShippingServiceRepository shippingServiceRepository;
+    /** Settings → Shipping Service Mapping (ship-via code → service, per client). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ShipViaMappingRepository shipViaMappingRepository;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.CarrierAccountRefRepository carrierAccountRefRepository;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -258,6 +261,25 @@ public class WmsService {
             if (StringUtils.hasText(shipMethod)) {
                 var hit = shippingConfigService.resolveServiceCode(canon, shipMethod, null);
                 if (hit.isPresent()) return hit.get().getServiceCode();
+            }
+            // Settings → Shipping Service Mapping: the client's own rule for this
+            // ship-via code wins; a rule with no client is a platform default.
+            if (StringUtils.hasText(shipVia) && shipViaMappingRepository != null && shippingServiceRepository != null) {
+                var rules = shipViaMappingRepository.findByShipviaCdIgnoreCase(shipVia.trim());
+                var rule = rules.stream()
+                        .filter(m -> m.getServiceId() != null)
+                        .filter(m -> StringUtils.hasText(clientCode) && m.getClientCode() != null
+                                && m.getClientCode().equalsIgnoreCase(clientCode.trim()))
+                        .findFirst()
+                        .or(() -> rules.stream()
+                                .filter(m -> m.getServiceId() != null && !StringUtils.hasText(m.getClientCode()))
+                                .findFirst());
+                if (rule.isPresent()) {
+                    var svc = shippingServiceRepository.findById(rule.get().getServiceId());
+                    if (svc.isPresent() && StringUtils.hasText(svc.get().getServiceCode())) {
+                        return svc.get().getServiceCode();
+                    }
+                }
             }
             if (StringUtils.hasText(shipVia) && StringUtils.hasText(clientCode)
                     && clientShipviaCodeMapRepository != null && shippingServiceRepository != null) {

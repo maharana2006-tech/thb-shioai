@@ -66,6 +66,8 @@ public class AuditService {
     public static final String LABEL_REGENERATED = "LABEL_REGENERATED";
     public static final String CARRIER_REJECTED = "CARRIER_REJECTED";
     public static final String LABEL_VOIDED = "LABEL_VOIDED";
+    /** The carrier refused to cancel the label (outside void window, sandbox, already in transit). */
+    public static final String LABEL_VOID_REFUSED = "LABEL_VOID_REFUSED";
     public static final String IMPORT_SAVED = "IMPORT_SAVED";
     public static final String IMPORT_GENERATED = "IMPORT_GENERATED";
     public static final String LOGIN = "LOGIN";

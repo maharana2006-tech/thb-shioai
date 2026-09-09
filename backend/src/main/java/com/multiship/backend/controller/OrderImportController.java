@@ -203,14 +203,22 @@ public class OrderImportController {
             @org.springframework.web.bind.annotation.PathVariable Long id,
             @org.springframework.web.bind.annotation.RequestParam(name = "onlyFailed", defaultValue = "false") boolean onlyFailed,
             @RequestParam(required = false, defaultValue = "false") boolean usePlatformAccount,
+            @RequestParam(required = false, defaultValue = "false") boolean allowDuplicate,
             @AuthenticationPrincipal UserDetails userDetails) {
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
         // Sprint 55 audit #302 F3.2 — onlyFailed=true skips rows already
         // marked GENERATED to prevent duplicate carrier calls + billing
         // on retry. FE defaults to true when isRetry (see DataHistoryPage).
         // usePlatformAccount=true forces the platform (house) account.
-        com.multiship.backend.dto.ImportBatchDTO dto =
-                orderImportService.generateLabelsForBatch(id, username, onlyFailed, usePlatformAccount);
+        // allowDuplicate=true confirms re-shipping orders flagged as already labelled (409 otherwise).
+        com.multiship.backend.dto.ImportBatchDTO dto;
+        try {
+            dto = orderImportService.generateLabelsForBatch(id, username, onlyFailed, usePlatformAccount, allowDuplicate);
+        } catch (com.multiship.backend.service.OrderImportServiceImpl.DuplicateShipmentException dup) {
+            return ResponseEntity.status(409).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                    .status("ERROR").code(409).timestamp(java.time.LocalDateTime.now())
+                    .message(dup.getMessage()).build());
+        }
         if (dto == null) {
             return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                     .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())
@@ -246,9 +254,17 @@ public class OrderImportController {
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> generateForRow(
             @org.springframework.web.bind.annotation.PathVariable Long id,
             @org.springframework.web.bind.annotation.PathVariable int rowNumber,
+            @RequestParam(required = false, defaultValue = "false") boolean allowDuplicate,
             @AuthenticationPrincipal UserDetails userDetails) {
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
-        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.generateLabelForRow(id, rowNumber, username);
+        com.multiship.backend.dto.ImportBatchDTO dto;
+        try {
+            dto = orderImportService.generateLabelForRow(id, rowNumber, username, allowDuplicate);
+        } catch (com.multiship.backend.service.OrderImportServiceImpl.DuplicateShipmentException dup) {
+            return ResponseEntity.status(409).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                    .status("ERROR").code(409).timestamp(java.time.LocalDateTime.now())
+                    .message(dup.getMessage()).build());
+        }
         if (dto == null) {
             return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                     .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())

@@ -212,6 +212,24 @@ public class VoidServiceImpl implements VoidService {
                     perBatchResults.size() + " batch(es) voided.", null);
         }
 
+        // A refusal keeps the label live, but the attempt itself is part of the
+        // label's story: record it on the tracking row and in Logs so "did anyone
+        // try to cancel this?" has an answer. (Sandbox UPS refuses every void.)
+        if (!result.voided()) {
+            try {
+                com.multiship.backend.util.LabelHistory.append(tracking, "VOID_REFUSED",
+                        tracking.getTrackingNumber(), null, LocalDateTime.now());
+                orderTrackingRepository.save(tracking);
+            } catch (Exception ex) {
+                log.warn("Void {} — could not record the refusal on label history: {}",
+                        tracking.getTrackingNumber(), ex.getMessage());
+            }
+            if (auditService != null) {
+                auditService.logShipment(AuditService.LABEL_VOID_REFUSED, orderNo, null,
+                        tracking.getTrackingNumber(),
+                        canonicalCarrier + " refused the void: " + (result.message() == null ? result.status() : result.message()));
+            }
+        }
         // Persist the successful void so the order is no longer treated
         // as GENERATED. NOT_SUPPORTED / ERROR leaves the DB untouched —
         // the label is still live at the carrier.

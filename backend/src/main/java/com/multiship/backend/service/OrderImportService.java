@@ -117,8 +117,15 @@ public interface OrderImportService {
     com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(
             Long id, String requestedBy, boolean onlyFailed, boolean usePlatformAccount);
 
+    /** As above; {@code allowDuplicate}=true skips the "already labelled" confirmation gate. */
+    com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(
+            Long id, String requestedBy, boolean onlyFailed, boolean usePlatformAccount, boolean allowDuplicate);
+
     /** Generate a label for a single row of a saved batch. Null if not found. */
     com.multiship.backend.dto.ImportBatchDTO generateLabelForRow(Long id, int rowNumber, String requestedBy);
+
+    /** As above; {@code allowDuplicate}=true skips the "already labelled" confirmation gate. */
+    com.multiship.backend.dto.ImportBatchDTO generateLabelForRow(Long id, int rowNumber, String requestedBy, boolean allowDuplicate);
 
     /**
      * Live label-generation progress for a batch, so the UI can show a real

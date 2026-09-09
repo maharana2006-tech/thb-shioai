@@ -22,6 +22,7 @@ import OrderImportModal from './modals/OrderImportModal'
 import OrderDocumentsTable from './OrderDocumentsTable'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
 import { notify } from '../utils/notify'
+import { ApiError } from '../api/apiClient'
 import {
   orderImportService,
   type ImportBatchSummary,
@@ -301,7 +302,19 @@ export default function DataHistoryPage() {
    *  rows aren't re-sent to the carrier + re-billed. Platform billing mode
    *  (billingMode) forces the house account for every row. Double-click is
    *  guarded by the generatingId===id busy check at the call site. */
-  const generate = async (id: number, isRetry: boolean) => {
+  /** 409 from generate = the server found rows whose orders already have a live
+   *  label. Ask before shipping them a second time; true = the user confirmed. */
+  const confirmDuplicates = async (e: unknown): Promise<boolean> => {
+    if (!(e instanceof ApiError) || e.status !== 409) return false
+    return notify.confirm(`${e.message}\n\nGenerate anyway?`, {
+      title: 'These orders are already labelled',
+      confirmLabel: 'Generate anyway',
+      cancelLabel: 'Cancel',
+      danger: true,
+    })
+  }
+
+  const generate = async (id: number, isRetry: boolean, allowDuplicate = false) => {
     const platform = batches.find((b) => b.id === id)?.billingMode === 'PLATFORM'
     setConfirmGenId(null)
     setGeneratingId(id)
@@ -327,7 +340,7 @@ export default function DataHistoryPage() {
     }
     void pollProgress()
     try {
-      const res = await orderImportService.generateLabels(id, { onlyFailed: isRetry, usePlatformAccount: platform })
+      const res = await orderImportService.generateLabels(id, { onlyFailed: isRetry, usePlatformAccount: platform, allowDuplicate })
       const updated = res.data
       if (updated) {
         setBatches((list) =>
@@ -344,6 +357,12 @@ export default function DataHistoryPage() {
         await load()
       }
     } catch (e) {
+      if (!allowDuplicate && (await confirmDuplicates(e))) {
+        polling = false
+        setGeneratingId(null)
+        await generate(id, isRetry, true)
+        return
+      }
       notify.apiError(e, 'Label generation failed.')
       await load()
     } finally {
@@ -358,11 +377,11 @@ export default function DataHistoryPage() {
   }
 
   /** Generate a label for a single row inside a batch. */
-  const generateRow = async (batchId: number, rowNumber: number) => {
+  const generateRow = async (batchId: number, rowNumber: number, allowDuplicate = false) => {
     const key = `${batchId}-${rowNumber}`
     setGenRowKey(key)
     try {
-      const res = await orderImportService.generateRowLabel(batchId, rowNumber)
+      const res = await orderImportService.generateRowLabel(batchId, rowNumber, allowDuplicate)
       const updated = res.data
       if (updated) {
         if (updated.rows) setRowsById((m) => ({ ...m, [batchId]: updated.rows }))
@@ -385,6 +404,11 @@ export default function DataHistoryPage() {
         }
       }
     } catch (e) {
+      if (!allowDuplicate && (await confirmDuplicates(e))) {
+        setGenRowKey(null)
+        await generateRow(batchId, rowNumber, true)
+        return
+      }
       notify.apiError(e, 'Label generation failed.')
     } finally {
       setGenRowKey(null)

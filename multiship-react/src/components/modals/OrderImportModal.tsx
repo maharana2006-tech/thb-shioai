@@ -173,8 +173,11 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     }
   }
 
-  /** Generate labels for every ready row; error rows stay behind in the draft. */
-  const generate = async () => {
+  /** Generate labels for every ready row; error rows stay behind in the draft.
+   *  allowDuplicate confirms re-shipping orders the server flagged as already
+   *  labelled (it answers 409 otherwise) — implied when the upload itself was
+   *  imported "anyway" past the duplicate gate. */
+  const generate = async (allowDuplicate = false) => {
     if (batchId == null) return
     setGenerating(true)
     setGenProgress(null)
@@ -195,6 +198,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     try {
       const res = await orderImportService.generateLabels(batchId, {
         usePlatformAccount: billing === 'PLATFORM',
+        allowDuplicate: allowDuplicate || dupBlocked,
       })
       if (res.data) {
         setResult(res.data)
@@ -206,6 +210,18 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
         notify.error(res.message ?? 'Label generation failed.')
       }
     } catch (e) {
+      if (!allowDuplicate && e instanceof ApiError && e.status === 409) {
+        polling = false
+        setGenerating(false)
+        const ok = await notify.confirm(`${e.message}\n\nGenerate anyway?`, {
+          title: 'These orders are already labelled',
+          confirmLabel: 'Generate anyway',
+          cancelLabel: 'Cancel',
+          danger: true,
+        })
+        if (ok) await generate(true)
+        return
+      }
       const { title, body } = importErrorDisplay(e, 'Label generation failed.')
       notify.error({ title, body })
     } finally {

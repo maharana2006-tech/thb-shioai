@@ -135,6 +135,9 @@ public class CarrierServiceImpl implements CarrierService {
     @org.springframework.beans.factory.annotation.Value("${packaging.validation-enabled:true}")
     private boolean packagingValidationEnabled;
     private final com.multiship.backend.repository.ClientCustomsProfileRepository clientCustomsProfileRepository;
+    /** Line items of the shipment (WMS/bulk/API rows) — shown on the order and the packing slip. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.OrderLineRepository orderLineRepository;
     private final ShippingConfigService shippingConfigService;
     private final CustomsService customsService;
     private final ShipmentResolutionService resolutionService;
@@ -1724,6 +1727,7 @@ public class CarrierServiceImpl implements CarrierService {
             }
         }
         orderRepository.save(order);
+        persistOrderLines(order, req);
 
         // On regenerate the order row is reused, so the prior attempt's
         // shipment_batch + label_package rows still exist. Clear them before
@@ -2189,6 +2193,54 @@ public class CarrierServiceImpl implements CarrierService {
     }
 
     /** True when the order's ship-to country differs from the platform shipper's origin. */
+    /**
+     * Every item the request carried becomes an order line, domestic or not —
+     * the customs table only exists for international orders, so a domestic
+     * WMS/bulk order used to keep just the first description. Replaces the
+     * previous attempt's lines on regenerate.
+     */
+    private void persistOrderLines(Order order, com.multiship.backend.dto.ManualShipmentRequest req) {
+        if (orderLineRepository == null || order == null || order.getOrderNo() == null
+                || req == null || req.getItems() == null || req.getItems().isEmpty()) return;
+        try {
+            List<com.multiship.backend.model.OrderLine> existing = orderLineRepository.findByOrderNo(order.getOrderNo());
+            if (!existing.isEmpty()) orderLineRepository.deleteAll(existing);
+            int lineNo = 0;
+            List<com.multiship.backend.model.OrderLine> lines = new ArrayList<>();
+            for (com.multiship.backend.dto.ManualShipmentRequest.Item it : req.getItems()) {
+                if (it == null || (!StringUtils.hasText(it.getDescription()) && !StringUtils.hasText(it.getSku()))) continue;
+                com.multiship.backend.model.OrderLine line = new com.multiship.backend.model.OrderLine();
+                line.setOrderNo(order.getOrderNo());
+                String tenant = StringUtils.hasText(order.getTenantId()) ? order.getTenantId()
+                        : (StringUtils.hasText(order.getCustNo()) ? order.getCustNo() : "MANUAL");
+                line.setTenantId(tenant.length() > 50 ? tenant.substring(0, 50) : tenant);
+                line.setLineNo(++lineNo);
+                line.setItemNo(clip(it.getSku(), 50));
+                line.setItemDescription(it.getDescription());
+                line.setDescription(it.getDescription());
+                line.setQtyShipped(it.getQuantity() != null && it.getQuantity() > 0 ? it.getQuantity() : 1);
+                line.setHsCode(clip(it.getHsCode(), 50));
+                if (StringUtils.hasText(it.getCountryOfOrigin())) line.setCountryOfOrigin(clip(it.getCountryOfOrigin(), 10));
+                line.setUnitPrice(it.getUnitValue());
+                if (it.getUnitValue() != null) {
+                    line.setTotalPrice(it.getUnitValue().multiply(java.math.BigDecimal.valueOf(line.getQtyShipped())));
+                    line.setCustomsDeclValue(line.getTotalPrice());
+                }
+                line.setWarehouseCode(clip(req.getWarehouseCode(), 50));
+                lines.add(line);
+            }
+            if (!lines.isEmpty()) orderLineRepository.saveAll(lines);
+        } catch (Exception ex) {
+            log.warn("Order {}: could not persist line items: {}", order.getOrderNo(), ex.getMessage());
+        }
+    }
+
+    private static String clip(String v, int max) {
+        if (v == null) return null;
+        String t = v.trim();
+        return t.length() > max ? t.substring(0, max) : t;
+    }
+
     private boolean isInternational(Order order) {
         // Effective origin mirrors buildShipmentRequest's shipper block: the
         // client's default warehouse when one is attached, else the platform

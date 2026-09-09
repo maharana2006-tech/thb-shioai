@@ -1940,6 +1940,12 @@ public class OrderImportServiceImpl implements OrderImportService {
     @Override
     public com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(
             Long id, String requestedBy, boolean onlyFailed, boolean usePlatformAccount) {
+        return generateLabelsForBatch(id, requestedBy, onlyFailed, usePlatformAccount, false);
+    }
+
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(
+            Long id, String requestedBy, boolean onlyFailed, boolean usePlatformAccount, boolean allowDuplicate) {
         if (importBatchRepository == null || id == null) return null;
         com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
         if (batch == null) return null;
@@ -1975,6 +1981,16 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
                         .toList()
                 : rows;
+        // Rows flagged at upload/pull as "already generated as order #N" are
+        // about to be shipped a second time. Stop and ask unless the caller
+        // confirmed (allowDuplicate) — five labelled copies of one WMS order
+        // is exactly what this gate prevents.
+        if (!allowDuplicate) {
+            List<OrderImportRowDTO> dup = rowsToProcess.stream()
+                    .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
+                    .filter(OrderImportServiceImpl::flaggedAsDuplicate).toList();
+            if (!dup.isEmpty()) throw new DuplicateShipmentException(duplicateSummary(dup));
+        }
         // A retry stays in the file's label batch: rows edited in the grid
         // may have lost their stamp, and the commit would mint a new batch
         // for them (import #29 said batch 24, its repaired order said 25).
@@ -2066,6 +2082,44 @@ public class OrderImportServiceImpl implements OrderImportService {
      */
     @Override
     public com.multiship.backend.dto.ImportBatchDTO generateLabelForRow(Long id, int rowNumber, String requestedBy) {
+        return generateLabelForRow(id, rowNumber, requestedBy, false);
+    }
+
+    /** A row whose orderRef already produced a live label (preview/pull advisory). */
+    static boolean flaggedAsDuplicate(OrderImportRowDTO r) {
+        return r.getWarnings() != null && r.getWarnings().stream()
+                .anyMatch(w -> w != null && w.contains("was already generated as order"));
+    }
+
+    /** "2 order(s) already labelled: ORD-1 → #900274, ORD-2 → #900273" for the confirm dialog. */
+    static String duplicateSummary(List<OrderImportRowDTO> dup) {
+        Map<String, String> byRef = new LinkedHashMap<>();
+        for (OrderImportRowDTO r : dup) {
+            String ref = StringUtils.hasText(r.getOrderRef()) ? r.getOrderRef().trim() : "row " + r.getRowNumber();
+            if (byRef.containsKey(ref)) continue;
+            String w = r.getWarnings().stream().filter(x -> x.contains("was already generated as order")).findFirst().orElse("");
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("as order (\\d+)").matcher(w);
+            byRef.put(ref, m.find() ? "#" + m.group(1) : "?");
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(byRef.size()).append(" order(s) in this batch already have a live label: ");
+        int i = 0;
+        for (Map.Entry<String, String> e : byRef.entrySet()) {
+            if (i++ > 0) sb.append(", ");
+            if (i > 6) { sb.append("…"); break; }
+            sb.append(e.getKey()).append(" → ").append(e.getValue());
+        }
+        sb.append(". Generating again creates duplicate shipments and carrier charges.");
+        return sb.toString();
+    }
+
+    /** Raised when a generate would re-ship orders that already have a live label and the caller didn't confirm. */
+    public static class DuplicateShipmentException extends RuntimeException {
+        public DuplicateShipmentException(String message) { super(message); }
+    }
+
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO generateLabelForRow(Long id, int rowNumber, String requestedBy, boolean allowDuplicate) {
         if (importBatchRepository == null || id == null) return null;
         com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
         if (batch == null) return null;
@@ -2118,6 +2172,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
         if (group.isEmpty()) group.add(target);
         syncRowsWithLiveOrders(group);
+        if (!allowDuplicate) {
+            List<OrderImportRowDTO> dup = group.stream()
+                    .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
+                    .filter(OrderImportServiceImpl::flaggedAsDuplicate).toList();
+            if (!dup.isEmpty()) {
+                throw new DuplicateShipmentException(duplicateSummary(dup));
+            }
+        }
         OrderImportRowDTO done = group.stream()
                 .filter(r -> "GENERATED".equalsIgnoreCase(r.getGeneratedStatus()) && r.getGeneratedOrderNo() != null)
                 .findFirst().orElse(null);
@@ -2125,6 +2187,9 @@ public class OrderImportServiceImpl implements OrderImportService {
             // The order is already labelled (another row of the group was
             // generated, or it was repaired from the Orders grid) — attach the
             // remaining rows to it instead of shipping the same order twice.
+            if ("GENERATED".equalsIgnoreCase(target.getGeneratedStatus())) {
+                target.setGeneratedMessage("Already labelled as order #" + done.getGeneratedOrderNo() + " — not re-sent.");
+            }
             for (OrderImportRowDTO r : group) {
                 if ("GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) continue;
                 r.setGeneratedStatus("GENERATED");
