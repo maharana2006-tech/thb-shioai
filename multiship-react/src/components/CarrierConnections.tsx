@@ -295,7 +295,10 @@ export default function CarrierConnections({
   const drawerFocusRef = useRef<DrawerFocusField>(null)
   const accountNameRef = useRef<HTMLInputElement>(null)
   const environmentRef = useRef<HTMLSelectElement>(null)
-  const [drawerCheck, setDrawerCheck] = useState<{ state: 'idle' | 'checking' | 'ok' | 'fail'; message?: string }>({ state: 'idle' })
+  const [drawerCheck, setDrawerCheck] = useState<{
+    state: 'idle' | 'checking' | 'ok' | 'fail' | 'needs-authorization'
+    message?: string
+  }>({ state: 'idle' })
   // Inline field errors for the drawer form (empty = clean). Populated on save
   // attempt and cleared as soon as the operator edits any validated field.
   const [drawerErrors, setDrawerErrors] = useState<CarrierAccountErrors>({})
@@ -582,7 +585,20 @@ export default function CarrierConnections({
         // other. Non-UPS carriers ignore this.
         environment: drawer.environment,
       })
-      setDrawerCheck({ state: response.data?.verified ? 'ok' : 'fail', message: response.message })
+      // SERA 3-legged OAuth pre-save path: authorizeUrl is null
+      // because the state signature needs accountId (not yet
+      // assigned). Surface a "Save first" hint instead of masking as
+      // a failure — after Save, the row-level Verify picks up the
+      // authorize flow with a real URL.
+      if (response.data?.needsAuthorization) {
+        setDrawerCheck({
+          state: 'needs-authorization',
+          message: response.message
+            || 'Save the account first, then click Verify on the row to complete Stamps.com OAuth consent.',
+        })
+      } else {
+        setDrawerCheck({ state: response.data?.verified ? 'ok' : 'fail', message: response.message })
+      }
     } catch (error) {
       setDrawerCheck({ state: 'fail', message: error instanceof Error ? error.message : 'Verification failed.' })
     }
@@ -1837,6 +1853,11 @@ export default function CarrierConnections({
                             <FiXCircle className="h-3 w-3" />
                             Check failed
                           </span>
+                        ) : drawerCheck.state === 'needs-authorization' ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[10.5px] font-bold text-amber-800">
+                            <FiShield className="h-3 w-3" />
+                            Needs OAuth consent
+                          </span>
                         ) : (
                           <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10.5px] font-bold text-slate-500">
                             Not verified yet
@@ -1859,7 +1880,13 @@ export default function CarrierConnections({
                         </button>
                       </div>
                       {drawerCheck.message ? (
-                        <p className={`mt-2 text-[11px] leading-4 ${drawerCheck.state === 'ok' ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        <p className={`mt-2 text-[11px] leading-4 ${
+                          drawerCheck.state === 'ok'
+                            ? 'text-emerald-700'
+                            : drawerCheck.state === 'needs-authorization'
+                              ? 'text-amber-800'
+                              : 'text-rose-700'
+                        }`}>
                           {drawerCheck.message}
                         </p>
                       ) : missing.length ? (
@@ -2045,6 +2072,25 @@ function RowActionsMenu({
             <FiShield className="h-3.5 w-3.5 text-emerald-600" />
             {account.verified === true ? 'Re-verify' : 'Verify'}
           </button>
+        ) : null}
+        {/* Stamps.com SERA 3-legged OAuth — always visible for USPS
+            accounts that haven't been authorized yet. Falls back to
+            the same window.open as handleVerify's needsAuthorization
+            path (PR #637) but exposes it as an explicit action so
+            operators aren't dependent on the popup-triggering flow. */}
+        {admin && normalizeCarrierCode(account.carrierCode) === 'USPS'
+            && account.verified !== true ? (
+          <a
+            role="menuitem"
+            href={accountRefService.authorizeStampsSera(account.id)}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => setOpen(false)}
+            className="flex w-full items-center gap-2 px-3 py-2 text-[12px] font-semibold text-amber-700 transition hover:bg-amber-50"
+          >
+            <FiShield className="h-3.5 w-3.5" />
+            Authorize with Stamps.com
+          </a>
         ) : null}
         <button
           type="button"
