@@ -31,6 +31,16 @@ public class UsFtr30_37Policy implements ExportDeclarationPolicy {
     /** Destinations that get a bilateral exemption (§30.36) — no filing needed. */
     private static final Set<String> BILATERAL_EXEMPT = Set.of("CA");
 
+    /**
+     * US territories WITHIN the customs territory of the US per 15 CFR
+     * §30.1(c) — Puerto Rico + US Virgin Islands. Shipments to these
+     * destinations are NOT exports under the FTR (no EEI required
+     * regardless of value). GU / AS / MP / UM are OUTSIDE the customs
+     * territory and are treated as normal exports (fire the threshold
+     * gate below). REGULATORY_REFERENCE — 15 CFR §30.1(c), §30.2(a).
+     */
+    private static final Set<String> CUSTOMS_TERRITORY_EXEMPT = Set.of("PR", "VI");
+
     @Override public String originIso() { return "US"; }
 
     @Override public BigDecimal thresholdAmount() { return THRESHOLD; }
@@ -42,10 +52,18 @@ public class UsFtr30_37Policy implements ExportDeclarationPolicy {
         IntlShipmentBlockDTO intl = request.getIntl();
         if (intl == null || !Boolean.TRUE.equals(intl.getInternational())) return Optional.empty();
 
-        String recipientCountry = request.getRecipientCountryCode() == null
-                ? "" : request.getRecipientCountryCode().trim().toUpperCase(Locale.ROOT);
+        // Normalize US-territory state → country so US+state=GU maps to
+        // country=GU (fires the export gate) while US+state=PR/VI maps
+        // to PR/VI (hits CUSTOMS_TERRITORY_EXEMPT below). Mirrors the
+        // connector-side wire rewrite from UsTerritoryNormalizer.
+        String recipientCountry = com.multiship.backend.util.UsTerritoryNormalizer
+                .normalizeCountryCode(request.getRecipientCountryCode(), request.getRecipientState());
+        recipientCountry = recipientCountry == null
+                ? "" : recipientCountry.trim().toUpperCase(Locale.ROOT);
         // §30.36 bilateral — never fires for US→CA.
         if (BILATERAL_EXEMPT.contains(recipientCountry)) return Optional.empty();
+        // §30.1(c) — PR + VI are within US customs territory, not exports.
+        if (CUSTOMS_TERRITORY_EXEMPT.contains(recipientCountry)) return Optional.empty();
         // Domestic (US→US) — not an export.
         if ("US".equals(recipientCountry)) return Optional.empty();
         // Already satisfied — operator supplied an FTR exemption or AES ITN.
