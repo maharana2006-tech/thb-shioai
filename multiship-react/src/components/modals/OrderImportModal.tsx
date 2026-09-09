@@ -62,6 +62,9 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
   const [preview, setPreview] = useState<OrderImportPreview | null>(null)
   // Billing, capacity and the carrier all count SHIPMENTS; the grid counts rows.
   const readyOrders = preview ? orderCount(preview.rows.filter((r) => (r.errors?.length ?? 0) === 0)) : 0
+  const dupRows = preview
+    ? preview.rows.filter((r) => (r.warnings ?? []).some((w) => /already generated as order|already has a labelled order/.test(w))).length
+    : 0
   /** The draft's Import-history id — minted by the auto-save at upload. */
   const [batchId, setBatchId] = useState<number | null>(null)
   /** Generation outcome. Non-null = step 3. */
@@ -72,6 +75,8 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
   /** Bill-to for the whole batch; PLATFORM needs an explicit confirm click. */
   const [billing, setBilling] = useState<'AUTO' | 'PLATFORM'>('AUTO')
   const [confirmPlatform, setConfirmPlatform] = useState(false)
+  /** Rows the advisory flagged as already labelled — generating them needs an explicit yes. */
+  const [confirmDup, setConfirmDup] = useState(false)
   const [error, setError] = useState<string | null>(null)
   /** Set when the upload was refused as a duplicate file (409) — unlocks "Import anyway". */
   const [dupBlocked, setDupBlocked] = useState(false)
@@ -308,7 +313,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
             {step === 2 && preview ? (
               <span>
                 {batchId != null ? (
-                  <span className="font-semibold text-[#6b5c42]">Draft #{batchId} saved automatically</span>
+                  <span className="font-semibold text-[#6b5c42]">Import #{batchId} saved automatically</span>
                 ) : null}
                 {preview.invalidRows > 0
                   ? ` · ${preview.invalidRows} row(s) need fixes — they stay in the draft until fixed`
@@ -386,7 +391,23 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                       <option value="PLATFORM">Platform account</option>
                     </select>
                   </span>
-                  {billing === 'PLATFORM' && confirmPlatform ? (
+                  {confirmDup ? (
+                    <span className="inline-flex flex-wrap items-center gap-2 rounded-xl border border-rose-300 bg-rose-50 px-3 py-1.5 text-[11.5px] text-rose-800">
+                      <FiAlertCircle className="h-3.5 w-3.5 shrink-0" />
+                      {dupRows} row{dupRows === 1 ? '' : 's'} already {dupRows === 1 ? 'has' : 'have'} a labelled order — generating again buys duplicate labels.
+                      <button
+                        type="button"
+                        onClick={() => { setConfirmDup(false); if (billing === 'PLATFORM') setConfirmPlatform(true); else void generate() }}
+                        className="rounded-lg border border-rose-400 bg-white px-2.5 py-1 text-[11px] font-semibold text-rose-800 hover:bg-rose-100"
+                      >
+                        Generate anyway
+                      </button>
+                      <button type="button" onClick={() => setConfirmDup(false)} className="rounded-lg px-2 py-1 text-[11px] font-semibold text-rose-700 hover:underline">
+                        Cancel
+                      </button>
+                    </span>
+                  ) : null}
+                  {billing === 'PLATFORM' && confirmPlatform && !confirmDup ? (
                     <>
                       <button type="button" onClick={() => void generate()} className={PRIMARY_BTN}>
                         <FiHome className="h-3.5 w-3.5" />
@@ -399,7 +420,11 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                   ) : (
                     <button
                       type="button"
-                      onClick={() => (billing === 'PLATFORM' ? setConfirmPlatform(true) : void generate())}
+                      onClick={() => {
+                        if (dupRows > 0 && !confirmDup) { setConfirmDup(true); return }
+                        if (billing === 'PLATFORM') setConfirmPlatform(true)
+                        else void generate()
+                      }}
                       disabled={preview.validRows === 0 || savingCell}
                       className={PRIMARY_BTN}
                       title={

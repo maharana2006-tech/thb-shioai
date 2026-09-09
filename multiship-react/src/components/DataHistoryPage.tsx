@@ -449,7 +449,7 @@ export default function DataHistoryPage() {
       case 'IN_PROGRESS':
         return { label: 'In progress', cls: 'bg-sky-50 text-sky-700 ring-sky-200' }
       case 'INITIATE':
-        return { label: 'Initiated', cls: 'bg-slate-100 text-slate-600 ring-slate-200' }
+        return { label: 'Saved · not generated', cls: 'bg-slate-100 text-slate-600 ring-slate-200' }
       case 'DRAFT':
         return { label: 'Draft', cls: 'bg-orange-50 text-orange-700 ring-orange-200' }
       default:

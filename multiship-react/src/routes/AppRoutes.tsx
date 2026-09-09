@@ -44,6 +44,15 @@ import AnonymousRoute from './AnonymousRoute'
 import RequireRole from './RequireRole'
 import { settingsPaths, workspacePaths } from './workspaceRoutes'
 
+/** /orders/:orderNo → /label/:orderNo (numeric segment only; /orders/new etc. are static routes). */
+function OrderNoRedirect() {
+  const { orderNo } = useParams()
+  const n = Number(orderNo)
+  return Number.isFinite(n) && n > 0
+    ? <Navigate to={`/label/${n}`} replace />
+    : <Navigate to={workspacePaths.orders} replace />
+}
+
 // Lazy — settings pages (loaded when operator navigates into Settings).
 const CarrierPage = lazy(() => import('../pages/CarrierPage'))
 const ClientsPage = lazy(() => import('../pages/ClientsPage'))
@@ -171,6 +180,8 @@ export default function AppRoutes() {
             <Route path="/orders/history" element={<DataHistoryPage />} />
 
             <Route path="/label/:orderNo" element={<LabelDocumentPage />} />
+            {/* /orders/900213 is what people type; the order's page lives at /label/:orderNo. */}
+            <Route path="/orders/:orderNo" element={<OrderNoRedirect />} />
 
             {/* legacy path redirects into the Settings hub */}
             <Route path="/clients" element={<Navigate to={settingsPaths.clients} replace />} />

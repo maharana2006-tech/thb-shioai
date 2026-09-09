@@ -315,7 +315,7 @@ export default function OrdersWorkspace() {
    *  was unstyleable, inconsistent with the app's modal pattern, and blocked
    *  the tab for automation. The modal carries the context that matters:
    *  tracking number, irreversibility, and the refund caveat. */
-  const [confirmVoid, setConfirmVoid] = useState<{ orderNo: number; trackingNumber: string } | null>(null)
+  const [confirmVoid, setConfirmVoid] = useState<{ orderNo: number; trackingNumber: string; reissue?: boolean } | null>(null)
 
   // Escape closes the void confirmation (parity with every other modal).
   useEffect(() => {
@@ -330,7 +330,14 @@ export default function OrdersWorkspace() {
     setConfirmVoid({ orderNo, trackingNumber })
   }
 
+  /** Edit & reissue: void the live label, then open the pre-filled form to regenerate in place. */
+  const handleEditReissue = (orderNo: number, trackingNumber: string | null) => {
+    if (!trackingNumber) return
+    setConfirmVoid({ orderNo, trackingNumber, reissue: true })
+  }
+
   const executeVoid = async (orderNo: number) => {
+    const reissue = confirmVoid?.orderNo === orderNo && confirmVoid.reissue === true
     setConfirmVoid(null)
     setVoidingOrderNo(orderNo)
     try {
@@ -338,6 +345,10 @@ export default function OrdersWorkspace() {
       const data = response.data
       if (data?.voided || data?.status === 'ALREADY_VOIDED') {
         notify.success(`Order ${orderNo}: ${data.message}`)
+        if (reissue) {
+          navigate(`/orders/new?fixOrder=${orderNo}`)
+          return
+        }
         refreshQueues()
       } else {
         notify.error(`Void failed: ${data?.message ?? 'Unknown error.'}`)
@@ -628,14 +639,29 @@ export default function OrdersWorkspace() {
 
     if (status === 'GENERATED') {
       return (
-        <button
-          type="button"
-          onClick={() => navigate(`/label/${orderNo}`)}
-          className={`${ACTION_BASE} ${ACTION_SOLID}`}
-        >
-          <FiEye className="h-3 w-3" />
-          View Label
-        </button>
+        <span className="inline-flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => navigate(`/label/${orderNo}`)}
+            className={`${ACTION_BASE} ${ACTION_SOLID}`}
+          >
+            <FiEye className="h-3 w-3" />
+            View Label
+          </button>
+          {/* Correct a labelled order without re-keying: void the label, then
+              the same order reopens pre-filled and regenerates in place
+              (regenerate accepts a VOIDED order; it refuses a live one). */}
+          <button
+            type="button"
+            onClick={() => handleEditReissue(orderNo, order.labelDetails.trackingNumber ?? null)}
+            disabled={voidingOrderNo === orderNo}
+            title="Void this label and reopen the order pre-filled to fix and regenerate it"
+            className={`${ACTION_BASE} ${ACTION_RETRY}`}
+          >
+            <FiEdit3 className="h-3 w-3" />
+            Edit &amp; reissue
+          </button>
+        </span>
       )
     }
 

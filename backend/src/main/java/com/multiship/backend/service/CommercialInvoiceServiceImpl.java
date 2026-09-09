@@ -937,7 +937,7 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             this.unit = unit;
             this.showPkg = showPkg;
             float pad = 5f;
-            wHs = 56f; wOrig = 36f; wQty = 30f; wUom = 28f; wNet = 56f; wUnit = 62f; wAmt = 68f;
+            wHs = 68f; wOrig = 34f; wQty = 28f; wUom = 26f; wNet = 54f; wUnit = 60f; wAmt = 66f;
             float wNo = 18f;
             wPkg = showPkg ? 30f : 0f;
             wDesc = width - (wNo + wPkg + wHs + wOrig + wQty + wUom + wNet + wUnit + wAmt);
@@ -985,7 +985,11 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
                 descW -= skuW + 8f;
             }
             pen.text(HELVETICA, 8.5f, INK, fit(HELVETICA, 8.5f, ln.description(), descW), xDesc, ty, 0f);
-            pen.text(HELVETICA, 8.5f, INK, fit(HELVETICA, 8.5f, ln.hs(), wHs - 6f), xHs, ty, 0f);
+            // A 10-digit HS code (6109.10.0010) must never be cut on a customs
+            // document: shrink the type before truncating.
+            float hsSize = textWidth(HELVETICA, 8.5f, ln.hs()) <= wHs - 6f ? 8.5f
+                    : textWidth(HELVETICA, 7.6f, ln.hs()) <= wHs - 6f ? 7.6f : 6.8f;
+            pen.text(HELVETICA, hsSize, INK, fit(HELVETICA, hsSize, ln.hs(), wHs - 6f), xHs, ty, 0f);
             pen.text(HELVETICA, 8.5f, INK, ln.origin(), xOrig, ty, 0f);
             pen.rightText(HELVETICA, 8.5f, INK, String.valueOf(ln.qty()), xQty + wQty - 4f, ty);
             pen.text(HELVETICA, 8.5f, INK, "EA", xUom + 2f, ty, 0f);

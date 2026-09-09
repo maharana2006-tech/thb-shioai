@@ -253,6 +253,73 @@ public class OrderServiceImpl implements OrderService {
     }
 
     /** Stamps each order with the WMS's own order number, from the raw-codes audit sidecar. */
+
+    /**
+     * The order's packages: the label_package rows once a label exists, else
+     * the box(es) persisted on the order at request time (packages_json) —
+     * so a FAILED order still opens in the repair form with its dims and
+     * units instead of blank inch fields that then block on "Required".
+     */
+    private List<com.multiship.backend.dto.LabelPackageDTO> packagesFor(Order entity) {
+        List<com.multiship.backend.dto.LabelPackageDTO> fromLabels = labelPackageRepository
+                .findByOrderNoOrderBySequenceNumberAsc(entity.getOrderNo()).stream()
+                .map(p -> com.multiship.backend.dto.LabelPackageDTO.builder()
+                        .sequenceNumber(p.getSequenceNumber())
+                        .trackingNumber(p.getTrackingNumber())
+                        .trackingUrl(p.getTrackingUrl())
+                        .labelFilePath(p.getLabelFilePath())
+                        .weight(p.getWeight())
+                        .weightUnit(p.getWeightUnit())
+                        .length(p.getLength())
+                        .width(p.getWidth())
+                        .height(p.getHeight())
+                        .dimUnit(p.getDimUnit())
+                        .packageType(p.getPackageType())
+                        .declaredValue(p.getDeclaredValue())
+                        .reference(p.getReference())
+                        .description(p.getDescription())
+                        .build())
+                .toList();
+        if (!fromLabels.isEmpty() || entity.getPackagesJson() == null || entity.getPackagesJson().isBlank()) {
+            return fromLabels;
+        }
+        try {
+            List<java.util.Map<String, Object>> raw = new com.fasterxml.jackson.databind.ObjectMapper().readValue(
+                    entity.getPackagesJson(),
+                    new com.fasterxml.jackson.core.type.TypeReference<List<java.util.Map<String, Object>>>() {});
+            List<com.multiship.backend.dto.LabelPackageDTO> out = new java.util.ArrayList<>(raw.size());
+            int seq = 0;
+            for (java.util.Map<String, Object> m : raw) {
+                seq++;
+                out.add(com.multiship.backend.dto.LabelPackageDTO.builder()
+                        .sequenceNumber(m.get("sequenceNumber") instanceof Number n ? n.intValue() : seq)
+                        .weight(dec(m.get("weight")))
+                        .weightUnit(str(m.get("weightUnit")))
+                        .length(dec(m.get("length")))
+                        .width(dec(m.get("width")))
+                        .height(dec(m.get("height")))
+                        .dimUnit(str(m.get("dimUnit")))
+                        .packageType(str(m.get("packageType")))
+                        .declaredValue(dec(m.get("declaredValue")))
+                        .reference(str(m.get("reference")))
+                        .description(str(m.get("description")))
+                        .build());
+            }
+            return out;
+        } catch (Exception e) {
+            return fromLabels;
+        }
+    }
+
+    private static BigDecimal dec(Object o) {
+        if (o == null) return null;
+        if (o instanceof BigDecimal b) return b;
+        if (o instanceof Number n) return new BigDecimal(n.toString());
+        try { return new BigDecimal(o.toString()); } catch (Exception e) { return null; }
+    }
+
+    private static String str(Object o) { return o == null ? null : o.toString(); }
+
     private void attachRefOrderNumbers(List<OrderResponseDTO> orders) {
         if (orders.isEmpty()) {
             return;
@@ -422,25 +489,7 @@ public class OrderServiceImpl implements OrderService {
                 .wmsExternalId(entity.getWmsExternalId())
                 .importerBrokerOverride(entity.getImporterBrokerOverride())
                 .packageCount(entity.getPackageCount())
-                .packages(labelPackageRepository
-                        .findByOrderNoOrderBySequenceNumberAsc(entity.getOrderNo()).stream()
-                        .map(p -> com.multiship.backend.dto.LabelPackageDTO.builder()
-                                .sequenceNumber(p.getSequenceNumber())
-                                .trackingNumber(p.getTrackingNumber())
-                                .trackingUrl(p.getTrackingUrl())
-                                .labelFilePath(p.getLabelFilePath())
-                                .weight(p.getWeight())
-                                .weightUnit(p.getWeightUnit())
-                                .length(p.getLength())
-                                .width(p.getWidth())
-                                .height(p.getHeight())
-                                .dimUnit(p.getDimUnit())
-                                .packageType(p.getPackageType())
-                                .declaredValue(p.getDeclaredValue())
-                                .reference(p.getReference())
-                                .description(p.getDescription())
-                                .build())
-                        .toList())
+                .packages(packagesFor(entity))
                 // PR #548 — master-tracking per shipment_batch. Empty on
                 // pre-Sprint-48 orders (no rows) — FE falls back to the
                 // shipment-level tracking + per-piece children in that case.
