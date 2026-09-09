@@ -156,6 +156,35 @@ export function isServiceAllowedForUsTerritory(
   return !US_TERRITORY_GROUND_DENYLIST.has(serviceCode)
 }
 
+/** UPS carrier restriction — DDP (Delivered Duty Paid) is NOT offered to
+ *  the smaller US Pacific territories (American Samoa + Northern Mariana
+ *  Islands). Operator's territory-testing matrix on 2026-09-09 hit UPS
+ *  wire error 121213 "The requested billing option is unavailable
+ *  between the selected locations" the moment incoterms=DDP was set
+ *  for either lane; switching to DAP made both pass. FedEx has no
+ *  restriction. GU (Guam) is deliberately NOT in the deny set — UPS'
+ *  Rate & Service Guide for Guam lists DDP as an available billing
+ *  option (Guam is a larger US Pacific territory with dedicated UPS
+ *  ground infrastructure). PR and VI stay off the list too (both
+ *  within the US customs territory per 15 CFR §30.1(c) so DDP isn't
+ *  applicable at all — no customs bill to prepay). */
+export const UPS_DDP_DISALLOWED_TERRITORIES: ReadonlySet<UsTerritory> =
+  new Set<UsTerritory>(['AS', 'MP'])
+
+/**
+ * True when carrier=UPS AND recipient territory is one UPS refuses to
+ * accept DDP for (AS or MP). Callers use this to remove DDP from the
+ * incoterm picker and to show an inline hint pointing to DAP instead.
+ */
+export function isUpsDdpDisallowedForTerritory(
+  carrier: string | null | undefined,
+  territory: string | null | undefined,
+): boolean {
+  if (!carrier || !isUsTerritory(territory)) return false
+  if (carrier.toUpperCase() !== 'UPS') return false
+  return UPS_DDP_DISALLOWED_TERRITORIES.has(territory)
+}
+
 /**
  * Short human phrase for the inline banner explaining what got hidden.
  * Baked here so the banner copy stays consistent with the allowlist —

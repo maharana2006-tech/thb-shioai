@@ -53,7 +53,7 @@ import { shipperFieldsFrom, recipientFieldsFrom } from '../utils/shipmentAddress
 import { compatiblePresetIds } from '../utils/servicePackageCompatibility'
 import { shipmentValidationService, type ShipmentValidationResult } from '../api/shipmentValidationService'
 import { SHIPPING_PURPOSES, clearanceOptionsForCarrier, FTR_EXEMPTIONS, EEI_THRESHOLD_USD } from '../utils/customsOptions'
-import { isServiceAllowedForUsTerritory, usTerritoryBannerHint } from '../utils/usTerritoryServices'
+import { isServiceAllowedForUsTerritory, usTerritoryBannerHint, isUpsDdpDisallowedForTerritory } from '../utils/usTerritoryServices'
 
 /** Canonicalise a carrier code (ERP aliases → UPS/FEDEX/USPS). */
 const canon = (c?: string | null) => {
@@ -1734,6 +1734,21 @@ export default function NewShipmentPage() {
     if (isInternational) setIncoterms(importerProfile?.incoterms ?? '')
   }, [importerProfile, isInternational])
 
+  /**
+   * Reset incoterms to blank if the operator lands on a UPS+AS/MP lane
+   * with DDP prefilled from the customs profile (or set earlier). The
+   * FE hides DDP from the picker on that lane per PR of 2026-09-09
+   * (UPS wire error 121213); leaving stale "DDP" behind would let the
+   * form submit with an unsupported billing option and the backend
+   * pre-flight would reject a hop later.
+   */
+  useEffect(() => {
+    if (incoterms === 'DDP' && isUpsDdpDisallowedForTerritory(canon(carrier), recipientTerritory)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- lane-change reset; matches label-field reset semantic above.
+      setIncoterms('')
+    }
+  }, [carrier, recipientTerritory, incoterms])
+
   /** Map a saved profile into the flat importer/broker shape (label-document keys). */
   const partiesFromProfile = (p: CustomsProfile): { importer: Party; broker: Party } => ({
     importer: {
@@ -3241,17 +3256,34 @@ export default function NewShipmentPage() {
                       </button>
                     ) : null}
                   </Field>
-                  {isInternational ? (
-                    <Field label="Incoterms" required
-                           error={submitAttempted && !incoterms ? 'Required — pick an incoterm.' : errAt('incoterms')}>
-                      <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
-                        <option value="">-- Select --</option>
-                        <option value="DDP">DDP — sender pays duties</option>
-                        <option value="DAP">DAP — receiver pays duties</option>
-                        <option value="DDU">DDU — receiver pays duties only</option>
-                      </select>
-                    </Field>
-                  ) : null}
+                  {isInternational ? (() => {
+                    // 2026-09-09 — UPS won't accept DDP (sender-paid duties)
+                    // to American Samoa or Northern Mariana Islands
+                    // (wire error 121213 "billing option unavailable
+                    // between the selected locations"). Hide DDP entirely
+                    // on those lanes and show an inline hint so the
+                    // operator picks DAP instead. GU is deliberately NOT
+                    // in the deny set — UPS supports DDP to Guam per its
+                    // Rate & Service Guide (larger territory, dedicated
+                    // ground infrastructure).
+                    const upsDdpBlocked = isUpsDdpDisallowedForTerritory(canon(carrier), recipientTerritory)
+                    return (
+                      <Field label="Incoterms" required
+                             hint={upsDdpBlocked
+                               ? `UPS doesn't offer DDP to ${recipientTerritory === 'AS' ? 'American Samoa' : 'Northern Mariana Islands'} — pick DAP or a different carrier.`
+                               : undefined}
+                             error={submitAttempted && !incoterms ? 'Required — pick an incoterm.' : errAt('incoterms')}>
+                        <select className={inputCls} value={incoterms} onChange={(e) => setIncoterms(e.target.value)}>
+                          <option value="">-- Select --</option>
+                          {upsDdpBlocked ? null : (
+                            <option value="DDP">DDP — sender pays duties</option>
+                          )}
+                          <option value="DAP">DAP — receiver pays duties</option>
+                          <option value="DDU">DDU — receiver pays duties only</option>
+                        </select>
+                      </Field>
+                    )
+                  })() : null}
                   {/* F6-C — clearanceOption dropdown. Per-carrier
                       vocabulary (customsOptions.ts). Blank = backend
                       connector picks its own default. Hidden when the
