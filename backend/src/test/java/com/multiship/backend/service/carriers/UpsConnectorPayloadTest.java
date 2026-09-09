@@ -198,21 +198,46 @@ class UpsConnectorPayloadTest {
 
     @SuppressWarnings("unchecked")
     @Test
-    void soldToOnlyEmittedWhenImporterHasIdentity() throws Exception {
+    void soldTo_alwaysEmitted_defaultsToConsignee_whenNoDistinctImporter() throws Exception {
+        // PR B (2026-09-09) — SoldTo is ALWAYS emitted for intl now.
+        // Turkey rejects with "128115 Invalid or missing sold to phone
+        // number" when SoldTo is absent. No distinct importer named →
+        // mirror the ShipTo party (Option="01" = consignee is importer).
         ShipmentRequestDTO r = domesticRequest();
-        r.setRecipientCountryCode("GB");
+        r.setRecipientCountryCode("TR");
         r.setIntl(validIntl()); // no importer fields set
 
-        assertNull(((Map<String, Object>) ((Map<String, Object>) build(r).get("ShipmentRequest")).get("Shipment"))
-                .get("SoldTo"), "SoldTo should not be emitted when importer identity is blank");
+        Map<String, Object> soldTo = (Map<String, Object>) ((Map<String, Object>)
+                ((Map<String, Object>) build(r).get("ShipmentRequest")).get("Shipment")).get("SoldTo");
 
-        // Now add importer identity
+        assertNotNull(soldTo, "SoldTo MUST be present — Turkey and others reject 128115 when it's absent");
+        assertEquals("01", soldTo.get("Option"),
+                "no distinct importer named → Option=01 (consignee is importer)");
+        assertEquals("Jane Doe", soldTo.get("Name"),
+                "Name mirrors the recipient party");
+        Map<String, Object> phone = (Map<String, Object>) soldTo.get("Phone");
+        assertNotNull(phone, "UPS 128115 fix requires Phone.Number populated on SoldTo");
+        assertEquals("5559876543", phone.get("Number"),
+                "recipient phone flows through to SoldTo.Phone.Number");
+        Map<String, Object> addr = (Map<String, Object>) soldTo.get("Address");
+        assertEquals("TR", addr.get("CountryCode"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void soldTo_usesDistinctImporter_whenIntlBlockNamesOne() throws Exception {
+        // Distinct importer path preserved — pre-PR-B behavior when the
+        // operator explicitly names an importer (e.g. a customs broker,
+        // parent company acting as importer of record).
+        ShipmentRequestDTO r = domesticRequest();
+        r.setRecipientCountryCode("GB");
         IntlShipmentBlockDTO intl = validIntl();
         intl.setImporterName("Acme UK Ltd");
         intl.setImporterAddressLine1("1 Kings Way");
         intl.setImporterCity("London");
         intl.setImporterPostcode("W1 1AA");
         intl.setImporterCountry("GB");
+        intl.setImporterPhone("+442071234567");
         r.setIntl(intl);
 
         Map<String, Object> soldTo = (Map<String, Object>) ((Map<String, Object>)
@@ -220,6 +245,46 @@ class UpsConnectorPayloadTest {
         assertNotNull(soldTo);
         assertEquals("02", soldTo.get("Option"));
         assertEquals("Acme UK Ltd", soldTo.get("Name"));
+        Map<String, Object> phone = (Map<String, Object>) soldTo.get("Phone");
+        assertNotNull(phone);
+        assertEquals("+442071234567", phone.get("Number"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void soldTo_distinctImporter_fallsBackToRecipientPhone_whenImporterPhoneBlank() throws Exception {
+        // Defense-in-depth: if the operator names an importer but leaves
+        // the importer phone blank, use the recipient phone rather than
+        // emitting an empty Phone block that UPS 128115 also rejects.
+        ShipmentRequestDTO r = domesticRequest();
+        r.setRecipientCountryCode("GB");
+        IntlShipmentBlockDTO intl = validIntl();
+        intl.setImporterName("Acme UK Ltd");
+        intl.setImporterAddressLine1("1 Kings Way");
+        intl.setImporterCity("London");
+        intl.setImporterPostcode("W1 1AA");
+        intl.setImporterCountry("GB");
+        // no importerPhone
+        r.setIntl(intl);
+
+        Map<String, Object> soldTo = (Map<String, Object>) ((Map<String, Object>)
+                ((Map<String, Object>) build(r).get("ShipmentRequest")).get("Shipment")).get("SoldTo");
+        Map<String, Object> phone = (Map<String, Object>) soldTo.get("Phone");
+        assertNotNull(phone, "importer phone blank → fall back to recipient phone, not empty Phone");
+        assertEquals("5559876543", phone.get("Number"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void soldTo_notEmittedForDomesticShipment_regressionGuard() throws Exception {
+        // PR B applies only to intl shipments. Domestic (US→US) must
+        // still omit SoldTo — UPS Ship API accepts domestic without one,
+        // and emitting it would waste bytes and confuse operators
+        // reading the logs.
+        Map<String, Object> shipment = (Map<String, Object>) ((Map<String, Object>)
+                build(domesticRequest()).get("ShipmentRequest")).get("Shipment");
+        assertNull(shipment.get("SoldTo"),
+                "domestic shipments must not emit SoldTo (pre-PR-B behavior preserved)");
     }
 
     @Test
