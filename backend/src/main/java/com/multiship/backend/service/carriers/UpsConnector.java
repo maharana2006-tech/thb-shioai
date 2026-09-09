@@ -1763,10 +1763,13 @@ public class UpsConnector implements CarrierConnector {
             Map<String, Object> serviceOptions = new LinkedHashMap<>();
             serviceOptions.put("InternationalForms", forms);
             shipment.put("ShipmentServiceOptions", serviceOptions);
-            // Importer of Record (SoldTo) is optional when it's the same as
-            // ShipTo — SoldTo.Option = "01" tells UPS "consignee IS importer".
-            // Only add a SoldTo block when the intl block names a different
-            // importer identity.
+            // PR B (2026-09-09) — SoldTo is now ALWAYS emitted for intl.
+            // Turkey (TR) and a growing set of destinations reject
+            // "128115 Invalid or missing sold to phone number" when the
+            // SoldTo block is absent. When the intl block names a
+            // distinct importer we use those fields (Option="02"); when
+            // it doesn't we mirror the consignee (Option="01" = importer
+            // is consignee) using the recipient party's phone.
             Map<String, Object> soldTo = buildSoldTo(request);
             if (soldTo != null) shipment.put("SoldTo", soldTo);
         }
@@ -2525,38 +2528,97 @@ public class UpsConnector implements CarrierConnector {
     }
 
     /**
-     * UPS SoldTo (Importer of Record) — added only when the intl block names
-     * a different importer than the consignee. When the importer is the
-     * consignee UPS accepts the shipment without SoldTo (implicit).
+     * UPS SoldTo (Importer of Record) — always emitted for intl shipments
+     * so UPS never falls back to its own consignee inference. Two shapes:
+     *
+     * <ul>
+     *   <li><strong>Distinct importer</strong> — when the intl block names
+     *       an importer identity (name/company/address line 1), that
+     *       party is the importer of record. {@code Option="02"} tells
+     *       UPS "importer differs from consignee". Full address block +
+     *       phone + tax ID from the intl block.</li>
+     *   <li><strong>Fallback to consignee</strong> — when no distinct
+     *       importer, mirror the ShipTo (recipient) party.
+     *       {@code Option="01"} = "importer is consignee". Uses recipient
+     *       name / phone / address / country verbatim. Matches
+     *       {@code Contacts.SoldTo} inside InternationalForms
+     *       (consignee-is-importer, Option="01") so the parcel
+     *       and the commercial invoice reconcile against the same
+     *       SoldTo identity.</li>
+     * </ul>
+     *
+     * <p>PR B (2026-09-09) — pre-fix, this method returned {@code null}
+     * for the no-importer case, letting UPS omit SoldTo entirely.
+     * Turkey (and a growing set of destinations) reject with
+     * {@code 128115 Invalid or missing sold to phone number} when the
+     * SoldTo block is absent. Always emitting SoldTo (Option="01" for
+     * the consignee-is-importer case) with the recipient's phone
+     * satisfies the check without asking the operator for redundant
+     * importer info.
      */
     private Map<String, Object> buildSoldTo(ShipmentRequestDTO request) {
         com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
-        if (intl == null) return null;
-        boolean hasImporterIdentity = StringUtils.hasText(intl.getImporterName())
-                || StringUtils.hasText(intl.getImporterCompany())
-                || StringUtils.hasText(intl.getImporterAddressLine1());
-        if (!hasImporterIdentity) return null;
+        boolean hasImporterIdentity = intl != null
+                && (StringUtils.hasText(intl.getImporterName())
+                        || StringUtils.hasText(intl.getImporterCompany())
+                        || StringUtils.hasText(intl.getImporterAddressLine1()));
 
         Map<String, Object> soldTo = new LinkedHashMap<>();
-        String name = firstNonBlank(intl.getImporterCompany(), intl.getImporterName(), "");
-        soldTo.put("Option", "02"); // 02 = importer differs from consignee
-        soldTo.put("Name", name);
-        soldTo.put("AttentionName", firstNonBlank(intl.getImporterContact(), intl.getImporterName(), name));
-        if (StringUtils.hasText(intl.getImporterTaxId())) {
-            soldTo.put("TaxIdentificationNumber", intl.getImporterTaxId());
+        if (hasImporterIdentity) {
+            // Distinct importer — use the intl block's importer fields.
+            String name = firstNonBlank(intl.getImporterCompany(), intl.getImporterName(), "");
+            soldTo.put("Option", "02"); // 02 = importer differs from consignee
+            soldTo.put("Name", name);
+            soldTo.put("AttentionName", firstNonBlank(intl.getImporterContact(), intl.getImporterName(), name));
+            if (StringUtils.hasText(intl.getImporterTaxId())) {
+                soldTo.put("TaxIdentificationNumber", intl.getImporterTaxId());
+            }
+            // UPS 128115 fix — Phone.Number required. Fall back to the
+            // recipient phone when the importer phone is blank (better
+            // than emitting an empty phone block that UPS also rejects).
+            String importerPhone = StringUtils.hasText(intl.getImporterPhone())
+                    ? intl.getImporterPhone()
+                    : joinPhone(request.getRecipientPhoneCountryCode(), request.getRecipientPhone());
+            if (StringUtils.hasText(importerPhone)) {
+                soldTo.put("Phone", Map.of("Number", importerPhone));
+            }
+            Map<String, Object> addr = new LinkedHashMap<>();
+            java.util.List<String> lines = new java.util.ArrayList<>();
+            if (StringUtils.hasText(intl.getImporterAddressLine1())) lines.add(intl.getImporterAddressLine1());
+            if (StringUtils.hasText(intl.getImporterAddressLine2())) lines.add(intl.getImporterAddressLine2());
+            addr.put("AddressLine", lines);
+            addr.put("City", firstNonBlank(intl.getImporterCity(), ""));
+            addr.put("StateProvinceCode", sanitizeUpsStateCode(intl.getImporterState()));
+            addr.put("PostalCode", firstNonBlank(intl.getImporterPostcode(), ""));
+            addr.put("CountryCode", firstNonBlank(intl.getImporterCountry(), ""));
+            soldTo.put("Address", addr);
+            return soldTo;
         }
-        if (StringUtils.hasText(intl.getImporterPhone())) {
-            soldTo.put("Phone", Map.of("Number", intl.getImporterPhone()));
+
+        // PR B fallback — no distinct importer named. Mirror the ShipTo
+        // (recipient) party. Option="01" = importer is consignee.
+        // Matches Contacts.SoldTo inside InternationalForms so parcel
+        // and commercial invoice reconcile against the same identity.
+        soldTo.put("Option", "01"); // 01 = importer is the consignee
+        soldTo.put("Name", firstNonBlank(request.getRecipientCompany(), request.getRecipientName(), ""));
+        soldTo.put("AttentionName", firstNonBlank(request.getRecipientName(), ""));
+        String recipientPhone = joinPhone(request.getRecipientPhoneCountryCode(), request.getRecipientPhone());
+        if (StringUtils.hasText(recipientPhone)) {
+            // UPS 128115 — Phone.Number MUST be populated. The 49-country
+            // matrix's TR failure was specifically "Invalid or missing
+            // sold to phone number"; recipient phone is required on
+            // every ShipmentRequestDTO anyway (see missingWireRequiredFields).
+            soldTo.put("Phone", Map.of("Number", recipientPhone));
         }
         Map<String, Object> addr = new LinkedHashMap<>();
         java.util.List<String> lines = new java.util.ArrayList<>();
-        if (StringUtils.hasText(intl.getImporterAddressLine1())) lines.add(intl.getImporterAddressLine1());
-        if (StringUtils.hasText(intl.getImporterAddressLine2())) lines.add(intl.getImporterAddressLine2());
+        if (StringUtils.hasText(request.getRecipientAddressLine1())) lines.add(request.getRecipientAddressLine1());
+        if (StringUtils.hasText(request.getRecipientAddressLine2())) lines.add(request.getRecipientAddressLine2());
         addr.put("AddressLine", lines);
-        addr.put("City", firstNonBlank(intl.getImporterCity(), ""));
-        addr.put("StateProvinceCode", sanitizeUpsStateCode(intl.getImporterState()));
-        addr.put("PostalCode", firstNonBlank(intl.getImporterPostcode(), ""));
-        addr.put("CountryCode", firstNonBlank(intl.getImporterCountry(), ""));
+        addr.put("City", firstNonBlank(request.getRecipientCity(), ""));
+        addr.put("StateProvinceCode", sanitizeUpsStateCode(request.getRecipientState()));
+        addr.put("PostalCode", firstNonBlank(request.getRecipientPostalCode(), ""));
+        addr.put("CountryCode", firstNonBlank(request.getRecipientCountryCode(), ""));
         soldTo.put("Address", addr);
         return soldTo;
     }
