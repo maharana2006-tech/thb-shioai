@@ -105,8 +105,62 @@ public class StampsConnector implements CarrierConnector {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.LabelPackageRepository labelPackageRepository;
 
+    /** Field injection — SERA 3-legged OAuth token refresh. Absent in unit
+     *  tests that drive SWSIM paths; when absent, {@code getAccessTokenSera}
+     *  falls back to the legacy {@code client_credentials} attempt (which
+     *  fails cleanly with the same LAST_AUTH_DETAIL surface). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private StampsSeraOAuthService seraOAuthService;
+
     /** Per-thread reason the last getAccessToken fell back — read by verify. */
     private static final ThreadLocal<String> LAST_AUTH_DETAIL = new ThreadLocal<>();
+
+    /**
+     * Per-thread SERA refresh_token — set by the caller (usually
+     * AccountRefServiceImpl.verifyAccount, or a label/shipment path
+     * loading the account row) BEFORE invoking {@code getAccessToken},
+     * so the SERA branch uses {@code grant_type=refresh_token} instead
+     * of the doomed {@code client_credentials} attempt.
+     *
+     * <p>Cleared after each call to prevent bleed between requests on
+     * the same thread. Mirrors the LAST_AUTH_DETAIL pattern.
+     */
+    private static final ThreadLocal<String> SERA_REFRESH_TOKEN = new ThreadLocal<>();
+
+    /**
+     * Per-thread flag: the SERA branch discovered that no refresh token
+     * is available for the account (needs the operator to complete the
+     * browser authorize flow). AccountRefServiceImpl reads this to
+     * surface {@code needsAuthorization: true} in the verify response
+     * so the FE can open the popup.
+     */
+    private static final ThreadLocal<Boolean> SERA_NEEDS_AUTHORIZATION = new ThreadLocal<>();
+
+    /**
+     * Push a refresh_token onto the thread-local before a subsequent
+     * {@code getAccessToken} call. Cleared on the connector's exit
+     * path — callers should still {@link #consumeSeraNeedsAuthorization()}
+     * on the way out to catch any residual state.
+     */
+    public static void pushSeraRefreshToken(String refreshToken) {
+        if (StringUtils.hasText(refreshToken)) {
+            SERA_REFRESH_TOKEN.set(refreshToken);
+        } else {
+            SERA_REFRESH_TOKEN.remove();
+        }
+        SERA_NEEDS_AUTHORIZATION.remove();
+    }
+
+    /**
+     * True when the last {@code getAccessToken} call on the SERA branch
+     * fell back because no refresh_token was available on the thread —
+     * consumed once, then cleared.
+     */
+    public static boolean consumeSeraNeedsAuthorization() {
+        Boolean v = SERA_NEEDS_AUTHORIZATION.get();
+        SERA_NEEDS_AUTHORIZATION.remove();
+        return Boolean.TRUE.equals(v);
+    }
 
     @Override
     public String consumeAuthFailureDetail() {
@@ -322,6 +376,49 @@ public class StampsConnector implements CarrierConnector {
                     + "Copy the values from your Stamps.com / Endicia developer portal.");
             return buildFallbackToken(clientId, clientSecret);
         }
+
+        // 3-legged OAuth path: when the caller pushed a refresh_token onto
+        // SERA_REFRESH_TOKEN, use the refresh_token grant — this is the
+        // grant Stamps.com developer accounts are actually provisioned for.
+        // The prior client_credentials fallback below is kept as a
+        // last-resort attempt for accounts that DID get provisioned for
+        // machine-to-machine (rare), but the primary path is refresh.
+        String refresh = SERA_REFRESH_TOKEN.get();
+        SERA_REFRESH_TOKEN.remove();  // one-shot; caller re-pushes for the next call
+        if (StringUtils.hasText(refresh) && seraOAuthService != null) {
+            StampsSeraOAuthService.TokenExchangeResult r =
+                    seraOAuthService.refreshToken(refresh, clientId.trim(), clientSecret, environment);
+            if (r.success()) {
+                LAST_AUTH_DETAIL.remove();
+                return r.accessToken();
+            }
+            LAST_AUTH_DETAIL.set("Stamps.com SERA refresh_token exchange failed: " + r.errorMessage()
+                    + ". The operator may need to re-authorize the account.");
+            log.warn("Stamps SERA refresh_token grant failed: {}", r.errorMessage());
+            // Flag needs-authorization so the FE can prompt the operator
+            // to click "Reconnect" and complete the browser authorize flow
+            // again (typical cause: refresh_token revoked by Stamps.com or
+            // expired past the account's inactivity window).
+            SERA_NEEDS_AUTHORIZATION.set(true);
+            return buildFallbackToken(clientId, clientSecret);
+        }
+
+        // No refresh_token on the thread → the account hasn't completed the
+        // browser authorize flow yet. Signal needs-authorization so verify
+        // returns { needsAuthorization: true, authorizeUrl } and the FE
+        // opens the SERA authorize popup instead of showing a rejection.
+        if (seraOAuthService != null) {
+            SERA_NEEDS_AUTHORIZATION.set(true);
+            LAST_AUTH_DETAIL.set("Stamps.com SERA accounts require a one-time browser authorization. "
+                    + "Click 'Authorize with Stamps.com' to complete the OAuth consent flow — "
+                    + "we'll store a refresh token and mint access tokens on demand from that point.");
+            return buildFallbackToken(clientId, clientSecret);
+        }
+
+        // Legacy fallback: unit tests that construct the connector directly
+        // don't wire seraOAuthService; keep the old client_credentials call
+        // so those tests continue to exercise the token endpoint (they
+        // expect the unsupported_grant_type rejection surface).
         CarrierProperties.Stamps cfg = carrierProperties.getStamps();
         String tokenUrl = isSandbox(environment) ? cfg.getSeraSandboxAuthUrl() : cfg.getSeraAuthUrl();
         if (!StringUtils.hasText(tokenUrl)) {

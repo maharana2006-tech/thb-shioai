@@ -71,6 +71,20 @@ export interface CredentialCheck {
   verified: boolean
   message: string
   checkedAt: string | null
+  /**
+   * Stamps.com SERA 3-legged OAuth: when true, credentials couldn't be
+   * verified server-to-server because the account needs the operator's
+   * browser consent. Open {@link authorizeUrl} in a popup/redirect —
+   * on success the SERA server 302s back to our callback which stores
+   * the refresh token on the account.
+   *
+   * Note: for the pre-save credential check on the add-drawer,
+   * needsAuthorization is true but authorizeUrl is null (the URL needs
+   * the accountId to sign the state, and there's no accountId until
+   * the account is saved). The FE prompts the operator to save first.
+   */
+  needsAuthorization?: boolean | null
+  authorizeUrl?: string | null
 }
 
 /**
@@ -256,6 +270,25 @@ export const accountRefService = {
       `/carrier-accounts/sync-eligible?carrier=${encodeURIComponent(carrier)}`,
     )
     return Array.isArray(response.data) ? response.data : []
+  },
+
+  /**
+   * Stamps.com SERA 3-legged OAuth — starts the browser authorize flow
+   * for the given account. Returns the URL to open; the caller should
+   * either window.open() it in a popup or window.location.assign() it
+   * for a full-page redirect. On operator consent the SERA server 302s
+   * back to /api/v1/carrier-accounts/stamps-sera/callback which stores
+   * the refresh token and marks the account verified.
+   */
+  authorizeStampsSera: (accountId: number): string => {
+    return `/api/v1/carrier-accounts/stamps-sera/authorize/${accountId}`
+  },
+
+  /** Poll whether the given SERA account has completed the authorize flow. */
+  stampsSeraStatus: (accountId: number) => {
+    return apiClient.get<ApiResponse<{ authorized: boolean; lastVerifiedAt: string | null }>>(
+      `/carrier-accounts/stamps-sera/status/${accountId}`,
+    )
   },
 
   /** Bulk preview of the generation scenario for each order. */
