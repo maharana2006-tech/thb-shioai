@@ -229,6 +229,19 @@ public class ShipmentValidationService {
             // fabricated fallbacks — every missing REQUIRED field surfaces
             // as a local error before the carrier hop.
             checkIntlRequiredFields(req, recipientCountry, errors);
+            // 2026-09-09 — UPS refuses DDP (sender-paid duties) to
+            // American Samoa or Northern Mariana Islands, returning
+            // wire error 121213 "The requested billing option is
+            // unavailable between the selected locations." Operator's
+            // territory matrix on the same day confirmed switching to
+            // DAP passes both lanes with nothing else changed. Mirrors
+            // the FE hide-DDP guard on the incoterm picker so the
+            // pre-flight blocks before the carrier hop even fires.
+            // Guam (GU) is deliberately NOT in the deny set — UPS' Rate
+            // & Service Guide for Guam lists DDP as available; PR/VI
+            // aren't in scope either (within the US customs territory
+            // per 15 CFR §30.1(c), no cross-border duties to prepay).
+            checkUpsDdpTerritoryRestriction(req, recipientCountry, errors);
             for (IntlShipmentValidator.ValidationError ve : IntlShipmentValidator.validate(adapted, fxRateService)) {
                 errors.add(ValidationIssue.builder()
                         .code(ve.code()).message(ve.message()).build());
@@ -772,6 +785,41 @@ public class ShipmentValidationService {
                         fieldPrefix + "weight"));
             }
         }
+    }
+
+    /** UPS-specific carrier restriction — DDP (Delivered Duty Paid) is
+     *  not offered to American Samoa or Northern Mariana Islands.
+     *  Mirrored on the FE incoterm picker in NewShipmentPage.tsx. */
+    private static final Set<String> UPS_DDP_DISALLOWED_TERRITORIES = Set.of("AS", "MP");
+
+    /**
+     * 2026-09-09 — pre-flight guard for UPS refusing DDP to AS/MP. Fires
+     * as a hard local error (equivalent to a 422 response) with an
+     * actionable message pointing the operator at DAP so they never see
+     * UPS wire error 121213.
+     *
+     * <p>Runs only when {@code international=true} so it never fires on
+     * domestic shipments. Skips silently when the carrier isn't UPS, the
+     * recipient territory isn't AS/MP, or incoterms isn't DDP.
+     */
+    private void checkUpsDdpTerritoryRestriction(ManualShipmentRequest req,
+                                                  String recipientCountry,
+                                                  List<ValidationIssue> errors) {
+        if (req == null) return;
+        String carrier = req.getCarrierCode();
+        if (!StringUtils.hasText(carrier)) return;
+        if (!"UPS".equalsIgnoreCase(carrier.trim())) return;
+        String territory = recipientCountry == null ? "" : recipientCountry.trim().toUpperCase(Locale.ROOT);
+        if (!UPS_DDP_DISALLOWED_TERRITORIES.contains(territory)) return;
+        String incoterms = resolveIncoterms(req, recipientCountry);
+        if (incoterms == null || !"DDP".equalsIgnoreCase(incoterms)) return;
+        String label = "AS".equals(territory) ? "American Samoa" : "Northern Mariana Islands";
+        errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                "UPS doesn't offer DDP (sender-paid duties) to " + label
+                        + " — pick DAP or a different carrier. UPS returns wire error "
+                        + "121213 \"billing option unavailable between the selected locations\" "
+                        + "on these lanes.",
+                "incoterms"));
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
