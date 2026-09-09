@@ -530,6 +530,8 @@ export interface ManualShipmentPayload {
    *  THIRD_PARTY vs USPS DDU/DDP vs DHL DAP/DDP/EXW). Null / omitted →
    *  connector applies its own carrier default. */
   clearanceOption?: string | null
+  /** Payer's carrier account when clearanceOption is THIRD_PARTY. */
+  dutiesAccount?: string | null
   /** Per-shipment importer/broker override (does not touch the client's saved profile). */
   importer?: Record<string, string>
   broker?: Record<string, string>

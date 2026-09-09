@@ -796,6 +796,15 @@ public class ShipmentValidationService {
                             + "or set a default on the carrier account or client.",
                     "currency"));
         }
+        // Third-party duties without a payer account: the carrier would bill
+        // its default account silently. The form pre-fills the profile's
+        // duties account; if that is blank too, it must be typed.
+        if ("THIRD_PARTY".equals(CarrierServiceImpl.normalizeDutyPayer(req.getClearanceOption()))
+                && !StringUtils.hasText(req.getDutiesAccount())) {
+            errors.add(issue(ErrorCode.VALIDATION_ERROR,
+                    "Duties paid by a third party need the payer's carrier account number.",
+                    "dutiesAccount"));
+        }
         if (resolveIncoterms(req, recipientCountry) == null) {
             errors.add(issue(ErrorCode.VALIDATION_ERROR,
                     "Incoterms is required for international shipments — pick one "

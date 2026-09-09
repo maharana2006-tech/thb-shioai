@@ -574,6 +574,8 @@ export default function NewShipmentPage() {
   // Blank = backend connector picks its own default (usually sender-
   // pays / DAP). International-only; hidden on domestic.
   const [clearanceOption, setClearanceOption] = useState('')
+  /** Payer's carrier account when duties are billed to a third party. */
+  const [dutiesAccount, setDutiesAccount] = useState('')
   const [packageChoice, setPackageChoice] = useState<string>('') // preset id as string, or CUSTOM_PKG
   const [length, setLength] = useState('')
   const [width, setWidth] = useState('')
@@ -1462,6 +1464,7 @@ export default function NewShipmentPage() {
     // ClientCustomsProfile via importerProfile; NULL profile / value
     // blocks with a targeted toast.
     if (isInternational && !incoterms) missing.push('Incoterms')
+    if (isInternational && /THIRD/.test(clearanceOption.toUpperCase()) && !dutiesAccount.trim()) missing.push('Duties payor account')
     return missing
   }, [carrier, labelImageType, labelStockType, labelImageFormat, isInternational, reasonForExport, incoterms,
       sender.countryCode, recipient.countryCode, recipientEffectiveCountry, currency, declaredValue, ftrExemption, aesCitation])
@@ -1898,6 +1901,7 @@ export default function NewShipmentPage() {
           incoterms: incoterms || undefined,
           reasonForExport: reasonForExport || undefined,
           clearanceOption: clearanceOption || undefined,
+          dutiesAccount: /THIRD/.test(clearanceOption.toUpperCase()) && dutiesAccount.trim() ? dutiesAccount.trim() : undefined,
           ftrExemption: ftrExemption || undefined,
           aesCitation: aesCitation || undefined,
           exportDeclarationReference: exportDeclarationReference || undefined,
@@ -2451,6 +2455,7 @@ export default function NewShipmentPage() {
         reasonForExport,
         incoterms,
         ...(clearanceOption ? { clearanceOption } : {}),
+        ...(/THIRD/.test(clearanceOption.toUpperCase()) && dutiesAccount.trim() ? { dutiesAccount: dutiesAccount.trim() } : {}),
         ...(ftrExemption ? { ftrExemption } : {}),
         ...(aesCitation ? { aesCitation } : {}),
         ...(exportDeclarationReference ? { exportDeclarationReference } : {}),
@@ -3328,18 +3333,32 @@ export default function NewShipmentPage() {
                              // A label that says DDP while the consignee gets
                              // the duty bill is a promise the paperwork breaks
                              // at delivery — surface the contradiction here.
-                             incoterms === 'DDP' && clearanceOption.toUpperCase().includes('RECIPIENT')
-                               ? 'DDP means the sender pays duties, but this bills them to the recipient — the label will promise DDP while the consignee gets the customs bill. Pick sender-pays or change the incoterm.'
+                             incoterms === 'DDP' && /RECIPIENT|RECEIVER/.test(clearanceOption.toUpperCase())
+                               ? 'DDP means the sender pays duties, but this bills them to the recipient — the commercial invoice will say "Payable by consignee (DDP)". Pick sender-pays or change the incoterm unless this is intended.'
                                : undefined
                            }>
                       <select className={inputCls}
                               value={clearanceOption}
-                              onChange={(e) => setClearanceOption(e.target.value)}>
+                              onChange={(e) => {
+                                const v = e.target.value
+                                setClearanceOption(v)
+                                // Third party: start from the profile's duties account.
+                                if (/THIRD/.test(v.toUpperCase()) && !dutiesAccount) setDutiesAccount(importerProfile?.dutiesAccount ?? '')
+                              }}>
                         <option value="">Follow incoterm (DDP → sender pays, DAP/DDU → recipient pays)</option>
                         {clearanceOptionsForCarrier(canon(carrier)).map((o) => (
                           <option key={o.value} value={o.value}>{o.label}</option>
                         ))}
                       </select>
+                    </Field>
+                  ) : null}
+                  {isInternational && /THIRD/.test(clearanceOption.toUpperCase()) ? (
+                    <Field label="Duties payor account" required
+                           hint={`The third party's ${canon(carrier) || 'carrier'} account that pays duties & taxes${importerProfile?.dutiesAccount ? ` (profile: ${importerProfile.dutiesAccount})` : ''}.`}
+                           error={!dutiesAccount.trim() ? 'Required when duties are billed to a third party.' : undefined}>
+                      <input className={inputCls} value={dutiesAccount}
+                             onChange={(e) => setDutiesAccount(e.target.value)}
+                             placeholder="Payer account number" />
                     </Field>
                   ) : null}
                 </div>

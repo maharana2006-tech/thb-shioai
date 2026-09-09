@@ -73,6 +73,8 @@ public class CustomsServiceImpl implements CustomsService {
         customs.setCurrency(upperOrNull(request.getCurrency()));
         customs.setWeightUnit(upperOrNull(request.getWeightUnit()));
         customs.setNotes(trimOrNull(request.getNotes()));
+        customs.setDutiesPaidBy(upperOrNull(request.getDutiesPaidBy()));
+        customs.setDutiesAccount(trimOrNull(request.getDutiesAccount()));
         // PR ω — persist export-compliance fields the intl track shipped.
         // Prior to this the wire to FedEx carried the value but the DB
         // row was left blank, so future reads (label re-generation,
@@ -192,6 +194,8 @@ public class CustomsServiceImpl implements CustomsService {
                 .importerEori(c.getImporterEori())
                 .incoterms(c.getIncoterms())
                 .reasonForExport(c.getReasonForExport())
+                .dutiesPaidBy(c.getDutiesPaidBy())
+                .dutiesAccount(c.getDutiesAccount())
                 .currency(c.getCurrency())
                 .weightUnit(c.getWeightUnit())
                 .notes(c.getNotes())

@@ -29,6 +29,8 @@ public class OrderCustomsUpsertRequest {
     @Size(max = 3) private String currency;
     @Size(max = 3) private String weightUnit;
     @Size(max = 500) private String notes;
+    @Size(max = 12) private String dutiesPaidBy;
+    @Size(max = 60) private String dutiesAccount;
 
     /** US FTR §30.37 exemption wire code (see IntlShipmentBlockDTO). */
     @Size(max = 32) private String ftrExemption;

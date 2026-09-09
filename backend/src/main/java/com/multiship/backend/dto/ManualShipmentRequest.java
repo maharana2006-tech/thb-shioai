@@ -96,6 +96,15 @@ public class ManualShipmentRequest {
     private List<Item> items;
     /** Incoterms — DAP / DDP (defaults from the client's importer profile). */
     private String incoterms;
+    /**
+     * Who the carrier bills duties and taxes to, in the carrier's own
+     * vocabulary (UPS SENDER / RECEIVER / THIRD_PARTY, FedEx SENDER /
+     * RECIPIENT / THIRD_PARTY). Blank = follow the Incoterm (DDP → sender,
+     * else recipient). The form always sent this; the request used to drop it.
+     */
+    private String clearanceOption;
+    /** Payer's carrier account when clearanceOption is THIRD_PARTY. */
+    private String dutiesAccount;
     /** Reason for export — SALE / GIFT / SAMPLE / RETURN / REPAIR. */
     private String reasonForExport;
     /** 3-letter currency for the declared/unit values. */

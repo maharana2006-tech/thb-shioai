@@ -303,9 +303,9 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         meta.add(new Meta("Currency of sale", currency.toUpperCase()));
         meta.add(new Meta("Reason for export", firstNonBlank(customs.getReasonForExport(),
                 profile == null ? null : profile.getReasonForExport(), "SALE").toUpperCase()));
-        meta.add(new Meta("Duties & taxes", dutyTerms(incoterms)));
+        meta.add(new Meta("Duties & taxes", dutyTerms(incoterms, customs.getDutiesPaidBy(), customs.getDutiesAccount())));
         String exportDecl = exportDeclaration(customs);
-        String dutiesAccount = dutiesAccount(incoterms, profile);
+        String dutiesAccount = dutiesAccount(incoterms, customs, profile);
         meta.add(new Meta("Export declaration", firstNonBlank(exportDecl, "None declared")));
         meta.add(new Meta("Duties billed to", firstNonBlank(dutiesAccount, dutyPayer(incoterms))));
         meta.add(new Meta("Country of destination", firstNonBlank(order.getCountryName(), order.getShiptoCountryCd(), "-")));
@@ -1284,18 +1284,44 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
         }
     }
 
-    /** Who settles duties & taxes, derived from the Incoterm. */
-    private static String dutyTerms(String incoterms) {
-        String code = incoterms == null ? "" : incoterms.trim().toUpperCase();
-        if (code.equals("DDP")) return "Prepaid by shipper (DDP)";
-        return "Payable by consignee (" + (code.isEmpty() ? "DAP" : code) + ")";
+    /**
+     * Who settles duties & taxes. The payer the carrier was actually told
+     * (recorded at label time) wins over the Incoterm's default, so a DDP
+     * invoice whose duties were deliberately billed to the recipient says so
+     * instead of promising "prepaid by shipper".
+     */
+    private static String dutyTerms(String incoterms, String paidBy, String account) {
+        String code = incoterms == null || incoterms.isBlank() ? "DAP" : incoterms.trim().toUpperCase();
+        String who = paidBy == null || paidBy.isBlank()
+                ? (code.equals("DDP") ? "SENDER" : "RECIPIENT")
+                : paidBy.trim().toUpperCase();
+        return switch (who) {
+            case "SENDER" -> "Prepaid by shipper (" + code + ")";
+            case "THIRD_PARTY" -> "Billed to third party" + (hasText(account) ? " acct " + maskAccount(account) : "") + " (" + code + ")";
+            default -> "Payable by consignee (" + code + ")" + (code.equals("DDP") ? " - carrier bills the consignee" : "");
+        };
+    }
+
+    private static String maskAccount(String account) {
+        String a = account.trim();
+        return a.length() <= 4 ? a : "***" + a.substring(a.length() - 4);
     }
 
     private static String dutyPayer(String incoterms) {
         return "DDP".equalsIgnoreCase(incoterms == null ? "" : incoterms.trim()) ? "Shipper" : "Consignee";
     }
 
-    private static String dutiesAccount(String incoterms, ClientCustomsProfile profile) {
+    private static String dutiesAccount(String incoterms, OrderCustoms customs, ClientCustomsProfile profile) {
+        // The recorded payer (label time) first; the profile only as a fallback.
+        if (customs != null && hasText(customs.getDutiesPaidBy())) {
+            String recorded = switch (customs.getDutiesPaidBy().trim().toUpperCase()) {
+                case "SENDER" -> "Shipper";
+                case "THIRD_PARTY" -> "Third party";
+                default -> "Consignee";
+            };
+            String acct = safe(customs.getDutiesAccount()).trim();
+            return recorded + (hasText(acct) ? " - acct " + maskAccount(acct) : "");
+        }
         if (profile == null) return null;
         String who = safe(profile.getDutiesBillTo()).trim();
         String acct = safe(profile.getDutiesAccount()).trim();

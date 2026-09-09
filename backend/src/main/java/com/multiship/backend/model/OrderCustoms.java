@@ -96,6 +96,16 @@ public class OrderCustoms {
     @Column(length = 500)
     private String notes;
 
+    /** Who the carrier was told to bill duties to: SENDER | RECIPIENT | THIRD_PARTY
+     *  (normalised). Null on orders that predate the field — the invoice then
+     *  derives it from the Incoterm. */
+    @Column(name = "duties_paid_by", length = 12)
+    private String dutiesPaidBy;
+
+    /** Payer's carrier account when dutiesPaidBy = THIRD_PARTY. */
+    @Column(name = "duties_account", length = 60)
+    private String dutiesAccount;
+
     /**
      * US FTR §30.37 exemption wire code: {@code NO_EEI_30_37_a},
      * {@code NO_EEI_30_37_h}, or {@code NO_EEI_30_36}. Populated on US-origin

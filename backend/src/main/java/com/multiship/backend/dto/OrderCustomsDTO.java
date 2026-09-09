@@ -29,6 +29,8 @@ public class OrderCustomsDTO {
     private String currency;
     private String weightUnit;
     private String notes;
+    private String dutiesPaidBy;
+    private String dutiesAccount;
 
     private List<OrderCustomsItemDTO> items;
 

@@ -1312,6 +1312,28 @@ public class CarrierServiceImpl implements CarrierService {
                     req.setReasonForExport(firstNonBlank(defaultsProfile == null ? null : defaultsProfile.getReasonForExport(), "SALE"));
                 }
             }
+            // Third-party duties need a payer: the form's account, else the
+            // customs profile's duties account, else refuse — the carrier
+            // would otherwise bill whatever account it defaults to, silently.
+            if ("THIRD_PARTY".equals(normalizeDutyPayer(req.getClearanceOption()))
+                    && !StringUtils.hasText(req.getDutiesAccount())) {
+                com.multiship.backend.model.ClientCustomsProfile payerProfile = null;
+                if (StringUtils.hasText(resolvedClient) && StringUtils.hasText(to.getCountryCode())) {
+                    payerProfile = clientCustomsProfileRepository
+                            .findByClientAndCountry(resolvedClient, to.getCountryCode().trim().toUpperCase(Locale.ROOT))
+                            .orElse(null);
+                }
+                if (payerProfile != null && StringUtils.hasText(payerProfile.getDutiesAccount())) {
+                    req.setDutiesAccount(payerProfile.getDutiesAccount().trim());
+                } else {
+                    return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.VALIDATION_ERROR,
+                            "Duties are set to be paid by a third party, but no payer account was given. "
+                            + "Enter the third party's " + carrier + " account number, save it as the duties "
+                            + "account on the " + firstNonBlank(resolvedClient, "client") + "/"
+                            + to.getCountryCode().trim().toUpperCase(Locale.ROOT)
+                            + " customs profile, or choose sender / recipient.");
+                }
+            }
             shipmentRequest.setIntl(buildManualIntlBlock(
                     req, firstNonBlank(req.getCurrency(), "USD"), req.getDeclaredValue()));
         }
@@ -1559,6 +1581,8 @@ public class CarrierServiceImpl implements CarrierService {
                 if (!failLines.isEmpty()) {
                     var failCustoms = new com.multiship.backend.dto.OrderCustomsUpsertRequest();
                     failCustoms.setIncoterms(req.getIncoterms());
+                    failCustoms.setDutiesPaidBy(normalizeDutyPayer(req.getClearanceOption()));
+                    failCustoms.setDutiesAccount(req.getDutiesAccount());
                     failCustoms.setReasonForExport(req.getReasonForExport());
                     failCustoms.setCurrency(firstNonBlank(req.getCurrency(), "USD"));
                     failCustoms.setItems(failLines);
@@ -1825,6 +1849,8 @@ public class CarrierServiceImpl implements CarrierService {
                 com.multiship.backend.dto.OrderCustomsUpsertRequest customsReq =
                         new com.multiship.backend.dto.OrderCustomsUpsertRequest();
                 customsReq.setIncoterms(req.getIncoterms());
+                customsReq.setDutiesPaidBy(normalizeDutyPayer(req.getClearanceOption()));
+                customsReq.setDutiesAccount(req.getDutiesAccount());
                 customsReq.setReasonForExport(req.getReasonForExport());
                 // Sprint 50 Tier 1 finding #4 — request > Client.defaultCurrency > USD.
                 String currencyForCustoms = firstNonBlank(
@@ -2770,6 +2796,22 @@ public class CarrierServiceImpl implements CarrierService {
         return "D2C";
     }
 
+    /**
+     * Carrier vocabularies → one word for the record: UPS RECEIVER and FedEx
+     * RECIPIENT both mean the consignee; DDP/DDU/DAP (DHL / USPS style)
+     * map by who pays under that term. Null when blank.
+     */
+    static String normalizeDutyPayer(String clearanceOption) {
+        if (!StringUtils.hasText(clearanceOption)) return null;
+        String v = clearanceOption.trim().toUpperCase(Locale.ROOT);
+        return switch (v) {
+            case "SENDER", "SHIPPER", "DDP" -> "SENDER";
+            case "RECIPIENT", "RECEIVER", "CONSIGNEE", "DAP", "DDU", "EXW" -> "RECIPIENT";
+            case "THIRD_PARTY", "THIRDPARTY" -> "THIRD_PARTY";
+            default -> v;
+        };
+    }
+
     private String truncate(String value, int maxLength) {
         if (!StringUtils.hasText(value) || value.length() <= maxLength) {
             return value;
@@ -3386,6 +3428,12 @@ public class CarrierServiceImpl implements CarrierService {
                 .customsCurrency(StringUtils.hasText(currency) ? currency.toUpperCase() : null)
                 .incoterms(StringUtils.hasText(req.getIncoterms()) ? req.getIncoterms() : null)
                 .reasonForExport(req.getReasonForExport())
+                // The form's "Duties paid by" and third-party payer account —
+                // in the carrier's vocabulary, consumed by each connector's
+                // duties block. Blank → the connector follows the Incoterm.
+                .clearanceOption(StringUtils.hasText(req.getClearanceOption()) ? req.getClearanceOption().trim().toUpperCase(Locale.ROOT) : null)
+                .dutyBillTo(normalizeDutyPayer(req.getClearanceOption()))
+                .dutyAccount(StringUtils.hasText(req.getDutiesAccount()) ? req.getDutiesAccount().trim() : null)
                 .customsTotalValue(total)
                 .weightUnit(req.getWeightUnit())
                 .ftrExemption(StringUtils.hasText(req.getFtrExemption()) ? req.getFtrExemption() : null)
