@@ -116,10 +116,15 @@ export const orderImportService = {
   preview: async (
     file: File,
     expectedAccountId?: number | null,
+    allowDuplicate = false,
   ): Promise<ApiResponse<OrderImportPreview>> => {
     const form = new FormData()
     form.append('file', file)
-    const qs = expectedAccountId != null ? `?expectedAccountId=${expectedAccountId}` : ''
+    const params = new URLSearchParams()
+    if (expectedAccountId != null) params.set('expectedAccountId', String(expectedAccountId))
+    // Operator confirmed "import anyway as a new batch" after a duplicate-file 409.
+    if (allowDuplicate) params.set('allowDuplicate', 'true')
+    const qs = params.size ? `?${params.toString()}` : ''
     // authFetch attaches the Bearer token + surfaces the actual server
     // error message on non-2xx (previously the caller got a raw JSON
     // parse failure when Security returned 401 as HTML). 401 also
@@ -138,10 +143,11 @@ export const orderImportService = {
    *  `fileName` is recorded so the history row shows where the data came from.
    *  `draft` parks the batch even with invalid rows; a final save (draft=false)
    *  is rejected 422 unless every row is valid. */
-  save: (rows: OrderImportRow[], fileName?: string | null, draft = false) => {
+  save: (rows: OrderImportRow[], fileName?: string | null, draft = false, allowDuplicate = false) => {
     const params = new URLSearchParams()
     if (fileName) params.set('fileName', fileName)
     if (draft) params.set('draft', 'true')
+    if (allowDuplicate) params.set('allowDuplicate', 'true')
     const qs = params.toString()
     return apiClient.post<ApiResponse<OrderImportPreview>>(
       `/orders/import/save${qs ? `?${qs}` : ''}`,

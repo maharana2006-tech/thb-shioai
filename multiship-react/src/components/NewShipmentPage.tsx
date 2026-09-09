@@ -1235,6 +1235,17 @@ export default function NewShipmentPage() {
         }
         if (o.weight != null) setWeight(String(o.weight))
         if (o.weightUnit === 'LB' || o.weightUnit === 'KG') setWeightUnit(o.weightUnit)
+        // Dimensions + units from the stored first package (bulk rows carry
+        // them there) — the repair form used to open with empty inch dims and
+        // then block on "Required".
+        const p0 = o.packages?.[0]
+        if (p0) {
+          if (p0.length != null) setLength(String(p0.length))
+          if (p0.width != null) setWidth(String(p0.width))
+          if (p0.height != null) setHeight(String(p0.height))
+          if (p0.dimUnit === 'IN' || p0.dimUnit === 'CM') setDimUnit(p0.dimUnit)
+          if (p0.weightUnit === 'LB' || p0.weightUnit === 'KG') setWeightUnit(p0.weightUnit)
+        }
         if (o.declaredValue != null) setDeclaredValue(String(o.declaredValue))
         // Prefill the CLIENT from the order (tenantId, custNo fallback) —
         // its absence left two required fields empty (CLIENT, and CARRIER
@@ -1697,8 +1708,11 @@ export default function NewShipmentPage() {
    * importerProfile change).
    */
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- prefill incoterms from resolved customs profile; hard-overwrite on lane change is by design (matches accountNumber / label-field reset semantic).
-    if (isInternational) setIncoterms(importerProfile?.incoterms ?? '')
+    // A profile with an Incoterm wins; with none, keep what is already set
+    // (the fix-order prefill from the saved customs record, or the
+    // operator's pick) instead of blanking a required field.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prefill incoterms from resolved customs profile on lane change (matches accountNumber / label-field reset semantic).
+    if (isInternational) setIncoterms((cur) => importerProfile?.incoterms ?? cur)
   }, [importerProfile, isInternational])
 
   /** Map a saved profile into the flat importer/broker shape (label-document keys). */

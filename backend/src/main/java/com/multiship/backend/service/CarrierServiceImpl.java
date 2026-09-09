@@ -1514,7 +1514,7 @@ public class CarrierServiceImpl implements CarrierService {
                     // per-box dims/weights it needs to rebuild a
                     // multi-package request.
                     errOrder.setPackagesJson(shipmentRequest != null
-                            ? serializePackagesJson(shipmentRequest.getPackages())
+                            ? serializePackagesJson(packagesForPersist(shipmentRequest))
                             : null);
                     orderRepository.save(errOrder);
                     // Record the carrier error on the tracking row for the detail view.
@@ -1687,7 +1687,7 @@ public class CarrierServiceImpl implements CarrierService {
         // (POST /orders/{n}/label) can reconstruct the multi-box
         // shipment on retry / regenerate. Null on single-box legacy
         // (matches the pre-V33 shape).
-        order.setPackagesJson(serializePackagesJson(shipmentRequest.getPackages()));
+        order.setPackagesJson(serializePackagesJson(packagesForPersist(shipmentRequest)));
         // Per-shipment importer/broker override (does NOT touch the client's saved profile).
         if (req.getImporter() != null || req.getBroker() != null) {
             try {
@@ -2774,6 +2774,22 @@ public class CarrierServiceImpl implements CarrierService {
             new com.fasterxml.jackson.databind.ObjectMapper();
 
     /**
+     * Packages to persist on the order. The explicit list when the request
+     * carried one; otherwise the single synthesised box — but only when it
+     * has dimensions or a unit worth keeping, so single-box legacy orders
+     * keep their pre-V33 null. Bulk rows never send packages[], and without
+     * this the repair screen had no dims to show and demanded them.
+     */
+    private static java.util.List<com.multiship.backend.dto.PackageDetailDTO> packagesForPersist(
+            ShipmentRequestDTO r) {
+        if (r == null) return null;
+        if (r.getPackages() != null && !r.getPackages().isEmpty()) return r.getPackages();
+        boolean hasDims = r.getLength() != null || r.getWidth() != null || r.getHeight() != null;
+        if (!hasDims && !StringUtils.hasText(r.getDimUnit()) && !StringUtils.hasText(r.getWeightUnit())) return null;
+        return r.effectivePackages();
+    }
+
+    /**
      * V33 — serialise the intended packages payload for {@code label_batch.
      * packages_json}. Returns {@code null} for null/empty input so the
      * column stays NULL on single-box legacy orders (matching pre-V33
@@ -2882,7 +2898,7 @@ public class CarrierServiceImpl implements CarrierService {
         String source = firstNonBlank(req.getSource(), "MANUAL").toUpperCase();
         String poNumber = orderNoForPo != null
                 ? ("MANUAL".equals(source) || "BULK".equals(source)
-                        ? "MAN" + orderNoForPo
+                        ? firstNonBlank(req.getReference(), "MAN" + orderNoForPo)
                         : String.valueOf(orderNoForPo))
                 : firstNonBlank(req.getReference(), null);
         String deptNumber = firstNonBlank(req.getClientCode(), null);
@@ -2893,6 +2909,12 @@ public class CarrierServiceImpl implements CarrierService {
                 .packageType(packageType)
                 .length(length).width(width).height(height)
                 .weight(req.getWeight())
+                // Units travel with the values. Without these every connector
+                // defaulted to LB / IN, so a 2 KG, 30x20x15 CM row was booked as
+                // 2 LB with inch dims while its customs lines said KG — FedEx
+                // rejected it as "weight units are inconsistent".
+                .weightUnit(req.getWeightUnit())
+                .dimUnit(req.getDimUnit())
                 .shipperName(firstNonBlank(from != null ? from.getName() : null, dflt.getName()))
                 .shipperPhone(firstNonBlank(from != null ? from.getPhone() : null, dflt.getPhone()))
                 .shipperCompany(from != null ? from.getCompany() : null)

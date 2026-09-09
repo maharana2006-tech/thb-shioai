@@ -51,4 +51,20 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long> 
      *  version of the same file updates this entry in place instead of piling
      *  up duplicate same-name rows in Import history. */
     Optional<ImportBatch> findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(String fileName);
+
+    /**
+     * Labelled orders whose customer reference (bulk orderRef / reference,
+     * manual reference) is one of {@code refs} (upper-cased) — the live-state
+     * half of the importer's duplicate-orderRef advisory. Lives here rather
+     * than on OrderRepository, whose lock mode applies to every query on it
+     * and is rejected for native / read-only selects.
+     */
+    @org.springframework.data.jpa.repository.Query(value = """
+        SELECT b.order_no, b.customer_ref
+        FROM label_batch b
+        WHERE UPPER(b.customer_ref) IN (:refs)
+          AND UPPER(b.order_status) = 'GENERATED'
+        """, nativeQuery = true)
+    List<Object[]> findGeneratedOrdersByCustomerRefIn(
+            @org.springframework.data.repository.query.Param("refs") java.util.Collection<String> refs);
 }

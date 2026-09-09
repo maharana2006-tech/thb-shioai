@@ -6,6 +6,7 @@ import com.multiship.backend.dto.OrderImportPreviewDTO;
 import com.multiship.backend.dto.OrderImportRowDTO;
 import com.multiship.backend.model.CarrierAccountRef;
 import com.multiship.backend.model.Client;
+import com.multiship.backend.model.Order;
 import com.multiship.backend.model.ClientWarehouse;
 import com.multiship.backend.model.Warehouse;
 import com.multiship.backend.repository.CarrierAccountRefRepository;
@@ -785,8 +786,11 @@ public class OrderImportServiceImpl implements OrderImportService {
             for (com.multiship.backend.model.ImportBatch b : importBatchRepository.findAllByDeletedAtIsNullOrderByIdDesc()) {
                 if (scanned++ >= 60 || flagged.size() == byRef.size()) break;
                 for (OrderImportRowDTO prev : parseBatchRows(b)) {
-                    if (!StringUtils.hasText(prev.getOrderRef()) || prev.getGeneratedOrderNo() == null
-                            || !"GENERATED".equalsIgnoreCase(prev.getGeneratedStatus())) continue;
+                    if (!StringUtils.hasText(prev.getOrderRef()) || prev.getGeneratedOrderNo() == null) continue;
+                    // The import row's status is frozen at generation time; an
+                    // order repaired later via Fix & regenerate is GENERATED in the
+                    // orders table while its row still says FAILED — ask the order.
+                    if (!"GENERATED".equalsIgnoreCase(prev.getGeneratedStatus()) && !orderIsLabelled(prev.getGeneratedOrderNo())) continue;
                     String key = prev.getOrderRef().trim().toUpperCase(Locale.ROOT);
                     List<OrderImportRowDTO> mine = byRef.get(key);
                     if (mine == null || flagged.contains(key)) continue;
@@ -802,6 +806,49 @@ public class OrderImportServiceImpl implements OrderImportService {
             }
         } catch (Exception ignore) {
             // advisory only — never block a preview on history parsing
+        }
+        // Live orders as well: an import batch can be deleted from history
+        // while its labelled orders live on, and an order repaired via Fix &
+        // regenerate is GENERATED regardless of what its import row says.
+        // The order stores the file's reference (else its orderRef) as
+        // customer_ref, so match on either value.
+        if (importBatchRepository == null) return;
+        try {
+            Map<String, List<OrderImportRowDTO>> byKey = new LinkedHashMap<>();
+            for (OrderImportRowDTO r : rows) {
+                if (!StringUtils.hasText(r.getOrderRef())) continue;
+                String key = StringUtils.hasText(r.getReference()) ? r.getReference().trim() : r.getOrderRef().trim();
+                byKey.computeIfAbsent(key.toUpperCase(Locale.ROOT), k -> new ArrayList<>()).add(r);
+            }
+            if (byKey.isEmpty()) return;
+            List<Object[]> hits = importBatchRepository.findGeneratedOrdersByCustomerRefIn(byKey.keySet());
+            log.debug("duplicate-orderRef advisory (live orders): refs={} hits={}", byKey.keySet(), hits.size());
+            for (Object[] hit : hits) {
+                Object orderNo = hit[0];
+                String ref = hit[1] == null ? null : String.valueOf(hit[1]);
+                if (!StringUtils.hasText(ref)) continue;
+                List<OrderImportRowDTO> mine = byKey.remove(ref.trim().toUpperCase(Locale.ROOT));
+                if (mine == null) continue;
+                String msg = "reference " + ref.trim() + " already has a labelled order (#" + orderNo
+                        + ") — generating again creates a duplicate shipment";
+                for (OrderImportRowDTO m : mine) {
+                    boolean already = m.getWarnings() != null && m.getWarnings().stream().anyMatch(w -> w.contains("already generated as order") || w.contains("already has a labelled order"));
+                    if (!already) addWarning(m, msg);
+                }
+            }
+        } catch (Exception ex) {
+            // advisory only — but say why it could not run
+            log.warn("duplicate-orderRef advisory (live orders) skipped: {}", ex.toString());
+        }
+    }
+
+    private boolean orderIsLabelled(Integer orderNo) {
+        if (orderRepository == null || orderNo == null) return false;
+        try {
+            return orderRepository.findByOrderNo(orderNo)
+                    .map(o -> "GENERATED".equalsIgnoreCase(o.getOrderStatus())).orElse(false);
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -1090,6 +1137,12 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     @Override
     public ApiResponse<OrderImportPreviewDTO> preview(String filename, InputStream body, Long expectedAccountId) {
+        return preview(filename, body, expectedAccountId, false);
+    }
+
+    @Override
+    public ApiResponse<OrderImportPreviewDTO> preview(String filename, InputStream body, Long expectedAccountId,
+                                                      boolean allowDuplicate) {
         String ext = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
         try {
             List<OrderImportRowDTO> rows;
@@ -1114,7 +1167,10 @@ public class OrderImportServiceImpl implements OrderImportService {
             // operator sees "already imported" immediately instead of only when
             // they hit Save. To re-import, delete the existing entry or edit its
             // rows in the saved grid (updateRow, a different path).
-            if (importBatchRepository != null && !rows.isEmpty()) {
+            // allowDuplicate — the operator confirmed "import anyway as a new
+            // batch" (a re-sent daily file, the shipped template a second time).
+            // Per-orderRef duplicate warnings still apply on the rows.
+            if (!allowDuplicate && importBatchRepository != null && !rows.isEmpty()) {
                 String normName = StringUtils.hasText(filename) ? filename.trim() : null;
                 if (normName != null) {
                     com.multiship.backend.model.ImportBatch byName = importBatchRepository
@@ -1476,6 +1532,12 @@ public class OrderImportServiceImpl implements OrderImportService {
     @Override
     public ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy,
                                                    String fileName, boolean draft) {
+        return save(rows, requestedBy, fileName, draft, false);
+    }
+
+    @Override
+    public ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy,
+                                                   String fileName, boolean draft, boolean allowDuplicate) {
         List<OrderImportRowDTO> safe = rows == null ? java.util.List.of() : rows;
         // Sprint 50 Tier 0.5 PR G — clamp before we persist rowsJson so a
         // scoped USER can't seed the import_batch table with foreign
@@ -1532,7 +1594,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         // saved grid, which updates in place via updateRow — a different path).
         String normName = StringUtils.hasText(fileName) ? fileName.trim() : "Untitled import";
         String contentHash = contentHash(safe);
-        if (importBatchRepository != null) {
+        // allowDuplicate — operator confirmed "import anyway as a new batch".
+        if (!allowDuplicate && importBatchRepository != null) {
             com.multiship.backend.model.ImportBatch byName = importBatchRepository
                     .findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(normName).orElse(null);
             if (byName != null) {

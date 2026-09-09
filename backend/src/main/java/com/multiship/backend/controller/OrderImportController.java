@@ -54,10 +54,11 @@ public class OrderImportController {
     public ResponseEntity<ApiResponse<OrderImportPreviewDTO>> preview(
             @RequestParam("file") MultipartFile file,
             @io.swagger.v3.oas.annotations.Parameter(description = "Optional — the account id the .xlsx template was scoped to. Rows whose accountNumber differs get a non-fatal warning.")
-            @RequestParam(value = "expectedAccountId", required = false) Long expectedAccountId)
+            @RequestParam(value = "expectedAccountId", required = false) Long expectedAccountId,
+            @RequestParam(value = "allowDuplicate", required = false, defaultValue = "false") boolean allowDuplicate)
             throws java.io.IOException {
         ApiResponse<OrderImportPreviewDTO> response = orderImportService.preview(
-                file.getOriginalFilename(), file.getInputStream(), expectedAccountId);
+                file.getOriginalFilename(), file.getInputStream(), expectedAccountId, allowDuplicate);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
@@ -84,9 +85,10 @@ public class OrderImportController {
             @RequestBody List<OrderImportRowDTO> rows,
             @org.springframework.web.bind.annotation.RequestParam(required = false) String fileName,
             @org.springframework.web.bind.annotation.RequestParam(required = false, defaultValue = "false") boolean draft,
+            @org.springframework.web.bind.annotation.RequestParam(required = false, defaultValue = "false") boolean allowDuplicate,
             @AuthenticationPrincipal UserDetails userDetails) {
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
-        ApiResponse<OrderImportPreviewDTO> response = orderImportService.save(rows, username, fileName, draft);
+        ApiResponse<OrderImportPreviewDTO> response = orderImportService.save(rows, username, fileName, draft, allowDuplicate);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 

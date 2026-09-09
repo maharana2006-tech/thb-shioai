@@ -33,6 +33,11 @@ public interface OrderImportService {
      */
     ApiResponse<OrderImportPreviewDTO> preview(String filename, InputStream body, Long expectedAccountId);
 
+    /** Same, with {@code allowDuplicate=true} skipping the same-name / same-content
+     *  guard so a legitimately re-sent file can be imported as a new batch. */
+    ApiResponse<OrderImportPreviewDTO> preview(String filename, InputStream body, Long expectedAccountId,
+                                               boolean allowDuplicate);
+
     /** Persist a list of previewed rows. Rows with errors are skipped
      *  (validity is the client's responsibility to check first). */
     ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy);
@@ -47,6 +52,11 @@ public interface OrderImportService {
      *   {@code false} this is a final save and is rejected (422) unless every
      *   row is valid.
      */
+    /** Same as {@code save(rows, requestedBy, fileName, draft)} with the duplicate-file
+     *  guard skipped when {@code allowDuplicate} — the operator's "import anyway". */
+    ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy,
+                                            String fileName, boolean draft, boolean allowDuplicate);
+
     ApiResponse<OrderImportPreviewDTO> save(List<OrderImportRowDTO> rows, String requestedBy,
                                             String fileName, boolean draft);
 

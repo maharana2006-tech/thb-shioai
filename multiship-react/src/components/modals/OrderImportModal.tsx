@@ -73,6 +73,8 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
   const [billing, setBilling] = useState<'AUTO' | 'PLATFORM'>('AUTO')
   const [confirmPlatform, setConfirmPlatform] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** Set when the upload was refused as a duplicate file (409) — unlocks "Import anyway". */
+  const [dupBlocked, setDupBlocked] = useState(false)
   const [downloadingXlsx, setDownloadingXlsx] = useState(false)
   /** True while a cell edit is being persisted + re-validated server-side. */
   const [savingCell, setSavingCell] = useState(false)
@@ -133,18 +135,19 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
    * draft simply exists from the moment the file parses, and the only real
    * decision left (generate now or fix first) belongs to step 2.
    */
-  const submitPreview = async () => {
+  const submitPreview = async (allowDuplicate = false) => {
     if (!file) return
     setUploading(true)
     setError(null)
+    setDupBlocked(false)
     try {
-      const previewRes = await orderImportService.preview(file)
+      const previewRes = await orderImportService.preview(file, null, allowDuplicate)
       if (previewRes.status !== 'success' || !previewRes.data) {
         setError(previewRes.message ?? 'Preview failed.')
         notify.error(previewRes.message ?? 'Preview failed.')
         return
       }
-      const saveRes = await orderImportService.save(previewRes.data.rows, file.name, true)
+      const saveRes = await orderImportService.save(previewRes.data.rows, file.name, true, allowDuplicate)
       if (saveRes.status === 'success' && saveRes.data) {
         setPreview(saveRes.data)
         setBatchId(saveRes.data.batchId ?? null)
@@ -156,6 +159,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     } catch (e) {
       const { title, body } = importErrorDisplay(e, 'Upload failed.')
       setError(body)
+      if ((e as { status?: number })?.status === 409) setDupBlocked(true)
       notify.error({ title, body })
     } finally {
       setUploading(false)
@@ -234,7 +238,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#b6a684]">Bulk import</p>
               <h3 className="text-[16px] font-semibold text-[#1f150c]">Import orders from CSV / Excel</h3>
               <p className="mt-0.5 text-[11.5px] text-[#6b5c42]">
-                One order per row — upload (saved automatically), fix what needs fixing, generate.
+                One order per orderRef (a multi-line order spans several rows) — upload (saved automatically), fix what needs fixing, generate.
               </p>
             </div>
           </div>
@@ -276,7 +280,24 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
           {error ? (
             <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-[12px] text-rose-800">
               <FiAlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{error}</span>
+              <span className="flex-1">
+                {error}
+                {dupBlocked ? (
+                  <span className="mt-2 block">
+                    <button
+                      type="button"
+                      onClick={() => void submitPreview(true)}
+                      disabled={uploading}
+                      className="rounded-lg border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-rose-800 hover:bg-rose-100 disabled:opacity-50"
+                    >
+                      Import anyway as a new batch
+                    </button>
+                    <span className="ml-2 text-[11px] text-rose-700">
+                      Orders already generated from it will be flagged row by row before you generate.
+                    </span>
+                  </span>
+                ) : null}
+              </span>
             </div>
           ) : null}
         </div>

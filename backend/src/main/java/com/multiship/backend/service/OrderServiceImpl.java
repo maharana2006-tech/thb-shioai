@@ -268,8 +268,13 @@ public class OrderServiceImpl implements OrderService {
                         com.multiship.backend.model.OrderRawCodes::getRefOrderNumber,
                         (a, b) -> a));
 
-        orders.forEach(order ->
-                order.getOrderDetails().setRefOrderNumber(byOrderNo.get(order.getOrderDetails().getOrderNo())));
+        // ERP raw code wins when present; otherwise keep the order's own
+        // customer_ref (bulk file reference / manual reference) that the row
+        // mapper already set — this used to overwrite it with null.
+        orders.forEach(order -> {
+            String raw = byOrderNo.get(order.getOrderDetails().getOrderNo());
+            if (raw != null) order.getOrderDetails().setRefOrderNumber(raw);
+        });
     }
 
     private boolean isValidDateFilter(String value) {

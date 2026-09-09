@@ -73,12 +73,12 @@ class OrderImportControllerTest {
                 "file", "orders-2026-08.csv", "text/csv", "orderNo,carrier\n1,UPS\n".getBytes());
         ApiResponse<OrderImportPreviewDTO> serviceResp = ApiResponse.<OrderImportPreviewDTO>builder()
                 .status("success").code(200).data(new OrderImportPreviewDTO()).build();
-        when(orderImportService.preview(anyString(), any(), any())).thenReturn(serviceResp);
+        when(orderImportService.preview(anyString(), any(), any(), anyBoolean())).thenReturn(serviceResp);
 
-        ResponseEntity<ApiResponse<OrderImportPreviewDTO>> resp = controller.preview(file, 77L);
+        ResponseEntity<ApiResponse<OrderImportPreviewDTO>> resp = controller.preview(file, 77L, false);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
-        verify(orderImportService).preview(eq("orders-2026-08.csv"), any(), eq(77L));
+        verify(orderImportService).preview(eq("orders-2026-08.csv"), any(), eq(77L), eq(false));
     }
 
     @Test
@@ -89,9 +89,9 @@ class OrderImportControllerTest {
                 .status("error").code(422).errorCode("VALIDATION_ERROR")
                 .message("Column headers don't match template.")
                 .build();
-        when(orderImportService.preview(anyString(), any(), any())).thenReturn(serviceResp);
+        when(orderImportService.preview(anyString(), any(), any(), anyBoolean())).thenReturn(serviceResp);
 
-        ResponseEntity<ApiResponse<OrderImportPreviewDTO>> resp = controller.preview(file, null);
+        ResponseEntity<ApiResponse<OrderImportPreviewDTO>> resp = controller.preview(file, null, false);
 
         assertEquals(HttpStatus.UNPROCESSABLE_CONTENT, resp.getStatusCode());
         assertEquals("VALIDATION_ERROR", resp.getBody().getErrorCode());
@@ -133,22 +133,22 @@ class OrderImportControllerTest {
         List<OrderImportRowDTO> rows = Collections.singletonList(new OrderImportRowDTO());
         ApiResponse<OrderImportPreviewDTO> serviceResp = ApiResponse.<OrderImportPreviewDTO>builder()
                 .status("success").code(200).build();
-        when(orderImportService.save(any(), anyString(), any(), anyBoolean())).thenReturn(serviceResp);
+        when(orderImportService.save(any(), anyString(), any(), anyBoolean(), anyBoolean())).thenReturn(serviceResp);
 
-        controller.save(rows, "batch-1.xlsx", false, alice);
+        controller.save(rows, "batch-1.xlsx", false, false, alice);
 
-        verify(orderImportService).save(eq(rows), eq("alice"), eq("batch-1.xlsx"), anyBoolean());
+        verify(orderImportService).save(eq(rows), eq("alice"), eq("batch-1.xlsx"), anyBoolean(), eq(false));
     }
 
     @Test
     void save_worksWithNullPrincipalAndNullFileName() {
         ApiResponse<OrderImportPreviewDTO> serviceResp = ApiResponse.<OrderImportPreviewDTO>builder()
                 .status("success").code(200).build();
-        when(orderImportService.save(any(), anyString(), any(), anyBoolean())).thenReturn(serviceResp);
+        when(orderImportService.save(any(), anyString(), any(), anyBoolean(), anyBoolean())).thenReturn(serviceResp);
 
-        controller.save(Collections.emptyList(), null, false, null);
+        controller.save(Collections.emptyList(), null, false, false, null);
 
-        verify(orderImportService).save(any(), eq("unknown"), eq(null), anyBoolean());
+        verify(orderImportService).save(any(), eq("unknown"), eq(null), anyBoolean(), eq(false));
     }
 
     // ─── history: controller wraps service result as 200 ───────────────────
