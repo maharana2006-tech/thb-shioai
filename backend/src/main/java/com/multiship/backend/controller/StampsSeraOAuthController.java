@@ -86,8 +86,15 @@ public class StampsSeraOAuthController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
         }
         String url = oauthService.buildAuthorizeUrl(accountId, account.getClientId(), account.getEnvironment());
-        log.info("SERA authorize: redirecting operator for account #{} (env={})",
-                accountId, account.getEnvironment());
+        // Log the full authorize URL (host + params) so we can diagnose
+        // Stamps.com's "Oops! Something went wrong" response. Common
+        // causes: (a) wrong sandbox host — signin.testing.stampsendicia
+        // .com may not exist for some tenant classes; (b) redirect_uri
+        // not registered on the client_id in the developer portal.
+        // client_id is masked in production logs elsewhere but exposed
+        // here at INFO so ops can compare against the developer portal.
+        log.info("SERA authorize: redirecting operator for account #{} (env={}) → {}",
+                accountId, account.getEnvironment(), url);
         return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(url)).build();
     }
 
