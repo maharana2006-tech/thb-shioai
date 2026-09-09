@@ -32,14 +32,26 @@ public class UsFtr30_37Policy implements ExportDeclarationPolicy {
     private static final Set<String> BILATERAL_EXEMPT = Set.of("CA");
 
     /**
-     * US territories WITHIN the customs territory of the US per 15 CFR
-     * §30.1(c) — Puerto Rico + US Virgin Islands. Shipments to these
-     * destinations are NOT exports under the FTR (no EEI required
-     * regardless of value). GU / AS / MP / UM are OUTSIDE the customs
-     * territory and are treated as normal exports (fire the threshold
-     * gate below). REGULATORY_REFERENCE — 15 CFR §30.1(c), §30.2(a).
+     * REGULATORY_REFERENCE — 15 CFR Part 30 Subpart B §30.37(a) +
+     * §30.1(c). Empty by operator direction 2026-09-09: PR and VI DO
+     * require EEI filing above the $2,500 Schedule-B threshold same as
+     * every other non-Canada destination. Prior reading (PR #626,
+     * 2026-09-08) treated PR/VI as "within the US customs territory
+     * per §30.1(c)" and skipped the gate — that interpretation is
+     * defensible on the letter of the reg but doesn't match how FedEx
+     * and UPS actually surface the FTR box in their own tools, and the
+     * operator's compliance stance is the safer position: file when
+     * over $2,500 regardless of customs-territory status.
+     *
+     * <p>Compliance officer sign-off required before reverting to a
+     * non-empty exempt set. Cite the §30.1(c) reading + carrier tool
+     * behaviour in any change-request. See
+     * <a href="https://www.ecfr.gov/current/title-15/subtitle-B/chapter-I/subchapter-C/part-30/subpart-B/section-30.37">
+     * §30.37(a)</a> +
+     * <a href="https://www.ecfr.gov/current/title-15/subtitle-B/chapter-I/subchapter-C/part-30/subpart-A/section-30.1">
+     * §30.1(c)</a>.
      */
-    private static final Set<String> CUSTOMS_TERRITORY_EXEMPT = Set.of("PR", "VI");
+    private static final Set<String> CUSTOMS_TERRITORY_EXEMPT = Set.of();
 
     @Override public String originIso() { return "US"; }
 
