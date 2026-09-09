@@ -850,7 +850,7 @@ public class OrderImportServiceImpl implements OrderImportService {
      * almost always a re-upload. Duplicate-file detection (name / content
      * hash) misses a file edited by one character; this catches the order.
      */
-    private void flagOrderRefsAlreadyGenerated(List<OrderImportRowDTO> rows) {
+    public void flagOrderRefsAlreadyGenerated(List<OrderImportRowDTO> rows) {
         if (importBatchRepository == null || rows == null || rows.isEmpty()) return;
         Map<String, List<OrderImportRowDTO>> byRef = new LinkedHashMap<>();
         for (OrderImportRowDTO r : rows) {
@@ -2100,10 +2100,42 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .orElse(null);
         if (target == null) return toBatchDTO(batch, rows);
 
-        // Generate just this one row (commit mutates it in place). WMS/API
-        // batches persist their order as source=API, matching full-batch generate.
+        // Generate this row's whole order (commit mutates the rows in place).
+        // Rows sharing an orderRef are ONE shipment — item lines and extra
+        // parcels of the same order — so sending the clicked row alone would
+        // mint a second order for the same customer order (and a 1-box label
+        // for a 2-box shipment). WMS/API batches persist their order as
+        // source=API, matching full-batch generate.
         String sourceOverride = isApiSource(batch.getSource()) ? "API" : null;
-        commit(new ArrayList<>(List.of(target)), requestedBy, false, sourceOverride);
+        List<OrderImportRowDTO> group = new ArrayList<>();
+        if (StringUtils.hasText(target.getOrderRef())) {
+            String ref = target.getOrderRef().trim().toUpperCase(Locale.ROOT);
+            for (OrderImportRowDTO r : rows) {
+                if (StringUtils.hasText(r.getOrderRef()) && ref.equals(r.getOrderRef().trim().toUpperCase(Locale.ROOT))) {
+                    group.add(r);
+                }
+            }
+        }
+        if (group.isEmpty()) group.add(target);
+        syncRowsWithLiveOrders(group);
+        OrderImportRowDTO done = group.stream()
+                .filter(r -> "GENERATED".equalsIgnoreCase(r.getGeneratedStatus()) && r.getGeneratedOrderNo() != null)
+                .findFirst().orElse(null);
+        if (done != null) {
+            // The order is already labelled (another row of the group was
+            // generated, or it was repaired from the Orders grid) — attach the
+            // remaining rows to it instead of shipping the same order twice.
+            for (OrderImportRowDTO r : group) {
+                if ("GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) continue;
+                r.setGeneratedStatus("GENERATED");
+                r.setGeneratedOrderNo(done.getGeneratedOrderNo());
+                r.setGeneratedTrackingNumber(done.getGeneratedTrackingNumber());
+                r.setBatchId(done.getBatchId());
+                r.setGeneratedMessage("Part of order #" + done.getGeneratedOrderNo() + " — already labelled, not re-sent.");
+            }
+        } else {
+            commit(group, requestedBy, false, sourceOverride);
+        }
 
         int total = rows.size();
         int generated = (int) rows.stream()

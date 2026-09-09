@@ -86,7 +86,7 @@ class WmsControllerTest {
 
         assertEquals(HttpStatus.OK, res.getStatusCode());
         assertEquals(200, res.getBody().getCode());
-        assertTrue(res.getBody().getMessage().contains("3 order(s) imported"));
+        assertTrue(res.getBody().getMessage().contains("3 shipment(s) imported"));
         assertTrue(res.getBody().getMessage().contains("1 already present"));
         assertTrue(res.getBody().getMessage().contains("1 failed"));
         assertEquals(3, res.getBody().getData().getImported());

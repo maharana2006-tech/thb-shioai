@@ -142,6 +142,7 @@ public class TrackingServiceImpl implements TrackingService {
                     + " — returning the URL-only stub.");
         }
 
+        final boolean sandbox = "SANDBOX".equalsIgnoreCase(account.getEnvironment());
         String accessToken;
         try {
             accessToken = connector.getAccessToken(account.getClientId(), account.getClientSecret(),
@@ -182,12 +183,15 @@ public class TrackingServiceImpl implements TrackingService {
                     "Live tracking call failed.");
         }
 
-        TrackingResponseDTO dto = withMpsTopology(toDto(result, canonicalCarrier, "LIVE"), orderNo);
+        TrackingResponseDTO dto = withMpsTopology(toDto(result, canonicalCarrier, "LIVE"), orderNo)
+                .toBuilder().sandbox(sandbox).build();
         // Cache LIVE results only — STUB / RATE_LIMITED responses are already cheap.
         cache.put(trackingNumber, new CacheEntry(dto,
                 dto.getDelivered() != null && dto.getDelivered()
                         ? CACHE_TTL_DELIVERED : CACHE_TTL_ACTIVE));
-        return success(dto, "Live tracking checked.");
+        return success(dto, sandbox
+                ? "Live tracking checked against the carrier's sandbox — events are sample data, not a real parcel."
+                : "Live tracking checked.");
     }
 
     /**

@@ -274,6 +274,14 @@ function StatusBlock({ data }: { data: TrackingResponseDTO }) {
               {data.status ?? 'Unknown'}
             </span>
             <SourceBadge source={data.source} retryAfterSeconds={data.retryAfterSeconds} />
+            {data.sandbox ? (
+              <span
+                title="This label was created on the carrier's sandbox (test) account. The carrier returns sample events for sandbox tracking numbers — nothing is actually moving."
+                className="inline-flex items-center rounded-full bg-amber-50 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.14em] text-amber-700"
+              >
+                Sandbox · sample data
+              </span>
+            ) : null}
           </div>
           {data.currentLocation ? (
             <p className="mt-2 flex items-center gap-1 text-[12px] text-slate-600">

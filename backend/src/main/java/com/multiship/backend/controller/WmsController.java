@@ -94,7 +94,7 @@ public class WmsController {
             WmsPullResultDTO result = wmsService.pullShippable(username);
             String msg = !result.isConfigured()
                     ? "WMS not configured — nothing pulled."
-                    : result.getImported() + " order(s) imported from WMS · "
+                    : result.getImported() + " shipment(s) imported from WMS · "
                         + result.getSkipped() + " already present, " + result.getFailed() + " failed";
             return ResponseEntity.ok(ApiResponse.<WmsPullResultDTO>builder()
                     .status("SUCCESS").code(200).timestamp(LocalDateTime.now())

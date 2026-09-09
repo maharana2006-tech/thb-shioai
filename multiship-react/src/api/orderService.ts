@@ -664,6 +664,9 @@ export interface TrackingResponseDTO {
   source: 'LIVE' | 'CACHE' | 'STUB' | 'RATE_LIMITED'
   /** Audit L1 — carrier-supplied Retry-After hint (seconds). Non-null only when source=RATE_LIMITED. */
   retryAfterSeconds?: number | null
+  /** True when the label's account is a SANDBOX account: the carrier returns canned
+   *  sample events (UPS says "Delivered" for any 1ZXXXX… number), not a real parcel. */
+  sandbox?: boolean | null
   /**
    * Audit L2 (PR #553) — per-batch master tracking, mirroring the
    * external v2 shape from PR #548. Populated for multi-package

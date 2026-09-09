@@ -47,6 +47,10 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long> 
      *  re-upload, so the operator can delete and re-import a corrected file. */
     Optional<ImportBatch> findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(String contentHash);
 
+    /** Same lookup including trashed batches — a WMS re-fetch after the operator
+     *  trashed the batch must still warn that its orders live on. */
+    Optional<ImportBatch> findFirstByContentHashOrderByIdDesc(String contentHash);
+
     /** Most recent LIVE batch with the same file name — re-saving an edited
      *  version of the same file updates this entry in place instead of piling
      *  up duplicate same-name rows in Import history. */

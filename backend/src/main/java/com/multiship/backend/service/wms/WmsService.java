@@ -45,6 +45,21 @@ public class WmsService {
     private com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.fasterxml.jackson.databind.ObjectMapper importObjectMapper;
+    /** Resolves the WMS ship-via / ship-method to a catalog service (optional for unit tests). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.ShippingConfigService shippingConfigService;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ClientShipviaCodeMapRepository clientShipviaCodeMapRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ShippingServiceRepository shippingServiceRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.CarrierAccountRefRepository carrierAccountRefRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ClientWarehouseRepository clientWarehouseRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.WarehouseRepository warehouseRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private OrderImportServiceImpl orderImportService;
 
     public boolean isConfigured() {
         return wmsClient.isConfigured();
@@ -64,6 +79,7 @@ public class WmsService {
         List<OrderImportRowDTO> rows = new ArrayList<>();
         List<String> messages = new ArrayList<>();
         int failed = 0;
+        int shipments = 0;
 
         for (WmsPendingOrderDTO src : shippable) {
             String externalId = src == null ? null : src.getShipmentNumber();
@@ -72,12 +88,23 @@ public class WmsService {
                 messages.add("Skipped a WMS shipment with no shipmentNumber.");
                 continue;
             }
+            shipments++;
             OrderImportRowDTO row = toImportRow(src, rows.size() + 1);
             // Validate up front so the grid shows what needs fixing (e.g. the
             // client to bill) the moment the batch is opened. Editing a cell
             // re-runs the same validator, so errors clear as they're resolved.
-            row.setErrors(OrderImportServiceImpl.validateRow(row));
+            List<String> errors = new ArrayList<>(OrderImportServiceImpl.validateRow(row));
+            errors.addAll(preflight(src, row));
+            row.setErrors(errors);
             rows.add(row);
+            // One line per shipped item so the packing list / commercial invoice
+            // carries every SKU. The first row is the parcel (it owns the
+            // container weight); the item lines inherit it and are flagged as
+            // such so generation doesn't turn them into extra boxes.
+            for (OrderImportRowDTO itemLine : itemLines(src, row, rows.size() + 1)) {
+                itemLine.setErrors(new ArrayList<>(OrderImportServiceImpl.validateRow(itemLine)));
+                rows.add(itemLine);
+            }
         }
 
         int total = rows.size();
@@ -100,6 +127,30 @@ public class WmsService {
                 deduped = true;
                 messages.add("These shipments were already fetched — showing batch #" + existing.getId() + ".");
             } else {
+                // The same set was fetched before but the operator trashed that
+                // batch: its labelled orders still exist, so re-importing would
+                // ship them twice. Flag every row that already has a live label
+                // and say where the original batch went.
+                ImportBatch trashed = null;
+                try {
+                    trashed = hash == null ? null
+                            : importBatchRepository.findFirstByContentHashOrderByIdDesc(hash)
+                                .filter(b -> b.getDeletedAt() != null).orElse(null);
+                } catch (Exception ignore) { /* optional lookup */ }
+                if (orderImportService != null) {
+                    try { orderImportService.flagOrderRefsAlreadyGenerated(rows); } catch (Exception ignore) { /* advisory */ }
+                }
+                long flagged = rows.stream().filter(r -> r.getWarnings() != null
+                        && r.getWarnings().stream().anyMatch(w -> w.contains("already generated")))
+                        .map(r -> r.getOrderRef() == null ? "" : r.getOrderRef().trim().toUpperCase())
+                        .distinct().count();
+                if (trashed != null) {
+                    messages.add("These shipments were fetched before as batch #" + trashed.getId()
+                            + ", which is in Trash. Restore it from Data History → Trash instead of generating again"
+                            + (flagged > 0 ? " — " + flagged + " order(s) already have a live label and are flagged." : "."));
+                } else if (flagged > 0) {
+                    messages.add(flagged + " order(s) were already labelled from an earlier import — generating again creates duplicate shipments.");
+                }
                 importBatchId = recordBatch(requestedBy, rows, invalid, hash);
             }
         }
@@ -110,8 +161,8 @@ public class WmsService {
         return WmsPullResultDTO.builder()
                 .configured(true)
                 .fetched(shippable.size())
-                .imported(deduped ? 0 : total)
-                .skipped(deduped ? total : 0)     // already-present when the same set was re-fetched
+                .imported(deduped ? 0 : shipments)
+                .skipped(deduped ? shipments : 0)     // already-present when the same set was re-fetched
                 .failed(failed)
                 .batchId(null)               // label batch is assigned when labels are generated
                 .importBatchId(importBatchId)
@@ -169,14 +220,183 @@ public class WmsService {
         // Best-effort carrier from the WMS ship-via code; the operator can
         // override it inline. Unknown codes pass through so generation flags them.
         r.setCarrierCode(mapCarrier(src.getShipVia()));
-        r.setServiceType(trimOrNull(src.getShipMethod()));
+        r.setServiceType(resolveService(r.getClientCode(), r.getCarrierCode(), src.getShipVia(),
+                src.getShipMethod(), r.getCountryCode(), r));
+        r.setAccountNumber(defaultAccount(r.getClientCode(), r.getCarrierCode()));
+        r.setWarehouseCode(defaultWarehouse(r.getClientCode()));
         BigDecimal w = totalWeight(src.getContainers());
         if (w != null) {
             r.setWeight(w);
             r.setWeightUnit("LB");
         }
         r.setReference(trimOrNull(src.getPoNumber()));
+        applyFirstItem(src, r);
         return r;
+    }
+
+    /**
+     * WMS ship-via → catalog service, in order of trust:
+     * <ol>
+     *   <li>the WMS's own shipMethod when it sends one;</li>
+     *   <li>the client's Shipping Service Mapping row for that ERP/ship-via code;</li>
+     *   <li>the platform resolver on the raw code (handles "03", "UPS Ground",
+     *       "GROUND", "U03"-style codes);</li>
+     *   <li>the carrier's ground service, with a warning telling the operator to
+     *       map the code — a label on the wrong service beats no label only when
+     *       the operator can see it, hence the warning.</li>
+     * </ol>
+     * Returns null (and leaves the row to preflight) when nothing resolves.
+     */
+    private String resolveService(String clientCode, String carrier, String shipVia, String shipMethod,
+                                  String destCountry, OrderImportRowDTO row) {
+        if (shippingConfigService == null) {
+            return trimOrNull(shipMethod);   // reduced-args unit-test wiring
+        }
+        String canon = carrier == null ? null : carrier.trim().toUpperCase();
+        if (canon == null || canon.isBlank()) return trimOrNull(shipMethod);
+        try {
+            if (StringUtils.hasText(shipMethod)) {
+                var hit = shippingConfigService.resolveServiceCode(canon, shipMethod, null);
+                if (hit.isPresent()) return hit.get().getServiceCode();
+            }
+            if (StringUtils.hasText(shipVia) && StringUtils.hasText(clientCode)
+                    && clientShipviaCodeMapRepository != null && shippingServiceRepository != null) {
+                var map = clientShipviaCodeMapRepository
+                        .findByClientCodeIgnoreCaseAndErpCodeIgnoreCase(clientCode.trim(), shipVia.trim());
+                if (map.isPresent() && map.get().getServiceId() != null) {
+                    var svc = shippingServiceRepository.findById(map.get().getServiceId());
+                    if (svc.isPresent() && StringUtils.hasText(svc.get().getServiceCode())) {
+                        return svc.get().getServiceCode();
+                    }
+                }
+            }
+            if (StringUtils.hasText(shipVia)) {
+                var hit = shippingConfigService.resolveServiceCode(canon, shipVia, null);
+                if (hit.isPresent()) return hit.get().getServiceCode();
+                // "U03" / "F03" — the WMS prefixes the carrier letter to the carrier's own code.
+                String stripped = shipVia.trim().replaceFirst("^(?i)(UPS|FEDEX|USPS|DHL|U|F)[-_ ]?", "");
+                if (!stripped.equals(shipVia.trim()) && !stripped.isBlank()) {
+                    hit = shippingConfigService.resolveServiceCode(canon, stripped, null);
+                    if (hit.isPresent()) return hit.get().getServiceCode();
+                }
+            }
+            var ground = shippingConfigService.resolveServiceCode(canon, "GROUND", null);
+            if (ground.isPresent()) {
+                addWarning(row, "WMS ship-via '" + (StringUtils.hasText(shipVia) ? shipVia.trim() : "(blank)")
+                        + "' isn't mapped for " + clientCode + " — defaulted to " + canon + " "
+                        + ground.get().getServiceCode() + " (" + ground.get().getName()
+                        + "). Map it under Settings → Shipping Service Mapping to stop this warning.");
+                return ground.get().getServiceCode();
+            }
+        } catch (Exception e) {
+            log.warn("WMS pull: service resolution for ship-via '{}' failed: {}", shipVia, e.getMessage());
+        }
+        return trimOrNull(shipMethod);
+    }
+
+    /** The client's default billing account for the carrier, when it has one. */
+    private String defaultAccount(String clientCode, String carrier) {
+        if (carrierAccountRefRepository == null || !StringUtils.hasText(clientCode) || !StringUtils.hasText(carrier)) return null;
+        try {
+            return carrierAccountRefRepository
+                    .findByCustomerNoIgnoreCaseOrderByClientDefaultDescUpdatedAtDesc(clientCode.trim()).stream()
+                    .filter(a -> !Boolean.FALSE.equals(a.getActive()))
+                    .filter(a -> a.getCarrierCode() != null && a.getCarrierCode().equalsIgnoreCase(carrier.trim()))
+                    .map(a -> a.getAccountNumber())
+                    .filter(StringUtils::hasText)
+                    .findFirst().orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** The client's default warehouse code (what the New Shipment form pre-selects). */
+    private String defaultWarehouse(String clientCode) {
+        if (clientWarehouseRepository == null || warehouseRepository == null || !StringUtils.hasText(clientCode)) return null;
+        try {
+            return clientWarehouseRepository.findByClientCodeIgnoreCaseAndIsDefaultTrue(clientCode.trim())
+                    .flatMap(link -> warehouseRepository.findById(link.getWarehouseId()))
+                    .filter(w -> !Boolean.FALSE.equals(w.getActive()) && StringUtils.hasText(w.getCode()))
+                    .map(w -> w.getCode())
+                    .orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Items the WMS actually shipped (shipQty > 0; back-ordered lines stay off the label). */
+    private static List<WmsPendingOrderDTO.WmsItem> shippedItems(WmsPendingOrderDTO src) {
+        List<WmsPendingOrderDTO.WmsItem> out = new ArrayList<>();
+        if (src.getItems() == null) return out;
+        for (WmsPendingOrderDTO.WmsItem it : src.getItems()) {
+            if (it == null) continue;
+            int qty = it.getShipQty() != null ? it.getShipQty() : (it.getOrderQty() != null ? it.getOrderQty() : 0);
+            if (qty > 0) out.add(it);
+        }
+        return out;
+    }
+
+    private static void applyFirstItem(WmsPendingOrderDTO src, OrderImportRowDTO r) {
+        List<WmsPendingOrderDTO.WmsItem> items = shippedItems(src);
+        if (items.isEmpty()) return;
+        applyItem(items.get(0), r);
+    }
+
+    private static void applyItem(WmsPendingOrderDTO.WmsItem it, OrderImportRowDTO r) {
+        r.setItemSku(trimOrNull(it.getItemNo()));
+        r.setItemDescription(trimOrNull(it.getItemDesc()));
+        r.setItemQuantity(it.getShipQty() != null ? it.getShipQty() : it.getOrderQty());
+    }
+
+    /** Continuation rows for the 2nd..nth shipped item: same shipment, same parcel, own SKU line. */
+    private List<OrderImportRowDTO> itemLines(WmsPendingOrderDTO src, OrderImportRowDTO leader, int firstRowNumber) {
+        List<OrderImportRowDTO> out = new ArrayList<>();
+        List<WmsPendingOrderDTO.WmsItem> items = shippedItems(src);
+        for (int i = 1; i < items.size(); i++) {
+            OrderImportRowDTO line = new OrderImportRowDTO();
+            line.setRowNumber(firstRowNumber + out.size());
+            line.setOrderRef(leader.getOrderRef());
+            line.setClientCode(leader.getClientCode());
+            line.setWarehouseCode(leader.getWarehouseCode());
+            line.setRecipientName(leader.getRecipientName());
+            line.setRecipientCompany(leader.getRecipientCompany());
+            line.setRecipientPhone(leader.getRecipientPhone());
+            line.setRecipientEmail(leader.getRecipientEmail());
+            line.setAddressLine1(leader.getAddressLine1());
+            line.setAddressLine2(leader.getAddressLine2());
+            line.setCity(leader.getCity());
+            line.setState(leader.getState());
+            line.setPostalCode(leader.getPostalCode());
+            line.setCountryCode(leader.getCountryCode());
+            line.setCarrierCode(leader.getCarrierCode());
+            line.setAccountNumber(leader.getAccountNumber());
+            line.setServiceType(leader.getServiceType());
+            line.setWeight(leader.getWeight());
+            line.setWeightUnit(leader.getWeightUnit());
+            line.setWeightInherited(Boolean.TRUE);
+            line.setReference(leader.getReference());
+            applyItem(items.get(i), line);
+            out.add(line);
+        }
+        return out;
+    }
+
+    /** Errors the carrier would certainly raise — surfaced now so the row isn't shown as Ready. */
+    private List<String> preflight(WmsPendingOrderDTO src, OrderImportRowDTO row) {
+        List<String> errors = new ArrayList<>();
+        if (shippingConfigService != null && StringUtils.hasText(row.getCarrierCode())
+                && !StringUtils.hasText(row.getServiceType())) {
+            errors.add("serviceType could not be resolved from WMS ship-via '"
+                    + (StringUtils.hasText(src.getShipVia()) ? src.getShipVia().trim() : "(blank)")
+                    + "' — pick a " + row.getCarrierCode() + " service, or map the code under Shipping Service Mapping");
+        }
+        return errors;
+    }
+
+    private static void addWarning(OrderImportRowDTO row, String warning) {
+        List<String> w = new ArrayList<>(row.getWarnings() == null ? List.of() : row.getWarnings());
+        w.add(warning);
+        row.setWarnings(w);
     }
 
     /** Heuristic WMS ship-via → carrier code (UPS / FEDEX / USPS). Operator overrides. */
@@ -210,9 +430,11 @@ public class WmsService {
         return StringUtils.hasText(v) ? v.trim() : null;
     }
 
-    /** Keep a phone as its dialable digits (WMS sends "14697017960"-style strings). */
+    /** Keep a phone as its dialable digits (WMS sends "14697017960" and "310.259.0546"-style strings). */
     private static String digitsOrNull(String v) {
-        return StringUtils.hasText(v) ? v.trim() : null;
+        if (!StringUtils.hasText(v)) return null;
+        String digits = v.replaceAll("[^0-9]", "");
+        return digits.isEmpty() ? v.trim() : digits;
     }
 
     private static String firstNonBlank(String a, String b) {

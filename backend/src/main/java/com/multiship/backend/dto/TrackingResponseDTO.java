@@ -66,6 +66,11 @@ public class TrackingResponseDTO {
      */
     private Integer retryAfterSeconds;
 
+    /** True when the events came from the carrier's SANDBOX/test environment —
+     *  sandbox tracking is canned sample data (UPS answers "Delivered" for any
+     *  1ZXXXX… number), not the movement of a real parcel. */
+    private Boolean sandbox;
+
     /**
      * Audit L2 — per-batch master tracking. Parity with the external v2
      * endpoint (see PR #548). Populated for multi-package shipments,
