@@ -245,21 +245,39 @@ public class AccountRefServiceImpl implements AccountRefService {
                 message = connector.getCarrierName() + " rejected the credentials.";
             }
 
-            return CredentialCheckDTO.builder()
-                    .verified(realToken)
-                    .checkedAt(now)
-                    .message(message)
-                    .needsAuthorization(needsAuth ? Boolean.TRUE : null)
-                    .authorizeUrl(authorizeUrl)
-                    .build();
+            return buildCheck(realToken, now, message, needsAuth ? Boolean.TRUE : null, authorizeUrl);
         } catch (Exception ex) {
             log.warn("Credential check failed for carrier {}: {}", carrierCode, ex.getMessage());
-            return CredentialCheckDTO.builder()
-                    .verified(false)
-                    .checkedAt(now)
-                    .message("Verification failed: " + ex.getMessage())
-                    .build();
+            return buildCheck(false, now, "Verification failed: " + ex.getMessage(), null, null);
         }
+    }
+
+    /**
+     * Build a {@link CredentialCheckDTO} via setters instead of the
+     * generated builder. Prevents a stale-hot-reload class-mismatch
+     * NoSuchMethodError when the DTO grows fields between deploys —
+     * ref=ac274af3 (2026-09-09): PR #628 added `needsAuthorization` +
+     * `authorizeUrl`, but the running JVM held a 3-arg
+     * {@code CredentialCheckDTOBuilder.build()} bytecode reference,
+     * throwing {@code NoSuchMethodError} → {@code LinkageError} →
+     * {@code GlobalExceptionHandler}'s 500 correlation. Setter-based
+     * construction only ever ADDS setters when a field is added, so
+     * hot-reload skew degrades to a null field rather than a link
+     * error. Same trade-off as the humane-error-handler pattern —
+     * fail into a survivable shape.
+     */
+    private static CredentialCheckDTO buildCheck(boolean verified,
+                                                  LocalDateTime checkedAt,
+                                                  String message,
+                                                  Boolean needsAuthorization,
+                                                  String authorizeUrl) {
+        CredentialCheckDTO dto = new CredentialCheckDTO();
+        dto.setVerified(verified);
+        dto.setCheckedAt(checkedAt);
+        dto.setMessage(message);
+        dto.setNeedsAuthorization(needsAuthorization);
+        dto.setAuthorizeUrl(authorizeUrl);
+        return dto;
     }
 
     @Override

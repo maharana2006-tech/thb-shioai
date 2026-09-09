@@ -452,4 +452,78 @@ class UpsConnectorPayloadTest {
         assertEquals("Jane Doe", shipTo.get("AttentionName"));
         assertEquals("jane@acme.example", shipTo.get("EMailAddress"));
     }
+
+    // ===================================================================
+    // PR C (2026-09-09) — paperless-invoice deny list
+    // ===================================================================
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void paperless_denied_egypt_omitsInternationalForms() throws Exception {
+        // Live 49-country matrix alert — UPS rejects "120372 The
+        // selected origin and destination pair does not accept
+        // paperless invoice" for Egypt. Our fix: skip emitting
+        // ShipmentServiceOptions.InternationalForms for EG; the printed
+        // CI is still available on demand via
+        // /orders/{n}/commercial-invoice.
+        ShipmentRequestDTO r = domesticRequest();
+        r.setRecipientCountryCode("EG");
+        r.setIntl(validIntl());
+
+        Map<String, Object> shipment = (Map<String, Object>) ((Map<String, Object>)
+                build(r).get("ShipmentRequest")).get("Shipment");
+        assertNull(shipment.get("ShipmentServiceOptions"),
+                "EG is on the paperless-invoice denylist — InternationalForms must be omitted");
+        // Shipment.InvoiceLineTotal is still emitted (UPS requires it for
+        // intl regardless of paperless status — 120502 fires without it).
+        assertNotNull(shipment.get("InvoiceLineTotal"),
+                "Shipment.InvoiceLineTotal must still be emitted for intl "
+                + "shipments even when paperless is disabled (UPS 120502)");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void paperless_denied_brazil_omitsInternationalForms() throws Exception {
+        // Same audit — Brazil. Second country flagged by the operator.
+        ShipmentRequestDTO r = domesticRequest();
+        r.setRecipientCountryCode("BR");
+        r.setIntl(validIntl());
+
+        Map<String, Object> shipment = (Map<String, Object>) ((Map<String, Object>)
+                build(r).get("ShipmentRequest")).get("Shipment");
+        assertNull(shipment.get("ShipmentServiceOptions"),
+                "BR is on the paperless-invoice denylist — InternationalForms must be omitted");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void paperless_allowed_britain_stillEmitsInternationalForms_regressionGuard() throws Exception {
+        // Regression: the denylist must not accidentally suppress
+        // paperless for the 99% of destinations UPS DOES support. GB is
+        // a canary — pre-PR-C paperless behavior preserved exactly.
+        ShipmentRequestDTO r = domesticRequest();
+        r.setRecipientCountryCode("GB");
+        r.setIntl(validIntl());
+
+        Map<String, Object> shipment = (Map<String, Object>) ((Map<String, Object>)
+                build(r).get("ShipmentRequest")).get("Shipment");
+        Map<String, Object> serviceOptions = (Map<String, Object>) shipment.get("ShipmentServiceOptions");
+        assertNotNull(serviceOptions, "GB is not on the denylist; InternationalForms must be present");
+        assertNotNull(serviceOptions.get("InternationalForms"));
+    }
+
+    @Test
+    void paperlessInvoiceAcceptedFor_helper_isCaseInsensitiveAndBlankSafe() {
+        // Direct-hit unit test of the predicate — case handling and
+        // blank-safety pinned so a future refactor can't silently
+        // regress on "eG" or "" inputs.
+        UpsConnector c = new UpsConnector(new CarrierProperties(), new ObjectMapper());
+        assertTrue(c.paperlessInvoiceAcceptedFor("US"));
+        assertTrue(c.paperlessInvoiceAcceptedFor("GB"));
+        assertFalse(c.paperlessInvoiceAcceptedFor("EG"));
+        assertFalse(c.paperlessInvoiceAcceptedFor("eg"));
+        assertFalse(c.paperlessInvoiceAcceptedFor("BR"));
+        assertTrue(c.paperlessInvoiceAcceptedFor(""), "blank country → accepted (upstream presence check catches missing country)");
+        assertTrue(c.paperlessInvoiceAcceptedFor(null));
+    }
 }

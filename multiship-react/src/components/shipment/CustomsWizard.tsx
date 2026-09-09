@@ -91,6 +91,22 @@ const WEIGHT_UNITS = ['LB', 'KG'] as const
  * the matching hint so operators can proactively enable paperless / ETD in
  * their carrier portal before the first cross-border label.
  */
+/**
+ * PR C (2026-09-09) — ISO alpha-2 destination codes where UPS does NOT
+ * accept Paperless Invoice / Paperless Trade. Mirrors the backend
+ * {@code UpsConnector.PAPERLESS_INVOICE_DENIED_COUNTRIES} whitelist.
+ * When a shipment's carrier is UPS and the destination is here, we
+ * show a green info banner so operators know the auto-flip happened
+ * without a scary 120372 error round-trip.
+ */
+const UPS_PAPERLESS_DENIED = new Set(['EG', 'BR'])
+
+/** Country-code → friendly name for banner copy. */
+const PAPERLESS_DENIED_LABELS: Record<string, string> = {
+  EG: 'Egypt',
+  BR: 'Brazil',
+}
+
 const CARRIER_HINTS: Record<string, { title: string; body: string; docsUrl: string }> = {
   UPS: {
     title: 'UPS Paperless Invoice',
@@ -143,6 +159,17 @@ export default function CustomsWizard({
   const carrierHint = carrierCode
     ? CARRIER_HINTS[carrierCode.trim().toUpperCase()]
     : undefined
+
+  // PR C — auto-flip banner. Only relevant when the carrier is UPS AND
+  // the destination is on the paperless-denied list. Blank carrier or
+  // non-UPS carriers get no banner (FedEx ETD / DHL Paperless Trade
+  // have their own destination-support matrices, tracked separately).
+  const paperlessDeniedCountry: string | null = useMemo(() => {
+    const carrier = (carrierCode || '').trim().toUpperCase()
+    const dest = (destinationCountry || '').trim().toUpperCase()
+    if (carrier !== 'UPS') return null
+    return UPS_PAPERLESS_DENIED.has(dest) ? dest : null
+  }, [carrierCode, destinationCountry])
 
   const invoiceTotal = useMemo(
     () =>
@@ -256,6 +283,7 @@ export default function CustomsWizard({
             value={value}
             invoiceTotal={invoiceTotal}
             carrierHint={carrierHint}
+            paperlessDeniedCountry={paperlessDeniedCountry}
           />
         ) : null}
       </div>
@@ -795,10 +823,15 @@ function ReviewStep({
   value,
   invoiceTotal,
   carrierHint,
+  paperlessDeniedCountry,
 }: {
   value: OrderCustomsPayload
   invoiceTotal: number
   carrierHint?: { title: string; body: string; docsUrl: string }
+  /** PR C — non-null when the shipment is UPS and the destination
+   *  doesn't accept UPS Paperless Invoice (EG / BR). Shows a green
+   *  info banner so operators know the printed CI will attach. */
+  paperlessDeniedCountry?: string | null
 }) {
   return (
     <div className="space-y-4">
@@ -849,6 +882,33 @@ function ReviewStep({
           </div>
         </div>
       </div>
+
+      {/* PR C — paperless-invoice auto-flip banner. Fires when the
+          carrier is UPS AND the destination is on the paperless-denied
+          list (EG / BR today; extend via backend property). Emerald
+          styling keeps this from looking like an error — the auto-flip
+          IS the fix, not a problem. */}
+      {paperlessDeniedCountry ? (
+        <div
+          className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3"
+          data-testid="ups-paperless-denied-banner"
+        >
+          <div className="flex items-start gap-2">
+            <FiInfo className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+            <div>
+              <div className="text-[12px] font-semibold text-emerald-900">
+                {(PAPERLESS_DENIED_LABELS[paperlessDeniedCountry] ?? paperlessDeniedCountry)}
+                {' '}doesn't support UPS Paperless Invoice
+              </div>
+              <p className="mt-1 text-[11.5px] leading-4 text-emerald-800">
+                A printed commercial invoice will be attached automatically.
+                No paperless-invoice request will be sent to UPS
+                (avoids error 120372 for this destination).
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {carrierHint ? (
         <div className="rounded-2xl border border-sky-200 bg-sky-50 p-3">

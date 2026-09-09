@@ -95,14 +95,13 @@ const credentialLabelsFor = (carrierCode: string) => {
       secretLong: 'Password',
       idShort: 'IntegrationID',
       secretShort: 'password',
-      // Placeholder shows the GUID example so operators paste the right shape
-      // upfront (used to fail server-side after Save with a "must be a GUID"
-      // message that only appeared post-round-trip). Braced {…}, urn:uuid: and
-      // 32-hex-no-hyphens variants are auto-normalised — the FE + BE both
-      // reshape them into the canonical 8-4-4-4-12 form.
-      idPlaceholder: 'e.g. 01234567-89ab-cdef-0123-456789abcdef',
+      // Placeholder + helper cover BOTH SWSIM (legacy SOAP, GUID
+      // IntegrationID) and SERA (REST OAuth, opaque client_id). The
+      // site-wide flavor toggle (Settings → System) picks which one
+      // is active; operator's key must match that flavor's shape.
+      idPlaceholder: 'GUID for SWSIM (01234567-…) OR opaque client_id for SERA (Az…)',
       helper:
-        'Stamps.com SWSIM: IntegrationID is a GUID assigned to the integrator on developer.stamps.com. Username + Password are the end-user\'s Stamps.com account login. Braces {…}, urn:uuid: prefix, and no-hyphens variants are auto-normalised.',
+        'Stamps.com: paste the credential matching the API flavor selected in Settings → System. SWSIM (legacy SOAP) uses a GUID IntegrationID from developer.stamps.com — braces {…}, urn:uuid: prefix, and no-hyphens variants are auto-normalised. SERA (OAuth REST) uses an opaque client_id string. Username + Password / secret are the end-user\'s Stamps.com account credentials for either flavor.',
     }
   }
   if (normalized === 'DHL') {
@@ -441,6 +440,21 @@ export default function CarrierConnections({
     setBusyId(account.id)
     try {
       const response = await accountRefService.verifyAccount(account.id)
+      // Stamps.com SERA 3-legged OAuth (PR #628): when the backend
+      // signals `needsAuthorization`, the account has no refresh_token
+      // yet. Kick off the browser consent flow in a new tab — the
+      // callback endpoint stores the refresh_token and next verify
+      // succeeds. Same pattern for authorization_code servers that
+      // don't support client_credentials.
+      if (response.data?.needsAuthorization) {
+        const url = response.data.authorizeUrl
+          || accountRefService.authorizeStampsSera(account.id)
+        notify.info(
+          'Opening Stamps.com in a new tab. Complete the consent flow, then click Verify again.',
+        )
+        window.open(url, '_blank', 'noopener,noreferrer')
+        return
+      }
       if (response.data?.verified) notify.success(response.message)
       else notify.error(response.message)
       await loadAccounts()

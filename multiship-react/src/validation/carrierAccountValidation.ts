@@ -118,14 +118,16 @@ export function validateCarrierAccount(
     else if (idT.length > 120) e.clientId = 'Too long — did you paste extra text?'
     else if (/\s/.test(idT)) e.clientId = 'Remove spaces — paste the key exactly as issued'
     else if (!NO_ANGLE.test(idT)) e.clientId = NO_ANGLE_MSG
-    // Stamps.com SWSIM requires the IntegrationID to be a GUID. Reject inline
-    // BEFORE the operator hits Save/Verify (used to fail server-side with a
-    // "must be a GUID" message that showed up only after the round trip).
-    // Accepts the same shapes the backend normaliser does: canonical
-    // 8-4-4-4-12, braced {…}, urn:uuid: prefix, and 32-hex-no-hyphens.
-    else if (isUsps && !isValidStampsIntegrationId(idT)) {
-      e.clientId = `${idLabel} must be a GUID (e.g. 01234567-89ab-cdef-0123-456789abcdef)`
-    }
+    // Stamps.com GUID hard-reject removed 2026-09-09. Prior to the
+    // SERA REST integration (PRs #611-#635) all Stamps.com accounts
+    // used the SWSIM SOAP API where IntegrationID was a strict GUID.
+    // SERA client_ids are OPAQUE strings (e.g.
+    // "AzQl3k0PhrhZo1D4XEIuvhWmr1oAVxu3") — 32 chars but not
+    // GUID-shaped. The FE can't tell SWSIM vs SERA at form time
+    // (that's a site-wide setting), so gating here would false-reject
+    // valid SERA credentials. Backend `StampsConnector` gates the
+    // GUID validator on `carrier.stamps.api-flavor=SWSIM` and gives
+    // a clearer error message when the flavor is wrong for the key.
 
     const secT = v.clientSecret.trim()
     if (!secT) e.clientSecret = `${secretLabel} is required`
