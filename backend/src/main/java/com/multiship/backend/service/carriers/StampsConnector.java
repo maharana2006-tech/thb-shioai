@@ -354,9 +354,38 @@ public class StampsConnector implements CarrierConnector {
         return getAccessTokenSwsim(clientId, clientSecret, accountNumber, environment);
     }
 
-    /** @return true when {@code carrier.stamps.api-flavor=SERA} (case-insensitive). */
+    /**
+     * DB-backed override of {@link CarrierProperties.Stamps#getApiFlavor()}.
+     * The admin picks SWSIM vs SERA on /settings/system; the setting is
+     * stored under {@code carrier.stamps.api-flavor} and overrides the
+     * property value app-wide. Optional injection so unit tests that
+     * construct the connector directly keep working — with the service
+     * absent, the property-based flavor is authoritative.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.service.SystemSettingService systemSettingService;
+
+    /** Setting key mirrored from {@link CarrierProperties.Stamps#getApiFlavor()}. */
+    public static final String FLAVOR_SETTING_KEY = "carrier.stamps.api-flavor";
+
+    /** @return true when the effective flavor (DB override → property fallback)
+     *  is SERA (case-insensitive). */
     private boolean isSeraFlavor() {
-        String flavor = carrierProperties.getStamps().getApiFlavor();
+        String flavor = null;
+        if (systemSettingService != null) {
+            try {
+                flavor = systemSettingService.getDecrypted(FLAVOR_SETTING_KEY).orElse(null);
+            } catch (Exception ex) {
+                // System setting unavailable (e.g. encryption key absent) —
+                // fall back to the property. Never let a settings-DB hiccup
+                // break shipping calls.
+                log.debug("SystemSetting[{}] read failed; using property fallback: {}",
+                        FLAVOR_SETTING_KEY, ex.getMessage());
+            }
+        }
+        if (!StringUtils.hasText(flavor)) {
+            flavor = carrierProperties.getStamps().getApiFlavor();
+        }
         return flavor != null && "SERA".equalsIgnoreCase(flavor.trim());
     }
 

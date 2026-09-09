@@ -36,27 +36,39 @@ import java.util.Map;
 public class SystemSettingsController {
 
     /**
-     * Registry of admin-manageable settings. Each entry surfaces on the
-     * Settings page with its description; the actual value flow is via
-     * {@link SystemSettingService}.
+     * Registry of admin-manageable settings. Each entry describes the
+     * setting's kind (SECRET vs CHOICE), the FE render hints, and the
+     * validation rules on the {@code /put} path.
      */
-    private static final List<Map.Entry<String, String>> KNOWN_SETTINGS = List.of(
-            Map.entry(OpenAiClient.SETTING_KEY,
+    private static final List<SettingSpec> KNOWN_SETTINGS = List.of(
+            new SettingSpec(
+                    OpenAiClient.SETTING_KEY,
                     "OpenAI API key used by AI-assist features (paste-to-fill, HS suggest). "
-                            + "Overrides the OPENAI_API_KEY env var.")
+                            + "Overrides the OPENAI_API_KEY env var.",
+                    SystemSettingDTO.Kind.SECRET,
+                    null, null),
+            // Site-wide Stamps.com API-flavor toggle. Overrides the property
+            // default (carrier.stamps.api-flavor) for every USPS/Stamps account
+            // on the platform. CHOICE kind — the FE renders a radio picker
+            // and displays the current cleartext value (not a secret).
+            new SettingSpec(
+                    com.multiship.backend.service.carriers.StampsConnector.FLAVOR_SETTING_KEY,
+                    "Stamps.com API flavor for every USPS account on the platform. "
+                            + "SWSIM = legacy SOAP (Client ID must be a GUID); "
+                            + "SERA = newer OAuth 2.0 REST (3-legged authorize flow, "
+                            + "Client ID is an opaque string). Overrides "
+                            + "carrier.stamps.api-flavor. Defaults to SWSIM.",
+                    SystemSettingDTO.Kind.CHOICE,
+                    List.of("SWSIM", "SERA"),
+                    "SWSIM")
     );
 
     private final SystemSettingService service;
 
-    @Operation(summary = "List admin-managed settings with masked values")
+    @Operation(summary = "List admin-managed settings with masked values or cleartext choice values")
     @GetMapping
     public ResponseEntity<List<SystemSettingDTO>> list() {
-        List<SystemSettingDTO> body = KNOWN_SETTINGS.stream().map(e -> {
-            String key = e.getKey();
-            boolean has = service.has(key);
-            String masked = has ? service.maskedPreview(key).orElse("(encrypted — no decrypt key)") : "";
-            return new SystemSettingDTO(key, has, masked, e.getValue());
-        }).toList();
+        List<SystemSettingDTO> body = KNOWN_SETTINGS.stream().map(this::toDTO).toList();
         return ResponseEntity.ok(body);
     }
 
@@ -69,24 +81,51 @@ public class SystemSettingsController {
         String value = body == null ? null : body.get("value");
         String actor = auth == null ? "unknown" : auth.getName();
 
-        if (!isKnown(key)) {
+        SettingSpec spec = findSpec(key);
+        if (spec == null) {
             return ResponseEntity.notFound().build();
         }
+        // CHOICE settings validate against their options — a rogue caller
+        // can't seed "PIGEON_POST" as the Stamps flavor. SECRET settings
+        // accept any non-blank value (validation lives on the consumer).
+        if (spec.kind == SystemSettingDTO.Kind.CHOICE) {
+            if (value == null || spec.options == null
+                    || !spec.options.contains(value.trim())) {
+                return ResponseEntity.badRequest().build();
+            }
+            value = value.trim();
+        }
         service.setEncrypted(key, value, actor);
-        String masked = service.maskedPreview(key).orElse("");
-        return ResponseEntity.ok(new SystemSettingDTO(
-                key, service.has(key), masked, descriptionFor(key)));
+        return ResponseEntity.ok(toDTO(spec));
     }
 
-    private static boolean isKnown(String key) {
-        return KNOWN_SETTINGS.stream().anyMatch(e -> e.getKey().equals(key));
+    // ===== helpers =====
+
+    private SystemSettingDTO toDTO(SettingSpec spec) {
+        boolean has = service.has(spec.key);
+        String masked = has ? service.maskedPreview(spec.key).orElse("(encrypted — no decrypt key)") : "";
+        String current = null;
+        if (spec.kind == SystemSettingDTO.Kind.CHOICE) {
+            // CHOICE values are safe to reveal — the FE needs the current
+            // pick to highlight the selected radio button. Fall through
+            // to the default when nothing's stored yet.
+            current = has ? service.getDecrypted(spec.key).orElse(spec.defaultValue)
+                    : spec.defaultValue;
+        }
+        return new SystemSettingDTO(
+                spec.key, has, masked, spec.description,
+                spec.kind, spec.options, current, spec.defaultValue);
     }
 
-    private static String descriptionFor(String key) {
+    private static SettingSpec findSpec(String key) {
         return KNOWN_SETTINGS.stream()
-                .filter(e -> e.getKey().equals(key))
-                .map(Map.Entry::getValue)
+                .filter(s -> s.key.equals(key))
                 .findFirst()
-                .orElse("");
+                .orElse(null);
     }
+
+    /** Registry entry — key + description + render hints. */
+    private record SettingSpec(String key, String description,
+                                SystemSettingDTO.Kind kind, List<String> options,
+                                String defaultValue) {}
 }

@@ -8,11 +8,22 @@ import { apiClient } from './apiClient'
  * accepts a plaintext {@code value} and the backend encrypts it before
  * persisting.
  */
+/**
+ * Render hint from the backend registry: SECRET → password input +
+ * masked preview; CHOICE → radio picker over {@link options} with
+ * {@link currentValue} highlighted.
+ */
+export type SystemSettingKind = 'SECRET' | 'CHOICE'
+
 export interface SystemSetting {
   key: string
   hasValue: boolean
   maskedValue: string
   description: string
+  kind?: SystemSettingKind | null
+  options?: string[] | null
+  currentValue?: string | null
+  defaultValue?: string | null
 }
 
 export const systemSettingsService = {

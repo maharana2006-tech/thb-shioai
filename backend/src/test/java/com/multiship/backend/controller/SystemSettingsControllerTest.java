@@ -53,6 +53,9 @@ class SystemSettingsControllerTest {
     private SystemSettingsController controller;
 
     private static final String KNOWN_KEY = "openai.api-key";
+    private static final String FLAVOR_KEY = "carrier.stamps.api-flavor";
+    /** Registry size — grow this in lockstep with SystemSettingsController.KNOWN_SETTINGS. */
+    private static final int REGISTRY_SIZE = 2;
 
     @BeforeEach
     void setUp() {
@@ -77,9 +80,12 @@ class SystemSettingsControllerTest {
         ResponseEntity<List<SystemSettingDTO>> re = controller.list();
 
         assertEquals(HttpStatus.OK, re.getStatusCode());
-        assertEquals(1, re.getBody().size(),
-                "Registry currently exposes exactly 1 setting (openai.api-key).");
-        SystemSettingDTO dto = re.getBody().get(0);
+        assertEquals(REGISTRY_SIZE, re.getBody().size(),
+                "Registry currently exposes " + REGISTRY_SIZE
+                        + " settings (openai.api-key + carrier.stamps.api-flavor).");
+        SystemSettingDTO dto = re.getBody().stream()
+                .filter(d -> KNOWN_KEY.equals(d.getKey()))
+                .findFirst().orElseThrow();
         assertEquals(KNOWN_KEY, dto.getKey());
         assertTrue(dto.isHasValue());
         assertEquals("****abcd", dto.getMaskedValue());
@@ -96,7 +102,9 @@ class SystemSettingsControllerTest {
         ResponseEntity<List<SystemSettingDTO>> re = controller.list();
 
         assertEquals(HttpStatus.OK, re.getStatusCode());
-        SystemSettingDTO dto = re.getBody().get(0);
+        SystemSettingDTO dto = re.getBody().stream()
+                .filter(d -> KNOWN_KEY.equals(d.getKey()))
+                .findFirst().orElseThrow();
         assertEquals(false, dto.isHasValue());
         assertEquals("", dto.getMaskedValue(),
                 "No value stored → masked empty string (not '(encrypted…)').");
@@ -116,7 +124,76 @@ class SystemSettingsControllerTest {
 
         ResponseEntity<List<SystemSettingDTO>> re = controller.list();
 
-        assertEquals("(encrypted — no decrypt key)", re.getBody().get(0).getMaskedValue());
+        SystemSettingDTO dto = re.getBody().stream()
+                .filter(d -> KNOWN_KEY.equals(d.getKey()))
+                .findFirst().orElseThrow();
+        assertEquals("(encrypted — no decrypt key)", dto.getMaskedValue());
+    }
+
+    // ================ CHOICE-kind setting (stamps api-flavor) ================
+
+    @Test
+    void list_flavorChoice_exposesOptionsAndCurrentValue() {
+        // CHOICE settings surface the current cleartext value + option list
+        // so the FE can render a radio picker. Not a secret — the flavor
+        // pick is public config.
+        when(service.has(FLAVOR_KEY)).thenReturn(true);
+        when(service.getDecrypted(FLAVOR_KEY)).thenReturn(Optional.of("SERA"));
+
+        ResponseEntity<List<SystemSettingDTO>> re = controller.list();
+
+        SystemSettingDTO dto = re.getBody().stream()
+                .filter(d -> FLAVOR_KEY.equals(d.getKey()))
+                .findFirst().orElseThrow();
+        assertEquals(SystemSettingDTO.Kind.CHOICE, dto.getKind(),
+                "flavor setting must be CHOICE so the FE renders a radio picker");
+        assertEquals(List.of("SWSIM", "SERA"), dto.getOptions());
+        assertEquals("SERA", dto.getCurrentValue(),
+                "CHOICE settings must expose the current cleartext value (not masked)");
+        assertEquals("SWSIM", dto.getDefaultValue(),
+                "flavor setting default must remain SWSIM (backward-compat)");
+    }
+
+    @Test
+    void list_flavorChoice_unsetReturnsDefault() {
+        when(service.has(FLAVOR_KEY)).thenReturn(false);
+
+        ResponseEntity<List<SystemSettingDTO>> re = controller.list();
+
+        SystemSettingDTO dto = re.getBody().stream()
+                .filter(d -> FLAVOR_KEY.equals(d.getKey()))
+                .findFirst().orElseThrow();
+        assertEquals("SWSIM", dto.getCurrentValue(),
+                "when nothing is stored, currentValue falls back to the default");
+    }
+
+    @Test
+    void update_flavorChoice_acceptsValidOption() {
+        ResponseEntity<SystemSettingDTO> re = controller.update(
+                FLAVOR_KEY, Map.of("value", "SERA"), auth("admin"));
+
+        assertEquals(HttpStatus.OK, re.getStatusCode());
+        verify(service, times(1)).setEncrypted(FLAVOR_KEY, "SERA", "admin");
+    }
+
+    @Test
+    void update_flavorChoice_rejectsInvalidOption() {
+        ResponseEntity<SystemSettingDTO> re = controller.update(
+                FLAVOR_KEY, Map.of("value", "PIGEON_POST"), auth("admin"));
+
+        assertEquals(HttpStatus.BAD_REQUEST, re.getStatusCode(),
+                "CHOICE settings must reject values outside the option list");
+        verify(service, never()).setEncrypted(eq(FLAVOR_KEY), any(), any());
+    }
+
+    @Test
+    void update_flavorChoice_rejectsNullValue() {
+        ResponseEntity<SystemSettingDTO> re = controller.update(
+                FLAVOR_KEY, Map.of("other", "field"), auth("admin"));
+
+        assertEquals(HttpStatus.BAD_REQUEST, re.getStatusCode(),
+                "CHOICE settings require a value — null clear is not supported");
+        verify(service, never()).setEncrypted(eq(FLAVOR_KEY), any(), any());
     }
 
     // ================ PUT /{key} ================

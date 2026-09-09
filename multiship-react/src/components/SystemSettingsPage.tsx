@@ -88,6 +88,9 @@ export default function SystemSettingsPage() {
           {items.map((item) => {
             const inputValue = inputs[item.key] ?? ''
             const isSaving = savingKey === item.key
+            const isChoice = item.kind === 'CHOICE' && Array.isArray(item.options) && item.options.length > 0
+            const effectiveChoice =
+              inputs[item.key] || item.currentValue || item.defaultValue || ''
             return (
               <section
                 key={item.key}
@@ -103,7 +106,14 @@ export default function SystemSettingsPage() {
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2 text-[12px]">
-                    {item.hasValue ? (
+                    {isChoice ? (
+                      <>
+                        <FiCheck className="h-3.5 w-3.5 text-emerald-600" />
+                        <span className="font-mono text-slate-700">
+                          {item.currentValue ?? item.defaultValue ?? '—'}
+                        </span>
+                      </>
+                    ) : item.hasValue ? (
                       <>
                         <FiCheck className="h-3.5 w-3.5 text-emerald-600" />
                         <span className="font-mono text-slate-600">{item.maskedValue}</span>
@@ -114,34 +124,77 @@ export default function SystemSettingsPage() {
                   </div>
                 </div>
 
-                <div className="mt-3 flex gap-2">
-                  <input
-                    type="password"
-                    autoComplete="new-password"
-                    placeholder={item.hasValue ? 'Replace stored value' : 'Enter new value'}
-                    className="flex-1 rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-[13px] outline-none focus:border-slate-500"
-                    value={inputValue}
-                    onChange={(e) =>
-                      setInputs((prev) => ({ ...prev, [item.key]: e.target.value }))
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void save(item.key)
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void save(item.key)}
-                    disabled={isSaving || !inputValue.trim()}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-900 bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {isSaving ? (
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-white" />
-                    ) : (
-                      <FiSave className="h-3.5 w-3.5" />
-                    )}
-                    Save
-                  </button>
-                </div>
+                {isChoice ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <div className="inline-flex rounded-lg border border-slate-300 bg-slate-50 p-0.5">
+                      {(item.options ?? []).map((opt) => {
+                        const selected = effectiveChoice === opt
+                        return (
+                          <button
+                            key={opt}
+                            type="button"
+                            onClick={() =>
+                              setInputs((prev) => ({ ...prev, [item.key]: opt }))
+                            }
+                            className={`rounded-md px-3 py-1 text-[12.5px] font-semibold transition ${
+                              selected
+                                ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200'
+                                : 'text-slate-500 hover:text-slate-800'
+                            }`}
+                          >
+                            {opt}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void save(item.key)}
+                      disabled={
+                        isSaving ||
+                        !inputValue.trim() ||
+                        inputValue.trim() === (item.currentValue ?? '')
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-900 bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {isSaving ? (
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-white" />
+                      ) : (
+                        <FiSave className="h-3.5 w-3.5" />
+                      )}
+                      Apply
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-3 flex gap-2">
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      placeholder={item.hasValue ? 'Replace stored value' : 'Enter new value'}
+                      className="flex-1 rounded-lg border border-slate-300 bg-slate-50 px-3 py-1.5 text-[13px] outline-none focus:border-slate-500"
+                      value={inputValue}
+                      onChange={(e) =>
+                        setInputs((prev) => ({ ...prev, [item.key]: e.target.value }))
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void save(item.key)
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void save(item.key)}
+                      disabled={isSaving || !inputValue.trim()}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-900 bg-slate-900 px-3 py-1.5 text-[12.5px] font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {isSaving ? (
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-white" />
+                      ) : (
+                        <FiSave className="h-3.5 w-3.5" />
+                      )}
+                      Save
+                    </button>
+                  </div>
+                )}
               </section>
             )
           })}
