@@ -247,7 +247,11 @@ public class OrderImportServiceImpl implements OrderImportService {
      * on permit acquire to 30s; on overflow the batch aborts with a
      * TenantSaturatedException that the controller surfaces as 429.
      */
-    private static final long IMPORT_MAX_BATCH_WAIT_MS = 30_000L;
+    // No total budget. A 1,000-order file cannot even be QUEUED in 30 s at
+    // carrier speed (8 slots x ~3 s per label), and the old 30 s cap aborted
+    // every large import after ~100 orders (2026-09-10 load test). A stalled
+    // run is still caught: FairTenantExecutor gives each slot 60 s to free up.
+    private static final long IMPORT_MAX_BATCH_WAIT_MS = Long.MAX_VALUE;
     private com.multiship.backend.service.fairness.FairTenantExecutor fairExecutor;
 
     @PostConstruct
@@ -1020,6 +1024,75 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
     }
 
+    /**
+     * {@link #syncRowsWithLiveOrders(List)}, plus rows that carry NO order number
+     * but whose order already exists in this import's label batch - labelled by a
+     * worker that finished after the row set was saved. Matched by the customer
+     * reference the order was created with (the row's reference, else its
+     * orderRef). Without this a Retry labels those orders a second time.
+     */
+    void syncRowsWithLiveOrders(List<OrderImportRowDTO> rows, Integer labelBatchId) {
+        syncRowsWithLiveOrders(rows);
+        if (rows == null || labelBatchId == null || importBatchRepository == null) return;
+        Map<String, List<OrderImportRowDTO>> byRef = new LinkedHashMap<>();
+        for (OrderImportRowDTO r : rows) {
+            if (r.getGeneratedOrderNo() != null || "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())) continue;
+            for (String k : new String[]{r.getReference(), r.getOrderRef()}) {
+                if (StringUtils.hasText(k)) {
+                    byRef.computeIfAbsent(k.trim().toUpperCase(Locale.ROOT), x -> new ArrayList<>()).add(r);
+                }
+            }
+        }
+        if (byRef.isEmpty()) return;
+        try {
+            // One order per reference: a GENERATED one wins, else the latest.
+            Map<String, Object[]> best = new LinkedHashMap<>();
+            for (Object[] o : importBatchRepository.findOrdersInLabelBatchByCustomerRefIn(labelBatchId, byRef.keySet())) {
+                String ref = String.valueOf(o[1]).trim().toUpperCase(Locale.ROOT);
+                Object[] cur = best.get(ref);
+                boolean gen = "GENERATED".equalsIgnoreCase(String.valueOf(o[2]));
+                boolean curGen = cur != null && "GENERATED".equalsIgnoreCase(String.valueOf(cur[2]));
+                if (cur == null || gen || !curGen) best.put(ref, o);
+            }
+            for (Map.Entry<String, Object[]> e : best.entrySet()) {
+                Integer no = ((Number) e.getValue()[0]).intValue();
+                boolean gen = "GENERATED".equalsIgnoreCase(String.valueOf(e.getValue()[2]));
+                for (OrderImportRowDTO r : byRef.getOrDefault(e.getKey(), List.of())) {
+                    if (r.getGeneratedOrderNo() != null) continue;
+                    r.setGeneratedOrderNo(no);
+                    r.setBatchId(labelBatchId);
+                    if (gen) {
+                        r.setGeneratedStatus("GENERATED");
+                        if (orderTrackingRepository != null) {
+                            orderTrackingRepository.findByOrderNo(no).ifPresent(t -> {
+                                if (StringUtils.hasText(t.getTrackingNumber())) r.setGeneratedTrackingNumber(t.getTrackingNumber());
+                            });
+                        }
+                        r.setGeneratedMessage("Labelled in an earlier run (order #" + no + ") — not re-sent.");
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("Import retry: could not match rows to orders in label batch {}: {}", labelBatchId, ex.getMessage());
+        }
+    }
+
+    /** "108 of 1000 order(s) labelled · 2 failed": orders, not rows (item-line rows share their order's label). */
+    static String ordersSummary(List<OrderImportRowDTO> rows) {
+        Map<String, String> state = new LinkedHashMap<>();
+        int pos = 0;
+        for (OrderImportRowDTO r : rows == null ? List.<OrderImportRowDTO>of() : rows) {
+            pos++;
+            String key = StringUtils.hasText(r.getOrderRef()) ? r.getOrderRef().trim().toUpperCase(Locale.ROOT) : "#pos" + pos;
+            String st = r.getGeneratedStatus() == null ? "" : r.getGeneratedStatus().trim().toUpperCase(Locale.ROOT);
+            state.merge(key, st, (a, b) -> a.equals("GENERATED") || b.equals("GENERATED") ? "GENERATED"
+                    : (a.equals("FAILED") || b.equals("FAILED") ? "FAILED" : a));
+        }
+        long gen = state.values().stream().filter("GENERATED"::equals).count();
+        long failed = state.values().stream().filter("FAILED"::equals).count();
+        return gen + " of " + state.size() + " order(s) labelled" + (failed > 0 ? " · " + failed + " failed" : "");
+    }
+
     private boolean orderIsLabelled(Integer orderNo) {
         if (orderRepository == null || orderNo == null) return false;
         try {
@@ -1697,17 +1770,35 @@ public class OrderImportServiceImpl implements OrderImportService {
                 generated += outcome.generated;
             }
         } catch (com.multiship.backend.service.fairness.FairTenantExecutor.TenantSaturatedException sat) {
-            // Sprint 50 PR K — tenant already has IMPORT_MAX_PER_TENANT batches
-            // in flight; refuse rather than pin an HTTP thread. Any already-
-            // submitted tasks complete on their own; caller retries the rest.
-            log.warn("Order import commit for tenant {} aborted: {} of {} groups submitted",
+            // No worker slot freed up for this client within the per-slot wait,
+            // so the rest of the file was not dispatched. Orders already handed
+            // to workers are still being labelled: WAIT for them. The caller
+            // saves the row set right after this, and a row whose order lands
+            // after that save reads "not generated" - a Retry then labels it a
+            // second time (8 duplicates in the 2026-09-10 load test).
+            for (Future<?> f : sat.getPartialFutures()) {
+                try {
+                    Object o = f.get();
+                    if (o instanceof GroupOutcome g) {
+                        valid += g.valid;
+                        invalid += g.invalid;
+                        generated += g.generated;
+                    }
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (java.util.concurrent.ExecutionException ee) {
+                    log.warn("Order import commit worker crashed: {}", ee.getMessage(), ee);
+                }
+            }
+            log.warn("Order import commit for tenant {} stalled: {} of {} groups dispatched (all finished)",
                     tenantKey, sat.getSubmittedTasks(), sat.getTotalTasks());
             return ApiResponse.<OrderImportPreviewDTO>builder()
                     .status("error").code(HttpStatus.TOO_MANY_REQUESTS.value())
                     .errorCode(ErrorCode.TENANT_RATE_LIMITED.name())
-                    .message("Too many concurrent import batches for this client. "
+                    .message("Label generation stalled: no worker slot freed up for this client for 60 s. "
                             + sat.getSubmittedTasks() + " of " + sat.getTotalTasks()
-                            + " groups accepted; retry the remainder in ~30s.")
+                            + " orders were sent; click Retry to send the rest.")
                     .build();
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
@@ -2090,7 +2181,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         // repaired from the Orders grid (Edit → Fix & regenerate), it is live
         // at the carrier — re-sending the stale row would buy a second label
         // and flip the order back to ERROR. Sync from the order first.
-        syncRowsWithLiveOrders(rows);
+        syncRowsWithLiveOrders(rows, batch.getLabelBatchId());
         List<OrderImportRowDTO> rowsToProcess = onlyFailed
                 ? rows.stream()
                         .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
@@ -2206,8 +2297,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
         batch = importBatchRepository.save(batch);
 
-        log.info("Import batch {} label generation ({}): {}/{} labels → {} (labelBatch {})",
-                id, requestedBy, generated, total, batch.getStatus(), batch.getLabelBatchId());
+        log.info("Import batch {} label generation ({}): {} → {} (labelBatch {})",
+                id, requestedBy, ordersSummary(rows), batch.getStatus(), batch.getLabelBatchId());
         // Logs page: batch-generation summary in the shipment trail (per-order
         // LABEL_GENERATED / CARRIER_REJECTED rows come from the carrier layer).
         if (auditService != null) {
@@ -2215,9 +2306,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                     failed > 0 ? AuditService.SEV_WARN : AuditService.SEV_INFO,
                     AuditService.IMPORT_GENERATED, AuditService.IMPORT_BATCH, id,
                     batch.getFileName(), null,
-                    generated + " of " + total + " label(s) generated"
-                            + (failed > 0 ? " · " + failed + " failed" : "")
-                            + (invalid > 0 ? " · " + invalid + " still need fixes" : ""),
+                    ordersSummary(rows)
+                            + (invalid > 0 ? " · " + invalid + " row(s) still need fixes" : ""),
                     null, requestedBy);
         }
         return toBatchDTO(batch, rows);
@@ -2389,7 +2479,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             }
         }
         if (group.isEmpty()) group.add(target);
-        syncRowsWithLiveOrders(group);
+        syncRowsWithLiveOrders(group, batch.getLabelBatchId());
         if (!allowDuplicate) {
             List<OrderImportRowDTO> dup = group.stream()
                     .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))

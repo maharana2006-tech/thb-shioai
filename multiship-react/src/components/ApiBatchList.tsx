@@ -6,6 +6,7 @@ import type { ImportBatchSummary, OrderImportRow } from '../api/orderImportServi
 import { notify } from '../utils/notify'
 import { ApiError } from '../api/apiClient'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
+import VirtualTable from './VirtualTable'
 import { BTN_PRIMARY, BTN_GHOST, BTN_PRIMARY_SM } from './ui/buttons'
 
 /**
@@ -497,13 +498,19 @@ export default function ApiBatchList() {
                     {rowsBusy ? (
                       <p className="px-4 py-6 text-center text-[12px] text-[#6b5c42]">Loading shipments…</p>
                     ) : rows && rows.length ? (
-                      <div className="overflow-x-auto">
+                      <div>
                         <p className="px-4 pt-3 text-[11px] text-[#6b5c42]">
                           Click any cell to edit — it saves and re-validates on blur. Fix the flagged cells, then generate.
                         </p>
-                        <table className="w-full text-left text-[12px]">
-                          <thead>
-                            <tr className="text-[10px] uppercase tracking-[0.05em] text-[#b6a684]">
+                        <VirtualTable
+                          rows={rows}
+                          rowKey={(r) => r.rowNumber}
+                          colCount={API_COLUMNS.length + 2}
+                          maxHeight="65vh"
+                          tableClassName="w-full text-left text-[12px]"
+                          head={
+                          <thead className="sticky top-0 z-30">
+                            <tr className="bg-[#fdfbf6] text-[10px] uppercase tracking-[0.05em] text-[#b6a684]">
                               <th className="sticky left-0 z-10 bg-[#fdfbf6] px-2 py-2 font-bold">Row</th>
                               {API_COLUMNS.map((c) => (
                                 <th key={c.key} className="whitespace-nowrap px-2 py-2 font-bold">
@@ -513,8 +520,8 @@ export default function ApiBatchList() {
                               <th className="px-3 py-2 font-bold">Label</th>
                             </tr>
                           </thead>
-                          <tbody>
-                            {rows.map((r) => {
+                          }
+                          renderRow={(r, index, measureRef) => {
                               const ok = (r.errors?.length ?? 0) === 0
                               const gen = (r.generatedStatus ?? '').toUpperCase()
                               const generated = gen === 'GENERATED'
@@ -529,7 +536,7 @@ export default function ApiBatchList() {
                               const hasExplain = !ok || (failed && !!r.generatedMessage) || warnings.length > 0
                               return (
                                 <Fragment key={r.rowNumber}>
-                                <tr className={ok && !failed ? 'bg-white' : 'bg-rose-50/40'}>
+                                <tr ref={measureRef} data-index={index} className={ok && !failed ? 'bg-white' : 'bg-rose-50/40'}>
                                   <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok && !failed ? 'bg-white' : 'bg-rose-50'}`}>
                                     <div className="flex items-center gap-1.5">
                                       <span className="font-mono text-[10px] font-bold text-[#6b5c42]">{r.rowNumber}</span>
@@ -618,9 +625,8 @@ export default function ApiBatchList() {
                                 </tr>
                                 </Fragment>
                               )
-                            })}
-                          </tbody>
-                        </table>
+                          }}
+                        />
                       </div>
                     ) : (
                       <p className="px-4 py-6 text-center text-[12px] text-[#6b5c42]">No shipments in this batch.</p>

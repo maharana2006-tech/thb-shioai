@@ -21,6 +21,7 @@ import {
 } from '../../api/orderImportService'
 import { notify } from '../../utils/notify'
 import { ApiError } from '../../api/apiClient'
+import VirtualTable from '../VirtualTable'
 
 /** Clean, user-facing text + a friendly title for an upload/save failure —
  *  duplicate-file (409) gets its own heading instead of "Something went wrong". */
@@ -876,6 +877,16 @@ function PreviewStep({
   // list on the left, the selected order's editable fields on the right).
   const [view, setView] = useState<'table' | 'detail'>('table')
   const [selectedRowNo, setSelectedRowNo] = useState<number | null>(null)
+  // A 1,000-order file is 2,484 rows: let the reviewer narrow to what needs a look.
+  const [rowFilter, setRowFilter] = useState<'all' | 'errors' | 'warnings'>('all')
+  const errorRowCount = preview.rows.filter((r) => (r.errors?.length ?? 0) > 0).length
+  const warningRowCount = preview.rows.filter((r) => (r.warnings?.length ?? 0) > 0).length
+  const shown =
+    rowFilter === 'errors'
+      ? preview.rows.filter((r) => (r.errors?.length ?? 0) > 0)
+      : rowFilter === 'warnings'
+        ? preview.rows.filter((r) => (r.warnings?.length ?? 0) > 0)
+        : preview.rows
 
   const cellFor = (r: OrderImportRow, col: PreviewColumn, errs?: string[]) => {
     const raw = (r as unknown as Record<string, unknown>)[col.key]
@@ -911,6 +922,25 @@ function PreviewStep({
             </button>
           ))}
         </div>
+        <div className="inline-flex overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Show rows">
+          {([
+            ['all', `All ${preview.rows.length}`],
+            ['errors', `Errors ${errorRowCount}`],
+            ['warnings', `Warnings ${warningRowCount}`],
+          ] as const).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              aria-pressed={rowFilter === k}
+              onClick={() => setRowFilter(k)}
+              className={`px-2.5 py-1 text-[10.5px] font-semibold transition ${
+                rowFilter === k ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <span className="ml-auto inline-flex items-center gap-1.5 text-[10.5px] text-[#b6a684]">
           {savingCell ? (
             <>
@@ -926,9 +956,16 @@ function PreviewStep({
       {/* TABLE view — dense spreadsheet grid: one row per order, one column per
           CSV field. Cells edit in place; a failing cell goes red. */}
       {view === 'table' ? (
-      <div className="overflow-x-auto rounded-xl border border-[#e3d9c4]">
-        <table className="w-full border-collapse text-[11px]">
-          <thead>
+      <VirtualTable
+        rows={shown}
+        rowKey={(r) => r.rowNumber}
+        colCount={1 + PREVIEW_COLUMNS.length + customCols.length}
+        maxHeight="60vh"
+        className="rounded-xl border border-[#e3d9c4]"
+        tableClassName="w-full border-collapse text-[11px]"
+        empty={<p className="py-6 text-center text-[11px] text-[#6b5c42]">No rows match this filter.</p>}
+        head={
+          <thead className="sticky top-0 z-30">
             <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.08em] text-[#6b5c42]">
               <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
               {PREVIEW_COLUMNS.map((c) => (
@@ -941,8 +978,8 @@ function PreviewStep({
               ))}
             </tr>
           </thead>
-          <tbody>
-            {preview.rows.map((r) => {
+        }
+        renderRow={(r, index, measureRef) => {
               const customKeys = Object.keys(r.customFields ?? {})
               const { byField } = bucketErrors(r.errors ?? [], customKeys)
               const ok = (r.errors?.length ?? 0) === 0
@@ -955,7 +992,7 @@ function PreviewStep({
                 ...(r.warnings ?? []).map((w) => '⚠ ' + w),
               ].join('\n') || undefined
               return (
-                <tr key={r.rowNumber} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
+                <tr key={r.rowNumber} ref={measureRef} data-index={index} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
                   {/* Single frozen column: row number + status, so nothing can
                       bleed through a gap between two separate sticky columns. */}
                   <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
@@ -1005,10 +1042,8 @@ function PreviewStep({
                   ))}
                 </tr>
               )
-            })}
-          </tbody>
-        </table>
-      </div>
+        }}
+      />
       ) : (
       /* MASTER–DETAIL: pick a row on the left, edit its fields on the right. */
       (() => {
@@ -1025,7 +1060,7 @@ function PreviewStep({
           <div className="flex h-[440px] overflow-hidden rounded-xl border border-[#e3d9c4]">
             {/* Left — row list */}
             <div className="w-56 shrink-0 overflow-y-auto border-r border-[#eee6d6] bg-[#faf7f0]">
-              {preview.rows.map((r) => {
+              {shown.map((r) => {
                 const rOk = (r.errors?.length ?? 0) === 0
                 const active = selected?.rowNumber === r.rowNumber
                 return (

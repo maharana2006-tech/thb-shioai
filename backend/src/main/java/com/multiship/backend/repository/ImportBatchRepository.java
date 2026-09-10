@@ -73,6 +73,24 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long> 
             @org.springframework.data.repository.query.Param("refs") java.util.Collection<String> refs);
 
     /**
+     * Orders already created inside one label batch for the given customer
+     * references (upper-cased) — lets a Retry recognise an order that was labelled
+     * but never recorded on its import row (e.g. a worker still in flight when the
+     * row set was saved) instead of labelling it a second time.
+     * Returns [order_no, customer_ref, order_status].
+     */
+    @org.springframework.data.jpa.repository.Query(value = """
+        SELECT b.order_no, b.customer_ref, b.order_status
+        FROM label_batch b
+        WHERE b.batch_id = :batchId
+          AND UPPER(b.customer_ref) IN (:refs)
+        ORDER BY b.order_no
+        """, nativeQuery = true)
+    List<Object[]> findOrdersInLabelBatchByCustomerRefIn(
+            @org.springframework.data.repository.query.Param("batchId") Integer batchId,
+            @org.springframework.data.repository.query.Param("refs") java.util.Collection<String> refs);
+
+    /**
      * Atomic status transition — the anti-race gate for
      * {@link com.multiship.backend.service.OrderImportServiceImpl#generateLabelsForBatch}.
      * Sets status=newStatus only if the current row status is currently
