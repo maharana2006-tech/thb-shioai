@@ -67,10 +67,44 @@ class BulkLabelServiceImplTest {
         when(jobRepo.findById(anyLong()))
                 .thenAnswer(inv -> Optional.ofNullable(saved.get(inv.<Long>getArgument(0))));
 
+        // Bulk MEDIUM #9 + #14 — status() now uses a lightweight projection
+        // to avoid dragging the ZIP through every 2s poll. Mirror the
+        // in-memory map for the projection path so status() tests still
+        // find the seeded rows.
+        when(jobRepo.findSummaryById(anyLong()))
+                .thenAnswer(inv -> {
+                    BulkLabelJob j = saved.get(inv.<Long>getArgument(0));
+                    if (j == null) return Optional.empty();
+                    return Optional.of(summaryOf(j));
+                });
+
         // Sprint 50 Tier 0.5 PR E - enforcer with flag OFF is a pure
         // pass-through, so existing test behavior is unchanged.
         service = new BulkLabelServiceImpl(jobRepo, carrierService, orderRepo,
                 new TenantScopeEnforcer(new AccessScopePolicy(false)));
+    }
+
+    /** Build a projection-interface stand-in from an in-memory BulkLabelJob
+     *  so the mocked {@code findSummaryById} can return one. Mirrors what
+     *  Spring Data would produce from the native query. */
+    private static com.multiship.backend.repository.BulkLabelJobRepository.BulkLabelJobSummary
+            summaryOf(BulkLabelJob j) {
+        return new com.multiship.backend.repository.BulkLabelJobRepository.BulkLabelJobSummary() {
+            @Override public Long getId() { return j.getId(); }
+            @Override public String getStatus() { return j.getStatus(); }
+            @Override public int getTotalCount() { return j.getTotalCount(); }
+            @Override public int getSuccessfulCount() { return j.getSuccessfulCount(); }
+            @Override public int getFailedCount() { return j.getFailedCount(); }
+            @Override public String getFailureMessage() { return j.getFailureMessage(); }
+            @Override public java.time.LocalDateTime getCreatedAt() { return j.getCreatedAt(); }
+            @Override public java.time.LocalDateTime getStartedAt() { return j.getStartedAt(); }
+            @Override public java.time.LocalDateTime getCompletedAt() { return j.getCompletedAt(); }
+            @Override public String getOrderNumbers() { return j.getOrderNumbers(); }
+            @Override public String getRequestedBy() { return j.getRequestedBy(); }
+            @Override public boolean getHasResultZip() {
+                return j.getResultZipBase64() != null && !j.getResultZipBase64().isEmpty();
+            }
+        };
     }
 
     private static LabelGenerationResponse okLabel(long orderNo) {
@@ -320,6 +354,31 @@ class BulkLabelServiceImplTest {
         assertNull(service.downloadLabelPdf(label));
     }
 
+    /* -------------------------- Dedup + idempotency -------------------------- */
+
+    /**
+     * Bulk MEDIUM — duplicate orderNos in the submit request should be
+     * silently deduped BEFORE persisting the job. Previously the second
+     * occurrence would produce a duplicate entry in the ZIP and inflate
+     * the successful count. Dedup preserves input order (LinkedHashSet).
+     */
+    @Test
+    void submitDedupsDuplicateOrderNos() {
+        ApiResponse<BulkLabelJobDTO> resp = service.submit(
+                BulkLabelRequestDTO.builder()
+                        .orderNumbers(java.util.List.of(42L, 43L, 42L, 44L, 43L))
+                        .build(),
+                "alice");
+
+        assertEquals("success", resp.getStatus());
+        // Post-dedup: {42, 43, 44} preserved in input order.
+        BulkLabelJob persisted = saved.values().iterator().next();
+        assertEquals(3, persisted.getTotalCount(),
+                "Dedup must drop duplicates BEFORE persisting; totalCount reflects unique orders only");
+        assertEquals("42,43,44", persisted.getOrderNumbers(),
+                "Input ordering (LinkedHashSet) must be preserved after dedup");
+    }
+
     /* -------------------------- Status polling -------------------------- */
 
     @Test
@@ -390,8 +449,11 @@ class BulkLabelServiceImplTest {
         org.mockito.ArgumentCaptor<org.springframework.security.core.userdetails.UserDetails> captor =
                 org.mockito.ArgumentCaptor.forClass(
                         org.springframework.security.core.userdetails.UserDetails.class);
+        // Bulk MED — idempotency key now includes jobId so different bulk
+        // jobs for the same order don't silently reuse each other's
+        // cached labels. Key shape is "bulk-{jobId}-{orderNo}".
         org.mockito.Mockito.verify(carrierService)
-                .generateLabel(eq(1L), captor.capture(), eq("bulk-1"), org.mockito.ArgumentMatchers.isNull());
+                .generateLabel(eq(1L), captor.capture(), eq("bulk-70-1"), org.mockito.ArgumentMatchers.isNull());
 
         org.springframework.security.core.userdetails.UserDetails passed = captor.getValue();
         assertNotNull(passed,
@@ -611,8 +673,9 @@ class BulkLabelServiceImplTest {
         org.mockito.ArgumentCaptor<org.springframework.security.core.userdetails.UserDetails> captor =
                 org.mockito.ArgumentCaptor.forClass(
                         org.springframework.security.core.userdetails.UserDetails.class);
+        // Idempotency key includes the persisted jobId (71 in this fixture).
         org.mockito.Mockito.verify(carrierService)
-                .generateLabel(eq(1L), captor.capture(), eq("bulk-1"), org.mockito.ArgumentMatchers.isNull());
+                .generateLabel(eq(1L), captor.capture(), eq("bulk-71-1"), org.mockito.ArgumentMatchers.isNull());
         assertNotNull(captor.getValue());
         assertEquals("unknown", captor.getValue().getUsername());
     }

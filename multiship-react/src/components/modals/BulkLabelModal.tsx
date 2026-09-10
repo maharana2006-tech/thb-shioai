@@ -51,7 +51,10 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
 
   const clearPoll = () => {
     if (pollTimer.current != null) {
-      window.clearInterval(pollTimer.current)
+      // Bulk MED — the poll loop switched from setInterval to a
+      // self-rescheduling setTimeout for exponential backoff, so use
+      // clearTimeout here (clearInterval is a no-op on setTimeout IDs).
+      window.clearTimeout(pollTimer.current)
       pollTimer.current = null
     }
   }
@@ -75,33 +78,67 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
     }
   }
 
+  /**
+   * Bulk MED — exponential backoff on the status poll. Prior to this
+   * fix the FE polled every 2s regardless of progress, which added up
+   * fast: 10 concurrent operators × 1 poll/2s × server-side ZIP-load
+   * (until the sibling backend fix landed) = gigabytes/min of pointless
+   * traffic. Now the poll starts at 1s (fast feedback on quick jobs),
+   * doubles up to a 15s ceiling, and resets whenever an incremental
+   * counter advances (real progress → poll faster; nothing happening →
+   * back off). The terminal-status branch clears the timer regardless.
+   */
   const startPolling = (jobId: number) => {
     clearPoll()
-    pollTimer.current = window.setInterval(async () => {
+    let delayMs = 1_000
+    const MIN_DELAY = 1_000
+    const MAX_DELAY = 15_000
+    let lastDone = -1
+    const tick = async () => {
       try {
         const response = await bulkLabelService.status(jobId)
         const next = response.data
-        if (!next) return
-        setJob(next)
-        if (next.status === 'COMPLETED' || next.status === 'FAILED' || next.status === 'CANCELLED') {
-          clearPoll()
-          if (next.status === 'COMPLETED') {
-            notify.success(
-              `Bulk labels done — ${next.successfulCount}/${next.totalCount} generated.`,
-            )
-          } else if (next.status === 'CANCELLED') {
-            notify.info(
-              `Bulk-label job cancelled — ${next.successfulCount} label(s) finished before the stop.`,
-            )
+        if (next) {
+          setJob(next)
+          const done = next.successfulCount + next.failedCount
+          if (done !== lastDone) {
+            // Progress observed — reset backoff so the operator sees
+            // fast updates while orders are actively completing.
+            delayMs = MIN_DELAY
+            lastDone = done
           } else {
-            notify.error('Bulk-label job failed. See error message.')
+            // Steady state — double the interval, capped, so a batch
+            // waiting on a slow carrier doesn't hammer /status.
+            delayMs = Math.min(delayMs * 2, MAX_DELAY)
+          }
+          if (next.status === 'COMPLETED' || next.status === 'FAILED' || next.status === 'CANCELLED') {
+            clearPoll()
+            if (next.status === 'COMPLETED') {
+              notify.success(
+                `Bulk labels done — ${next.successfulCount}/${next.totalCount} generated.`,
+              )
+            } else if (next.status === 'CANCELLED') {
+              notify.info(
+                `Bulk-label job cancelled — ${next.successfulCount} label(s) finished before the stop.`,
+              )
+            } else {
+              notify.error('Bulk-label job failed. See error message.')
+            }
+            return
           }
         }
       } catch (e) {
-        // Transient poll failures don't kill the session — keep polling.
+        // Transient poll failures don't kill the session — keep polling
+        // but back off so a persistently failing endpoint doesn't
+        // consume all the browser's connection budget.
         console.warn('Poll error', e)
+        delayMs = Math.min(delayMs * 2, MAX_DELAY)
       }
-    }, 2000)
+      pollTimer.current = window.setTimeout(tick, delayMs)
+    }
+    // Fire the first tick immediately so the operator sees status right
+    // after Submit rather than waiting 1s for the first setTimeout.
+    void tick()
   }
 
   /**

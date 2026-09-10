@@ -311,6 +311,23 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             return failure(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION_ERROR, ex.getMessage());
         }
 
+        // Bulk MEDIUM — dedupe orderNos before persisting. If the operator
+        // submits [42, 42, 43] (accidental double-click after grid
+        // selection, or copy-paste error) we used to run order 42 twice
+        // and end up with 'label-42-*.pdf' duplicated in the ZIP. Now
+        // the second occurrence is silently dropped; the FE gets an
+        // outcome-count that matches what was actually processed
+        // (successfulCount + failedCount == distinct order count).
+        // LinkedHashSet preserves the operator's input ordering — the
+        // ZIP still reflects the sequence they submitted.
+        int preDedupeSize = resolvedOrderNos.size();
+        resolvedOrderNos = new java.util.ArrayList<>(
+                new java.util.LinkedHashSet<>(resolvedOrderNos));
+        if (resolvedOrderNos.size() < preDedupeSize) {
+            log.info("Bulk-label submit: dedup'd {} duplicate orderNo(s); {} unique orders will process",
+                    preDedupeSize - resolvedOrderNos.size(), resolvedOrderNos.size());
+        }
+
         if (resolvedOrderNos.size() > MAX_BULK_ORDERS) {
             return failure(HttpStatus.UNPROCESSABLE_CONTENT, ErrorCode.BULK_LIMIT_EXCEEDED,
                     "Bulk batch limited to " + MAX_BULK_ORDERS + " orders — this request has "
@@ -661,7 +678,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             }
         }
         try {
-            LabelGenerationResponse label = generateSingle(orderNo, jobUser);
+            LabelGenerationResponse label = generateSingle(jobId, orderNo, jobUser);
             if (label == null) {
                 return OrderOutcome.failure(orderNo, "label service returned null");
             }
@@ -724,9 +741,16 @@ public class BulkLabelServiceImpl implements BulkLabelService {
 
     /**
      * Delegate to the existing single-order label pipeline. Idempotency
-     * key + accountId are null — bulk operators aren't picking accounts
-     * per row; they want the default cascade to resolve each order's
-     * carrier account.
+     * key includes the {@code jobId} so a bulk job's request for order N
+     * is a distinct idempotency envelope from a different bulk job's
+     * request for the same order N. Pre-fix the key was just
+     * {@code bulk-{orderNo}} and CarrierServiceImpl.generateLabel would
+     * silently return the FIRST job's cached label to the SECOND job as
+     * a success — a stale label reuse across independent operator
+     * requests. Bulk MEDIUM #10 fix.
+     *
+     * <p>accountId is null — bulk operators aren't picking accounts per
+     * row; the default cascade resolves each order's carrier account.
      *
      * <p>{@code jobUser} is the reconstructed UserDetails for the operator
      * who submitted the bulk job (see {@link #buildJobUser}). Required
@@ -734,9 +758,9 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      * with "Authenticated user is required." — fan-out workers run off
      * the HTTP thread so SecurityContext is not automatically available.
      */
-    LabelGenerationResponse generateSingle(long orderNo, UserDetails jobUser) {
+    LabelGenerationResponse generateSingle(long jobId, long orderNo, UserDetails jobUser) {
         ApiResponse<LabelGenerationResponse> resp = carrierService
-                .generateLabel(orderNo, jobUser, "bulk-" + orderNo, null);
+                .generateLabel(orderNo, jobUser, "bulk-" + jobId + "-" + orderNo, null);
         return resp == null ? null : resp.getData();
     }
 
@@ -805,17 +829,27 @@ public class BulkLabelServiceImpl implements BulkLabelService {
 
     @Override
     public ApiResponse<BulkLabelJobDTO> status(Long jobId) {
-        Optional<BulkLabelJob> job = jobRepository.findById(jobId);
-        if (job.isEmpty()) {
+        // Bulk MEDIUM #9 + #14 — use a lightweight projection query that
+        // DOES NOT load the resultZipBase64 column. Before this fix,
+        // Hibernate's default findById pulled the whole entity —
+        // including a base64 ZIP that on 500-order jobs can be 130 MB —
+        // through the network on every 2s status poll. With 10 concurrent
+        // operators polling, that was gigabytes per minute of pointless
+        // JDBC transfer.
+        Optional<BulkLabelJobRepository.BulkLabelJobSummary> summary =
+                jobRepository.findSummaryById(jobId);
+        if (summary.isEmpty()) {
             return failure(HttpStatus.NOT_FOUND, ErrorCode.VALIDATION_ERROR,
                     "Bulk-label job " + jobId + " not found.");
         }
         // Sprint 50 Tier 0.5 PR G — belt guard on jobId enumeration.
         // The submit path clamps every order in the job, so all orders
         // belong to a single tenant. Load the first order and match its
-        // tenant against the caller's scope.
-        requireJobTenantMatch(job.get());
-        return success(toDto(job.get()), job.get().getStatus());
+        // tenant against the caller's scope. Uses the projection's
+        // orderNumbers (still a light column — the CSV string, not the
+        // ZIP).
+        requireJobTenantMatchFromOrderNumbers(summary.get().getOrderNumbers());
+        return success(toDtoFromSummary(summary.get()), summary.get().getStatus());
     }
 
     @Override
@@ -829,7 +863,14 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      *  submit path clamps every order, so the whole job is tenant-uniform.
      *  Pull the first orderNumber, load the order, requireTenantMatch. */
     private void requireJobTenantMatch(BulkLabelJob job) {
-        long[] orderNos = parseOrderNumbers(job.getOrderNumbers());
+        requireJobTenantMatchFromOrderNumbers(job.getOrderNumbers());
+    }
+
+    /** Same guard driven by a raw comma-separated orderNumbers string —
+     *  used by {@link #status(Long)} which loads via a lightweight
+     *  projection to avoid dragging the ZIP through every poll. */
+    private void requireJobTenantMatchFromOrderNumbers(String orderNumbersCsv) {
+        long[] orderNos = parseOrderNumbers(orderNumbersCsv);
         if (orderNos.length == 0) return;
         orderRepository.findByOrderNo((int) orderNos[0]).ifPresent(o ->
                 tenantScope.requireTenantMatch(
@@ -848,6 +889,26 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 .startedAt(j.getStartedAt())
                 .completedAt(j.getCompletedAt())
                 .downloadable(StringUtils.hasText(j.getResultZipBase64()))
+                .build();
+    }
+
+    /** DTO conversion for the lightweight projection used by
+     *  {@link #status(Long)}. Mirrors {@link #toDto(BulkLabelJob)}
+     *  field-for-field; the {@code downloadable} flag comes from
+     *  {@code hasResultZip} rather than a StringUtils check on the
+     *  ZIP itself (which we deliberately didn't load). */
+    static BulkLabelJobDTO toDtoFromSummary(BulkLabelJobRepository.BulkLabelJobSummary s) {
+        return BulkLabelJobDTO.builder()
+                .id(s.getId())
+                .status(s.getStatus())
+                .totalCount(s.getTotalCount())
+                .successfulCount(s.getSuccessfulCount())
+                .failedCount(s.getFailedCount())
+                .failureMessage(s.getFailureMessage())
+                .createdAt(s.getCreatedAt())
+                .startedAt(s.getStartedAt())
+                .completedAt(s.getCompletedAt())
+                .downloadable(s.getHasResultZip())
                 .build();
     }
 
