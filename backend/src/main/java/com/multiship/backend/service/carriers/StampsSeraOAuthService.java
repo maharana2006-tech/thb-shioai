@@ -24,6 +24,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Stamps.com SERA 3-legged OAuth support — builds the browser-authorize
@@ -67,6 +68,52 @@ public class StampsSeraOAuthService {
      *  dedicated key to keep signing + encryption domains separate. */
     @Value("${carrier.stamps.sera-state-signing-key:${secrets.encryption-key:}}")
     private String stateSigningSecret;
+
+    /**
+     * SERA access-token cache keyed by {@code SHA-256(refresh_token) + "|" + env}.
+     * The value we cache is the short-lived {@code access_token} SERA returns;
+     * the point of the cache is to skip the {@code POST /oauth/token} round-trip
+     * on every carrier call. Without it, a 500-order bulk batch with the default
+     * 24-worker pool = up to 500 refresh_token exchanges against Auctane per
+     * batch — Auctane rate-limits token requests separately from ship requests,
+     * so this trips before the shipment API does.
+     *
+     * <p><b>Refresh_token itself is NEVER used as the map key</b> — even as an
+     * in-memory hashmap key, refresh_tokens are secrets we treat like passwords.
+     * SHA-256 collapses to a 32-byte fingerprint that's safe to hold in a map;
+     * a caller with a different refresh_token deterministically hits a
+     * different slot.
+     *
+     * <p><b>refresh_tokens may rotate.</b> SERA can hand back a new
+     * {@code refresh_token} in the exchange response; the caller is responsible
+     * for persisting it and passing the new value on subsequent calls. When
+     * that happens, the new refresh_token hashes to a different key and we
+     * miss the cache once — that's the correct behavior. The old entry
+     * eventually expires and is evicted lazily on the next lookup for that
+     * hash (which won't happen again).
+     *
+     * <p><b>Access_token failures are NOT cached.</b> {@link #refreshToken}
+     * returns a failure {@link TokenExchangeResult} on rejection; the cache
+     * only ever stores successful results with a positive TTL from the
+     * response's {@code expires_in}.
+     */
+    private final ConcurrentHashMap<String, CachedAccessToken> tokenCache = new ConcurrentHashMap<>();
+
+    /** Refresh a cached access-token this many seconds before its declared
+     *  expiry so an in-flight worker doesn't submit against a token that
+     *  expires mid-request. */
+    private static final long TOKEN_REFRESH_MARGIN_SECONDS = 60;
+
+    /**
+     * Cached access-token entry. Does NOT store the refresh_token, only
+     * the access_token — the caller owns refresh_token persistence.
+     */
+    private record CachedAccessToken(String accessToken, String rotatedRefreshToken,
+                                      Instant expiresAt) {
+        boolean isValid() {
+            return Instant.now().isBefore(expiresAt.minusSeconds(TOKEN_REFRESH_MARGIN_SECONDS));
+        }
+    }
 
     /**
      * Build the fully-formed authorize URL the frontend should redirect
@@ -159,17 +206,104 @@ public class StampsSeraOAuthService {
      * the exchange result including any newly-issued refresh_token (SERA
      * MAY rotate the refresh token on each refresh; callers should
      * persist a non-null value back).
+     *
+     * <p>Cached by {@code SHA-256(refresh_token) + "|" + env}. Successive
+     * calls with the same refresh_token within the cached access_token's
+     * TTL (minus the {@link #TOKEN_REFRESH_MARGIN_SECONDS} margin) return
+     * the cached value without a network round-trip. On rotation the new
+     * refresh_token hashes to a different key and we miss the cache once,
+     * as intended.
      */
     public TokenExchangeResult refreshToken(String refreshToken, String clientId, String clientSecret,
                                             String environment) {
-        return postToken(env(environment), body -> {
-            body.put("grant_type", "refresh_token");
-            body.put("refresh_token", refreshToken);
-            body.put("client_id", clientId);
-            if (StringUtils.hasText(clientSecret)) {
-                body.put("client_secret", clientSecret);
+        if (!StringUtils.hasText(refreshToken)) {
+            return TokenExchangeResult.failure("refresh_token is required");
+        }
+        String cacheKey = hashForKey(refreshToken) + "|" + envKey(environment);
+        CachedAccessToken existing = tokenCache.get(cacheKey);
+        if (existing != null && existing.isValid()) {
+            // Cache HIT — return a TokenExchangeResult built from the
+            // cached access_token. Preserve the rotatedRefreshToken from
+            // the original exchange so callers still see it (they may
+            // have persisted it already, so re-emitting is a no-op).
+            long remainingSeconds = Math.max(0,
+                    existing.expiresAt().getEpochSecond() - Instant.now().getEpochSecond());
+            return TokenExchangeResult.success(
+                    existing.accessToken(), existing.rotatedRefreshToken(), remainingSeconds);
+        }
+        // Miss — fetch a fresh access_token. Single-flighted via compute()
+        // so 24 concurrent bulk workers sharing the same refresh_token
+        // serialise on the same map bin rather than fire parallel token
+        // POSTs against Auctane. Returning null from the lambda removes
+        // any stale entry (compute contract) — used on failure so a
+        // transient Auctane outage doesn't leave a bad entry behind.
+        //
+        // We split into a boolean holder because compute() can only return
+        // the cached value; the failure/success result the caller needs
+        // is on the exchange response, not the cache entry.
+        java.util.concurrent.atomic.AtomicReference<TokenExchangeResult> outcome =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        tokenCache.compute(cacheKey, (k, cur) -> {
+            if (cur != null && cur.isValid()) {
+                long rem = Math.max(0,
+                        cur.expiresAt().getEpochSecond() - Instant.now().getEpochSecond());
+                outcome.set(TokenExchangeResult.success(
+                        cur.accessToken(), cur.rotatedRefreshToken(), rem));
+                return cur;
             }
+            TokenExchangeResult fresh = postToken(env(environment), body -> {
+                body.put("grant_type", "refresh_token");
+                body.put("refresh_token", refreshToken);
+                body.put("client_id", clientId);
+                if (StringUtils.hasText(clientSecret)) {
+                    body.put("client_secret", clientSecret);
+                }
+            });
+            outcome.set(fresh);
+            if (!fresh.success() || fresh.expiresInSeconds() <= 0) {
+                // Don't cache failures, and don't cache a zero-TTL success
+                // (safety — SERA should always provide expires_in, but if
+                // it doesn't, caching indefinitely would be worse than
+                // re-fetching).
+                return null;
+            }
+            return new CachedAccessToken(
+                    fresh.accessToken(),
+                    fresh.refreshToken(),
+                    Instant.now().plusSeconds(fresh.expiresInSeconds()));
         });
+        return outcome.get();
+    }
+
+    /** Package-private for tests + operational hygiene. */
+    void clearTokenCache() {
+        tokenCache.clear();
+    }
+
+    private static String envKey(String environment) {
+        return "SANDBOX".equalsIgnoreCase(environment) ? "SANDBOX" : "PRODUCTION";
+    }
+
+    /**
+     * SHA-256 fingerprint of the refresh_token, hex-encoded. Used as
+     * part of the cache key so we don't hold refresh_tokens (secrets) as
+     * plaintext map keys. Deterministic — same input always hashes to
+     * the same key.
+     */
+    private static String hashForKey(String refreshToken) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(refreshToken.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) sb.append(String.format(Locale.ROOT, "%02x", b));
+            return sb.toString();
+        } catch (Exception ex) {
+            // SHA-256 is a JDK-required algorithm; this can't realistically
+            // fail. Fall back to identityHashCode so the cache still works,
+            // just with a wider key surface (an attacker who can enumerate
+            // identityHashCodes to guess refresh_tokens has already lost).
+            return "id-" + System.identityHashCode(refreshToken);
+        }
     }
 
     // ===== implementation helpers =====
