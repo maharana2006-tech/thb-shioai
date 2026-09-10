@@ -18,6 +18,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -27,6 +28,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Component
@@ -79,6 +81,44 @@ public class UpsConnector implements CarrierConnector {
 
     /** Per-thread reason the last getAccessToken fell back — read by verify. */
     private static final ThreadLocal<String> LAST_AUTH_DETAIL = new ThreadLocal<>();
+
+    /**
+     * UPS U-1 — OAuth token cache keyed by {@code clientId + "|" + environment}
+     * so concurrent bulk workers (24 threads by default in
+     * {@link com.multiship.backend.service.BulkLabelServiceImpl}) don't each
+     * fetch their own token from UPS. Pre-cache, a 500-order bulk batch =
+     * 500 OAuth POSTs to UPS's token endpoint.
+     *
+     * <p>Access via {@link #getAccessToken(String, String, String, String)},
+     * which single-flights the refresh via {@link ConcurrentHashMap#compute}
+     * so many-worker cache-misses serialize on the same key rather than
+     * stampede UPS. Tokens are refreshed
+     * {@link #TOKEN_REFRESH_MARGIN_SECONDS} seconds before their declared
+     * expiry so an in-flight worker doesn't burn a token that expires
+     * mid-request.
+     *
+     * <p><b>Only real tokens are cached.</b> Fallback tokens (the
+     * {@code -local-...} placeholders {@link #buildFallbackToken} returns
+     * on OAuth failure) are NEVER put in the cache — otherwise a transient
+     * OAuth outage would poison the cache for a whole TTL window.
+     */
+    private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
+
+    /** Refresh margin — treat a token as expired {@value} seconds early so
+     *  in-flight workers don't submit against a token that expires
+     *  mid-request. Matches the FedEx connector's cache. */
+    private static final long TOKEN_REFRESH_MARGIN_SECONDS = 60;
+
+    /** Fallback when the UPS OAuth response doesn't include {@code expires_in}.
+     *  UPS tokens are documented as 4-hour tokens; the -60s margin then
+     *  refreshes at T-1min. */
+    private static final long TOKEN_DEFAULT_TTL_SECONDS = 14_400;
+
+    private record CachedToken(String token, Instant expiresAt) {
+        boolean isValid() {
+            return Instant.now().isBefore(expiresAt.minusSeconds(TOKEN_REFRESH_MARGIN_SECONDS));
+        }
+    }
 
     @Override
     public String consumeAuthFailureDetail() {
@@ -259,6 +299,59 @@ public class UpsConnector implements CarrierConnector {
      */
     @Override
     public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
+        String cacheKey = clientId + "|" + envKey(environment);
+        CachedToken existing = tokenCache.get(cacheKey);
+        if (existing != null && existing.isValid()) {
+            // Cache HIT — clear any stale per-thread auth detail from a
+            // prior caller so consumeAuthFailureDetail() doesn't lie.
+            LAST_AUTH_DETAIL.remove();
+            return existing.token();
+        }
+        // Miss (or near-expiry) — single-flight the refresh so 24 concurrent
+        // bulk workers hitting the same account don't all fire an OAuth POST.
+        // compute() holds a per-bin lock; other keys refresh in parallel.
+        // Recheck inside the lambda so a competing thread that already
+        // refreshed doesn't get re-fetched.
+        //
+        // Returning null from the lambda REMOVES the entry (compute()
+        // contract) — that's exactly what we want when the fetch fails,
+        // because we return a "-local-..." fallback token that must
+        // NEVER be cached. A transient UPS OAuth outage would otherwise
+        // poison the cache for a full TTL window.
+        CachedToken refreshed = tokenCache.compute(cacheKey, (k, cur) -> {
+            if (cur != null && cur.isValid()) return cur;
+            return fetchTokenUncached(clientId, clientSecret, accountNumber, environment);
+        });
+        if (refreshed == null) {
+            // fetchTokenUncached() already set LAST_AUTH_DETAIL and logged;
+            // fall back to the local placeholder so the caller can still
+            // render "not verified" without an exception blowing up the
+            // whole request.
+            return buildFallbackToken(clientId, clientSecret);
+        }
+        return refreshed.token();
+    }
+
+    /** Package-private for tests + operational hygiene. Cache is bounded by
+     *  the number of distinct (clientId, environment) tuples in the system
+     *  (dozens at most). */
+    void clearTokenCache() {
+        tokenCache.clear();
+    }
+
+    private static String envKey(String environment) {
+        return "SANDBOX".equalsIgnoreCase(environment) ? "SANDBOX" : "PRODUCTION";
+    }
+
+    /**
+     * Fetch a fresh token from UPS OAuth. Returns null on failure so the
+     * caller's {@code compute()} removes the cache entry (fallback tokens
+     * must NEVER be cached). Never called directly from outside — go
+     * through {@link #getAccessToken(String, String, String, String)} so
+     * caching applies.
+     */
+    private CachedToken fetchTokenUncached(String clientId, String clientSecret,
+                                            String accountNumber, String environment) {
         // Sprint 51 BS-L2 — LAST_AUTH_DETAIL is per-thread state that the
         // caller consumes AFTER we return. If a prior request on this same
         // pool-recycled thread set the detail and the caller never
@@ -296,10 +389,11 @@ public class UpsConnector implements CarrierConnector {
                 String safeBody = LogRedaction.redactSecrets(response, clientId, clientSecret);
                 log.warn("UPS token endpoint returned no access_token; response: {}", safeBody);
                 LAST_AUTH_DETAIL.set("UPS returned no access token.");
-                return buildFallbackToken(clientId, clientSecret);
+                return null;
             }
             LAST_AUTH_DETAIL.remove();
-            return accessToken;
+            long ttlSeconds = jsonNode.path("expires_in").asLong(TOKEN_DEFAULT_TTL_SECONDS);
+            return new CachedToken(accessToken, Instant.now().plusSeconds(ttlSeconds));
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             // UPS puts the reason ({"response":{"errors":[{"code":"...","message":"..."}]}})
             // in the response body. Surface it in the log AND to the operator so
@@ -311,11 +405,11 @@ public class UpsConnector implements CarrierConnector {
             String safeBody = LogRedaction.redactSecrets(body, clientId, clientSecret);
             log.warn("UPS token request rejected (HTTP {}): {} — using local fallback token.", status, safeBody);
             LAST_AUTH_DETAIL.set(describeUpsAuthError(status, body, isSandbox(environment)));
-            return buildFallbackToken(clientId, clientSecret);
+            return null;
         } catch (Exception ex) {
             log.warn("UPS token request failed; using local fallback token. Reason: {}", ex.getMessage());
             LAST_AUTH_DETAIL.set("could not reach the UPS OAuth endpoint (" + ex.getMessage() + ")");
-            return buildFallbackToken(clientId, clientSecret);
+            return null;
         }
     }
 
