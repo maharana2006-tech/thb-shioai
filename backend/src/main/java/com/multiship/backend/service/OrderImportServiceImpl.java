@@ -237,6 +237,8 @@ public class OrderImportServiceImpl implements OrderImportService {
     private static final class GenProgress {
         final java.util.concurrent.atomic.AtomicInteger done = new java.util.concurrent.atomic.AtomicInteger();
         final int total;
+        /** Shown under the progress bar while the run waits on a carrier; null otherwise. */
+        volatile String note;
         GenProgress(int total) { this.total = total; }
     }
 
@@ -1641,6 +1643,15 @@ public class OrderImportServiceImpl implements OrderImportService {
                                                      boolean usePlatformAccount, String sourceOverride,
                                                      Runnable onGroupComplete,
                                                      java.util.function.BooleanSupplier cancelCheck) {
+        return commit(rows, requestedBy, usePlatformAccount, sourceOverride, onGroupComplete, cancelCheck, null);
+    }
+
+    /** As above; {@code onNote} gets a one-line status while the run waits on a carrier (null clears it). */
+    public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy,
+                                                     boolean usePlatformAccount, String sourceOverride,
+                                                     Runnable onGroupComplete,
+                                                     java.util.function.BooleanSupplier cancelCheck,
+                                                     java.util.function.Consumer<String> onNote) {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
         }
@@ -1714,37 +1725,10 @@ public class OrderImportServiceImpl implements OrderImportService {
         log.info("Order import commit ({}): fanning {} groups across {} worker(s).",
                 requestedBy, groupCount, importCommitConcurrency);
 
+        List<List<OrderImportRowDTO>> groupList = new ArrayList<>(groups.values());
         List<Callable<GroupOutcome>> tasks = new ArrayList<>(groupCount);
-        for (Map.Entry<String, List<OrderImportRowDTO>> entry : groups.entrySet()) {
-            List<OrderImportRowDTO> group = entry.getValue();
-            tasks.add(() -> {
-                try {
-                    // Import I-3 — cancel gate checked BEFORE the carrier
-                    // call so queued groups are skipped as soon as the
-                    // operator hits Cancel. In-flight carrier calls
-                    // (whichever workers were mid-flight when cancel fired)
-                    // finish naturally — we can't interrupt a paid label
-                    // without leaking it.
-                    if (cancelCheck != null && cancelCheck.getAsBoolean()) {
-                        // Stamp each row in the group so operators see WHY
-                        // the group didn't ship — a blank status looks like
-                        // a bug otherwise.
-                        for (OrderImportRowDTO r : group) {
-                            r.setGeneratedStatus("FAILED");
-                            java.util.List<String> errs = new java.util.ArrayList<>(
-                                    r.getErrors() == null ? java.util.List.of() : r.getErrors());
-                            errs.add("Cancelled by operator before dispatch");
-                            r.setErrors(errs);
-                        }
-                        return new GroupOutcome(0, group.size(), 0);
-                    }
-                    return processGroup(group, batchId, usePlatformAccount, sourceOverride);
-                } finally {
-                    // Tick exactly once per group as it finishes (whatever the
-                    // outcome) so the live progress bar advances in real time.
-                    if (onGroupComplete != null) onGroupComplete.run();
-                }
-            });
+        for (List<OrderImportRowDTO> group : groupList) {
+            tasks.add(groupTask(group, batchId, usePlatformAccount, sourceOverride, onGroupComplete, cancelCheck));
         }
 
         // Sprint 50 Tier 1 finding #15 — tenant key for fair-share. Groups
@@ -1763,12 +1747,58 @@ public class OrderImportServiceImpl implements OrderImportService {
         try {
             ensureExecutors();
             List<Future<GroupOutcome>> futures = fairExecutor.submitAll(tenantKey, tasks);
-            for (Future<GroupOutcome> f : futures) {
-                GroupOutcome outcome = f.get();
+            List<List<OrderImportRowDTO>> deferred = new ArrayList<>();
+            for (int i = 0; i < futures.size(); i++) {
+                GroupOutcome outcome = futures.get(i).get();
+                if (outcome.rateLimited()) { deferred.add(groupList.get(i)); continue; }
                 valid += outcome.valid;
                 invalid += outcome.invalid;
                 generated += outcome.generated;
             }
+            // Wait out the carrier's cool-down, then resend only the throttled
+            // orders; up to MAX_RATE_LIMIT_PASSES times with a growing wait.
+            for (int pass = 1; pass <= MAX_RATE_LIMIT_PASSES && !deferred.isEmpty(); pass++) {
+                if (cancelCheck != null && cancelCheck.getAsBoolean()) break;
+                long waitMs = waitForCarriers(deferred);
+                String who = carrierLabel(carrierKey(deferred.get(0).get(0)));
+                log.info("Order import commit ({}): {} order(s) rate-limited by {}; waiting {} s before retry {} of {}",
+                        requestedBy, deferred.size(), who, waitMs / 1000, pass, MAX_RATE_LIMIT_PASSES);
+                long end = System.currentTimeMillis() + waitMs;
+                boolean cancelled = false;
+                while (System.currentTimeMillis() < end) {
+                    if (cancelCheck != null && cancelCheck.getAsBoolean()) { cancelled = true; break; }
+                    long left = Math.max(0, end - System.currentTimeMillis());
+                    if (onNote != null) onNote.accept(who + " asked us to slow down — retrying " + deferred.size()
+                            + " order(s) in " + ((left + 999) / 1000) + " s (attempt " + pass + " of " + MAX_RATE_LIMIT_PASSES + ")");
+                    Thread.sleep(Math.min(1_000L, Math.max(1L, left)));
+                }
+                if (cancelled) break;
+                if (onNote != null) onNote.accept("Retrying " + deferred.size() + " rate-limited order(s) (attempt "
+                        + pass + " of " + MAX_RATE_LIMIT_PASSES + ")");
+                List<Callable<GroupOutcome>> retryTasks = new ArrayList<>(deferred.size());
+                for (List<OrderImportRowDTO> g : deferred) {
+                    retryTasks.add(groupTask(g, batchId, usePlatformAccount, sourceOverride, onGroupComplete, cancelCheck));
+                }
+                List<Future<GroupOutcome>> retryFutures = fairExecutor.submitAll(tenantKey, retryTasks);
+                List<List<OrderImportRowDTO>> still = new ArrayList<>();
+                for (int i = 0; i < retryFutures.size(); i++) {
+                    GroupOutcome outcome = retryFutures.get(i).get();
+                    if (outcome.rateLimited()) { still.add(deferred.get(i)); continue; }
+                    valid += outcome.valid;
+                    invalid += outcome.invalid;
+                    generated += outcome.generated;
+                }
+                deferred = still;
+            }
+            for (List<OrderImportRowDTO> g : deferred) {
+                String who = carrierLabel(carrierKey(g.get(0)));
+                for (OrderImportRowDTO r : g) {
+                    r.setGeneratedMessage(who + " is still rate-limiting after " + MAX_RATE_LIMIT_PASSES
+                            + " automatic retries — click Retry in a few minutes.");
+                }
+                if (onGroupComplete != null) onGroupComplete.run();
+            }
+            if (onNote != null) onNote.accept(null);
         } catch (com.multiship.backend.service.fairness.FairTenantExecutor.TenantSaturatedException sat) {
             // No worker slot freed up for this client within the per-slot wait,
             // so the rest of the file was not dispatched. Orders already handed
@@ -2253,7 +2283,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             try {
                 commit(rowsToProcess, requestedBy, platform, sourceOverride,
                         () -> prog.done.incrementAndGet(),
-                        () -> cancelledBatchIds.contains(id));
+                        () -> cancelledBatchIds.contains(id),
+                        n -> prog.note = n);
             } finally {
                 generationProgressByBatch.remove(id);
             }
@@ -2545,7 +2576,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         GenProgress p = id == null ? null : generationProgressByBatch.get(id);
         if (p == null) return new GenProgressView(0, 0, false);
         // Clamp done ≤ total in case a poll lands between the last tick and removal.
-        return new GenProgressView(Math.min(p.done.get(), p.total), p.total, true);
+        return new GenProgressView(Math.min(p.done.get(), p.total), p.total, true, p.note);
     }
 
     /** Count of orderRef groups in a row set — one label (and one progress tick)
@@ -3896,6 +3927,14 @@ public class OrderImportServiceImpl implements OrderImportService {
             // ERROR order's number) so a retry UPDATEs that same order instead of
             // INSERTing a second one for the source row. Null on the first attempt
             // → a fresh order is minted.
+            // Carrier in a rate-limit cool-down: don't call it (that only extends the
+            // throttle); queue the order for the automatic retry pass instead.
+            String rlCarrier = carrierKey(leader);
+            Long pausedUntil = carrierPauseUntil.get(rlCarrier);
+            if (pausedUntil != null && pausedUntil > System.currentTimeMillis()) {
+                markRateLimited(group, rlCarrier, batchId);
+                return new GroupOutcome(valid, 0, 0, true);
+            }
             Integer existingOrderNo = leader.getGeneratedOrderNo();
             ApiResponse<com.multiship.backend.dto.LabelGenerationResponse> resp =
                     carrierService.generateManualLabel(req, null, existingOrderNo);
@@ -3930,6 +3969,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                         log.warn("Custom field write failed for order {}: {}", orderNo, ex.getMessage());
                     }
                 }
+                carrierStrikes.remove(rlCarrier);
                 return new GroupOutcome(valid, 0, 1);
             } else {
                 String raw = resp == null ? "no response" : resp.getMessage();
@@ -3940,6 +3980,11 @@ public class OrderImportServiceImpl implements OrderImportService {
                 // the carrier humanizer turned it into "UPS rejected the billing
                 // account", which points at the wrong place (no carrier was called).
                 String code = resp == null || resp.getErrorCode() == null ? "" : String.valueOf(resp.getErrorCode());
+                if ("CARRIER_RATE_LIMITED".equals(code)) {
+                    noteRateLimited(rlCarrier, raw);
+                    markRateLimited(group, rlCarrier, batchId);
+                    return new GroupOutcome(valid, 0, 0, true);
+                }
                 String msg = code.contains("VALIDATION") ? raw : humanizeCarrierError(raw, leader);
                 // The ERROR order's number comes back in the failure data — record
                 // it on every row of the group so a retry reuses it (no duplicate
@@ -3991,7 +4036,103 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /** Sprint 50 Tier 1 finding #8 — return shape for a per-group commit worker. */
-    private record GroupOutcome(int valid, int invalid, int generated) {}
+    private record GroupOutcome(int valid, int invalid, int generated, boolean rateLimited) {
+        GroupOutcome(int valid, int invalid, int generated) { this(valid, invalid, generated, false); }
+    }
+
+    /**
+     * One commit worker: the cancel gate, then the carrier call. Ticks the progress
+     * bar once when the group settles; a group deferred by a carrier rate limit ticks
+     * when its automatic retry settles instead, so the bar doesn't reach 100% while
+     * orders are still queued.
+     */
+    private Callable<GroupOutcome> groupTask(List<OrderImportRowDTO> group, Integer batchId, boolean usePlatformAccount,
+                                             String sourceOverride, Runnable onGroupComplete,
+                                             java.util.function.BooleanSupplier cancelCheck) {
+        return () -> {
+            GroupOutcome outcome = null;
+            try {
+                // Import I-3 — cancel gate checked BEFORE the carrier call so queued
+                // groups are skipped as soon as the operator hits Cancel. In-flight
+                // carrier calls finish naturally (a paid label can't be interrupted).
+                if (cancelCheck != null && cancelCheck.getAsBoolean()) {
+                    for (OrderImportRowDTO r : group) {
+                        r.setGeneratedStatus("FAILED");
+                        java.util.List<String> errs = new java.util.ArrayList<>(
+                                r.getErrors() == null ? java.util.List.of() : r.getErrors());
+                        errs.add("Cancelled by operator before dispatch");
+                        r.setErrors(errs);
+                    }
+                    outcome = new GroupOutcome(0, group.size(), 0);
+                    return outcome;
+                }
+                outcome = processGroup(group, batchId, usePlatformAccount, sourceOverride);
+                return outcome;
+            } finally {
+                if (onGroupComplete != null && (outcome == null || !outcome.rateLimited())) onGroupComplete.run();
+            }
+        };
+    }
+
+    /**
+     * Carrier rate limits (HTTP 429). In the 2026-09-10 load test UPS throttled
+     * from about order 480 and 139 orders failed; an immediate retry recovered
+     * none, a retry minutes later recovered them all. So: when a carrier answers
+     * 429, every import worker holds off that carrier until the cool-down ends
+     * (no hammering), and the throttled orders are resent automatically after it.
+     */
+    private final Map<String, Long> carrierPauseUntil = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Consecutive rate-limit episodes per carrier, for the escalating wait (reset by a success). */
+    private final Map<String, Integer> carrierStrikes = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Cool-down per episode (1st, 2nd, 3rd, 4th+). Instance field so tests can shorten it. */
+    private long[] rateLimitWaitsMs = {30_000L, 60_000L, 120_000L, 240_000L};
+    private static final int MAX_RATE_LIMIT_PASSES = 4;
+
+    private static String carrierKey(OrderImportRowDTO leader) {
+        return leader == null || leader.getCarrierCode() == null ? "" : leader.getCarrierCode().trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static String carrierLabel(String key) {
+        return "FEDEX".equals(key) ? "FedEx" : (key == null || key.isBlank() ? "The carrier" : key);
+    }
+
+    private void noteRateLimited(String carrier, String message) {
+        long now = System.currentTimeMillis();
+        Long hinted = null;
+        if (message != null) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("retry after (\\d+)\\s*s", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(message);
+            if (m.find()) hinted = Long.parseLong(m.group(1)) * 1000L;
+        }
+        final Long hint = hinted;
+        carrierPauseUntil.compute(carrier, (k, until) -> {
+            boolean newEpisode = until == null || until <= now;
+            int strikes = newEpisode ? carrierStrikes.merge(k, 1, Integer::sum) : carrierStrikes.getOrDefault(k, 1);
+            long wait = rateLimitWaitsMs[Math.min(Math.max(strikes, 1), rateLimitWaitsMs.length) - 1];
+            if (hint != null) wait = Math.max(wait, hint);
+            long next = now + wait;
+            return until == null ? next : Math.max(until, next);
+        });
+    }
+
+    private static void markRateLimited(List<OrderImportRowDTO> group, String carrier, Integer batchId) {
+        for (OrderImportRowDTO gr : group) {
+            gr.setGeneratedStatus("FAILED");
+            gr.setGeneratedMessage(carrierLabel(carrier)
+                    + " asked us to slow down (rate limit) — this order is queued for an automatic retry.");
+            if (batchId != null) gr.setBatchId(batchId);
+        }
+    }
+
+    /** Milliseconds until every carrier in these groups is out of its cool-down (at least 1 s). */
+    private long waitForCarriers(List<List<OrderImportRowDTO>> groups) {
+        long now = System.currentTimeMillis();
+        long until = now + 1_000L;
+        for (List<OrderImportRowDTO> g : groups) {
+            Long u = carrierPauseUntil.get(carrierKey(g.get(0)));
+            if (u != null && u > until) until = u;
+        }
+        return until - now;
+    }
 
     /**
      * Sprint 51 fix #2 — set the ship-from origin on a bulk request from the

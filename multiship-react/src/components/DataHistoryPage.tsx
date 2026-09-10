@@ -55,7 +55,7 @@ export default function DataHistoryPage() {
   const [generatingId, setGeneratingId] = useState<number | null>(null)
   // Live "X of N" label-generation progress per batch, polled while a batch
   // generate/retry runs so the button shows a real progress bar, not a spinner.
-  const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number }>>({})
+  const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number; note?: string | null }>>({})
   // Bill-to account: the batch whose "Bills to" selector is mid-save.
   const [billingSavingId, setBillingSavingId] = useState<number | null>(null)
   // Confirm-before-generate when a batch bills to the platform account.
@@ -341,7 +341,7 @@ export default function DataHistoryPage() {
           const pr = await orderImportService.generationProgress(id)
           const d = pr.data
           if (polling && d && d.running && d.total > 0) {
-            setGenProgressById((m) => ({ ...m, [id]: { done: d.done, total: d.total } }))
+            setGenProgressById((m) => ({ ...m, [id]: { done: d.done, total: d.total, note: d.note ?? null } }))
           }
         } catch {
           /* transient poll error — keep going, the POST result is authoritative */
@@ -777,9 +777,14 @@ export default function DataHistoryPage() {
                                     />
                                   ) : (
                                     <div className="h-full w-1/3 animate-pulse rounded-full bg-[#f4eede]/70" />
-                                  )}
-                                </div>
-                              </div>
+      )}
+    </div>
+{progress?.note ? (
+  <div className="max-w-[280px] text-[10px] leading-snug text-[#f4eede]/85" aria-live="polite">
+    {progress.note}
+  </div>
+) : null}
+  </div>
                               <button
                                 type="button"
                                 onClick={() => void cancelGeneration(b.id)}

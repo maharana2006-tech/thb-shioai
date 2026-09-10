@@ -244,7 +244,7 @@ export const orderImportService = {
    * done=total=0) when nothing is generating for the batch.
    */
   generationProgress: (id: number, signal?: AbortSignal) =>
-    apiClient.get<ApiResponse<{ done: number; total: number; running: boolean }>>(
+    apiClient.get<ApiResponse<{ done: number; total: number; running: boolean; note?: string | null }>>(
       `/orders/import/history/${id}/generate/progress`,
       { signal },
     ),

@@ -1584,7 +1584,7 @@ public class CarrierServiceImpl implements CarrierService {
                 if (!failLines.isEmpty()) {
                     var failCustoms = new com.multiship.backend.dto.OrderCustomsUpsertRequest();
                     failCustoms.setIncoterms(req.getIncoterms());
-                    failCustoms.setDutiesPaidBy(normalizeDutyPayer(req.getClearanceOption()));
+                    failCustoms.setDutiesPaidBy(effectiveDutyPayer(req.getClearanceOption(), req.getIncoterms()));
                     failCustoms.setDutiesAccount(req.getDutiesAccount());
                     failCustoms.setReasonForExport(req.getReasonForExport());
                     failCustoms.setCurrency(firstNonBlank(req.getCurrency(), "USD"));
@@ -1853,7 +1853,10 @@ public class CarrierServiceImpl implements CarrierService {
                 com.multiship.backend.dto.OrderCustomsUpsertRequest customsReq =
                         new com.multiship.backend.dto.OrderCustomsUpsertRequest();
                 customsReq.setIncoterms(req.getIncoterms());
-                customsReq.setDutiesPaidBy(normalizeDutyPayer(req.getClearanceOption()));
+                // Record who the carrier was actually told pays duties (the explicit
+                // choice, else what the Incoterm implies) so the invoice and a later
+                // regenerate agree with the label.
+                customsReq.setDutiesPaidBy(effectiveDutyPayer(req.getClearanceOption(), req.getIncoterms()));
                 customsReq.setDutiesAccount(req.getDutiesAccount());
                 customsReq.setReasonForExport(req.getReasonForExport());
                 // Sprint 50 Tier 1 finding #4 — request > Client.defaultCurrency > USD.
@@ -2861,6 +2864,28 @@ public class CarrierServiceImpl implements CarrierService {
      * RECIPIENT both mean the consignee; DDP/DDU/DAP (DHL / USPS style)
      * map by who pays under that term. Null when blank.
      */
+    /** Who the carrier is told pays duties: the explicit choice, else the Incoterm (DDP → SENDER, anything else → RECIPIENT). */
+    static String effectiveDutyPayer(String clearanceOption, String incoterms) {
+        String explicit = normalizeDutyPayer(clearanceOption);
+        if (explicit != null) return explicit;
+        return "DDP".equalsIgnoreCase(incoterms == null ? "" : incoterms.trim()) ? "SENDER" : "RECIPIENT";
+    }
+
+    /**
+     * Duty payer when (re)generating from a stored order: what the original label
+     * recorded; else nothing when the order has its own Incoterm (the connector
+     * derives the payer from it); else the client profile's default. A profile's
+     * "duties billed to shipper" must not override an order shipped DAP.
+     */
+    static String orderDutyPayer(com.multiship.backend.model.OrderCustoms customs,
+                                 com.multiship.backend.model.ClientCustomsProfile profile) {
+        if (customs != null && StringUtils.hasText(customs.getDutiesPaidBy())) {
+            return customs.getDutiesPaidBy().trim().toUpperCase(Locale.ROOT);
+        }
+        if (customs != null && StringUtils.hasText(customs.getIncoterms())) return null;
+        return profile == null ? null : profile.getDutiesBillTo();
+    }
+
     static String normalizeDutyPayer(String clearanceOption) {
         if (!StringUtils.hasText(clearanceOption)) return null;
         String v = clearanceOption.trim().toUpperCase(Locale.ROOT);
@@ -3614,8 +3639,9 @@ public class CarrierServiceImpl implements CarrierService {
                 .brokerPhone(profile == null ? null : profile.getBrokerPhone())
                 .brokerId(profile == null ? null : profile.getBrokerId())
                 .brokerLicense(profile == null ? null : profile.getBrokerLicense())
-                .dutyBillTo(profile == null ? null : profile.getDutiesBillTo())
-                .dutyAccount(profile == null ? null : profile.getDutiesAccount())
+                .dutyBillTo(orderDutyPayer(customs, profile))
+                .dutyAccount(firstNonBlank(customs == null ? null : customs.getDutiesAccount(),
+                        profile == null ? null : profile.getDutiesAccount()))
                 .ftrExemption(customs == null ? null : customs.getFtrExemption())
                 .aesCitation(customs == null ? null : customs.getAesCitation())
                 .exportDeclarationReference(customs == null ? null : customs.getExportDeclarationReference())

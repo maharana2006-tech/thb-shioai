@@ -1346,6 +1346,11 @@ public class CommercialInvoiceServiceImpl implements CommercialInvoiceService {
             String acct = safe(customs.getDutiesAccount()).trim();
             return recorded + (hasText(acct) ? " - acct " + maskAccount(acct) : "");
         }
+        // Nothing recorded: the order's own Incoterm decides (the call site falls
+        // back to dutyPayer(incoterms)). A client-profile default such as "DDP,
+        // duties billed to shipper" for Canada must not contradict an order that
+        // shipped DAP; the profile only speaks for orders with no Incoterm.
+        if (customs != null && hasText(customs.getIncoterms())) return null;
         if (profile == null) return null;
         String who = safe(profile.getDutiesBillTo()).trim();
         String acct = safe(profile.getDutiesAccount()).trim();

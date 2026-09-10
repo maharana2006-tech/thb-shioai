@@ -294,7 +294,8 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                OR CAST(b.order_no AS TEXT) LIKE CONCAT('%', :keyword, '%')
                OR LOWER(b.shipto_city) LIKE LOWER(CONCAT('%', :keyword, '%'))
                OR LOWER(b.cust_no) LIKE LOWER(CONCAT('%', :keyword, '%'))
-               OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :keyword, '%')))
+               OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :keyword, '%'))
+               OR LOWER(COALESCE(b.customer_ref, '')) LIKE LOWER(CONCAT('%', :keyword, '%')))
           AND (:customer = '' OR LOWER(COALESCE(b.tenant_id, b.cust_no)) LIKE LOWER(CONCAT('%', :customer, '%')))
           AND (:city = ''
                OR LOWER(b.shipto_city) LIKE LOWER(CONCAT('%', :city, '%'))
