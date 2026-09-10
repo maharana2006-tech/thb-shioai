@@ -16,6 +16,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * DHL Express MyDHL API v2 connector. Differs from UPS/FedEx in one key way:
@@ -64,6 +66,46 @@ public class DhlConnector implements CarrierConnector {
      *  those tests don't exercise listPackages(). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.CarrierPackageCatalogRepository packageCatalogRepository;
+
+    /**
+     * DHL — verified-credentials cache keyed by
+     * {@code clientId + "|" + environment}. The value we cache is the
+     * pre-computed Basic Auth string; the point of the cache is to skip
+     * the "verify credentials via GET /products" HTTP round-trip that
+     * every {@link #getAccessToken} call otherwise makes.
+     *
+     * <p>Bulk fan-out scaling: without the cache, a 500-order bulk batch
+     * with the default 24-worker pool = up to 500 verify pings against
+     * DHL's product-catalogue endpoint per batch. Since the Basic Auth
+     * string is deterministic from (clientId, clientSecret), we only
+     * need the round-trip on the FIRST call per (clientId, env) window.
+     *
+     * <p><b>Fallback tokens are NEVER cached.</b> When credentials are
+     * genuinely bad, DHL 401/403s and we fall back to a
+     * {@code -local-...} placeholder. Caching that would keep the account
+     * stuck on the fallback until the TTL — including through the
+     * operator fixing the credentials in the Carriers UI. compute()'s
+     * "return null to remove" contract handles this cleanly.
+     */
+    private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
+
+    /** Re-verify credentials after {@value} minutes. Basic Auth doesn't
+     *  "expire" but this bounds the window in which a revoked-at-DHL
+     *  credential keeps satisfying our cache. Six hours is a reasonable
+     *  compromise between skipping every-call round-trips and picking up
+     *  external revocations within the same shift. */
+    private static final long TOKEN_TTL_MINUTES = 360;
+
+    /** Refresh margin (5 min) — treat a cache entry as expired this early
+     *  so a batch that starts near the TTL boundary doesn't have workers
+     *  see mixed cached-vs-fresh states mid-run. */
+    private static final long TOKEN_REFRESH_MARGIN_SECONDS = 300;
+
+    private record CachedToken(String token, Instant expiresAt) {
+        boolean isValid() {
+            return Instant.now().isBefore(expiresAt.minusSeconds(TOKEN_REFRESH_MARGIN_SECONDS));
+        }
+    }
 
     @Override
     public String getCarrierCode() {
@@ -174,16 +216,53 @@ public class DhlConnector implements CarrierConnector {
         if (!StringUtils.hasText(clientId) || !StringUtils.hasText(clientSecret)) {
             return buildFallbackToken(clientId, clientSecret);
         }
-        // Live verify: ping DHL's product catalogue with the Basic Auth
-        // header. If DHL returns 401/403 the credentials are bad; anything
-        // else (200, 400 for missing params, 429 rate-limited) means the
-        // auth was accepted and we treat the credentials as real.
+        String cacheKey = clientId + "|" + envKey(environment);
+        CachedToken existing = tokenCache.get(cacheKey);
+        if (existing != null && existing.isValid()) {
+            return existing.token();
+        }
+        // Miss (or near-expiry) — single-flight the verify+cache so 24
+        // concurrent bulk workers hitting the same account don't all
+        // fire a verify GET. compute() serialises on the same map bin;
+        // other keys refresh in parallel. Returning null from the lambda
+        // REMOVES the entry (compute contract) — that's the intended
+        // handling when the verify fails, because we return a
+        // "-local-..." fallback token that must NEVER be cached (a
+        // transient DHL outage would otherwise keep the account stuck
+        // on the fallback until the TTL, including through the operator
+        // fixing the credentials).
+        CachedToken refreshed = tokenCache.compute(cacheKey, (k, cur) -> {
+            if (cur != null && cur.isValid()) return cur;
+            return verifyAndBuildBasicAuth(clientId, clientSecret, environment);
+        });
+        if (refreshed == null) {
+            return buildFallbackToken(clientId, clientSecret);
+        }
+        return refreshed.token();
+    }
+
+    /** Package-private for tests + operational hygiene. */
+    void clearTokenCache() {
+        tokenCache.clear();
+    }
+
+    private static String envKey(String environment) {
+        return "SANDBOX".equalsIgnoreCase(environment) ? "SANDBOX" : "PRODUCTION";
+    }
+
+    /**
+     * Verify credentials via DHL's product-catalogue endpoint and build
+     * the Basic Auth string on success. Returns null on genuine
+     * credential rejection (401/403) so the caller's {@code compute()}
+     * removes the cache entry — fallback tokens are NEVER cached (see
+     * {@link #tokenCache}'s javadoc).
+     */
+    private CachedToken verifyAndBuildBasicAuth(String clientId, String clientSecret, String environment) {
         String host = isSandbox(environment)
                 ? carrierProperties.getDhl().getSandboxAuthUrl()
                 : carrierProperties.getDhl().getAuthUrl();
         String basic = Base64.getEncoder().encodeToString(
                 (clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8));
-
         try {
             HttpClients.newBuilder().baseUrl(host).build().get()
                     .uri("/products")
@@ -191,7 +270,7 @@ public class DhlConnector implements CarrierConnector {
                     .header("Authorization", "Basic " + basic)
                     .retrieve()
                     .body(String.class);
-            return basic;
+            return new CachedToken(basic, Instant.now().plusSeconds(TOKEN_TTL_MINUTES * 60));
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             int status = ex.getStatusCode().value();
             if (status == 401 || status == 403) {
@@ -200,13 +279,13 @@ public class DhlConnector implements CarrierConnector {
                 String safeBody = LogRedaction.redactSecrets(
                         ex.getResponseBodyAsString(), clientId, clientSecret);
                 log.warn("DHL rejected credentials (HTTP {}): {}", status, safeBody);
-                return buildFallbackToken(clientId, clientSecret);
+                return null;
             }
             // 4xx-except-auth or 5xx means the auth was accepted; take it.
-            return basic;
+            return new CachedToken(basic, Instant.now().plusSeconds(TOKEN_TTL_MINUTES * 60));
         } catch (Exception ex) {
             log.warn("DHL credential check network failure; using local fallback token. Reason: {}", ex.getMessage());
-            return buildFallbackToken(clientId, clientSecret);
+            return null;
         }
     }
 
