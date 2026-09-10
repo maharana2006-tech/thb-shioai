@@ -236,12 +236,26 @@ public class OrderImportController {
                     .message("Import not found.")
                     .build());
         }
-        long gen = dto.getRows() == null ? 0 : dto.getRows().stream()
-                .filter(r -> "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())).count();
-        int totalRows = dto.getRows() == null ? 0 : dto.getRows().size();
+        // Count ORDERS, not rows: item-line rows of one order share its label, so
+        // "97 of 126 label(s)" read as 29 failures when 8 orders had failed.
+        java.util.Map<String, Boolean> orderDone = new java.util.LinkedHashMap<>();
+        if (dto.getRows() != null) {
+            int idx = 0;
+            for (com.multiship.backend.dto.OrderImportRowDTO r : dto.getRows()) {
+                idx++;
+                // A row without an orderRef is its own order; key it by position,
+                // which is always unique (rowNumber can be unset).
+                String key = org.springframework.util.StringUtils.hasText(r.getOrderRef())
+                        ? r.getOrderRef().trim().toUpperCase(java.util.Locale.ROOT) : "#pos" + idx;
+                boolean g = "GENERATED".equalsIgnoreCase(r.getGeneratedStatus());
+                orderDone.merge(key, g, Boolean::logicalOr);
+            }
+        }
+        long gen = orderDone.values().stream().filter(Boolean::booleanValue).count();
+        int totalRows = orderDone.size();
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
-                .message(gen + " of " + totalRows + " label(s) generated · " + statusLabel(dto.getStatus()))
+                .message(gen + " of " + totalRows + " order(s) labelled · " + statusLabel(dto.getStatus()))
                 .data(dto)
                 .build());
     }

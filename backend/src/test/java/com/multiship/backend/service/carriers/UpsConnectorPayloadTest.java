@@ -101,19 +101,56 @@ class UpsConnectorPayloadTest {
     }
 
     @SuppressWarnings("unchecked")
-    @Test
-    void kgWeightPreservedOnTheWire() throws Exception {
-        ShipmentRequestDTO r = domesticRequest();
-        r.setWeightUnit("KG");
-        r.setWeight(new BigDecimal("1.5"));
-
+    private Map<String, Object> packageWeight(ShipmentRequestDTO r) throws Exception {
         Map<String, Object> payload = build(r);
         Map<String, Object> pkg = (Map<String, Object>) ((List<Object>) ((Map<String, Object>)
                 ((Map<String, Object>) payload.get("ShipmentRequest")).get("Shipment")).get("Package")).get(0);
-        Map<String, Object> weight = (Map<String, Object>) pkg.get("PackageWeight");
-        Map<String, Object> uom = (Map<String, Object>) weight.get("UnitOfMeasurement");
-        assertEquals("KGS", uom.get("Code"), "KG on the DTO should serialize as KGS to UPS");
+        return (Map<String, Object>) pkg.get("PackageWeight");
+    }
+
+    /** UPS rejects KGS from a US origin ("This measurement system is not valid for
+     *  the selected country or territory") — a KG order from a US warehouse goes out
+     *  in pounds, rounded UP so the declared weight never shrinks. */
+    @SuppressWarnings("unchecked")
+    @Test
+    void kgWeightFromUsOriginIsSentAsPounds() throws Exception {
+        ShipmentRequestDTO r = domesticRequest();   // shipper US
+        r.setWeightUnit("KG");
+        r.setWeight(new BigDecimal("1.5"));
+        Map<String, Object> weight = packageWeight(r);
+        assertEquals("LBS", ((Map<String, Object>) weight.get("UnitOfMeasurement")).get("Code"));
+        assertEquals("3.4", weight.get("Weight"), "1.5 kg = 3.307 lb, rounded up to 3.4");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void kgWeightPreservedOnTheWireForMetricOrigin() throws Exception {
+        ShipmentRequestDTO r = domesticRequest();
+        r.setShipperCountryCode("DE");
+        r.setRecipientCountryCode("DE");
+        r.setWeightUnit("KG");
+        r.setWeight(new BigDecimal("1.5"));
+        Map<String, Object> weight = packageWeight(r);
+        assertEquals("KGS", ((Map<String, Object>) weight.get("UnitOfMeasurement")).get("Code"),
+                "KG from a metric origin should serialize as KGS to UPS");
         assertEquals("1.5", weight.get("Weight"));
+    }
+
+    @Test
+    void metricConversionHelpersRoundTheSafeWay() {
+        org.junit.jupiter.api.Assertions.assertTrue(UpsConnector.upsImperialOrigin("us"));
+        org.junit.jupiter.api.Assertions.assertTrue(UpsConnector.upsImperialOrigin("PR"));
+        org.junit.jupiter.api.Assertions.assertFalse(UpsConnector.upsImperialOrigin("DE"));
+        org.junit.jupiter.api.Assertions.assertFalse(UpsConnector.upsImperialOrigin(null));
+        // parcel weight rounds UP (13.4 kg = 29.54 lb)
+        assertEquals(new BigDecimal("29.6"), UpsConnector.kgToLbCeil(new BigDecimal("13.4")));
+        // commodity weight rounds DOWN but never to zero
+        assertEquals(new BigDecimal("2.9"), UpsConnector.kgToLbFloor(new BigDecimal("1.33")));
+        assertEquals(new BigDecimal("0.1"), UpsConnector.kgToLbFloor(new BigDecimal("0.01")));
+        // dimensions: 30 cm = 11.81 in, rounded up; untouched when no conversion is needed
+        assertEquals("11.9", UpsConnector.upsDimValue(new BigDecimal("30"), true));
+        assertEquals("30", UpsConnector.upsDimValue(new BigDecimal("30"), false));
+        assertEquals("0", UpsConnector.upsDimValue(null, true));
     }
 
     @SuppressWarnings("unchecked")

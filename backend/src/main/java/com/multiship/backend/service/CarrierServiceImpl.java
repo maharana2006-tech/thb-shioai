@@ -3458,30 +3458,35 @@ public class CarrierServiceImpl implements CarrierService {
                 : req.getWeight();
         boolean canSpreadWeight = pkgWeight != null && pkgWeight.signum() > 0 && totalQty > 0;
 
-        java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> commodities = items.stream()
-                .map(it -> {
-                    int qty = it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1;
-                    BigDecimal lineWeight;
-                    if (it.getWeight() != null && it.getWeight().signum() > 0) {
-                        lineWeight = it.getWeight();
-                    } else if (canSpreadWeight) {
-                        lineWeight = pkgWeight.multiply(BigDecimal.valueOf(qty))
-                                .divide(BigDecimal.valueOf(totalQty), 3, HU);
-                    } else {
-                        lineWeight = null;
-                    }
-                    return com.multiship.backend.dto.CustomsCommodityDTO.builder()
-                            .description(it.getDescription())
-                            .hsCode(it.getHsCode())
-                            .countryOfOrigin(it.getCountryOfOrigin())
-                            .quantity(qty)
-                            .unitValue(it.getUnitValue())
-                            .unitWeight(lineWeight)
-                            .sku(it.getSku())
-                            .boxSeq(it.getBoxSeq())
-                            .build();
-                })
-                .toList();
+        // Exact split: the shares add up to the parcel, never more (FedEx rejects
+        // COMMODITYWEIGHT.GREATERTHAN.PACKAGEWEIGHT) — see WeightSplit.
+        int[] itemQty = new int[items.size()];
+        boolean[] spreadMe = new boolean[items.size()];
+        for (int i = 0; i < items.size(); i++) {
+            var it = items.get(i);
+            itemQty[i] = it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1;
+            spreadMe[i] = !(it.getWeight() != null && it.getWeight().signum() > 0);
+        }
+        BigDecimal[] spread = canSpreadWeight
+                ? com.multiship.backend.util.WeightSplit.byQuantity(pkgWeight, itemQty, spreadMe)
+                : new BigDecimal[items.size()];
+        java.util.List<com.multiship.backend.dto.CustomsCommodityDTO> commodities = new java.util.ArrayList<>();
+        for (int i = 0; i < items.size(); i++) {
+            var it = items.get(i);
+            int qty = it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1;
+            BigDecimal lineWeight = it.getWeight() != null && it.getWeight().signum() > 0
+                    ? it.getWeight() : spread[i];
+            commodities.add(com.multiship.backend.dto.CustomsCommodityDTO.builder()
+                    .description(it.getDescription())
+                    .hsCode(it.getHsCode())
+                    .countryOfOrigin(it.getCountryOfOrigin())
+                    .quantity(qty)
+                    .unitValue(it.getUnitValue())
+                    .unitWeight(lineWeight)
+                    .sku(it.getSku())
+                    .boxSeq(it.getBoxSeq())
+                    .build());
+        }
 
         BigDecimal sum = commodities.stream()
                 .map(com.multiship.backend.dto.CustomsCommodityDTO::lineTotalValue)
