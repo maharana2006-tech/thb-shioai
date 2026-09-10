@@ -30,6 +30,7 @@ import {
   type OrderImportRow,
 } from '../api/orderImportService'
 import { useAppSession } from '../hooks/useAppSession'
+import { useEventStream } from '../hooks/useEventStream'
 import { normalizeRole } from '../utils/roles'
 
 /**
@@ -247,8 +248,41 @@ export default function DataHistoryPage() {
    * without hitting refresh, slow enough that a 20-operator office
    * doesn't hammer /history.
    */
+  /**
+   * Phase 3 — SSE push subscription for real-time status updates.
+   * Opens ONE long-lived connection while the page is mounted. On
+   * every backend batch state change (INITIATE→IN_PROGRESS, terminal
+   * status, cancel), the backend publishes an event; the handler
+   * below reloads the list. Removes the poll's per-request cost when
+   * SSE is available.
+   *
+   * <p>When SSE is 'open', the auto-poll below is suppressed (push
+   * is authoritative). When SSE drops (network hiccup, Redis off,
+   * proxy strips text/event-stream), the poll picks up transparently
+   * so the operator never sees stale state.
+   */
+  const sseHandlers = useMemo(() => ({
+    'batch-updated': (_payload: unknown) => { void reloadQuiet() },
+    'batch-created': (_payload: unknown) => { void reloadQuiet() },
+    'batch-cancel-requested': (_payload: unknown) => { void reloadQuiet() },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [])
+
+  const { status: sseStatus } = useEventStream({
+    enabled: !viewTrash,
+    topics: ['import-batches'],
+    handlers: sseHandlers,
+  })
+
+  /**
+   * Auto-poll — the FALLBACK path when SSE isn't available. Runs
+   * ONLY while: (a) not in Trash view, (b) at least one batch is
+   * IN_PROGRESS, AND (c) the SSE stream is NOT 'open'. When SSE
+   * connects, the poll goes quiet; when SSE drops, it resumes.
+   */
   useEffect(() => {
     if (viewTrash) return
+    if (sseStatus === 'open') return
     const anyInProgress = batches.some(
       (b) => (b.status || '').toUpperCase() === 'IN_PROGRESS',
     )
@@ -256,7 +290,7 @@ export default function DataHistoryPage() {
     const timer = window.setInterval(() => { void reloadQuiet() }, 4_000)
     return () => window.clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batches, viewTrash])
+  }, [batches, viewTrash, sseStatus])
 
   /** Empty the Trash — PERMANENTLY delete every batch currently in Trash. */
   const handleEmptyTrash = async () => {

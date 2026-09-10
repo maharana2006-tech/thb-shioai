@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   FiAlertCircle,
   FiCheckCircle,
@@ -16,6 +16,7 @@ import {
 } from '../../api/bulkLabelService'
 import { notify } from '../../utils/notify'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
+import { useEventStream } from '../../hooks/useEventStream'
 
 /**
  * Sprint 37 — bulk label generation modal. Submits the batch, polls
@@ -84,14 +85,48 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
   }
 
   /**
+   * Refresh the modal's job state from the server. Extracted so both
+   * the SSE handler (push path) and the polling fallback can invoke
+   * it without duplication. Handles the terminal-status toast + poll
+   * teardown so any code path that lands the final state gets the
+   * same UX.
+   */
+  const refreshJob = useCallback(async (jobId: number) => {
+    try {
+      const response = await bulkLabelService.status(jobId)
+      const next = response.data
+      if (!next) return
+      setJob(next)
+      if (next.status === 'COMPLETED' || next.status === 'FAILED' || next.status === 'CANCELLED') {
+        clearPoll()
+        if (next.status === 'COMPLETED') {
+          notify.success(
+            `Bulk labels done — ${next.successfulCount}/${next.totalCount} generated.`,
+          )
+        } else if (next.status === 'CANCELLED') {
+          notify.info(
+            `Bulk-label job cancelled — ${next.successfulCount} label(s) finished before the stop.`,
+          )
+        } else {
+          notify.error('Bulk-label job failed. See error message.')
+        }
+      }
+    } catch (e) {
+      console.warn('Bulk-label refresh error', e)
+    }
+  }, [])
+
+  /**
    * Bulk MED — exponential backoff on the status poll. Prior to this
-   * fix the FE polled every 2s regardless of progress, which added up
-   * fast: 10 concurrent operators × 1 poll/2s × server-side ZIP-load
-   * (until the sibling backend fix landed) = gigabytes/min of pointless
-   * traffic. Now the poll starts at 1s (fast feedback on quick jobs),
-   * doubles up to a 15s ceiling, and resets whenever an incremental
-   * counter advances (real progress → poll faster; nothing happening →
-   * back off). The terminal-status branch clears the timer regardless.
+   * fix the FE polled every 2s regardless of progress. Now the poll
+   * starts at 1s (fast feedback on quick jobs), doubles up to a 15s
+   * ceiling, and resets whenever an incremental counter advances.
+   * Terminal-status branch clears the timer.
+   *
+   * <p>Phase 3 SSE — this is now a FALLBACK. When SSE is connected
+   * (see useEventStream below), the polling loop stays dormant and
+   * push events drive the UI. If SSE fails or Redis is off, the
+   * polling loop takes over transparently.
    */
   const startPolling = (jobId: number) => {
     clearPoll()
@@ -107,13 +142,9 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
           setJob(next)
           const done = next.successfulCount + next.failedCount
           if (done !== lastDone) {
-            // Progress observed — reset backoff so the operator sees
-            // fast updates while orders are actively completing.
             delayMs = MIN_DELAY
             lastDone = done
           } else {
-            // Steady state — double the interval, capped, so a batch
-            // waiting on a slow carrier doesn't hammer /status.
             delayMs = Math.min(delayMs * 2, MAX_DELAY)
           }
           if (next.status === 'COMPLETED' || next.status === 'FAILED' || next.status === 'CANCELLED') {
@@ -133,16 +164,11 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
           }
         }
       } catch (e) {
-        // Transient poll failures don't kill the session — keep polling
-        // but back off so a persistently failing endpoint doesn't
-        // consume all the browser's connection budget.
         console.warn('Poll error', e)
         delayMs = Math.min(delayMs * 2, MAX_DELAY)
       }
       pollTimer.current = window.setTimeout(tick, delayMs)
     }
-    // Fire the first tick immediately so the operator sees status right
-    // after Submit rather than waiting 1s for the first setTimeout.
     void tick()
   }
 
@@ -177,6 +203,54 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
   useEffect(() => {
     return () => clearPoll()
   }, [])
+
+  /**
+   * Phase 3 — real-time SSE push subscription. Opens while a job is
+   * active and swaps the polling fallback for a single long-lived
+   * connection that receives job-updated events as the backend
+   * publishes them. When SSE is 'open' we stop the poll to avoid
+   * doubling up requests; when it drops (network hiccup, Redis off,
+   * proxy strips text/event-stream), polling automatically resumes
+   * so the operator never sees stale state.
+   *
+   * Only subscribed while THIS job is running — a completed job's
+   * modal doesn't need a live connection.
+   */
+  const activeJobId = job && (job.status === 'PENDING' || job.status === 'RUNNING') ? job.id : null
+  const sseHandlers = useMemo(() => ({
+    'job-created': (payload: unknown) => {
+      const p = payload as { jobId?: number }
+      if (p?.jobId === activeJobId) void refreshJob(activeJobId)
+    },
+    'job-updated': (payload: unknown) => {
+      const p = payload as { jobId?: number }
+      if (p?.jobId === activeJobId) void refreshJob(activeJobId)
+    },
+    'job-cancel-requested': (payload: unknown) => {
+      const p = payload as { jobId?: number }
+      if (p?.jobId === activeJobId) void refreshJob(activeJobId)
+    },
+  }), [activeJobId, refreshJob])
+
+  const { status: sseStatus } = useEventStream({
+    enabled: activeJobId != null,
+    topics: ['bulk-labels'],
+    handlers: sseHandlers,
+  })
+
+  // When SSE flips to 'open', silence the polling fallback (push is
+  // authoritative). When it drops back to 'error' / 'connecting', let
+  // the poll restart. Only touches the timer — the connection lifecycle
+  // stays with useEventStream.
+  useEffect(() => {
+    if (!activeJobId) return
+    if (sseStatus === 'open') {
+      clearPoll()
+    } else if (pollTimer.current == null) {
+      startPolling(activeJobId)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sseStatus, activeJobId])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
