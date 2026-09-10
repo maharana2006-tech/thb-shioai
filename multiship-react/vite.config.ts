@@ -59,16 +59,15 @@ export default defineConfig(({ mode }) => {
   // Q1/Q2/Q3 to be sent by the browser (cross-origin cookies on HTTP
   // localhost need SameSite=None+Secure, which needs HTTPS).
   //
-  // Default target is :8081 to match backend/src/main/resources/
-  // application.properties (server.port=8081). If your local backend runs
-  // on a different port (Spring Boot's own default is 8080, or you launched
-  // it with SERVER_PORT=nnnn), override without touching this file by
-  // creating multiship-react/.env.local with:
-  //     VITE_DEV_BACKEND_URL=http://localhost:8080
+  // Default target is :8080 to match backend/src/main/resources/
+  // application.properties (server.port=8080). If your local backend runs
+  // on a different port, override without touching this file by creating
+  // multiship-react/.env.local with:
+  //     VITE_DEV_BACKEND_URL=http://localhost:8081
   server: {
     proxy: {
       '/api': {
-        target: env.VITE_DEV_BACKEND_URL || 'http://localhost:8081',
+        target: env.VITE_DEV_BACKEND_URL || 'http://localhost:8080',
         changeOrigin: false,
       },
     },

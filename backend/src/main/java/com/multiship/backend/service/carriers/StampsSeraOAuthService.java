@@ -8,8 +8,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
@@ -21,7 +19,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -143,13 +143,13 @@ public class StampsSeraOAuthService {
      */
     public TokenExchangeResult exchangeCode(String code, String clientId, String clientSecret,
                                             String environment) {
-        return postToken(env(environment), form -> {
-            form.add("grant_type", "authorization_code");
-            form.add("code", code);
-            form.add("redirect_uri", requireRedirectUri());
-            form.add("client_id", clientId);
+        return postToken(env(environment), body -> {
+            body.put("grant_type", "authorization_code");
+            body.put("code", code);
+            body.put("redirect_uri", requireRedirectUri());
+            body.put("client_id", clientId);
             if (StringUtils.hasText(clientSecret)) {
-                form.add("client_secret", clientSecret);
+                body.put("client_secret", clientSecret);
             }
         });
     }
@@ -162,12 +162,12 @@ public class StampsSeraOAuthService {
      */
     public TokenExchangeResult refreshToken(String refreshToken, String clientId, String clientSecret,
                                             String environment) {
-        return postToken(env(environment), form -> {
-            form.add("grant_type", "refresh_token");
-            form.add("refresh_token", refreshToken);
-            form.add("client_id", clientId);
+        return postToken(env(environment), body -> {
+            body.put("grant_type", "refresh_token");
+            body.put("refresh_token", refreshToken);
+            body.put("client_id", clientId);
             if (StringUtils.hasText(clientSecret)) {
-                form.add("client_secret", clientSecret);
+                body.put("client_secret", clientSecret);
             }
         });
     }
@@ -175,18 +175,23 @@ public class StampsSeraOAuthService {
     // ===== implementation helpers =====
 
     private TokenExchangeResult postToken(String tokenUrl,
-                                          java.util.function.Consumer<MultiValueMap<String, String>> fillForm) {
+                                          java.util.function.Consumer<Map<String, String>> fillBody) {
         if (!StringUtils.hasText(tokenUrl)) {
             return TokenExchangeResult.failure("SERA token URL is not configured");
         }
-        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-        fillForm.accept(form);
+        // SERA v1 token endpoint requires an application/json body per
+        // developer.stamps.com/rest-api/reference/serav1.html#tag/qs_connect
+        // (unusual — most OAuth2 servers take form-urlencoded). LinkedHashMap
+        // preserves insertion order so grant_type shows up first in
+        // troubleshooting captures.
+        Map<String, String> body = new LinkedHashMap<>();
+        fillBody.accept(body);
         try {
             String response = HttpClients.newBuilder().baseUrl(tokenUrl).build()
                     .post()
-                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
-                    .body(form)
+                    .body(body)
                     .retrieve()
                     .body(String.class);
             JsonNode json = objectMapper.readTree(Optional.ofNullable(response).orElse("{}"));
@@ -199,8 +204,8 @@ public class StampsSeraOAuthService {
             }
             return TokenExchangeResult.success(access, refresh, expiresIn);
         } catch (RestClientResponseException ex) {
-            String body = ex.getResponseBodyAsString();
-            String err = extractOAuthError(body);
+            String errorBody = ex.getResponseBodyAsString();
+            String err = extractOAuthError(errorBody);
             log.warn("SERA token exchange rejected (HTTP {}): {}", ex.getStatusCode().value(), err);
             return TokenExchangeResult.failure("HTTP " + ex.getStatusCode().value()
                     + (StringUtils.hasText(err) ? ": " + err : ""));

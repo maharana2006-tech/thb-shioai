@@ -281,13 +281,13 @@ export const accountRefService = {
    * the refresh token and marks the account verified.
    */
   authorizeStampsSera: (accountId: number): string => {
-    // Absolute path — must reach the backend (port 8081) not Vite
+    // Absolute path — must reach the backend (port 8080) not Vite
     // (port 5173). apiClient.BASE_URL is either the configured
     // `VITE_API_BASE_URL` (prod) or `/api/v1` (dev proxy). window.open
     // needs a full URL so the browser bypasses the Vite dev server
     // and hits the backend directly for the 302 redirect chain.
     const base = (import.meta.env?.VITE_API_BASE_URL as string | undefined)
-      ?? `${window.location.protocol}//${window.location.hostname}:8081/api/v1`
+      ?? `${window.location.protocol}//${window.location.hostname}:8080/api/v1`
     return `${base.replace(/\/$/, '')}/carrier-accounts/stamps-sera/authorize/${accountId}`
   },
 
