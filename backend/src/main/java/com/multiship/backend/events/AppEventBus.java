@@ -35,8 +35,10 @@ import org.springframework.stereotype.Component;
 @Component
 public class AppEventBus {
 
-    /** Redis channel prefix — all app events land under {@code events.<topic>}. */
-    static final String CHANNEL_PREFIX = "events.";
+    /** Redis channel prefix — all app events land under {@code events.<topic>}.
+     *  Public so the SSE controller (different package) can strip it when
+     *  routing incoming messages back to the client. */
+    public static final String CHANNEL_PREFIX = "events.";
 
     private final ObjectMapper objectMapper;
 
