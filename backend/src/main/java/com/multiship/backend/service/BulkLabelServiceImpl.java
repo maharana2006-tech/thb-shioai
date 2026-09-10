@@ -18,6 +18,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -73,11 +75,37 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     @Value("${bulk.max-per-tenant:8}")
     private int maxPerTenant = 8;
 
+    /**
+     * Startup housekeeper cutoff — any bulk_label_jobs row in status
+     * RUNNING whose {@code startedAt} is older than this many minutes at
+     * boot is treated as a JVM-crash victim and flipped to FAILED. 60 min
+     * accommodates the worst-case 500-order batch (approx 5-10 min) with
+     * a huge safety margin; anything older than 1h is almost certainly
+     * abandoned by a prior JVM.
+     *
+     * <p>Test-overridable via {@code bulk.stale-running-cutoff-minutes}.
+     */
+    @Value("${bulk.stale-running-cutoff-minutes:60}")
+    private long staleRunningCutoffMinutes = 60;
+
     /** HTTP timeout for downloading a label PDF from the carrier's CDN. */
     private static final Duration LABEL_FETCH_TIMEOUT = Duration.ofSeconds(15);
 
     private final BulkLabelJobRepository jobRepository;
     private final CarrierService carrierService;
+    /**
+     * Pre-check for orders that already have a label from a prior
+     * manual/bulk generation. Without this, bulk would call
+     * {@code CarrierServiceImpl.generateLabel} which returns 409
+     * LABEL_ALREADY_GENERATED, and the bulk pipeline would record each
+     * such order as a "failed" one — noise that hides real failures.
+     *
+     * <p>{@code @Autowired(required=false)} keeps the pre-existing
+     * 4-arg constructor compilable for the unit tests that instantiate
+     * this service via {@code new} without touching the pre-check path.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
     /**
      * Sprint 52 output routing — invoked per generated label so every
      * client that opted into direct delivery gets the bytes without
@@ -107,6 +135,18 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     private ExecutorService fanOutExecutor;
 
     /**
+     * Cooperative cancellation flags — one per running job. A worker
+     * that finds its jobId here skips further orders (already-in-flight
+     * carrier calls run to completion; we can't interrupt a paid label
+     * without leaking it). Cleared when {@link #runJob} exits.
+     *
+     * <p>ConcurrentHashMap.KeySetView because we only need set semantics
+     * — presence of an id means "cancelled".
+     */
+    private final java.util.Set<Long> cancelledJobIds =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
      * Sprint 50 Tier 1 finding #15 — per-tenant fair-share wrapper. Caps
      * each tenant at {@code maxPerTenant} concurrent labels so one
      * tenant's giant batch can't drain the {@code workerConcurrency}-slot
@@ -120,6 +160,48 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         ensureExecutors();
         log.info("BulkLabelServiceImpl fan-out ready: workerConcurrency={} maxPerTenant={}",
                 workerConcurrency, maxPerTenant);
+        reapStaleRunningJobs();
+    }
+
+    /**
+     * Sweep bulk_label_jobs rows left in status=RUNNING from a prior JVM
+     * that crashed (or was SIGKILL'd past the graceful-shutdown window).
+     * Flips each to FAILED with a diagnostic message so operators know
+     * why the job never finished and can requeue if they need the
+     * labels.
+     *
+     * <p>Called from {@link #initExecutors()} so it runs once at bean
+     * init on every process boot. Idempotent: on a clean run it finds
+     * zero rows.
+     *
+     * <p>Package-private + returns count so tests can assert behavior.
+     */
+    int reapStaleRunningJobs() {
+        java.time.LocalDateTime cutoff = java.time.LocalDateTime
+                .now(java.time.ZoneOffset.UTC)
+                .minusMinutes(staleRunningCutoffMinutes);
+        java.util.List<BulkLabelJob> stale = jobRepository
+                .findByStatusAndStartedAtBeforeOrderByIdAsc("RUNNING", cutoff);
+        if (stale.isEmpty()) {
+            log.debug("Startup housekeeper: no stale RUNNING bulk-label jobs found (cutoff {}m).",
+                    staleRunningCutoffMinutes);
+            return 0;
+        }
+        for (BulkLabelJob job : stale) {
+            job.setStatus("FAILED");
+            job.setCompletedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+            String detail = "Marked FAILED by startup housekeeper: job was RUNNING when the JVM "
+                    + "restarted (started at " + job.getStartedAt() + " UTC, older than "
+                    + staleRunningCutoffMinutes + " min cutoff). Resubmit to retry.";
+            job.setFailureMessage(StringUtils.hasText(job.getFailureMessage())
+                    ? job.getFailureMessage() + '\n' + detail
+                    : detail);
+            jobRepository.save(job);
+        }
+        log.warn("Startup housekeeper: reaped {} stale RUNNING bulk-label job(s): {}",
+                stale.size(),
+                stale.stream().map(j -> String.valueOf(j.getId())).collect(Collectors.joining(",")));
+        return stale.size();
     }
 
     /**
@@ -337,7 +419,31 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      * Per-order outcome so parallel workers can build up results without
      * mutating shared state on every step.
      */
-    private record OrderOutcome(long orderNo, byte[] pdf, String trackingNumber, String failureReason) {}
+    /**
+     * Per-order outcome:
+     * <ul>
+     *   <li>Success: {@code pdf} + {@code trackingNumber} set, everything else null.</li>
+     *   <li>Failure: {@code failureReason} set, {@code pdf} and {@code trackingNumber} null.</li>
+     *   <li>Skipped (already had a label): {@code alreadyLabeled=true} +
+     *       {@code trackingNumber} set (the existing tracking number for the
+     *       failure summary), {@code pdf} null. Counts as success in
+     *       {@code successful_count} but adds a note to
+     *       {@code failure_message} so operators can see which orders
+     *       were skipped vs freshly labeled.</li>
+     * </ul>
+     */
+    private record OrderOutcome(long orderNo, byte[] pdf, String trackingNumber,
+                                 String failureReason, boolean alreadyLabeled) {
+        static OrderOutcome success(long orderNo, byte[] pdf, String trackingNumber) {
+            return new OrderOutcome(orderNo, pdf, trackingNumber, null, false);
+        }
+        static OrderOutcome failure(long orderNo, String reason) {
+            return new OrderOutcome(orderNo, null, null, reason, false);
+        }
+        static OrderOutcome skipped(long orderNo, String existingTrackingNumber) {
+            return new OrderOutcome(orderNo, null, existingTrackingNumber, null, true);
+        }
+    }
 
     /**
      * Job worker. Loads the freshly-saved job, submits each order to the
@@ -362,6 +468,13 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         job.setStartedAt(LocalDateTime.now(ZoneOffset.UTC));
         jobRepository.save(job);
 
+        // Reconstruct a UserDetails from the persisted requester username so
+        // CarrierServiceImpl.resolveUser() can find the User row. Without
+        // this, every generateSingle() below throws "Authenticated user is
+        // required." because the fan-out executor doesn't carry the
+        // caller's SecurityContext across threads.
+        UserDetails jobUser = buildJobUser(job.getRequestedBy());
+
         long[] orderNos = parseOrderNumbers(job.getOrderNumbers());
         StringBuilder failures = new StringBuilder();
 
@@ -380,7 +493,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             // doesn't monopolise while tenant B's small batch waits.
             java.util.List<java.util.concurrent.Callable<OrderOutcome>> tasks = new java.util.ArrayList<>(orderNos.length);
             for (long orderNo : orderNos) {
-                tasks.add(() -> processOneOrder(orderNo));
+                tasks.add(() -> processOneOrder(jobId, orderNo, jobUser));
             }
             // Sprint 50 Tier 1 finding #15 — derive tenant key from the
             // first order's tenantId/custNo. Cheap lookup, avoids a schema
@@ -405,7 +518,19 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                     continue;
                 }
 
-                if (out.pdf != null && out.trackingNumber != null) {
+                if (out.alreadyLabeled) {
+                    // Order already had a label from a prior generation —
+                    // count as success (nothing to charge for; label exists)
+                    // but note it in the summary so operators can tell
+                    // fresh-vs-skipped apart. No ZIP entry: the existing
+                    // label lives on the order row itself and is
+                    // re-downloadable via GET /orders/{n}/label/pdf.
+                    job.setSuccessfulCount(job.getSuccessfulCount() + 1);
+                    failures.append("order ").append(out.orderNo)
+                            .append(": already had a label (tracking ")
+                            .append(out.trackingNumber == null ? "unknown" : out.trackingNumber)
+                            .append(") — skipped, no new label generated.\n");
+                } else if (out.pdf != null && out.trackingNumber != null) {
                     String entryName = "label-" + out.orderNo + "-" + out.trackingNumber + ".pdf";
                     zip.putNextEntry(new ZipEntry(entryName));
                     zip.write(out.pdf);
@@ -435,7 +560,11 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             if (all.length > 0 && job.getSuccessfulCount() > 0) {
                 job.setResultZipBase64(Base64.getEncoder().encodeToString(all));
             }
-            job.setStatus("COMPLETED");
+            // If cancel() was called during the run, promote status to
+            // CANCELLED. Preserve any labels that finished before the
+            // cancel toggle — operators still paid for those, so the ZIP
+            // stays downloadable.
+            job.setStatus(cancelledJobIds.contains(jobId) ? "CANCELLED" : "COMPLETED");
         } catch (Exception ex) {
             log.warn("Bulk-label job {} failed globally: {}", jobId, ex.getMessage());
             job.setStatus("FAILED");
@@ -444,7 +573,36 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             if (failures.length() > 0) job.setFailureMessage(failures.toString());
             job.setCompletedAt(LocalDateTime.now(ZoneOffset.UTC));
             jobRepository.save(job);
+            // Free the cancellation slot regardless of outcome so the map
+            // doesn't accumulate stale entries on a long-lived JVM.
+            cancelledJobIds.remove(jobId);
         }
+    }
+
+    @Override
+    public ApiResponse<BulkLabelJobDTO> cancel(Long jobId) {
+        BulkLabelJob job = jobRepository.findById(jobId).orElse(null);
+        if (job == null) {
+            return failure(HttpStatus.NOT_FOUND, ErrorCode.BULK_JOB_NOT_FOUND,
+                    "Bulk-label job " + jobId + " does not exist.");
+        }
+        String current = job.getStatus();
+        if ("COMPLETED".equals(current) || "FAILED".equals(current) || "CANCELLED".equals(current)) {
+            return failure(HttpStatus.CONFLICT, ErrorCode.BULK_JOB_ALREADY_TERMINAL,
+                    "Job " + jobId + " is already in terminal state " + current + " — nothing to cancel.");
+        }
+        // Same tenant gate the download endpoint uses — a scoped USER
+        // must not cancel another tenant's job.
+        requireJobTenantMatch(job);
+        // Set the cooperative flag; workers pick it up on their next
+        // per-order poll. Status flip happens in runJob's finally block
+        // once the current worker batch drains — that keeps the response
+        // consistent even if a worker races us to persist COMPLETED.
+        cancelledJobIds.add(jobId);
+        log.info("Bulk-label job {} cancellation requested (current status={}).", jobId, current);
+        // Return the current DTO; the poll endpoint will show CANCELLED
+        // once workers drain (usually within seconds).
+        return success(toDto(job), "Cancellation requested. Workers will stop after current in-flight orders.");
     }
 
     /**
@@ -476,25 +634,50 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      * DB copy driver persists the bytes so ops can re-drive delivery
      * from the admin page.
      */
-    private OrderOutcome processOneOrder(long orderNo) {
+    private OrderOutcome processOneOrder(long jobId, long orderNo, UserDetails jobUser) {
+        // Cancellation gate — checked BEFORE calling the carrier so a
+        // cancel() request stops new labels from being generated even if
+        // dozens of worker tasks are still queued behind it. Already-
+        // in-flight carrier calls run to completion; we can't interrupt a
+        // paid label mid-request without leaking it.
+        if (cancelledJobIds.contains(jobId)) {
+            return OrderOutcome.failure(orderNo, "cancelled by operator before dispatch");
+        }
+        // Already-labeled pre-check. Without this, bulk hits
+        // CarrierServiceImpl.generateLabel which returns 409
+        // LABEL_ALREADY_GENERATED for orders that already have a label
+        // (manual generation, prior bulk with a different idempotency
+        // key). The bulk pipeline then counted those as failures — noise
+        // that hid real failures. Treat as SKIPPED: success count +1,
+        // no new label generated, no bytes in the ZIP, and a per-order
+        // note added to the failure summary so operators can distinguish
+        // "already had one" from "freshly labeled".
+        if (orderTrackingRepository != null) {
+            var existing = orderTrackingRepository.findByOrderNo((int) orderNo).orElse(null);
+            if (existing != null
+                    && Boolean.TRUE.equals(existing.getIsLabelGenerated())
+                    && "GENERATED".equalsIgnoreCase(existing.getStatus())) {
+                return OrderOutcome.skipped(orderNo, existing.getTrackingNumber());
+            }
+        }
         try {
-            LabelGenerationResponse label = generateSingle(orderNo);
+            LabelGenerationResponse label = generateSingle(orderNo, jobUser);
             if (label == null) {
-                return new OrderOutcome(orderNo, null, null, "label service returned null");
+                return OrderOutcome.failure(orderNo, "label service returned null");
             }
             if (!StringUtils.hasText(label.getTrackingNumber())) {
-                return new OrderOutcome(orderNo, null, null,
+                return OrderOutcome.failure(orderNo,
                         label.getMessage() == null ? "unknown" : label.getMessage());
             }
             byte[] pdf = downloadLabelPdf(label);
             if (pdf == null) {
-                return new OrderOutcome(orderNo, null, null, "label URL unreachable");
+                return OrderOutcome.failure(orderNo, "label URL unreachable");
             }
             dispatchToConfiguredDestinations(orderNo, pdf);
-            return new OrderOutcome(orderNo, pdf, label.getTrackingNumber(), null);
+            return OrderOutcome.success(orderNo, pdf, label.getTrackingNumber());
         } catch (Exception ex) {
             log.warn("Bulk-label worker: order {} failed: {}", orderNo, ex.getMessage());
-            return new OrderOutcome(orderNo, null, null,
+            return OrderOutcome.failure(orderNo,
                     ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
         }
     }
@@ -544,11 +727,33 @@ public class BulkLabelServiceImpl implements BulkLabelService {
      * key + accountId are null — bulk operators aren't picking accounts
      * per row; they want the default cascade to resolve each order's
      * carrier account.
+     *
+     * <p>{@code jobUser} is the reconstructed UserDetails for the operator
+     * who submitted the bulk job (see {@link #buildJobUser}). Required
+     * because CarrierServiceImpl.resolveUser() rejects a null principal
+     * with "Authenticated user is required." — fan-out workers run off
+     * the HTTP thread so SecurityContext is not automatically available.
      */
-    LabelGenerationResponse generateSingle(long orderNo) {
+    LabelGenerationResponse generateSingle(long orderNo, UserDetails jobUser) {
         ApiResponse<LabelGenerationResponse> resp = carrierService
-                .generateLabel(orderNo, null, "bulk-" + orderNo, null);
+                .generateLabel(orderNo, jobUser, "bulk-" + orderNo, null);
         return resp == null ? null : resp.getData();
+    }
+
+    /**
+     * Reconstruct a UserDetails for the operator who submitted the bulk
+     * job so downstream services (CarrierServiceImpl.resolveUser) can
+     * look up the User row by username. Mirrors the JWT filter's
+     * {@code User.withUsername(...).authorities("ROLE_USER").build()}
+     * pattern — password and authorities are placeholders because
+     * downstream code only reads the username.
+     */
+    private static UserDetails buildJobUser(String requestedBy) {
+        String username = StringUtils.hasText(requestedBy) ? requestedBy : "unknown";
+        return User.withUsername(username)
+                .password("")
+                .authorities("ROLE_USER")
+                .build();
     }
 
     /**

@@ -15,6 +15,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -23,6 +24,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Component
@@ -48,6 +50,39 @@ public class FedExConnector implements CarrierConnector {
      * the previous one-liner "Unable to obtain FedEx access token."
      */
     private static final ThreadLocal<String> LAST_AUTH_DETAIL = new ThreadLocal<>();
+
+    /**
+     * OAuth token cache keyed by {@code clientId + "|" + environment} so
+     * concurrent bulk workers (24 threads by default in
+     * {@link com.multiship.backend.service.BulkLabelServiceImpl}) don't
+     * each fetch their own token from FedEx — which was measurably 500+
+     * OAuth POSTs against a 500-order batch and, on FedEx sandbox,
+     * routinely tripped rate limits.
+     *
+     * <p>Access via {@link #getAccessToken(String, String, String, String)}
+     * which single-flights the refresh via {@link ConcurrentHashMap#compute}
+     * so many-worker cache-misses serialize on the same key rather than
+     * stampede FedEx. Tokens are refreshed 60 seconds before their
+     * declared expiry so an in-flight worker doesn't burn a token that
+     * expires mid-request.
+     */
+    private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();
+
+    /** Refresh margin — we treat a token as expired {@value} seconds early
+     *  so in-flight workers don't submit against a token that expires
+     *  mid-request. */
+    private static final long TOKEN_REFRESH_MARGIN_SECONDS = 60;
+
+    /** Fallback when the FedEx OAuth response doesn't include {@code expires_in}.
+     *  FedEx tokens are documented as 1-hour tokens; the -60s margin then
+     *  refreshes them at T-1min. */
+    private static final long TOKEN_DEFAULT_TTL_SECONDS = 3_600;
+
+    private record CachedToken(String token, Instant expiresAt) {
+        boolean isValid() {
+            return Instant.now().isBefore(expiresAt.minusSeconds(TOKEN_REFRESH_MARGIN_SECONDS));
+        }
+    }
 
     @Override
     public String consumeAuthFailureDetail() {
@@ -212,6 +247,38 @@ public class FedExConnector implements CarrierConnector {
      */
     @Override
     public String getAccessToken(String clientId, String clientSecret, String accountNumber, String environment) {
+        String cacheKey = clientId + "|" + envKey(environment);
+        CachedToken existing = tokenCache.get(cacheKey);
+        if (existing != null && existing.isValid()) {
+            return existing.token();
+        }
+        // Miss (or near-expiry) — single-flight the refresh so 24 concurrent
+        // bulk workers hitting the same account don't all fire an OAuth POST.
+        // compute() holds a per-bin lock; other keys can still refresh in
+        // parallel. Recheck inside the lambda so a competing thread that
+        // already refreshed doesn't get re-fetched.
+        CachedToken refreshed = tokenCache.compute(cacheKey, (k, cur) -> {
+            if (cur != null && cur.isValid()) return cur;
+            return fetchTokenUncached(clientId, clientSecret, environment);
+        });
+        return refreshed.token();
+    }
+
+    /** Package-private for tests + startup hygiene. Cache is bounded by the
+     *  number of distinct (clientId, environment) tuples in the system,
+     *  which is small (dozens at most). */
+    void clearTokenCache() {
+        tokenCache.clear();
+    }
+
+    private static String envKey(String environment) {
+        return "SANDBOX".equalsIgnoreCase(environment) ? "SANDBOX" : "PRODUCTION";
+    }
+
+    /** Fetch a fresh token from FedEx OAuth. Throws
+     *  {@link CarrierConnectionException} on failure. Never called directly
+     *  from outside — go through {@link #getAccessToken} so caching applies. */
+    private CachedToken fetchTokenUncached(String clientId, String clientSecret, String environment) {
         LAST_AUTH_DETAIL.remove();
         String tokenUrl = getTokenUrl(environment);
         boolean sandbox = "SANDBOX".equalsIgnoreCase(environment);
@@ -237,8 +304,8 @@ public class FedExConnector implements CarrierConnector {
                 throw new CarrierConnectionException(
                         "FedEx token response did not contain an access token.");
             }
-
-            return accessToken;
+            long ttlSeconds = jsonNode.path("expires_in").asLong(TOKEN_DEFAULT_TTL_SECONDS);
+            return new CachedToken(accessToken, Instant.now().plusSeconds(ttlSeconds));
         } catch (org.springframework.web.client.RestClientResponseException ex) {
             // FedEx returns the specific reason ({"errors":[{"code":"NOT.AUTHORIZED.ERROR",
             // "message":"..."}]}) in the response body. Surface it in the log

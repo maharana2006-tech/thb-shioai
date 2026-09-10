@@ -24,4 +24,14 @@ public interface BulkLabelService {
     /** Fetch the raw job entity — used by the download endpoint to
      *  stream the zipped PDFs. */
     Optional<BulkLabelJob> findRaw(Long jobId);
+
+    /**
+     * Cooperatively cancel a running job. Marks the job as CANCELLED
+     * and sets an in-memory flag that workers check between orders;
+     * already-in-flight carrier calls run to completion (we can't
+     * interrupt a paid label mid-request without leaking it). Returns
+     * 404 if the job is unknown, 409 if the job is already in a
+     * terminal state (COMPLETED/FAILED/CANCELLED).
+     */
+    ApiResponse<BulkLabelJobDTO> cancel(Long jobId);
 }

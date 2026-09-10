@@ -16,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -69,6 +70,19 @@ public class BulkLabelController {
     @GetMapping("/{jobId}")
     public ResponseEntity<ApiResponse<BulkLabelJobDTO>> status(@PathVariable Long jobId) {
         ApiResponse<BulkLabelJobDTO> response = bulkLabelService.status(jobId);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    @Operation(summary = "Cancel a running bulk-label job",
+            description = "Cooperatively cancels a bulk-label job — workers stop picking up new orders " +
+                    "after the flag is set. Already-in-flight carrier calls run to completion (we cannot " +
+                    "interrupt a paid label mid-request without leaking it). 404 if the jobId is unknown, " +
+                    "409 BULK_JOB_ALREADY_TERMINAL if the job is already COMPLETED/FAILED/CANCELLED. " +
+                    "Tenant-scoped: a USER cannot cancel another tenant's job.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @DeleteMapping("/{jobId}")
+    public ResponseEntity<ApiResponse<BulkLabelJobDTO>> cancel(@PathVariable Long jobId) {
+        ApiResponse<BulkLabelJobDTO> response = bulkLabelService.cancel(jobId);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 

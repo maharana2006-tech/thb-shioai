@@ -267,6 +267,17 @@ public enum ErrorCode {
      * batch into multiple submissions.
      */
     BULK_LIMIT_EXCEEDED,
+    /**
+     * Cancellation was requested on a bulk-label job that is already in
+     * a terminal state (COMPLETED / FAILED / CANCELLED). Response is
+     * HTTP 409 — nothing to cancel.
+     */
+    BULK_JOB_ALREADY_TERMINAL,
+    /**
+     * DELETE / GET on a bulk-label job whose id doesn't exist. Response
+     * is HTTP 404.
+     */
+    BULK_JOB_NOT_FOUND,
 
     // ===== Sprint 52 output routing + network printing =====
     /**

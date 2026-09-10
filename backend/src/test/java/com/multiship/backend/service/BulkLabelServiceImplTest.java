@@ -356,4 +356,264 @@ class BulkLabelServiceImplTest {
         job.setResultZipBase64("YWJj");
         assertTrue(BulkLabelServiceImpl.toDto(job).isDownloadable());
     }
+
+    /* -------------------------- Regression: userDetails threading -------------------------- */
+
+    /**
+     * Regression guard for the null-userDetails bug that shipped in the
+     * initial bulk-labels PR. runJob() must construct a UserDetails from
+     * the persisted {@code requestedBy} and pass it into
+     * {@link CarrierService#generateLabel} — otherwise
+     * {@code CarrierServiceImpl.resolveUser} throws
+     * "Authenticated user is required." on every order and the whole
+     * batch silently fails 100%.
+     *
+     * <p>The other tests here use {@code any()} for the UserDetails
+     * argument so a null there passes; this test captures the arg and
+     * asserts it is non-null AND carries the persisted username.
+     */
+    @Test
+    void runJobPassesUserDetailsFromRequestedBy() {
+        stubGenerate(1L, okLabel(1L));
+
+        BulkLabelJob job = new BulkLabelJob();
+        job.setId(70L);
+        job.setOrderNumbers("1");
+        job.setTotalCount(1);
+        job.setRequestedBy("alice@example.com");
+        job.setStatus("PENDING");
+        job.setCreatedAt(java.time.LocalDateTime.now());
+        saved.put(70L, job);
+
+        service.runJob(70L);
+
+        org.mockito.ArgumentCaptor<org.springframework.security.core.userdetails.UserDetails> captor =
+                org.mockito.ArgumentCaptor.forClass(
+                        org.springframework.security.core.userdetails.UserDetails.class);
+        org.mockito.Mockito.verify(carrierService)
+                .generateLabel(eq(1L), captor.capture(), eq("bulk-1"), org.mockito.ArgumentMatchers.isNull());
+
+        org.springframework.security.core.userdetails.UserDetails passed = captor.getValue();
+        assertNotNull(passed,
+                "Bulk workers must pass a non-null UserDetails so CarrierServiceImpl.resolveUser succeeds");
+        assertEquals("alice@example.com", passed.getUsername(),
+                "The passed UserDetails must carry the operator who submitted the job");
+    }
+
+    /**
+     * If somehow the job row was persisted with a blank requestedBy (shouldn't
+     * happen — the controller substitutes "unknown"), we still pass a
+     * non-null UserDetails so downstream resolveUser fails with
+     * "User not found" (recoverable, per-order) rather than
+     * "Authenticated user is required" (kills the whole batch).
+     */
+    /* -------------------------- Already-labeled pre-check -------------------------- */
+
+    /**
+     * Orders that already carry a generated label (either from manual or
+     * from a prior bulk with a different idempotency key) MUST be counted
+     * as SUCCESS with a note, not as failure. Without this pre-check,
+     * CarrierServiceImpl.generateLabel returns 409 LABEL_ALREADY_GENERATED
+     * and the pre-check-less bulk pipeline counted each as a failure.
+     */
+    @Test
+    void alreadyLabeledOrdersAreCountedAsSuccessNotFailure() {
+        // Wire OrderTrackingRepository via reflection since the test's
+        // 4-arg constructor doesn't include it (field-injected @Autowired).
+        var trackingRepo = org.mockito.Mockito.mock(
+                com.multiship.backend.repository.OrderTrackingRepository.class);
+        org.springframework.test.util.ReflectionTestUtils
+                .setField(service, "orderTrackingRepository", trackingRepo);
+
+        var existing = new com.multiship.backend.model.OrderTracking();
+        existing.setOrderNo(42);
+        existing.setIsLabelGenerated(true);
+        existing.setStatus("GENERATED");
+        existing.setTrackingNumber("TN-EXISTING-42");
+        org.mockito.Mockito.when(trackingRepo.findByOrderNo(42))
+                .thenReturn(java.util.Optional.of(existing));
+        // Order 43 has no existing label — should proceed to carrier
+        org.mockito.Mockito.when(trackingRepo.findByOrderNo(43))
+                .thenReturn(java.util.Optional.empty());
+        stubGenerate(43L, okLabel(43L));
+
+        BulkLabelJob job = new BulkLabelJob();
+        job.setId(100L);
+        job.setOrderNumbers("42,43");
+        job.setTotalCount(2);
+        job.setStatus("PENDING");
+        job.setCreatedAt(java.time.LocalDateTime.now());
+        saved.put(100L, job);
+
+        service.runJob(100L);
+
+        BulkLabelJob terminal = saved.get(100L);
+        assertEquals("COMPLETED", terminal.getStatus());
+        assertEquals(2, terminal.getSuccessfulCount(),
+                "Already-labeled order MUST be counted as success (not failure)");
+        assertEquals(0, terminal.getFailedCount(),
+                "Already-labeled order MUST NOT be counted as failure");
+        assertNotNull(terminal.getFailureMessage(),
+                "The summary should surface which orders were skipped");
+        assertTrue(terminal.getFailureMessage().contains("order 42"),
+                "The skipped order MUST be listed in the summary");
+        assertTrue(terminal.getFailureMessage().contains("already had a label"),
+                "Skip note should explain why we didn't re-generate");
+        assertTrue(terminal.getFailureMessage().contains("TN-EXISTING-42"),
+                "The existing tracking number should appear so operators can locate the label");
+
+        // Verify the carrier was NEVER called for the skipped order.
+        org.mockito.Mockito.verify(carrierService, org.mockito.Mockito.never())
+                .generateLabel(eq(42L), any(), anyString(), any());
+    }
+
+    /* -------------------------- Cancellation -------------------------- */
+
+    @Test
+    void cancelUnknownJobReturns404() {
+        ApiResponse<BulkLabelJobDTO> resp = service.cancel(9999L);
+        assertEquals("error", resp.getStatus());
+        assertEquals(404, resp.getCode());
+        assertEquals("BULK_JOB_NOT_FOUND", resp.getErrorCode());
+    }
+
+    @Test
+    void cancelJobInTerminalStateReturns409() {
+        BulkLabelJob completed = new BulkLabelJob();
+        completed.setId(90L);
+        completed.setStatus("COMPLETED");
+        saved.put(90L, completed);
+
+        ApiResponse<BulkLabelJobDTO> resp = service.cancel(90L);
+        assertEquals(409, resp.getCode());
+        assertEquals("BULK_JOB_ALREADY_TERMINAL", resp.getErrorCode());
+        assertTrue(resp.getMessage().contains("COMPLETED"));
+    }
+
+    @Test
+    void cancelRunningJobFlipsToCancelledAfterWorkersDrain() {
+        // Simulate a running job. cancel() sets the flag, then runJob's
+        // finally block promotes status to CANCELLED. We drive both here
+        // synchronously to observe the flip.
+        stubGenerate(1L, okLabel(1L));
+        stubGenerate(2L, okLabel(2L));
+
+        BulkLabelJob job = new BulkLabelJob();
+        job.setId(91L);
+        job.setOrderNumbers("1,2");
+        job.setTotalCount(2);
+        job.setStatus("PENDING");
+        job.setCreatedAt(java.time.LocalDateTime.now());
+        saved.put(91L, job);
+
+        // Cancel BEFORE runJob starts. Since processOneOrder gates on the
+        // flag before hitting the carrier, no labels should be generated.
+        ApiResponse<BulkLabelJobDTO> cancelResp = service.cancel(91L);
+        assertEquals(200, cancelResp.getCode(),
+                "cancel() on a non-terminal job returns 200 with the current DTO");
+
+        service.runJob(91L);
+
+        BulkLabelJob terminal = saved.get(91L);
+        assertEquals("CANCELLED", terminal.getStatus(),
+                "runJob() finally block must promote status to CANCELLED when the flag was set");
+        assertEquals(0, terminal.getSuccessfulCount(),
+                "No labels should be generated when the job was cancelled before dispatch");
+        assertEquals(2, terminal.getFailedCount(),
+                "Every skipped order should count as failed with a 'cancelled' reason");
+        assertTrue(terminal.getFailureMessage().contains("cancelled"),
+                "Failure summary should record the cancel reason for each skipped order");
+    }
+
+    /* -------------------------- Startup housekeeper -------------------------- */
+
+    /**
+     * Startup housekeeper flips stale RUNNING jobs (JVM-crash victims)
+     * to FAILED with a diagnostic message. Uses the configurable
+     * cutoff so tests don't need to fabricate 60-min-old timestamps.
+     */
+    @Test
+    void reapStaleRunningJobsFlipsOldRunningRowsToFailed() {
+        BulkLabelJob stale = new BulkLabelJob();
+        stale.setId(80L);
+        stale.setStatus("RUNNING");
+        stale.setStartedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(2));
+        stale.setOrderNumbers("1,2,3");
+        stale.setTotalCount(3);
+        saved.put(80L, stale);
+        org.mockito.Mockito.when(jobRepo.findByStatusAndStartedAtBeforeOrderByIdAsc(
+                        org.mockito.ArgumentMatchers.eq("RUNNING"),
+                        org.mockito.ArgumentMatchers.any(java.time.LocalDateTime.class)))
+                .thenReturn(java.util.List.of(stale));
+
+        int reaped = service.reapStaleRunningJobs();
+
+        assertEquals(1, reaped);
+        assertEquals("FAILED", stale.getStatus());
+        assertNotNull(stale.getCompletedAt(), "Reaped jobs must get a completedAt timestamp");
+        assertNotNull(stale.getFailureMessage());
+        assertTrue(stale.getFailureMessage().contains("startup housekeeper"),
+                "Reap message should mention the housekeeper for operator debugging");
+    }
+
+    @Test
+    void reapStaleRunningJobsIsNoOpWhenClean() {
+        org.mockito.Mockito.when(jobRepo.findByStatusAndStartedAtBeforeOrderByIdAsc(
+                        org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.any(java.time.LocalDateTime.class)))
+                .thenReturn(java.util.List.of());
+
+        int reaped = service.reapStaleRunningJobs();
+        assertEquals(0, reaped);
+    }
+
+    /**
+     * A stale row with an existing failureMessage (e.g. some workers reported
+     * per-order failures before the crash) must retain that history — the
+     * housekeeper appends to failureMessage rather than overwriting.
+     */
+    @Test
+    void reapStaleRunningJobsPreservesExistingFailureMessage() {
+        BulkLabelJob stale = new BulkLabelJob();
+        stale.setId(81L);
+        stale.setStatus("RUNNING");
+        stale.setStartedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(3));
+        stale.setFailureMessage("order 5: no credentials");
+        saved.put(81L, stale);
+        org.mockito.Mockito.when(jobRepo.findByStatusAndStartedAtBeforeOrderByIdAsc(
+                        org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.any(java.time.LocalDateTime.class)))
+                .thenReturn(java.util.List.of(stale));
+
+        service.reapStaleRunningJobs();
+
+        assertTrue(stale.getFailureMessage().contains("order 5: no credentials"),
+                "Pre-crash per-order failures must be preserved");
+        assertTrue(stale.getFailureMessage().contains("startup housekeeper"),
+                "Reap message must be appended, not replace");
+    }
+
+    @Test
+    void runJobHandlesBlankRequestedByWithoutNpe() {
+        stubGenerate(1L, okLabel(1L));
+
+        BulkLabelJob job = new BulkLabelJob();
+        job.setId(71L);
+        job.setOrderNumbers("1");
+        job.setTotalCount(1);
+        job.setRequestedBy(null);      // deliberately blank
+        job.setStatus("PENDING");
+        job.setCreatedAt(java.time.LocalDateTime.now());
+        saved.put(71L, job);
+
+        service.runJob(71L);
+
+        org.mockito.ArgumentCaptor<org.springframework.security.core.userdetails.UserDetails> captor =
+                org.mockito.ArgumentCaptor.forClass(
+                        org.springframework.security.core.userdetails.UserDetails.class);
+        org.mockito.Mockito.verify(carrierService)
+                .generateLabel(eq(1L), captor.capture(), eq("bulk-1"), org.mockito.ArgumentMatchers.isNull());
+        assertNotNull(captor.getValue());
+        assertEquals("unknown", captor.getValue().getUsername());
+    }
 }
