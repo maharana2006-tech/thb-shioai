@@ -147,4 +147,75 @@ class GlobalExceptionHandlerTest {
         org.junit.jupiter.api.Assertions.assertFalse(body.getMessage().contains("TrackingResponseDTO"),
                 "DTO class name leaked: " + body.getMessage());
     }
+
+    /* -------- Client-disconnect detection (post-smoke fix) -------- */
+
+    /**
+     * Browser-closed-mid-response should return an empty 500 without
+     * minting a correlation ID or logging WARN. Prior to this fix,
+     * every operator who navigated away during a long generate produced
+     * an alarming "Unexpected server error [ref=xxx]" line + a stack
+     * trace — noise that hid real bugs.
+     */
+    @Test
+    void handleUnexpectedRuntime_httpMessageNotWritable_returnsEmpty500NoBody() {
+        GlobalExceptionHandler handler = new GlobalExceptionHandler();
+        org.springframework.http.converter.HttpMessageNotWritableException disconnect =
+                new org.springframework.http.converter.HttpMessageNotWritableException(
+                        "Could not write JSON",
+                        new java.io.IOException("Connection reset by peer"));
+
+        org.springframework.http.ResponseEntity<com.multiship.backend.dto.ApiResponse<Void>> resp =
+                handler.handleUnexpectedRuntime(disconnect);
+
+        assertEquals(500, resp.getStatusCode().value());
+        org.junit.jupiter.api.Assertions.assertNull(resp.getBody(),
+                "Client-disconnect response body should be empty — the socket is gone, "
+                        + "no one will read a friendly message anyway.");
+    }
+
+    /**
+     * A regular RuntimeException (NOT a client disconnect) must still
+     * hit the humane-error path — correlation ID minted, WARN logged,
+     * friendly body returned.
+     */
+    @Test
+    void handleUnexpectedRuntime_regularRuntime_returnsFriendlyBody() {
+        GlobalExceptionHandler handler = new GlobalExceptionHandler();
+        org.springframework.http.ResponseEntity<com.multiship.backend.dto.ApiResponse<Void>> resp =
+                handler.handleUnexpectedRuntime(new RuntimeException("bad state"));
+
+        assertEquals(500, resp.getStatusCode().value());
+        com.multiship.backend.dto.ApiResponse<Void> body = resp.getBody();
+        org.junit.jupiter.api.Assertions.assertNotNull(body,
+                "Genuine server errors must still return a friendly body with a correlation ID.");
+        org.junit.jupiter.api.Assertions.assertTrue(
+                body.getMessage() != null && body.getMessage().toLowerCase().contains("something went wrong"),
+                "Genuine errors should render the humane 'something went wrong' template. Got: "
+                        + body.getMessage());
+    }
+
+    /**
+     * Database exceptions surface as RuntimeException with an
+     * IOException nested somewhere in the chain (e.g. connection
+     * dropped mid-query). MUST NOT be misclassified as a client
+     * disconnect — those are real server issues that operators need
+     * to see. This is the "why we don't just grep for IOException in
+     * the cause chain" test.
+     */
+    @Test
+    void handleUnexpectedRuntime_dbExceptionWithIoExceptionInChain_stillLogsAsError() {
+        GlobalExceptionHandler handler = new GlobalExceptionHandler();
+        RuntimeException dbFailure = new org.springframework.dao.DataAccessResourceFailureException(
+                "connection lost to postgres",
+                new java.io.IOException("Broken pipe"));
+
+        org.springframework.http.ResponseEntity<com.multiship.backend.dto.ApiResponse<Void>> resp =
+                handler.handleUnexpectedRuntime(dbFailure);
+
+        assertEquals(500, resp.getStatusCode().value());
+        org.junit.jupiter.api.Assertions.assertNotNull(resp.getBody(),
+                "DB failures are real server errors — must return a friendly body, "
+                        + "NOT be misclassified as a browser disconnect.");
+    }
 }

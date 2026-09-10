@@ -140,9 +140,57 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpectedRuntime(RuntimeException ex) {
+        // Client-disconnect detection: HttpMessageNotWritableException
+        // wrapping an IOException means the browser closed the socket
+        // BEFORE we finished writing the response — normal operator
+        // behaviour (tab closed, page navigated, fetch timeout). We
+        // can't send a response either way (socket is gone), so return
+        // a minimal placeholder and DEBUG-log it. Prior behaviour of
+        // logging WARN + minting a correlation ID + stack trace made
+        // every closed-tab-during-a-slow-request look like a server
+        // bug in the log.
+        if (isClientDisconnect(ex)) {
+            log.debug("Client disconnected before response completed: {}", ex.getMessage());
+            // Return an empty 500 — the client is gone anyway, so the
+            // body will never reach anyone. Sole purpose is to satisfy
+            // Spring's contract that an @ExceptionHandler returns
+            // something.
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
         String correlationId = UUID.randomUUID().toString().substring(0, 8);
         log.warn("Unexpected server error [ref={}]: {}", correlationId, ex.toString(), ex);
         return respondFriendly(correlationId, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    /**
+     * True when the exception represents "the browser closed the
+     * connection before we finished writing the response". Fires when
+     * an operator closes a tab / navigates away / hits the FE fetch
+     * timeout during a long-running request. Two exact shapes:
+     * <ul>
+     *   <li><b>Top-level</b> is
+     *       {@link org.springframework.http.converter.HttpMessageNotWritableException} —
+     *       Jackson message converter failed to write the response
+     *       body. The ONLY realistic cause of "write failed" is the
+     *       socket being gone.</li>
+     *   <li><b>Any level</b> is Tomcat's
+     *       {@link org.apache.catalina.connector.ClientAbortException}
+     *       (typed wrapper; extends IOException).</li>
+     * </ul>
+     * Deliberately does NOT match on generic {@link java.io.IOException}
+     * in the causal chain — a database connection failure would also
+     * surface as IOException and we don't want to silence those.
+     */
+    private static boolean isClientDisconnect(Throwable ex) {
+        if (ex instanceof org.springframework.http.converter.HttpMessageNotWritableException) {
+            return true;
+        }
+        Throwable t = ex;
+        while (t != null) {
+            if ("ClientAbortException".equals(t.getClass().getSimpleName())) return true;
+            t = t.getCause();
+        }
+        return false;
     }
 
     /**
