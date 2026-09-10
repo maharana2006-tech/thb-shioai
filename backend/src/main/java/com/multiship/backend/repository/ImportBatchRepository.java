@@ -86,6 +86,13 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long> 
      * as a single SQL statement so two concurrent JVMs still serialize
      * on Postgres's per-row lock.
      */
+    // Own (short) transaction: the caller, generateLabelsForBatch, is deliberately
+    // non-transactional (it fans out per-order carrier calls), and a JPQL UPDATE
+    // outside a transaction fails with "No active transaction for update or delete
+    // query" — every batch Generate/Retry returned 500. Committing here also makes
+    // the IN_PROGRESS claim visible to other threads/JVMs at once, which is the point
+    // of the race gate.
+    @org.springframework.transaction.annotation.Transactional
     @Modifying(clearAutomatically = true)
     @Query("UPDATE ImportBatch b SET b.status = :newStatus "
             + "WHERE b.id = :id AND UPPER(b.status) IN :allowedFromStatuses")
