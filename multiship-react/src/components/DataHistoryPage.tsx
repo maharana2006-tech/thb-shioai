@@ -207,6 +207,21 @@ export default function DataHistoryPage() {
     }
   }
 
+  /**
+   * Silent reload — same DB fetch as load(), but doesn't flip the
+   * loading spinner (auto-poll shouldn't flash the page every 5s).
+   * Errors are swallowed because a transient network hiccup shouldn't
+   * blow up the operator's view; the next poll will retry.
+   */
+  const reloadQuiet = async () => {
+    try {
+      const res = await orderImportService.listHistory(viewTrash)
+      setBatches(res.data ?? [])
+    } catch {
+      // ignore transient failures during background polling
+    }
+  }
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount + when switching between live/Trash views
     void load()
@@ -214,6 +229,34 @@ export default function DataHistoryPage() {
     setConfirmEmpty(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewTrash])
+
+  /**
+   * Auto-poll the list while any batch is IN_PROGRESS so status
+   * changes made by backend workers (or by another operator) reflect
+   * without a manual refresh. Fixes the "status not updating till
+   * refreshed" complaint on the /orders/history page.
+   *
+   * <p>Runs ONLY while there's at least one IN_PROGRESS row — an idle
+   * list doesn't poll (saves DB round-trips and network chatter). Also
+   * skips the Trash view (its rows are terminal by construction).
+   * When any batch flips to a terminal state on the server, the next
+   * poll picks it up and the loop naturally stops on the tick after
+   * that.
+   *
+   * <p>Interval is 4 s — fast enough that operators see progress
+   * without hitting refresh, slow enough that a 20-operator office
+   * doesn't hammer /history.
+   */
+  useEffect(() => {
+    if (viewTrash) return
+    const anyInProgress = batches.some(
+      (b) => (b.status || '').toUpperCase() === 'IN_PROGRESS',
+    )
+    if (!anyInProgress) return
+    const timer = window.setInterval(() => { void reloadQuiet() }, 4_000)
+    return () => window.clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batches, viewTrash])
 
   /** Empty the Trash — PERMANENTLY delete every batch currently in Trash. */
   const handleEmptyTrash = async () => {
@@ -524,6 +567,10 @@ export default function DataHistoryPage() {
         return { label: 'Failed', cls: 'bg-rose-50 text-rose-700 ring-rose-200' }
       case 'IN_PROGRESS':
         return { label: 'In progress', cls: 'bg-sky-50 text-sky-700 ring-sky-200' }
+      case 'CANCELLED':
+        // Import I-3 — operator cancelled during the run. Amber ring to
+        // match the CANCELLED status style used on the bulk-labels modal.
+        return { label: 'Cancelled', cls: 'bg-amber-50 text-amber-700 ring-amber-200' }
       case 'INITIATE':
         return { label: 'Saved · not generated', cls: 'bg-slate-100 text-slate-600 ring-slate-200' }
       case 'DRAFT':
