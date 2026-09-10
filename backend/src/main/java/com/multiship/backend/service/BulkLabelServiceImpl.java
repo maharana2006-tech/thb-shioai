@@ -94,6 +94,15 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     private final BulkLabelJobRepository jobRepository;
     private final CarrierService carrierService;
     /**
+     * Event bus for real-time SSE notifications to the FE. Optional
+     * (@Autowired required=false) so pure-Mockito unit tests that
+     * construct this service via {@code new} don't need to wire it.
+     * Publishes are fire-and-forget — a missing/broken bus never
+     * blocks a bulk-label job.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.events.AppEventBus appEventBus;
+    /**
      * Pre-check for orders that already have a label from a prior
      * manual/bulk generation. Without this, bulk would call
      * {@code CarrierServiceImpl.generateLabel} which returns 409
@@ -356,6 +365,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         job.setTotalCount(resolvedOrderNos.size());
         job.setCreatedAt(LocalDateTime.now(ZoneOffset.UTC));
         BulkLabelJob saved = jobRepository.save(job);
+        publishEvent(saved, "job-created");
 
         // Kick off the worker; return before it starts touching carriers.
         dispatchExecutor.submit(() -> runJob(saved.getId()));
@@ -484,6 +494,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         job.setStatus("RUNNING");
         job.setStartedAt(LocalDateTime.now(ZoneOffset.UTC));
         jobRepository.save(job);
+        publishEvent(job, "job-updated");
 
         // Reconstruct a UserDetails from the persisted requester username so
         // CarrierServiceImpl.resolveUser() can find the User row. Without
@@ -624,6 +635,9 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             }
             job.setCompletedAt(LocalDateTime.now(ZoneOffset.UTC));
             jobRepository.save(job);
+            // Terminal-state notification for the FE — SSE subscribers
+            // hear this immediately, no 2-4s poll delay.
+            publishEvent(job, "job-updated");
             // Free the cancellation slot regardless of outcome so the map
             // doesn't accumulate stale entries on a long-lived JVM.
             cancelledJobIds.remove(jobId);
@@ -651,6 +665,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
         // consistent even if a worker races us to persist COMPLETED.
         cancelledJobIds.add(jobId);
         log.info("Bulk-label job {} cancellation requested (current status={}).", jobId, current);
+        publishEvent(job, "job-cancel-requested");
         // Return the current DTO; the poll endpoint will show CANCELLED
         // once workers drain (usually within seconds).
         return success(toDto(job), "Cancellation requested. Workers will stop after current in-flight orders.");
@@ -860,6 +875,48 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     private static final class FailureJsonMapperHolder {
         private static final com.fasterxml.jackson.databind.ObjectMapper INSTANCE =
                 new com.fasterxml.jackson.databind.ObjectMapper();
+    }
+
+    /**
+     * Publish a real-time SSE event for the FE. Never throws — the
+     * bus is fire-and-forget so a Redis blip cannot fail a bulk-label
+     * job that already succeeded. When {@code appEventBus} isn't
+     * wired (pure-Mockito tests), this is a silent no-op.
+     *
+     * <p>Tenant scope is resolved by loading the first order in the
+     * job (same cheap trick {@link #requireJobTenantMatch} uses) so
+     * the SseController can filter events by caller tenant without
+     * exposing another tenant's activity.
+     */
+    private void publishEvent(BulkLabelJob job, String eventType) {
+        if (appEventBus == null || job == null) return;
+        try {
+            String tenant = resolveTenantForJob(job);
+            appEventBus.publish(new com.multiship.backend.events.BulkLabelJobEvent(
+                    eventType,
+                    tenant,
+                    job.getId(),
+                    job.getStatus(),
+                    job.getTotalCount(),
+                    job.getSuccessfulCount(),
+                    job.getFailedCount(),
+                    StringUtils.hasText(job.getResultZipBase64())));
+        } catch (Exception ex) {
+            // Publishing must never break the caller.
+            log.debug("Bulk-label event publish for job {} threw: {}", job.getId(), ex.getMessage());
+        }
+    }
+
+    /** Resolve a bulk-label job's tenant scope by peeking at its first
+     *  order (jobs are submit-time-clamped to a single tenant). Null
+     *  when the order can't be located — treated as a platform-level
+     *  event by the SSE controller (no tenant filter applies). */
+    private String resolveTenantForJob(BulkLabelJob job) {
+        long[] orderNos = parseOrderNumbers(job.getOrderNumbers());
+        if (orderNos.length == 0 || orderRepository == null) return null;
+        return orderRepository.findByOrderNo((int) orderNos[0])
+                .map(o -> StringUtils.hasText(o.getTenantId()) ? o.getTenantId() : o.getCustNo())
+                .orElse(null);
     }
 
     /**

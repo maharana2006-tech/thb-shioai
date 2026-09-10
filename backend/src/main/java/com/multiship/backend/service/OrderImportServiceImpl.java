@@ -121,6 +121,15 @@ public class OrderImportServiceImpl implements OrderImportService {
     /** Live tracking for the retry sync (optional — unit-test constructors don't wire it). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
+
+    /**
+     * SSE event bus — same publish pattern as BulkLabelServiceImpl.
+     * Fire-and-forget; null when Redis is disabled. Publish sites are
+     * every ImportBatch state transition (CAS gate flip, terminal in
+     * generateLabelsForBatch's derive, cancellation, save).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.events.AppEventBus appEventBus;
     /** Catalog-aware service resolution (optional for the same reason). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ShippingConfigService shippingConfigService;
@@ -2143,6 +2152,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         // entity in sync so downstream save() writes don't overwrite it
         // with a stale value.
         batch.setStatus("IN_PROGRESS");
+        publishBatchEvent(batch, "batch-updated");
 
         // Reuse the commit path — it generates labels and stamps each row's
         // generatedStatus (GENERATED / FAILED) in place. platform forces the
@@ -2205,6 +2215,9 @@ public class OrderImportServiceImpl implements OrderImportService {
                     id, ex.getMessage());
         }
         batch = importBatchRepository.save(batch);
+        // Terminal-state notification — SSE subscribers on the FE
+        // update instantly instead of waiting for the 4s auto-poll.
+        publishBatchEvent(batch, "batch-updated");
 
         log.info("Import batch {} label generation ({}): {}/{} labels → {} (labelBatch {})",
                 id, requestedBy, generated, total, batch.getStatus(), batch.getLabelBatchId());
@@ -2285,11 +2298,54 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
         cancelledBatchIds.add(id);
         log.info("Import batch {} cancellation requested (current status={}).", id, current);
+        publishBatchEvent(batch, "batch-cancel-requested");
         return ApiResponse.<String>builder()
                 .status("success").code(HttpStatus.OK.value())
                 .message("Cancellation requested. Workers will stop after the current in-flight groups.")
                 .data("cancelled")
                 .build();
+    }
+
+    /**
+     * Publish a real-time SSE event for the FE. Fire-and-forget —
+     * publishes never throw and never block business logic. When
+     * {@code appEventBus} isn't wired (pure-Mockito tests), silent
+     * no-op.
+     *
+     * <p>Tenant scope comes from the first row's clientCode; batches
+     * are submit-time tenant-clamped so peeking the first row is
+     * always accurate. Null tenant when rowsJson is missing/blank —
+     * SseController treats null-tenant events as platform-scope.
+     */
+    private void publishBatchEvent(com.multiship.backend.model.ImportBatch batch, String eventType) {
+        if (appEventBus == null || batch == null) return;
+        try {
+            String tenant = resolveTenantForBatch(batch);
+            appEventBus.publish(new com.multiship.backend.events.ImportBatchEvent(
+                    eventType,
+                    tenant,
+                    batch.getId(),
+                    batch.getStatus(),
+                    batch.getTotalRows(),
+                    batch.getSavedRows(),
+                    batch.getInvalidRows()));
+        } catch (Exception ex) {
+            log.debug("Import batch event publish for {} threw: {}", batch.getId(), ex.getMessage());
+        }
+    }
+
+    /** Best-effort tenant lookup for a batch — reads first row's
+     *  clientCode from rowsJson. Null on legacy or empty rows. */
+    private String resolveTenantForBatch(com.multiship.backend.model.ImportBatch batch) {
+        if (importObjectMapper == null || batch.getRowsJson() == null) return null;
+        try {
+            List<OrderImportRowDTO> rows = importObjectMapper.readValue(
+                    batch.getRowsJson(),
+                    new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
+            return firstClientCode(rows);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     /**
