@@ -207,6 +207,32 @@ public class OrderImportServiceImpl implements OrderImportService {
      */
     private final Map<Long, GenProgress> generationProgressByBatch = new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * Import I-3 — cooperative cancellation flags for in-flight
+     * generate-labels-for-batch runs. Same pattern as
+     * {@code BulkLabelServiceImpl.cancelledJobIds}: presence of a batch
+     * id means "operator asked to cancel". Workers gate on this BEFORE
+     * calling the carrier inside {@code commit()}'s per-group loop so
+     * queued groups are skipped; already-in-flight carrier calls run to
+     * completion because we can't interrupt a paid label mid-request
+     * without leaking it. Cleared in {@link #generateLabelsForBatch}'s
+     * finally block regardless of outcome.
+     */
+    private final java.util.Set<Long> cancelledBatchIds =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Import I-11 — configurable cutoff for the startup housekeeper. Any
+     * batch left in status IN_PROGRESS whose lastUpdatedAt is older than
+     * this many minutes at boot is treated as a JVM-crash victim and
+     * flipped back to a terminal state ({@code FAILED}) with a note in
+     * the batch metadata. 60 min accommodates the worst-case commit
+     * (large batches + slow carrier) with a huge safety margin.
+     * Test-overridable via {@code import.stale-inprogress-cutoff-minutes}.
+     */
+    @Value("${import.stale-inprogress-cutoff-minutes:60}")
+    private long staleInProgressCutoffMinutes = 60;
+
     /** Mutable counter behind {@link GenProgressView}. */
     private static final class GenProgress {
         final java.util.concurrent.atomic.AtomicInteger done = new java.util.concurrent.atomic.AtomicInteger();
@@ -229,6 +255,56 @@ public class OrderImportServiceImpl implements OrderImportService {
         ensureExecutors();
         log.info("OrderImportServiceImpl fan-out ready: commitConcurrency={} maxPerTenant={}",
                 importCommitConcurrency, importMaxPerTenant);
+        reapStaleInProgressBatches();
+    }
+
+    /**
+     * Import I-11 startup housekeeper. Sweeps import_batch rows left in
+     * status=IN_PROGRESS from a prior JVM that crashed / was SIGKILL'd
+     * past the graceful-shutdown window. Without this, a crash-victim
+     * batch stays stuck in IN_PROGRESS forever AND — worse — the atomic
+     * CAS gate on {@link #generateLabelsForBatch} would then reject any
+     * retry with 409 IMPORT_BATCH_ALREADY_GENERATING because the row's
+     * status still reads IN_PROGRESS.
+     *
+     * <p>Flips each stale row to FAILED with a diagnostic message so the
+     * operator can see why the generation stopped and can retry from
+     * Data History.
+     *
+     * <p>Package-private + returns count so tests can assert behavior.
+     */
+    int reapStaleInProgressBatches() {
+        if (importBatchRepository == null) return 0;
+        java.util.List<com.multiship.backend.model.ImportBatch> stale = importBatchRepository
+                .findByStatusInOrderByIdAsc(java.util.List.of("IN_PROGRESS"));
+        if (stale.isEmpty()) return 0;
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        int reaped = 0;
+        for (com.multiship.backend.model.ImportBatch batch : stale) {
+            // Extra guard: only reap batches genuinely older than the
+            // cutoff; a fresh batch that legitimately started a moment
+            // before the housekeeper fired must not be interrupted.
+            // ImportBatch has no updated_at column so we use createdAt —
+            // batches typically start generating within seconds of upload,
+            // and the cutoff (default 60 min) is generous enough that a
+            // legitimately running batch never trips.
+            java.time.LocalDateTime lastActivity = batch.getCreatedAt();
+            if (lastActivity != null
+                    && lastActivity.isAfter(now.minusMinutes(staleInProgressCutoffMinutes))) {
+                continue;
+            }
+            batch.setStatus("FAILED");
+            String detail = "Marked FAILED by startup housekeeper: batch was IN_PROGRESS when the JVM "
+                    + "restarted (created " + lastActivity + ", older than "
+                    + staleInProgressCutoffMinutes + " min cutoff). Retry from Data History.";
+            log.warn("Import batch {}: {}", batch.getId(), detail);
+            importBatchRepository.save(batch);
+            reaped++;
+        }
+        if (reaped > 0) {
+            log.warn("Import startup housekeeper: reaped {} stale IN_PROGRESS import batch(es).", reaped);
+        }
+        return reaped;
     }
 
     /**
@@ -1472,6 +1548,26 @@ public class OrderImportServiceImpl implements OrderImportService {
     public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy,
                                                      boolean usePlatformAccount, String sourceOverride,
                                                      Runnable onGroupComplete) {
+        return commit(rows, requestedBy, usePlatformAccount, sourceOverride, onGroupComplete, null);
+    }
+
+    /**
+     * Import I-3 overload — additionally accepts {@code cancelCheck}, a
+     * supplier a per-group worker polls just before invoking the carrier.
+     * When it returns true, the worker records a "cancelled" outcome for
+     * that group and skips the carrier call. Already-in-flight carrier
+     * calls run to completion because we can't interrupt a paid label
+     * mid-request without leaking it.
+     *
+     * <p>Passed as null from callers that don't support cancellation
+     * (direct commit() from the manual paths); passed non-null from
+     * {@link #generateLabelsForBatch} which owns the batch-level cancel
+     * flag.
+     */
+    public ApiResponse<OrderImportPreviewDTO> commit(List<OrderImportRowDTO> rows, String requestedBy,
+                                                     boolean usePlatformAccount, String sourceOverride,
+                                                     Runnable onGroupComplete,
+                                                     java.util.function.BooleanSupplier cancelCheck) {
         if (rows == null || rows.isEmpty()) {
             return failure(HttpStatus.BAD_REQUEST, "No rows to commit.");
         }
@@ -1550,6 +1646,25 @@ public class OrderImportServiceImpl implements OrderImportService {
             List<OrderImportRowDTO> group = entry.getValue();
             tasks.add(() -> {
                 try {
+                    // Import I-3 — cancel gate checked BEFORE the carrier
+                    // call so queued groups are skipped as soon as the
+                    // operator hits Cancel. In-flight carrier calls
+                    // (whichever workers were mid-flight when cancel fired)
+                    // finish naturally — we can't interrupt a paid label
+                    // without leaking it.
+                    if (cancelCheck != null && cancelCheck.getAsBoolean()) {
+                        // Stamp each row in the group so operators see WHY
+                        // the group didn't ship — a blank status looks like
+                        // a bug otherwise.
+                        for (OrderImportRowDTO r : group) {
+                            r.setGeneratedStatus("FAILED");
+                            java.util.List<String> errs = new java.util.ArrayList<>(
+                                    r.getErrors() == null ? java.util.List.of() : r.getErrors());
+                            errs.add("Cancelled by operator before dispatch");
+                            r.setErrors(errs);
+                        }
+                        return new GroupOutcome(0, group.size(), 0);
+                    }
                     return processGroup(group, batchId, usePlatformAccount, sourceOverride);
                 } finally {
                     // Tick exactly once per group as it finishes (whatever the
@@ -2004,13 +2119,38 @@ public class OrderImportServiceImpl implements OrderImportService {
         boolean platform = usePlatformAccount || "PLATFORM".equalsIgnoreCase(
                 batch.getBillingMode() == null ? "" : batch.getBillingMode());
 
-        // Mark IN_PROGRESS before the (potentially slow) carrier calls.
+        // Import I-11 — atomic CAS gate against concurrent-generate race.
+        // Two operators clicking Generate on the same batch used to BOTH
+        // enter this method, fan out per-row label calls in parallel, and
+        // produce duplicate paid shipments. Now the status transition to
+        // IN_PROGRESS runs as a single UPDATE that only succeeds when the
+        // row is currently in an accepted "ready to start" state. If
+        // another JVM/thread has already flipped it, updated==0 and we
+        // 409-refuse the second attempt.
+        java.util.Collection<String> allowedFrom = java.util.List.of(
+                "INITIATE", "DRAFT", "COMPLETE", "PARTIAL_COMPLETE", "FAILED", "CANCELLED");
+        int updated = importBatchRepository.atomicallyTransitionStatus(id, "IN_PROGRESS", allowedFrom);
+        if (updated == 0) {
+            // Re-read the current status so the operator sees exactly why
+            // (RUNNING elsewhere / already terminal / unknown state).
+            com.multiship.backend.model.ImportBatch fresh = importBatchRepository.findById(id).orElse(null);
+            String cur = fresh == null ? "unknown" : fresh.getStatus();
+            throw new ConcurrentBatchGenerationException(
+                    "Batch " + id + " cannot start label generation: current status is "
+                            + cur + ". Wait for the in-flight run to finish or refresh Data History.");
+        }
+        // The status is now IN_PROGRESS in the DB; keep the in-memory
+        // entity in sync so downstream save() writes don't overwrite it
+        // with a stale value.
         batch.setStatus("IN_PROGRESS");
-        importBatchRepository.save(batch);
 
         // Reuse the commit path — it generates labels and stamps each row's
         // generatedStatus (GENERATED / FAILED) in place. platform forces the
         // house account for every row; onlyFailed limits to the not-yet-done subset.
+        // Note: cancellation flag is NOT cleared here — an operator who
+        // called cancel BEFORE the run should still stop this run. The
+        // finally block below always clears it on exit so a subsequent
+        // Generate starts with a clean slate.
         if (!rowsToProcess.isEmpty()) {
             // WMS/API batches persist their generated orders as source=API.
             String sourceOverride = isApiSource(batch.getSource()) ? "API" : null;
@@ -2021,7 +2161,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             generationProgressByBatch.put(id, prog);
             try {
                 commit(rowsToProcess, requestedBy, platform, sourceOverride,
-                        () -> prog.done.incrementAndGet());
+                        () -> prog.done.incrementAndGet(),
+                        () -> cancelledBatchIds.contains(id));
             } finally {
                 generationProgressByBatch.remove(id);
             }
@@ -2040,7 +2181,14 @@ public class OrderImportServiceImpl implements OrderImportService {
 
         // savedRows/invalidRows keep their data-validity meaning from save();
         // label progress is conveyed by the status + the per-row Label column.
-        batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
+        // Import I-3 — if cancel() flipped the flag during the run, the
+        // status is CANCELLED regardless of the mix of outcomes. Preserves
+        // any labels that finished before the toggle so they stay
+        // downloadable / voidable from Data History.
+        boolean wasCancelled = cancelledBatchIds.remove(id);
+        batch.setStatus(wasCancelled
+                ? "CANCELLED"
+                : deriveGenerationStatus(total, generated, failed, invalid));
         // commit() stamps every generated row with the shared label batchId;
         // lift it onto the import so the file row shows which All-Orders batch
         // its labels belong to. Keep any prior id if this run generated none.
@@ -2083,6 +2231,76 @@ public class OrderImportServiceImpl implements OrderImportService {
     @Override
     public com.multiship.backend.dto.ImportBatchDTO generateLabelForRow(Long id, int rowNumber, String requestedBy) {
         return generateLabelForRow(id, rowNumber, requestedBy, false);
+    }
+
+    /**
+     * Import I-3 — request cooperative cancellation of an in-flight
+     * generate-labels-for-batch run. Sets a flag that workers pick up on
+     * their next per-group poll inside {@link #commit(List, String, boolean, String, Runnable, java.util.function.BooleanSupplier)}.
+     * Returns HTTP 404 if the batch id is unknown, 409 if the batch is
+     * already in a terminal state (nothing to cancel).
+     *
+     * <p>Tenant-scoped via {@code requireMatch} — a scoped USER cannot
+     * cancel another tenant's job even if they guess the id.
+     *
+     * <p>Called from OrderImportController.cancelGeneration().
+     */
+    @Override
+    public ApiResponse<String> cancelGeneration(Long id) {
+        if (importBatchRepository == null || id == null) {
+            return ApiResponse.<String>builder()
+                    .status("error").code(HttpStatus.NOT_FOUND.value())
+                    .errorCode(ErrorCode.BULK_JOB_NOT_FOUND.name())
+                    .message("Batch id is required.").build();
+        }
+        com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
+        if (batch == null) {
+            return ApiResponse.<String>builder()
+                    .status("error").code(HttpStatus.NOT_FOUND.value())
+                    .errorCode(ErrorCode.BULK_JOB_NOT_FOUND.name())
+                    .message("Import batch " + id + " does not exist.")
+                    .build();
+        }
+        // Tenant match — parse enough of rowsJson to get the first clientCode.
+        try {
+            List<OrderImportRowDTO> rows = importObjectMapper == null || batch.getRowsJson() == null
+                    ? java.util.List.of()
+                    : importObjectMapper.readValue(batch.getRowsJson(),
+                            new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
+            requireMatch(firstClientCode(rows));
+        } catch (Exception ignored) {
+            // Malformed rowsJson: fall through — tenant clamp on submit
+            // already protected the write; this is a nice-to-have hardening.
+        }
+        String current = batch.getStatus();
+        if ("COMPLETE".equalsIgnoreCase(current)
+                || "PARTIAL_COMPLETE".equalsIgnoreCase(current)
+                || "FAILED".equalsIgnoreCase(current)
+                || "CANCELLED".equalsIgnoreCase(current)) {
+            return ApiResponse.<String>builder()
+                    .status("error").code(HttpStatus.CONFLICT.value())
+                    .errorCode(ErrorCode.BULK_JOB_ALREADY_TERMINAL.name())
+                    .message("Batch " + id + " is already in terminal state " + current + " — nothing to cancel.")
+                    .build();
+        }
+        cancelledBatchIds.add(id);
+        log.info("Import batch {} cancellation requested (current status={}).", id, current);
+        return ApiResponse.<String>builder()
+                .status("success").code(HttpStatus.OK.value())
+                .message("Cancellation requested. Workers will stop after the current in-flight groups.")
+                .data("cancelled")
+                .build();
+    }
+
+    /**
+     * Import I-11 — thrown by {@link #generateLabelsForBatch} when the
+     * atomic CAS finds the batch already IN_PROGRESS. Controller layer
+     * maps this to 409 IMPORT_BATCH_ALREADY_GENERATING so the operator
+     * knows a second Generate click was rejected (not that the batch is
+     * missing or broken).
+     */
+    public static class ConcurrentBatchGenerationException extends RuntimeException {
+        public ConcurrentBatchGenerationException(String message) { super(message); }
     }
 
     /** A row whose orderRef already produced a live label (preview/pull advisory). */

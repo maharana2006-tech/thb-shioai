@@ -138,6 +138,19 @@ public interface OrderImportService {
     GenProgressView generationProgress(Long id);
 
     /**
+     * Import I-3 — cooperatively cancel an in-flight generate-labels-for-batch
+     * run. Marks the batch with a flag that worker groups poll before
+     * invoking the carrier; already-in-flight carrier calls run to
+     * completion because we can't interrupt a paid label mid-request
+     * without leaking it.
+     *
+     * <p>404 if the batch id is unknown, 409 if the batch is already in
+     * a terminal state (COMPLETE / PARTIAL_COMPLETE / FAILED / CANCELLED).
+     * Tenant-scoped: a scoped USER cannot cancel another tenant's batch.
+     */
+    ApiResponse<String> cancelGeneration(Long id);
+
+    /**
      * Sprint 51 — correct one row of a saved import in place (Data History
      * inline edit). Applies the edited row, re-runs the full validation
      * pipeline over the whole batch, re-stamps each ungenerated row as

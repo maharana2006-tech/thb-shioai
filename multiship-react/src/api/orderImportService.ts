@@ -71,8 +71,19 @@ export interface OrderImportPreview {
   rows: OrderImportRow[]
 }
 
-/** Lifecycle status of a saved import. */
-export type ImportStatus = 'DRAFT' | 'INITIATE' | 'IN_PROGRESS' | 'PARTIAL_COMPLETE' | 'COMPLETE' | 'FAILED'
+/** Lifecycle status of a saved import.
+ *  CANCELLED is set when an operator called
+ *  {@link orderImportService.cancelGeneration} during an IN_PROGRESS run.
+ *  Rows that were already labelled before the cancel toggle keep their
+ *  generated status; the rest carry a "Cancelled by operator" error. */
+export type ImportStatus =
+  | 'DRAFT'
+  | 'INITIATE'
+  | 'IN_PROGRESS'
+  | 'PARTIAL_COMPLETE'
+  | 'COMPLETE'
+  | 'FAILED'
+  | 'CANCELLED'
 
 /** A saved import in the Data History list. */
 export interface ImportBatchSummary {
@@ -212,6 +223,20 @@ export const orderImportService = {
       `/orders/import/history/${id}/generate/${rowNumber}${allowDuplicate ? '?allowDuplicate=true' : ''}`,
       {},
     ),
+
+  /**
+   * Import I-3 — request cooperative cancellation of an in-flight
+   * generate-labels-for-batch run. Backend sets a flag; worker groups
+   * check it BEFORE calling the carrier so queued groups are skipped.
+   * Already-in-flight carrier calls run to completion (we can't
+   * interrupt a paid label mid-request without leaking it).
+   *
+   * 404 BULK_JOB_NOT_FOUND if the batch id is unknown, 409
+   * BULK_JOB_ALREADY_TERMINAL if the batch is already COMPLETE /
+   * PARTIAL_COMPLETE / FAILED / CANCELLED.
+   */
+  cancelGeneration: (id: number) =>
+    apiClient.delete<ApiResponse<string>>(`/orders/import/history/${id}/generate`),
 
   /**
    * Live label-generation progress for a batch, polled ALONGSIDE the generate

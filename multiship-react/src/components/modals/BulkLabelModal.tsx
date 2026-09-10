@@ -4,6 +4,7 @@ import {
   FiCheckCircle,
   FiDownload,
   FiPackage,
+  FiSlash,
   FiX,
   FiZap,
 } from 'react-icons/fi'
@@ -27,6 +28,7 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const pollTimer = useRef<number | null>(null)
   // Sprint 49 Tier 4 Fix 6 — trap Tab focus inside the modal and
   // restore to the trigger on close.
@@ -81,11 +83,15 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
         const next = response.data
         if (!next) return
         setJob(next)
-        if (next.status === 'COMPLETED' || next.status === 'FAILED') {
+        if (next.status === 'COMPLETED' || next.status === 'FAILED' || next.status === 'CANCELLED') {
           clearPoll()
           if (next.status === 'COMPLETED') {
             notify.success(
               `Bulk labels done — ${next.successfulCount}/${next.totalCount} generated.`,
+            )
+          } else if (next.status === 'CANCELLED') {
+            notify.info(
+              `Bulk-label job cancelled — ${next.successfulCount} label(s) finished before the stop.`,
             )
           } else {
             notify.error('Bulk-label job failed. See error message.')
@@ -96,6 +102,34 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
         console.warn('Poll error', e)
       }
     }, 2000)
+  }
+
+  /**
+   * Ask the backend to cancel the in-flight run. Already-in-flight
+   * carrier calls run to completion (server-side); UI immediately
+   * disables the cancel button and waits for the poll to bring back
+   * status=CANCELLED. Confirm dialog protects against accidental clicks.
+   */
+  const cancelJob = async () => {
+    if (!job || cancelling) return
+    const ok = window.confirm(
+      `Cancel bulk-label job ${job.id}? Workers stop after the current in-flight orders finish. ` +
+        `Labels already generated stay downloadable.`,
+    )
+    if (!ok) return
+    setCancelling(true)
+    try {
+      const response = await bulkLabelService.cancel(job.id)
+      if (response.data) setJob(response.data)
+      notify.info('Cancellation requested. Waiting for workers to drain…')
+    } catch (e) {
+      // 409 = already terminal (raced our own poll). Surface friendly text.
+      const msg = e instanceof Error ? e.message : 'Cancel failed.'
+      setError(msg)
+      notify.apiError(e, 'Cancel failed.')
+    } finally {
+      setCancelling(false)
+    }
   }
 
   useEffect(() => {
@@ -185,6 +219,18 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
               {downloading ? 'Downloading…' : `Download ${job.successfulCount} labels (zip)`}
             </button>
           ) : null}
+          {job && (job.status === 'PENDING' || job.status === 'RUNNING') ? (
+            <button
+              type="button"
+              onClick={() => void cancelJob()}
+              disabled={cancelling}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-[12px] font-semibold text-rose-800 transition hover:bg-rose-100 disabled:opacity-40"
+              title="Stop workers from picking up new orders. In-flight carrier calls run to completion."
+            >
+              <FiSlash className="h-3 w-3" />
+              {cancelling ? 'Cancelling…' : 'Cancel job'}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
@@ -211,14 +257,23 @@ export default function BulkLabelModal({ onClose, orderNumbers }: BulkLabelModal
 
 function ProgressBlock({ job, progress }: { job: BulkLabelJob; progress: number }) {
   const done = job.successfulCount + job.failedCount
-  const isDone = job.status === 'COMPLETED' || job.status === 'FAILED'
+  const isCancelled = job.status === 'CANCELLED'
+  const isDone = job.status === 'COMPLETED' || job.status === 'FAILED' || isCancelled
+  const barColor = isCancelled
+    ? 'bg-amber-500'
+    : isDone
+      ? 'bg-emerald-500'
+      : 'bg-slate-950'
+  const badgeColor = isCancelled
+    ? 'text-amber-800'
+    : 'text-emerald-800'
   return (
     <div className="space-y-3">
       <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
         <div className="flex items-center justify-between gap-2 text-[11.5px] font-semibold text-slate-700">
           <span>
             {isDone ? (
-              <span className="inline-flex items-center gap-1.5 text-emerald-800">
+              <span className={`inline-flex items-center gap-1.5 ${badgeColor}`}>
                 <FiCheckCircle className="h-3.5 w-3.5" /> {job.status}
               </span>
             ) : (
@@ -229,7 +284,7 @@ function ProgressBlock({ job, progress }: { job: BulkLabelJob; progress: number 
         </div>
         <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
           <div
-            className={`h-full transition-all ${isDone ? 'bg-emerald-500' : 'bg-slate-950'}`}
+            className={`h-full transition-all ${barColor}`}
             style={{ width: `${progress}%` }}
           />
         </div>

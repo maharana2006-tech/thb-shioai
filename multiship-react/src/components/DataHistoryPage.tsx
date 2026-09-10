@@ -11,6 +11,7 @@ import {
   FiSliders,
   FiTrash2,
   FiRotateCcw,
+  FiSlash,
   FiX,
   FiZap,
 } from 'react-icons/fi'
@@ -274,6 +275,13 @@ export default function DataHistoryPage() {
       case 'INITIATE':
         notify.error({ title: 'Label generation failed', body: message })
         break
+      case 'CANCELLED':
+        // Import I-3 — operator cancelled during the run. Labels that
+        // finished before the cancel toggle keep their generated status
+        // and stay downloadable; the rest carry a "Cancelled by operator"
+        // error and can be retried from Data History.
+        notify.info({ title: 'Cancelled', body: message })
+        break
       default:
         notify.info(message)
     }
@@ -363,8 +371,24 @@ export default function DataHistoryPage() {
         await generate(id, isRetry, true)
         return
       }
-      notify.apiError(e, 'Label generation failed.')
-      await load()
+      // Import I-11 — a second Generate click landed while another
+      // browser tab / operator was already running the batch. Backend
+      // refuses with 409 IMPORT_BATCH_ALREADY_GENERATING rather than
+      // silently minting duplicate paid shipments. Surface a friendly
+      // message and reload to reflect the current status.
+      if (e instanceof ApiError && e.status === 409
+          && (e.errorCode === 'IMPORT_BATCH_ALREADY_GENERATING'
+              || (e.message ?? '').includes('IN_PROGRESS'))) {
+        notify.info({
+          title: 'Batch is already generating',
+          body: 'Another operator (or another tab) is already generating labels for this batch. '
+            + 'Refreshing to show the live status.',
+        })
+        await load()
+      } else {
+        notify.apiError(e, 'Label generation failed.')
+        await load()
+      }
     } finally {
       polling = false
       setGeneratingId(null)
@@ -373,6 +397,34 @@ export default function DataHistoryPage() {
         delete next[id]
         return next
       })
+    }
+  }
+
+  /** Import I-3 — cancel an in-flight label generation. Backend flips
+   *  a cooperative flag; workers stop picking up new orders. Already-
+   *  in-flight carrier calls run to completion (we can't interrupt a
+   *  paid label mid-request without leaking it). */
+  const [cancellingId, setCancellingId] = useState<number | null>(null)
+  const cancelGeneration = async (id: number) => {
+    if (cancellingId != null) return
+    const ok = window.confirm(
+      `Cancel label generation for batch ${id}? Workers stop after the current in-flight orders finish. `
+        + `Labels already generated stay downloadable from Data History.`,
+    )
+    if (!ok) return
+    setCancellingId(id)
+    try {
+      await orderImportService.cancelGeneration(id)
+      notify.info('Cancellation requested. Waiting for workers to drain…')
+      // Poll status a few times so the button flips when the run
+      // actually finishes; the existing generate() polling loop drives
+      // most of the UX, this just covers the case where cancel arrives
+      // after generate() already returned.
+      await load()
+    } catch (e) {
+      notify.apiError(e, 'Cancel failed.')
+    } finally {
+      setCancellingId(null)
     }
   }
 
@@ -690,36 +742,51 @@ export default function DataHistoryPage() {
                       ) : busy ? (
                         // Live progress while generating: a real X-of-N bar once
                         // the first poll lands, an indeterminate shimmer until then.
+                        // Import I-3 — Cancel button appears alongside so the operator
+                        // can stop mid-run. Workers finish already-in-flight carrier
+                        // calls; queued groups are skipped.
                         (() => {
                           const total = progress?.total ?? 0
                           const done = Math.min(progress?.done ?? 0, total)
                           const pct = total > 0 ? Math.round((done / total) * 100) : 0
                           return (
-                            <div
-                              className="flex min-w-[150px] flex-col gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[#f4eede]"
-                              role="progressbar"
-                              aria-valuemin={0}
-                              aria-valuemax={total || undefined}
-                              aria-valuenow={total > 0 ? done : undefined}
-                              title={total > 0 ? `Generating labels — ${done} of ${total} done` : 'Generating labels…'}
-                            >
-                              <div className="flex items-center justify-between text-[11px] font-semibold">
-                                <span className="inline-flex items-center gap-1.5">
-                                  <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                                  Generating…
-                                </span>
-                                {total > 0 ? <span className="tabular-nums">{done}/{total}</span> : null}
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="flex min-w-[150px] flex-col gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[#f4eede]"
+                                role="progressbar"
+                                aria-valuemin={0}
+                                aria-valuemax={total || undefined}
+                                aria-valuenow={total > 0 ? done : undefined}
+                                title={total > 0 ? `Generating labels — ${done} of ${total} done` : 'Generating labels…'}
+                              >
+                                <div className="flex items-center justify-between text-[11px] font-semibold">
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                                    Generating…
+                                  </span>
+                                  {total > 0 ? <span className="tabular-nums">{done}/{total}</span> : null}
+                                </div>
+                                <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#f4eede]/20">
+                                  {total > 0 ? (
+                                    <div
+                                      className="h-full rounded-full bg-[#f4eede] transition-[width] duration-300 ease-out"
+                                      style={{ width: `${pct}%` }}
+                                    />
+                                  ) : (
+                                    <div className="h-full w-1/3 animate-pulse rounded-full bg-[#f4eede]/70" />
+                                  )}
+                                </div>
                               </div>
-                              <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#f4eede]/20">
-                                {total > 0 ? (
-                                  <div
-                                    className="h-full rounded-full bg-[#f4eede] transition-[width] duration-300 ease-out"
-                                    style={{ width: `${pct}%` }}
-                                  />
-                                ) : (
-                                  <div className="h-full w-1/3 animate-pulse rounded-full bg-[#f4eede]/70" />
-                                )}
-                              </div>
+                              <button
+                                type="button"
+                                onClick={() => void cancelGeneration(b.id)}
+                                disabled={cancellingId === b.id}
+                                title="Stop workers from picking up more orders. Already-in-flight carrier calls run to completion."
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-[11px] font-semibold text-rose-800 transition hover:bg-rose-100 disabled:opacity-40"
+                              >
+                                <FiSlash className="h-3 w-3" />
+                                {cancellingId === b.id ? 'Cancelling…' : 'Cancel'}
+                              </button>
                             </div>
                           )
                         })()

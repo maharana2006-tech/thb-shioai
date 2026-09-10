@@ -278,6 +278,13 @@ public enum ErrorCode {
      * is HTTP 404.
      */
     BULK_JOB_NOT_FOUND,
+    /**
+     * Import I-11 — a second Generate click landed on a batch that was
+     * already IN_PROGRESS (either from an earlier click on the same
+     * screen or a concurrent operator). Response is HTTP 409 — wait for
+     * the in-flight run to finish or refresh Data History.
+     */
+    IMPORT_BATCH_ALREADY_GENERATING,
 
     // ===== Sprint 52 output routing + network printing =====
     /**

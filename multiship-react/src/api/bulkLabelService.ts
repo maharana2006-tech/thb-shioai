@@ -28,7 +28,11 @@ async function downloadZip(jobId: number, filename: string): Promise<void> {
 
 export interface BulkLabelJob {
   id: number
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  // CANCELLED was added in the bulk-labels cancel-endpoint commit — a job
+  // finishes in CANCELLED when an operator called DELETE /bulk-labels/{id}
+  // during the run. Labels that finished BEFORE the cancel toggle are still
+  // in the ZIP (downloadable=true), so the operator can print/discard them.
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
   totalCount: number
   successfulCount: number
   failedCount: number
@@ -45,6 +49,17 @@ export const bulkLabelService = {
 
   status: (jobId: number) =>
     apiClient.get<ApiResponse<BulkLabelJob>>(`/bulk-labels/${jobId}`),
+
+  /**
+   * Request cooperative cancellation of a running bulk-label job.
+   * Backend flips a flag; workers pick it up between per-order carrier
+   * calls. Already-in-flight carrier calls run to completion because we
+   * can't interrupt a paid label mid-request without leaking it.
+   * 404 if the jobId is unknown, 409 BULK_JOB_ALREADY_TERMINAL if the
+   * job is already COMPLETED / FAILED / CANCELLED.
+   */
+  cancel: (jobId: number) =>
+    apiClient.delete<ApiResponse<BulkLabelJob>>(`/bulk-labels/${jobId}`),
 
   /**
    * Download the ZIP for a completed job. Endpoint is JWT-gated so a

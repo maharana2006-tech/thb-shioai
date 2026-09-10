@@ -218,6 +218,17 @@ public class OrderImportController {
             return ResponseEntity.status(409).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                     .status("ERROR").code(409).timestamp(java.time.LocalDateTime.now())
                     .message(dup.getMessage()).build());
+        } catch (com.multiship.backend.service.OrderImportServiceImpl.ConcurrentBatchGenerationException race) {
+            // Import I-11 — a second Generate click landed on a batch
+            // already in IN_PROGRESS. Refuse rather than silently produce
+            // duplicate paid shipments. Frontend shows the message inline
+            // and re-enables the button once the batch reaches a terminal
+            // state.
+            return ResponseEntity.status(409).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                    .status("ERROR").code(409).timestamp(java.time.LocalDateTime.now())
+                    .errorCode(com.multiship.backend.dto.ErrorCode.IMPORT_BATCH_ALREADY_GENERATING.name())
+                    .message(race.getMessage())
+                    .build());
         }
         if (dto == null) {
             return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
@@ -235,6 +246,21 @@ public class OrderImportController {
                 .build());
     }
 
+    @Operation(summary = "Cancel an in-flight import label-generation run",
+            description = "Cooperative cancellation: the flag is set immediately; worker groups stop " +
+                    "picking up new orders after the flag is set. Already-in-flight carrier calls run to " +
+                    "completion (we cannot interrupt a paid label mid-request without leaking it). " +
+                    "404 if the batch is unknown, 409 BULK_JOB_ALREADY_TERMINAL if the batch is already " +
+                    "COMPLETE/PARTIAL_COMPLETE/FAILED/CANCELLED. Tenant-scoped: a USER cannot cancel " +
+                    "another tenant's batch.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @org.springframework.web.bind.annotation.DeleteMapping("/history/{id}/generate")
+    public ResponseEntity<ApiResponse<String>> cancelGeneration(
+            @org.springframework.web.bind.annotation.PathVariable Long id) {
+        ApiResponse<String> response = orderImportService.cancelGeneration(id);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
     /** Human-friendly batch status for API messages. */
     private static String statusLabel(String status) {
         if (status == null) return "";
@@ -244,6 +270,7 @@ public class OrderImportController {
             case "FAILED": return "Failed";
             case "IN_PROGRESS": return "In progress";
             case "INITIATE": return "Initiated";
+            case "CANCELLED": return "Cancelled";
             default: return status;
         }
     }
