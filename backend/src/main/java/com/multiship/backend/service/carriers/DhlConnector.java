@@ -349,6 +349,19 @@ public class DhlConnector implements CarrierConnector {
             return parseShipmentResult(response);
         } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
             throw cex;
+        } catch (org.springframework.web.client.RestClientResponseException rlex) {
+            // Distinguish 429 (rate-limited) from other 4xx/5xx so
+            // operators reviewing bulk-batch logs can tell "DHL
+            // throttled us" from a bad payload at a glance. Retry-After
+            // (RFC 7231 §7.1.3) logged verbatim.
+            if (CarrierRateLimit.isRateLimited(rlex)) {
+                log.warn("DHL createShipment {} — {}",
+                        CarrierRateLimit.describe(rlex), rlex.getMessage());
+            } else {
+                log.warn("DHL createShipment failed: {}", rlex.getMessage());
+            }
+            throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                    .map("DHL", rlex, "createShipment");
         } catch (Exception ex) {
             // Sprint 49 Tier 2: no silent fake-label fallback. Throw typed
             // exception so downstream sees the real failure.

@@ -512,6 +512,19 @@ public class UpsConnector implements CarrierConnector {
             // Already typed — surface without wrapping so the caller can
             // distinguish auth / validation / rate-limit / server.
             throw cex;
+        } catch (org.springframework.web.client.RestClientResponseException rlex) {
+            // Distinguish 429 (rate-limited) from other 4xx/5xx so
+            // operators reviewing bulk-batch logs can tell "UPS
+            // throttled us" from a bad payload at a glance. Retry-After
+            // (RFC 7231 §7.1.3) logged verbatim.
+            if (CarrierRateLimit.isRateLimited(rlex)) {
+                log.warn("UPS createShipment {} — {}",
+                        CarrierRateLimit.describe(rlex), rlex.getMessage());
+            } else {
+                log.warn("UPS createShipment failed: {}", rlex.getMessage());
+            }
+            throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                    .map("UPS", rlex, "createShipment");
         } catch (Exception ex) {
             // Sprint 49 Tier 2: no more silent fake-label fallback. Throw a
             // typed carrier exception so the caller (CarrierServiceImpl)

@@ -934,8 +934,20 @@ public class StampsConnector implements CarrierConnector {
                 String errMsg = ex instanceof org.springframework.web.client.RestClientResponseException resp
                         ? extractSeraError(resp.getResponseBodyAsString())
                         : ex.getMessage();
-                log.warn("Stamps SERA /labels failed for package {}/{}: {}",
-                        i + 1, packages.size(), errMsg);
+                // Distinguish 429 rate-limits from other 4xx/5xx —
+                // Auctane rate-limits the /labels endpoint separately
+                // from /oauth/token so a bulk batch that clears OAuth
+                // can still hit label-side throttling. Retry-After
+                // (RFC 7231 §7.1.3) logged verbatim.
+                if (ex instanceof org.springframework.web.client.RestClientResponseException rlex
+                        && CarrierRateLimit.isRateLimited(rlex)) {
+                    log.warn("Stamps SERA /labels {} for package {}/{} — {}",
+                            CarrierRateLimit.describe(rlex),
+                            i + 1, packages.size(), errMsg);
+                } else {
+                    log.warn("Stamps SERA /labels failed for package {}/{}: {}",
+                            i + 1, packages.size(), errMsg);
+                }
                 rollbackSuccessfulPiecesSera(perPackage, accessToken, environment);
                 throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
                         .map("STAMPS", ex, "createShipmentSera[pkg " + (i + 1) + "/" + packages.size() + "]");

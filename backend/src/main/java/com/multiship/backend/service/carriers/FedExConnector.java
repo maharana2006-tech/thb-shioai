@@ -416,6 +416,22 @@ public class FedExConnector implements CarrierConnector {
             return parseShipmentResult(response);
         } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
             throw cex;
+        } catch (org.springframework.web.client.RestClientResponseException rlex) {
+            // Distinguish 429 (rate-limited) from other 4xx/5xx so
+            // operators reviewing bulk-batch logs can tell "carrier
+            // throttled us" from "wrong credentials" or "bad payload"
+            // at a glance. The Retry-After header (RFC 7231 §7.1.3)
+            // tells us when the carrier is willing to accept the next
+            // request — logged verbatim so a future retry-with-backoff
+            // scheduler can pick it up too.
+            if (CarrierRateLimit.isRateLimited(rlex)) {
+                log.warn("FedEx createShipment {} — {}",
+                        CarrierRateLimit.describe(rlex), rlex.getMessage());
+            } else {
+                log.warn("FedEx createShipment failed: {}", rlex.getMessage());
+            }
+            throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
+                    .map("FEDEX", rlex, "createShipment");
         } catch (Exception ex) {
             log.warn("FedEx createShipment failed: {}", ex.getMessage());
             // FDX-A — no more sandbox fake-label fallback. Pre-fix, any
