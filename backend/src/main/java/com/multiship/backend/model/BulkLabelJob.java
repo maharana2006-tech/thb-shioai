@@ -61,6 +61,22 @@ public class BulkLabelJob {
     @Column(name = "failure_message", columnDefinition = "text")
     private String failureMessage;
 
+    /**
+     * Bulk MED — machine-parseable per-order failure list, mirroring
+     * {@link #failureMessage} but as structured JSON so the FE can
+     * render a proper error table instead of a text blob. Shape:
+     * <pre>[
+     *   { "orderNo":12345, "code":"LABEL_ALREADY_GENERATED",
+     *     "message":"already had a label (tracking 1Z...)", "at":"2026-09-10T13:04Z" },
+     *   ...
+     * ]</pre>
+     * Persisted as TEXT so pre-JSONB Postgres versions keep working;
+     * the DDL uses JSONB where available (see V51). Nullable on legacy
+     * rows.
+     */
+    @Column(name = "failure_details_json", columnDefinition = "text")
+    private String failureDetailsJson;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 

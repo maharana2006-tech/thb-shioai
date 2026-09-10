@@ -96,6 +96,7 @@ class BulkLabelServiceImplTest {
             @Override public int getSuccessfulCount() { return j.getSuccessfulCount(); }
             @Override public int getFailedCount() { return j.getFailedCount(); }
             @Override public String getFailureMessage() { return j.getFailureMessage(); }
+            @Override public String getFailureDetailsJson() { return j.getFailureDetailsJson(); }
             @Override public java.time.LocalDateTime getCreatedAt() { return j.getCreatedAt(); }
             @Override public java.time.LocalDateTime getStartedAt() { return j.getStartedAt(); }
             @Override public java.time.LocalDateTime getCompletedAt() { return j.getCompletedAt(); }
@@ -414,6 +415,110 @@ class BulkLabelServiceImplTest {
         assertFalse(BulkLabelServiceImpl.toDto(job).isDownloadable());
         job.setResultZipBase64("YWJj");
         assertTrue(BulkLabelServiceImpl.toDto(job).isDownloadable());
+    }
+
+    /* -------------------------- Structured failure JSON -------------------------- */
+
+    /**
+     * Bulk MED — mixed success/failure job populates the new
+     * {@code failure_details_json} column with per-order structured
+     * entries alongside the legacy {@code failure_message} text blob.
+     * FE renders structured when present; legacy stays populated so
+     * pre-upgrade FE bundles don't regress.
+     */
+    @Test
+    void mixedOutcomeJobPopulatesStructuredFailureJson() throws Exception {
+        stubGenerate(1L, okLabel(1L));
+        stubGenerate(2L, failedLabel(2L, "no credentials"));
+        stubGenerate(3L, okLabel(3L));
+
+        BulkLabelJob job = new BulkLabelJob();
+        job.setId(200L);
+        job.setOrderNumbers("1,2,3");
+        job.setTotalCount(3);
+        job.setStatus("PENDING");
+        job.setCreatedAt(java.time.LocalDateTime.now());
+        saved.put(200L, job);
+
+        service.runJob(200L);
+
+        BulkLabelJob terminal = saved.get(200L);
+        assertNotNull(terminal.getFailureDetailsJson(),
+                "Job with any failure must populate failure_details_json");
+
+        // Parse the JSON and check the entry.
+        com.fasterxml.jackson.databind.ObjectMapper om =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode entries =
+                om.readTree(terminal.getFailureDetailsJson());
+        assertTrue(entries.isArray(), "failure_details_json must be a JSON array");
+        assertEquals(1, entries.size(),
+                "Only order 2 failed; the array should contain exactly one entry");
+        com.fasterxml.jackson.databind.JsonNode entry = entries.get(0);
+        assertEquals(2, entry.get("orderNo").asLong());
+        assertEquals("NO_CREDENTIALS", entry.get("code").asText(),
+                "classifyFailureCode should map 'no credentials' to the NO_CREDENTIALS code");
+        assertTrue(entry.get("message").asText().contains("no credentials"),
+                "Structured entry should carry the original reason text");
+        assertTrue(entry.get("at").asText().length() > 0,
+                "Structured entry must include an ISO-8601 timestamp");
+
+        // Legacy failure_message stays populated for backward compat.
+        assertNotNull(terminal.getFailureMessage());
+        assertTrue(terminal.getFailureMessage().contains("order 2"));
+    }
+
+    /**
+     * All-success job leaves failure_details_json null — matches the
+     * behaviour of failure_message on the same path.
+     */
+    @Test
+    void allSuccessJobLeavesFailureDetailsJsonNull() {
+        stubGenerate(1L, okLabel(1L));
+        stubGenerate(2L, okLabel(2L));
+
+        BulkLabelJob job = new BulkLabelJob();
+        job.setId(201L);
+        job.setOrderNumbers("1,2");
+        job.setTotalCount(2);
+        job.setStatus("PENDING");
+        job.setCreatedAt(java.time.LocalDateTime.now());
+        saved.put(201L, job);
+
+        service.runJob(201L);
+
+        assertNull(saved.get(201L).getFailureDetailsJson(),
+                "No-failure jobs should leave the structured column null (nothing to render)");
+    }
+
+    /**
+     * classifyFailureCode maps common failure reasons to the coarse
+     * codes the FE styles differently. Ensures the classifier stays in
+     * sync with the strings actually written by processOneOrder /
+     * connectors.
+     */
+    @Test
+    void classifyFailureCodeCoversTheKnownReasonStrings() {
+        assertEquals("CANCELLED",
+                BulkLabelServiceImpl.classifyFailureCode("cancelled by operator before dispatch"));
+        assertEquals("RATE_LIMITED",
+                BulkLabelServiceImpl.classifyFailureCode("rate limited (Retry-After: 30s)"));
+        assertEquals("AUTH_REJECTED",
+                BulkLabelServiceImpl.classifyFailureCode("HTTP 401 unauthorised"));
+        assertEquals("NO_CREDENTIALS",
+                BulkLabelServiceImpl.classifyFailureCode("no credentials"));
+        assertEquals("ALREADY_LABELED",
+                BulkLabelServiceImpl.classifyFailureCode("Order 42 already has a label"));
+        assertEquals("NETWORK",
+                BulkLabelServiceImpl.classifyFailureCode("host unreachable"));
+        assertEquals("VALIDATION",
+                BulkLabelServiceImpl.classifyFailureCode("recipient country is required"));
+        assertEquals("LABEL_FETCH_FAILED",
+                BulkLabelServiceImpl.classifyFailureCode("label URL unreachable"));
+        assertEquals("CARRIER_FAILURE",
+                BulkLabelServiceImpl.classifyFailureCode("FedEx said something weird"));
+        assertEquals("UNKNOWN",
+                BulkLabelServiceImpl.classifyFailureCode(null));
     }
 
     /* -------------------------- Regression: userDetails threading -------------------------- */

@@ -26,6 +26,48 @@ async function downloadZip(jobId: number, filename: string): Promise<void> {
   URL.revokeObjectURL(objectUrl)
 }
 
+/**
+ * Bulk MED — structured per-order failure entry mirroring the JSON
+ * shape written by BulkLabelServiceImpl.buildFailureDetail. Present on
+ * the wire as a stringified JSON array on {@link BulkLabelJob.failureDetailsJson};
+ * FE parses lazily via {@link parseFailureDetails} so we don't blow
+ * bundle size with a Zod schema.
+ */
+export interface BulkLabelFailureDetail {
+  /** 0 for global/worker failures; the actual orderNo otherwise. */
+  orderNo: number
+  /**
+   * One of: CANCELLED, RATE_LIMITED, AUTH_REJECTED, NO_CREDENTIALS,
+   * ALREADY_LABELED, NETWORK, VALIDATION, LABEL_FETCH_FAILED,
+   * CARRIER_FAILURE, WORKER_FAILURE, GLOBAL_FAILURE, UNKNOWN.
+   * See BulkLabelServiceImpl.classifyFailureCode for the mapping.
+   */
+  code: string
+  message: string
+  /** ISO-8601 UTC timestamp — when the outcome was recorded. */
+  at: string
+}
+
+/** Parse the JSON array on BulkLabelJob.failureDetailsJson. Returns
+ *  an empty array on absent / malformed input so callers don't need
+ *  a null-check. */
+export function parseFailureDetails(raw: string | null | undefined): BulkLabelFailureDetail[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (e): e is BulkLabelFailureDetail =>
+        typeof e === 'object' && e != null
+        && typeof (e as { orderNo?: unknown }).orderNo === 'number'
+        && typeof (e as { code?: unknown }).code === 'string'
+        && typeof (e as { message?: unknown }).message === 'string',
+    )
+  } catch {
+    return []
+  }
+}
+
 export interface BulkLabelJob {
   id: number
   // CANCELLED was added in the bulk-labels cancel-endpoint commit — a job
@@ -37,6 +79,11 @@ export interface BulkLabelJob {
   successfulCount: number
   failedCount: number
   failureMessage: string | null
+  /** Bulk MED — structured per-order failure list serialised as JSON.
+   *  Present on jobs that had any failure; null on all-success jobs and
+   *  legacy jobs from before the V51 migration. FE prefers this when
+   *  populated; falls back to failureMessage otherwise. */
+  failureDetailsJson: string | null
   createdAt: string | null
   startedAt: string | null
   completedAt: string | null

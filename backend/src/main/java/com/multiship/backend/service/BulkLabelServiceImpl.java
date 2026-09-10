@@ -494,6 +494,12 @@ public class BulkLabelServiceImpl implements BulkLabelService {
 
         long[] orderNos = parseOrderNumbers(job.getOrderNumbers());
         StringBuilder failures = new StringBuilder();
+        // Bulk MED — structured per-order failure list alongside the
+        // legacy text blob. Flushed to bulk_label_jobs.failure_details_json
+        // in the finally block so the FE can render a proper table
+        // instead of parsing a wall of "order N: reason" lines.
+        java.util.List<java.util.Map<String, Object>> structuredFailures =
+                new java.util.ArrayList<>();
 
         // Progress tracking mutated from callback + timer.
         java.util.concurrent.atomic.AtomicLong lastFlushMs =
@@ -532,6 +538,8 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                     log.warn("Bulk-label worker future.get() threw: {}", e.getMessage());
                     job.setFailedCount(job.getFailedCount() + 1);
                     failures.append("worker failure: ").append(e.getMessage()).append('\n');
+                    structuredFailures.add(buildFailureDetail(
+                            0L, "WORKER_FAILURE", "worker failure: " + e.getMessage()));
                     continue;
                 }
 
@@ -543,10 +551,17 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                     // label lives on the order row itself and is
                     // re-downloadable via GET /orders/{n}/label/pdf.
                     job.setSuccessfulCount(job.getSuccessfulCount() + 1);
+                    String tn = out.trackingNumber == null ? "unknown" : out.trackingNumber;
                     failures.append("order ").append(out.orderNo)
                             .append(": already had a label (tracking ")
-                            .append(out.trackingNumber == null ? "unknown" : out.trackingNumber)
+                            .append(tn)
                             .append(") — skipped, no new label generated.\n");
+                    // Bulk MED — structured entry so FE can render this
+                    // as an "info" row rather than lumping with real
+                    // failures. Same code the manual path uses.
+                    structuredFailures.add(buildFailureDetail(
+                            out.orderNo, "ALREADY_LABELED",
+                            "Already had a label (tracking " + tn + ") — skipped."));
                 } else if (out.pdf != null && out.trackingNumber != null) {
                     String entryName = "label-" + out.orderNo + "-" + out.trackingNumber + ".pdf";
                     zip.putNextEntry(new ZipEntry(entryName));
@@ -558,6 +573,9 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                     if (out.failureReason != null) {
                         failures.append("order ").append(out.orderNo)
                                 .append(": ").append(out.failureReason).append('\n');
+                        structuredFailures.add(buildFailureDetail(
+                                out.orderNo, classifyFailureCode(out.failureReason),
+                                out.failureReason));
                     }
                 }
 
@@ -586,8 +604,24 @@ public class BulkLabelServiceImpl implements BulkLabelService {
             log.warn("Bulk-label job {} failed globally: {}", jobId, ex.getMessage());
             job.setStatus("FAILED");
             failures.append("global: ").append(ex.getMessage()).append('\n');
+            structuredFailures.add(buildFailureDetail(
+                    0L, "GLOBAL_FAILURE", "global: " + ex.getMessage()));
         } finally {
             if (failures.length() > 0) job.setFailureMessage(failures.toString());
+            // Bulk MED — serialise the structured failure list into the
+            // parallel JSON column. Wrapped in try/catch so a Jackson
+            // hiccup doesn't tank the whole job save (the human-readable
+            // failureMessage is authoritative for legacy FE, structured
+            // is a progressive enhancement).
+            if (!structuredFailures.isEmpty()) {
+                try {
+                    job.setFailureDetailsJson(objectMapperForFailures()
+                            .writeValueAsString(structuredFailures));
+                } catch (Exception jsonEx) {
+                    log.warn("Bulk-label job {}: failure_details_json serialisation failed: {}",
+                            jobId, jsonEx.getMessage());
+                }
+            }
             job.setCompletedAt(LocalDateTime.now(ZoneOffset.UTC));
             jobRepository.save(job);
             // Free the cancellation slot regardless of outcome so the map
@@ -765,6 +799,70 @@ public class BulkLabelServiceImpl implements BulkLabelService {
     }
 
     /**
+     * Build one structured failure entry for
+     * {@link com.multiship.backend.model.BulkLabelJob#getFailureDetailsJson}.
+     * Fields are kept small and JSON-primitive so Jackson never chokes
+     * on downstream persistence; timestamps are ISO-8601 UTC so the FE
+     * can localise if it wants.
+     */
+    private static java.util.Map<String, Object> buildFailureDetail(long orderNo, String code, String message) {
+        java.util.LinkedHashMap<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("orderNo", orderNo);
+        m.put("code", code == null ? "UNKNOWN" : code);
+        m.put("message", message == null ? "" : message);
+        m.put("at", java.time.OffsetDateTime.now(ZoneOffset.UTC).toString());
+        return m;
+    }
+
+    /**
+     * Classify a free-text failure reason into a coarse error code the
+     * FE can style differently (rate-limit vs credential vs validation).
+     * String-matching is fragile but the alternative — plumbing typed
+     * error codes back from the connector layer — is a much bigger
+     * refactor. Kept in one place so future carrier-message drift only
+     * needs updating here.
+     */
+    static String classifyFailureCode(String reason) {
+        if (reason == null) return "UNKNOWN";
+        String lc = reason.toLowerCase(java.util.Locale.ROOT);
+        if (lc.contains("cancelled by operator")) return "CANCELLED";
+        if (lc.contains("rate limited") || lc.contains("429")) return "RATE_LIMITED";
+        // NO_CREDENTIALS matches BEFORE AUTH_REJECTED because "no
+        // credentials" also contains the substring "credentials" —
+        // the more specific case has to win.
+        if (lc.contains("no credentials") || lc.contains("not verified")
+                || lc.contains("no default account")) return "NO_CREDENTIALS";
+        if (lc.contains("credentials") || lc.contains("unauthorized")
+                || lc.contains("unauthorised") || lc.contains("401")
+                || lc.contains("403")) return "AUTH_REJECTED";
+        if (lc.contains("already generated") || lc.contains("already has a label")) {
+            return "ALREADY_LABELED";
+        }
+        // LABEL_FETCH_FAILED before NETWORK because "label URL
+        // unreachable" also contains "unreachable" — specific wins.
+        if (lc.contains("label url unreachable")) return "LABEL_FETCH_FAILED";
+        if (lc.contains("network") || lc.contains("timeout")
+                || lc.contains("unreachable")) return "NETWORK";
+        if (lc.contains("validation") || lc.contains("required")
+                || lc.contains("missing")) return "VALIDATION";
+        return "CARRIER_FAILURE";
+    }
+
+    /**
+     * Lazily-instantiated ObjectMapper for failure-detail serialisation.
+     * Static holder pattern so pure-Mockito unit tests that build the
+     * service via {@code new} don't need to inject one.
+     */
+    private static com.fasterxml.jackson.databind.ObjectMapper objectMapperForFailures() {
+        return FailureJsonMapperHolder.INSTANCE;
+    }
+
+    private static final class FailureJsonMapperHolder {
+        private static final com.fasterxml.jackson.databind.ObjectMapper INSTANCE =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+    }
+
+    /**
      * Reconstruct a UserDetails for the operator who submitted the bulk
      * job so downstream services (CarrierServiceImpl.resolveUser) can
      * look up the User row by username. Mirrors the JWT filter's
@@ -885,6 +983,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 .successfulCount(j.getSuccessfulCount())
                 .failedCount(j.getFailedCount())
                 .failureMessage(j.getFailureMessage())
+                .failureDetailsJson(j.getFailureDetailsJson())
                 .createdAt(j.getCreatedAt())
                 .startedAt(j.getStartedAt())
                 .completedAt(j.getCompletedAt())
@@ -905,6 +1004,7 @@ public class BulkLabelServiceImpl implements BulkLabelService {
                 .successfulCount(s.getSuccessfulCount())
                 .failedCount(s.getFailedCount())
                 .failureMessage(s.getFailureMessage())
+                .failureDetailsJson(s.getFailureDetailsJson())
                 .createdAt(s.getCreatedAt())
                 .startedAt(s.getStartedAt())
                 .completedAt(s.getCompletedAt())

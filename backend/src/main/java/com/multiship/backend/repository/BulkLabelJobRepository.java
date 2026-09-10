@@ -31,7 +31,9 @@ public interface BulkLabelJobRepository extends JpaRepository<BulkLabelJob, Long
     @Query(value = """
         SELECT b.id AS id, b.status AS status, b.total_count AS totalCount,
                b.successful_count AS successfulCount, b.failed_count AS failedCount,
-               b.failure_message AS failureMessage, b.created_at AS createdAt,
+               b.failure_message AS failureMessage,
+               CAST(b.failure_details_json AS text) AS failureDetailsJson,
+               b.created_at AS createdAt,
                b.started_at AS startedAt, b.completed_at AS completedAt,
                b.order_numbers AS orderNumbers, b.requested_by AS requestedBy,
                (b.result_zip_base64 IS NOT NULL AND LENGTH(b.result_zip_base64) > 0) AS hasResultZip
@@ -53,6 +55,7 @@ public interface BulkLabelJobRepository extends JpaRepository<BulkLabelJob, Long
         int getSuccessfulCount();
         int getFailedCount();
         String getFailureMessage();
+        String getFailureDetailsJson();
         LocalDateTime getCreatedAt();
         LocalDateTime getStartedAt();
         LocalDateTime getCompletedAt();

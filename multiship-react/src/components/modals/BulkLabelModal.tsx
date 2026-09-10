@@ -8,7 +8,12 @@ import {
   FiX,
   FiZap,
 } from 'react-icons/fi'
-import { bulkLabelService, type BulkLabelJob } from '../../api/bulkLabelService'
+import {
+  bulkLabelService,
+  parseFailureDetails,
+  type BulkLabelFailureDetail,
+  type BulkLabelJob,
+} from '../../api/bulkLabelService'
 import { notify } from '../../utils/notify'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 
@@ -338,14 +343,98 @@ function ProgressBlock({ job, progress }: { job: BulkLabelJob; progress: number 
         </div>
       </div>
 
-      {job.failureMessage ? (
-        <div className="rounded-xl border border-rose-200 bg-rose-50/60 px-3 py-2 text-[11.5px] text-rose-800">
-          <p className="font-semibold">Failures</p>
-          <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-[10.5px] font-mono">
-            {job.failureMessage}
-          </pre>
-        </div>
+      {job.failureMessage || job.failureDetailsJson ? (
+        <FailureBlock job={job} />
       ) : null}
     </div>
   )
+}
+
+/**
+ * Bulk MED — render structured per-order failures as a proper table
+ * when the backend provided failureDetailsJson (V51 and later). Falls
+ * back to the legacy failureMessage text blob when structured is
+ * absent (jobs from before V51, or all-failed-globally rows).
+ */
+function FailureBlock({ job }: { job: BulkLabelJob }) {
+  const details = parseFailureDetails(job.failureDetailsJson)
+  if (details.length === 0) {
+    // Legacy fallback — old jobs OR global-failure-only jobs where
+    // the parser found no structured rows.
+    return (
+      <div className="rounded-xl border border-rose-200 bg-rose-50/60 px-3 py-2 text-[11.5px] text-rose-800">
+        <p className="font-semibold">Failures</p>
+        <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap text-[10.5px] font-mono">
+          {job.failureMessage}
+        </pre>
+      </div>
+    )
+  }
+  return (
+    <div className="rounded-xl border border-rose-200 bg-rose-50/60 px-3 py-2 text-[11.5px] text-rose-800">
+      <p className="font-semibold">
+        Details ({details.length} {details.length === 1 ? 'entry' : 'entries'})
+      </p>
+      <div className="mt-1 max-h-48 overflow-y-auto">
+        <table className="w-full text-left text-[10.5px]">
+          <thead>
+            <tr className="border-b border-rose-200 text-[10px] uppercase tracking-wide text-rose-700/80">
+              <th className="py-1 pr-2 font-semibold">Order</th>
+              <th className="py-1 pr-2 font-semibold">Code</th>
+              <th className="py-1 font-semibold">Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {details.map((d, i) => (
+              <FailureRow key={i} detail={d} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function FailureRow({ detail }: { detail: BulkLabelFailureDetail }) {
+  // Slightly different chip color per code so operators can eyeball
+  // patterns (all AUTH_REJECTED → creds problem; all RATE_LIMITED →
+  // slow down; mixed → real per-order data issues).
+  const codeChipClass = codeChip(detail.code)
+  return (
+    <tr className="border-b border-rose-100 last:border-0 align-top">
+      <td className="py-1 pr-2 font-mono tabular-nums">
+        {detail.orderNo === 0 ? '—' : detail.orderNo}
+      </td>
+      <td className="py-1 pr-2">
+        <span className={`inline-block rounded-full px-1.5 py-0.5 text-[9.5px] font-semibold ${codeChipClass}`}>
+          {detail.code}
+        </span>
+      </td>
+      <td className="py-1 text-rose-900">{detail.message}</td>
+    </tr>
+  )
+}
+
+function codeChip(code: string): string {
+  switch (code) {
+    case 'ALREADY_LABELED':
+      return 'bg-emerald-100 text-emerald-800'   // not really a failure — info
+    case 'CANCELLED':
+      return 'bg-amber-100 text-amber-800'
+    case 'RATE_LIMITED':
+      return 'bg-orange-100 text-orange-800'
+    case 'AUTH_REJECTED':
+    case 'NO_CREDENTIALS':
+      return 'bg-rose-200 text-rose-900'         // needs operator action
+    case 'NETWORK':
+    case 'LABEL_FETCH_FAILED':
+      return 'bg-slate-200 text-slate-800'       // usually transient
+    case 'VALIDATION':
+      return 'bg-yellow-100 text-yellow-800'     // operator fixable per-order
+    case 'WORKER_FAILURE':
+    case 'GLOBAL_FAILURE':
+      return 'bg-purple-100 text-purple-800'     // platform bug, escalate
+    default:
+      return 'bg-rose-100 text-rose-800'         // generic CARRIER_FAILURE / UNKNOWN
+  }
 }

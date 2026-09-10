@@ -25,6 +25,15 @@ public class BulkLabelJobDTO {
     private int successfulCount;
     private int failedCount;
     private String failureMessage;
+    /**
+     * Bulk MED — structured per-order failures for FE table-rendering.
+     * Serves as a progressive enhancement alongside the legacy
+     * {@link #failureMessage} text blob; when present, the FE should
+     * prefer it. Shape: JSON array of {orderNo, code, message, at}.
+     * Null on jobs that landed before V51 (nothing to render) OR on
+     * fully-successful jobs (nothing failed).
+     */
+    private String failureDetailsJson;
     private LocalDateTime createdAt;
     private LocalDateTime startedAt;
     private LocalDateTime completedAt;
