@@ -356,8 +356,8 @@ public class OrderImportController {
         long totalRows = orderDone.size() - needFixes;
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
-                .message(gen + " of " + totalRows + " order(s) labelled"
-                        + (needFixes > 0 ? " · " + needFixes + " need fixes" : "")
+                .message(gen + " of " + totalRows + (totalRows == 1 ? " order" : " orders") + " labelled"
+                        + (needFixes > 0 ? " · " + needFixes + (needFixes == 1 ? " needs" : " need") + " fixes" : "")
                         + " · " + statusLabel(dto.getStatus()))
                 .data(dto)
                 .build());

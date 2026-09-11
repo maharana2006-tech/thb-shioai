@@ -216,7 +216,7 @@ class OrderImportStagingTest {
 
         ApiResponse<StagingUploadDTO> res = service.saveStaging(s.getId(), "alice", true);
         assertEquals("success", res.getStatus(), res.getMessage());
-        assertTrue(res.getMessage().contains("including 1 with errors"), res.getMessage());
+        assertTrue(res.getMessage().contains("including 1 that needs fixes"), res.getMessage());
         assertEquals(1, savedBatches.size());
         ImportBatch batch = savedBatches.get(0);
         assertEquals("DRAFT", batch.getStatus(), "a batch carrying errors is parked as a Draft");

@@ -4396,11 +4396,10 @@ public class OrderImportServiceImpl implements OrderImportService {
                     return ApiResponse.<StagingUploadDTO>builder()
                             .status("error").code(HttpStatus.CONFLICT.value())
                             .errorCode(ErrorCode.VALIDATION_ERROR.name())
-                            .message("This file is already uploaded as upload #" + open.getId() + " (" + open.getFileName()
-                                    + ": " + waiting.getReadyOrders() + " ready and " + waiting.getInvalidOrders()
-                                    + " with errors still to save"
-                                    + (waiting.getSavedOrders() > 0 ? ", " + waiting.getSavedOrders() + " already saved" : "")
-                                    + "). Continue that upload, or upload this file anyway as a new one.")
+                            .message("Already uploaded as upload #" + open.getId() + " (" + open.getFileName() + "): "
+                                    + waiting.getReadyOrders() + " ready · " + needFixes(waiting.getInvalidOrders())
+                                    + (waiting.getSavedOrders() > 0 ? " · " + waiting.getSavedOrders() + " saved" : "")
+                                    + ". Continue that upload, or upload this file anyway as a new one.")
                             .data(waiting)
                             .build();
                 }
@@ -4455,9 +4454,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         log.info("Import staging #{} ({}): {} row(s) / {} order(s) — {} valid, {} with errors",
                 up.getId(), requestedBy, c.totalRows(), c.totalOrders(), c.validOrders(), c.invalidOrders());
         String msg = c.invalidOrders() == 0
-                ? "All " + c.totalOrders() + " order(s) passed validation — review them and click Save."
-                : c.validOrders() + " of " + c.totalOrders() + " order(s) passed validation; " + c.invalidOrders()
-                        + " have errors. Save writes only the valid orders to Import history.";
+                ? (c.totalOrders() == 1 ? "The order is ready to save." : "All " + c.totalOrders() + " orders are ready to save.")
+                : c.validOrders() + " of " + countNoun(c.totalOrders(), "order") + " ready to save · "
+                        + needFixes(c.invalidOrders()) + ".";
         return stagingSuccess(toStagingDTO(up, rows, saved), msg);
     }
 
@@ -4547,8 +4546,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             applyStagingCounts(up, before);
             stagingUploadRepository.save(up);
             return stagingFailure(HttpStatus.UNPROCESSABLE_ENTITY, before.totalOrders() > 0 && before.savedOrders() == before.totalOrders()
-                    ? "Everything in this upload is already saved to Import history."
-                    : "No fully valid orders to save — fix the errors here or download them first.");
+                    ? "Everything in this upload is already saved."
+                    : "Nothing is ready to save — fix the orders that need fixes, or use Save all, including errors.");
         }
         // Orders already in Import history (typically the same file uploaded twice
         // with "Upload anyway") would be saved a second time — ask first.
@@ -4572,8 +4571,9 @@ public class OrderImportServiceImpl implements OrderImportService {
                     if (i++ > 0) list.append(", ");
                     list.append(e.getKey()).append(" (").append(e.getValue()).append(")");
                 }
-                return stagingFailure(HttpStatus.CONFLICT, dups.size() + " order(s) in this save are already in Import history: "
-                        + list + ". Saving them again creates duplicate orders.");
+                return stagingFailure(HttpStatus.CONFLICT, countNoun(dups.size(), "order") + " in this save "
+                        + (dups.size() == 1 ? "is" : "are") + " already in Import history: " + list
+                        + ". Saving again creates duplicates.");
             }
         }
         // Copies: save() re-validates and mutates the rows it is handed.
@@ -4611,13 +4611,12 @@ public class OrderImportServiceImpl implements OrderImportService {
         log.info("Import staging #{} ({}): saved {} order(s) / {} row(s) to Import history #{}; {} order(s) left in staging",
                 up.getId(), requestedBy, orders, toSave.size(), batchId, left);
         String msg = withErrors > 0
-                ? "Saved all " + orders + " order(s) (" + toSave.size() + " row(s)) to Import history #" + batchId
-                        + ", including " + withErrors + " with errors. Fix those in Import history"
-                        + (orders - withErrors > 0
-                                ? "; the " + (orders - withErrors) + " valid order(s) can be labelled now."
-                                : " before labelling them.")
-                : "Saved " + orders + " order(s) (" + toSave.size() + " row(s)) to Import history #" + batchId + "."
-                        + (left > 0 ? " " + left + " order(s) with errors were not saved — fix them here or download the error file." : "");
+                ? "Saved " + countNoun(orders, "order") + " to Import history #" + batchId + ", including "
+                        + withErrors + " that " + (withErrors == 1 ? "needs" : "need") + " fixes — fix "
+                        + (withErrors == 1 ? "it" : "them") + " there before labelling."
+                : "Saved " + countNoun(orders, "order") + " to Import history #" + batchId + "."
+                        + (left > 0 ? " " + countNoun(left, "order") + " that " + (left == 1 ? "needs" : "need")
+                                + " fixes " + (left == 1 ? "stays" : "stay") + " in this upload." : "");
         return stagingSuccess(toStagingDTO(up, rows, savedAfter), msg);
     }
 
@@ -4687,6 +4686,16 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     // ---- staging helpers ------------------------------------------------------
+
+    /** "1 order" / "4 orders". */
+    private static String countNoun(int k, String noun) {
+        return k + " " + noun + (k == 1 ? "" : "s");
+    }
+
+    /** "1 needs fixes" / "4 need fixes". */
+    private static String needFixes(int k) {
+        return k + (k == 1 ? " needs fixes" : " need fixes");
+    }
 
     /** Counts from the stored upload header (no rows) — for the list and the "already uploaded" answer. */
     private StagingUploadDTO stagingSummary(ImportStagingUpload up) {

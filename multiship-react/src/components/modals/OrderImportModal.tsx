@@ -250,10 +250,10 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     const lead =
       staging.readyOrders === 0
         ? `Save ${total === 1 ? 'this order' : `these ${total} orders`} to Import history with ${total === 1 ? 'its' : 'their'} errors?`
-        : `Save all ${total} orders to Import history, including ${count(staging.invalidOrders, 'order')} with errors?`
-    const tail = staging.readyOrders > 0 ? ` The ${count(staging.readyOrders, 'valid order')} can be labelled right away.` : ''
+        : `Save all ${total} orders to Import history, including the ${count(staging.invalidOrders, 'order')} that need${staging.invalidOrders === 1 ? 's' : ''} fixes?`
+    const tail = staging.readyOrders > 0 ? ` The ${count(staging.readyOrders, 'ready order')} can be labelled right away.` : ''
     const ok = await notify.confirm(
-      `${lead}\n\nOrders with errors are saved as they are and flagged in Import history — fix them there before labelling them.${tail}`,
+      `${lead}\n\nOrders that need fixes are saved as they are and flagged in Import history — fix them there before labelling them.${tail}`,
       { title: 'Proceed with errors', confirmLabel: total === 1 ? 'Save it' : 'Save all', cancelLabel: 'Cancel' },
     )
     if (ok) await saveValid(true)
@@ -279,7 +279,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
   }
 
   const expires = staging?.expiresAt ? new Date(staging.expiresAt).toLocaleDateString() : null
-  const errorDownloads = (compact = false) =>
+  const errorDownloads = () =>
     staging && staging.invalidOrders > 0 ? (
       <span className="inline-flex items-center gap-1">
         {(['csv', 'xlsx'] as const).map((f) => (
@@ -289,10 +289,10 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
             onClick={() => void downloadErrors(f)}
             disabled={downloading != null}
             className={GHOST_BTN}
-            title={`Download the ${staging.invalidOrders} order(s) with errors — every row of each, plus an "errors" column. Fix the file and upload it again.`}
+            title={`Download the ${staging.invalidOrders} order${staging.invalidOrders === 1 ? '' : 's'} that need${staging.invalidOrders === 1 ? 's' : ''} fixes — every row, plus an "errors" column. Fix the file and upload it again.`}
           >
             {downloading === f ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiDownload className="h-3.5 w-3.5" />}
-            {compact ? f.toUpperCase() : `Errors (${f === 'csv' ? 'CSV' : 'Excel'})`}
+            {`Errors (${f === 'csv' ? 'CSV' : 'Excel'})`}
           </button>
         ))}
       </span>
@@ -375,8 +375,8 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                       #{u.id} · {u.fileName}
                     </span>
                     <span className="text-[11px] text-[#6b5c42]">
-                      {u.readyOrders} ready · {u.invalidOrders} with errors
-                      {u.savedOrders > 0 ? ` · ${u.savedOrders} already saved` : ''}
+                      {u.readyOrders} ready · {u.invalidOrders} need{u.invalidOrders === 1 ? 's' : ''} fixes
+                      {u.savedOrders > 0 ? ` · ${u.savedOrders} saved` : ''}
                     </span>
                     {u.createdAt ? (
                       <span className="text-[10.5px] text-[#b6a684]">{new Date(u.createdAt).toLocaleString()}</span>
@@ -398,20 +398,24 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
           ) : null}
           {step === 2 && staging && preview ? (
             <>
-              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2.5">
-                <FiFile className="h-3.5 w-3.5 text-[#6b5c42]" />
-                <span className="text-[12px] font-semibold text-[#1f150c]">
-                  Upload #{staging.id} · {staging.fileName}
-                </span>
-                <StatPill tone="total" label={`${staging.totalOrders} order${staging.totalOrders === 1 ? '' : 's'}`} />
-                <StatPill tone="valid" label={`${staging.readyOrders} ready to save`} />
-                {staging.invalidOrders > 0 ? (
-                  <StatPill tone="error" label={`${staging.invalidOrders} with errors`} />
-                ) : null}
-                {staging.savedOrders > 0 ? <StatPill tone="warn" label={`${staging.savedOrders} already saved`} /> : null}
-                <span className="ml-auto text-[10.5px] text-[#b6a684]">
-                  In staging — not in Import history until you save{expires ? ` · kept until ${expires}` : ''}
-                </span>
+              <div className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <FiFile className="h-3.5 w-3.5 text-[#6b5c42]" />
+                  <span className="text-[12.5px] font-semibold text-[#1f150c]">{staging.fileName}</span>
+                  <span className="text-[10.5px] text-[#b6a684]">
+                    Upload #{staging.id}
+                    {expires ? ` · kept until ${expires}` : ''}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <StatPill tone="total" label={`${staging.totalOrders} order${staging.totalOrders === 1 ? '' : 's'}`} />
+                  <StatPill tone="valid" label={`${staging.readyOrders} ready to save`} />
+                  {staging.invalidOrders > 0 ? (
+                    <StatPill tone="error" label={`${staging.invalidOrders} need${staging.invalidOrders === 1 ? 's' : ''} fixes`} />
+                  ) : null}
+                  {staging.savedOrders > 0 ? <StatPill tone="warn" label={`${staging.savedOrders} saved`} /> : null}
+                  <span className="ml-auto text-[10.5px] text-[#b6a684]">Nothing is in Import history until you save.</span>
+                </div>
               </div>
               <PreviewStep
                 preview={preview}
@@ -459,31 +463,25 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
 
         {/* ── Footer — one primary action per state ── */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#eee6d6] bg-white px-6 py-3.5">
-          <div className="text-[11px] text-[#b6a684]">
+          <div className="flex flex-wrap items-center gap-2">
             {step === 2 && staging ? (
-              <span>
-                <span className="font-semibold text-[#6b5c42]">
-                  {staging.readyOrders} order{staging.readyOrders === 1 ? '' : 's'} ready to save
-                </span>
-                {staging.invalidOrders > 0
-                  ? ` · ${staging.invalidOrders} with errors stay in staging — fix them here or download them`
-                  : ''}
-              </span>
+              <>
+                {errorDownloads()}
+                <button type="button" onClick={() => void discardUpload(staging.id)} disabled={discarding || saving} className={GHOST_BTN}>
+                  {discarding ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiTrash2 className="h-3.5 w-3.5" />}
+                  Discard
+                </button>
+              </>
             ) : step === 3 ? (
-              'Saved to Import history — generate labels from there'
+              <span className="text-[11px] text-[#b6a684]">Generate labels from Import history.</span>
             ) : (
-              'Step 1 of 3'
+              <span className="text-[11px] text-[#b6a684]">Step 1 of 3</span>
             )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             {step === 2 && staging ? (
               <>
-                {errorDownloads(true)}
-                <button type="button" onClick={() => void discardUpload(staging.id)} disabled={discarding || saving} className={GHOST_BTN}>
-                  {discarding ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiTrash2 className="h-3.5 w-3.5" />}
-                  Discard
-                </button>
                 {onClose ? (
                   <button type="button" onClick={onClose} className={GHOST_BTN}>
                     Close
@@ -495,10 +493,10 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                     onClick={() => void proceedWithErrors()}
                     disabled={savingCell || saving}
                     className={GHOST_BTN}
-                    title="Save every order to Import history, errors included. The flagged rows are fixed there; the valid orders can be labelled right away."
+                    title={`Saves all ${staging.readyOrders + staging.invalidOrders} orders. The ${staging.invalidOrders} that need${staging.invalidOrders === 1 ? 's' : ''} fixes ${staging.invalidOrders === 1 ? 'is' : 'are'} flagged in Import history to fix there.`}
                   >
                     <FiAlertCircle className="h-3.5 w-3.5" />
-                    Proceed with errors ({staging.readyOrders + staging.invalidOrders})
+                    Save all, including errors
                   </button>
                 ) : null}
                 <button
@@ -510,18 +508,16 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                     savingCell
                       ? 'Saving your edit…'
                       : staging.readyOrders === 0
-                        ? 'No fully valid orders to save yet — fix the errors, or use Proceed with errors.'
-                        : staging.invalidOrders > 0
-                          ? `Saves the ${staging.readyOrders} valid order(s); the ${staging.invalidOrders} with errors stay here.`
-                          : undefined
+                        ? 'Nothing is ready yet — fix the orders that need fixes, or use Save all, including errors.'
+                        : `Saves the ${staging.readyOrders} ready order${staging.readyOrders === 1 ? '' : 's'}.${
+                            staging.invalidOrders > 0
+                              ? ` The ${staging.invalidOrders} that need${staging.invalidOrders === 1 ? 's' : ''} fixes stay${staging.invalidOrders === 1 ? 's' : ''} here.`
+                              : ''
+                          }`
                   }
                 >
                   {saving ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiSave className="h-3.5 w-3.5" />}
-                  {staging.readyOrders === 0
-                    ? 'Nothing valid to save'
-                    : staging.invalidOrders > 0
-                      ? `Ignore errors and save ${staging.readyOrders}`
-                      : `Save ${staging.readyOrders} order${staging.readyOrders === 1 ? '' : 's'} to Import history`}
+                  {staging.readyOrders === 0 ? 'Nothing ready to save' : staging.invalidOrders > 0 ? 'Save ready orders' : 'Save to Import history'}
                 </button>
               </>
             ) : step === 3 && staging ? (
@@ -529,7 +525,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                 {staging.invalidOrders > 0 ? (
                   <button type="button" onClick={() => setLastSave(null)} className={GHOST_BTN}>
                     <FiArrowRight className="h-3.5 w-3.5 rotate-180" />
-                    Fix the remaining {staging.invalidOrders}
+                    Back to orders that need fixes
                   </button>
                 ) : null}
                 <button type="button" onClick={startOver} className={GHOST_BTN}>
@@ -972,7 +968,6 @@ function PreviewStep({
   savedRows?: number[]
 }) {
   const savedSet = new Set(savedRows)
-  const warned = preview.rows.filter((r) => (r.warnings?.length ?? 0) > 0).length
   // Union of tenant custom-field keys across the batch → stable extra columns.
   const customCols = Array.from(
     new Set(preview.rows.flatMap((r) => Object.keys(r.customFields ?? {}))),
@@ -1016,10 +1011,7 @@ function PreviewStep({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <StatPill tone="total" label={`${preview.totalRows} total`} />
-        <StatPill tone="valid" label={`✓ ${preview.validRows} valid`} />
-        {preview.invalidRows > 0 ? <StatPill tone="error" label={`✗ ${preview.invalidRows} with errors`} /> : null}
-        {warned > 0 ? <StatPill tone="warn" label={`⚠ ${warned} with warnings`} /> : null}
+        {/* Counts live in the order summary above; the grid only filters its rows. */}
         {/* View toggle: dense spreadsheet grid vs one card per order */}
         <div className="inline-flex overflow-hidden rounded-lg border border-[#e3d9c4]">
           {(['table', 'detail'] as const).map((v) => (
@@ -1037,9 +1029,9 @@ function PreviewStep({
         </div>
         <div className="inline-flex overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Show rows">
           {([
-            ['all', `All ${preview.rows.length}`],
-            ['errors', `Errors ${errorRowCount}`],
-            ['warnings', `Warnings ${warningRowCount}`],
+            ['all', `All rows (${preview.rows.length})`],
+            ['errors', `Rows with errors (${errorRowCount})`],
+            ['warnings', `Rows with warnings (${warningRowCount})`],
           ] as const).map(([k, label]) => (
             <button
               key={k}
@@ -1326,7 +1318,7 @@ function SavedStep({
         <div>
           <p className="text-[13.5px] font-semibold text-emerald-900">{lastSave.message}</p>
           <p className="mt-1 text-[12px] text-emerald-800">
-            Generate their labels from Import history{lastSave.batchId != null ? ` (import #${lastSave.batchId})` : ''}.
+            Generate labels from Import history{lastSave.batchId != null ? `, import #${lastSave.batchId}` : ''}.
           </p>
         </div>
       </div>
@@ -1337,17 +1329,17 @@ function SavedStep({
         </div>
         <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-center">
           <p className="text-[18px] font-semibold tabular-nums text-emerald-800">{staging.savedOrders}</p>
-          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[#b6a684]">In Import history</p>
+          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[#b6a684]">Saved</p>
         </div>
         <div className="rounded-xl border border-rose-200 bg-white px-3 py-2.5 text-center">
           <p className="text-[18px] font-semibold tabular-nums text-rose-800">{left}</p>
-          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[#b6a684]">Not saved</p>
+          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[#b6a684]">Need fixes</p>
         </div>
       </div>
       {left > 0 ? (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3.5 text-[12.5px] text-rose-900">
           <p className="font-semibold">
-            {left} order{left === 1 ? '' : 's'} with errors {left === 1 ? 'was' : 'were'} not saved.
+            {left} order{left === 1 ? '' : 's'} that need{left === 1 ? 's' : ''} fixes {left === 1 ? 'was' : 'were'} not saved.
           </p>
           <p className="mt-1">
             {left === 1 ? 'It stays' : 'They stay'} in this upload{expires ? ` until ${expires}` : ''}. Fix them here and save

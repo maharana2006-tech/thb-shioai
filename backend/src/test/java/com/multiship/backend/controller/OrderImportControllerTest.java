@@ -206,7 +206,7 @@ class OrderImportControllerTest {
 
     @Test
     void generateForBatch_composesMessageWithGeneratedCountAndStatusLabel() {
-        // 3 rows without an orderRef are 3 orders → "2 of 3 order(s) labelled · Partial complete"
+        // 3 rows without an orderRef are 3 orders → "2 of 3 orders labelled · Partial complete"
         OrderImportRowDTO r1 = new OrderImportRowDTO();
         r1.setGeneratedStatus("GENERATED");
         OrderImportRowDTO r2 = new OrderImportRowDTO();
@@ -227,7 +227,7 @@ class OrderImportControllerTest {
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertNotNull(resp.getBody().getMessage());
-        assertTrue(resp.getBody().getMessage().contains("2 of 3 order(s) labelled"),
+        assertTrue(resp.getBody().getMessage().contains("2 of 3 orders labelled"),
                 "expected count-based message; got: " + resp.getBody().getMessage());
         assertTrue(resp.getBody().getMessage().contains("Partial complete"),
                 "expected humanised status label; got: " + resp.getBody().getMessage());
@@ -252,7 +252,7 @@ class OrderImportControllerTest {
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
                 controller.generateForBatch(7L, false, false, false, alice);
 
-        assertTrue(resp.getBody().getMessage().contains("1 of 2 order(s) labelled"),
+        assertTrue(resp.getBody().getMessage().contains("1 of 2 orders labelled"),
                 "expected order-based count; got: " + resp.getBody().getMessage());
     }
 
@@ -285,7 +285,7 @@ class OrderImportControllerTest {
                 controller.generateForBatch(7L, false, false, false, alice);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
-        assertTrue(resp.getBody().getMessage().contains("0 of 0 order(s) labelled"),
+        assertTrue(resp.getBody().getMessage().contains("0 of 0 orders labelled"),
                 "expected 0/0 count on null-rows dto; got: " + resp.getBody().getMessage());
     }
 
