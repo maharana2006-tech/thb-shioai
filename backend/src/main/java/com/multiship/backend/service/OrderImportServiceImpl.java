@@ -315,7 +315,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             batch.setStatus("FAILED");
             String detail = "Marked FAILED by startup housekeeper: batch was IN_PROGRESS when the JVM "
                     + "restarted (created " + lastActivity + ", older than "
-                    + staleInProgressCutoffMinutes + " min cutoff). Retry from Data History.";
+                    + staleInProgressCutoffMinutes + " min cutoff). Retry from Import history.";
             log.warn("Import batch {}: {}", batch.getId(), detail);
             importBatchRepository.save(batch);
             reaped++;
@@ -867,6 +867,41 @@ public class OrderImportServiceImpl implements OrderImportService {
             case "OZ" -> weight.divide(new BigDecimal("16"), 4, java.math.RoundingMode.HALF_UP);
             default -> weight;
         };
+    }
+
+    /** Rows whose whole order (every line of its orderRef) passed validation — the rows that can be labelled. */
+    private static int readyRowCount(List<OrderImportRowDTO> rows) {
+        java.util.Set<String> broken = new java.util.HashSet<>();
+        for (OrderImportRowDTO r : rows) {
+            if (r.getErrors() != null && !r.getErrors().isEmpty()) broken.add(groupKeyOf(r));
+        }
+        int ready = 0;
+        for (OrderImportRowDTO r : rows) {
+            if (!broken.contains(groupKeyOf(r))) ready++;
+        }
+        return ready;
+    }
+
+    /**
+     * A row-edit JSON body applied on top of a copy of the stored row, so only the
+     * fields it names change. An empty body or JSON that isn't a row → 400.
+     */
+    private OrderImportRowDTO mergeRowJson(OrderImportRowDTO current, String json) {
+        if (!StringUtils.hasText(json)) {
+            throw new ImportBatchStateException(400,
+                    "Send the row as JSON — the fields to change, or the whole row as the import returns it.");
+        }
+        com.fasterxml.jackson.databind.ObjectMapper mapper = importObjectMapper != null
+                ? importObjectMapper : new com.fasterxml.jackson.databind.ObjectMapper();
+        try {
+            OrderImportRowDTO copy = mapper.readValue(mapper.writeValueAsString(current), OrderImportRowDTO.class);
+            OrderImportRowDTO merged = mapper.readerForUpdating(copy)
+                    .without(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                    .readValue(json);
+            return merged == null ? copy : merged;
+        } catch (com.fasterxml.jackson.core.JacksonException e) {
+            throw new ImportBatchStateException(400, "The row isn't valid JSON: " + e.getOriginalMessage());
+        }
     }
 
     /** Group key used for order grouping — mirrors commit()/international rules. */
@@ -1906,7 +1941,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         int invalid = (int) safe.stream()
                 .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
                 .count();
-        int saved = total - invalid;
+        // Ready = rows whose whole order is clean (an order is labelled as one shipment).
+        int saved = readyRowCount(safe);
 
         // Sprint 51 — two save modes:
         //   final (draft=false) — REFUSE (422) unless every row is valid.
@@ -2187,6 +2223,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .totalRows(b.getTotalRows())
                 .savedRows(b.getSavedRows())
                 .invalidRows(b.getInvalidRows())
+                .deletedAt(b.getDeletedAt() == null ? null : b.getDeletedAt().toString())
+                .deletedBy(b.getDeletedBy())
                 .billingMode(StringUtils.hasText(b.getBillingMode()) ? b.getBillingMode() : "AUTO")
                 .source(StringUtils.hasText(b.getSource()) ? b.getSource() : "BULK")
                 .rows(parsedRows)
@@ -2312,7 +2350,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             String cur = fresh == null ? "unknown" : fresh.getStatus();
             throw new ConcurrentBatchGenerationException(
                     "Batch " + id + " cannot start label generation: current status is "
-                            + cur + ". Wait for the in-flight run to finish or refresh Data History.");
+                            + cur + ". Wait for the in-flight run to finish or refresh Import history.");
         }
         // The status is now IN_PROGRESS in the DB; keep the in-memory
         // entity in sync so downstream save() writes don't overwrite it
@@ -2742,6 +2780,23 @@ public class OrderImportServiceImpl implements OrderImportService {
     @Override
     public com.multiship.backend.dto.ImportBatchDTO updateBatchRow(
             Long id, int rowNumber, OrderImportRowDTO edited, String requestedBy) {
+        return editBatchRow(id, rowNumber, current -> edited, requestedBy);
+    }
+
+    /**
+     * Row edit as the API receives it: the JSON body is applied on top of the
+     * stored row, so a partial body changes only the fields it names (the UI
+     * sends the whole row, which is the same as a replace). A missing row is
+     * 404 before the body is read; an empty or malformed body is 400.
+     */
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO updateBatchRowJson(
+            Long id, int rowNumber, String json, String requestedBy) {
+        return editBatchRow(id, rowNumber, current -> mergeRowJson(current, json), requestedBy);
+    }
+
+    private com.multiship.backend.dto.ImportBatchDTO editBatchRow(Long id, int rowNumber,
+            java.util.function.UnaryOperator<OrderImportRowDTO> applyEdit, String requestedBy) {
         if (importBatchRepository == null || id == null) return null;
         com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
         if (batch == null) return null;
@@ -2782,6 +2837,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Apply the edit. Force the row number so the client can't renumber
         // a row by editing, and drop any stale generation outcome so a
         // previously-FAILED row re-enters the SAVED / NEEDS_FIX lifecycle.
+        OrderImportRowDTO edited = applyEdit.apply(current);
         if (edited == null) edited = new OrderImportRowDTO();
         edited.setRowNumber(rowNumber);
         edited.setGeneratedStatus(null);
@@ -2822,7 +2878,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .count();
 
         batch.setTotalRows(total);
-        batch.setSavedRows(total - invalid);
+        batch.setSavedRows(readyRowCount(rows));
         batch.setInvalidRows(invalid);
         batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
         try {
@@ -4566,6 +4622,17 @@ public class OrderImportServiceImpl implements OrderImportService {
     @Override
     public ApiResponse<StagingUploadDTO> updateStagingRow(Long id, int rowNumber, OrderImportRowDTO edited,
                                                           String requestedBy) {
+        return editStagingRow(id, rowNumber, current -> edited, requestedBy);
+    }
+
+    /** Same edit with a JSON body applied on top of the staged row (see updateBatchRowJson). */
+    @Override
+    public ApiResponse<StagingUploadDTO> updateStagingRowJson(Long id, int rowNumber, String json, String requestedBy) {
+        return editStagingRow(id, rowNumber, current -> mergeRowJson(current, json), requestedBy);
+    }
+
+    private ApiResponse<StagingUploadDTO> editStagingRow(Long id, int rowNumber,
+            java.util.function.UnaryOperator<OrderImportRowDTO> applyEdit, String requestedBy) {
         ImportStagingUpload up = findStaging(id, requestedBy);
         if (up == null) return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
         List<ImportStagingRow> ents = stagingRowRepository.findByUploadIdOrderByRowNoAsc(up.getId());
@@ -4582,6 +4649,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                     + saved.get(rowNumber) + " — edit it there.");
         }
         OrderImportRowDTO current = rows.get(index);
+        OrderImportRowDTO edited = applyEdit.apply(current);
         if (edited == null) edited = new OrderImportRowDTO();
         edited.setRowNumber(rowNumber);
         edited.setBatchId(current.getBatchId());

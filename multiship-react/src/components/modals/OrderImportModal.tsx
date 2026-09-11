@@ -130,6 +130,13 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     }
   }
 
+  /** The "File already uploaded" toast belongs to the refused upload — clear it once the user moves on. */
+  const dismissDupToast = () =>
+    notifyStore
+      .snapshot()
+      .filter((m) => m.title === 'File already uploaded')
+      .forEach((m) => notifyStore.dismiss(m.id))
+
   /** Upload = parse + validate into STAGING. Nothing reaches Import history until Save. */
   const submitUpload = async (allowDuplicate = false) => {
     if (!file) return
@@ -137,6 +144,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     setError(null)
     setDupBlocked(false)
     setResumeId(null)
+    dismissDupToast()
     try {
       const res = await orderImportService.stageUpload(file, allowDuplicate)
       if (res.status === 'success' && res.data) {
@@ -166,6 +174,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
   const resume = async (id: number) => {
     setUploading(true)
     setError(null)
+    dismissDupToast()
     try {
       const res = await orderImportService.getStaging(id)
       if (res.data) {
@@ -193,6 +202,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
       if (res.status === 'success' && res.data) {
         setStaging(res.data)
         setLastSave({ message: res.message ?? 'Saved to Import history.', batchId: res.data.lastSavedBatchId ?? null })
+        dismissDupToast()
         notify.success(res.message ?? 'Saved to Import history.')
         onImported?.()
       } else {
@@ -350,10 +360,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                 setError(null)
                 setDupBlocked(false)
                 setResumeId(null)
-                notifyStore
-                  .snapshot()
-                  .filter((m) => m.title === 'File already uploaded')
-                  .forEach((m) => notifyStore.dismiss(m.id))
+                dismissDupToast()
               }}
               onSubmit={() => void submitUpload()}
               uploading={uploading}
@@ -1331,9 +1338,9 @@ function SavedStep({
           <p className="text-[18px] font-semibold tabular-nums text-emerald-800">{staging.savedOrders}</p>
           <p className="text-[10.5px] uppercase tracking-[0.08em] text-[#b6a684]">Saved</p>
         </div>
-        <div className="rounded-xl border border-rose-200 bg-white px-3 py-2.5 text-center">
-          <p className="text-[18px] font-semibold tabular-nums text-rose-800">{left}</p>
-          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[#b6a684]">Need fixes</p>
+        <div className={`rounded-xl border bg-white px-3 py-2.5 text-center ${left > 0 ? 'border-rose-200' : 'border-[#e3d9c4]'}`}>
+          <p className={`text-[18px] font-semibold tabular-nums ${left > 0 ? 'text-rose-800' : 'text-[#1f150c]'}`}>{left}</p>
+          <p className="text-[10.5px] uppercase tracking-[0.08em] text-[#b6a684]">Not saved</p>
         </div>
       </div>
       {left > 0 ? (

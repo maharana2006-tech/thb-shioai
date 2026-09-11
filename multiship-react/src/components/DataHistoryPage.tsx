@@ -490,7 +490,7 @@ export default function DataHistoryPage() {
     if (cancellingId != null) return
     const ok = window.confirm(
       `Cancel label generation for batch ${id}? Workers stop after the current in-flight orders finish. `
-        + `Labels already generated stay downloadable from Data History.`,
+        + `Labels already generated stay downloadable from Import history.`,
     )
     if (!ok) return
     setCancellingId(id)
@@ -723,8 +723,11 @@ export default function DataHistoryPage() {
           const b = row.original
           return (
             <span className="flex items-center gap-1.5">
-              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 ring-1 ring-emerald-200">
-                {b.savedRows} saved
+              <span
+                title="Rows whose whole order passed validation — they can be labelled (or already are)"
+                className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 ring-1 ring-emerald-200"
+              >
+                {b.savedRows} ready
               </span>
               {b.invalidRows > 0 ? (
                 <span
@@ -935,6 +938,10 @@ export default function DataHistoryPage() {
       (r.errors?.length ?? 0) > 0 || (r.generatedStatus ?? '').toUpperCase() === 'FAILED'
     const notLabelled = (r: (typeof list)[number]) => (r.generatedStatus ?? '').toUpperCase() !== 'GENERATED'
     const visible = filter === 'failed' ? list.filter(needsAttention) : filter === 'pending' ? list.filter(notLabelled) : list
+    // An order is labelled as one shipment, so a clean line of an order whose
+    // other line has errors can't be labelled on its own either.
+    const orderKey = (r: (typeof list)[number]) => (r.orderRef ?? '').trim() || `__row_${r.rowNumber}`
+    const brokenOrders = new Set(list.filter((r) => (r.errors?.length ?? 0) > 0).map(orderKey))
     return (
       <div className="border-t border-dashed border-[#eee6d6] bg-[#faf7f0]/50 px-5 py-3">
         {rows === 'loading' || rows === undefined ? (
@@ -964,7 +971,13 @@ export default function DataHistoryPage() {
                 ))}
               </div>
               <p className="text-[10.5px] text-[#b6a684]">
-                Click any cell to edit; it saves and re-validates on blur. Scroll right for more columns.
+                {viewTrash
+                  ? 'Read-only in Trash — restore this import to edit rows or generate labels.'
+                  : (b.status || '').toUpperCase() === 'IN_PROGRESS'
+                    ? 'Locked while labels are generating — editing opens again when the run finishes.'
+                    : !canWrite
+                      ? 'Read-only view. Scroll right for more columns.'
+                      : 'Click any cell to edit; it saves and re-validates on blur. Scroll right for more columns.'}
               </p>
             </div>
             <VirtualTable
@@ -988,6 +1001,7 @@ export default function DataHistoryPage() {
               }
               renderRow={(r, index, measureRef) => {
                     const ok = (r.errors?.length ?? 0) === 0
+                    const orderReady = !brokenOrders.has(orderKey(r))
                     const gen = (r.generatedStatus ?? '').toUpperCase()
                     const rowIsWms = (b.source || '').toUpperCase() === 'WMS'
                     const generated = gen === 'GENERATED'
@@ -1087,7 +1101,7 @@ export default function DataHistoryPage() {
                             </span>
                           ) : !canWrite ? (
                             <span className="text-[9.5px] text-[#b6a684]">Read-only view</span>
-                          ) : (ok || failed) ? (
+                          ) : orderReady && (ok || failed) ? (
                             <div className="flex flex-col gap-0.5">
                               <button
                                 type="button"
@@ -1108,7 +1122,12 @@ export default function DataHistoryPage() {
                               ) : null}
                             </div>
                           ) : (
-                            <span className="text-[9.5px] text-[#b6a684]">Fix errors first</span>
+                            <span
+                              className="text-[9.5px] text-[#b6a684]"
+                              title={ok ? `Another line of order ${r.orderRef ?? ''} needs fixes — the order is labelled as one shipment` : undefined}
+                            >
+                              Fix errors first
+                            </span>
                           )}
                           {hasExplain ? (
                             <RowIssuesIcon
@@ -1350,7 +1369,7 @@ export default function DataHistoryPage() {
             >
               <option value="created">Sort: Date created</option>
               <option value="fileName">Sort: File name</option>
-              <option value="savedRows">Sort: Rows saved</option>
+              <option value="savedRows">Sort: Rows ready</option>
               <option value="status">Sort: Status</option>
               <option value="labelBatch">Sort: Batch #</option>
             </select>
@@ -1451,6 +1470,7 @@ export default function DataHistoryPage() {
             data={filtered}
             renderExpanded={renderBatchExpanded}
             onRowExpand={(b) => ensureRows(b.id)}
+            getRowId={(b) => String(b.id)}
             initialColumnPinning={{ left: [], right: ['actions'] }}
             caption={viewTrash ? 'Trash — deleted imports · click a row to view its rows' : 'Saved imports · click a row to view & edit its rows'}
             emptyState={

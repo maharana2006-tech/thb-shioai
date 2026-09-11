@@ -92,6 +92,8 @@ public enum ErrorCode {
     // ===== Orders =====
     ORDER_NOT_FOUND,
     VALIDATION_ERROR,
+    /** The request body is missing or isn't valid JSON for the endpoint — HTTP 400. */
+    MALFORMED_REQUEST,
     /** Import-history action the import's current state doesn't allow (in Trash, generating, nothing to do, …). */
     IMPORT_BATCH_STATE,
 
@@ -284,7 +286,7 @@ public enum ErrorCode {
      * Import I-11 — a second Generate click landed on a batch that was
      * already IN_PROGRESS (either from an earlier click on the same
      * screen or a concurrent operator). Response is HTTP 409 — wait for
-     * the in-flight run to finish or refresh Data History.
+     * the in-flight run to finish or refresh Import history.
      */
     IMPORT_BATCH_ALREADY_GENERATING,
 

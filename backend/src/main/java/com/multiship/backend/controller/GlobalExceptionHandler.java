@@ -149,6 +149,21 @@ public class GlobalExceptionHandler {
                 .build());
     }
 
+    /** A missing body, or one that isn't valid JSON for the endpoint, is the caller's mistake — 400, not 500. */
+    @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnreadableBody(
+            org.springframework.http.converter.HttpMessageNotReadableException ex) {
+        log.debug("Unreadable request body: {}", ex.getMessage());
+        boolean missing = ex.getMessage() != null && ex.getMessage().startsWith("Required request body is missing");
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.<Void>builder()
+                .status("error").code(400)
+                .message(missing
+                        ? "This request needs a JSON body."
+                        : "The request body isn't valid for this endpoint — check the field names and value types.")
+                .errorCode(ErrorCode.MALFORMED_REQUEST.name())
+                .build());
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpectedRuntime(RuntimeException ex) {
         // Client-disconnect detection: HttpMessageNotWritableException

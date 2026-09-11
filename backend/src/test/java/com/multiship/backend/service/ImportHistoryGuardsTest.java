@@ -155,4 +155,27 @@ class ImportHistoryGuardsTest {
         assertEquals(null, trashed.getDeletedAt(), "restores once nothing live duplicates it");
         verify(repo, never()).deleteById(anyLong());
     }
+
+    @Test
+    void apiRowEditsMergeOntoTheStoredRow_andBadBodiesAre400Not500() throws Exception {
+        batch(10, "INITIATE", List.of(row(1, "A"), row(2, "C")));
+        assertEquals(404, status(() -> service.updateBatchRowJson(10L, 999, "{}", "alice")));
+        assertEquals(404, status(() -> service.updateBatchRowJson(10L, 999, null, "alice")));
+        assertEquals(400, status(() -> service.updateBatchRowJson(10L, 1, null, "alice")));
+        assertEquals(400, status(() -> service.updateBatchRowJson(10L, 1, "{not json", "alice")));
+
+        OrderImportRowDTO edited = service.updateBatchRowJson(10L, 1, "{\"city\":\"Brooklyn\"}", "alice").getRows().get(0);
+        assertEquals("Brooklyn", edited.getCity());
+        assertEquals("1 Broadway", edited.getAddressLine1(), "fields the body doesn't name are kept");
+        assertEquals(1, edited.getRowNumber());
+    }
+
+    @Test
+    void aCleanLineOfAnOrderThatNeedsFixesIsNotCountedReady() {
+        OrderImportRowDTO b1 = row(1, "B");
+        b1.setErrors(new ArrayList<>(List.of("hsCode needs at least 9 digits")));
+        Integer ready = ReflectionTestUtils.invokeMethod(OrderImportServiceImpl.class, "readyRowCount",
+                List.of(b1, row(2, "B"), row(3, "C")));
+        assertEquals(1, ready);
+    }
 }

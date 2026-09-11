@@ -163,6 +163,12 @@ public interface OrderImportService {
     com.multiship.backend.dto.ImportBatchDTO updateBatchRow(
             Long id, int rowNumber, OrderImportRowDTO edited, String requestedBy);
 
+
+    /** Row edit with a JSON body applied on top of the stored row — only the fields it names change. */
+    default com.multiship.backend.dto.ImportBatchDTO updateBatchRowJson(Long id, int rowNumber, String json, String requestedBy) {
+        throw new UnsupportedOperationException("updateBatchRowJson");
+    }
+
     /**
      * Sprint 48 — dry-run validation on rows the operator may have edited
      * post-preview. Runs the same pipeline as {@link #preview(String, InputStream)}
@@ -214,6 +220,12 @@ public interface OrderImportService {
     /** Edit one staged row; the whole upload is re-validated. Saved rows are read-only. */
     ApiResponse<com.multiship.backend.dto.StagingUploadDTO> updateStagingRow(
             Long id, int rowNumber, OrderImportRowDTO edited, String requestedBy);
+
+
+    /** Staged-row edit with a JSON body applied on top of the staged row. */
+    default ApiResponse<com.multiship.backend.dto.StagingUploadDTO> updateStagingRowJson(Long id, int rowNumber, String json, String requestedBy) {
+        throw new UnsupportedOperationException("updateStagingRowJson");
+    }
 
     /** "Ignore errors and save": the fully valid, not-yet-saved orders, as a new Import-history batch. */
     default ApiResponse<com.multiship.backend.dto.StagingUploadDTO> saveStaging(Long id, String requestedBy) {

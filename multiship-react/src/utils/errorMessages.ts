@@ -180,6 +180,8 @@ export const errorMessages: Readonly<Record<string, FriendlyError>> = {
  *  than the generic "Something went wrong" — e.g. the customs BN gate. */
 const errorTitles: Readonly<Record<string, string>> = {
   VALIDATION_ERROR: 'This shipment needs attention',
+  IMPORT_BATCH_STATE: 'Not available for this import',
+  MALFORMED_REQUEST: 'Request not understood',
 }
 
 export function getFriendlyError(

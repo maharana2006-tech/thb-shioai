@@ -105,10 +105,10 @@ public class OrderImportController {
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.StagingUploadDTO>> updateStagingRow(
             @org.springframework.web.bind.annotation.PathVariable Long id,
             @org.springframework.web.bind.annotation.PathVariable int rowNumber,
-            @RequestBody OrderImportRowDTO row,
+            @RequestBody(required = false) String row,
             @AuthenticationPrincipal UserDetails userDetails) {
         ApiResponse<com.multiship.backend.dto.StagingUploadDTO> r =
-                orderImportService.updateStagingRow(id, rowNumber, row, stagingUser(userDetails));
+                orderImportService.updateStagingRowJson(id, rowNumber, row, stagingUser(userDetails));
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
@@ -446,10 +446,10 @@ public class OrderImportController {
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> updateRow(
             @org.springframework.web.bind.annotation.PathVariable Long id,
             @org.springframework.web.bind.annotation.PathVariable int rowNumber,
-            @RequestBody OrderImportRowDTO edited,
+            @RequestBody(required = false) String edited,
             @AuthenticationPrincipal UserDetails userDetails) {
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
-        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.updateBatchRow(id, rowNumber, edited, username);
+        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.updateBatchRowJson(id, rowNumber, edited, username);
         if (dto == null) {
             return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                     .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())

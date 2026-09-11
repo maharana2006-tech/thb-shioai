@@ -100,6 +100,9 @@ export interface AdvancedDataTableProps<T> {
   /** Fired when a row is expanded (not collapsed) — lets the parent lazy-load
    *  the expanded content's data. */
   onRowExpand?: (row: T) => void
+  /** Stable row identity (e.g. the record id). Without it rows are keyed by position,
+   *  so removing a row moves an open expansion onto the next record. */
+  getRowId?: (row: T, index: number) => string
   initialHiddenColumns?: string[]
   /** Default column pinning (e.g. keep an Actions column visible on the right).
    *  Applied only when the user hasn't pinned anything themselves. */
@@ -334,6 +337,7 @@ export default function AdvancedDataTable<T>({
   emptyState,
   renderExpanded,
   onRowExpand,
+  getRowId,
   initialHiddenColumns,
   initialColumnPinning,
   initialDensity = 'compact',
@@ -418,6 +422,7 @@ export default function AdvancedDataTable<T>({
   const table = useReactTable<T>({
     data,
     columns,
+    getRowId,
     state: {
       sorting,
       columnVisibility,
