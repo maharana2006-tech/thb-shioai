@@ -568,6 +568,25 @@ export default function NewShipmentPage() {
   // SHIPMENT = outbound (you → customer); RETURN = reverse (customer → you).
   const [mode, setMode] = useState<'SHIPMENT' | 'RETURN'>('SHIPMENT')
   const isReturn = mode === 'RETURN'
+  /**
+   * How the carrier should deliver the return label — only meaningful when
+   * isReturn=true. PRINT = carrier returns the label PDF to us (default);
+   * EMAIL = carrier emails the label directly to the customer (requires
+   * the customer's email on the sender block). Threaded to
+   * ManualShipmentRequest.returnType → ShipmentRequestDTO.returnType →
+   * the UPS ReturnService.Code + LabelDelivery.EMail block, and mirrored
+   * on FedEx (Code 9 = ELECTRONIC_SHIPPING_INFORMATION emails the label).
+   */
+  const [returnType, setReturnType] = useState<'PRINT' | 'EMAIL'>('PRINT')
+  /**
+   * UPS rejects return labels with 9120145 "Missing label delivery
+   * information" when the LabelDelivery.EMail block is absent — and we
+   * can't build that block without the customer's email. Also required
+   * for EMAIL mode on every carrier. Same rule for both modes on returns
+   * to keep the UI predictable; the boundary guard on CarrierServiceImpl
+   * also throws on this to catch programmatic callers.
+   */
+  const returnEmailMissing = isReturn && !sender.email?.trim()
 
   const [carrier, setCarrier] = useState('')
   const [accountNumber, setAccountNumber] = useState('') // bill-to account, manually editable
@@ -650,6 +669,15 @@ export default function NewShipmentPage() {
     packageType: '', declaredValue: '',
   })
   const [extraPackages, setExtraPackages] = useState<ExtraPackage[]>([])
+  /**
+   * UPS's Ship API rejects multi-package returns natively — its
+   * documented workaround is one API call per box. The backend
+   * (UpsConnector.createSplitReturnShipment) does that split
+   * transparently so the operator can still add multiple boxes here
+   * and get a single order with N return-label pieces. This flag
+   * lights the informational note only; it does NOT block submit.
+   */
+  const upsReturnMultiPkgNote = isReturn && canon(carrier) === 'UPS' && extraPackages.length > 0
   // Bulk-entry contracts for multi-package orders (a 45-box shipment is a
   // normal day, not an edge case): duplicate a box, add N like the last,
   // apply box 1 everywhere, and collapse filled boxes to one-line summaries.
@@ -1899,6 +1927,10 @@ export default function NewShipmentPage() {
         sender,
         recipient,
         isReturn,
+        // Return delivery mode — only meaningful when isReturn=true.
+        // Carrier connectors key off this: UPS ReturnService.Code 8/9,
+        // FedEx returnedShipmentDetail.returnType, etc.
+        ...(isReturn ? { returnType } : {}),
         carrierCode: carrier,
         accountNumber: accountNumber.trim(),
         accountId: matched?.id ?? null,
@@ -2396,6 +2428,11 @@ export default function NewShipmentPage() {
       sender,
       recipient,
       isReturn,
+      // Return delivery mode — only meaningful when isReturn=true.
+      // Carrier connectors key off this: UPS ReturnService.Code 8/9
+      // (with LabelDelivery.EMail block), FedEx returnedShipmentDetail
+      // .returnType (PRINT_RETURN_LABEL / EMAIL_LABEL), etc.
+      ...(isReturn ? { returnType } : {}),
       reference: reference.trim() || undefined,
       carrierCode: carrier,
       accountNumber: accountNumber.trim(),
@@ -2685,9 +2722,34 @@ export default function NewShipmentPage() {
                   ))}
                 </div>
                 {isReturn ? (
-                  <span className="text-[12px] text-[#6b5c42]">
-                    Reverse label — the customer ships back to your address. Billed to your account.
-                  </span>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-[12px] text-[#6b5c42]">
+                      Reverse label — the customer ships back to your address. Billed to your account.
+                    </span>
+                    {/* Return delivery type — PRINT | EMAIL. Threaded as
+                        ManualShipmentRequest.returnType and picked up by
+                        each carrier connector (UPS ReturnService.Code 8/9,
+                        FedEx returnedShipmentDetail.returnType). */}
+                    <div className="inline-flex items-center gap-1 rounded-xl border border-[#e3d9c4] bg-white p-1 shadow-sm">
+                      {(['PRINT', 'EMAIL'] as const).map((rt) => (
+                        <button
+                          key={rt}
+                          type="button"
+                          onClick={() => setReturnType(rt)}
+                          title={rt === 'PRINT'
+                            ? 'Carrier returns the label PDF to us — we print or forward it.'
+                            : 'Carrier emails the label directly to the customer.'}
+                          className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11.5px] font-semibold transition ${
+                            returnType === rt
+                              ? 'bg-[#1f150c] text-[#f4eede]'
+                              : 'text-[#5a4526] hover:bg-[#faf7f0]'
+                          }`}
+                        >
+                          {rt === 'PRINT' ? 'Print' : 'Email to customer'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ) : null}
               </div>
               <button
@@ -2699,6 +2761,28 @@ export default function NewShipmentPage() {
                 Back to orders
               </button>
             </div>
+
+            {/* Return-mode gate: carriers (UPS especially) reject a return
+                label without a customer email. Show why the Generate button
+                is disabled and where to fix it, right next to the mode
+                toggle so the operator finds it immediately. */}
+            {returnEmailMissing ? (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+                <div className="flex items-start gap-2.5">
+                  <FiAlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-amber-900">
+                      Customer email required for return labels
+                    </p>
+                    <p className="mt-0.5 text-[12px] text-amber-800">
+                      Enter the customer's email on the <span className="font-semibold">Return from · customer</span> block below.
+                      Without it, UPS rejects the label with 9120145 &ldquo;Missing label delivery information&rdquo;;
+                      other carriers behave similarly.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             {/* Fix-a-failed-order banner: the order's data is pre-filled below;
                 correct what the carrier rejected and re-generate in place. */}
@@ -2820,7 +2904,7 @@ export default function NewShipmentPage() {
                     ) : null}
                   </select>
                 </Field>
-                <Field label="Reference / PO" hint="Your own order or PO number — shows as Ref # and on the label and invoice.">
+                <Field label="Reference / PO">
                   <input className={inputCls} value={reference} onChange={(e) => setReference(e.target.value)} placeholder="PO-12345" maxLength={80} />
                 </Field>
                 {isInternational ? (
@@ -3785,6 +3869,15 @@ export default function NewShipmentPage() {
                       boxes like the last
                     </button>
                   </span>
+                  {upsReturnMultiPkgNote ? (
+                    <span
+                      title="UPS's Ship API allows only one package per return-label call, so we submit N single-box requests behind the scenes and stitch them into one order with N per-piece tracking numbers."
+                      className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-2.5 text-[11px] font-semibold text-sky-800"
+                    >
+                      <FiAlertCircle className="h-3 w-3" />
+                      UPS returns: one label per box. We'll generate {1 + extraPackages.length} return labels — a separate tracking number for each box.
+                    </span>
+                  ) : null}
                   {extraPackages.length > 0 ? (
                     <button
                       type="button"
@@ -4111,10 +4204,12 @@ export default function NewShipmentPage() {
               <button
                 type="button"
                 onClick={() => void submit()}
-                disabled={submitting || noCarriersAtAll || residentialConflict}
+                disabled={submitting || noCarriersAtAll || residentialConflict || returnEmailMissing}
                 title={residentialConflict
                   ? 'FedEx Home Delivery requires the recipient to be marked as residential. Tick the checkbox on the recipient block, or pick a different service.'
-                  : undefined}
+                  : returnEmailMissing
+                    ? 'Return labels need the customer email on the sender block — carriers (UPS especially) reject return labels without it (UPS error 9120145 "Missing label delivery information").'
+                    : undefined}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none"
               >
                 {submitting ? (

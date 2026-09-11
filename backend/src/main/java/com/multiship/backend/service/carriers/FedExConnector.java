@@ -826,14 +826,36 @@ public class FedExConnector implements CarrierConnector {
 
             return parseFedExRateResponse(response);
         } catch (org.springframework.web.client.RestClientResponseException ex) {
+            // Surface HTTP status + first FedEx error message so the
+            // rate-shop caller can display an actionable reason
+            // ("FedEx rate call failed: 503 SERVICE.UNAVAILABLE.ERROR")
+            // instead of the misleading "returned no rates for this
+            // lane" that empty-return produced pre-fix.
             log.warn("FedEx rate quote rejected (HTTP {}): {}",
                     ex.getStatusCode().value(), ex.getResponseBodyAsString());
-            return java.util.List.of();
+            throw new IllegalStateException(
+                    "HTTP " + ex.getStatusCode().value() + " " + firstFedExErrorMessage(ex.getResponseBodyAsString()),
+                    ex);
         } catch (Exception ex) {
-            log.warn("FedEx rate quote failed; returning empty rate list. Reason: {}",
-                    ex.getMessage());
-            return java.util.List.of();
+            log.warn("FedEx rate quote failed; propagating so the caller can surface the "
+                    + "reason. Message: {}", ex.getMessage());
+            throw ex instanceof RuntimeException re ? re : new IllegalStateException(ex.getMessage(), ex);
         }
+    }
+
+    /** Pull the first {@code errors[0].message} out of a FedEx error
+     *  payload for the caller's "why did this fail?" summary. */
+    private String firstFedExErrorMessage(String body) {
+        if (!StringUtils.hasText(body)) return "";
+        try {
+            JsonNode first = objectMapper.readTree(body).at("/errors/0/message");
+            if (first != null && !first.isMissingNode() && first.isTextual()) {
+                return first.asText();
+            }
+        } catch (Exception ignored) {
+            // fall through
+        }
+        return body.length() > 200 ? body.substring(0, 200) + "…" : body;
     }
 
     /**
@@ -2324,19 +2346,48 @@ public class FedExConnector implements CarrierConnector {
             requestedShipment.put("shipmentSpecialServicesRequested", specialServices);
         }
 
-        // Sprint 25 — Print Return Label. FedEx wants:
-        //   pickupType=CONTACT_FEDEX_TO_SCHEDULE (so the return recipient
-        //     doesn't need a scheduled pickup),
-        //   plus returnedShipmentDetail.returnType=PRINT_RETURN_LABEL
-        //     (paper label; the customer prints and drops off).
-        // The shipper/recipient roles are kept as-is on the payload — the
-        // caller is expected to populate shipper as the RETURN destination
-        // (retailer / return depot) and recipient as the customer sending
-        // the parcel back.
+        // Sprint 25 / UPS-9120145 follow-up — Print/Email Return Label.
+        //
+        // FedEx return semantics:
+        //   pickupType=CONTACT_FEDEX_TO_SCHEDULE (so the customer doesn't
+        //     need a scheduled pickup — they drop it off / hand it to a
+        //     driver on their next stop).
+        //   returnedShipmentDetail.returnType keys off the operator's
+        //     PRINT vs EMAIL choice (ShipmentRequestDTO.returnType,
+        //     mirrored across UpsConnector). EMAIL requires an
+        //     emailLabelDetail block naming the customer.
+        //
+        // Party mapping (matches UpsConnector return-label docs at
+        // UpsConnector.java:1907-1919): on the wire the SHIPPER block is
+        // the customer (physical origin) and the RECIPIENT block is the
+        // retailer's return depot (physical destination). The FE builder
+        // (NewShipmentPage sender = "Return from · customer" for
+        // isReturn) already produces this shape, and CarrierServiceImpl
+        // maps sender→shipperXxx / recipient→recipientXxx without
+        // swapping — so on returns getShipperEmail() = customer email
+        // and getRecipientEmail() = retailer email.
         if (Boolean.TRUE.equals(request.getIsReturn())) {
             requestedShipment.put("pickupType", "CONTACT_FEDEX_TO_SCHEDULE");
             Map<String, Object> returnDetail = new LinkedHashMap<>();
-            returnDetail.put("returnType", "PRINT_RETURN_LABEL");
+            boolean emailFlavour = "EMAIL".equalsIgnoreCase(
+                    request.getReturnType() == null ? "" : request.getReturnType().trim());
+            if (emailFlavour) {
+                returnDetail.put("returnType", "EMAIL_LABEL");
+                // emailLabelDetail lists the recipients of the label email.
+                // role=SHIPMENT_RECEIVER means "the party receiving the
+                // return label" (the customer). Expiration is optional;
+                // FedEx defaults to ~24h when omitted.
+                Map<String, Object> recipient = new LinkedHashMap<>();
+                recipient.put("emailAddress", request.getShipperEmail());
+                recipient.put("role", "SHIPMENT_RECEIVER");
+                Map<String, Object> emailLabel = new LinkedHashMap<>();
+                emailLabel.put("recipients", java.util.List.of(recipient));
+                emailLabel.put("message",
+                        "Your return label — print and attach to the package.");
+                returnDetail.put("emailLabelDetail", emailLabel);
+            } else {
+                returnDetail.put("returnType", "PRINT_RETURN_LABEL");
+            }
             requestedShipment.put("returnedShipmentDetail", returnDetail);
         }
 

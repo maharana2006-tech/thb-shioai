@@ -1588,7 +1588,15 @@ public class StampsConnector implements CarrierConnector {
     @Override
     public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken, String environment) {
         if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
-            return java.util.List.of();
+            // Surface the placeholder-token case so the rate-shop caller
+            // labels this as ERROR (with a pointer to Stamps.com auth)
+            // instead of the confusing "returned no rates for this lane"
+            // an empty-return produced pre-fix. Same visibility policy
+            // as the FedEx/UPS rate paths.
+            throw new IllegalStateException(
+                    "Stamps.com is not authorized on this account — no live SWSIM "
+                            + "token available. Complete the Stamps.com Authorization "
+                            + "flow before rate-shopping USPS.");
         }
         // FDX-B4 — recipient country is required. Pre-fix, blank silently
         // defaulted to "US" downstream in the SWSIM envelope builders

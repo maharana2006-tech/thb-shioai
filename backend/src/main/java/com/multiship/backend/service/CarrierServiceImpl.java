@@ -1446,6 +1446,34 @@ public class CarrierServiceImpl implements CarrierService {
                             com.multiship.backend.service.carriers.ResidentialRequiredServices
                                     .inconsistentMessage(sub.getServiceType()));
                 }
+                // Return-label email gate — UPS return codes 8 and 9
+                // (and FedEx returns) require the customer's email so
+                // the carrier can either email the label directly OR
+                // send a return-notification. UPS refuses with error
+                // 9120145 "Missing label delivery information" when the
+                // LabelDelivery block lacks EMailAddress.
+                //
+                // On a return, the physical shipment direction reverses:
+                // the customer is the physical origin, so on the wire
+                // that's the SHIPPER block (see FE convention at
+                // NewShipmentPage sender=customer for isReturn, mapped
+                // to shipperEmail at conversion time). We therefore
+                // check shipperEmail here, not recipientEmail.
+                if (Boolean.TRUE.equals(sub.getIsReturn())
+                        && !StringUtils.hasText(sub.getShipperEmail())) {
+                    throw new IllegalArgumentException(
+                            "Return labels require the customer's email address so the carrier "
+                                    + "can deliver or announce the return label. Enter an email on "
+                                    + "the sender block (\"Return from · customer\") and try again.");
+                }
+                // UPS multi-package returns are split inside UpsConnector
+                // (one createShipment call per package, then merged into
+                // a single ShipmentResult). The connector-level split
+                // preserves the operator's mental model of "one return
+                // = one order with N labels" while working around UPS's
+                // Ship API constraint that ReturnService codes 8 / 9
+                // accept only one Package per request (real failure order
+                // 900671, 2026-09-11). No boundary guard needed here.
                 batchResults.add(com.multiship.backend.service.carriers.AuthRetry.withAuthRetry(
                         token,
                         () -> fConnector.getAccessToken(fAccount.getClientId(), fAccount.getClientSecret(),
@@ -3108,6 +3136,7 @@ public class CarrierServiceImpl implements CarrierService {
                 .specialInstructions(req.getGoodsDescription())
                 .declaredValue(req.getDeclaredValue())
                 .isReturn(req.getIsReturn())
+                .returnType(req.getReturnType())
                 .dangerousGoods(req.getDangerousGoods())
                 .signatureOption(req.getSignatureOption())
                 .insuredValue(req.getInsuredValue())

@@ -42,21 +42,38 @@ class StampsRateShopTest {
                 .build();
     }
 
-    /* -------------------------- Auth guardrails -------------------------- */
+    /* -------------------------- Auth guardrails --------------------------
+     *
+     * Post rate-shop visibility fix (2026-09-11): a placeholder / missing
+     * token now THROWS instead of silently returning empty, so the
+     * rate-shop caller can display "Stamps.com not authorized" alongside
+     * live UPS/FedEx quotes. Empty return was indistinguishable from
+     * "carrier has no matching services" — a real failure mode was
+     * hidden as a soft one. */
 
     @Test
-    void localFallbackTokenReturnsEmptyList() {
-        assertTrue(connector.getRates(domesticRequest(), "stamps-local-abc", null).isEmpty());
+    void localFallbackTokenThrowsWithActionableMessage() {
+        IllegalStateException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class,
+                () -> connector.getRates(domesticRequest(), "stamps-local-abc", null));
+        assertTrue(ex.getMessage().toLowerCase().contains("not authorized"),
+                "message should point the operator at Stamps.com authorization; got: " + ex.getMessage());
     }
 
     @Test
-    void blankTokenReturnsEmptyList() {
-        assertTrue(connector.getRates(domesticRequest(), "", null).isEmpty());
+    void blankTokenThrowsWithActionableMessage() {
+        IllegalStateException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class,
+                () -> connector.getRates(domesticRequest(), "", null));
+        assertTrue(ex.getMessage().toLowerCase().contains("not authorized"));
     }
 
     @Test
-    void nullTokenReturnsEmptyList() {
-        assertTrue(connector.getRates(domesticRequest(), null, null).isEmpty());
+    void nullTokenThrowsWithActionableMessage() {
+        IllegalStateException ex = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class,
+                () -> connector.getRates(domesticRequest(), null, null));
+        assertTrue(ex.getMessage().toLowerCase().contains("not authorized"));
     }
 
     /* -------------------------- Envelope -------------------------- */

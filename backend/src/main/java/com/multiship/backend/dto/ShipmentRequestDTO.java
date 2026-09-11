@@ -11,7 +11,7 @@ import lombok.NoArgsConstructor;
 import java.math.BigDecimal;
 
 @Data
-@Builder
+@Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
 public class ShipmentRequestDTO {
@@ -220,6 +220,25 @@ public class ShipmentRequestDTO {
      * outbound labels.
      */
     private Boolean isReturn;
+
+    /**
+     * How the carrier should deliver the return label — used only when
+     * {@link #isReturn} = true. Values:
+     * <ul>
+     *   <li>{@code "PRINT"} (default) — carrier returns the label PDF to
+     *       us and we forward it to the customer via our own email flow.
+     *       UPS: ReturnService.Code=8 + LabelDelivery.EMail block.
+     *       FedEx: returnedShipmentDetail.returnType=PRINT_RETURN_LABEL.</li>
+     *   <li>{@code "EMAIL"} — carrier emails the label directly to the
+     *       customer using the recipient email. UPS: Code=9 (Electronic
+     *       Return Label). Skips our email step.</li>
+     * </ul>
+     * Null / anything else is treated as PRINT. Populated from
+     * {@code ManualShipmentRequest.returnType} at the CarrierServiceImpl
+     * conversion site; not surfaced by the auto-label path (returns are
+     * always operator-initiated today).
+     */
+    private String returnType;
 
     /**
      * Optional dangerous goods declaration. When present + ready for

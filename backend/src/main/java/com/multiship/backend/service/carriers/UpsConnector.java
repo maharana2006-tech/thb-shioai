@@ -444,6 +444,22 @@ public class UpsConnector implements CarrierConnector {
 
     @Override
     public ShipmentResult createShipment(ShipmentRequestDTO request, String accessToken, String environment) {
+        // UPS Ship API constraint (real failure order 900671, 2026-09-11):
+        // ReturnService codes 8 (Print Return Label) and 9 (Electronic
+        // Return Label) both reject a shipment with more than one
+        // Package — UPS returns "Only one package is allowed for this
+        // movement." Their documented workaround is to submit N separate
+        // single-package return shipments.
+        //
+        // We do that split HERE, transparently, so the operator's
+        // one-order-with-N-boxes mental model still holds: they get one
+        // response with N per-piece PackageTracking entries and a
+        // combined label bundle. The recursive call bottoms out because
+        // each sub-request has exactly one package.
+        if (Boolean.TRUE.equals(request.getIsReturn())
+                && request.effectivePackages().size() > 1) {
+            return createSplitReturnShipment(request, accessToken, environment);
+        }
         normalizeUsTerritories(request);
         // F7 fix — recipient country is required. UPS lets you ship anywhere
         // the ShipTo party's country is set to; a blank country would pass
@@ -542,6 +558,95 @@ public class UpsConnector implements CarrierConnector {
             throw new CarrierConnectionException("UPS client id and client secret are required.");
         }
         return true;
+    }
+
+    /**
+     * Multi-package UPS return workaround — see the guard at the top of
+     * {@link #createShipment} for the "why." Submits one createShipment
+     * call per box (each with the same shipper/customer/service/account
+     * but its own package) and merges the N responses into a single
+     * {@link ShipmentResult} whose {@code packages[]} list has one entry
+     * per box (re-sequenced 1..N), master identity mirroring the first
+     * response, and aggregated shipping cost.
+     *
+     * <p>Failure behavior: if any single-box call throws, we throw the
+     * SAME exception without attempting the remaining boxes and without
+     * voiding the labels we already generated — the caller catches at
+     * CarrierServiceImpl and the operator sees a partial-failure
+     * message with the pieces UPS did generate visible in the raw
+     * response for auditing. Voiding already-generated pieces would
+     * require a second round-trip we can't guarantee (and UPS charges
+     * a small fee on some voids); it's safer to leave them for the
+     * operator to void manually from the order page.
+     */
+    private ShipmentResult createSplitReturnShipment(ShipmentRequestDTO request,
+                                                     String accessToken, String environment) {
+        java.util.List<com.multiship.backend.dto.PackageDetailDTO> allPackages =
+                request.effectivePackages();
+        int total = allPackages.size();
+        log.info("UPS return split — order={} pkgCount={} accountNumber={} — "
+                        + "submitting {} single-package createShipment calls (UPS ReturnService "
+                        + "8/9 accepts only one Package per request).",
+                request.getReferenceNumber(), total, request.getAccountNumber(), total);
+
+        java.util.List<ShipmentResult> subResults = new java.util.ArrayList<>(total);
+        for (int i = 0; i < total; i++) {
+            com.multiship.backend.dto.PackageDetailDTO pkg = allPackages.get(i);
+            // Force sequenceNumber=1 on the sub-request so UPS doesn't
+            // see a gap ("box 3 of 3" with only 1 Package on the wire).
+            com.multiship.backend.dto.PackageDetailDTO singlePkg = pkg.toBuilder()
+                    .sequenceNumber(1)
+                    .build();
+            ShipmentRequestDTO sub = request.toBuilder()
+                    .packages(java.util.List.of(singlePkg))
+                    .build();
+            // Recursive call — bottoms out because sub has exactly one package.
+            ShipmentResult sr = createShipment(sub, accessToken, environment);
+            subResults.add(sr);
+        }
+
+        // Aggregate. Master identity = first piece (matches how carriers
+        // that DO natively support MPS surface the shipment).
+        ShipmentResult first = subResults.get(0);
+        java.util.List<PackageTracking> aggregated = new java.util.ArrayList<>(total);
+        java.math.BigDecimal totalCost = java.math.BigDecimal.ZERO;
+        boolean anyCost = false;
+        StringBuilder rawJson = new StringBuilder("[");
+        for (int i = 0; i < subResults.size(); i++) {
+            ShipmentResult r = subResults.get(i);
+            // Every sub-result should have exactly one piece — keep the
+            // per-piece PDF but re-sequence to the operator's original
+            // box order (1..N). Fall back to the master's identity if
+            // the parser produced an empty packages list.
+            PackageTracking piece;
+            if (r.packages() != null && !r.packages().isEmpty()) {
+                PackageTracking source = r.packages().get(0);
+                piece = new PackageTracking(i + 1, source.trackingNumber(), source.trackingUrl(),
+                        source.labelUrl(), source.labelPdf(), source.netCharge(),
+                        source.carrierLabelRef());
+            } else {
+                piece = new PackageTracking(i + 1, r.trackingNumber(), r.trackingUrl(),
+                        r.labelUrl(), r.labelPdf(), r.shippingCost());
+            }
+            aggregated.add(piece);
+            if (r.shippingCost() != null) {
+                totalCost = totalCost.add(r.shippingCost());
+                anyCost = true;
+            }
+            if (i > 0) rawJson.append(",");
+            rawJson.append(r.rawResponse() == null ? "null" : r.rawResponse());
+        }
+        rawJson.append("]");
+
+        return new ShipmentResult(
+                first.trackingNumber(),
+                first.trackingUrl(),
+                first.labelUrl(),
+                first.labelPdf(),
+                anyCost ? totalCost : null,
+                first.estimatedDelivery(),
+                rawJson.toString(),
+                aggregated);
     }
 
     /**
@@ -1809,16 +1914,74 @@ public class UpsConnector implements CarrierConnector {
     private Map<String, Object> buildShipmentPayload(ShipmentRequestDTO request, String requestOption) {
         Map<String, Object> shipment = new LinkedHashMap<>();
         shipment.put("Description", firstNonBlank(request.getSpecialInstructions(), "Shipment"));
-        shipment.put("Shipper", buildParty(
-                request.getShipperName(),
-                request.getShipperPhone(),
-                request.getShipperCompany(),
-                request.getShipperEmail(),
-                request.getShipperAddressLine1(), request.getShipperAddressLine2(),
-                request.getShipperCity(), request.getShipperState(),
-                request.getShipperPostalCode(), request.getShipperCountryCode(),
-                request.getAccountNumber(),
-                request.getIntl() != null ? request.getIntl().getImporterTaxId() : null));
+
+        // Party-block wiring depends on shipment direction:
+        //
+        // OUTBOUND (isReturn=false):
+        //   Shipper  = retailer (account holder, has ShipperNumber) = request.shipperXxx
+        //     — FE sender = retailer for outbound, mapped straight through.
+        //   ShipTo   = customer = request.recipientXxx
+        //   ShipFrom = (omitted — UPS defaults to Shipper's address)
+        //
+        // RETURN (isReturn=true):
+        //   Shipper  = retailer (account holder, still needs ShipperNumber)
+        //     — FE recipient = retailer's return address on returns.
+        //   ShipTo   = retailer = request.recipientXxx (same address as Shipper)
+        //   ShipFrom = customer = request.shipperXxx  ← REQUIRED
+        //     — FE sender = customer on returns. UPS rejects the payload
+        //       with "Missing ship from information" (real failure order
+        //       900667, 2026-09-11) when ShipFrom is absent because for
+        //       returns the physical origin (customer) is different from
+        //       the account holder in Shipper.
+        //
+        // Payment/billing (BillShipper/BillReceiver split) is separate —
+        // it always uses the caller-supplied accountNumber regardless of
+        // direction.
+        boolean isReturn = Boolean.TRUE.equals(request.getIsReturn());
+
+        // Shipper party — retailer/account-holder. On returns we source
+        // the address from the recipient block (which is the retailer on
+        // a return per FE convention); the ShipperNumber stays the
+        // account we're billing.
+        if (isReturn) {
+            shipment.put("Shipper", buildParty(
+                    request.getRecipientName(),
+                    joinPhone(request.getRecipientPhoneCountryCode(), request.getRecipientPhone()),
+                    request.getRecipientCompany(),
+                    request.getRecipientEmail(),
+                    request.getRecipientAddressLine1(), request.getRecipientAddressLine2(),
+                    request.getRecipientCity(), request.getRecipientState(),
+                    request.getRecipientPostalCode(), request.getRecipientCountryCode(),
+                    request.getAccountNumber(),
+                    request.getIntl() != null ? request.getIntl().getImporterTaxId() : null));
+        } else {
+            shipment.put("Shipper", buildParty(
+                    request.getShipperName(),
+                    request.getShipperPhone(),
+                    request.getShipperCompany(),
+                    request.getShipperEmail(),
+                    request.getShipperAddressLine1(), request.getShipperAddressLine2(),
+                    request.getShipperCity(), request.getShipperState(),
+                    request.getShipperPostalCode(), request.getShipperCountryCode(),
+                    request.getAccountNumber(),
+                    request.getIntl() != null ? request.getIntl().getImporterTaxId() : null));
+        }
+
+        // ShipFrom — REQUIRED on returns (customer's address, from the
+        // sender block per FE convention). Omitted on outbound because
+        // UPS defaults ShipFrom to Shipper.
+        if (isReturn) {
+            shipment.put("ShipFrom", buildParty(
+                    request.getShipperName(),
+                    request.getShipperPhone(),
+                    request.getShipperCompany(),
+                    request.getShipperEmail(),
+                    request.getShipperAddressLine1(), request.getShipperAddressLine2(),
+                    request.getShipperCity(), request.getShipperState(),
+                    request.getShipperPostalCode(), request.getShipperCountryCode(),
+                    null, null));
+        }
+
         // Recipient phone: prepend the country dial code when the DTO
         // carries one (Sprint 6). UPS wire format accepts "+44 20 ..." and
         // "4420..." both; we use the plus-prefixed form for readability.
@@ -1880,13 +2043,82 @@ public class UpsConnector implements CarrierConnector {
         }
         shipment.put("Package", packageBlocks);
 
-        // Sprint 25 — Print Return Label. UPS ReturnService.Code "8" =
-        // "Print Return Label" (the paper-based variant; PDF returned to
-        // us, we forward to the customer). Code "9" = Electronic Return
-        // Label (UPS emails the label direct to the customer). We use 8
-        // because our label PDF flow already handles operator delivery.
+        // UPS return labels. Two flavours driven by request.getReturnType():
+        //   PRINT (default) → ReturnService.Code=8 (Print Return Label).
+        //     UPS emails the customer a notification AND returns the PDF
+        //     to us via ShipmentResults.PackageResults.ShippingLabel so
+        //     our own delivery flow can also forward it.
+        //   EMAIL           → ReturnService.Code=9 (Electronic Return Label).
+        //     UPS emails the label directly to the customer; we get no
+        //     PDF back for our own delivery.
+        //
+        // BOTH codes REQUIRE a ShipmentServiceOptions.LabelDelivery.EMail
+        // block with the customer's email — without it UPS rejects with
+        // error 9120145 "Missing label delivery information." (real
+        // failure orders 900665, 900666, 2026-09-11). The previous fix
+        // sent only ReturnService.Code=8 with no LabelDelivery block,
+        // so every UPS return failed at the wire regardless of whether
+        // an email was on the form.
         if (Boolean.TRUE.equals(request.getIsReturn())) {
-            shipment.put("ReturnService", Map.of("Code", "8"));
+            boolean emailFlavour = "EMAIL".equalsIgnoreCase(
+                    request.getReturnType() == null ? "" : request.getReturnType().trim());
+            String returnCode = emailFlavour ? "9" : "8";
+            shipment.put("ReturnService", Map.of("Code", returnCode));
+
+            // LabelDelivery.EMail — required for return codes 8 and 9.
+            //
+            // On a return, the physical shipment direction reverses:
+            //   Shipper block on wire = physical origin = the CUSTOMER
+            //     (FE "Return from · customer", mapped to shipperXxx
+            //      at CarrierServiceImpl:3097-3106).
+            //   ShipTo block on wire  = physical destination = the RETAILER
+            //     (FE "Return to · your address", mapped to recipientXxx
+            //      at CarrierServiceImpl:3107-3117).
+            //
+            // UPS sends the notification email TO the customer (they
+            // need the label to attach to the package) and it appears
+            // to come FROM the retailer. So on a return:
+            //   EMailAddress     = customer email = wire shipperEmail
+            //   FromEMailAddress = retailer email = wire recipientEmail
+            //     (falls back to a synthesized noreply@<company> when
+            //      the retailer block has no email configured, which is
+            //      common for return-address-only rows).
+            //   FromName         = retailer company / name / configured default
+            String customerEmail = request.getShipperEmail();
+            // Only emit LabelDelivery when we have an email to put in
+            // EMailAddress. The CarrierServiceImpl boundary guard
+            // rejects isReturn without customer email before we reach
+            // here, so on the real code path customerEmail is always
+            // populated. Guarding it makes the connector safe for direct
+            // callers (unit tests, future scripted callers) without
+            // silently producing an invalid UPS payload.
+            if (org.springframework.util.StringUtils.hasText(customerEmail)) {
+                String retailerEmail = firstNonBlank(request.getRecipientEmail(),
+                        "noreply@" + firstNonBlank(carrierProperties.getShipper().getName(),
+                                "shipx.local").toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9.-]", ""));
+                String fromName = firstNonBlank(request.getRecipientCompany(),
+                        request.getRecipientName(),
+                        carrierProperties.getShipper().getName(),
+                        "Shipper");
+                java.util.LinkedHashMap<String, Object> emailBlock = new java.util.LinkedHashMap<>();
+                emailBlock.put("EMailAddress", customerEmail);
+                emailBlock.put("UndeliverableEMailAddress", retailerEmail);
+                emailBlock.put("FromEMailAddress", retailerEmail);
+                emailBlock.put("FromName", fromName);
+                emailBlock.put("Memo", "Your return shipping label from " + fromName + ".");
+                emailBlock.put("Subject", "Your return label");
+                emailBlock.put("SubjectCode", "01");   // 01 = "Return Notification"
+                java.util.LinkedHashMap<String, Object> labelDelivery = new java.util.LinkedHashMap<>();
+                labelDelivery.put("EMail", emailBlock);
+                // Merge into any existing ShipmentServiceOptions rather than
+                // overwrite — the intl-forms block below may also target this
+                // key on international returns. Small but real edge case.
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> serviceOptions = (java.util.Map<String, Object>)
+                        shipment.computeIfAbsent("ShipmentServiceOptions",
+                                k -> new java.util.LinkedHashMap<String, Object>());
+                serviceOptions.put("LabelDelivery", labelDelivery);
+            }
         }
 
         // International forms only when the request carries an intl block
@@ -1919,9 +2151,13 @@ public class UpsConnector implements CarrierConnector {
             // GET /orders/{n}/commercial-invoice.
             if (paperlessInvoiceAcceptedFor(request.getRecipientCountryCode())) {
                 Map<String, Object> forms = buildInternationalForms(request);
-                Map<String, Object> serviceOptions = new LinkedHashMap<>();
+                // Merge, don't overwrite — the return-label block above
+                // may have already put LabelDelivery under this key.
+                @SuppressWarnings("unchecked")
+                Map<String, Object> serviceOptions = (Map<String, Object>)
+                        shipment.computeIfAbsent("ShipmentServiceOptions",
+                                k -> new LinkedHashMap<String, Object>());
                 serviceOptions.put("InternationalForms", forms);
-                shipment.put("ShipmentServiceOptions", serviceOptions);
             } else {
                 log.info("UPS paperless-invoice denied for destination country '{}' — "
                         + "omitting ShipmentServiceOptions.InternationalForms; operator "
@@ -3240,13 +3476,38 @@ public class UpsConnector implements CarrierConnector {
 
             return parseUpsRateResponse(response);
         } catch (org.springframework.web.client.RestClientResponseException ex) {
+            // Surface the HTTP status + first UPS error line so the
+            // rate-shop caller can display an actionable message
+            // ("UPS rate call failed: 401 Invalid Authentication
+            // Information") instead of the misleading "returned no
+            // rates for this lane" that empty-return produced pre-fix.
             log.warn("UPS rate shop rejected (HTTP {}): {}", ex.getStatusCode().value(),
                     ex.getResponseBodyAsString());
-            return java.util.List.of();
+            throw new IllegalStateException(
+                    "HTTP " + ex.getStatusCode().value() + " " + firstUpsErrorMessage(ex.getResponseBodyAsString()),
+                    ex);
         } catch (Exception ex) {
-            log.warn("UPS rate shop failed; returning empty rate list. Reason: {}", ex.getMessage());
-            return java.util.List.of();
+            log.warn("UPS rate shop failed; propagating so the caller can surface the reason. "
+                    + "Message: {}", ex.getMessage());
+            throw ex instanceof RuntimeException re ? re : new IllegalStateException(ex.getMessage(), ex);
         }
+    }
+
+    /** Pull the first {@code errors[0].message} out of a UPS error payload
+     *  for the caller's "why did this fail?" summary. Best-effort — falls
+     *  back to the raw body when parsing doesn't fit UPS's shape. */
+    private String firstUpsErrorMessage(String body) {
+        if (!StringUtils.hasText(body)) return "";
+        try {
+            JsonNode first = objectMapper.readTree(body)
+                    .at("/response/errors/0/message");
+            if (first != null && !first.isMissingNode() && first.isTextual()) {
+                return first.asText();
+            }
+        } catch (Exception ignored) {
+            // fall through
+        }
+        return body.length() > 200 ? body.substring(0, 200) + "…" : body;
     }
 
     /**

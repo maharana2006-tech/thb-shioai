@@ -22,7 +22,7 @@ import java.math.BigDecimal;
  * package support.
  */
 @Data
-@Builder
+@Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
 public class PackageDetailDTO {
