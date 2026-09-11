@@ -555,6 +555,16 @@ export default function NewShipmentPage() {
 
   const [sender, setSender] = useState<ManualShipmentAddress>(defaultSender())
   const [recipient, setRecipient] = useState<ManualShipmentAddress>(blankAddress())
+  /**
+   * Origin of the recipient.residential flag — 'auto' when we ticked
+   * it because the operator picked a service that requires residential
+   * (e.g. FedEx GROUND_HOME_DELIVERY), 'manual' when the operator
+   * ticked it themselves, undefined when the flag is unset. Drives the
+   * "un-tick when switching AWAY from Home Delivery" behaviour so we
+   * only revert flags WE set — an operator's deliberate tick
+   * ('manual') is sacred and never auto-unticked.
+   */
+  const [residentialOrigin, setResidentialOrigin] = useState<'auto' | 'manual' | undefined>(undefined)
   // SHIPMENT = outbound (you → customer); RETURN = reverse (customer → you).
   const [mode, setMode] = useState<'SHIPMENT' | 'RETURN'>('SHIPMENT')
   const isReturn = mode === 'RETURN'
@@ -2553,6 +2563,24 @@ export default function NewShipmentPage() {
   const clientHasNoOwnCarriers = !loading && !!clientCode
     && clientCarriers.length === 0 && platformCarriers.length > 0
 
+  /**
+   * True when the operator has picked a service that requires residential
+   * (FedEx GROUND_HOME_DELIVERY) but the recipient's residential flag
+   * is unticked. Drives:
+   *   1. An inline warning banner near the residential checkbox
+   *   2. The Submit button's disabled state
+   * Both surfaces exist so operators see the constraint in context AND
+   * can't submit a shipment doomed to fail at the carrier. Backend
+   * boundary guard in CarrierServiceImpl catches API callers who
+   * bypass the FE, so this is UX polish rather than the only line of
+   * defense.
+   */
+  const selectedServiceCode = serviceId !== ''
+    ? services.find((s) => s.id === Number(serviceId))?.serviceCode
+    : undefined
+  const residentialConflict = selectedServiceCode === 'GROUND_HOME_DELIVERY'
+    && !recipient.residential
+
   return (
     <div className="pb-6">
       {/* Validation toast — non-blocking; auto-dismisses. */}
@@ -3019,6 +3047,14 @@ export default function NewShipmentPage() {
                   value={recipient}
                   onChange={(patch) => {
                     setRecipient((r) => ({ ...r, ...patch }))
+                    // Any operator interaction with the residential
+                    // checkbox flips the origin to 'manual' — after
+                    // this, subsequent service changes won't auto-
+                    // untick even if we're leaving Home Delivery.
+                    // Applies whether they ticked OR unticked.
+                    if (Object.prototype.hasOwnProperty.call(patch, 'residential')) {
+                      setResidentialOrigin('manual')
+                    }
                     // Editing the address invalidates any prior validation result,
                     // so clear the stale carrier / format-check banners.
                     setCarrierAddressResult(null)
@@ -3281,21 +3317,43 @@ export default function NewShipmentPage() {
                       <select className={inputCls} value={serviceId} onChange={(e) => {
                         const nextId = e.target.value ? Number(e.target.value) : ''
                         setServiceId(nextId)
-                        // Auto-tick "Residential address" when the operator
-                        // picks a service that requires it (FedEx Home
-                        // Delivery today). FedEx refuses this service to
-                        // commercial addresses with an opaque error;
-                        // silently flipping the recipient flag prevents
-                        // the failure at submit time. Operator can still
-                        // untick manually — the auto-flip only ADDS the
-                        // flag, never removes it, so switching between
-                        // Home Delivery ↔ regular Ground doesn't
-                        // stomp on a legitimate residential setting.
-                        if (nextId !== '') {
-                          const svcCode = services.find((s) => s.id === Number(nextId))?.serviceCode
-                          if (svcCode === 'GROUND_HOME_DELIVERY' && !recipient.residential) {
+                        // Auto-manage the "Residential address" flag based
+                        // on service choice. Two directions:
+                        //
+                        //   Picking GROUND_HOME_DELIVERY → auto-tick + mark
+                        //   origin='auto'. FedEx refuses Home Delivery to
+                        //   commercial addresses with an opaque error, so
+                        //   the tick prevents the failure at submit. If
+                        //   operator ticked it themselves before ('manual'),
+                        //   leave the origin alone — no need to demote.
+                        //
+                        //   Leaving Home Delivery for another service →
+                        //   IF the current tick is 'auto' (we set it),
+                        //   untick and clear origin. IF 'manual' (operator
+                        //   set it themselves), leave the tick alone —
+                        //   respect operator intent, they may have picked
+                        //   residential deliberately for surcharge reasons.
+                        //
+                        // Re-picking Home Delivery after an untick re-auto-
+                        // ticks (per intended UX). Operator manually
+                        // unticking after auto-tick stays unticked but
+                        // Submit will be disabled with a warning banner
+                        // (see the residentialConflict computed below).
+                        const svcCode = nextId !== ''
+                          ? services.find((s) => s.id === Number(nextId))?.serviceCode
+                          : undefined
+                        if (svcCode === 'GROUND_HOME_DELIVERY') {
+                          if (!recipient.residential) {
                             setRecipient({ ...recipient, residential: true })
+                            setResidentialOrigin('auto')
                           }
+                          // Already ticked → keep whatever origin already is.
+                        } else if (residentialOrigin === 'auto' && recipient.residential) {
+                          // Switching AWAY from Home Delivery and we set
+                          // the flag ourselves — revert. Manual ticks
+                          // (origin='manual') stay put.
+                          setRecipient({ ...recipient, residential: false })
+                          setResidentialOrigin(undefined)
                         }
                       }}>
                         {servicesForCarrier.length === 0 ? <option value="">Carrier default</option> : null}
@@ -3316,6 +3374,17 @@ export default function NewShipmentPage() {
                         Compare rates
                       </button>
                     </div>
+                    {residentialConflict ? (
+                      <div className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900">
+                        <FiAlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+                        <span>
+                          <span className="font-semibold">FedEx Home Delivery</span> requires the
+                          recipient to be marked as <span className="font-semibold">residential</span>.
+                          Tick the checkbox on the recipient block, or pick a different service —
+                          Submit is disabled until this is fixed.
+                        </span>
+                      </div>
+                    ) : null}
                   </Field>
                   <Field label="Dangerous goods">
                     <button
@@ -4042,7 +4111,10 @@ export default function NewShipmentPage() {
               <button
                 type="button"
                 onClick={() => void submit()}
-                disabled={submitting || noCarriersAtAll}
+                disabled={submitting || noCarriersAtAll || residentialConflict}
+                title={residentialConflict
+                  ? 'FedEx Home Delivery requires the recipient to be marked as residential. Tick the checkbox on the recipient block, or pick a different service.'
+                  : undefined}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-4 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none"
               >
                 {submitting ? (
