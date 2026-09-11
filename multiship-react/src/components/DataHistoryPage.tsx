@@ -170,7 +170,7 @@ export default function DataHistoryPage() {
           cmp = (a.fileName || '').localeCompare(b.fileName || '')
           break
         case 'savedRows':
-          cmp = a.savedRows - b.savedRows
+          cmp = a.totalRows - b.totalRows
           break
         case 'labelBatch':
           cmp = (a.labelBatchId ?? -1) - (b.labelBatchId ?? -1)
@@ -708,20 +708,8 @@ export default function DataHistoryPage() {
         accessorFn: (b) => b.status ?? '',
         cell: ({ row }) => {
           const s = statusMeta(row.original.status)
-          const invalid = row.original.invalidRows
-          return (
-            <span className="flex flex-col items-start gap-0.5">
-              <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>{s.label}</span>
-              {/* Errors must be visible while the batch is COLLAPSED too — the
-                  operator shouldn't have to expand a row to learn it's broken. */}
-              {invalid > 0 ? (
-                <span className="inline-flex items-center gap-1 text-[9.5px] font-semibold text-rose-700">
-                  <FiAlertCircle className="h-2.5 w-2.5 shrink-0" />
-                  {invalid} row{invalid === 1 ? '' : 's'} need{invalid === 1 ? 's' : ''} fixes — click to see why
-                </span>
-              ) : null}
-            </span>
-          )
+          // Status only — the error count lives once, in the Rows column.
+          return <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>{s.label}</span>
         },
         meta: { headerLabel: 'Status' },
       },
@@ -730,25 +718,35 @@ export default function DataHistoryPage() {
         header: 'Rows',
         enableSorting: false,
         size: 120,
-        accessorFn: (b) => b.savedRows,
+        accessorFn: (b) => b.totalRows,
         cell: ({ row }) => {
           const b = row.original
+          const total = b.totalRows || 0
+          const invalid = b.invalidRows || 0
+          // Errors are the only thing worth a second line: a clean import is just its size.
+          // The bar is the share of rows whose whole order can be labelled.
+          const readyPct = total > 0 ? Math.min(100, (b.savedRows / total) * 100) : 0
           return (
-            <span className="flex items-center gap-1.5">
-              <span
-                title="Rows whose whole order passed validation — they can be labelled (or already are)"
-                className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 ring-1 ring-emerald-200"
-              >
-                {b.savedRows} ready
+            <span className="flex w-full min-w-[88px] flex-col gap-1">
+              <span className="text-[12px] font-semibold tabular-nums text-[#1f150c]">
+                {total} row{total === 1 ? '' : 's'}
               </span>
-              {b.invalidRows > 0 ? (
-                <span
-                  title={`${b.invalidRows} row(s) failed validation — click the row to see each error explained under its line.`}
-                  className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10.5px] font-bold text-rose-800 ring-1 ring-rose-300"
-                >
-                  <FiAlertCircle className="h-3 w-3 shrink-0" />
-                  {b.invalidRows} error{b.invalidRows === 1 ? '' : 's'}
-                </span>
+              {invalid > 0 ? (
+                <>
+                  <span
+                    className="flex h-1 w-full max-w-[110px] overflow-hidden rounded-full bg-rose-200"
+                    title={`${b.savedRows} of ${total} rows can be labelled · the rest wait on fixes`}
+                  >
+                    <span className="h-full bg-[#b6a684]" style={{ width: `${readyPct}%` }} />
+                  </span>
+                  <span
+                    className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-rose-700"
+                    title="Open the import to see each error under its row"
+                  >
+                    <FiAlertCircle className="h-3 w-3 shrink-0" />
+                    {invalid} need{invalid === 1 ? 's' : ''} fixes
+                  </span>
+                </>
               ) : null}
             </span>
           )
@@ -1390,7 +1388,7 @@ export default function DataHistoryPage() {
             >
               <option value="created">Sort: Date created</option>
               <option value="fileName">Sort: File name</option>
-              <option value="savedRows">Sort: Rows ready</option>
+              <option value="savedRows">Sort: Rows</option>
               <option value="status">Sort: Status</option>
               <option value="labelBatch">Sort: Batch #</option>
             </select>
