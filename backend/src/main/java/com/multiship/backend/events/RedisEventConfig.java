@@ -2,6 +2,7 @@ package com.multiship.backend.events;
 
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -30,6 +31,19 @@ import java.time.Duration;
  */
 @Slf4j
 @Configuration
+// @ConditionalOnProperty picks up REDIS_HOST-derived
+// spring.data.redis.host — same signal RedisPresenceLogger uses.
+// We used to also @ConditionalOnBean(RedisConnectionFactory.class),
+// but that check evaluates BEFORE Spring Boot's Redis auto-config
+// has produced the factory bean (regular @Configuration classes are
+// processed before auto-configurations), which caused the config to
+// silently skip even when Redis WAS available at runtime. The
+// factory is now looked up via ObjectProvider on the @Bean method
+// so injection happens after auto-config completes; when the
+// property is set but the factory isn't provisioned (e.g.
+// spring.autoconfigure.exclude still hides DataRedisAutoConfiguration),
+// we log a warning and return null so the SseController gracefully
+// falls back to the "SSE unavailable" 503 path.
 @ConditionalOnProperty(name = "spring.data.redis.host")
 public class RedisEventConfig {
 
@@ -43,7 +57,20 @@ public class RedisEventConfig {
 
     @Bean
     public StreamMessageListenerContainer<String, MapRecord<String, String, String>>
-            eventStreamListenerContainer(RedisConnectionFactory factory) {
+            eventStreamListenerContainer(ObjectProvider<RedisConnectionFactory> factoryProvider) {
+        RedisConnectionFactory factory = factoryProvider.getIfAvailable();
+        if (factory == null) {
+            // Property said Redis is on but auto-config didn't produce
+            // a factory (e.g. spring.autoconfigure.exclude still hides
+            // DataRedisAutoConfiguration). Log once and return null;
+            // SseController's null-check on the container returns 503
+            // from /events/stream and the FE degrades to polling.
+            log.warn("StreamMessageListenerContainer NOT started — spring.data.redis.host is set "
+                    + "but no RedisConnectionFactory bean was provisioned. Set "
+                    + "REDIS_AUTOCONFIGURE_EXCLUDE= (empty) alongside REDIS_HOST to enable "
+                    + "Redis auto-config. FE will fall back to polling.");
+            return null;
+        }
         StreamMessageListenerContainer.StreamMessageListenerContainerOptions<
                         String, MapRecord<String, String, String>>
                 options = StreamMessageListenerContainer.StreamMessageListenerContainerOptions
