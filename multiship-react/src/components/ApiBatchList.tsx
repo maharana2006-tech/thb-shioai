@@ -169,7 +169,8 @@ export default function ApiBatchList() {
    *  label (fetched again after the batch was trashed, or labelled from another
    *  import). Ask before shipping them a second time; true = the user confirmed. */
   const confirmDuplicates = async (e: unknown): Promise<boolean> => {
-    if (!(e instanceof ApiError) || e.status !== 409) return false
+    // IMPORT_BATCH_STATE 409s (in Trash, generating…) are not "already labelled" questions.
+    if (!(e instanceof ApiError) || e.status !== 409 || e.errorCode === 'IMPORT_BATCH_STATE') return false
     return notify.confirm(`${e.message}\n\nGenerate anyway?`, {
       title: 'These orders are already labelled',
       confirmLabel: 'Generate anyway',

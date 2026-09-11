@@ -92,6 +92,8 @@ public enum ErrorCode {
     // ===== Orders =====
     ORDER_NOT_FOUND,
     VALIDATION_ERROR,
+    /** Import-history action the import's current state doesn't allow (in Trash, generating, nothing to do, …). */
+    IMPORT_BATCH_STATE,
 
     // ===== Label generation =====
     LABEL_ALREADY_GENERATED,

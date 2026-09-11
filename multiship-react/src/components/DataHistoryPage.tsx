@@ -393,7 +393,8 @@ export default function DataHistoryPage() {
   /** 409 from generate = the server found rows whose orders already have a live
    *  label. Ask before shipping them a second time; true = the user confirmed. */
   const confirmDuplicates = async (e: unknown): Promise<boolean> => {
-    if (!(e instanceof ApiError) || e.status !== 409) return false
+    // IMPORT_BATCH_STATE 409s (in Trash, generating…) are not "already labelled" questions.
+    if (!(e instanceof ApiError) || e.status !== 409 || e.errorCode === 'IMPORT_BATCH_STATE') return false
     return notify.confirm(`${e.message}\n\nGenerate anyway?`, {
       title: 'These orders are already labelled',
       confirmLabel: 'Generate anyway',
@@ -798,7 +799,7 @@ export default function DataHistoryPage() {
                         <span className="hidden sm:inline text-[9.5px] uppercase tracking-[0.08em] text-[#b6a684]">Bills to</span>
                         <select
                           value={platform ? 'PLATFORM' : 'AUTO'}
-                          disabled={busy || billingSavingId === b.id}
+                          disabled={busy || st === 'IN_PROGRESS' || billingSavingId === b.id}
                           onChange={(e) => void setBilling(b.id, e.target.value as 'AUTO' | 'PLATFORM')}
                           className="cursor-pointer border-0 bg-transparent pr-1 text-[11px] font-semibold text-inherit focus:outline-none disabled:cursor-not-allowed"
                         >
@@ -901,8 +902,8 @@ export default function DataHistoryPage() {
                     <button
                       type="button"
                       onClick={() => void handleDelete(b.id, b.fileName)}
-                      disabled={trashBusyId === b.id}
-                      title="Move this import to Trash (recoverable)"
+                      disabled={trashBusyId === b.id || st === 'IN_PROGRESS'}
+                      title={st === 'IN_PROGRESS' ? 'Wait for the label run to finish (or cancel it) before moving this import to Trash' : 'Move this import to Trash (recoverable)'}
                       aria-label="Delete import"
                       className="inline-flex items-center justify-center rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -1044,7 +1045,9 @@ export default function DataHistoryPage() {
                               <div className={c.w}>
                                 <GridCell
                                   value={raw == null ? '' : String(raw)}
-                                  readOnly={generated}
+                                  // Locked when labelled, while the import is generating
+                                  // (the run would overwrite the edit) and in Trash.
+                                  readOnly={generated || viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
                                   bad={(byField[c.key]?.length ?? 0) > 0}
                                   errors={byField[c.key]}
                                   mono={c.mono}
@@ -1089,7 +1092,7 @@ export default function DataHistoryPage() {
                               <button
                                 type="button"
                                 onClick={() => void generateRow(b.id, r.rowNumber)}
-                                disabled={rowBusy}
+                                disabled={rowBusy || viewTrash || (b.status || '').toUpperCase() === 'IN_PROGRESS'}
                                 className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-semibold text-[#f4eede] transition disabled:cursor-not-allowed disabled:bg-[#dcd4c4] ${failed ? 'bg-rose-700 hover:bg-rose-800' : 'bg-[#1f150c] hover:bg-[#412d15]'}`}
                                 title={failed ? 'Retry — re-sends this same order to the carrier (no duplicate order is created)' : 'Generate a carrier label for this row'}
                               >

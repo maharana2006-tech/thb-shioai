@@ -138,6 +138,17 @@ public class GlobalExceptionHandler {
                 .build());
     }
 
+    /** Import-history state guards (in Trash, generating, nothing to generate, …) — their own status + message. */
+    @ExceptionHandler(com.multiship.backend.service.OrderImportServiceImpl.ImportBatchStateException.class)
+    public ResponseEntity<ApiResponse<Void>> handleImportBatchState(
+            com.multiship.backend.service.OrderImportServiceImpl.ImportBatchStateException ex) {
+        return ResponseEntity.status(ex.getStatus()).body(ApiResponse.<Void>builder()
+                .status("error").code(ex.getStatus())
+                .message(ex.getMessage())
+                .errorCode(ErrorCode.IMPORT_BATCH_STATE.name())
+                .build());
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpectedRuntime(RuntimeException ex) {
         // Client-disconnect detection: HttpMessageNotWritableException

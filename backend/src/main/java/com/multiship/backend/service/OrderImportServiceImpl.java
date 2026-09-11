@@ -2075,7 +2075,12 @@ public class OrderImportServiceImpl implements OrderImportService {
         com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
         if (b == null) return null;
         requireMatch(firstClientCode(parseBatchRows(b)));
-        String m = "PLATFORM".equalsIgnoreCase(mode == null ? "" : mode.trim()) ? "PLATFORM" : "AUTO";
+        String requested = mode == null ? "" : mode.trim().toUpperCase(Locale.ROOT);
+        if (!requested.equals("AUTO") && !requested.equals("PLATFORM")) {
+            throw new ImportBatchStateException(400, "Billing mode must be AUTO (client account) or PLATFORM (platform account).");
+        }
+        requireActionable(b, "change which account it bills");
+        String m = requested;
         b.setBillingMode(m);
         b = importBatchRepository.save(b);
         log.info("Import batch {} billing mode set to {} by {}", id, m, requestedBy);
@@ -2089,6 +2094,10 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (b == null) return null;
         // Tenant boundary — a scoped USER may only delete a batch their tenant owns.
         requireMatch(firstClientCode(parseBatchRows(b)));
+        if (b.getDeletedAt() == null && isGenerating(b)) {
+            throw new ImportBatchStateException(409, "Import #" + id + " is generating labels right now — wait for the run"
+                    + " to finish (or cancel it) before moving it to Trash.");
+        }
         if (b.getDeletedAt() == null) {              // idempotent: skip if already trashed
             b.setDeletedAt(java.time.LocalDateTime.now());
             b.setDeletedBy(requestedBy);
@@ -2104,6 +2113,16 @@ public class OrderImportServiceImpl implements OrderImportService {
         com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
         if (b == null) return null;
         requireMatch(firstClientCode(parseBatchRows(b)));
+        if (b.getDeletedAt() != null && StringUtils.hasText(b.getContentHash())) {
+            com.multiship.backend.model.ImportBatch live = importBatchRepository
+                    .findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(b.getContentHash()).orElse(null);
+            if (live != null && !live.getId().equals(b.getId())) {
+                throw new ImportBatchStateException(409, "Import #" + live.getId()
+                        + (StringUtils.hasText(live.getFileName()) ? " (" + live.getFileName() + ")" : "")
+                        + " holds the same orders and is not in Trash — restoring #" + id
+                        + " would duplicate them. Move #" + live.getId() + " to Trash first.");
+            }
+        }
         if (b.getDeletedAt() != null) {
             b.setDeletedAt(null);
             b.setDeletedBy(null);
@@ -2215,6 +2234,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         // trying to fire label generation on a foreign tenant's batch
         // gets 403 here rather than after we've minted N labels.
         requireMatch(firstClientCode(rows));
+        if (batch.getDeletedAt() != null) {
+            throw new ImportBatchStateException(409, "Import #" + id + " is in Trash — restore it before generating labels.");
+        }
 
         // Sprint 55 audit #302 F3.2 — retry-safe filter: skip rows already
         // GENERATED so we don't re-bill the carrier for successful ones.
@@ -2225,11 +2247,13 @@ public class OrderImportServiceImpl implements OrderImportService {
         // at the carrier — re-sending the stale row would buy a second label
         // and flip the order back to ERROR. Sync from the order first.
         syncRowsWithLiveOrders(rows, batch.getLabelBatchId());
-        List<OrderImportRowDTO> rowsToProcess = onlyFailed
-                ? rows.stream()
-                        .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
-                        .toList()
-                : rows;
+        // Rows that already carry a label are never sent again — Generate as well
+        // as Retry. (Generate used to re-send them: a second Generate through the
+        // API bought duplicate labels.) onlyFailed is kept for callers; both paths
+        // now process exactly the rows without a label.
+        List<OrderImportRowDTO> rowsToProcess = rows.stream()
+                .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
+                .toList();
         // Rows flagged at upload/pull as "already generated as order #N" are
         // about to be shipped a second time. Stop and ask unless the caller
         // confirmed (allowDuplicate) — five labelled copies of one WMS order
@@ -2239,6 +2263,23 @@ public class OrderImportServiceImpl implements OrderImportService {
                     .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
                     .filter(OrderImportServiceImpl::flaggedAsDuplicate).toList();
             if (!dup.isEmpty()) throw new DuplicateShipmentException(duplicateSummary(dup));
+        }
+        // Nothing the carrier can be asked for — every order is labelled already or
+        // still needs fixes. Say so instead of starting an empty run.
+        {
+            int needFix = 0;
+            boolean anyEligible = false;
+            for (List<OrderImportRowDTO> g : stagingGroups(rowsToProcess).values()) {
+                boolean hasErrors = g.stream().anyMatch(r -> r.getErrors() != null && !r.getErrors().isEmpty());
+                if (hasErrors) needFix++;
+                else anyEligible = true;
+            }
+            if (!anyEligible) {
+                throw new ImportBatchStateException(422, needFix > 0
+                        ? "Nothing to generate — " + needFix + (needFix == 1 ? " order needs" : " orders need")
+                                + " fixes first, and every other order is already labelled."
+                        : "Nothing to generate — every order in this import is already labelled.");
+            }
         }
         // A retry stays in the file's label batch: rows edited in the grid
         // may have lost their stamp, and the commit would mint a new batch
@@ -2480,6 +2521,32 @@ public class OrderImportServiceImpl implements OrderImportService {
      * knows a second Generate click was rejected (not that the batch is
      * missing or broken).
      */
+    /** An Import-history request the import's state doesn't allow — carries the HTTP status to answer with. */
+    public static class ImportBatchStateException extends RuntimeException {
+        private final int status;
+        public ImportBatchStateException(int status, String message) {
+            super(message);
+            this.status = status;
+        }
+        public int getStatus() { return status; }
+    }
+
+    private static boolean isGenerating(com.multiship.backend.model.ImportBatch b) {
+        String st = b.getStatus() == null ? "" : b.getStatus().trim().toUpperCase(Locale.ROOT);
+        return st.equals("IN_PROGRESS") || st.equals("GENERATING");
+    }
+
+    /** Edits and label runs need a live import that isn't mid-run. */
+    private static void requireActionable(com.multiship.backend.model.ImportBatch b, String action) {
+        if (b.getDeletedAt() != null) {
+            throw new ImportBatchStateException(409, "Import #" + b.getId() + " is in Trash — restore it before you " + action + ".");
+        }
+        if (isGenerating(b)) {
+            throw new ImportBatchStateException(409, "Import #" + b.getId() + " is generating labels right now — wait for the run"
+                    + " to finish (or cancel it) before you " + action + ".");
+        }
+    }
+
     public static class ConcurrentBatchGenerationException extends RuntimeException {
         public ConcurrentBatchGenerationException(String message) { super(message); }
     }
@@ -2547,11 +2614,13 @@ public class OrderImportServiceImpl implements OrderImportService {
         // batch before we generate for a single row. Single-row generation
         // must have the same tenant boundary as full-batch generation.
         requireMatch(firstClientCode(rows));
+        // A single-row label during a batch run could label the same order twice.
+        requireActionable(batch, "generate a single row");
         OrderImportRowDTO target = rows.stream()
                 .filter(r -> r.getRowNumber() == rowNumber)
                 .findFirst()
                 .orElse(null);
-        if (target == null) return toBatchDTO(batch, rows);
+        if (target == null) throw new ImportBatchStateException(404, "Row " + rowNumber + " is not in import #" + id + ".");
 
         // Generate this row's whole order (commit mutates the rows in place).
         // Rows sharing an orderRef are ONE shipment — item lines and extra
@@ -2571,6 +2640,18 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
         if (group.isEmpty()) group.add(target);
         syncRowsWithLiveOrders(group, batch.getLabelBatchId());
+        boolean groupLabelled = group.stream().anyMatch(r -> "GENERATED".equalsIgnoreCase(r.getGeneratedStatus())
+                && r.getGeneratedOrderNo() != null);
+        if (!groupLabelled) {
+            List<String> errs = group.stream()
+                    .flatMap(r -> (r.getErrors() == null ? List.<String>of() : r.getErrors()).stream())
+                    .distinct().limit(3).toList();
+            if (!errs.isEmpty()) {
+                throw new ImportBatchStateException(422, "Order "
+                        + (StringUtils.hasText(target.getOrderRef()) ? target.getOrderRef().trim() : "on row " + rowNumber)
+                        + " needs fixes before it can be labelled: " + String.join("; ", errs) + ".");
+            }
+        }
         if (!allowDuplicate) {
             List<OrderImportRowDTO> dup = group.stream()
                     .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
@@ -2680,17 +2761,22 @@ public class OrderImportServiceImpl implements OrderImportService {
         // Same tenant boundary as read / generate: a scoped USER may only
         // edit a batch their own tenant owns.
         requireMatch(firstClientCode(rows));
+        // An edit saved during a run would be overwritten when the run saves its
+        // rows; an edit to an import in Trash would change data nobody sees.
+        requireActionable(batch, "edit it");
 
         int index = -1;
         for (int i = 0; i < rows.size(); i++) {
             if (rows.get(i).getRowNumber() == rowNumber) { index = i; break; }
         }
-        if (index < 0) return toBatchDTO(batch, rows);
+        if (index < 0) throw new ImportBatchStateException(404, "Row " + rowNumber + " is not in import #" + id + ".");
 
         OrderImportRowDTO current = rows.get(index);
-        // A generated row is already a live shipment — never mutate it here.
+        // A generated row is already a live shipment — never mutate it here; say so.
         if ("GENERATED".equalsIgnoreCase(current.getGeneratedStatus())) {
-            return toBatchDTO(batch, rows);
+            throw new ImportBatchStateException(409, "Row " + rowNumber + " is already labelled"
+                    + (current.getGeneratedOrderNo() != null ? " (order #" + current.getGeneratedOrderNo() + ")" : "")
+                    + " — change the shipment from the Orders page instead.");
         }
 
         // Apply the edit. Force the row number so the client can't renumber
