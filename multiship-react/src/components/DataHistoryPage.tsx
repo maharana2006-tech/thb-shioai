@@ -22,6 +22,7 @@ import AllOrdersHistory from './AllOrdersHistory'
 import OrderImportModal from './modals/OrderImportModal'
 import OrderDocumentsTable from './OrderDocumentsTable'
 import { GridCell, DH_COLUMNS, RowIssuesIcon, RowChannelChip, bucketRowErrors, type DhColumn } from './batchGrid'
+import VirtualTable from './VirtualTable'
 import { notify } from '../utils/notify'
 import { ApiError } from '../api/apiClient'
 import {
@@ -55,11 +56,13 @@ export default function DataHistoryPage() {
   const [generatingId, setGeneratingId] = useState<number | null>(null)
   // Live "X of N" label-generation progress per batch, polled while a batch
   // generate/retry runs so the button shows a real progress bar, not a spinner.
-  const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number }>>({})
+  const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number; note?: string | null }>>({})
   // Bill-to account: the batch whose "Bills to" selector is mid-save.
   const [billingSavingId, setBillingSavingId] = useState<number | null>(null)
   // Confirm-before-generate when a batch bills to the platform account.
   const [confirmGenId, setConfirmGenId] = useState<number | null>(null)
+  // Per-batch row filter for the expanded grid — a 1,000-order batch is 2,484 rows.
+  const [gridFilter, setGridFilter] = useState<Record<number, 'all' | 'failed' | 'pending'>>({})
   const [genRowKey, setGenRowKey] = useState<string | null>(null)
   // Inline correction: the cell being saved (rowKey), for a per-cell spinner.
   const [savingCell, setSavingCell] = useState<string | null>(null)
@@ -415,7 +418,7 @@ export default function DataHistoryPage() {
           const pr = await orderImportService.generationProgress(id)
           const d = pr.data
           if (polling && d && d.running && d.total > 0) {
-            setGenProgressById((m) => ({ ...m, [id]: { done: d.done, total: d.total } }))
+            setGenProgressById((m) => ({ ...m, [id]: { done: d.done, total: d.total, note: d.note ?? null } }))
           }
         } catch {
           /* transient poll error — keep going, the POST result is authoritative */
@@ -855,9 +858,14 @@ export default function DataHistoryPage() {
                                     />
                                   ) : (
                                     <div className="h-full w-1/3 animate-pulse rounded-full bg-[#f4eede]/70" />
-                                  )}
-                                </div>
-                              </div>
+      )}
+    </div>
+{progress?.note ? (
+  <div className="max-w-[280px] text-[10px] leading-snug text-[#f4eede]/85" aria-live="polite">
+    {progress.note}
+  </div>
+) : null}
+  </div>
                               <button
                                 type="button"
                                 onClick={() => void cancelGeneration(b.id)}
@@ -915,6 +923,12 @@ export default function DataHistoryPage() {
   /** Expanded content for a batch row — the all-columns editable grid. */
   const renderBatchExpanded = (b: ImportBatchSummary) => {
     const rows = rowsById[b.id]
+    const list = Array.isArray(rows) ? rows : []
+    const filter = gridFilter[b.id] ?? 'all'
+    const needsAttention = (r: (typeof list)[number]) =>
+      (r.errors?.length ?? 0) > 0 || (r.generatedStatus ?? '').toUpperCase() === 'FAILED'
+    const notLabelled = (r: (typeof list)[number]) => (r.generatedStatus ?? '').toUpperCase() !== 'GENERATED'
+    const visible = filter === 'failed' ? list.filter(needsAttention) : filter === 'pending' ? list.filter(notLabelled) : list
     return (
       <div className="border-t border-dashed border-[#eee6d6] bg-[#faf7f0]/50 px-5 py-3">
         {rows === 'loading' || rows === undefined ? (
@@ -923,12 +937,40 @@ export default function DataHistoryPage() {
           <p className="py-4 text-center text-[12px] text-[#6b5c42]">No rows stored for this import.</p>
         ) : (
           <>
-            <p className="mb-1.5 text-[10.5px] text-[#b6a684]">
-              All columns shown — click any cell to edit; it saves and re-validates on blur. Scroll right for more.
-            </p>
-            <div className="overflow-x-auto rounded-xl border border-[#e3d9c4] bg-white">
-              <table className="w-full border-collapse text-[11px] text-[#3f3527]">
-                <thead>
+            <div className="mb-1.5 flex flex-wrap items-center gap-2">
+              <div className="inline-flex overflow-hidden rounded-lg border border-[#e3d9c4]" role="group" aria-label="Show rows">
+                {([
+                  ['all', `All ${list.length}`],
+                  ['failed', `Needs attention ${list.filter(needsAttention).length}`],
+                  ['pending', `Not labelled ${list.filter(notLabelled).length}`],
+                ] as const).map(([k, label]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    aria-pressed={filter === k}
+                    onClick={() => setGridFilter((m) => ({ ...m, [b.id]: k }))}
+                    className={`px-2.5 py-1 text-[10.5px] font-semibold transition ${
+                      filter === k ? 'bg-[#1f150c] text-[#f4eede]' : 'bg-white text-[#5a4526] hover:bg-[#faf7f0]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10.5px] text-[#b6a684]">
+                Click any cell to edit; it saves and re-validates on blur. Scroll right for more columns.
+              </p>
+            </div>
+            <VirtualTable
+              rows={visible}
+              rowKey={(r) => r.rowNumber}
+              colCount={DH_COLUMNS.length + 2}
+              maxHeight="70vh"
+              className="rounded-xl border border-[#e3d9c4] bg-white"
+              tableClassName="w-full border-collapse text-[11px] text-[#3f3527]"
+              empty={<p className="py-6 text-center text-[11px] text-[#6b5c42]">No rows match this filter.</p>}
+              head={
+                <thead className="sticky top-0 z-30">
                   <tr className="bg-[#faf7f0] text-[8.5px] uppercase tracking-[0.1em] text-[#6b5c42]">
                     <th className="sticky left-0 z-20 border-b border-r border-[#e3d9c4] bg-[#faf7f0] px-2 py-1.5 text-left font-bold">Row</th>
                     {DH_COLUMNS.map((c) => (
@@ -937,8 +979,8 @@ export default function DataHistoryPage() {
                     <th className="whitespace-nowrap border-b border-[#e3d9c4] px-2 py-1.5 text-left font-bold">Label</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {rows.map((r) => {
+              }
+              renderRow={(r, index, measureRef) => {
                     const ok = (r.errors?.length ?? 0) === 0
                     const gen = (r.generatedStatus ?? '').toUpperCase()
                     const rowIsWms = (b.source || '').toUpperCase() === 'WMS'
@@ -959,7 +1001,7 @@ export default function DataHistoryPage() {
                     const hasExplain = !ok || (failed && !!r.generatedMessage) || warnings.length > 0
                     return (
                       <Fragment key={r.rowNumber}>
-                      <tr className={ok ? 'bg-white' : 'bg-rose-50/40'}>
+                      <tr ref={measureRef} data-index={index} className={ok ? 'bg-white' : 'bg-rose-50/40'}>
                         <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
                           <div className="flex items-center gap-1.5">
                             <span className="font-mono text-[10px] font-bold text-[#6b5c42]">{r.rowNumber}</span>
@@ -1074,10 +1116,8 @@ export default function DataHistoryPage() {
                       </tr>
                       </Fragment>
                     )
-                  })}
-                </tbody>
-              </table>
-            </div>
+              }}
+            />
           </>
         )}
       </div>

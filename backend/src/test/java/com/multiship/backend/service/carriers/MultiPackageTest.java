@@ -115,8 +115,8 @@ class MultiPackageTest {
         List<Map<String, Object>> packages = upsPackageBlocks(r);
         assertEquals(3, packages.size());
         // Per-package packaging type propagates.
-        assertEquals("02", ((Map<String, Object>) packages.get(0).get("PackagingType")).get("Code"));
-        assertEquals("01", ((Map<String, Object>) packages.get(2).get("PackagingType")).get("Code"));
+        assertEquals("02", ((Map<String, Object>) packages.get(0).get("Packaging")).get("Code"));
+        assertEquals("01", ((Map<String, Object>) packages.get(2).get("Packaging")).get("Code"));
         // Per-package weight propagates.
         assertEquals("3.0",
                 ((Map<String, Object>) packages.get(1).get("PackageWeight")).get("Weight"));

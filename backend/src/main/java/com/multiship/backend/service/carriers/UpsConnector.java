@@ -1537,9 +1537,13 @@ public class UpsConnector implements CarrierConnector {
         piece.put("ContainerCode", "01");
         pcr.put("PickupPiece", java.util.List.of(piece));
 
-        String weightUnitCode = "KG".equalsIgnoreCase(req.weightUnit()) ? "KGS" : "LBS";
+        boolean pickupKg = "KG".equalsIgnoreCase(req.weightUnit());
+        boolean pickupToLb = pickupKg && upsImperialOrigin(a == null ? null : a.countryCode());
+        String weightUnitCode = pickupKg && !pickupToLb ? "KGS" : "LBS";
+        java.math.BigDecimal pickupWeight = req.totalWeight();
+        if (pickupToLb && pickupWeight != null) pickupWeight = kgToLbCeil(pickupWeight);
         pcr.put("TotalWeight", Map.of(
-                "Weight", req.totalWeight() != null ? req.totalWeight().toPlainString() : "0",
+                "Weight", pickupWeight != null ? pickupWeight.toPlainString() : "0",
                 "UnitOfMeasurement", weightUnitCode));
 
         if (StringUtils.hasText(req.specialInstructions())) {
@@ -2198,11 +2202,19 @@ public class UpsConnector implements CarrierConnector {
         // key (different endpoint) so the two easily get swapped.
         pkg.put("Packaging", Map.of("Code", upsPackageCode));
 
-        String weightUnitCode = "KG".equalsIgnoreCase(
-                firstNonBlank(p.getWeightUnit(), request.getWeightUnit())) ? "KGS" : "LBS";
+        // UPS ties the measurement system to the ORIGIN country: a US/PR shipper
+        // must send LBS/IN, otherwise UPS answers "This measurement system is not
+        // valid for the selected country or territory". Metric orders shipped from
+        // a US warehouse are converted here; weight rounds UP so the carrier never
+        // sees less than the parcel weighs.
+        boolean imperialOrigin = upsImperialOrigin(request.getShipperCountryCode());
+        boolean kg = "KG".equalsIgnoreCase(firstNonBlank(p.getWeightUnit(), request.getWeightUnit()));
+        String weightUnitCode = kg && !imperialOrigin ? "KGS" : "LBS";
+        java.math.BigDecimal pkgWeight = p.getWeight();
+        if (kg && imperialOrigin && pkgWeight != null) pkgWeight = kgToLbCeil(pkgWeight);
         Map<String, Object> weight = new LinkedHashMap<>();
         weight.put("UnitOfMeasurement", Map.of("Code", weightUnitCode));
-        weight.put("Weight", p.getWeight() != null ? p.getWeight().toPlainString() : "0");
+        weight.put("Weight", pkgWeight != null ? pkgWeight.toPlainString() : "0");
         pkg.put("PackageWeight", weight);
 
         // UPS 120605 fix — branded UPS packaging (Letter/Pak/Tube/Express
@@ -2219,13 +2231,14 @@ public class UpsConnector implements CarrierConnector {
         // conflict with UPS's own catalog.
         if ("02".equalsIgnoreCase(upsPackageCode)
                 && (p.getLength() != null || p.getWidth() != null || p.getHeight() != null)) {
-            String dimUnitCode = "CM".equalsIgnoreCase(
-                    firstNonBlank(p.getDimUnit(), request.getDimUnit())) ? "CM" : "IN";
+            boolean cm = "CM".equalsIgnoreCase(firstNonBlank(p.getDimUnit(), request.getDimUnit()));
+            boolean cmToIn = cm && upsImperialOrigin(request.getShipperCountryCode());
+            String dimUnitCode = cm && !cmToIn ? "CM" : "IN";
             Map<String, Object> dims = new LinkedHashMap<>();
             dims.put("UnitOfMeasurement", Map.of("Code", dimUnitCode));
-            dims.put("Length", p.getLength() != null ? p.getLength().toPlainString() : "0");
-            dims.put("Width", p.getWidth() != null ? p.getWidth().toPlainString() : "0");
-            dims.put("Height", p.getHeight() != null ? p.getHeight().toPlainString() : "0");
+            dims.put("Length", upsDimValue(p.getLength(), cmToIn));
+            dims.put("Width", upsDimValue(p.getWidth(), cmToIn));
+            dims.put("Height", upsDimValue(p.getHeight(), cmToIn));
             pkg.put("Dimensions", dims);
         }
 
@@ -2401,6 +2414,33 @@ public class UpsConnector implements CarrierConnector {
      * Invoice on the account to have UPS transmit this electronically instead
      * of requiring printed copies attached to the parcel.
      */
+    /** UPS: shipments originating in the US or Puerto Rico must be measured in LBS/IN. */
+    static boolean upsImperialOrigin(String countryCode) {
+        if (countryCode == null) return false;
+        String c = countryCode.trim().toUpperCase(Locale.ROOT);
+        return c.equals("US") || c.equals("PR");
+    }
+
+    private static final java.math.BigDecimal LB_PER_KG = new java.math.BigDecimal("2.20462262");
+
+    /** KG → LB rounded UP to 0.1 (a parcel's declared weight must not shrink). */
+    static java.math.BigDecimal kgToLbCeil(java.math.BigDecimal kg) {
+        return kg.multiply(LB_PER_KG).setScale(1, java.math.RoundingMode.CEILING);
+    }
+
+    /** KG → LB rounded DOWN to 0.1, never below 0.1 (commodity lines must not outweigh the parcel). */
+    static java.math.BigDecimal kgToLbFloor(java.math.BigDecimal kg) {
+        java.math.BigDecimal lb = kg.multiply(LB_PER_KG).setScale(1, java.math.RoundingMode.FLOOR);
+        return lb.signum() > 0 ? lb : new java.math.BigDecimal("0.1");
+    }
+
+    /** A package dimension on the wire, converted CM → IN (rounded UP to 0.1) when required. */
+    static String upsDimValue(java.math.BigDecimal v, boolean cmToIn) {
+        if (v == null) return "0";
+        if (!cmToIn) return v.toPlainString();
+        return v.divide(new java.math.BigDecimal("2.54"), 1, java.math.RoundingMode.CEILING).toPlainString();
+    }
+
     private Map<String, Object> buildInternationalForms(ShipmentRequestDTO request) {
         com.multiship.backend.dto.IntlShipmentBlockDTO intl = request.getIntl();
         Map<String, Object> forms = new LinkedHashMap<>();
@@ -2430,7 +2470,11 @@ public class UpsConnector implements CarrierConnector {
         forms.put("ReasonForExport", mapUpsReasonForExport(intl.getReasonForExport()));
         forms.put("CurrencyCode", firstNonBlank(intl.getCustomsCurrency(), "USD").toUpperCase());
 
-        String weightUnitCode = "KG".equalsIgnoreCase(intl.getWeightUnit()) ? "KGS" : "LBS";
+        // Same origin rule as PackageWeight: a US/PR shipper declares product
+        // weights in LBS. Rounded DOWN so the lines never outweigh the parcel.
+        boolean productKg = "KG".equalsIgnoreCase(intl.getWeightUnit());
+        boolean productToLb = productKg && upsImperialOrigin(request.getShipperCountryCode());
+        String weightUnitCode = productKg && !productToLb ? "KGS" : "LBS";
         // UPS 128039 fix — UPS Ship API v1 caps
         // InternationalForms.Product at 50 entries per shipment. Beyond
         // that → "Invalid number of products." Consolidate commodities
@@ -2469,7 +2513,7 @@ public class UpsConnector implements CarrierConnector {
             if (c.getUnitWeight() != null) {
                 product.put("ProductWeight", Map.of(
                         "UnitOfMeasurement", Map.of("Code", weightUnitCode),
-                        "Weight", c.getUnitWeight().toPlainString()));
+                        "Weight", (productToLb ? kgToLbFloor(c.getUnitWeight()) : c.getUnitWeight()).toPlainString()));
             }
             products.add(product);
         }

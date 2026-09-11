@@ -132,7 +132,9 @@ public interface OrderImportService {
      * "X of N" bar while a generate/retry runs. {@code running} is false (with
      * done=total=0) when no generation is in flight for the batch.
      */
-    record GenProgressView(int done, int total, boolean running) {}
+    record GenProgressView(int done, int total, boolean running, String note) {
+        public GenProgressView(int done, int total, boolean running) { this(done, total, running, null); }
+    }
 
     /** Snapshot the in-flight generation progress for {@code id}. Never null. */
     GenProgressView generationProgress(Long id);

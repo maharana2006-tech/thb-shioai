@@ -1085,21 +1085,26 @@ public class ShipmentValidationService {
         if (req.getItems() == null || req.getItems().isEmpty()) return java.util.List.of();
         int totalQty = req.getItems().stream()
                 .mapToInt(it -> it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1).sum();
-        java.math.RoundingMode HU = java.math.RoundingMode.HALF_UP;
         BigDecimal pkgWeight = req.getWeight();
         boolean canSpread = pkgWeight != null && pkgWeight.signum() > 0 && totalQty > 0;
-        return req.getItems().stream()
-                .map(it -> {
-                    int qty = it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1;
-                    BigDecimal lineWeight;
-                    if (it.getWeight() != null && it.getWeight().signum() > 0) {
-                        lineWeight = it.getWeight();
-                    } else if (canSpread) {
-                        lineWeight = pkgWeight.multiply(BigDecimal.valueOf(qty))
-                                .divide(BigDecimal.valueOf(totalQty), 3, HU);
-                    } else {
-                        lineWeight = null;
-                    }
+        // Same exact split as the carrier request (WeightSplit), so the pre-flight
+        // checks see the weights the carrier will see.
+        var items = req.getItems();
+        int[] itemQty = new int[items.size()];
+        boolean[] spreadMe = new boolean[items.size()];
+        for (int i = 0; i < items.size(); i++) {
+            var it = items.get(i);
+            itemQty[i] = it.getQuantity() != null ? Math.max(it.getQuantity(), 1) : 1;
+            spreadMe[i] = !(it.getWeight() != null && it.getWeight().signum() > 0);
+        }
+        BigDecimal[] spread = canSpread
+                ? com.multiship.backend.util.WeightSplit.byQuantity(pkgWeight, itemQty, spreadMe)
+                : new BigDecimal[items.size()];
+        return java.util.stream.IntStream.range(0, items.size())
+                .mapToObj(i -> {
+                    var it = items.get(i);
+                    int qty = itemQty[i];
+                    BigDecimal lineWeight = spreadMe[i] ? spread[i] : it.getWeight();
                     return com.multiship.backend.dto.CustomsCommodityDTO.builder()
                             .description(it.getDescription())
                             .hsCode(it.getHsCode())
