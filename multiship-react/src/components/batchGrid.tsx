@@ -9,7 +9,8 @@ import { useEffect, useRef, useState } from 'react'
 
 import IssuesInfoIcon, { type IssueItem } from './ui/IssuesInfoIcon'
 
-/** D2C/B2B chip for a batch grid row, derived from the recipient company —
+/** D2C/B2B chip for an API / WMS batch grid row (never on CSV/Excel uploads —
+ *  the classification is API-only by client request), derived from the recipient company —
  *  the same heuristic the persist path applies at generate time (import/WMS
  *  rows carry no residential flag or explicit channel, so this preview
  *  matches what gets stored). Value-only tooltip: the reason is not exposed

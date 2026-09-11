@@ -1055,7 +1055,9 @@ export default function DataHistoryPage() {
                                 {r.errors!.length} error{r.errors!.length === 1 ? '' : 's'}
                               </span>
                             )}
-                            <RowChannelChip recipientCompany={r.recipientCompany} />
+                            {/* D2C / B2B belongs to the API side only (client request) —
+                                shown for WMS fetches, never for CSV/Excel uploads. */}
+                            {rowIsWms ? <RowChannelChip recipientCompany={r.recipientCompany} /> : null}
                             {saving ? <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-[#cdbf9f] border-t-[#5a4526]" /> : null}
                             {/* Left ⓘ — sticky cell, so the issues stay one
                                 hover away at any horizontal scroll position. */}

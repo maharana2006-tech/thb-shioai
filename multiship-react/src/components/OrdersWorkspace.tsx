@@ -1563,7 +1563,11 @@ export default function OrdersWorkspace() {
                         'Source',
                         <select
                           value={sourceFilter}
-                          onChange={(e) => setSourceFilter(e.target.value)}
+                          onChange={(e) => {
+                            setSourceFilter(e.target.value)
+                            // D2C / B2B is an API-only classification (client request).
+                            if (e.target.value !== 'API') setChannelFilter('')
+                          }}
                           className={advInputCls}
                         >
                           <option value="">Any source</option>
@@ -1572,7 +1576,7 @@ export default function OrdersWorkspace() {
                           <option value="API">API</option>
                         </select>,
                       )}
-                      {advField(
+                      {sourceFilter === 'API' && advField(
                         <FiDatabase className="h-3 w-3" />,
                         'Channel',
                         <select
