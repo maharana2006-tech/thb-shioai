@@ -62,6 +62,85 @@ public class OrderImportController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
+    // ── Staging: upload → validate → Save (2026-09-11 bulk-upload restructure) ──
+
+    @Operation(summary = "Upload a CSV / XLSX into staging and validate it",
+            description = "Parses and validates the file and parks it in staging. Nothing reaches Import history "
+                    + "until Save, and Save writes only orders whose every row is valid.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping(value = "/staging", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.StagingUploadDTO>> stageUpload(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "allowDuplicate", required = false, defaultValue = "false") boolean allowDuplicate,
+            @AuthenticationPrincipal UserDetails userDetails) throws java.io.IOException {
+        ApiResponse<com.multiship.backend.dto.StagingUploadDTO> r = orderImportService.stageUpload(
+                file.getOriginalFilename(), file.getInputStream(), allowDuplicate, stagingUser(userDetails));
+        return ResponseEntity.status(r.getCode()).body(r);
+    }
+
+    @Operation(summary = "A staged upload with its rows and per-order counts")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/staging/{id}")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.StagingUploadDTO>> getStaging(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        ApiResponse<com.multiship.backend.dto.StagingUploadDTO> r = orderImportService.getStaging(id, stagingUser(userDetails));
+        return ResponseEntity.status(r.getCode()).body(r);
+    }
+
+    @Operation(summary = "Edit one staged row; the whole upload is re-validated")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @org.springframework.web.bind.annotation.PutMapping("/staging/{id}/rows/{rowNumber}")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.StagingUploadDTO>> updateStagingRow(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @org.springframework.web.bind.annotation.PathVariable int rowNumber,
+            @RequestBody OrderImportRowDTO row,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        ApiResponse<com.multiship.backend.dto.StagingUploadDTO> r =
+                orderImportService.updateStagingRow(id, rowNumber, row, stagingUser(userDetails));
+        return ResponseEntity.status(r.getCode()).body(r);
+    }
+
+    @Operation(summary = "Save the fully valid orders of a staged upload to Import history")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @PostMapping("/staging/{id}/save")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.StagingUploadDTO>> saveStaging(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        ApiResponse<com.multiship.backend.dto.StagingUploadDTO> r = orderImportService.saveStaging(id, stagingUser(userDetails));
+        return ResponseEntity.status(r.getCode()).body(r);
+    }
+
+    @Operation(summary = "Discard a staged upload (orders already saved stay in Import history)")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @org.springframework.web.bind.annotation.DeleteMapping("/staging/{id}")
+    public ResponseEntity<ApiResponse<com.multiship.backend.dto.StagingUploadDTO>> discardStaging(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        ApiResponse<com.multiship.backend.dto.StagingUploadDTO> r = orderImportService.discardStaging(id, stagingUser(userDetails));
+        return ResponseEntity.status(r.getCode()).body(r);
+    }
+
+    @Operation(summary = "Download the orders with errors (template columns + an errors column)",
+            description = "format=csv|xlsx; defaults to the uploaded file's type. 404 when no order has errors.")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/staging/{id}/errors")
+    public ResponseEntity<byte[]> stagingErrors(
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @RequestParam(value = "format", required = false) String format,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        OrderImportService.StagingErrorFile f = orderImportService.stagingErrorFile(id, format, stagingUser(userDetails));
+        if (f == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + f.fileName().replace("\"", "") + "\"")
+                .contentType(MediaType.parseMediaType(f.contentType()))
+                .body(f.bytes());
+    }
+
+    private static String stagingUser(UserDetails userDetails) {
+        return userDetails == null ? "unknown" : userDetails.getUsername();
+    }
+
     @Operation(summary = "Commit previewed rows",
             description = "Validates rows one last time (client may have edited them) and reports " +
                     "how many would be persisted. Sprint 40 MVP: reports only — persistence follow-up " +

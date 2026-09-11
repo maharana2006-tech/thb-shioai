@@ -200,4 +200,28 @@ public interface OrderImportService {
      * Content-Type / filename headers.
      */
     byte[] xlsxTemplate(Long accountId);
+
+    // ── Staging: upload → validate → Save (2026-09-11 bulk-upload restructure) ──
+    // Nothing reaches Import history until Save, and Save writes only orders whose
+    // every row is valid. Invalid orders stay staged (editable / downloadable).
+
+    /** Parse + validate a file into staging. 409 when the same file is already staged or imported. */
+    ApiResponse<com.multiship.backend.dto.StagingUploadDTO> stageUpload(
+            String filename, java.io.InputStream body, boolean allowDuplicate, String requestedBy);
+
+    ApiResponse<com.multiship.backend.dto.StagingUploadDTO> getStaging(Long id, String requestedBy);
+
+    /** Edit one staged row; the whole upload is re-validated. Saved rows are read-only. */
+    ApiResponse<com.multiship.backend.dto.StagingUploadDTO> updateStagingRow(
+            Long id, int rowNumber, OrderImportRowDTO edited, String requestedBy);
+
+    /** Save the fully valid, not-yet-saved orders to Import history as a new batch. */
+    ApiResponse<com.multiship.backend.dto.StagingUploadDTO> saveStaging(Long id, String requestedBy);
+
+    ApiResponse<com.multiship.backend.dto.StagingUploadDTO> discardStaging(Long id, String requestedBy);
+
+    /** Every row of each unsaved invalid order, in template columns + an "errors" column. Null when none. */
+    StagingErrorFile stagingErrorFile(Long id, String format, String requestedBy);
+
+    record StagingErrorFile(byte[] bytes, String fileName, String contentType) {}
 }

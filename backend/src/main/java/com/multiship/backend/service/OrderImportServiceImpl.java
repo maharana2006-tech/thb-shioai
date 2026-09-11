@@ -1,5 +1,9 @@
 package com.multiship.backend.service;
 
+import com.multiship.backend.dto.StagingUploadDTO;
+import com.multiship.backend.model.ImportStagingRow;
+import com.multiship.backend.model.ImportStagingUpload;
+
 import com.multiship.backend.dto.ApiResponse;
 import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.dto.OrderImportPreviewDTO;
@@ -3276,6 +3280,9 @@ public class OrderImportServiceImpl implements OrderImportService {
             HEADERS.stream().map(h -> h.toLowerCase(Locale.ROOT))
                     .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
 
+    /** Columns the downloadable error file adds — ignored (not custom fields) when it is uploaded again. */
+    private static final java.util.Set<String> IGNORED_HEADERS_LOWER = java.util.Set.of("errors", "error", "warnings");
+
     /**
      * Tier 4 — stash every column that isn't part of the canonical schema.
      * Those are candidate custom-field values; {@link #validateCustomFields}
@@ -3289,7 +3296,8 @@ public class OrderImportServiceImpl implements OrderImportService {
                                             ColumnReader reader) {
         Map<String, String> extras = new LinkedHashMap<>();
         for (String header : headerMap.keySet()) {
-            if (header == null || header.isBlank() || KNOWN_HEADERS_LOWER.contains(header)) continue;
+            if (header == null || header.isBlank() || KNOWN_HEADERS_LOWER.contains(header)
+                    || IGNORED_HEADERS_LOWER.contains(header)) continue;
             String value = sanitise(reader.read(header));
             if (StringUtils.hasText(value)) extras.put(header.trim(), value);
         }
@@ -4323,6 +4331,533 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .invalidRows(invalid)
                 .rows(rows)
                 .build();
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // Staging — bulk-upload restructure (2026-09-11).
+    //   1. Upload   → the file is parsed and parked in import_staging_*.
+    //   2. Validate → staged rows are validated and can be edited in place.
+    //   3. Save     → ONLY fully valid orders (every row of the orderRef valid)
+    //                 go to Import history (import_batch) through save().
+    // Orders with errors stay staged until fixed, discarded or expired, and can
+    // be downloaded as an error file. No labels are generated here.
+    // ════════════════════════════════════════════════════════════════════
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ImportStagingUploadRepository stagingUploadRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ImportStagingRowRepository stagingRowRepository;
+    @org.springframework.beans.factory.annotation.Value("${import.staging.retention-days:7}")
+    private int stagingRetentionDays = 7;
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper STAGING_JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    private record StagingCounts(int totalRows, int validRows, int totalOrders, int validOrders,
+                                 int invalidOrders, int savedOrders, int readyOrders) {}
+
+    private com.fasterxml.jackson.databind.ObjectMapper stagingJson() {
+        return importObjectMapper != null ? importObjectMapper : STAGING_JSON;
+    }
+
+    @Override
+    public ApiResponse<StagingUploadDTO> stageUpload(String filename, InputStream body,
+                                                     boolean allowDuplicate, String requestedBy) {
+        if (stagingUploadRepository == null || stagingRowRepository == null) {
+            return stagingFailure(HttpStatus.SERVICE_UNAVAILABLE, "Upload staging is not available on this server.");
+        }
+        // Same parse + validation (and Import-history duplicate-file gate) as before.
+        ApiResponse<OrderImportPreviewDTO> parsed = preview(filename, body, null, allowDuplicate);
+        if (parsed == null || !"success".equalsIgnoreCase(parsed.getStatus()) || parsed.getData() == null) {
+            HttpStatus st = parsed == null ? HttpStatus.BAD_REQUEST
+                    : java.util.Optional.ofNullable(HttpStatus.resolve(parsed.getCode())).orElse(HttpStatus.BAD_REQUEST);
+            return stagingFailure(st, parsed == null ? "Upload failed." : parsed.getMessage());
+        }
+        List<OrderImportRowDTO> rows = parsed.getData().getRows() == null
+                ? new ArrayList<>() : new ArrayList<>(parsed.getData().getRows());
+        if (rows.isEmpty()) {
+            return stagingFailure(HttpStatus.UNPROCESSABLE_ENTITY, "The file has no order rows.");
+        }
+        String hash = contentHash(rows);
+        // The same file staged twice would let both copies reach Import history —
+        // point the operator at the upload that is already waiting instead.
+        if (!allowDuplicate && hash != null) {
+            ImportStagingUpload open = stagingUploadRepository
+                    .findFirstByContentHashAndStatusOrderByIdDesc(hash, "OPEN").orElse(null);
+            if (open != null && canAccessStaging(open, requestedBy)) {
+                return ApiResponse.<StagingUploadDTO>builder()
+                        .status("error").code(HttpStatus.CONFLICT.value())
+                        .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                        .message("This file is already uploaded and waiting for validation as upload #" + open.getId()
+                                + " (" + open.getFileName() + "). Continue that upload, or upload this file anyway as a new one.")
+                        .data(StagingUploadDTO.builder().id(open.getId()).fileName(open.getFileName()).status(open.getStatus())
+                                .totalOrders(open.getTotalOrders()).validOrders(open.getValidOrders())
+                                .savedOrders(open.getSavedOrders()).createdAt(open.getCreatedAt()).build())
+                        .build();
+            }
+        }
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        ImportStagingUpload up = new ImportStagingUpload();
+        up.setCreatedBy(requestedBy);
+        up.setFileName(StringUtils.hasText(filename) ? clip(filename.trim(), 260) : "upload");
+        up.setContentHash(hash);
+        up.setStatus("OPEN");
+        up.setCreatedAt(now);
+        up.setUpdatedAt(now);
+        up = stagingUploadRepository.save(up);
+        List<ImportStagingRow> entities = new ArrayList<>(rows.size());
+        for (OrderImportRowDTO r : rows) {
+            ImportStagingRow e = new ImportStagingRow();
+            e.setUploadId(up.getId());
+            writeStagingRow(e, r);
+            entities.add(e);
+        }
+        stagingRowRepository.saveAll(entities);
+        Map<Integer, Long> saved = Map.of();
+        StagingCounts c = stagingCounts(rows, saved);
+        applyStagingCounts(up, c);
+        stagingUploadRepository.save(up);
+        log.info("Import staging #{} ({}): {} row(s) / {} order(s) — {} valid, {} with errors",
+                up.getId(), requestedBy, c.totalRows(), c.totalOrders(), c.validOrders(), c.invalidOrders());
+        String msg = c.invalidOrders() == 0
+                ? "All " + c.totalOrders() + " order(s) passed validation — review them and click Save."
+                : c.validOrders() + " of " + c.totalOrders() + " order(s) passed validation; " + c.invalidOrders()
+                        + " have errors. Save writes only the valid orders to Import history.";
+        return stagingSuccess(toStagingDTO(up, rows, saved), msg);
+    }
+
+    @Override
+    public ApiResponse<StagingUploadDTO> getStaging(Long id, String requestedBy) {
+        ImportStagingUpload up = findStaging(id, requestedBy);
+        if (up == null) return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
+        List<ImportStagingRow> ents = stagingRowRepository.findByUploadIdOrderByRowNoAsc(up.getId());
+        List<OrderImportRowDTO> rows = readStagingRows(ents);
+        requireMatch(firstClientCode(rows));
+        return stagingSuccess(toStagingDTO(up, rows, savedRowMap(ents)), null);
+    }
+
+    @Override
+    public ApiResponse<StagingUploadDTO> updateStagingRow(Long id, int rowNumber, OrderImportRowDTO edited,
+                                                          String requestedBy) {
+        ImportStagingUpload up = findStaging(id, requestedBy);
+        if (up == null) return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
+        List<ImportStagingRow> ents = stagingRowRepository.findByUploadIdOrderByRowNoAsc(up.getId());
+        List<OrderImportRowDTO> rows = readStagingRows(ents);
+        requireMatch(firstClientCode(rows));
+        Map<Integer, Long> saved = savedRowMap(ents);
+        int index = -1;
+        for (int i = 0; i < rows.size(); i++) {
+            if (rows.get(i).getRowNumber() == rowNumber) { index = i; break; }
+        }
+        if (index < 0) return stagingFailure(HttpStatus.NOT_FOUND, "Row " + rowNumber + " is not in this upload.");
+        if (saved.containsKey(rowNumber)) {
+            return stagingFailure(HttpStatus.CONFLICT, "Row " + rowNumber + " is already saved to Import history #"
+                    + saved.get(rowNumber) + " — edit it there.");
+        }
+        OrderImportRowDTO current = rows.get(index);
+        if (edited == null) edited = new OrderImportRowDTO();
+        edited.setRowNumber(rowNumber);
+        edited.setBatchId(current.getBatchId());
+        edited.setGeneratedStatus(null);
+        edited.setGeneratedMessage(null);
+        edited.setGeneratedOrderNo(null);
+        edited.setGeneratedTrackingNumber(null);
+        rows.set(index, edited);
+        propagateGroupEdit(rows, current, edited);
+        revalidateStaged(rows);
+        persistChangedStagingRows(ents, rows);
+        applyStagingCounts(up, stagingCounts(rows, saved));
+        up.setUpdatedAt(java.time.LocalDateTime.now());
+        stagingUploadRepository.save(up);
+        return stagingSuccess(toStagingDTO(up, rows, saved), null);
+    }
+
+    @Override
+    public ApiResponse<StagingUploadDTO> saveStaging(Long id, String requestedBy) {
+        ImportStagingUpload up = findStaging(id, requestedBy);
+        if (up == null) return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
+        List<ImportStagingRow> ents = stagingRowRepository.findByUploadIdOrderByRowNoAsc(up.getId());
+        List<OrderImportRowDTO> rows = readStagingRows(ents);
+        requireMatch(firstClientCode(rows));
+        Map<Integer, Long> saved = savedRowMap(ents);
+        // Reference data can change while a file waits (an account deactivated, a
+        // client removed) — validate once more before anything is saved.
+        revalidateStaged(rows);
+        persistChangedStagingRows(ents, rows);
+
+        List<OrderImportRowDTO> toSave = new ArrayList<>();
+        int orders = 0;
+        for (List<OrderImportRowDTO> g : stagingGroups(rows).values()) {
+            boolean alreadySaved = g.stream().allMatch(r -> saved.containsKey(r.getRowNumber()));
+            boolean valid = g.stream().allMatch(OrderImportServiceImpl::stagedRowValid);
+            if (!alreadySaved && valid) {
+                toSave.addAll(g);
+                orders++;
+            }
+        }
+        StagingCounts before = stagingCounts(rows, saved);
+        if (toSave.isEmpty()) {
+            applyStagingCounts(up, before);
+            stagingUploadRepository.save(up);
+            return stagingFailure(HttpStatus.UNPROCESSABLE_ENTITY, before.totalOrders() > 0 && before.savedOrders() == before.totalOrders()
+                    ? "Everything in this upload is already saved to Import history."
+                    : "No fully valid orders to save — fix the errors here or download them first.");
+        }
+        // Copies: save() re-validates and mutates the rows it is handed.
+        List<OrderImportRowDTO> copies = new ArrayList<>(toSave.size());
+        for (OrderImportRowDTO r : toSave) copies.add(stagingJson().convertValue(r, OrderImportRowDTO.class));
+        // allowDuplicate: the duplicate-file gate already ran when the file was staged.
+        ApiResponse<OrderImportPreviewDTO> res = save(copies, requestedBy, up.getFileName(), false, true);
+        if (res == null || !"success".equalsIgnoreCase(res.getStatus()) || res.getData() == null
+                || res.getData().getBatchId() == null) {
+            HttpStatus st = res == null ? HttpStatus.INTERNAL_SERVER_ERROR
+                    : java.util.Optional.ofNullable(HttpStatus.resolve(res.getCode())).orElse(HttpStatus.UNPROCESSABLE_ENTITY);
+            return stagingFailure(st, res == null ? "Save failed." : res.getMessage());
+        }
+        long batchId = res.getData().getBatchId().longValue();
+        java.util.Set<Integer> savedNos = new java.util.HashSet<>();
+        for (OrderImportRowDTO r : toSave) savedNos.add(r.getRowNumber());
+        Map<Integer, Long> savedAfter = new java.util.HashMap<>(saved);
+        List<ImportStagingRow> marked = new ArrayList<>();
+        for (ImportStagingRow e : ents) {
+            if (savedNos.contains(e.getRowNo())) {
+                e.setSavedBatchId(batchId);
+                marked.add(e);
+                savedAfter.put(e.getRowNo(), batchId);
+            }
+        }
+        stagingRowRepository.saveAll(marked);
+        StagingCounts after = stagingCounts(rows, savedAfter);
+        applyStagingCounts(up, after);
+        up.setLastSavedBatchId(batchId);
+        up.setUpdatedAt(java.time.LocalDateTime.now());
+        stagingUploadRepository.save(up);
+        int left = after.totalOrders() - after.savedOrders();
+        log.info("Import staging #{} ({}): saved {} order(s) / {} row(s) to Import history #{}; {} order(s) left in staging",
+                up.getId(), requestedBy, orders, toSave.size(), batchId, left);
+        String msg = "Saved " + orders + " order(s) (" + toSave.size() + " row(s)) to Import history #" + batchId + "."
+                + (left > 0 ? " " + left + " order(s) with errors were not saved — fix them here or download the error file." : "");
+        return stagingSuccess(toStagingDTO(up, rows, savedAfter), msg);
+    }
+
+    @Override
+    public ApiResponse<StagingUploadDTO> discardStaging(Long id, String requestedBy) {
+        ImportStagingUpload up = findStaging(id, requestedBy);
+        if (up == null) return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
+        stagingRowRepository.deleteAllForUpload(up.getId());
+        stagingUploadRepository.delete(up);
+        log.info("Import staging #{} discarded by {}", id, requestedBy);
+        return stagingSuccess(null, "Upload discarded. Orders already saved stay in Import history.");
+    }
+
+    @Override
+    public StagingErrorFile stagingErrorFile(Long id, String format, String requestedBy) {
+        ImportStagingUpload up = findStaging(id, requestedBy);
+        if (up == null) return null;
+        List<ImportStagingRow> ents = stagingRowRepository.findByUploadIdOrderByRowNoAsc(up.getId());
+        List<OrderImportRowDTO> rows = readStagingRows(ents);
+        requireMatch(firstClientCode(rows));
+        Map<Integer, Long> saved = savedRowMap(ents);
+        // Every row of each unsaved order that has an error: a re-upload of the
+        // corrected file then brings back complete orders, not stray item lines.
+        List<OrderImportRowDTO> out = new ArrayList<>();
+        for (List<OrderImportRowDTO> g : stagingGroups(rows).values()) {
+            if (g.stream().allMatch(r -> saved.containsKey(r.getRowNumber()))) continue;
+            if (g.stream().allMatch(OrderImportServiceImpl::stagedRowValid)) continue;
+            out.addAll(g);
+        }
+        if (out.isEmpty()) return null;
+        java.util.LinkedHashSet<String> customKeys = new java.util.LinkedHashSet<>();
+        for (OrderImportRowDTO r : out) if (r.getCustomFields() != null) customKeys.addAll(r.getCustomFields().keySet());
+        List<String> header = new ArrayList<>(HEADERS);
+        header.addAll(customKeys);
+        header.add("errors");
+        List<List<String>> table = new ArrayList<>(out.size());
+        for (OrderImportRowDTO r : out) {
+            List<String> cells = new ArrayList<>(header.size());
+            for (String h : HEADERS) cells.add(nzs(stagingCell(r, h)));
+            for (String k : customKeys) cells.add(nzs(r.getCustomFields() == null ? null : r.getCustomFields().get(k)));
+            List<String> errs = r.getErrors() == null ? List.of() : r.getErrors();
+            cells.add(errs.isEmpty()
+                    ? "(no errors on this row — another row of order " + nzs(r.getOrderRef()) + " has errors)"
+                    : String.join("; ", errs));
+            table.add(cells);
+        }
+        String base = up.getFileName() == null ? "upload" : up.getFileName().replaceAll("\\.[^.]+$", "");
+        if (base.isBlank()) base = "upload";
+        base = base + "-errors";
+        boolean xlsx = format != null ? "xlsx".equalsIgnoreCase(format.trim())
+                : up.getFileName() != null && up.getFileName().toLowerCase(Locale.ROOT).endsWith(".xlsx");
+        try {
+            return xlsx
+                    ? new StagingErrorFile(errorsXlsx(header, table), base + ".xlsx",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    : new StagingErrorFile(errorsCsv(header, table), base + ".csv", "text/csv; charset=UTF-8");
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
+
+    // ---- staging helpers ------------------------------------------------------
+
+    private ImportStagingUpload findStaging(Long id, String requestedBy) {
+        if (stagingUploadRepository == null || stagingRowRepository == null || id == null) return null;
+        ImportStagingUpload up = stagingUploadRepository.findById(id).orElse(null);
+        if (up == null) return null;
+        if (!canAccessStaging(up, requestedBy)) {
+            throw new org.springframework.security.access.AccessDeniedException("This upload belongs to another user.");
+        }
+        return up;
+    }
+
+    /** The uploader, or an admin. */
+    private static boolean canAccessStaging(ImportStagingUpload up, String requestedBy) {
+        if (requestedBy != null && requestedBy.equalsIgnoreCase(up.getCreatedBy())) return true;
+        org.springframework.security.core.Authentication auth =
+                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.getAuthorities().stream().anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+    }
+
+    private static boolean stagedRowValid(OrderImportRowDTO r) {
+        return r.getErrors() == null || r.getErrors().isEmpty();
+    }
+
+    /** orderRef groups in file order; a row without an orderRef is its own order. */
+    private static Map<String, List<OrderImportRowDTO>> stagingGroups(List<OrderImportRowDTO> rows) {
+        Map<String, List<OrderImportRowDTO>> groups = new LinkedHashMap<>();
+        for (OrderImportRowDTO r : rows) {
+            String key = StringUtils.hasText(r.getOrderRef())
+                    ? r.getOrderRef().trim().toUpperCase(Locale.ROOT) : "#row" + r.getRowNumber();
+            groups.computeIfAbsent(key, k -> new ArrayList<>()).add(r);
+        }
+        return groups;
+    }
+
+    private static StagingCounts stagingCounts(List<OrderImportRowDTO> rows, Map<Integer, Long> saved) {
+        int validRows = 0;
+        for (OrderImportRowDTO r : rows) if (stagedRowValid(r)) validRows++;
+        int total = 0, valid = 0, invalid = 0, savedOrders = 0, ready = 0;
+        for (List<OrderImportRowDTO> g : stagingGroups(rows).values()) {
+            total++;
+            boolean v = g.stream().allMatch(OrderImportServiceImpl::stagedRowValid);
+            boolean s = g.stream().allMatch(r -> saved.containsKey(r.getRowNumber()));
+            if (v) valid++;
+            if (s) savedOrders++;
+            if (!s && !v) invalid++;
+            if (!s && v) ready++;
+        }
+        return new StagingCounts(rows.size(), validRows, total, valid, invalid, savedOrders, ready);
+    }
+
+    private static void applyStagingCounts(ImportStagingUpload up, StagingCounts c) {
+        up.setTotalRows(c.totalRows());
+        up.setValidRows(c.validRows());
+        up.setInvalidRows(c.totalRows() - c.validRows());
+        up.setTotalOrders(c.totalOrders());
+        up.setValidOrders(c.validOrders());
+        up.setSavedOrders(c.savedOrders());
+        up.setStatus(c.totalOrders() > 0 && c.savedOrders() == c.totalOrders() ? "SAVED" : "OPEN");
+    }
+
+    private StagingUploadDTO toStagingDTO(ImportStagingUpload up, List<OrderImportRowDTO> rows, Map<Integer, Long> saved) {
+        StagingCounts c = stagingCounts(rows, saved);
+        return StagingUploadDTO.builder()
+                .id(up.getId())
+                .fileName(up.getFileName())
+                .status(c.totalOrders() > 0 && c.savedOrders() == c.totalOrders() ? "SAVED" : "OPEN")
+                .totalRows(c.totalRows())
+                .validRows(c.validRows())
+                .invalidRows(c.totalRows() - c.validRows())
+                .totalOrders(c.totalOrders())
+                .validOrders(c.validOrders())
+                .invalidOrders(c.invalidOrders())
+                .savedOrders(c.savedOrders())
+                .readyOrders(c.readyOrders())
+                .lastSavedBatchId(up.getLastSavedBatchId())
+                .savedRowNumbers(saved.keySet().stream().sorted().toList())
+                .createdAt(up.getCreatedAt())
+                .expiresAt(up.getCreatedAt() == null ? null : up.getCreatedAt().plusDays(Math.max(1, stagingRetentionDays)))
+                .rows(rows)
+                .build();
+    }
+
+    private List<OrderImportRowDTO> readStagingRows(List<ImportStagingRow> ents) {
+        List<OrderImportRowDTO> rows = new ArrayList<>(ents.size());
+        for (ImportStagingRow e : ents) {
+            try {
+                rows.add(stagingJson().readValue(e.getRowJson(), OrderImportRowDTO.class));
+            } catch (Exception ex) {
+                OrderImportRowDTO broken = new OrderImportRowDTO();
+                broken.setRowNumber(e.getRowNo());
+                broken.setOrderRef(e.getOrderRef());
+                broken.setErrors(List.of("This row could not be read back from staging — upload the file again."));
+                rows.add(broken);
+            }
+        }
+        return rows;
+    }
+
+    private void writeStagingRow(ImportStagingRow e, OrderImportRowDTO r) {
+        e.setRowNo(r.getRowNumber());
+        e.setOrderRef(r.getOrderRef() == null ? null : clip(r.getOrderRef().trim(), 120));
+        e.setValid(stagedRowValid(r));
+        try {
+            e.setRowJson(stagingJson().writeValueAsString(r));
+        } catch (Exception ex) {
+            throw new IllegalStateException("Could not stage row " + r.getRowNumber(), ex);
+        }
+    }
+
+    /** Writes back only rows whose content or validity changed (an edit touches a handful, not the file). */
+    private void persistChangedStagingRows(List<ImportStagingRow> ents, List<OrderImportRowDTO> rows) {
+        Map<Integer, ImportStagingRow> byNo = new java.util.HashMap<>();
+        for (ImportStagingRow e : ents) byNo.put(e.getRowNo(), e);
+        List<ImportStagingRow> changed = new ArrayList<>();
+        for (OrderImportRowDTO r : rows) {
+            ImportStagingRow e = byNo.get(r.getRowNumber());
+            if (e == null) continue;
+            String json = e.getRowJson();
+            boolean valid = e.isValid();
+            String ref = e.getOrderRef();
+            writeStagingRow(e, r);
+            if (!java.util.Objects.equals(json, e.getRowJson()) || valid != e.isValid()
+                    || !java.util.Objects.equals(ref, e.getOrderRef())) {
+                changed.add(e);
+            }
+        }
+        if (!changed.isEmpty()) stagingRowRepository.saveAll(changed);
+    }
+
+    private static Map<Integer, Long> savedRowMap(List<ImportStagingRow> ents) {
+        Map<Integer, Long> m = new java.util.HashMap<>();
+        for (ImportStagingRow e : ents) if (e.getSavedBatchId() != null) m.put(e.getRowNo(), e.getSavedBatchId());
+        return m;
+    }
+
+    /** The full server-side pipeline, the same sequence save() runs. */
+    private void revalidateStaged(List<OrderImportRowDTO> rows) {
+        for (OrderImportRowDTO row : rows) {
+            row.setClientCode(clamp(row.getClientCode()));
+            row.setErrors(new ArrayList<>(validateRow(row)));
+            row.setWarnings(List.of());
+        }
+        resolveNamesToCodes(rows);
+        validateReferences(rows);
+        validateBusinessRules(rows);
+        validateCustomFields(rows);
+        validateInternationalItems(rows);
+    }
+
+    /** A staged row's value for one template column, as it would be typed in the file. */
+    private static String stagingCell(OrderImportRowDTO r, String header) {
+        boolean itemLine = Boolean.TRUE.equals(r.getWeightInherited());
+        return switch (header) {
+            case "orderRef" -> r.getOrderRef();
+            case "clientCode" -> r.getClientCode();
+            case "billTo" -> r.getBillTo();
+            case "warehouseCode" -> r.getWarehouseCode();
+            case "recipientName" -> r.getRecipientName();
+            case "recipientCompany" -> r.getRecipientCompany();
+            case "recipientPhone" -> r.getRecipientPhone();
+            case "recipientEmail" -> r.getRecipientEmail();
+            case "addressLine1" -> r.getAddressLine1();
+            case "addressLine2" -> r.getAddressLine2();
+            case "city" -> r.getCity();
+            case "state" -> r.getState();
+            case "postalCode" -> r.getPostalCode();
+            case "countryCode" -> r.getCountryCode();
+            case "carrierCode" -> r.getCarrierCode();
+            case "accountNumber" -> r.getAccountNumber();
+            case "serviceType" -> r.getServiceType();
+            case "packageType" -> r.getPackageType();
+            // An item line took its order's weight; leave it blank so a re-upload
+            // doesn't turn the line into an extra parcel.
+            case "weight" -> itemLine ? null : plainNumber(r.getWeight());
+            case "weightUnit" -> itemLine ? null : r.getWeightUnit();
+            case "length" -> plainNumber(r.getLength());
+            case "width" -> plainNumber(r.getWidth());
+            case "height" -> plainNumber(r.getHeight());
+            case "dimUnit" -> r.getDimUnit();
+            case "currency" -> r.getCurrency();
+            case "incoterms" -> r.getIncoterms();
+            case "reference" -> r.getReference();
+            case "itemDescription" -> r.getItemDescription();
+            case "itemSku" -> r.getItemSku();
+            case "itemQuantity" -> r.getItemQuantity() == null ? null : String.valueOf(r.getItemQuantity());
+            case "itemUnitValue" -> plainNumber(r.getItemUnitValue());
+            case "hsCode" -> r.getHsCode();
+            case "countryOfOrigin" -> r.getCountryOfOrigin();
+            default -> null;
+        };
+    }
+
+    private static String plainNumber(BigDecimal v) {
+        return v == null ? null : v.stripTrailingZeros().toPlainString();
+    }
+
+    private static String nzs(String v) {
+        return v == null ? "" : v;
+    }
+
+    private static String clip(String v, int max) {
+        return v.length() <= max ? v : v.substring(0, max);
+    }
+
+    private static byte[] errorsCsv(List<String> header, List<List<String>> table) throws java.io.IOException {
+        java.io.StringWriter sw = new java.io.StringWriter();
+        sw.write('﻿');   // BOM: Excel opens UTF-8 correctly; the importer strips it on upload
+        try (org.apache.commons.csv.CSVPrinter printer = new org.apache.commons.csv.CSVPrinter(sw, CSVFormat.DEFAULT)) {
+            printer.printRecord(header);
+            for (List<String> row : table) printer.printRecord(row);
+        }
+        return sw.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] errorsXlsx(List<String> header, List<List<String>> table) throws java.io.IOException {
+        try (XSSFWorkbook wb = new XSSFWorkbook(); ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            org.apache.poi.ss.usermodel.Sheet sheet = wb.createSheet("Errors");
+            org.apache.poi.ss.usermodel.Font bold = wb.createFont();
+            bold.setBold(true);
+            org.apache.poi.ss.usermodel.CellStyle headStyle = wb.createCellStyle();
+            headStyle.setFont(bold);
+            org.apache.poi.ss.usermodel.Font red = wb.createFont();
+            red.setColor(org.apache.poi.ss.usermodel.IndexedColors.RED.getIndex());
+            org.apache.poi.ss.usermodel.CellStyle errStyle = wb.createCellStyle();
+            errStyle.setFont(red);
+            org.apache.poi.ss.usermodel.Row head = sheet.createRow(0);
+            for (int i = 0; i < header.size(); i++) {
+                org.apache.poi.ss.usermodel.Cell c = head.createCell(i);
+                c.setCellValue(header.get(i));
+                c.setCellStyle(headStyle);
+            }
+            int last = header.size() - 1;
+            for (int r = 0; r < table.size(); r++) {
+                org.apache.poi.ss.usermodel.Row row = sheet.createRow(r + 1);
+                List<String> cells = table.get(r);
+                for (int i = 0; i < cells.size(); i++) {
+                    org.apache.poi.ss.usermodel.Cell c = row.createCell(i);
+                    c.setCellValue(cells.get(i));
+                    if (i == last) c.setCellStyle(errStyle);
+                }
+            }
+            for (int i = 0; i < last; i++) sheet.setColumnWidth(i, 16 * 256);
+            sheet.setColumnWidth(last, 90 * 256);
+            sheet.createFreezePane(0, 1);
+            wb.write(bos);
+            return bos.toByteArray();
+        }
+    }
+
+    private static ApiResponse<StagingUploadDTO> stagingSuccess(StagingUploadDTO data, String message) {
+        return ApiResponse.<StagingUploadDTO>builder()
+                .status("success").code(200).message(message).data(data).build();
+    }
+
+    private static ApiResponse<StagingUploadDTO> stagingFailure(HttpStatus status, String message) {
+        return ApiResponse.<StagingUploadDTO>builder()
+                .status("error").code(status.value())
+                .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                .message(message).data(null).build();
     }
 
     private static ApiResponse<OrderImportPreviewDTO> success(OrderImportPreviewDTO data, String message) {

@@ -62,6 +62,33 @@ export interface OrderImportRow {
   batchId?: number | null
 }
 
+/**
+ * A file parked in staging for validation (bulk-upload restructure). Nothing
+ * from it is in Import history until Save, and Save writes only the orders
+ * whose every row is valid. Counts are per order as well as per row.
+ */
+export interface StagingUpload {
+  id: number
+  fileName: string
+  status: 'OPEN' | 'SAVED'
+  totalRows: number
+  validRows: number
+  invalidRows: number
+  totalOrders: number
+  validOrders: number
+  /** Unsaved orders with at least one row in error — they stay in staging. */
+  invalidOrders: number
+  savedOrders: number
+  /** Valid orders not saved yet — what the next Save writes. */
+  readyOrders: number
+  lastSavedBatchId?: number | null
+  /** Rows already saved to Import history (read-only here). */
+  savedRowNumbers?: number[]
+  createdAt?: string | null
+  expiresAt?: string | null
+  rows: OrderImportRow[]
+}
+
 export interface OrderImportPreview {
   totalRows: number
   validRows: number
@@ -149,6 +176,47 @@ export const orderImportService = {
 
   commit: (rows: OrderImportRow[]) =>
     apiClient.post<ApiResponse<OrderImportPreview>>('/orders/import/commit', rows),
+
+  /** Upload a file into STAGING: parsed + validated, nothing in Import history yet. */
+  stageUpload: async (file: File, allowDuplicate = false) => {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await authFetch(`/orders/import/staging${allowDuplicate ? '?allowDuplicate=true' : ''}`, {
+      method: 'POST',
+      body: form,
+    })
+    return (await response.json()) as ApiResponse<StagingUpload>
+  },
+
+  /** A staged upload with its rows (e.g. to continue one that is already waiting). */
+  getStaging: (id: number) => apiClient.get<ApiResponse<StagingUpload>>(`/orders/import/staging/${id}`),
+
+  /** Edit one staged row; the whole upload is re-validated server-side. */
+  updateStagingRow: (id: number, rowNumber: number, row: OrderImportRow) =>
+    apiClient.put<ApiResponse<StagingUpload>>(`/orders/import/staging/${id}/rows/${rowNumber}`, row),
+
+  /** Save the fully valid, not-yet-saved orders to Import history (a new batch). */
+  saveStaging: (id: number) => apiClient.post<ApiResponse<StagingUpload>>(`/orders/import/staging/${id}/save`, {}),
+
+  /** Discard a staged upload. Orders already saved stay in Import history. */
+  discardStaging: (id: number) => apiClient.delete<ApiResponse<StagingUpload>>(`/orders/import/staging/${id}`),
+
+  /** Download the orders with errors (template columns + an "errors" column) to fix and re-upload. */
+  downloadStagingErrors: async (id: number, format: 'csv' | 'xlsx'): Promise<void> => {
+    const response = await authFetch(`/orders/import/staging/${id}/errors?format=${format}`)
+    const blob = await response.blob()
+    const cd = response.headers.get('Content-Disposition') || ''
+    const nameMatch = /filename="?([^"]+)"?/i.exec(cd)
+    const filename = nameMatch ? nameMatch[1] : `upload-${id}-errors.${format}`
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  },
 
   /** Save the previewed rows to Data History (persists the data, no labels).
    *  `fileName` is recorded so the history row shows where the data came from.

@@ -1262,11 +1262,11 @@ export default function DataHistoryPage() {
         <OrderImportModal
           inline
           onImported={() => {
-            // The importer auto-saves a draft at upload and calls this again
-            // after generation — refresh the history list quietly WITHOUT
-            // switching views, so the operator isn't yanked out of the
-            // review/fix step mid-flow. The result step tells them where
-            // the batch lives.
+            // Called after the importer's Save writes valid orders to Import
+            // history (uploads wait in staging until then) — refresh the list
+            // quietly WITHOUT switching views, so the operator isn't yanked out
+            // of fixing the remaining rows. The saved step says which import
+            // the orders went to.
             void load()
           }}
         />
