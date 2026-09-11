@@ -96,6 +96,51 @@ class SseControllerTest {
         assertEquals(Optional.of("job-updated"), SseController.extractEventType(body));
     }
 
+    /* -------- Phase 4: Last-Event-Id resume parsing -------- */
+
+    @Test
+    void parseReadOffset_nullReturnsLatest() {
+        // Fresh subscription — no history to resume from.
+        var offset = SseController.parseReadOffset(null);
+        assertEquals("$", offset.getOffset(),
+                "Missing Last-Event-Id should mean 'only new events from now on'");
+    }
+
+    @Test
+    void parseReadOffset_blankReturnsLatest() {
+        assertEquals("$", SseController.parseReadOffset("").getOffset());
+        assertEquals("$", SseController.parseReadOffset("   ").getOffset());
+    }
+
+    @Test
+    void parseReadOffset_ourInitialSubscribedPingIsNotAStreamId() {
+        // The "sub-N" ids we send with the initial 'subscribed' ping
+        // aren't Redis Stream IDs. If a browser reconnects with one
+        // as Last-Event-Id, we must fall back to latest() rather
+        // than let XREAD choke on a malformed offset.
+        assertEquals("$", SseController.parseReadOffset("sub-42").getOffset());
+    }
+
+    @Test
+    void parseReadOffset_wellFormedStreamIdIsHonoured() {
+        // Standard Redis Stream ID shape: millis-seq. Should be
+        // passed through to XREAD as the resume point.
+        var offset = SseController.parseReadOffset("1699999999999-0");
+        assertEquals("1699999999999-0", offset.getOffset());
+    }
+
+    @Test
+    void parseReadOffset_malformedIdFallsBackToLatest() {
+        // Belt-and-braces against a client that sends garbage —
+        // arbitrary strings must never crash the endpoint.
+        assertEquals("$", SseController.parseReadOffset("not an id").getOffset());
+        assertEquals("$", SseController.parseReadOffset("-").getOffset());
+        assertEquals("$", SseController.parseReadOffset("-42").getOffset());
+        assertEquals("$", SseController.parseReadOffset("42-").getOffset());
+        assertEquals("$", SseController.parseReadOffset("42-abc").getOffset());
+        assertEquals("$", SseController.parseReadOffset("abc-0").getOffset());
+    }
+
     @Test
     void extractorIsFastEnoughForHotPath() {
         // Not a strict perf test — just a smoke that the substring
