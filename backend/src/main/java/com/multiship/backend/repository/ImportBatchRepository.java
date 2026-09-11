@@ -112,7 +112,6 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long> 
     // of the race gate.
     @org.springframework.transaction.annotation.Transactional
     @Modifying(clearAutomatically = true)
-    @org.springframework.transaction.annotation.Transactional
     @Query("UPDATE ImportBatch b SET b.status = :newStatus "
             + "WHERE b.id = :id AND UPPER(b.status) IN :allowedFromStatuses")
     int atomicallyTransitionStatus(@Param("id") Long id,
