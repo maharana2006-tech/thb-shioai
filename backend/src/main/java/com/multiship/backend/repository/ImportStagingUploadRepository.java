@@ -15,6 +15,9 @@ public interface ImportStagingUploadRepository extends JpaRepository<ImportStagi
     /** The newest still-open upload of the same content — re-uploading a file resumes it. */
     Optional<ImportStagingUpload> findFirstByContentHashAndStatusOrderByIdDesc(String contentHash, String status);
 
+    /** A user's uploads in one state, newest first ("Waiting in staging" list). */
+    java.util.List<ImportStagingUpload> findByCreatedByIgnoreCaseAndStatusOrderByIdDesc(String createdBy, String status);
+
     /** Expiry sweep; staged rows go with their upload (ON DELETE CASCADE). */
     @Transactional
     @Modifying

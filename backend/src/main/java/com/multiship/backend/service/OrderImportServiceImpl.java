@@ -4367,7 +4367,10 @@ public class OrderImportServiceImpl implements OrderImportService {
             return stagingFailure(HttpStatus.SERVICE_UNAVAILABLE, "Upload staging is not available on this server.");
         }
         // Same parse + validation (and Import-history duplicate-file gate) as before.
-        ApiResponse<OrderImportPreviewDTO> parsed = preview(filename, body, null, allowDuplicate);
+        // Parse + validate. The duplicate-file gate runs below instead, AFTER the
+        // staging check, so re-uploading a file whose upload is still waiting (even
+        // partly saved) offers "Continue" rather than "already imported".
+        ApiResponse<OrderImportPreviewDTO> parsed = preview(filename, body, null, true);
         if (parsed == null || !"success".equalsIgnoreCase(parsed.getStatus()) || parsed.getData() == null) {
             HttpStatus st = parsed == null ? HttpStatus.BAD_REQUEST
                     : java.util.Optional.ofNullable(HttpStatus.resolve(parsed.getCode())).orElse(HttpStatus.BAD_REQUEST);
@@ -4379,21 +4382,47 @@ public class OrderImportServiceImpl implements OrderImportService {
             return stagingFailure(HttpStatus.UNPROCESSABLE_ENTITY, "The file has no order rows.");
         }
         String hash = contentHash(rows);
-        // The same file staged twice would let both copies reach Import history —
-        // point the operator at the upload that is already waiting instead.
-        if (!allowDuplicate && hash != null) {
-            ImportStagingUpload open = stagingUploadRepository
-                    .findFirstByContentHashAndStatusOrderByIdDesc(hash, "OPEN").orElse(null);
-            if (open != null && canAccessStaging(open, requestedBy)) {
-                return ApiResponse.<StagingUploadDTO>builder()
-                        .status("error").code(HttpStatus.CONFLICT.value())
-                        .errorCode(ErrorCode.VALIDATION_ERROR.name())
-                        .message("This file is already uploaded and waiting for validation as upload #" + open.getId()
-                                + " (" + open.getFileName() + "). Continue that upload, or upload this file anyway as a new one.")
-                        .data(StagingUploadDTO.builder().id(open.getId()).fileName(open.getFileName()).status(open.getStatus())
-                                .totalOrders(open.getTotalOrders()).validOrders(open.getValidOrders())
-                                .savedOrders(open.getSavedOrders()).createdAt(open.getCreatedAt()).build())
-                        .build();
+        if (!allowDuplicate) {
+            // 1) Already waiting in staging: offer to continue it. Staging the same
+            //    file twice would let both copies reach Import history.
+            if (hash != null) {
+                ImportStagingUpload open = stagingUploadRepository
+                        .findFirstByContentHashAndStatusOrderByIdDesc(hash, "OPEN").orElse(null);
+                if (open != null && canAccessStaging(open, requestedBy)) {
+                    StagingUploadDTO waiting = stagingSummary(open);
+                    return ApiResponse.<StagingUploadDTO>builder()
+                            .status("error").code(HttpStatus.CONFLICT.value())
+                            .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                            .message("This file is already uploaded as upload #" + open.getId() + " (" + open.getFileName()
+                                    + ": " + waiting.getReadyOrders() + " ready and " + waiting.getInvalidOrders()
+                                    + " with errors still to save). Continue that upload, or upload this file anyway as a new one.")
+                            .data(waiting)
+                            .build();
+                }
+            }
+            // 2) Already in Import history — same file name or same content.
+            if (importBatchRepository != null) {
+                String normName = StringUtils.hasText(filename) ? filename.trim() : null;
+                if (normName != null) {
+                    com.multiship.backend.model.ImportBatch byName = importBatchRepository
+                            .findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(normName).orElse(null);
+                    if (byName != null) {
+                        return stagingFailure(HttpStatus.CONFLICT,
+                                "A file named \"" + normName + "\" is already imported as #" + byName.getId()
+                                + (byName.getCreatedAt() != null ? " on " + byName.getCreatedAt().toLocalDate() : "")
+                                + ". Delete it from Import history (or rename the file) before importing again.");
+                    }
+                }
+                if (hash != null) {
+                    com.multiship.backend.model.ImportBatch dup = importBatchRepository
+                            .findFirstByContentHashAndDeletedAtIsNullOrderByIdDesc(hash).orElse(null);
+                    if (dup != null) {
+                        return stagingFailure(HttpStatus.CONFLICT,
+                                "This file was already imported as #" + dup.getId()
+                                + " (" + (StringUtils.hasText(dup.getFileName()) ? dup.getFileName() : "Untitled") + ")"
+                                + ". Edit a value or upload a different file to import a changed version.");
+                    }
+                }
             }
         }
         java.time.LocalDateTime now = java.time.LocalDateTime.now();
@@ -4473,7 +4502,7 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     @Override
-    public ApiResponse<StagingUploadDTO> saveStaging(Long id, String requestedBy) {
+    public ApiResponse<StagingUploadDTO> saveStaging(Long id, String requestedBy, boolean includeErrors) {
         ImportStagingUpload up = findStaging(id, requestedBy);
         if (up == null) return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
         List<ImportStagingRow> ents = stagingRowRepository.findByUploadIdOrderByRowNoAsc(up.getId());
@@ -4485,14 +4514,18 @@ public class OrderImportServiceImpl implements OrderImportService {
         revalidateStaged(rows);
         persistChangedStagingRows(ents, rows);
 
+        // "Ignore errors and save": fully valid orders only. "Proceed with errors":
+        // every unsaved order; the flagged ones are fixed later in Import history.
         List<OrderImportRowDTO> toSave = new ArrayList<>();
         int orders = 0;
+        int withErrors = 0;
         for (List<OrderImportRowDTO> g : stagingGroups(rows).values()) {
             boolean alreadySaved = g.stream().allMatch(r -> saved.containsKey(r.getRowNumber()));
             boolean valid = g.stream().allMatch(OrderImportServiceImpl::stagedRowValid);
-            if (!alreadySaved && valid) {
+            if (!alreadySaved && (valid || includeErrors)) {
                 toSave.addAll(g);
                 orders++;
+                if (!valid) withErrors++;
             }
         }
         StagingCounts before = stagingCounts(rows, saved);
@@ -4507,7 +4540,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         List<OrderImportRowDTO> copies = new ArrayList<>(toSave.size());
         for (OrderImportRowDTO r : toSave) copies.add(stagingJson().convertValue(r, OrderImportRowDTO.class));
         // allowDuplicate: the duplicate-file gate already ran when the file was staged.
-        ApiResponse<OrderImportPreviewDTO> res = save(copies, requestedBy, up.getFileName(), false, true);
+        // draft=includeErrors: a batch that carries errors is parked as a Draft
+        // (its valid rows can still be labelled; the flagged rows wait for fixes).
+        ApiResponse<OrderImportPreviewDTO> res = save(copies, requestedBy, up.getFileName(), includeErrors, true);
         if (res == null || !"success".equalsIgnoreCase(res.getStatus()) || res.getData() == null
                 || res.getData().getBatchId() == null) {
             HttpStatus st = res == null ? HttpStatus.INTERNAL_SERVER_ERROR
@@ -4535,8 +4570,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         int left = after.totalOrders() - after.savedOrders();
         log.info("Import staging #{} ({}): saved {} order(s) / {} row(s) to Import history #{}; {} order(s) left in staging",
                 up.getId(), requestedBy, orders, toSave.size(), batchId, left);
-        String msg = "Saved " + orders + " order(s) (" + toSave.size() + " row(s)) to Import history #" + batchId + "."
-                + (left > 0 ? " " + left + " order(s) with errors were not saved — fix them here or download the error file." : "");
+        String msg = withErrors > 0
+                ? "Saved all " + orders + " order(s) (" + toSave.size() + " row(s)) to Import history #" + batchId
+                        + ", including " + withErrors + " with errors. Fix those in Import history"
+                        + (orders - withErrors > 0
+                                ? "; the " + (orders - withErrors) + " valid order(s) can be labelled now."
+                                : " before labelling them.")
+                : "Saved " + orders + " order(s) (" + toSave.size() + " row(s)) to Import history #" + batchId + "."
+                        + (left > 0 ? " " + left + " order(s) with errors were not saved — fix them here or download the error file." : "");
         return stagingSuccess(toStagingDTO(up, rows, savedAfter), msg);
     }
 
@@ -4598,7 +4639,34 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
     }
 
+    @Override
+    public List<StagingUploadDTO> listStaging(String requestedBy) {
+        if (stagingUploadRepository == null || !StringUtils.hasText(requestedBy)) return List.of();
+        return stagingUploadRepository.findByCreatedByIgnoreCaseAndStatusOrderByIdDesc(requestedBy, "OPEN")
+                .stream().map(this::stagingSummary).toList();
+    }
+
     // ---- staging helpers ------------------------------------------------------
+
+    /** Counts from the stored upload header (no rows) — for the list and the "already uploaded" answer. */
+    private StagingUploadDTO stagingSummary(ImportStagingUpload up) {
+        return StagingUploadDTO.builder()
+                .id(up.getId())
+                .fileName(up.getFileName())
+                .status(up.getStatus())
+                .totalRows(up.getTotalRows())
+                .validRows(up.getValidRows())
+                .invalidRows(up.getInvalidRows())
+                .totalOrders(up.getTotalOrders())
+                .validOrders(up.getValidOrders())
+                .invalidOrders(Math.max(0, up.getTotalOrders() - up.getValidOrders()))
+                .savedOrders(up.getSavedOrders())
+                .readyOrders(Math.max(0, up.getValidOrders() - up.getSavedOrders()))
+                .lastSavedBatchId(up.getLastSavedBatchId())
+                .createdAt(up.getCreatedAt())
+                .expiresAt(up.getCreatedAt() == null ? null : up.getCreatedAt().plusDays(Math.max(1, stagingRetentionDays)))
+                .build();
+    }
 
     private ImportStagingUpload findStaging(Long id, String requestedBy) {
         if (stagingUploadRepository == null || stagingRowRepository == null || id == null) return null;

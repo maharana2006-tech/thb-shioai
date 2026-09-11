@@ -78,6 +78,17 @@ public class OrderImportController {
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
+    @Operation(summary = "Your uploads still waiting in staging (no rows)")
+    @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
+    @GetMapping("/staging")
+    public ResponseEntity<ApiResponse<java.util.List<com.multiship.backend.dto.StagingUploadDTO>>> listStaging(
+            @AuthenticationPrincipal UserDetails userDetails) {
+        return ResponseEntity.ok(ApiResponse.<java.util.List<com.multiship.backend.dto.StagingUploadDTO>>builder()
+                .status("success").code(200)
+                .data(orderImportService.listStaging(stagingUser(userDetails)))
+                .build());
+    }
+
     @Operation(summary = "A staged upload with its rows and per-order counts")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/staging/{id}")
@@ -106,8 +117,11 @@ public class OrderImportController {
     @PostMapping("/staging/{id}/save")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.StagingUploadDTO>> saveStaging(
             @org.springframework.web.bind.annotation.PathVariable Long id,
+            @io.swagger.v3.oas.annotations.Parameter(description = "false = \"Ignore errors and save\" (valid orders only); true = \"Proceed with errors\" (every unsaved order, as a Draft while errors remain)")
+            @RequestParam(value = "includeErrors", required = false, defaultValue = "false") boolean includeErrors,
             @AuthenticationPrincipal UserDetails userDetails) {
-        ApiResponse<com.multiship.backend.dto.StagingUploadDTO> r = orderImportService.saveStaging(id, stagingUser(userDetails));
+        ApiResponse<com.multiship.backend.dto.StagingUploadDTO> r =
+                orderImportService.saveStaging(id, stagingUser(userDetails), includeErrors);
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
@@ -362,7 +376,7 @@ public class OrderImportController {
             case "PARTIAL_COMPLETE": return "Partial complete";
             case "FAILED": return "Failed";
             case "IN_PROGRESS": return "In progress";
-            case "INITIATE": return "Initiated";
+            case "INITIATE": return "Saved · not generated";
             case "CANCELLED": return "Cancelled";
             default: return status;
         }

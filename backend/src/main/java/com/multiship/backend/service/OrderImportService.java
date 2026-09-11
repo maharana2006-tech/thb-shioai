@@ -215,8 +215,21 @@ public interface OrderImportService {
     ApiResponse<com.multiship.backend.dto.StagingUploadDTO> updateStagingRow(
             Long id, int rowNumber, OrderImportRowDTO edited, String requestedBy);
 
-    /** Save the fully valid, not-yet-saved orders to Import history as a new batch. */
-    ApiResponse<com.multiship.backend.dto.StagingUploadDTO> saveStaging(Long id, String requestedBy);
+    /** "Ignore errors and save": the fully valid, not-yet-saved orders, as a new Import-history batch. */
+    default ApiResponse<com.multiship.backend.dto.StagingUploadDTO> saveStaging(Long id, String requestedBy) {
+        return saveStaging(id, requestedBy, false);
+    }
+
+    /**
+     * {@code includeErrors=false} — "Ignore errors and save": only fully valid orders.
+     * {@code includeErrors=true} — "Proceed with errors": every unsaved order, errors
+     * included, as one Import-history entry (Draft while any row has errors) where the
+     * flagged rows are fixed and the valid ones can already be labelled.
+     */
+    ApiResponse<com.multiship.backend.dto.StagingUploadDTO> saveStaging(Long id, String requestedBy, boolean includeErrors);
+
+    /** The caller's uploads still waiting in staging (summaries, no rows). */
+    java.util.List<com.multiship.backend.dto.StagingUploadDTO> listStaging(String requestedBy);
 
     ApiResponse<com.multiship.backend.dto.StagingUploadDTO> discardStaging(Long id, String requestedBy);
 

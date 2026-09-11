@@ -76,6 +76,18 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
   const [savingCell, setSavingCell] = useState(false)
   /** Serialize cell PUTs — the backend re-validates the whole upload per edit, so order matters. */
   const putChain = useRef<Promise<void>>(Promise.resolve())
+  /** Your uploads still waiting in staging — offered on the upload step (Continue / Discard). */
+  const [openUploads, setOpenUploads] = useState<StagingUpload[]>([])
+  const [openUploadsTick, setOpenUploadsTick] = useState(0)
+  useEffect(() => {
+    if (staging) return
+    let alive = true
+    orderImportService
+      .listStaging()
+      .then((res) => { if (alive) setOpenUploads(res.data ?? []) })
+      .catch(() => { if (alive) setOpenUploads([]) })
+    return () => { alive = false }
+  }, [staging, openUploadsTick])
 
   const step: 1 | 2 | 3 = lastSave && staging ? 3 : staging ? 2 : 1
   const preview: OrderImportPreview | null = staging
@@ -169,14 +181,15 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     }
   }
 
-  /** Save = only fully valid, not-yet-saved orders go to Import history. */
-  const saveValid = async () => {
+  /** Save to Import history. includeErrors=false: "Ignore errors and save" — only fully
+   *  valid orders; true: "Proceed with errors" — every unsaved order, flagged ones included. */
+  const saveValid = async (includeErrors = false) => {
     if (!staging) return
     setSaving(true)
     setError(null)
     try {
       await putChain.current // let a pending cell edit land first
-      const res = await orderImportService.saveStaging(staging.id)
+      const res = await orderImportService.saveStaging(staging.id, includeErrors)
       if (res.status === 'success' && res.data) {
         setStaging(res.data)
         setLastSave({ message: res.message ?? 'Saved to Import history.', batchId: res.data.lastSavedBatchId ?? null })
@@ -217,8 +230,19 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     setResumeId(null)
   }
 
-  const discard = async () => {
+  const proceedWithErrors = async () => {
     if (!staging) return
+    const total = staging.readyOrders + staging.invalidOrders
+    const ok = await notify.confirm(
+      `Save all ${total} orders to Import history, including ${staging.invalidOrders} with errors?\n\n` +
+        `The orders with errors are saved as they are and flagged in Import history — fix them there before labelling them. ` +
+        `The ${staging.readyOrders} valid order${staging.readyOrders === 1 ? '' : 's'} can be labelled right away.`,
+      { title: 'Proceed with errors', confirmLabel: 'Save all', cancelLabel: 'Cancel' },
+    )
+    if (ok) await saveValid(true)
+  }
+
+  const discardUpload = async (id: number) => {
     const ok = await notify.confirm(
       'Discard this upload? Orders already saved stay in Import history; everything else in this upload is deleted.',
       { title: 'Discard upload', confirmLabel: 'Discard', cancelLabel: 'Keep it', danger: true },
@@ -226,9 +250,10 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
     if (!ok) return
     setDiscarding(true)
     try {
-      await orderImportService.discardStaging(staging.id)
+      await orderImportService.discardStaging(id)
       notify.info('Upload discarded.')
-      startOver()
+      if (staging?.id === id) startOver()
+      setOpenUploadsTick((t) => t + 1)
     } catch (e) {
       notify.apiError(e, 'Could not discard the upload.')
     } finally {
@@ -302,13 +327,53 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
           {step === 1 ? (
             <UploadStep
               file={file}
-              onFileChange={setFile}
+              onFileChange={(f) => {
+                // A new file clears the previous file's duplicate banner.
+                setFile(f)
+                setError(null)
+                setDupBlocked(false)
+                setResumeId(null)
+              }}
               onSubmit={() => void submitUpload()}
               uploading={uploading}
               downloadingXlsx={downloadingXlsx}
               onDownloadXlsx={() => void downloadXlsx()}
               csvHref={orderImportService.templateUrl()}
             />
+          ) : null}
+          {step === 1 && openUploads.length > 0 ? (
+            <div className="overflow-hidden rounded-xl border border-[#e3d9c4] bg-white">
+              <p className="border-b border-[#eee6d6] bg-[#faf7f0] px-3.5 py-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">
+                Waiting in staging
+              </p>
+              <ul className="divide-y divide-[#f2ecdf]">
+                {openUploads.map((u) => (
+                  <li key={u.id} className="flex flex-wrap items-center gap-2 px-3.5 py-2 text-[12px] text-[#3f3527]">
+                    <FiFile className="h-3.5 w-3.5 shrink-0 text-[#6b5c42]" />
+                    <span className="font-semibold text-[#1f150c]">
+                      #{u.id} · {u.fileName}
+                    </span>
+                    <span className="text-[11px] text-[#6b5c42]">
+                      {u.readyOrders} ready · {u.invalidOrders} with errors
+                      {u.savedOrders > 0 ? ` · ${u.savedOrders} already saved` : ''}
+                    </span>
+                    {u.createdAt ? (
+                      <span className="text-[10.5px] text-[#b6a684]">{new Date(u.createdAt).toLocaleString()}</span>
+                    ) : null}
+                    <span className="ml-auto inline-flex items-center gap-1.5">
+                      <button type="button" onClick={() => void resume(u.id)} disabled={uploading} className={GHOST_BTN}>
+                        <FiArrowRight className="h-3.5 w-3.5" />
+                        Continue
+                      </button>
+                      <button type="button" onClick={() => void discardUpload(u.id)} disabled={discarding} className={GHOST_BTN}>
+                        <FiTrash2 className="h-3.5 w-3.5" />
+                        Discard
+                      </button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
           {step === 2 && staging && preview ? (
             <>
@@ -327,7 +392,12 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                   In staging — not in Import history until you save{expires ? ` · kept until ${expires}` : ''}
                 </span>
               </div>
-              <PreviewStep preview={preview} onEdit={updateRow} savingCell={savingCell} />
+              <PreviewStep
+                preview={preview}
+                onEdit={updateRow}
+                savingCell={savingCell}
+                savedRows={staging.savedRowNumbers ?? []}
+              />
             </>
           ) : null}
           {step === 3 && staging && lastSave ? (
@@ -389,7 +459,7 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
             {step === 2 && staging ? (
               <>
                 {errorDownloads(true)}
-                <button type="button" onClick={() => void discard()} disabled={discarding || saving} className={GHOST_BTN}>
+                <button type="button" onClick={() => void discardUpload(staging.id)} disabled={discarding || saving} className={GHOST_BTN}>
                   {discarding ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiTrash2 className="h-3.5 w-3.5" />}
                   Discard
                 </button>
@@ -398,16 +468,28 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                     Close
                   </button>
                 ) : null}
+                {staging.invalidOrders > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => void proceedWithErrors()}
+                    disabled={savingCell || saving}
+                    className={GHOST_BTN}
+                    title="Save every order to Import history, errors included. The flagged rows are fixed there; the valid orders can be labelled right away."
+                  >
+                    <FiAlertCircle className="h-3.5 w-3.5" />
+                    Proceed with errors ({staging.readyOrders + staging.invalidOrders})
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  onClick={() => void saveValid()}
+                  onClick={() => void saveValid(false)}
                   disabled={staging.readyOrders === 0 || savingCell || saving}
                   className={PRIMARY_BTN}
                   title={
                     savingCell
                       ? 'Saving your edit…'
                       : staging.readyOrders === 0
-                        ? 'No fully valid orders to save yet — fix the errors first.'
+                        ? 'No fully valid orders to save yet — fix the errors, or use Proceed with errors.'
                         : staging.invalidOrders > 0
                           ? `Saves the ${staging.readyOrders} valid order(s); the ${staging.invalidOrders} with errors stay here.`
                           : undefined
@@ -416,7 +498,9 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                   {saving ? <FiLoader className="h-3.5 w-3.5 animate-spin" /> : <FiSave className="h-3.5 w-3.5" />}
                   {staging.readyOrders === 0
                     ? 'Nothing valid to save'
-                    : `Save ${staging.readyOrders} valid order${staging.readyOrders === 1 ? '' : 's'} to Import history`}
+                    : staging.invalidOrders > 0
+                      ? `Ignore errors and save ${staging.readyOrders}`
+                      : `Save ${staging.readyOrders} order${staging.readyOrders === 1 ? '' : 's'} to Import history`}
                 </button>
               </>
             ) : step === 3 && staging ? (
@@ -463,6 +547,18 @@ const GHOST_BTN =
   'inline-flex items-center gap-1.5 rounded-lg border border-[#e3d9c4] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0] disabled:cursor-not-allowed disabled:opacity-40'
 const PRIMARY_BTN =
   'inline-flex items-center gap-1.5 rounded-lg bg-[#1f150c] px-3.5 py-1.5 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4] disabled:text-white disabled:shadow-none'
+
+/** A row already saved to Import history (read-only in the upload). */
+function SavedChip() {
+  return (
+    <span
+      title="Saved to Import history — edit it there"
+      className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-600"
+    >
+      <FiCheck className="h-2.5 w-2.5" /> Saved
+    </span>
+  )
+}
 
 function Stepper({ current }: { current: 1 | 2 | 3 }) {
   const steps = [
@@ -685,11 +781,14 @@ function EditCell({
   bad = false,
   mono = false,
   errors,
+  readOnly = false,
 }: {
   value: string
   onCommit: (v: string) => void
   bad?: boolean
   mono?: boolean
+  /** Saved to Import history — shown as plain text, not editable here. */
+  readOnly?: boolean
   /** When present, shown as the cell's hover tooltip so the error text isn't
    *  printed inline — the cell just turns red and explains itself on hover. */
   errors?: string[]
@@ -717,6 +816,16 @@ function EditCell({
     setDraft(value)
   }
 
+  if (readOnly) {
+    return (
+      <span
+        title="Saved to Import history — edit it there"
+        className={`block w-full cursor-default truncate rounded-[5px] px-1.5 py-0.5 text-left text-[11px] text-[#9a8a6c] ${mono ? 'font-mono' : ''}`}
+      >
+        {value || <span className="text-[#cdbf9f]">—</span>}
+      </span>
+    )
+  }
   if (editing) {
     return (
       <input
@@ -833,11 +942,15 @@ function PreviewStep({
   preview,
   onEdit,
   savingCell,
+  savedRows = [],
 }: {
   preview: OrderImportPreview
   onEdit: (rowNumber: number, patch: Partial<OrderImportRow>) => void
   savingCell: boolean
+  /** Rows already saved to Import history — shown as Saved and read-only. */
+  savedRows?: number[]
 }) {
+  const savedSet = new Set(savedRows)
   const warned = preview.rows.filter((r) => (r.warnings?.length ?? 0) > 0).length
   // Union of tenant custom-field keys across the batch → stable extra columns.
   const customCols = Array.from(
@@ -867,7 +980,16 @@ function PreviewStep({
       else if (col.upper) next = v.toUpperCase()
       onEdit(r.rowNumber, { [col.key]: next } as Partial<OrderImportRow>)
     }
-    return <EditCell value={value} onCommit={commit} bad={(errs?.length ?? 0) > 0} mono={col.mono} errors={errs} />
+    return (
+      <EditCell
+        value={value}
+        onCommit={commit}
+        bad={(errs?.length ?? 0) > 0}
+        mono={col.mono}
+        errors={errs}
+        readOnly={savedSet.has(r.rowNumber)}
+      />
+    )
   }
 
   return (
@@ -968,9 +1090,11 @@ function PreviewStep({
                   <td className={`sticky left-0 z-10 whitespace-nowrap border-b border-r border-[#e3d9c4] px-2 py-1 ${ok ? 'bg-white' : 'bg-rose-50'}`}>
                     <div className="flex items-center gap-1.5">
                       <span className="font-mono text-[10px] font-bold text-[#6b5c42]">{r.rowNumber}</span>
-                      {ok ? (
+                      {savedSet.has(r.rowNumber) ? (
+                        <SavedChip />
+                      ) : ok ? (
                         <span
-                          title={warnCount > 0 ? statusTitle : 'Ready to generate'}
+                          title={warnCount > 0 ? statusTitle : 'Ready to save'}
                           className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800"
                         >
                           <FiCheckCircle className="h-2.5 w-2.5" /> Ready
@@ -1005,6 +1129,7 @@ function PreviewStep({
                           value={r.customFields?.[k] ?? ''}
                           bad={(byField[k]?.length ?? 0) > 0}
                           errors={byField[k]}
+                          readOnly={savedSet.has(r.rowNumber)}
                           onCommit={(v) => onEdit(r.rowNumber, { customFields: { ...(r.customFields ?? {}), [k]: v } })}
                         />
                       </div>
@@ -1071,7 +1196,9 @@ function PreviewStep({
                       <span className="rounded bg-[#faf7f0] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#5a4526]">{selected.clientCode}</span>
                     ) : null}
                     <span className="ml-auto">
-                      {(selected.errors?.length ?? 0) === 0 ? (
+                      {savedSet.has(selected.rowNumber) ? (
+                        <SavedChip />
+                      ) : (selected.errors?.length ?? 0) === 0 ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
                           <FiCheckCircle className="h-2.5 w-2.5" /> Ready
                         </span>
@@ -1134,6 +1261,7 @@ function PreviewStep({
                                       value={selected.customFields?.[k] ?? ''}
                                       bad={(fe?.length ?? 0) > 0}
                                       errors={fe}
+                                      readOnly={savedSet.has(selected.rowNumber)}
                                       onCommit={(v) => onEdit(selected.rowNumber, { customFields: { ...(selected.customFields ?? {}), [k]: v } })}
                                     />
                                   </div>

@@ -195,8 +195,16 @@ export const orderImportService = {
   updateStagingRow: (id: number, rowNumber: number, row: OrderImportRow) =>
     apiClient.put<ApiResponse<StagingUpload>>(`/orders/import/staging/${id}/rows/${rowNumber}`, row),
 
-  /** Save the fully valid, not-yet-saved orders to Import history (a new batch). */
-  saveStaging: (id: number) => apiClient.post<ApiResponse<StagingUpload>>(`/orders/import/staging/${id}/save`, {}),
+  /** Save to Import history (a new batch). includeErrors=false: "Ignore errors and save" (valid orders
+   *  only); true: "Proceed with errors" (every unsaved order, a Draft while errors remain). */
+  saveStaging: (id: number, includeErrors = false) =>
+    apiClient.post<ApiResponse<StagingUpload>>(
+      `/orders/import/staging/${id}/save${includeErrors ? '?includeErrors=true' : ''}`,
+      {},
+    ),
+
+  /** Your uploads still waiting in staging (summaries, no rows). */
+  listStaging: () => apiClient.get<ApiResponse<StagingUpload[]>>('/orders/import/staging'),
 
   /** Discard a staged upload. Orders already saved stay in Import history. */
   discardStaging: (id: number) => apiClient.delete<ApiResponse<StagingUpload>>(`/orders/import/staging/${id}`),

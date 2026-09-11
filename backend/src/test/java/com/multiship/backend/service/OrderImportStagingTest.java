@@ -48,6 +48,7 @@ class OrderImportStagingTest {
     private final Map<Long, ImportStagingUpload> uploads = new HashMap<>();
     private final List<ImportStagingRow> stagedRows = new ArrayList<>();
     private final List<ImportBatch> savedBatches = new ArrayList<>();
+    private ImportBatchRepository batchRepo;
 
     @BeforeEach
     void setUp() {
@@ -62,6 +63,12 @@ class OrderImportStagingTest {
             return u;
         });
         when(upRepo.findById(anyLong())).thenAnswer(inv -> Optional.ofNullable(uploads.get((Long) inv.getArgument(0))));
+        when(upRepo.findFirstByContentHashAndStatusOrderByIdDesc(any(), any())).thenAnswer(inv -> uploads.values().stream()
+                .filter(u -> java.util.Objects.equals(u.getContentHash(), inv.getArgument(0)) && inv.getArgument(1).equals(u.getStatus()))
+                .max(Comparator.comparingLong(ImportStagingUpload::getId)));
+        when(upRepo.findByCreatedByIgnoreCaseAndStatusOrderByIdDesc(any(), any())).thenAnswer(inv -> uploads.values().stream()
+                .filter(u -> ((String) inv.getArgument(0)).equalsIgnoreCase(u.getCreatedBy()) && inv.getArgument(1).equals(u.getStatus()))
+                .sorted(Comparator.comparingLong(ImportStagingUpload::getId).reversed()).toList());
 
         ImportStagingRowRepository rowRepo = mock(ImportStagingRowRepository.class);
         when(rowRepo.saveAll(anyIterable())).thenAnswer(inv -> {
@@ -77,7 +84,10 @@ class OrderImportStagingTest {
                 .filter(r -> r.getUploadId().equals(inv.getArgument(0)))
                 .sorted(Comparator.comparingInt(ImportStagingRow::getRowNo)).toList());
 
-        ImportBatchRepository batchRepo = mock(ImportBatchRepository.class);
+        batchRepo = mock(ImportBatchRepository.class);
+        when(batchRepo.findFirstByFileNameIgnoreCaseAndDeletedAtIsNullOrderByIdDesc(any())).thenAnswer(inv -> savedBatches.stream()
+                .filter(b -> b.getFileName() != null && b.getFileName().equalsIgnoreCase(inv.getArgument(0)))
+                .reduce((first, second) -> second));
         when(batchRepo.save(any())).thenAnswer(inv -> {
             ImportBatch b = inv.getArgument(0);
             b.setId(batchSeq.incrementAndGet());
@@ -176,14 +186,64 @@ class OrderImportStagingTest {
     }
 
     @Test
+    void reUploadingAWaitingFileOffersToContinueIt_evenAfterAPartialSave() {
+        String file = csv(List.of(order("A-1", "10001"), order("B-1", "")));
+        StagingUploadDTO s = stage("orders.csv", file).getData();
+        assertEquals("success", service.saveStaging(s.getId(), "alice").getStatus());   // A-1 now in Import history
+
+        ApiResponse<StagingUploadDTO> again = stage("orders.csv", file);
+        assertEquals(409, again.getCode(), again.getMessage());
+        StagingUploadDTO waiting = again.getData();
+        assertNotNull(waiting, "the 409 must carry the waiting upload so the UI can offer Continue");
+        assertEquals(s.getId(), waiting.getId());
+        assertEquals(2, waiting.getTotalRows());
+        assertEquals(1, waiting.getInvalidOrders());
+        assertEquals(0, waiting.getReadyOrders());
+        assertTrue(again.getMessage().contains("Continue"), again.getMessage());
+        assertEquals(List.of(s.getId()), service.listStaging("alice").stream().map(StagingUploadDTO::getId).toList());
+        assertTrue(service.listStaging("bob").isEmpty());
+
+        // Upload anyway → a separate upload.
+        ApiResponse<StagingUploadDTO> anyway = service.stageUpload("orders.csv",
+                new ByteArrayInputStream(file.getBytes(StandardCharsets.UTF_8)), true, "alice");
+        assertEquals("success", anyway.getStatus());
+        assertTrue(anyway.getData().getId() > s.getId());
+    }
+
+    @Test
+    void proceedWithErrorsSavesEveryOrderAsADraftInImportHistory() {
+        StagingUploadDTO s = stage("orders.csv", csv(List.of(order("A-1", "10001"), order("B-1", "")))).getData();
+
+        ApiResponse<StagingUploadDTO> res = service.saveStaging(s.getId(), "alice", true);
+        assertEquals("success", res.getStatus(), res.getMessage());
+        assertTrue(res.getMessage().contains("including 1 with errors"), res.getMessage());
+        assertEquals(1, savedBatches.size());
+        ImportBatch batch = savedBatches.get(0);
+        assertEquals("DRAFT", batch.getStatus(), "a batch carrying errors is parked as a Draft");
+        assertTrue(batch.getRowsJson().contains("\"A-1\"") && batch.getRowsJson().contains("\"B-1\""));
+        assertEquals("SAVED", res.getData().getStatus());
+        assertEquals(0, res.getData().getInvalidOrders());
+        assertTrue(service.listStaging("alice").isEmpty(), "a fully saved upload is no longer waiting");
+    }
+
+    @Test
     void theErrorFileCanBeUploadedAgain_itsErrorsColumnIsNotACustomField() {
         StagingUploadDTO s = stage("orders.csv", csv(List.of(order("B-1", "")))).getData();
         String errors = new String(service.stagingErrorFile(s.getId(), "csv", "alice").bytes(), StandardCharsets.UTF_8);
 
-        ApiResponse<StagingUploadDTO> again = stage("orders-errors.csv", errors);
+        // Uploaded again unchanged, it is the same orders as the waiting upload: offer Continue.
+        ApiResponse<StagingUploadDTO> unchanged = stage("orders-errors.csv", errors);
+        assertEquals(409, unchanged.getCode(), unchanged.getMessage());
+        assertEquals(s.getId(), unchanged.getData().getId());
+
+        // Fixed in the spreadsheet (postal code filled, errors column left as is) it validates cleanly.
+        String fixed = errors.replace(",New York,NY,,US,", ",New York,NY,10001,US,");
+        assertTrue(!fixed.equals(errors), "fixture: the postal code cell must have been filled");
+        ApiResponse<StagingUploadDTO> again = stage("orders-errors.csv", fixed);
         assertEquals("success", again.getStatus(), again.getMessage());
         OrderImportRowDTO row = again.getData().getRows().get(0);
         assertNull(row.getCustomFields(), "the errors column must be ignored on re-upload");
-        assertTrue(row.getErrors().stream().anyMatch(e -> e.contains("postalCode is required")));
+        assertTrue(row.getErrors() == null || row.getErrors().isEmpty(), String.valueOf(row.getErrors()));
+        assertEquals(1, again.getData().getReadyOrders());
     }
 }

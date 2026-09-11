@@ -161,11 +161,15 @@ export async function authFetch(endpoint: string, options: RequestInit = {}): Pr
   // responses are JSON with a `message` field; static/binary error
   // responses (e.g., raw 401 pages) fall back to a generic line.
   let serverMessage: string | null = null;
+  // The whole parsed body rides on the ApiError so structured payloads survive
+  // (e.g. the 409 for a file already waiting in staging carries that upload's id).
+  let parsedBody: unknown = null;
   try {
     const text = await response.clone().text();
     if (text) {
       try {
         const body = JSON.parse(text);
+        parsedBody = body;
         serverMessage = body?.message ?? body?.error ?? null;
       } catch {
         // not JSON — treat the body as opaque
@@ -194,7 +198,7 @@ export async function authFetch(endpoint: string, options: RequestInit = {}): Pr
   throw new ApiError(
     serverMessage || `HTTP error! status: ${response.status}`,
     response.status,
-    serverMessage ? { message: serverMessage } : {},
+    parsedBody && typeof parsedBody === 'object' ? parsedBody : serverMessage ? { message: serverMessage } : {},
   );
 }
 

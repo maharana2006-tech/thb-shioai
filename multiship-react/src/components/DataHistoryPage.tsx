@@ -751,7 +751,10 @@ export default function DataHistoryPage() {
           // created (PENDING) and labelled in the Shipments workspace, so the
           // batch-level Generate/Retry flow doesn't apply.
           const isWms = (b.source || '').toUpperCase() === 'WMS'
-          const canGenerate = canWrite && !isWms && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED')
+          // A Draft (saved with errors via "Proceed with errors") can label its valid
+          // rows now; the rows with errors are skipped until they are fixed.
+          const canGenerate = canWrite && !isWms && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED'
+            || (st === 'DRAFT' && b.savedRows > 0))
           const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED'
           const busy = generatingId === b.id
           const progress = genProgressById[b.id]
@@ -883,7 +886,9 @@ export default function DataHistoryPage() {
                         <button
                           type="button"
                           onClick={() => (platform ? setConfirmGenId(b.id) : void generate(b.id, isRetry))}
-                          title={isRetry ? 'Retry generating labels — only rows that FAILED or are un-generated will be re-sent' : 'Generate carrier labels for this saved import'}
+                          title={st === 'DRAFT'
+                            ? 'Generate labels for the valid rows — rows with errors are skipped until you fix them'
+                            : isRetry ? 'Retry generating labels — only rows that FAILED or are un-generated will be re-sent' : 'Generate carrier labels for this saved import'}
                           className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3 py-2 text-[12px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15] disabled:cursor-not-allowed disabled:bg-[#dcd4c4]"
                         >
                           <FiZap className="h-3.5 w-3.5" />
@@ -1284,7 +1289,7 @@ export default function DataHistoryPage() {
                 { key: 'COMPLETE', label: 'Complete' },
                 { key: 'PARTIAL_COMPLETE', label: 'Partial complete' },
                 { key: 'IN_PROGRESS', label: 'In progress' },
-                { key: 'INITIATE', label: 'Initiated' },
+                { key: 'INITIATE', label: 'Saved · not generated' },
                 { key: 'FAILED', label: 'Failed' },
               ] as { key: StatusKey; label: string }[]).map((s) => {
                 const active = statusFilter === s.key
