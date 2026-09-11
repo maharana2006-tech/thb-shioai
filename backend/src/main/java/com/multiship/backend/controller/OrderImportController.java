@@ -224,8 +224,10 @@ public class OrderImportController {
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @PostMapping("/history/{id}/restore")
     public ResponseEntity<ApiResponse<com.multiship.backend.dto.ImportBatchDTO>> restoreBatch(
-            @org.springframework.web.bind.annotation.PathVariable Long id) {
-        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.restoreBatch(id);
+            @org.springframework.web.bind.annotation.PathVariable Long id,
+            @io.swagger.v3.oas.annotations.Parameter(description = "true = restore even though some of its orders are also in live imports (409 otherwise)")
+            @RequestParam(required = false, defaultValue = "false") boolean allowDuplicate) {
+        com.multiship.backend.dto.ImportBatchDTO dto = orderImportService.restoreBatch(id, allowDuplicate);
         if (dto == null) {
             return ResponseEntity.status(404).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                     .status("ERROR").code(404).timestamp(java.time.LocalDateTime.now())

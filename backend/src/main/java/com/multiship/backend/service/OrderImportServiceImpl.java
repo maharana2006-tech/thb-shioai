@@ -904,6 +904,50 @@ public class OrderImportServiceImpl implements OrderImportService {
         }
     }
 
+    /**
+     * Next label batch number. Taken from a sequence (V53): MAX(batch_id)+1 only
+     * counts batches that already have orders, so two files uploaded before
+     * either generated labels were both given the same number.
+     */
+    private Integer mintLabelBatchId() {
+        if (orderRepository == null) return null;
+        try {
+            Long next = orderRepository.nextLabelBatchNumber();
+            if (next != null) return next.intValue();
+        } catch (Exception e) {
+            log.warn("label_batch_number_seq unavailable — falling back to MAX(batch_id)+1: {}", e.getMessage());
+        }
+        Integer max = orderRepository.findMaxBatchId();
+        return (max == null ? 0 : max) + 1;
+    }
+
+    /** "2 orders in this import are also in live imports: MT1-01 (#87), …" — or null when none are. */
+    private String liveOverlapSummary(List<OrderImportRowDTO> rows, Long self) {
+        if (importBatchRepository == null || rows == null) return null;
+        java.util.Set<String> refs = new java.util.LinkedHashSet<>();
+        for (OrderImportRowDTO r : rows) {
+            if (StringUtils.hasText(r.getOrderRef())) refs.add(r.getOrderRef().trim().toUpperCase(Locale.ROOT));
+        }
+        if (refs.isEmpty()) return null;
+        List<String> hits = new ArrayList<>();
+        try {
+            for (Object[] o : importBatchRepository.findBatchesHoldingOrderRefs(refs)) {
+                if (o == null || o.length < 2 || o[0] == null || o[1] == null) continue;
+                long other = ((Number) o[1]).longValue();
+                if (self != null && other == self) continue;
+                hits.add(o[0] + " (#" + other + ")");
+            }
+        } catch (Exception ex) {
+            log.warn("Restore: duplicate-order check skipped: {}", ex.getMessage());
+            return null;
+        }
+        if (hits.isEmpty()) return null;
+        String list = String.join(", ", hits.subList(0, Math.min(5, hits.size())))
+                + (hits.size() > 5 ? " and " + (hits.size() - 5) + " more" : "");
+        return hits.size() + (hits.size() == 1 ? " order in this import is" : " orders in this import are")
+                + " also in live imports: " + list + ".";
+    }
+
     /** Group key used for order grouping — mirrors commit()/international rules. */
     private static String groupKeyOf(OrderImportRowDTO row) {
         return StringUtils.hasText(row.getOrderRef())
@@ -1493,7 +1537,7 @@ public class OrderImportServiceImpl implements OrderImportService {
             // from the moment it's uploaded — commit() re-uses this same
             // id (rows round-trip it back) instead of minting a new one.
             if (orderRepository != null && !rows.isEmpty()) {
-                Integer batchId = orderRepository.findMaxBatchId() + 1;
+                Integer batchId = mintLabelBatchId();
                 for (OrderImportRowDTO row : rows) {
                     row.setBatchId(batchId);
                 }
@@ -1721,7 +1765,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .map(OrderImportRowDTO::getBatchId)
                 .filter(java.util.Objects::nonNull)
                 .findFirst()
-                .orElse(orderRepository == null ? null : orderRepository.findMaxBatchId() + 1);
+                .orElseGet(this::mintLabelBatchId);
         // Frontend may edit rows post-preview; re-run the name→code
         // reverse-lookup here so a value the operator pasted in
         // ("UPS Ground") still resolves to the wire code before the
@@ -2145,6 +2189,16 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     @Override
     public com.multiship.backend.dto.ImportBatchDTO restoreBatch(Long id) {
+        return restoreBatch(id, false);
+    }
+
+    /**
+     * Restore from Trash. An identical live twin always blocks (409, move it to
+     * Trash first). Orders that are also in other live imports ask first — 409
+     * IMPORT_DUPLICATE_ORDERS unless allowDuplicate, like "Save anyway".
+     */
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO restoreBatch(Long id, boolean allowDuplicate) {
         if (importBatchRepository == null || id == null) return null;
         com.multiship.backend.model.ImportBatch b = importBatchRepository.findById(id).orElse(null);
         if (b == null) return null;
@@ -2157,6 +2211,13 @@ public class OrderImportServiceImpl implements OrderImportService {
                         + (StringUtils.hasText(live.getFileName()) ? " (" + live.getFileName() + ")" : "")
                         + " holds the same orders and is not in Trash — restoring #" + id
                         + " would duplicate them. Move #" + live.getId() + " to Trash first.");
+            }
+        }
+        if (b.getDeletedAt() != null && !allowDuplicate) {
+            String overlap = liveOverlapSummary(parseBatchRows(b), b.getId());
+            if (overlap != null) {
+                throw new ImportBatchStateException(409, overlap + " Restoring #" + id + " creates duplicate orders.",
+                        com.multiship.backend.dto.ErrorCode.IMPORT_DUPLICATE_ORDERS.name());
             }
         }
         if (b.getDeletedAt() != null) {
@@ -2349,9 +2410,13 @@ public class OrderImportServiceImpl implements OrderImportService {
             com.multiship.backend.model.ImportBatch fresh = importBatchRepository.findById(id).orElse(null);
             String cur = fresh == null ? "unknown" : fresh.getStatus();
             throw new ConcurrentBatchGenerationException(
-                    "Batch " + id + " cannot start label generation: current status is "
+                    "Import #" + id + " cannot start label generation: current status is "
                             + cur + ". Wait for the in-flight run to finish or refresh Import history.");
         }
+        // This run owns the import now: a Cancel left over from a run that ended
+        // abnormally must not stop it. (Cleared only after winning the claim, so a
+        // refused second Generate can't wipe a real Cancel of the running one.)
+        cancelledBatchIds.remove(id);
         // The status is now IN_PROGRESS in the DB; keep the in-memory
         // entity in sync so downstream save() writes don't overwrite it
         // with a stale value.
@@ -2497,7 +2562,16 @@ public class OrderImportServiceImpl implements OrderImportService {
             return ApiResponse.<String>builder()
                     .status("error").code(HttpStatus.CONFLICT.value())
                     .errorCode(ErrorCode.BULK_JOB_ALREADY_TERMINAL.name())
-                    .message("Batch " + id + " is already in terminal state " + current + " — nothing to cancel.")
+                    .message("Import #" + id + " is already in terminal state " + current + " — nothing to cancel.")
+                    .build();
+        }
+        // Only a running import can be cancelled — a flag set on an idle import
+        // stayed behind and stopped (and marked CANCELLED) its next real run.
+        if (!isGenerating(batch)) {
+            return ApiResponse.<String>builder()
+                    .status("error").code(HttpStatus.CONFLICT.value())
+                    .errorCode(ErrorCode.IMPORT_BATCH_STATE.name())
+                    .message("Import #" + id + " isn't generating labels right now — nothing to cancel.")
                     .build();
         }
         cancelledBatchIds.add(id);
@@ -2562,11 +2636,18 @@ public class OrderImportServiceImpl implements OrderImportService {
     /** An Import-history request the import's state doesn't allow — carries the HTTP status to answer with. */
     public static class ImportBatchStateException extends RuntimeException {
         private final int status;
+        private final String errorCode;
         public ImportBatchStateException(int status, String message) {
+            this(status, message, null);
+        }
+        public ImportBatchStateException(int status, String message, String errorCode) {
             super(message);
             this.status = status;
+            this.errorCode = errorCode;
         }
         public int getStatus() { return status; }
+        /** Specific code for the client to act on (null = IMPORT_BATCH_STATE). */
+        public String getErrorCode() { return errorCode; }
     }
 
     private static boolean isGenerating(com.multiship.backend.model.ImportBatch b) {
@@ -5168,7 +5249,9 @@ public class OrderImportServiceImpl implements OrderImportService {
     private static ApiResponse<StagingUploadDTO> stagingFailure(HttpStatus status, String message) {
         return ApiResponse.<StagingUploadDTO>builder()
                 .status("error").code(status.value())
-                .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                // Missing / conflicting uploads use the same code as Import history's state errors.
+                .errorCode((status == HttpStatus.NOT_FOUND || status == HttpStatus.CONFLICT
+                        ? ErrorCode.IMPORT_BATCH_STATE : ErrorCode.VALIDATION_ERROR).name())
                 .message(message).data(null).build();
     }
 

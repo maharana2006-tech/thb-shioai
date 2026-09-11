@@ -63,6 +63,10 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
     @Query("SELECT COALESCE(MAX(o.batchId), 0) FROM Order o")
     Integer findMaxBatchId();
 
+    /** Next label batch number (sequence from V53) — unique even before the batch has orders. */
+    @Query(value = "SELECT nextval('label_batch_number_seq')", nativeQuery = true)
+    Long nextLabelBatchNumber();
+
     /**
      * Locks the order row (SELECT ... FOR UPDATE) so concurrent label
      * generations for the same order serialize: the second request waits for

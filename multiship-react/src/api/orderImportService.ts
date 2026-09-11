@@ -260,8 +260,12 @@ export const orderImportService = {
     apiClient.delete<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}`),
 
   /** Restore a soft-deleted import batch from Trash. */
-  restoreBatch: (id: number) =>
-    apiClient.post<ApiResponse<ImportBatchDetail>>(`/orders/import/history/${id}/restore`, {}),
+  /** allowDuplicate = restore even though some of its orders are also in live imports (409 otherwise). */
+  restoreBatch: (id: number, allowDuplicate = false) =>
+    apiClient.post<ApiResponse<ImportBatchDetail>>(
+      `/orders/import/history/${id}/restore${allowDuplicate ? '?allowDuplicate=true' : ''}`,
+      {},
+    ),
 
   /** Empty the Trash — PERMANENTLY delete every soft-deleted import. Irreversible.
    *  Resolves with the number of imports purged. */

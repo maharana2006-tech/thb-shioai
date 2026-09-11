@@ -94,6 +94,8 @@ public enum ErrorCode {
     VALIDATION_ERROR,
     /** The request body is missing or isn't valid JSON for the endpoint — HTTP 400. */
     MALFORMED_REQUEST,
+    /** Restoring an import would put orders live twice — HTTP 409; retry with allowDuplicate=true to confirm. */
+    IMPORT_DUPLICATE_ORDERS,
     /** Import-history action the import's current state doesn't allow (in Trash, generating, nothing to do, …). */
     IMPORT_BATCH_STATE,
 

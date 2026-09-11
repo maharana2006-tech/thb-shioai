@@ -145,7 +145,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(ex.getStatus()).body(ApiResponse.<Void>builder()
                 .status("error").code(ex.getStatus())
                 .message(ex.getMessage())
-                .errorCode(ErrorCode.IMPORT_BATCH_STATE.name())
+                .errorCode(ex.getErrorCode() != null ? ex.getErrorCode() : ErrorCode.IMPORT_BATCH_STATE.name())
                 .build());
     }
 

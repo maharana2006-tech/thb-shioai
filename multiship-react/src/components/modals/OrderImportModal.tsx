@@ -421,7 +421,11 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                     <StatPill tone="error" label={`${staging.invalidOrders} need${staging.invalidOrders === 1 ? 's' : ''} fixes`} />
                   ) : null}
                   {staging.savedOrders > 0 ? <StatPill tone="warn" label={`${staging.savedOrders} saved`} /> : null}
-                  <span className="ml-auto text-[10.5px] text-[#b6a684]">Nothing is in Import history until you save.</span>
+                  <span className="ml-auto text-[10.5px] text-[#b6a684]">
+                    {staging.savedOrders > 0
+                      ? 'Saved orders are already in Import history — the rest stay here until you save them.'
+                      : 'Nothing is in Import history until you save.'}
+                  </span>
                 </div>
               </div>
               <PreviewStep

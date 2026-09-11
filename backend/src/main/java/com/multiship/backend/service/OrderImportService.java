@@ -87,6 +87,11 @@ public interface OrderImportService {
      */
     com.multiship.backend.dto.ImportBatchDTO restoreBatch(Long id);
 
+    /** Restore from Trash; allowDuplicate = restore even though some orders are also in live imports. */
+    default com.multiship.backend.dto.ImportBatchDTO restoreBatch(Long id, boolean allowDuplicate) {
+        return restoreBatch(id);
+    }
+
     /**
      * Empty the Trash — PERMANENTLY (hard) delete every soft-deleted batch the
      * caller's tenant owns. This is irreversible. Returns the number purged.

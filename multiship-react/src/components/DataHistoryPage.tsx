@@ -327,14 +327,26 @@ export default function DataHistoryPage() {
   }
 
   /** Restore a batch from Trash back to the live Data History list. */
-  const handleRestore = async (id: number, fileName?: string | null) => {
+  const handleRestore = async (id: number, fileName?: string | null, allowDuplicate = false) => {
     setTrashBusyId(id)
     try {
-      await orderImportService.restoreBatch(id)
+      await orderImportService.restoreBatch(id, allowDuplicate)
       setBatches((list) => list.filter((b) => b.id !== id))
       if (openId === id) setOpenId(null)
       notify.success(`"${fileName || `Import #${id}`}" restored.`)
     } catch (e) {
+      // Some orders are also in live imports — ask, like "Save anyway" does.
+      if (!allowDuplicate && e instanceof ApiError && e.status === 409 && e.errorCode === 'IMPORT_DUPLICATE_ORDERS') {
+        setTrashBusyId(null)
+        const ok = await notify.confirm(`${e.message}\n\nRestore anyway?`, {
+          title: 'Orders already in Import history',
+          confirmLabel: 'Restore anyway',
+          cancelLabel: 'Cancel',
+          danger: true,
+        })
+        if (ok) await handleRestore(id, fileName, true)
+        return
+      }
       notify.apiError(e, 'Could not restore import.')
     } finally {
       setTrashBusyId(null)
@@ -1029,8 +1041,15 @@ export default function DataHistoryPage() {
                               <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Generated</span>
                             ) : failed ? (
                               <span title={r.generatedMessage || 'The carrier rejected this shipment'} className="cursor-help rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800">Failed</span>
-                            ) : ok ? (
+                            ) : ok && orderReady ? (
                               <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800">Ready</span>
+                            ) : ok ? (
+                              <span
+                                title={`This line is fine, but another line of order ${r.orderRef ?? ''} needs fixes`}
+                                className="cursor-help rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800"
+                              >
+                                Order needs fixes
+                              </span>
                             ) : (
                               <span title={statusTitle} className="cursor-help rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800">
                                 {r.errors!.length} error{r.errors!.length === 1 ? '' : 's'}

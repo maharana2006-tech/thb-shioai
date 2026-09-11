@@ -180,26 +180,37 @@ class OrderImportRaceAndCancelTest {
     }
 
     @Test
-    void cancelSetsFlagAndBatchStatusFlipsToCancelledAfterWorkerDrain() throws Exception {
+    void cancelOnAnIdleBatchIsRefused_soItCantStopTheNextRun() throws Exception {
         persistBatchWithOneRow(201L, "INITIATE");
-        // Do NOT stub generateManualLabel — the row should be skipped
-        // BEFORE the carrier is called because we cancel first.
+        // Nothing is running: a Cancel accepted here used to stay flagged and
+        // stop (and mark CANCELLED) the import's next real run.
         ApiResponse<String> cancelResp = service.cancelGeneration(201L);
-        assertEquals(200, cancelResp.getCode(),
-                "cancel() on a non-terminal batch returns 200");
-        // Note: the CAS gate INITIATE→IN_PROGRESS may reject after cancel
-        // pre-flag if cancel() happens between allowlist check and worker
-        // spin-up. Here we drive generateLabelsForBatch in the same thread
-        // AFTER cancel to prove the row-level skip works when the batch
-        // is already flagged as cancelled at run time.
-        try {
-            service.generateLabelsForBatch(201L, "alice", false, false, true);
-        } catch (OrderImportServiceImpl.ConcurrentBatchGenerationException expected) {
-            // If the CAS is now IN_PROGRESS from a real prior run we would
-            // hit this; the test setup guarantees INITIATE so we shouldn't.
-        }
-        ImportBatch terminal = saved.get(201L);
-        assertEquals("CANCELLED", terminal.getStatus(),
+        assertEquals(409, cancelResp.getCode(), "nothing is running — nothing to cancel");
+        assertEquals("IMPORT_BATCH_STATE", cancelResp.getErrorCode());
+
+        service.generateLabelsForBatch(201L, "alice", false, false, true);
+        assertTrue(!"CANCELLED".equalsIgnoreCase(saved.get(201L).getStatus()),
+                "a refused Cancel must not cancel the next run; got " + saved.get(201L).getStatus());
+    }
+
+    @Test
+    void cancelDuringARunFlipsTheBatchToCancelledAfterWorkerDrain() throws Exception {
+        persistBatchWithOneRow(202L, "INITIATE");
+        // The carrier call happens mid-run (the import is IN_PROGRESS) — cancel from inside it.
+        java.util.concurrent.atomic.AtomicInteger cancelCode = new java.util.concurrent.atomic.AtomicInteger();
+        org.mockito.stubbing.Answer<ApiResponse<LabelGenerationResponse>> cancelThenSucceed = inv -> {
+            cancelCode.set(service.cancelGeneration(202L).getCode());
+            return ApiResponse.<LabelGenerationResponse>builder()
+                    .status("success").code(200)
+                    .data(LabelGenerationResponse.builder().orderNo(999L).trackingNumber("TN-999").status("GENERATED").build())
+                    .build();
+        };
+        when(carrierService.generateManualLabel(any(), any())).thenAnswer(cancelThenSucceed);
+        when(carrierService.generateManualLabel(any(), any(), any())).thenAnswer(cancelThenSucceed);
+
+        service.generateLabelsForBatch(202L, "alice", false, false, true);
+        assertEquals(200, cancelCode.get(), "cancel() while the import is generating is accepted");
+        assertEquals("CANCELLED", saved.get(202L).getStatus(),
                 "runJob's finally block must promote status to CANCELLED when the flag is set");
     }
 

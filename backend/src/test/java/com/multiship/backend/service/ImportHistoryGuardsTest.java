@@ -171,6 +171,43 @@ class ImportHistoryGuardsTest {
     }
 
     @Test
+    void restoringOrdersThatAreAlsoLiveElsewhereAsksFirst() throws Exception {
+        ImportBatch trashed = batch(11, "INITIATE", List.of(row(1, "A"), row(2, "B")));
+        trashed.setDeletedAt(LocalDateTime.now());
+        List<Object[]> live = new ArrayList<>();
+        live.add(new Object[]{"A", 12L});
+        when(repo.findBatchesHoldingOrderRefs(any())).thenReturn(live);
+        OrderImportServiceImpl.ImportBatchStateException e = assertThrows(
+                OrderImportServiceImpl.ImportBatchStateException.class, () -> service.restoreBatch(11L));
+        assertEquals(409, e.getStatus());
+        assertEquals("IMPORT_DUPLICATE_ORDERS", e.getErrorCode());
+        assertTrue(e.getMessage().contains("A (#12)"), e.getMessage());
+
+        service.restoreBatch(11L, true);
+        assertEquals(null, trashed.getDeletedAt(), "restores once the user confirms");
+    }
+
+    @Test
+    void labelBatchNumbersComeFromTheSequence_withMaxPlusOneFallback() {
+        com.multiship.backend.repository.OrderRepository orders = mock(com.multiship.backend.repository.OrderRepository.class);
+        ReflectionTestUtils.setField(service, "orderRepository", orders);
+        when(orders.nextLabelBatchNumber()).thenReturn(77L);
+        assertEquals(77, (Integer) ReflectionTestUtils.invokeMethod(service, "mintLabelBatchId"));
+        when(orders.nextLabelBatchNumber()).thenReturn(null);
+        when(orders.findMaxBatchId()).thenReturn(41);
+        assertEquals(42, (Integer) ReflectionTestUtils.invokeMethod(service, "mintLabelBatchId"));
+    }
+
+    @Test
+    void cancelOnAnImportThatIsntRunningIsRefused_andLeavesNoFlagForItsNextRun() throws Exception {
+        batch(13, "INITIATE", List.of(row(1, "A")));
+        assertEquals(409, service.cancelGeneration(13L).getCode());
+        @SuppressWarnings("unchecked")
+        java.util.Set<Long> flags = (java.util.Set<Long>) ReflectionTestUtils.getField(service, "cancelledBatchIds");
+        assertTrue(flags == null || !flags.contains(13L), "an idle import must not carry a pending Cancel");
+    }
+
+    @Test
     void aCleanLineOfAnOrderThatNeedsFixesIsNotCountedReady() {
         OrderImportRowDTO b1 = row(1, "B");
         b1.setErrors(new ArrayList<>(List.of("hsCode needs at least 9 digits")));
