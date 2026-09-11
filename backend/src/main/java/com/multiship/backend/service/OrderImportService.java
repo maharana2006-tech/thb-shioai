@@ -226,7 +226,13 @@ public interface OrderImportService {
      * included, as one Import-history entry (Draft while any row has errors) where the
      * flagged rows are fixed and the valid ones can already be labelled.
      */
-    ApiResponse<com.multiship.backend.dto.StagingUploadDTO> saveStaging(Long id, String requestedBy, boolean includeErrors);
+    default ApiResponse<com.multiship.backend.dto.StagingUploadDTO> saveStaging(Long id, String requestedBy, boolean includeErrors) {
+        return saveStaging(id, requestedBy, includeErrors, false);
+    }
+
+    /** As above; {@code allowDuplicate} confirms saving orders already in Import history (409 otherwise). */
+    ApiResponse<com.multiship.backend.dto.StagingUploadDTO> saveStaging(
+            Long id, String requestedBy, boolean includeErrors, boolean allowDuplicate);
 
     /** The caller's uploads still waiting in staging (summaries, no rows). */
     java.util.List<com.multiship.backend.dto.StagingUploadDTO> listStaging(String requestedBy);

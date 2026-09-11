@@ -119,9 +119,11 @@ public class OrderImportController {
             @org.springframework.web.bind.annotation.PathVariable Long id,
             @io.swagger.v3.oas.annotations.Parameter(description = "false = \"Ignore errors and save\" (valid orders only); true = \"Proceed with errors\" (every unsaved order, as a Draft while errors remain)")
             @RequestParam(value = "includeErrors", required = false, defaultValue = "false") boolean includeErrors,
+            @io.swagger.v3.oas.annotations.Parameter(description = "true = save orders that are already in Import history anyway (409 otherwise)")
+            @RequestParam(value = "allowDuplicate", required = false, defaultValue = "false") boolean allowDuplicate,
             @AuthenticationPrincipal UserDetails userDetails) {
         ApiResponse<com.multiship.backend.dto.StagingUploadDTO> r =
-                orderImportService.saveStaging(id, stagingUser(userDetails), includeErrors);
+                orderImportService.saveStaging(id, stagingUser(userDetails), includeErrors, allowDuplicate);
         return ResponseEntity.status(r.getCode()).body(r);
     }
 
@@ -332,6 +334,7 @@ public class OrderImportController {
         // Count ORDERS, not rows: item-line rows of one order share its label, so
         // "97 of 126 label(s)" read as 29 failures when 8 orders had failed.
         java.util.Map<String, Boolean> orderDone = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Boolean> orderHasErrors = new java.util.HashMap<>();
         if (dto.getRows() != null) {
             int idx = 0;
             for (com.multiship.backend.dto.OrderImportRowDTO r : dto.getRows()) {
@@ -342,13 +345,20 @@ public class OrderImportController {
                         ? r.getOrderRef().trim().toUpperCase(java.util.Locale.ROOT) : "#pos" + idx;
                 boolean g = "GENERATED".equalsIgnoreCase(r.getGeneratedStatus());
                 orderDone.merge(key, g, Boolean::logicalOr);
+                orderHasErrors.merge(key, r.getErrors() != null && !r.getErrors().isEmpty(), Boolean::logicalOr);
             }
         }
         long gen = orderDone.values().stream().filter(Boolean::booleanValue).count();
-        int totalRows = orderDone.size();
+        // Orders still carrying errors can't be labelled yet — keep them out of
+        // the "N of M" and say how many wait for fixes.
+        long needFixes = orderDone.entrySet().stream()
+                .filter(e -> !e.getValue() && Boolean.TRUE.equals(orderHasErrors.get(e.getKey()))).count();
+        long totalRows = orderDone.size() - needFixes;
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
-                .message(gen + " of " + totalRows + " order(s) labelled · " + statusLabel(dto.getStatus()))
+                .message(gen + " of " + totalRows + " order(s) labelled"
+                        + (needFixes > 0 ? " · " + needFixes + " need fixes" : "")
+                        + " · " + statusLabel(dto.getStatus()))
                 .data(dto)
                 .build());
     }

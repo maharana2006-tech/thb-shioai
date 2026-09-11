@@ -19,7 +19,7 @@ import {
   type OrderImportRow,
   type StagingUpload,
 } from '../../api/orderImportService'
-import { notify } from '../../utils/notify'
+import { notify, notifyStore } from '../../utils/notify'
 import { ApiError } from '../../api/apiClient'
 import VirtualTable from '../VirtualTable'
 
@@ -183,13 +183,13 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
 
   /** Save to Import history. includeErrors=false: "Ignore errors and save" — only fully
    *  valid orders; true: "Proceed with errors" — every unsaved order, flagged ones included. */
-  const saveValid = async (includeErrors = false) => {
+  const saveValid = async (includeErrors = false, allowDuplicate = false): Promise<void> => {
     if (!staging) return
     setSaving(true)
     setError(null)
     try {
       await putChain.current // let a pending cell edit land first
-      const res = await orderImportService.saveStaging(staging.id, includeErrors)
+      const res = await orderImportService.saveStaging(staging.id, includeErrors, allowDuplicate)
       if (res.status === 'success' && res.data) {
         setStaging(res.data)
         setLastSave({ message: res.message ?? 'Saved to Import history.', batchId: res.data.lastSavedBatchId ?? null })
@@ -200,6 +200,19 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
         notify.error(res.message ?? 'Save failed.')
       }
     } catch (e) {
+      // 409 = some of these orders are already in Import history (e.g. the same
+      // file saved from another upload). Ask before saving them a second time.
+      if (!allowDuplicate && e instanceof ApiError && e.status === 409) {
+        setSaving(false)
+        const ok = await notify.confirm(`${e.message}\n\nSave anyway?`, {
+          title: 'Already in Import history',
+          confirmLabel: 'Save anyway',
+          cancelLabel: 'Cancel',
+          danger: true,
+        })
+        if (ok) await saveValid(includeErrors, true)
+        return
+      }
       const { body } = importErrorDisplay(e, 'Save failed.')
       setError(body)
       notify.error({ title: 'Save failed', body })
@@ -233,11 +246,15 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
   const proceedWithErrors = async () => {
     if (!staging) return
     const total = staging.readyOrders + staging.invalidOrders
+    const count = (k: number, word: string) => `${k} ${word}${k === 1 ? '' : 's'}`
+    const lead =
+      staging.readyOrders === 0
+        ? `Save ${total === 1 ? 'this order' : `these ${total} orders`} to Import history with ${total === 1 ? 'its' : 'their'} errors?`
+        : `Save all ${total} orders to Import history, including ${count(staging.invalidOrders, 'order')} with errors?`
+    const tail = staging.readyOrders > 0 ? ` The ${count(staging.readyOrders, 'valid order')} can be labelled right away.` : ''
     const ok = await notify.confirm(
-      `Save all ${total} orders to Import history, including ${staging.invalidOrders} with errors?\n\n` +
-        `The orders with errors are saved as they are and flagged in Import history — fix them there before labelling them. ` +
-        `The ${staging.readyOrders} valid order${staging.readyOrders === 1 ? '' : 's'} can be labelled right away.`,
-      { title: 'Proceed with errors', confirmLabel: 'Save all', cancelLabel: 'Cancel' },
+      `${lead}\n\nOrders with errors are saved as they are and flagged in Import history — fix them there before labelling them.${tail}`,
+      { title: 'Proceed with errors', confirmLabel: total === 1 ? 'Save it' : 'Save all', cancelLabel: 'Cancel' },
     )
     if (ok) await saveValid(true)
   }
@@ -333,6 +350,10 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
                 setError(null)
                 setDupBlocked(false)
                 setResumeId(null)
+                notifyStore
+                  .snapshot()
+                  .filter((m) => m.title === 'File already uploaded')
+                  .forEach((m) => notifyStore.dismiss(m.id))
               }}
               onSubmit={() => void submitUpload()}
               uploading={uploading}

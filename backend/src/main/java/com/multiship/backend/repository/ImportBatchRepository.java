@@ -91,6 +91,24 @@ public interface ImportBatchRepository extends JpaRepository<ImportBatch, Long> 
             @org.springframework.data.repository.query.Param("refs") java.util.Collection<String> refs);
 
     /**
+     * Live (not trashed) imports holding any of these orderRefs (upper-cased):
+     * [ref, newest import id]. Lets staging warn before an upload saves orders
+     * that are already in Import history.
+     */
+    @org.springframework.data.jpa.repository.Query(value = """
+        SELECT DISTINCT ON (UPPER(x->>'orderRef')) UPPER(x->>'orderRef') AS ref, b.id
+        FROM import_batch b
+        CROSS JOIN LATERAL jsonb_array_elements(
+            CASE WHEN jsonb_typeof(CAST(b.rows_json AS jsonb)) = 'array'
+                 THEN CAST(b.rows_json AS jsonb) ELSE CAST('[]' AS jsonb) END) x
+        WHERE b.deleted_at IS NULL
+          AND UPPER(x->>'orderRef') IN (:refs)
+        ORDER BY UPPER(x->>'orderRef'), b.id DESC
+        """, nativeQuery = true)
+    List<Object[]> findBatchesHoldingOrderRefs(
+            @org.springframework.data.repository.query.Param("refs") java.util.Collection<String> refs);
+
+    /**
      * Atomic status transition — the anti-race gate for
      * {@link com.multiship.backend.service.OrderImportServiceImpl#generateLabelsForBatch}.
      * Sets status=newStatus only if the current row status is currently

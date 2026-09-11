@@ -2764,6 +2764,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (total == 0) return "INITIATE";
         if (generated == total) return "COMPLETE";
         if (failed == total) return "FAILED";
+        // Nothing labelled but something failed (the rest still need fixes): the
+        // run failed — "Partial complete" suggested some labels exist.
+        if (generated == 0 && failed > 0) return "FAILED";
         // Nothing has generated or failed yet: a batch still carrying bad rows
         // stays a DRAFT (work-in-progress); an all-clean batch is INITIATE
         // (ready to generate).
@@ -4395,7 +4398,9 @@ public class OrderImportServiceImpl implements OrderImportService {
                             .errorCode(ErrorCode.VALIDATION_ERROR.name())
                             .message("This file is already uploaded as upload #" + open.getId() + " (" + open.getFileName()
                                     + ": " + waiting.getReadyOrders() + " ready and " + waiting.getInvalidOrders()
-                                    + " with errors still to save). Continue that upload, or upload this file anyway as a new one.")
+                                    + " with errors still to save"
+                                    + (waiting.getSavedOrders() > 0 ? ", " + waiting.getSavedOrders() + " already saved" : "")
+                                    + "). Continue that upload, or upload this file anyway as a new one.")
                             .data(waiting)
                             .build();
                 }
@@ -4425,6 +4430,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
             }
         }
+        flagAlreadyInImportHistory(rows, Map.of());
         java.time.LocalDateTime now = java.time.LocalDateTime.now();
         ImportStagingUpload up = new ImportStagingUpload();
         up.setCreatedBy(requestedBy);
@@ -4462,7 +4468,14 @@ public class OrderImportServiceImpl implements OrderImportService {
         List<ImportStagingRow> ents = stagingRowRepository.findByUploadIdOrderByRowNoAsc(up.getId());
         List<OrderImportRowDTO> rows = readStagingRows(ents);
         requireMatch(firstClientCode(rows));
-        return stagingSuccess(toStagingDTO(up, rows, savedRowMap(ents)), null);
+        Map<Integer, Long> saved = savedRowMap(ents);
+        // Re-check on open: reference data may have changed, or these orders may
+        // have reached Import history through another upload in the meantime.
+        revalidateStaged(rows, saved);
+        persistChangedStagingRows(ents, rows);
+        applyStagingCounts(up, stagingCounts(rows, saved));
+        stagingUploadRepository.save(up);
+        return stagingSuccess(toStagingDTO(up, rows, saved), null);
     }
 
     @Override
@@ -4493,7 +4506,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         edited.setGeneratedTrackingNumber(null);
         rows.set(index, edited);
         propagateGroupEdit(rows, current, edited);
-        revalidateStaged(rows);
+        revalidateStaged(rows, saved);
         persistChangedStagingRows(ents, rows);
         applyStagingCounts(up, stagingCounts(rows, saved));
         up.setUpdatedAt(java.time.LocalDateTime.now());
@@ -4502,7 +4515,8 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     @Override
-    public ApiResponse<StagingUploadDTO> saveStaging(Long id, String requestedBy, boolean includeErrors) {
+    public ApiResponse<StagingUploadDTO> saveStaging(Long id, String requestedBy, boolean includeErrors,
+                                                     boolean allowDuplicate) {
         ImportStagingUpload up = findStaging(id, requestedBy);
         if (up == null) return stagingFailure(HttpStatus.NOT_FOUND, "Upload not found — it may have expired or been discarded.");
         List<ImportStagingRow> ents = stagingRowRepository.findByUploadIdOrderByRowNoAsc(up.getId());
@@ -4511,7 +4525,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         Map<Integer, Long> saved = savedRowMap(ents);
         // Reference data can change while a file waits (an account deactivated, a
         // client removed) — validate once more before anything is saved.
-        revalidateStaged(rows);
+        revalidateStaged(rows, saved);
         persistChangedStagingRows(ents, rows);
 
         // "Ignore errors and save": fully valid orders only. "Proceed with errors":
@@ -4535,6 +4549,32 @@ public class OrderImportServiceImpl implements OrderImportService {
             return stagingFailure(HttpStatus.UNPROCESSABLE_ENTITY, before.totalOrders() > 0 && before.savedOrders() == before.totalOrders()
                     ? "Everything in this upload is already saved to Import history."
                     : "No fully valid orders to save — fix the errors here or download them first.");
+        }
+        // Orders already in Import history (typically the same file uploaded twice
+        // with "Upload anyway") would be saved a second time — ask first.
+        if (!allowDuplicate) {
+            java.util.LinkedHashMap<String, String> dups = new java.util.LinkedHashMap<>();
+            java.util.regex.Pattern importNo = java.util.regex.Pattern.compile("\\(#(\\d+)\\)");
+            for (OrderImportRowDTO r : toSave) {
+                if (r.getWarnings() == null) continue;
+                for (String w : r.getWarnings()) {
+                    if (w == null || !w.contains(IN_HISTORY_MARKER)) continue;
+                    java.util.regex.Matcher m = importNo.matcher(w);
+                    dups.putIfAbsent(StringUtils.hasText(r.getOrderRef()) ? r.getOrderRef().trim() : "row " + r.getRowNumber(),
+                            m.find() ? "#" + m.group(1) : "?");
+                }
+            }
+            if (!dups.isEmpty()) {
+                StringBuilder list = new StringBuilder();
+                int i = 0;
+                for (Map.Entry<String, String> e : dups.entrySet()) {
+                    if (i == 6) { list.append(", …"); break; }
+                    if (i++ > 0) list.append(", ");
+                    list.append(e.getKey()).append(" (").append(e.getValue()).append(")");
+                }
+                return stagingFailure(HttpStatus.CONFLICT, dups.size() + " order(s) in this save are already in Import history: "
+                        + list + ". Saving them again creates duplicate orders.");
+            }
         }
         // Copies: save() re-validates and mutates the rows it is handed.
         List<OrderImportRowDTO> copies = new ArrayList<>(toSave.size());
@@ -4802,8 +4842,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         return m;
     }
 
-    /** The full server-side pipeline, the same sequence save() runs. */
-    private void revalidateStaged(List<OrderImportRowDTO> rows) {
+    /** The full server-side pipeline, the same sequence save() runs, plus the Import-history duplicate check. */
+    private void revalidateStaged(List<OrderImportRowDTO> rows, Map<Integer, Long> saved) {
         for (OrderImportRowDTO row : rows) {
             row.setClientCode(clamp(row.getClientCode()));
             row.setErrors(new ArrayList<>(validateRow(row)));
@@ -4814,6 +4854,47 @@ public class OrderImportServiceImpl implements OrderImportService {
         validateBusinessRules(rows);
         validateCustomFields(rows);
         validateInternationalItems(rows);
+        flagAlreadyInImportHistory(rows, saved);
+    }
+
+    /** Text the Save gate recognises on a duplicate warning. */
+    private static final String IN_HISTORY_MARKER = "is already in Import history";
+
+    /**
+     * Unsaved staged orders whose orderRef is already in a live (not trashed)
+     * import — typically the same file uploaded twice with "Upload anyway".
+     * Saving them again would create duplicate orders, so the rows get a warning
+     * and Save asks before writing them.
+     */
+    private void flagAlreadyInImportHistory(List<OrderImportRowDTO> rows, Map<Integer, Long> saved) {
+        if (importBatchRepository == null || rows == null || rows.isEmpty()) return;
+        java.util.Set<String> refs = new java.util.HashSet<>();
+        for (OrderImportRowDTO r : rows) {
+            if (saved.containsKey(r.getRowNumber()) || !StringUtils.hasText(r.getOrderRef())) continue;
+            refs.add(r.getOrderRef().trim().toUpperCase(Locale.ROOT));
+        }
+        if (refs.isEmpty()) return;
+        Map<String, Long> where = new java.util.HashMap<>();
+        try {
+            for (Object[] o : importBatchRepository.findBatchesHoldingOrderRefs(refs)) {
+                if (o != null && o.length > 1 && o[0] != null && o[1] != null) {
+                    where.put(String.valueOf(o[0]), ((Number) o[1]).longValue());
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("Import staging: duplicate check against Import history skipped: {}", ex.getMessage());
+            return;
+        }
+        if (where.isEmpty()) return;
+        for (OrderImportRowDTO r : rows) {
+            if (saved.containsKey(r.getRowNumber()) || !StringUtils.hasText(r.getOrderRef())) continue;
+            Long batch = where.get(r.getOrderRef().trim().toUpperCase(Locale.ROOT));
+            if (batch == null) continue;
+            List<String> w = new ArrayList<>(r.getWarnings() == null ? List.of() : r.getWarnings());
+            w.add("orderRef " + r.getOrderRef().trim() + " " + IN_HISTORY_MARKER + " (#" + batch
+                    + ") — saving it again creates a duplicate order");
+            r.setWarnings(w);
+        }
     }
 
     /** A staged row's value for one template column, as it would be typed in the file. */

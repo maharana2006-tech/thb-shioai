@@ -197,11 +197,14 @@ export const orderImportService = {
 
   /** Save to Import history (a new batch). includeErrors=false: "Ignore errors and save" (valid orders
    *  only); true: "Proceed with errors" (every unsaved order, a Draft while errors remain). */
-  saveStaging: (id: number, includeErrors = false) =>
-    apiClient.post<ApiResponse<StagingUpload>>(
-      `/orders/import/staging/${id}/save${includeErrors ? '?includeErrors=true' : ''}`,
-      {},
-    ),
+  saveStaging: (id: number, includeErrors = false, allowDuplicate = false) => {
+    const params = new URLSearchParams()
+    if (includeErrors) params.set('includeErrors', 'true')
+    // allowDuplicate confirms saving orders that are already in Import history (409 otherwise).
+    if (allowDuplicate) params.set('allowDuplicate', 'true')
+    const qs = params.toString()
+    return apiClient.post<ApiResponse<StagingUpload>>(`/orders/import/staging/${id}/save${qs ? `?${qs}` : ''}`, {})
+  },
 
   /** Your uploads still waiting in staging (summaries, no rows). */
   listStaging: () => apiClient.get<ApiResponse<StagingUpload[]>>('/orders/import/staging'),
