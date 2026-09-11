@@ -1431,6 +1431,21 @@ public class CarrierServiceImpl implements CarrierService {
             final CarrierConnector fConnector = connector;
             final String fEnv = envForCall;
             for (ShipmentRequestDTO sub : subRequests) {
+                // Residential-required service gate — catches operators
+                // (or scripted API callers) who picked GROUND_HOME_DELIVERY
+                // without ticking the residential flag. FedEx refuses
+                // Home Delivery to commercial addresses with an obscure
+                // CUSTOMER.DESTINATION.INVALID response; we refuse it
+                // ourselves with an actionable message BEFORE the carrier
+                // round-trip. Manual FE + import row builders auto-fill
+                // the flag, so in practice this fires only for direct
+                // API callers who bypass those paths.
+                if (com.multiship.backend.service.carriers.ResidentialRequiredServices
+                        .isInconsistent(sub.getServiceType(), sub.getRecipientResidential())) {
+                    throw new IllegalArgumentException(
+                            com.multiship.backend.service.carriers.ResidentialRequiredServices
+                                    .inconsistentMessage(sub.getServiceType()));
+                }
                 batchResults.add(com.multiship.backend.service.carriers.AuthRetry.withAuthRetry(
                         token,
                         () -> fConnector.getAccessToken(fAccount.getClientId(), fAccount.getClientSecret(),
@@ -2183,6 +2198,20 @@ public class CarrierServiceImpl implements CarrierService {
         final AccountResolution fRes = res;
         final CarrierConnector fConnector = connector;
         for (ShipmentRequestDTO sub : subRequests) {
+            // Residential-required service gate — mirrors the manual-label
+            // path guard. Catches bulk-labels submissions of pre-existing
+            // orders whose shipviaCd=GROUND_HOME_DELIVERY but recipient
+            // isn't flagged residential (a data-model gap on legacy
+            // orders that pre-date the FE auto-tick fix). Rejecting here
+            // fails the ONE row cleanly with a structured error the FE
+            // renders in the failure-details table; other rows in the
+            // same batch continue.
+            if (com.multiship.backend.service.carriers.ResidentialRequiredServices
+                    .isInconsistent(sub.getServiceType(), sub.getRecipientResidential())) {
+                throw new IllegalArgumentException(
+                        com.multiship.backend.service.carriers.ResidentialRequiredServices
+                                .inconsistentMessage(sub.getServiceType()));
+            }
             results.add(com.multiship.backend.service.carriers.AuthRetry.withAuthRetry(
                     accessToken,
                     () -> fConnector.getAccessToken(fRes.clientId(), fRes.clientSecret(),

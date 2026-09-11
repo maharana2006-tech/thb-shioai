@@ -2715,6 +2715,18 @@ public class OrderImportServiceImpl implements OrderImportService {
         recipient.setState(leader.getState());
         recipient.setPostalCode(leader.getPostalCode());
         recipient.setCountryCode(leader.getCountryCode());
+        // Auto-flag residential when the row's serviceType requires it
+        // (FedEx Home Delivery today). OrderImportRowDTO has no
+        // dedicated residential column, so before this fix EVERY
+        // imported row defaulted to commercial and FedEx refused Home
+        // Delivery with an opaque CUSTOMER.DESTINATION.INVALID
+        // response. Auto-fill fixes the common case; operators who
+        // need residential on a NON-Home-Delivery service should
+        // (future) get an explicit spreadsheet column — separate ask.
+        if (com.multiship.backend.service.carriers.ResidentialRequiredServices
+                .requiresResidential(leader.getServiceType())) {
+            recipient.setResidential(true);
+        }
         req.setRecipient(recipient);
 
         req.setCarrierCode(leader.getCarrierCode());

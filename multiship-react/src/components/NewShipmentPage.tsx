@@ -3278,7 +3278,26 @@ export default function NewShipmentPage() {
                   </Field>
                   <Field label="Service level">
                     <div className="flex items-center gap-1.5">
-                      <select className={inputCls} value={serviceId} onChange={(e) => setServiceId(e.target.value ? Number(e.target.value) : '')}>
+                      <select className={inputCls} value={serviceId} onChange={(e) => {
+                        const nextId = e.target.value ? Number(e.target.value) : ''
+                        setServiceId(nextId)
+                        // Auto-tick "Residential address" when the operator
+                        // picks a service that requires it (FedEx Home
+                        // Delivery today). FedEx refuses this service to
+                        // commercial addresses with an opaque error;
+                        // silently flipping the recipient flag prevents
+                        // the failure at submit time. Operator can still
+                        // untick manually — the auto-flip only ADDS the
+                        // flag, never removes it, so switching between
+                        // Home Delivery ↔ regular Ground doesn't
+                        // stomp on a legitimate residential setting.
+                        if (nextId !== '') {
+                          const svcCode = services.find((s) => s.id === Number(nextId))?.serviceCode
+                          if (svcCode === 'GROUND_HOME_DELIVERY' && !recipient.residential) {
+                            setRecipient({ ...recipient, residential: true })
+                          }
+                        }
+                      }}>
                         {servicesForCarrier.length === 0 ? <option value="">Carrier default</option> : null}
                         {servicesForCarrier.map((s) => (
                           <option key={s.id} value={s.id}>{s.name}</option>

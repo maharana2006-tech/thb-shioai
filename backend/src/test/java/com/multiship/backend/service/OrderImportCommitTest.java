@@ -134,6 +134,54 @@ class OrderImportCommitTest {
         assertEquals("US", req.getRecipient().getCountryCode());
     }
 
+    /**
+     * FedEx Home Delivery import — the row's serviceType triggers
+     * auto-fill of the recipient's residential flag. Without this
+     * fill, FedEx returns CUSTOMER.DESTINATION.INVALID on every
+     * Home Delivery row because import rows default residential to
+     * unknown/false. Locks in the auto-fill so a future refactor
+     * of toManualShipmentRequest doesn't silently drop the flag.
+     */
+    @Test
+    void groundHomeDeliveryRowAutoFlagsRecipientAsResidential() {
+        when(carrierService.generateManualLabel(any(), any(), any())).thenReturn(ok(1001L, "TN-1"));
+
+        com.multiship.backend.dto.OrderImportRowDTO row = validRow(1);
+        row.setCarrierCode("FEDEX");
+        row.setServiceType("GROUND_HOME_DELIVERY");
+
+        service.commit(List.of(row), "alice");
+
+        ArgumentCaptor<ManualShipmentRequest> captor = ArgumentCaptor.forClass(ManualShipmentRequest.class);
+        verify(carrierService).generateManualLabel(captor.capture(), any(), any());
+        assertEquals(Boolean.TRUE, captor.getValue().getRecipient().getResidential(),
+                "Import row with serviceType=GROUND_HOME_DELIVERY must auto-set "
+                        + "recipient.residential=true so FedEx doesn't reject the shipment");
+    }
+
+    /**
+     * Regression guard — a NON-Home-Delivery service must NOT touch
+     * the residential flag. Otherwise a regular FedEx Ground shipment
+     * to a commercial address would get billed the residential
+     * surcharge for no reason.
+     */
+    @Test
+    void nonHomeDeliveryRowLeavesResidentialUntouched() {
+        when(carrierService.generateManualLabel(any(), any(), any())).thenReturn(ok(1001L, "TN-1"));
+
+        com.multiship.backend.dto.OrderImportRowDTO row = validRow(1);
+        row.setCarrierCode("FEDEX");
+        row.setServiceType("FEDEX_GROUND");
+
+        service.commit(List.of(row), "alice");
+
+        ArgumentCaptor<ManualShipmentRequest> captor = ArgumentCaptor.forClass(ManualShipmentRequest.class);
+        verify(carrierService).generateManualLabel(captor.capture(), any(), any());
+        assertNull(captor.getValue().getRecipient().getResidential(),
+                "Regular services must NOT force the residential flag — that would bill "
+                        + "an unnecessary residential surcharge on commercial addresses");
+    }
+
     /* -------------------------- Mixed success/failure -------------------------- */
 
     @Test
