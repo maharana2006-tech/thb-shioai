@@ -79,6 +79,14 @@ public class UpsConnector implements CarrierConnector {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.CarrierPackageCatalogRepository packageCatalogRepository;
 
+    /** Client-side outbound rate limiter — throttles UPS calls to a safe
+     *  rate (default 3 req/sec) to prevent the burst-into-429 pattern
+     *  observed on 2026-09-11 during bulk import. Field injection so the
+     *  unit-test two-arg constructor keeps compiling; null in tests
+     *  means the acquire() is a no-op. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CarrierOutboundRateLimiter outboundRateLimiter;
+
     /** Per-thread reason the last getAccessToken fell back — read by verify. */
     private static final ThreadLocal<String> LAST_AUTH_DETAIL = new ThreadLocal<>();
 
@@ -496,6 +504,17 @@ public class UpsConnector implements CarrierConnector {
         // actionable message pointing at the field so the operator can
         // fix it upstream instead of round-tripping to UPS.
         assertUpsIntlContactPresent(request);
+        // Outbound rate limit — bulk-import fan-out sends ~8 concurrent
+        // UPS calls per tenant, which trips UPS's burst limit and every
+        // one gets 429 10429 "Too Many Requests" (real failure at
+        // 2026-09-11 20:06:20). Gate here so the burst is serialized to
+        // a safe rate (default 3 req/sec, configurable via
+        // carrier.rate-limit.ups.requests-per-second). Single-caller
+        // paths (manual label, rate-shop, single UPS API caller) pay
+        // zero latency because there's no contention.
+        if (outboundRateLimiter != null) {
+            outboundRateLimiter.acquire("UPS");
+        }
         try {
             Map<String, Object> payload = buildShipmentPayload(request);
             String baseUrl = isSandbox(environment)
