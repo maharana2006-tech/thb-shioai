@@ -128,6 +128,11 @@ export interface ImportBatchSummary {
    *  PARTIAL_COMPLETE / FAILED / CANCELLED). Null while the batch
    *  hasn't finished a generation run yet. Updated on retries. */
   completedAt?: string | null
+  /** Batch-level note surfaced under the status pill (Batch #11
+   *  post-mortem 2026-09-12). Populated when a generate run
+   *  exhausts its retry passes with rows still rate-limited by the
+   *  carrier. Cleared on the next retry. */
+  note?: string | null
   totalRows: number
   savedRows: number
   invalidRows: number

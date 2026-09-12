@@ -66,6 +66,16 @@ public class ImportBatch {
     @Column(name = "completed_at")
     private LocalDateTime completedAt;
 
+    /**
+     * Batch-level note surfaced under the status pill on Data History.
+     * Populated when the retry-pass loop exhausts with deferred rows
+     * remaining (Batch #11 post-mortem, 2026-09-12): "UPS was rate-
+     * limiting throughout — 5,142 rows still queued." Cleared on the
+     * next IN_PROGRESS retry. 500-char max.
+     */
+    @Column(name = "note", length = 500)
+    private String note;
+
     @Column(name = "total_rows")
     private int totalRows;
 

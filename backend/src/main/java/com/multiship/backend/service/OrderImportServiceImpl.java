@@ -2427,6 +2427,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         // "In progress" status pill. The new terminal transition at the
         // end of this run stamps a fresh value via stampCompletionIfTerminal.
         batch.setCompletedAt(null);
+        // Same for the batch-level note (Batch #11 post-mortem, 2026-09-12)
+        // — a stale "UPS was rate-limiting throughout" caption from a
+        // prior run should disappear while the retry runs; if the retry
+        // ALSO exhausts we'll set it again below.
+        batch.setNote(null);
         publishBatchEvent(batch, "batch-updated");
 
         // Reuse the commit path — it generates labels and stamps each row's
@@ -2476,6 +2481,31 @@ public class OrderImportServiceImpl implements OrderImportService {
                 ? "CANCELLED"
                 : deriveGenerationStatus(total, generated, failed, invalid));
         stampCompletionIfTerminal(batch);
+        // Batch #11 post-mortem (2026-09-12) — surface a batch-level note
+        // when the retry-pass loop exhausted with rows still rate-limited.
+        // The per-row message ("UPS is still rate-limiting after N
+        // automatic retries — click Retry in a few minutes") is set on
+        // each affected row's generatedMessage inside commit(); we look
+        // for that shape here and derive a single, human-summary caption
+        // for the FE Data History row.
+        long rateLimitedRemaining = rows.stream()
+                .filter(r -> "FAILED".equalsIgnoreCase(r.getGeneratedStatus()))
+                .map(OrderImportRowDTO::getGeneratedMessage)
+                .filter(m -> m != null && m.contains("still rate-limiting after"))
+                .count();
+        if (rateLimitedRemaining > 0) {
+            String who = rows.stream()
+                    .filter(r -> r.getGeneratedMessage() != null
+                            && r.getGeneratedMessage().contains("still rate-limiting after"))
+                    .map(OrderImportRowDTO::getCarrierCode)
+                    .filter(StringUtils::hasText)
+                    .findFirst()
+                    .map(String::toUpperCase)
+                    .orElse("The carrier");
+            batch.setNote(who + " was rate-limiting throughout — " + rateLimitedRemaining
+                    + " row(s) still queued. Wait for the carrier's quota window to reset, "
+                    + "then click Retry.");
+        }
         // commit() stamps every generated row with the shared label batchId;
         // lift it onto the import so the file row shows which All-Orders batch
         // its labels belong to. Keep any prior id if this run generated none.
@@ -3050,6 +3080,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .labelBatchId(batch.getLabelBatchId())
                 .createdAt(batch.getCreatedAt() == null ? null : batch.getCreatedAt().toString())
                 .completedAt(batch.getCompletedAt() == null ? null : batch.getCompletedAt().toString())
+                .note(batch.getNote())
                 .totalRows(batch.getTotalRows())
                 .savedRows(batch.getSavedRows())
                 .invalidRows(batch.getInvalidRows())

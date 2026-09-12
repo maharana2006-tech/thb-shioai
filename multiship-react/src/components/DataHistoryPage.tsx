@@ -826,7 +826,7 @@ export default function DataHistoryPage() {
           // caption disappears until the next terminal transition.
           const done = completedAgo(b.completedAt)
           return (
-            <span className="flex flex-col items-start gap-0.5">
+            <span className="flex max-w-[220px] flex-col items-start gap-0.5">
               <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>{s.label}</span>
               {done ? (
                 <span
@@ -834,6 +834,18 @@ export default function DataHistoryPage() {
                   title={b.completedAt ? new Date(b.completedAt).toLocaleString() : undefined}
                 >
                   {done}
+                </span>
+              ) : null}
+              {b.note ? (
+                // Batch #11 post-mortem (2026-09-12) — batch-level note
+                // like "UPS was rate-limiting throughout — N rows still
+                // queued". Rendered as a subtle amber caption; full text
+                // in the title so operators can scan on hover.
+                <span
+                  className="whitespace-normal text-[10px] leading-snug text-amber-800"
+                  title={b.note}
+                >
+                  {b.note}
                 </span>
               ) : null}
             </span>

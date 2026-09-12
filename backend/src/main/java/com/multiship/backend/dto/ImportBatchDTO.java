@@ -18,6 +18,13 @@ public class ImportBatchDTO {
      * batch hasn't finished a generation run yet. Updated on retries.
      */
     private String completedAt;
+    /**
+     * Optional batch-level note (Batch #11 post-mortem, 2026-09-12) —
+     * rendered under the status pill in the FE. Populated when a
+     * generate run exhausts its retry passes with rows still rate-
+     * limited. Cleared when the operator retries. Max 500 chars.
+     */
+    private String note;
     /** Original uploaded file name the rows came from. */
     private String fileName;
     /** INITIATE | IN_PROGRESS | PARTIAL_COMPLETE | COMPLETE. */

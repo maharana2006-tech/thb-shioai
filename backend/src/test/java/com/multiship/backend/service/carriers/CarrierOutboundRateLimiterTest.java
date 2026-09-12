@@ -85,6 +85,79 @@ class CarrierOutboundRateLimiterTest {
         limiter.acquire(null);
     }
 
+    /* ==================== Adaptive throttling (Batch #11 post-mortem) ==================== */
+
+    @Test
+    void adaptiveHalveTriggersAfterConsecutive429s() {
+        // Baseline 8rps; feed the trigger count of 429s and verify the
+        // effective rps halves to 4.
+        CarrierOutboundRateLimiter limiter = limiterAt("UPS", 8);
+        assertEquals(8, limiter.currentRpsForTest("UPS"));
+        for (int i = 0; i < CarrierOutboundRateLimiter.RATE_LIMIT_TRIGGER_COUNT; i++) {
+            limiter.notifyRateLimited("UPS");
+        }
+        assertEquals(4, limiter.currentRpsForTest("UPS"),
+                "Effective rps must halve after " + CarrierOutboundRateLimiter.RATE_LIMIT_TRIGGER_COUNT
+                        + " consecutive 429s");
+    }
+
+    @Test
+    void adaptiveHalveKeepsHalving() {
+        // Successive 429 storms should keep halving until the floor.
+        CarrierOutboundRateLimiter limiter = limiterAt("UPS", 8);
+        // First storm — 8 -> 4.
+        for (int i = 0; i < CarrierOutboundRateLimiter.RATE_LIMIT_TRIGGER_COUNT; i++) {
+            limiter.notifyRateLimited("UPS");
+        }
+        assertEquals(4, limiter.currentRpsForTest("UPS"));
+        // Additional 429s in the same window keep tripping — 4 -> 2.
+        // (Notice: after the initial trigger we don't clear the window,
+        // so a single additional 429 puts the count over threshold again.)
+        limiter.notifyRateLimited("UPS");
+        assertEquals(2, limiter.currentRpsForTest("UPS"));
+        // 2 -> 1 (floor).
+        limiter.notifyRateLimited("UPS");
+        assertEquals(1, limiter.currentRpsForTest("UPS"));
+        // Additional 429s below the floor should stay at 1 rps.
+        limiter.notifyRateLimited("UPS");
+        limiter.notifyRateLimited("UPS");
+        assertEquals(1, limiter.currentRpsForTest("UPS"),
+                "Adaptive floor must clamp at 1 rps regardless of continued 429s");
+    }
+
+    @Test
+    void adaptiveHalveDoesNotAffectOtherCarriers() {
+        CarrierOutboundRateLimiter limiter = new CarrierOutboundRateLimiter();
+        limiter.setRequestsPerSecondForTest("UPS", 8);
+        limiter.setRequestsPerSecondForTest("FEDEX", 8);
+        for (int i = 0; i < CarrierOutboundRateLimiter.RATE_LIMIT_TRIGGER_COUNT; i++) {
+            limiter.notifyRateLimited("UPS");
+        }
+        assertEquals(4, limiter.currentRpsForTest("UPS"),
+                "UPS should have adapted down");
+        assertEquals(8, limiter.currentRpsForTest("FEDEX"),
+                "FedEx should be unaffected by UPS's rate-limit storm");
+    }
+
+    @Test
+    void notifyRateLimitedOnUnconfiguredCarrierIsNoOp() {
+        // Baseline rps <= 0 for an unknown carrier — notification must
+        // not NPE or leak state.
+        CarrierOutboundRateLimiter limiter = new CarrierOutboundRateLimiter();
+        // Should not throw.
+        limiter.notifyRateLimited("MYSTERY_CARRIER");
+        limiter.notifyRateLimited(null);
+    }
+
+    @Test
+    void adaptiveHalveTriggersBelowThresholdIsNoOp() {
+        CarrierOutboundRateLimiter limiter = limiterAt("UPS", 8);
+        // One 429 shouldn't drop the rate — needs the trigger count.
+        limiter.notifyRateLimited("UPS");
+        assertEquals(8, limiter.currentRpsForTest("UPS"),
+                "Single 429 must not trip the adaptive halve");
+    }
+
     @Test
     void concurrentCallersAreSerializedToTheConfiguredRate() throws Exception {
         // 8 concurrent workers × 4 rps = ~1.75s total (7 gaps × 250ms).

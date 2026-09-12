@@ -555,6 +555,12 @@ public class UpsConnector implements CarrierConnector {
             if (CarrierRateLimit.isRateLimited(rlex)) {
                 log.warn("UPS createShipment {} — {}",
                         CarrierRateLimit.describe(rlex), rlex.getMessage());
+                // Batch #11 post-mortem (2026-09-12) — notify the outbound
+                // rate limiter so it can adaptively halve UPS's rps after
+                // enough 429s land in the sliding window. Prevents a 10k-
+                // row bulk batch from repeatedly re-tripping UPS's quota
+                // after each retry pass.
+                if (outboundRateLimiter != null) outboundRateLimiter.notifyRateLimited("UPS");
             } else {
                 log.warn("UPS createShipment failed: {}", rlex.getMessage());
             }
