@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   FiAlertCircle,
@@ -35,6 +35,24 @@ import { useEventStream } from '../hooks/useEventStream'
 import { normalizeRole } from '../utils/roles'
 
 /**
+ * Compact "X ago" for a completion timestamp — mirrors the pattern
+ * used in ApiKeysPage / CarrierConnections so all "last activity" cells
+ * on the site read the same way. Returns null for unset / future
+ * timestamps so the caller can render nothing at all.
+ */
+const completedAgo = (iso?: string | null): string | null => {
+  if (!iso) return null
+  const secs = Math.round((Date.now() - new Date(iso).getTime()) / 1000)
+  if (Number.isNaN(secs) || secs < 0) return null
+  if (secs < 60) return 'completed just now'
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return `completed ${mins}m ago`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 24) return `completed ${hrs}h ago`
+  return `completed ${Math.round(hrs / 24)}d ago`
+}
+
+/**
  * Data History — every saved CSV/XLSX import. "Commit" in the import modal
  * saves the parsed rows here (no labels generated); this page lists those
  * saved imports and lets you expand one to see its rows.
@@ -57,6 +75,14 @@ export default function DataHistoryPage() {
   // Live "X of N" label-generation progress per batch, polled while a batch
   // generate/retry runs so the button shows a real progress bar, not a spinner.
   const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number; note?: string | null }>>({})
+  // Observer-mode poll tracking (2026-09-12 post-mortem) — pre-fix, the
+  // progress bar only rendered when THIS browser session called
+  // generate(id). Reloading the page or opening Data History in a fresh
+  // tab left IN_PROGRESS batches without a visible progress bar even
+  // though workers were actively labelling. This map holds a cancel
+  // function per batch so the effect below can restart / stop polls
+  // without racing the local generate() session.
+  const observerPollsRef = useRef<Map<number, { cancel: () => void }>>(new Map())
   // Bill-to account: the batch whose "Bills to" selector is mid-save.
   const [billingSavingId, setBillingSavingId] = useState<number | null>(null)
   // Confirm-before-generate when a batch bills to the platform account.
@@ -294,6 +320,91 @@ export default function DataHistoryPage() {
     return () => window.clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batches, viewTrash, sseStatus])
+
+  /**
+   * Observer-mode progress polling (2026-09-12 fix). For any batch whose
+   * SERVER-side status is IN_PROGRESS but that WASN'T started by this
+   * session (generatingId !== id), poll {@code generationProgress} so
+   * the progress bar renders regardless of who kicked off the generate.
+   * Covers: page-reload while a batch is generating, opening Data
+   * History in a fresh tab, watching a batch another operator started.
+   *
+   * <p>The local generate() call runs its own poll (with a tighter
+   * closure-scoped stop signal), so this observer poll skips batches
+   * where {@code generatingId === b.id}. Otherwise duplicate polls
+   * would race on the same setGenProgressById state.
+   *
+   * <p>Each poll auto-terminates when the server reports
+   * {@code running: false} (batch reached a terminal status) or when
+   * the batch leaves the IN_PROGRESS state on our next render. Cancel
+   * functions live in {@link observerPollsRef} keyed by batch id.
+   */
+  useEffect(() => {
+    if (viewTrash) return
+    const polls = observerPollsRef.current
+    const inProgressIds = new Set(
+      batches
+        .filter((b) => (b.status || '').toUpperCase() === 'IN_PROGRESS')
+        .map((b) => b.id),
+    )
+    // Start polls for any newly-IN_PROGRESS batch we're not already
+    // polling AND that the local generate() isn't already polling itself.
+    for (const id of inProgressIds) {
+      if (polls.has(id)) continue
+      if (generatingId === id) continue
+      let cancelled = false
+      polls.set(id, { cancel: () => { cancelled = true } })
+      void (async () => {
+        while (!cancelled) {
+          try {
+            const pr = await orderImportService.generationProgress(id)
+            const d = pr.data
+            if (cancelled) break
+            if (d && d.running && d.total > 0) {
+              setGenProgressById((m) => ({
+                ...m,
+                [id]: { done: d.done, total: d.total, note: d.note ?? null },
+              }))
+            } else if (d && !d.running) {
+              // Server says the run finished — clean up and stop.
+              setGenProgressById((m) => {
+                if (!(id in m)) return m
+                const next = { ...m }
+                delete next[id]
+                return next
+              })
+              break
+            }
+          } catch {
+            /* transient poll error — try again; the auto-poll effect
+               above will refresh the batches list which drives our
+               continue/stop decision on the next tick. */
+          }
+          await new Promise((r) => setTimeout(r, 400))
+        }
+        polls.delete(id)
+      })()
+    }
+    // Stop polls for batches that are no longer IN_PROGRESS (reached
+    // a terminal state, got soft-deleted, or otherwise fell off the list).
+    for (const [id, poll] of polls) {
+      if (!inProgressIds.has(id)) {
+        poll.cancel()
+        polls.delete(id)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batches, viewTrash, generatingId])
+
+  /** Cleanup on unmount — cancel every in-flight observer poll so the
+   *  loop doesn't outlive the component. */
+  useEffect(() => {
+    return () => {
+      const polls = observerPollsRef.current
+      for (const [, poll] of polls) poll.cancel()
+      polls.clear()
+    }
+  }, [])
 
   /** Empty the Trash — PERMANENTLY delete every batch currently in Trash. */
   const handleEmptyTrash = async () => {
@@ -707,9 +818,26 @@ export default function DataHistoryPage() {
         size: 130,
         accessorFn: (b) => b.status ?? '',
         cell: ({ row }) => {
-          const s = statusMeta(row.original.status)
-          // Status only — the error count lives once, in the Rows column.
-          return <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>{s.label}</span>
+          const b = row.original
+          const s = statusMeta(b.status)
+          // Completion caption (2026-09-12) — only rendered when the
+          // batch has landed a terminal state at least once; retries
+          // that go back through IN_PROGRESS null completedAt so the
+          // caption disappears until the next terminal transition.
+          const done = completedAgo(b.completedAt)
+          return (
+            <span className="flex flex-col items-start gap-0.5">
+              <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>{s.label}</span>
+              {done ? (
+                <span
+                  className="text-[10px] text-[#8a7a5a]"
+                  title={b.completedAt ? new Date(b.completedAt).toLocaleString() : undefined}
+                >
+                  {done}
+                </span>
+              ) : null}
+            </span>
+          )
         },
         meta: { headerLabel: 'Status' },
       },
@@ -770,7 +898,11 @@ export default function DataHistoryPage() {
           const canGenerate = canWrite && !isWms && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED'
             || (st === 'DRAFT' && b.savedRows > 0))
           const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED'
-          const busy = generatingId === b.id
+          // busy renders the progress bar. Include server-side IN_PROGRESS
+          // (2026-09-12 fix) so operators watching a batch started in
+          // another session / tab / browser see the same bar. The
+          // observer-poll effect populates genProgressById for those.
+          const busy = generatingId === b.id || st === 'IN_PROGRESS'
           const progress = genProgressById[b.id]
           const platform = b.billingMode === 'PLATFORM'
           const confirming = confirmGenId === b.id

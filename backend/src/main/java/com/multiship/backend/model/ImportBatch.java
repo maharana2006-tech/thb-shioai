@@ -54,6 +54,18 @@ public class ImportBatch {
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
+    /**
+     * When the batch reached its most recent terminal state
+     * (COMPLETE / PARTIAL_COMPLETE / FAILED / CANCELLED). Null while
+     * pre-generation or actively IN_PROGRESS. Updated on every terminal
+     * transition — a retry that flips PARTIAL_COMPLETE back to
+     * IN_PROGRESS and lands terminal again overwrites this with the
+     * latest wall-clock time (operator ask 2026-09-12). See
+     * OrderImportServiceImpl#stampCompletionIfTerminal.
+     */
+    @Column(name = "completed_at")
+    private LocalDateTime completedAt;
+
     @Column(name = "total_rows")
     private int totalRows;
 

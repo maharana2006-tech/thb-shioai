@@ -313,6 +313,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 continue;
             }
             batch.setStatus("FAILED");
+            stampCompletionIfTerminal(batch);
             String detail = "Marked FAILED by startup housekeeper: batch was IN_PROGRESS when the JVM "
                     + "restarted (created " + lastActivity + ", older than "
                     + staleInProgressCutoffMinutes + " min cutoff). Retry from Import history.";
@@ -2421,6 +2422,11 @@ public class OrderImportServiceImpl implements OrderImportService {
         // entity in sync so downstream save() writes don't overwrite it
         // with a stale value.
         batch.setStatus("IN_PROGRESS");
+        // Clear the previous completion timestamp when a retry starts so
+        // the FE doesn't render "completed 8m ago" alongside an
+        // "In progress" status pill. The new terminal transition at the
+        // end of this run stamps a fresh value via stampCompletionIfTerminal.
+        batch.setCompletedAt(null);
         publishBatchEvent(batch, "batch-updated");
 
         // Reuse the commit path — it generates labels and stamps each row's
@@ -2469,6 +2475,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         batch.setStatus(wasCancelled
                 ? "CANCELLED"
                 : deriveGenerationStatus(total, generated, failed, invalid));
+        stampCompletionIfTerminal(batch);
         // commit() stamps every generated row with the shared label batchId;
         // lift it onto the import so the file row shows which All-Orders batch
         // its labels belong to. Keep any prior id if this run generated none.
@@ -2812,6 +2819,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .filter(r -> r.getErrors() != null && !r.getErrors().isEmpty())
                 .count();
         batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
+        stampCompletionIfTerminal(batch);
         Integer labelBatchId = firstBatchId(rows);
         if (labelBatchId != null) batch.setLabelBatchId(labelBatchId);
         try {
@@ -2962,6 +2970,7 @@ public class OrderImportServiceImpl implements OrderImportService {
         batch.setSavedRows(readyRowCount(rows));
         batch.setInvalidRows(invalid);
         batch.setStatus(deriveGenerationStatus(total, generated, failed, invalid));
+        stampCompletionIfTerminal(batch);
         try {
             if (importObjectMapper != null) batch.setRowsJson(importObjectMapper.writeValueAsString(rows));
         } catch (Exception ex) {
@@ -2983,6 +2992,28 @@ public class OrderImportServiceImpl implements OrderImportService {
      *   FAILED           — every row was attempted and all failed
      *   PARTIAL_COMPLETE — some labels made, or some rows still pending
      */
+    /**
+     * Stamp {@link com.multiship.backend.model.ImportBatch#getCompletedAt()}
+     * with the current wall-clock time when the batch has just landed a
+     * terminal state (COMPLETE / PARTIAL_COMPLETE / FAILED / CANCELLED).
+     * Updates on every terminal transition — a retry that runs the batch
+     * through IN_PROGRESS -> terminal a second time overwrites the
+     * previous stamp with the latest "run finished" moment (operator
+     * ask 2026-09-12). No-op on non-terminal states (DRAFT / INITIATE /
+     * IN_PROGRESS) so a save-time INITIATE or a mid-run IN_PROGRESS
+     * write doesn't accidentally clear or forward-date the field.
+     *
+     * <p>Callers must invoke this AFTER {@code batch.setStatus(...)} so
+     * the terminal check reads the just-set value.
+     */
+    private static void stampCompletionIfTerminal(com.multiship.backend.model.ImportBatch batch) {
+        String s = batch == null || batch.getStatus() == null ? "" : batch.getStatus().trim().toUpperCase(java.util.Locale.ROOT);
+        if ("COMPLETE".equals(s) || "PARTIAL_COMPLETE".equals(s)
+                || "FAILED".equals(s) || "CANCELLED".equals(s)) {
+            batch.setCompletedAt(java.time.LocalDateTime.now());
+        }
+    }
+
     private String deriveGenerationStatus(int total, int generated, int failed, int invalid) {
         if (total == 0) return "INITIATE";
         if (generated == total) return "COMPLETE";
@@ -3018,6 +3049,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .status(batch.getStatus())
                 .labelBatchId(batch.getLabelBatchId())
                 .createdAt(batch.getCreatedAt() == null ? null : batch.getCreatedAt().toString())
+                .completedAt(batch.getCompletedAt() == null ? null : batch.getCompletedAt().toString())
                 .totalRows(batch.getTotalRows())
                 .savedRows(batch.getSavedRows())
                 .invalidRows(batch.getInvalidRows())

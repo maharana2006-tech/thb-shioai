@@ -12,6 +12,12 @@ public class ImportBatchDTO {
     private Long id;
     private String createdBy;
     private String createdAt;
+    /**
+     * ISO timestamp of the last terminal transition
+     * (COMPLETE / PARTIAL_COMPLETE / FAILED / CANCELLED). Null when the
+     * batch hasn't finished a generation run yet. Updated on retries.
+     */
+    private String completedAt;
     /** Original uploaded file name the rows came from. */
     private String fileName;
     /** INITIATE | IN_PROGRESS | PARTIAL_COMPLETE | COMPLETE. */

@@ -124,6 +124,10 @@ export interface ImportBatchSummary {
    *  Null until the first label is generated. Groups the orders in All Orders. */
   labelBatchId?: number | null
   createdAt?: string | null
+  /** ISO timestamp of the last terminal transition (COMPLETE /
+   *  PARTIAL_COMPLETE / FAILED / CANCELLED). Null while the batch
+   *  hasn't finished a generation run yet. Updated on retries. */
+  completedAt?: string | null
   totalRows: number
   savedRows: number
   invalidRows: number
