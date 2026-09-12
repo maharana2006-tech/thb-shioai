@@ -67,9 +67,18 @@ public final class CarrierServiceLaneRules {
 
     /** Services that reach the 48 states + PR/territories but NOT AK/HI —
      *  a distinct tier from {@link #DOMESTIC48_ONLY_SERVICES}. FedEx
-     *  Express Saver is the archetypal example (Batch #8: 14 of 25 errors). */
+     *  Express Saver is the archetypal example (Batch #8: 14 of 25 errors).
+     *
+     *  <p>STANDARD_OVERNIGHT added post batch-9 (2026-09-12): 7 of 13
+     *  batch-9 errors were FedEx SERVICETYPE.NOTSUPPORTED on
+     *  STANDARD_OVERNIGHT to HI ZIP 96813 (matching 4 batch-8 rows on
+     *  the same ZIP). Not just ZIP-specific — FedEx's Standard Overnight
+     *  is a next-day-by-3pm service that keys off same-day pickup
+     *  timing plus continental-US routing, so AK/HI aren't covered
+     *  from any origin.  Fallback: PRIORITY_OVERNIGHT / FIRST_OVERNIGHT. */
     private static final Map<String, String> NON_AK_HI_SERVICES = Map.of(
-            "FEDEX|FEDEX_EXPRESS_SAVER", "FedEx Express Saver");
+            "FEDEX|FEDEX_EXPRESS_SAVER", "FedEx Express Saver",
+            "FEDEX|STANDARD_OVERNIGHT", "FedEx Standard Overnight");
 
     /**
      * International service ↔ destination-country exclusions (2026-09-12

@@ -199,4 +199,48 @@ class CarrierServiceLaneRulesTest {
         assertNull(CarrierServiceLaneRules.checkLane(
                 "FEDEX", "INTERNATIONAL_ECONOMY", "JAL", "MX"));
     }
+
+    /* ==================== Batch #9 Group A: STANDARD_OVERNIGHT AK/HI ==================== */
+
+    @Test
+    void fedexStandardOvernightToHawaiiIsRejected() {
+        // Real failing rows from Batch #9: 7 orders on STANDARD_OVERNIGHT
+        // to HI 96813 (Honolulu). Matches 4 batch-8 rows on the same
+        // ZIP. Standard Overnight doesn't cover AK/HI from any US origin.
+        String err = CarrierServiceLaneRules.checkLane(
+                "FEDEX", "STANDARD_OVERNIGHT", "HI", "US");
+        assertNotNull(err, "Standard Overnight to HI must be rejected pre-flight");
+        assertTrue(err.contains("Standard Overnight"), "message names the service: " + err);
+        assertTrue(err.contains("HI"), "message names the state: " + err);
+        assertTrue(err.contains("Overnight"),
+                "message suggests an overnight fallback: " + err);
+    }
+
+    @Test
+    void fedexStandardOvernightToAlaskaIsRejected() {
+        // Not directly in Batch #9 (all 7 were HI), but the rule applies
+        // to AK too since Standard Overnight is continental-US only.
+        assertNotNull(CarrierServiceLaneRules.checkLane(
+                "FEDEX", "STANDARD_OVERNIGHT", "AK", "US"));
+    }
+
+    @Test
+    void fedexPriorityOvernightToHawaiiIsFine() {
+        // The recommended replacement. Priority Overnight DOES cover
+        // AK/HI (with next-day-by-noon-ish semantics).
+        assertNull(CarrierServiceLaneRules.checkLane(
+                "FEDEX", "PRIORITY_OVERNIGHT", "HI", "US"));
+        assertNull(CarrierServiceLaneRules.checkLane(
+                "FEDEX", "FIRST_OVERNIGHT", "HI", "US"));
+    }
+
+    @Test
+    void fedexStandardOvernightToContiguousUsIsFine() {
+        // Guard against over-blocking: this is the whole point of
+        // Standard Overnight, must still work on the 48-state grid.
+        assertNull(CarrierServiceLaneRules.checkLane(
+                "FEDEX", "STANDARD_OVERNIGHT", "NY", "US"));
+        assertNull(CarrierServiceLaneRules.checkLane(
+                "FEDEX", "STANDARD_OVERNIGHT", "TX", "US"));
+    }
 }

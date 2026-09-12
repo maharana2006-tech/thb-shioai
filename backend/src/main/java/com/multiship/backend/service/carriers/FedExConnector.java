@@ -405,13 +405,8 @@ public class FedExConnector implements CarrierConnector {
             RestClient restClient = HttpClients.newBuilder().baseUrl(shipmentUrl).build();
             Map<String, Object> payload = buildShipmentPayload(request);
 
-            String response = restClient.post()
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .accept(MediaType.APPLICATION_JSON)
-                    .header("Authorization", "Bearer " + accessToken)
-                    .body(payload)
-                    .retrieve()
-                    .body(String.class);
+            String response = postShipmentWithTcpRetry(restClient, accessToken, payload,
+                    request.getReferenceNumber());
 
             return parseShipmentResult(response);
         } catch (com.multiship.backend.service.carriers.exceptions.CarrierException cex) {
@@ -445,6 +440,62 @@ public class FedExConnector implements CarrierConnector {
             throw com.multiship.backend.service.carriers.exceptions.CarrierExceptionMapper
                     .map("FEDEX", ex, "createShipment");
         }
+    }
+
+    /**
+     * POST the shipment payload to FedEx with a single bounded retry
+     * on TCP-level failure (Connection reset, read timeout).
+     *
+     * <p>Batch #9 post-mortem (2026-09-12): 5 orders in a 9,821-row
+     * batch failed with {@code I/O error on POST request ... Connection
+     * reset} — all in the same second, on FedEx sandbox. The
+     * connections got severed mid-request by FedEx's edge. Spring
+     * REST client surfaces this as {@link ResourceAccessException},
+     * which isn't a 4xx/5xx so it never triggered the existing
+     * 429 backoff path. A single 500ms retry recovers the transient
+     * case without hiding a genuine outage (persistent Connection
+     * reset still throws after the retry).
+     *
+     * <p>Retry gate: only TCP-level failures (ResourceAccessException,
+     * IOException, SocketTimeoutException). 4xx / 5xx responses go
+     * straight to the caller's error handler as before — we never
+     * want to double-fire on a validation error and risk a duplicate
+     * label charge.
+     */
+    private String postShipmentWithTcpRetry(RestClient restClient, String accessToken,
+                                             Map<String, Object> payload, String orderRef) {
+        int maxAttempts = 2; // 1 original + 1 retry
+        org.springframework.web.client.ResourceAccessException lastError = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return restClient.post()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header("Authorization", "Bearer " + accessToken)
+                        .body(payload)
+                        .retrieve()
+                        .body(String.class);
+            } catch (org.springframework.web.client.ResourceAccessException tcpEx) {
+                // Only retry TCP-level failures. Any nested checked exception
+                // that isn't IO-shaped (unlikely but defensive) also gets
+                // retried once — we're specifically catching this class.
+                lastError = tcpEx;
+                if (attempt >= maxAttempts) break;
+                log.warn("FedEx createShipment TCP error (attempt {}/{}, order {}): {} — "
+                                + "retrying in 500ms", attempt, maxAttempts,
+                        orderRef == null ? "?" : orderRef, tcpEx.getMessage());
+                try {
+                    Thread.sleep(500L);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    // Propagate the ORIGINAL TCP error so the caller sees the
+                    // real cause rather than a bare InterruptedException.
+                    throw tcpEx;
+                }
+            }
+        }
+        // Fell through the retry loop — persistent TCP failure.
+        throw lastError;
     }
 
     @Override
