@@ -135,12 +135,14 @@ const CARRIER_LABEL: Record<string, string> = { UPS: 'UPS', FEDEX: 'FedEx', USPS
 const blankAddress = (): ManualShipmentAddress => ({
   name: '', company: '', phone: '', email: '',
   addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', countryCode: 'US',
+  phoneCountryCode: dialCodeFor('US') || '',
 })
 
 /** A sensible default ship-from so operators don't retype the warehouse each time. */
 const defaultSender = (): ManualShipmentAddress => ({
   name: 'MultiShip Fulfillment', company: 'MultiShip', phone: '2125550100', email: '',
   addressLine1: '350 5th Ave', addressLine2: '', city: 'New York', state: 'NY', postalCode: '10118', countryCode: 'US',
+  phoneCountryCode: dialCodeFor('US') || '',
 })
 
 const inputCls =
@@ -413,31 +415,23 @@ function AddressBlock({
           it, so choosing the country up front makes those fields correct and
           prevents US/CA mismatches (e.g. a Canadian postal code under a US
           state). Order: Country → State → City → Postal. */}
-      <div className="col-span-2 grid grid-cols-3 gap-3">
+      <div className="col-span-2 grid grid-cols-2 gap-3">
         <Field label="Country" required error={errors?.countryCode}>
           <CountrySelect
             value={value.countryCode}
             onChange={(code) => {
-              // Picking a country auto-fills its dial code, but never clobbers a
-              // dial code the user typed that doesn't match the previous country.
-              const nextDial = dialCodeFor(code)
-              const current = (value.phoneCountryCode ?? '').trim()
-              const wasAutoFilled = !current || current === dialCodeFor(value.countryCode)
+              // Country -> dial code is fully derived per operator ask
+              // (2026-09-12): the "Phone country code" field is hidden
+              // and phoneCountryCode always resyncs to the picked
+              // country's dial. Blank when dialCodeFor returns nothing
+              // (backend UpsConnector.joinPhone / equivalents already
+              // omit the prefix in that case, so the phone field just
+              // rides on the wire as-is).
               onChange({
                 countryCode: code,
-                ...(nextDial && wasAutoFilled ? { phoneCountryCode: nextDial } : {}),
+                phoneCountryCode: dialCodeFor(code) || '',
               })
             }}
-          />
-        </Field>
-        <Field label="Phone country code" error={errors?.phoneCountryCode} title="ISO dial code without the plus — auto-filled from the country; e.g. 1 for US, 44 for GB, 91 for IN">
-          <input
-            className={inputCls}
-            value={value.phoneCountryCode ?? ''}
-            onChange={(e) => onChange({ phoneCountryCode: e.target.value.replace(/[^\d]/g, '') })}
-            placeholder={dialCodeFor(value.countryCode) || 'e.g. 1'}
-            inputMode="numeric"
-            maxLength={4}
           />
         </Field>
         <Field label="Phone" required error={errors?.phone} hint={phoneHintFor(value.countryCode) || undefined}>
@@ -941,18 +935,23 @@ export default function NewShipmentPage() {
     const a = cw?.warehouse?.address
     if (!a) return
     // eslint-disable-next-line react-hooks/set-state-in-effect -- overwrite sender block with warehouse address when picker changes; depends on prior sender state to preserve unfilled fields, not derivable at render
-    setSender((cur) => ({
-      ...cur,
-      // Name only as a fallback when nothing identifies the sender yet.
-      ...(a.name && !cur.name ? { name: a.name } : {}),
-      ...(a.line1 ? { addressLine1: a.line1 } : {}),
-      ...(a.line2 != null ? { addressLine2: a.line2 || '' } : {}),
-      ...(a.city ? { city: a.city } : {}),
-      ...(a.state ? { state: a.state } : {}),
-      ...(a.zip ? { postalCode: a.zip } : {}),
-      ...(a.country ? { countryCode: a.country } : {}),
-      ...(a.phone ? { phone: a.phone } : {}),
-    }))
+    setSender((cur) => {
+      // Country -> dial code fully derived (2026-09-12): when the
+      // warehouse pick changes the country, resync phoneCountryCode.
+      const nextCountry = a.country ?? cur.countryCode
+      return {
+        ...cur,
+        // Name only as a fallback when nothing identifies the sender yet.
+        ...(a.name && !cur.name ? { name: a.name } : {}),
+        ...(a.line1 ? { addressLine1: a.line1 } : {}),
+        ...(a.line2 != null ? { addressLine2: a.line2 || '' } : {}),
+        ...(a.city ? { city: a.city } : {}),
+        ...(a.state ? { state: a.state } : {}),
+        ...(a.zip ? { postalCode: a.zip } : {}),
+        ...(a.country ? { countryCode: a.country, phoneCountryCode: dialCodeFor(nextCountry) || '' } : {}),
+        ...(a.phone ? { phone: a.phone } : {}),
+      }
+    })
   }, [warehouseCode, clientWarehouses])
 
   // Route: does this shipment cross a customs border? Drives which services/packages apply.
@@ -1298,16 +1297,23 @@ export default function NewShipmentPage() {
         ])
         if (cancelled) return
         const o = details.data.order
+        // Country -> dial code is fully derived (2026-09-12) — re-derive
+        // phoneCountryCode from the loaded country instead of trusting a
+        // stored value that may not match.
+        const recipCountry = o.shiptoCountryCd ?? 'US'
         setRecipient({
           name: o.shipName ?? '', company: o.shipAttn ?? '', phone: o.phone ?? '', email: '',
           addressLine1: o.shipAddr1 ?? '', addressLine2: '', city: o.shiptoCity ?? '',
-          state: o.shiptoState ?? '', postalCode: o.shiptoZip ?? '', countryCode: o.shiptoCountryCd ?? 'US',
+          state: o.shiptoState ?? '', postalCode: o.shiptoZip ?? '', countryCode: recipCountry,
+          phoneCountryCode: dialCodeFor(recipCountry) || '',
         })
         if (o.shipFromCountryCd) {
+          const senderCountry = o.shipFromCountryCd ?? 'US'
           setSender({
             name: o.shipFromName ?? '', company: o.shipFromCompany ?? '', phone: o.shipFromPhone ?? '', email: '',
             addressLine1: o.shipFromAddr1 ?? '', addressLine2: o.shipFromAddr2 ?? '', city: o.shipFromCity ?? '',
-            state: o.shipFromState ?? '', postalCode: o.shipFromZip ?? '', countryCode: o.shipFromCountryCd ?? 'US',
+            state: o.shipFromState ?? '', postalCode: o.shipFromZip ?? '', countryCode: senderCountry,
+            phoneCountryCode: dialCodeFor(senderCountry) || '',
           })
         }
         if (o.weight != null) setWeight(String(o.weight))
@@ -1532,6 +1538,7 @@ export default function NewShipmentPage() {
     // address in place. The subsequent warehouse-change effect re-overlays
     // if the newly-picked client has warehouses attached.
     const base = defaultSender()
+    const mergedCountry = yourAddr ? (yourAddr.country || base.countryCode) : base.countryCode
     const merged: ManualShipmentAddress = yourAddr
       ? {
           name: client.name || base.name,
@@ -1543,7 +1550,9 @@ export default function NewShipmentPage() {
           city: yourAddr.city || base.city,
           state: yourAddr.state || base.state,
           postalCode: yourAddr.zip || base.postalCode,
-          countryCode: yourAddr.country || base.countryCode,
+          countryCode: mergedCountry,
+          // Country -> dial code fully derived (2026-09-12).
+          phoneCountryCode: dialCodeFor(mergedCountry) || '',
         }
       : base
     // Fix-order mode: the ship-from was prefilled from the ORDER (the address
@@ -2029,22 +2038,29 @@ export default function NewShipmentPage() {
 
   /** Apply a saved recipient — overwrites the current recipient block. */
   const applySavedRecipient = (r: SavedRecipient) => {
-    setRecipient((cur) => ({
-      ...cur,
-      name: r.name ?? cur.name,
-      company: r.company ?? cur.company,
-      phone: r.phone ?? cur.phone,
-      phoneCountryCode: r.phoneCountryCode ?? cur.phoneCountryCode,
-      email: r.email ?? cur.email,
-      addressLine1: r.addressLine1 ?? cur.addressLine1,
-      addressLine2: r.addressLine2 ?? cur.addressLine2,
-      addressLine3: r.addressLine3 ?? cur.addressLine3,
-      city: r.city ?? cur.city,
-      state: r.state ?? cur.state,
-      postalCode: r.postalCode ?? cur.postalCode,
-      countryCode: r.countryCode ?? cur.countryCode,
-      residential: r.residential ?? cur.residential,
-    }))
+    setRecipient((cur) => {
+      // Country -> dial code is fully derived per operator ask
+      // (2026-09-12); ignore any saved phoneCountryCode and re-derive
+      // from the incoming (or current) country so a stale saved-
+      // address dial can't drift out of sync with its country.
+      const nextCountry = r.countryCode ?? cur.countryCode
+      return {
+        ...cur,
+        name: r.name ?? cur.name,
+        company: r.company ?? cur.company,
+        phone: r.phone ?? cur.phone,
+        phoneCountryCode: dialCodeFor(nextCountry) || '',
+        email: r.email ?? cur.email,
+        addressLine1: r.addressLine1 ?? cur.addressLine1,
+        addressLine2: r.addressLine2 ?? cur.addressLine2,
+        addressLine3: r.addressLine3 ?? cur.addressLine3,
+        city: r.city ?? cur.city,
+        state: r.state ?? cur.state,
+        postalCode: r.postalCode ?? cur.postalCode,
+        countryCode: nextCountry,
+        residential: r.residential ?? cur.residential,
+      }
+    })
     setRecipientSearch(r.name)
     setRecipientSuggestions([])
     setRecipientDropdownOpen(false)
@@ -2055,16 +2071,21 @@ export default function NewShipmentPage() {
   const applyCarrierSuggestion = () => {
     const s = carrierAddressResult?.suggested
     if (!s) return
-    setRecipient((cur) => ({
-      ...cur,
-      addressLine1: s.addressLine1 ?? cur.addressLine1,
-      addressLine2: s.addressLine2 ?? cur.addressLine2,
-      addressLine3: s.addressLine3 ?? cur.addressLine3,
-      city: s.city ?? cur.city,
-      state: s.state ?? cur.state,
-      postalCode: s.postalCode ?? cur.postalCode,
-      countryCode: s.countryCode ?? cur.countryCode,
-    }))
+    setRecipient((cur) => {
+      // Country -> dial code fully derived (2026-09-12).
+      const nextCountry = s.countryCode ?? cur.countryCode
+      return {
+        ...cur,
+        addressLine1: s.addressLine1 ?? cur.addressLine1,
+        addressLine2: s.addressLine2 ?? cur.addressLine2,
+        addressLine3: s.addressLine3 ?? cur.addressLine3,
+        city: s.city ?? cur.city,
+        state: s.state ?? cur.state,
+        postalCode: s.postalCode ?? cur.postalCode,
+        countryCode: nextCountry,
+        phoneCountryCode: dialCodeFor(nextCountry) || '',
+      }
+    })
     setCarrierAddressResult(null)
     notify.success('Applied carrier-suggested address.')
   }
@@ -3445,18 +3466,13 @@ export default function NewShipmentPage() {
                           <option key={s.id} value={s.id}>{s.name}</option>
                         ))}
                       </select>
-                      <button
-                        type="button"
-                        disabled={!canOpenRatePicker}
-                        onClick={() => setRatePickerOpen(true)}
-                        title={canOpenRatePicker
-                          ? 'Fetch live rates across every configured carrier'
-                          : 'Enter postal codes and weight first'}
-                        className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[#1f150c] bg-[#1f150c] px-2.5 py-1 text-[11px] font-semibold text-[#f4eede] transition hover:bg-[#33221a] disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        <FiSearch className="h-2.5 w-2.5" />
-                        Compare rates
-                      </button>
+                      {/* Compare-rates button hidden per operator ask
+                          (2026-09-12) — the rate-picker infra
+                          (ratePickerOpen state, RatePickerModal render,
+                          rateShopRequest useMemo, rateShopService
+                          wiring) is left in place so it can be
+                          reintroduced later or reused by another
+                          surface without a rebuild. */}
                     </div>
                     {residentialConflict ? (
                       <div className="mt-1.5 flex items-start gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900">
