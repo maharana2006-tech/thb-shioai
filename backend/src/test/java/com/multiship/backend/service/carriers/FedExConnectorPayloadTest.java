@@ -265,6 +265,118 @@ class FedExConnectorPayloadTest {
         assertEquals("EUR", unitPrice.get("currency"));
     }
 
+    /**
+     * Batch-6 currency-mismatch post-mortem (2026-09-12) — 73 of 114
+     * batch-6 errors were FedEx {@code
+     * CARRIAGEVALUECURRENCY.CUSTOMSVALUECURRENCY.MISMATCH "All Currency
+     * Types in the Requested Shipment must match"}. Root cause: the
+     * connector sourced declared currency from
+     * {@code request.declaredValueCurrency} (defaulting to USD) but
+     * sourced customs currency separately from
+     * {@code intl.customsCurrency}. A shipment where those two disagreed
+     * (blank declared → USD, EUR customs) produced declared=USD +
+     * customs=EUR on the wire and FedEx rejected. Post-fix: on any
+     * international shipment the customs currency wins across
+     * declared, customs, per-line, and commodities.
+     */
+    @SuppressWarnings("unchecked")
+    @Test
+    void intlCurrencyUnified_customsWinsOverBlankDeclared() throws Exception {
+        // The exact batch-6 setup: blank declaredValueCurrency, EUR customs.
+        ShipmentRequestDTO r = baseRequest();
+        r.setDeclaredValueCurrency(null);
+        IntlShipmentBlockDTO intl = baseIntl();
+        r.setIntl(intl);
+        Map<String, Object> rs = requestedShipment(r);
+        Map<String, Object> ccd = (Map<String, Object>) rs.get("customsClearanceDetail");
+
+        // customsValue.currency — must be EUR (from intl.customsCurrency).
+        Map<String, Object> cv = (Map<String, Object>) ccd.get("customsValue");
+        assertEquals("EUR", cv.get("currency"));
+
+        // Every commodity's unitPrice + customsValue currency — must be EUR.
+        List<Map<String, Object>> commodities = (List<Map<String, Object>>) ccd.get("commodities");
+        assertFalse(commodities.isEmpty());
+        for (Map<String, Object> line : commodities) {
+            Map<String, Object> unitPrice = (Map<String, Object>) line.get("unitPrice");
+            if (unitPrice != null) {
+                assertEquals("EUR", unitPrice.get("currency"),
+                        "commodity unitPrice currency must match customs currency");
+            }
+            Map<String, Object> lineCustomsValue = (Map<String, Object>) line.get("customsValue");
+            if (lineCustomsValue != null) {
+                assertEquals("EUR", lineCustomsValue.get("currency"),
+                        "commodity customsValue currency must match customs currency");
+            }
+        }
+
+        // Per-package declaredValue currency (line-item level) — must be EUR.
+        List<Map<String, Object>> lineItems = (List<Map<String, Object>>) rs.get("requestedPackageLineItems");
+        for (Map<String, Object> li : lineItems) {
+            Map<String, Object> declared = (Map<String, Object>) li.get("declaredValue");
+            if (declared != null) {
+                assertEquals("EUR", declared.get("currency"),
+                        "per-package declaredValue currency must match customs currency on intl");
+            }
+        }
+
+        // totalDeclaredValue (shipment level, intl MPS path) — must be EUR.
+        Map<String, Object> totalDeclared = (Map<String, Object>) rs.get("totalDeclaredValue");
+        if (totalDeclared != null) {
+            assertEquals("EUR", totalDeclared.get("currency"),
+                    "shipment-level totalDeclaredValue currency must match customs on intl");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void intlCurrencyUnified_customsWinsOverConflictingDeclared() throws Exception {
+        // Operator explicitly picked USD declared, but customs is EUR.
+        // Pre-fix this shipped declared=USD + customs=EUR and FedEx
+        // rejected. Post-fix: customs currency wins across the board.
+        ShipmentRequestDTO r = baseRequest();
+        r.setDeclaredValueCurrency("USD");
+        IntlShipmentBlockDTO intl = baseIntl();
+        r.setIntl(intl);
+        Map<String, Object> rs = requestedShipment(r);
+        Map<String, Object> ccd = (Map<String, Object>) rs.get("customsClearanceDetail");
+        assertEquals("EUR", ((Map<String, Object>) ccd.get("customsValue")).get("currency"));
+        List<Map<String, Object>> lineItems = (List<Map<String, Object>>) rs.get("requestedPackageLineItems");
+        for (Map<String, Object> li : lineItems) {
+            Map<String, Object> declared = (Map<String, Object>) li.get("declaredValue");
+            if (declared != null) {
+                assertEquals("EUR", declared.get("currency"),
+                        "on intl the customs currency wins, not declaredValueCurrency");
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void domesticStillHonoursDeclaredValueCurrency() throws Exception {
+        // Guard the fix against over-reach: domestic shipments (no intl
+        // block) must keep the pre-fix behaviour where declaredValueCurrency
+        // (or USD fallback) drives per-line declaredValue.currency.
+        ShipmentRequestDTO r = baseRequest();
+        r.setRecipientCountryCode("US");
+        r.setRecipientState("NY");
+        r.setRecipientPostalCode("10001");
+        r.setDeclaredValueCurrency("USD");
+        r.setIntl(null);
+        // Insured value forces per-line declaredValue emission.
+        r.setInsuredValue(new BigDecimal("100.00"));
+        r.setInsuredValueCurrency("USD");
+        Map<String, Object> rs = requestedShipment(r);
+        List<Map<String, Object>> lineItems = (List<Map<String, Object>>) rs.get("requestedPackageLineItems");
+        for (Map<String, Object> li : lineItems) {
+            Map<String, Object> declared = (Map<String, Object>) li.get("declaredValue");
+            if (declared != null) {
+                assertEquals("USD", declared.get("currency"),
+                        "domestic keeps declaredValueCurrency (or insured currency) unchanged");
+            }
+        }
+    }
+
     @SuppressWarnings("unchecked")
     @Test
     void ddpMapsToSenderDutiesPayment() throws Exception {

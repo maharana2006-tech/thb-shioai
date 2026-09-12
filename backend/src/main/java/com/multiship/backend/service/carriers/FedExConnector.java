@@ -2217,8 +2217,30 @@ public class FedExConnector implements CarrierConnector {
         // with one entry per box AND totalPackageCount at the parent.
         java.util.List<com.multiship.backend.dto.PackageDetailDTO> packages = request.effectivePackages();
         java.util.List<Map<String, Object>> lineItems = new java.util.ArrayList<>();
-        String declaredCurrency = StringUtils.hasText(request.getDeclaredValueCurrency())
-                ? request.getDeclaredValueCurrency().trim().toUpperCase() : "USD";
+        // Batch-6 post-mortem (2026-09-12) — FedEx rejects a shipment with
+        // {@code CARRIAGEVALUECURRENCY.CUSTOMSVALUECURRENCY.MISMATCH "All
+        // Currency Types in the Requested Shipment must match"} whenever
+        // {@code totalDeclaredValue.currency}, {@code customsValue.currency},
+        // or any {@code commodities[].customsValue.currency} differ. Pre-fix
+        // this method sourced declared currency from
+        // {@code request.declaredValueCurrency} (defaulting to USD) but
+        // sourced customs currency separately from {@code intl.customsCurrency}
+        // — a shipment to France with EUR customs and blank declared
+        // currency sent declared=USD + customs=EUR and FedEx rejected. 73
+        // of 114 batch-6 errors traced to this exact drift.
+        //
+        // Rule: on an international shipment (intl present) let the customs
+        // currency win — commodity + declared values are then all quoted
+        // in that same currency. Domestic shipments emit no customs
+        // block so declaredValueCurrency (or USD) is used as-is.
+        String customsCurrency = request.getIntl() != null
+                && StringUtils.hasText(request.getIntl().getCustomsCurrency())
+                ? request.getIntl().getCustomsCurrency().trim().toUpperCase()
+                : null;
+        String declaredCurrency = customsCurrency != null
+                ? customsCurrency
+                : (StringUtils.hasText(request.getDeclaredValueCurrency())
+                        ? request.getDeclaredValueCurrency().trim().toUpperCase() : "USD");
         // Sprint 48 B11 — derive per-package declared value from CI
         // commodities (grouped by boxSeq). Domestic FedEx uses per-pkg
         // declaredValue on each line item; international FedEx MPS
@@ -2266,9 +2288,16 @@ public class FedExConnector implements CarrierConnector {
                 declared = request.getInsuredValue();
             }
             if (declared != null) {
-                String currencyForLine = request.getInsuredValue() != null
-                        ? firstNonBlank(request.getInsuredValueCurrency(), declaredCurrency)
-                        : declaredCurrency;
+                // Batch-6 currency-unification (2026-09-12) — on intl
+                // shipments every currency-bearing field MUST match, so
+                // insuredValueCurrency can't override declaredCurrency
+                // here. Only domestic shipments (no intl block) fall
+                // through to the insuredValueCurrency override.
+                String currencyForLine = customsCurrency != null
+                        ? declaredCurrency
+                        : (request.getInsuredValue() != null
+                                ? firstNonBlank(request.getInsuredValueCurrency(), declaredCurrency)
+                                : declaredCurrency);
                 item.put("declaredValue", Map.of(
                         "amount", declared,
                         "currency", currencyForLine.trim().toUpperCase()));
@@ -2480,8 +2509,16 @@ public class FedExConnector implements CarrierConnector {
         // commodity sum > declaredValue > throw. Throwing here turns FedEx's
         // opaque "Customs Value is required" into an actionable message that
         // names the fix (fill unit values or set a positive Declared Value).
+        //
+        // Batch-6 currency-unification (2026-09-12) — every currency-bearing
+        // field on an international FedEx shipment MUST use the same code
+        // (see buildShipmentPayload for the source-of-truth rule). Same
+        // resolution as declared: intl.customsCurrency wins, then
+        // declaredValueCurrency, then USD.
         String currency = StringUtils.hasText(intl.getCustomsCurrency())
-                ? intl.getCustomsCurrency().toUpperCase() : "USD";
+                ? intl.getCustomsCurrency().trim().toUpperCase()
+                : (StringUtils.hasText(request.getDeclaredValueCurrency())
+                        ? request.getDeclaredValueCurrency().trim().toUpperCase() : "USD");
         BigDecimal total = computeCustomsInvoiceTotal(request);
         detail.put("customsValue", Map.of("amount", total, "currency", currency));
 

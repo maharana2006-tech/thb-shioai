@@ -3917,6 +3917,34 @@ public class OrderImportServiceImpl implements OrderImportService {
         if (row.getRecipientCompany() != null && row.getRecipientCompany().length() > MAX_NAME_LEN)
             errors.add("recipientCompany must be " + MAX_NAME_LEN + " characters or fewer");
 
+        // Batch #8 post-mortem (2026-09-12) — service ↔ destination lane
+        // check. Pre-fix, an operator who set UPS 3 Day Select or FedEx
+        // Express Saver on an AK/HI row shipped it straight to the
+        // carrier and burned a real round-trip on a UPS 121210 / FedEx
+        // SERVICETYPE.NOTSUPPORTED. All 25 errors in Batch #8 (out of
+        // 7,368 orders) traced to this exact pattern. Rules encoded in
+        // CarrierServiceLaneRules; ignored on non-US lanes and on
+        // service/carrier combos we don't have a rule for (falls through
+        // to the reactive carrier response, same as pre-fix behaviour).
+        String laneErr = com.multiship.backend.service.carriers.CarrierServiceLaneRules
+                .checkLane(row.getCarrierCode(), row.getServiceType(),
+                        row.getState(), row.getCountryCode());
+        if (laneErr != null) errors.add("serviceType: " + laneErr);
+
+        // Batch #6 post-mortem (2026-09-12) — US exports to strategic-
+        // country destinations (CN + others) require an EEI filing
+        // (FTR exemption code or AES ITN) regardless of monetary value.
+        // The bulk-import DTO doesn't carry those fields, so any such
+        // row will always fail FedEx SHIPMENTVALIDATION.EEIEDIT.ERROR.
+        // Flag it at validate time so the operator switches to the
+        // manual /orders/new flow (which exposes FTR / AES) or fills
+        // them via Data History before generating. Sender is assumed
+        // US-origin at import time (backend defaults to platform
+        // ship-from); origin-country field isn't on the row DTO.
+        String eeiErr = com.multiship.backend.service.carriers.EeiRequirementRules
+                .check("US", row.getCountryCode(), null, null);
+        if (eeiErr != null) errors.add("customs.eei: " + eeiErr);
+
         // Sprint 51 security fix — reject stored markup in free-text fields
         // (server-side mirror of the SPA guard; also covers non-UI import).
         // Each message starts with the column name so the review UI renders
