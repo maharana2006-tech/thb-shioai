@@ -68,6 +68,13 @@ public class OrderResponseDTO {
         private String shipVia;
         private BigDecimal weight;
         private String shipViaDescription;
+        /**
+         * International-shipment flag persisted at label time ('Y'/'N').
+         * Powers the FE's per-row "Print commercial invoice" icon on
+         * /orders — the icon renders only when this is 'Y' because
+         * domestic orders 422 on /orders/{n}/commercial-invoice.
+         */
+        private String intlYn;
     }
 
     @Data

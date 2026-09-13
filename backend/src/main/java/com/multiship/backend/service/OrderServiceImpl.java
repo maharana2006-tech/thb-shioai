@@ -678,6 +678,12 @@ public class OrderServiceImpl implements OrderService {
                         .shipVia((String) row[7])
                         .weight(row[8] != null ? (BigDecimal) row[8] : BigDecimal.ZERO)
                         .shipViaDescription((String) row[18])
+                        // intl_yn — column index 24 (see the two queries in
+                        // OrderRepository that share this mapper). Powers
+                        // the /orders per-row "Print commercial invoice"
+                        // icon; blank on rows saved before this column
+                        // was added, which is safe (icon just hides).
+                        .intlYn(row.length > 24 ? (String) row[24] : null)
                         .build())
                 .labelDetails(OrderResponseDTO.LabelDetails.builder()
                         .status(row[11] != null ? (String) row[11] : "PENDING")

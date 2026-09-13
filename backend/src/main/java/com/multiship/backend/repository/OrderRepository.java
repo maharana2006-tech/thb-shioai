@@ -119,7 +119,12 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                 ELSE 'D2C'
             END) as order_channel,
             b.customer_ref,
-            b.package_count
+            b.package_count,
+            -- intl_yn — 2026-09-13. Needed by the FE row action to gate
+            -- the "Print commercial invoice" icon (only visible when the
+            -- order has customs data / crossed a border). Both queries
+            -- feed the same mapToOrderResponseDTO so both must select it.
+            b.intl_yn
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
@@ -365,7 +370,12 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                 ELSE 'D2C'
             END) as order_channel,
             b.customer_ref,
-            b.package_count
+            b.package_count,
+            -- intl_yn — 2026-09-13. Needed by the FE row action to gate
+            -- the "Print commercial invoice" icon (only visible when the
+            -- order has customs data / crossed a border). Both queries
+            -- feed the same mapToOrderResponseDTO so both must select it.
+            b.intl_yn
         FROM label_batch b
         LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
         LEFT JOIN ship_vias s ON b.shipvia_cd = s.shipvia_cd
