@@ -803,7 +803,12 @@ export default function AdvancedDataTable<T>({
       >
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <table
-            className="text-[13px] text-slate-700"
+            // 2026-09-13 operator ask — bumped base cell font-size from 13px
+            // to 14.5px so tables read more comfortably. Per-cell renderers
+            // that used explicit text-[12px] / text-[12.5px] were also
+            // sweep-bumped one step (13 / 13.5) in the same commit;
+            // anything not swept still inherits this base.
+            className="text-[14.5px] text-slate-700"
             // `width: 100%` + `min-width: totalSize` = the table fills the
             // container when there's extra room (percentages in <colgroup>
             // scale all columns proportionally); overflows and scrolls when
@@ -818,7 +823,7 @@ export default function AdvancedDataTable<T>({
                 />
               ))}
             </colgroup>
-            <thead className="sticky top-0 z-10 border-b border-dashed border-slate-300 bg-white text-left font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400 shadow-[0_1px_0_0_rgba(148,163,184,0.2)]">
+            <thead className="sticky top-0 z-10 border-b border-dashed border-slate-300 bg-white text-left font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-slate-400 shadow-[0_1px_0_0_rgba(148,163,184,0.2)]">
               {table.getHeaderGroups().map((group) => (
                 <SortableContext
                   key={group.id}

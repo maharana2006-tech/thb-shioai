@@ -779,7 +779,7 @@ export default function DataHistoryPage() {
             <span className="block min-w-0">
               <span className="flex items-center gap-1.5">
                 <FiFileText className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
-                <span className="truncate text-[12.5px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
+                <span className="truncate text-[13.5px] font-semibold text-[#1f150c]" title={b.fileName || undefined}>
                   {b.fileName || 'Untitled import'}
                 </span>
                 {isWms ? (
@@ -1326,7 +1326,7 @@ export default function DataHistoryPage() {
               <button
                 type="button"
                 onClick={() => setShowAdvanced((v) => !v)}
-                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[13.5px] font-semibold transition ${
                   showAdvanced || activeAdvancedCount > 0
                     ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
                     : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
@@ -1345,7 +1345,7 @@ export default function DataHistoryPage() {
               <button
                 type="button"
                 onClick={() => void load()}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
               >
                 <FiRefreshCw className="h-3.5 w-3.5" />
                 Refresh
@@ -1358,7 +1358,7 @@ export default function DataHistoryPage() {
                     type="button"
                     onClick={() => void handleEmptyTrash()}
                     disabled={emptying}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-2 text-[12.5px] font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-2 text-[13.5px] font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {emptying ? (
                       <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
@@ -1371,7 +1371,7 @@ export default function DataHistoryPage() {
                     type="button"
                     onClick={() => setConfirmEmpty(false)}
                     disabled={emptying}
-                    className="inline-flex items-center rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                    className="inline-flex items-center rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
                   >
                     Cancel
                   </button>
@@ -1381,7 +1381,7 @@ export default function DataHistoryPage() {
                   type="button"
                   onClick={() => setConfirmEmpty(true)}
                   title="Permanently delete everything in Trash"
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-2 text-[12.5px] font-semibold text-rose-600 transition hover:border-rose-300 hover:bg-rose-50"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-2 text-[13.5px] font-semibold text-rose-600 transition hover:border-rose-300 hover:bg-rose-50"
                 >
                   <FiTrash2 className="h-3.5 w-3.5" />
                   Empty Trash
@@ -1393,7 +1393,7 @@ export default function DataHistoryPage() {
                 type="button"
                 onClick={() => setViewTrash((v) => !v)}
                 title={viewTrash ? 'Back to live imports' : 'View deleted imports (Trash)'}
-                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[12.5px] font-semibold transition ${
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-[13.5px] font-semibold transition ${
                   viewTrash
                     ? 'border-[#412d15] bg-[#412d15] text-[#f4eede]'
                     : 'border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'
@@ -1406,7 +1406,7 @@ export default function DataHistoryPage() {
             <button
               type="button"
               onClick={() => navigate('/orders')}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[12.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1f150c] px-3.5 py-2 text-[13.5px] font-semibold text-[#f4eede] shadow-sm transition hover:bg-[#412d15]"
             >
               <FiArrowLeft className="h-3.5 w-3.5" />
               Back to orders
@@ -1429,7 +1429,7 @@ export default function DataHistoryPage() {
               key={t.key}
               type="button"
               onClick={() => setDhView(t.key)}
-              className={`inline-flex items-baseline gap-1.5 rounded-xl px-3.5 py-2 text-[12.5px] font-semibold transition ${
+              className={`inline-flex items-baseline gap-1.5 rounded-xl px-3.5 py-2 text-[13.5px] font-semibold transition ${
                 active
                   ? 'bg-[#1f150c] text-[#f4eede]'
                   : 'border border-[#e3d9c4] bg-white text-[#5a4526] hover:border-[#cdbf9f] hover:bg-[#faf7f0]'

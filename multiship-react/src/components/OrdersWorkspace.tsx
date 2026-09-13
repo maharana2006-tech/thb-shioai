@@ -25,6 +25,8 @@ import {
   FiMapPin,
   FiTag,
   FiSliders,
+  FiSlash,
+  FiCopy,
 } from 'react-icons/fi'
 import { ApiError, isAbortError } from '../api/apiClient'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
@@ -427,8 +429,14 @@ export default function OrdersWorkspace() {
     }
   }, [view, tabs, loading])
 
-  // ===== Selection (Ready tab; individual + all-filtered) =====
-  const selectableVisible = view === 'ready' ? rows : []
+  // ===== Selection (Ready / All / Generated tabs; individual + all-filtered) =====
+  // 2026-09-13 — widened from Ready-only. Ready powers "Generate
+  // selected"; All and Generated power "Void selected" + "Copy order #s".
+  // Other tabs (details/client/choose/failed) stay read-only — their
+  // rows aren't actionable via bulk in the current workflow set.
+  const SELECTABLE_VIEWS: readonly View[] = ['ready', 'all', 'generated']
+  const selectionEnabled = SELECTABLE_VIEWS.includes(view)
+  const selectableVisible = selectionEnabled ? rows : []
 
   /**
    * True when the given order_no is currently selected under the
@@ -555,26 +563,33 @@ export default function OrdersWorkspace() {
   /** Fetch every order id matching the current filter and switch to
    *  all-filtered mode. Cached by filterSignature so repeat clicks are
    *  free until the operator changes a filter. */
+  /** Assemble the /orders/ids fetch params for the current view +
+   *  filter set. View maps to status/resolution via VIEW_QUERY so
+   *  "Select all matching" respects the operator's active tab. */
+  const buildIdsParams = useCallback(() => {
+    const vq = VIEW_QUERY[view]
+    return {
+      status: vq.status,
+      resolution: vq.resolution,
+      tenantId: clientFilter || undefined,
+      search: debouncedQuery.trim() || undefined,
+      customer: debouncedFilters.customer?.trim() || undefined,
+      city: debouncedFilters.city?.trim() || undefined,
+      orderNo: debouncedFilters.orderNo?.trim() || undefined,
+      tracking: debouncedFilters.tracking?.trim() || undefined,
+      createdFrom: dateFrom || undefined,
+      createdTo: dateTo || undefined,
+      source: sourceFilter || undefined,
+      channel: channelFilter || undefined,
+    }
+  }, [view, clientFilter, debouncedQuery, debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter])
+
   const selectAllFiltered = useCallback(async () => {
     try {
       // Reuse cache if the filter signature matches the last fetch.
       let ids = allFilteredIds
       if (!ids || allFilteredSignature !== filterSignature) {
-        const params = {
-          status: 'PENDING' as const,
-          resolution: 'READY' as const,
-          tenantId: clientFilter || undefined,
-          search: debouncedQuery.trim() || undefined,
-          customer: debouncedFilters.customer?.trim() || undefined,
-          city: debouncedFilters.city?.trim() || undefined,
-          orderNo: debouncedFilters.orderNo?.trim() || undefined,
-          tracking: debouncedFilters.tracking?.trim() || undefined,
-          createdFrom: dateFrom || undefined,
-          createdTo: dateTo || undefined,
-          source: sourceFilter || undefined,
-          channel: channelFilter || undefined,
-        }
-        const res = await orderService.listOrderIds(params)
+        const res = await orderService.listOrderIds(buildIdsParams())
         ids = res.data ?? []
         setAllFilteredIds(ids)
         setAllFilteredSignature(filterSignature)
@@ -584,8 +599,7 @@ export default function OrdersWorkspace() {
     } catch (e) {
       notify.apiError(e, 'Could not fetch all matching orders.')
     }
-  }, [allFilteredIds, allFilteredSignature, filterSignature, clientFilter, debouncedQuery,
-      debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter])
+  }, [allFilteredIds, allFilteredSignature, filterSignature, buildIdsParams])
 
   /** Invert selection within the current filter. Fetches the full id
    *  list if not already cached, then computes the complement. */
@@ -593,21 +607,7 @@ export default function OrdersWorkspace() {
     let ids = allFilteredIds
     if (!ids || allFilteredSignature !== filterSignature) {
       try {
-        const params = {
-          status: 'PENDING' as const,
-          resolution: 'READY' as const,
-          tenantId: clientFilter || undefined,
-          search: debouncedQuery.trim() || undefined,
-          customer: debouncedFilters.customer?.trim() || undefined,
-          city: debouncedFilters.city?.trim() || undefined,
-          orderNo: debouncedFilters.orderNo?.trim() || undefined,
-          tracking: debouncedFilters.tracking?.trim() || undefined,
-          createdFrom: dateFrom || undefined,
-          createdTo: dateTo || undefined,
-          source: sourceFilter || undefined,
-          channel: channelFilter || undefined,
-        }
-        const res = await orderService.listOrderIds(params)
+        const res = await orderService.listOrderIds(buildIdsParams())
         ids = res.data ?? []
         setAllFilteredIds(ids)
         setAllFilteredSignature(filterSignature)
@@ -621,8 +621,7 @@ export default function OrdersWorkspace() {
     const inverted = ids.filter((id) => !currentlySelected.has(id))
     setSelectionMode('individual')
     setSelectionSet(new Set(inverted))
-  }, [allFilteredIds, allFilteredSignature, filterSignature, clientFilter, debouncedQuery,
-      debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter, materialisedSelection])
+  }, [allFilteredIds, allFilteredSignature, filterSignature, buildIdsParams, materialisedSelection])
 
   /** Back-compat alias — accepts either an array or a functional
    *  updater. Existing call sites pre-refactor used both shapes. */
@@ -805,6 +804,80 @@ export default function OrdersWorkspace() {
 
     refreshQueues()
   }
+
+  /** Label shown next to the bulk-progress bar. Reset by
+   *  generateForOrders / voidSelected before they set bulkProgress. */
+  const [bulkProgressLabel, setBulkProgressLabel] = useState('Generating')
+
+  /**
+   * Void every LABELLED order in the current selection. Skips PENDING /
+   * VOIDED / ERROR rows — voiding an already-voided or never-labelled
+   * order is a carrier no-op (or 4xx). Reports success / skip / failure
+   * counts. Reuses bulkProgress for the sticky-bar bar.
+   */
+  const voidSelected = useCallback(async () => {
+    const selected = materialisedSelection()
+    if (!selected.length) return
+    // Filter to rows we KNOW are voidable — for on-page rows we check
+    // labelDetails.status; off-page rows are attempted optimistically
+    // (backend returns a clear 4xx for non-voidable rows, which we log
+    // as skipped so the operator sees the counts).
+    const rowByOrderNo = new Map(rows.map((o) => [o.orderDetails.orderNo, o] as const))
+    const targets = selected.filter((no) => {
+      const r = rowByOrderNo.get(no)
+      if (!r) return true // off-page — attempt optimistically
+      const st = (r.labelDetails.status || 'PENDING').toUpperCase()
+      return st === 'GENERATED'
+    })
+    if (!targets.length) {
+      notify.info('Nothing to void — the selection has no labelled orders.')
+      return
+    }
+    if (!window.confirm(`Void ${targets.length} label(s)? This calls the carrier's void API for each; already-voided rows are skipped silently.`)) {
+      return
+    }
+    setBulkProgressLabel('Voiding')
+    setBulkProgress({ done: 0, total: targets.length })
+    let ok = 0
+    let skipped = 0
+    const failures: string[] = []
+    await Promise.all(targets.map(async (orderNo) => {
+      try {
+        await orderService.voidLabel(orderNo)
+        ok += 1
+      } catch (e) {
+        // 4xx typically means "not voidable" — track as skip rather than error.
+        if (e instanceof ApiError && e.status >= 400 && e.status < 500) skipped += 1
+        else failures.push(`#${orderNo}`)
+      } finally {
+        setBulkProgress((cur) => cur ? { ...cur, done: cur.done + 1 } : cur)
+      }
+    }))
+    setBulkProgress(null)
+    setBulkProgressLabel('Generating')
+    const parts: string[] = []
+    if (ok) parts.push(`${ok} voided`)
+    if (skipped) parts.push(`${skipped} not voidable`)
+    if (failures.length) parts.push(`${failures.length} failed (${failures.slice(0, 5).join(', ')}${failures.length > 5 ? '…' : ''})`)
+    notify.info(parts.length ? parts.join(' · ') : 'No changes.')
+    setReloadToken((n) => n + 1)
+    clearSelection()
+  }, [materialisedSelection, rows, clearSelection])
+
+  /** Copy the current selection's order numbers to the clipboard, one
+   *  per line. Small utility that saves the operator a manual scrape
+   *  when they need to send the list to accounting / support / CSV. */
+  const copySelectedOrderNos = useCallback(async () => {
+    const selected = materialisedSelection()
+    if (!selected.length) return
+    const text = selected.join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      notify.info(`${selected.length} order number(s) copied to clipboard.`)
+    } catch {
+      notify.info('Clipboard access blocked — check browser permissions.')
+    }
+  }, [materialisedSelection])
 
   const generateAllReady = async () => {
     const readyOrders = await fetchAllReadyOrders()
@@ -1072,7 +1145,7 @@ export default function OrdersWorkspace() {
   const columns = useMemo<ColumnDef<Order>[]>(() => {
     const defs: ColumnDef<Order>[] = []
 
-    if (view === 'ready') {
+    if (selectionEnabled) {
       defs.push({
         id: 'select',
         header: () => {
@@ -1139,7 +1212,7 @@ export default function OrdersWorkspace() {
       // predictably instead of react-table's 160-default per column.
       size: 96,
       cell: ({ row }) => (
-        <span className="font-mono text-[12.5px] font-bold tabular-nums text-[#1f150c]">
+        <span className="font-mono text-[13.5px] font-bold tabular-nums text-[#1f150c]">
           #{row.original.orderDetails.orderNo}
         </span>
       ),
@@ -1298,7 +1371,7 @@ export default function OrdersWorkspace() {
         const tooltip = tooltipParts.length > 0 ? tooltipParts.join(' ') : 'No destination on file'
         return (
           <span
-            className="block truncate text-[12.5px] tabular-nums text-[#3f3527]"
+            className="block truncate text-[13.5px] tabular-nums text-[#3f3527]"
             title={tooltip}
           >
             {cellText}
@@ -1595,7 +1668,7 @@ export default function OrdersWorkspace() {
                   setView(t.key)
                   setSelectedOrderNos([])
                 }}
-                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-semibold transition ${
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13.5px] font-semibold transition ${
                   view === t.key
                     ? 'bg-white text-[#1f150c] shadow-sm ring-1 ring-[#e3d9c4]'
                     : 'text-[#6b5c42] hover:text-[#412d15]'
@@ -1614,7 +1687,7 @@ export default function OrdersWorkspace() {
             ))}
           </div>
 
-          {view === 'ready' && selectableVisible.length ? (
+          {selectionEnabled && selectableVisible.length ? (
             <div className="flex flex-wrap items-center gap-1.5">
               {/* Select-page button — clearly scoped to the visible rows,
                   distinct from "all matching the filter" below. */}
@@ -1647,7 +1720,7 @@ export default function OrdersWorkspace() {
           all pages. Also shown when all-filtered is active so the
           operator can bail back to page-scoped selection.
         */}
-        {view === 'ready' && selectableVisible.length && selectionMode === 'individual' && pageAllSelected ? (
+        {selectionEnabled && selectableVisible.length && selectionMode === 'individual' && pageAllSelected ? (
           <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-[11.5px] text-sky-900">
             <span>
               All <span className="font-semibold">{selectableVisible.length}</span> orders on this page are selected.
@@ -1661,7 +1734,7 @@ export default function OrdersWorkspace() {
             </button>
           </div>
         ) : null}
-        {view === 'ready' && selectionMode === 'all-filtered' && allFilteredIds ? (
+        {selectionEnabled && selectionMode === 'all-filtered' && allFilteredIds ? (
           <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-sky-300 bg-sky-100 px-3 py-2 text-[11.5px] text-sky-900">
             <span>
               All <span className="font-semibold">{selectedCount}</span> orders matching the current filter are selected
@@ -1959,15 +2032,19 @@ export default function OrdersWorkspace() {
         </div>
       </section>
 
-      {/* ===== sticky action bar: live bulk progress OR selection ===== */}
-      {bulkProgress || (view === 'ready' && selectedCount > 0) ? (
+      {/* ===== sticky action bar: live bulk progress OR selection =====
+           Per-view action set (2026-09-13):
+             ready      → Generate selected
+             all/gen    → Void selected (labelled subset) + Copy order #s
+      */}
+      {bulkProgress || (selectionEnabled && selectedCount > 0) ? (
         <div className="fixed inset-x-0 bottom-5 z-30 flex justify-center px-4">
           <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 shadow-[0_18px_50px_rgba(15,23,42,0.22)]">
             {bulkProgress ? (
               <>
                 <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-900" />
-                <span className="text-[12.5px] font-semibold text-slate-950 tabular-nums">
-                  Generating {bulkProgress.done}/{bulkProgress.total}…
+                <span className="text-[13.5px] font-semibold text-slate-950 tabular-nums">
+                  {bulkProgressLabel} {bulkProgress.done}/{bulkProgress.total}…
                 </span>
                 <div className="h-1.5 w-32 overflow-hidden rounded-full bg-slate-100">
                   <div
@@ -1978,33 +2055,57 @@ export default function OrdersWorkspace() {
               </>
             ) : (
               <>
-                <span className="text-[12.5px] font-semibold text-slate-950 tabular-nums">
+                <span className="text-[13.5px] font-semibold text-slate-950 tabular-nums">
                   {selectedCount} selected{selectionMode === 'all-filtered' ? ' (all matching filter)' : ''}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    // 2026-09-13 overhaul: use the materialised selection
-                    // (may span multiple pages when all-filtered is active).
-                    // For orders on the current page we can pass the Order
-                    // object directly; for off-page orders we synthesise a
-                    // minimal Order-shaped stub — generateForOrders only
-                    // reads orderNo + accountResolution?.scenario from it,
-                    // and the 'ready' view filter guarantees resolution=READY.
-                    const rowByOrderNo = new Map(rows.map((o) => [o.orderDetails.orderNo, o] as const))
-                    const selection = materialisedSelection()
-                    const orderObjs = selection.map((no) => rowByOrderNo.get(no) ?? ({
-                      orderDetails: { orderNo: no },
-                      accountResolution: { scenario: 'READY' },
-                    } as unknown as Order))
-                    void generateForOrders(orderObjs)
-                  }}
-                  disabled={busy}
-                  className={BTN_PRIMARY}
-                >
-                  <FiZap className="h-3.5 w-3.5" />
-                  Generate selected
-                </button>
+                {view === 'ready' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // 2026-09-13 overhaul: use the materialised selection
+                      // (may span multiple pages when all-filtered is active).
+                      // For off-page orders we synthesise a minimal Order-
+                      // shaped stub since generateForOrders only reads
+                      // orderNo + accountResolution.scenario, and 'ready'
+                      // view guarantees resolution=READY.
+                      const rowByOrderNo = new Map(rows.map((o) => [o.orderDetails.orderNo, o] as const))
+                      const selection = materialisedSelection()
+                      const orderObjs = selection.map((no) => rowByOrderNo.get(no) ?? ({
+                        orderDetails: { orderNo: no },
+                        accountResolution: { scenario: 'READY' },
+                      } as unknown as Order))
+                      void generateForOrders(orderObjs)
+                    }}
+                    disabled={busy}
+                    className={BTN_PRIMARY}
+                  >
+                    <FiZap className="h-3.5 w-3.5" />
+                    Generate selected
+                  </button>
+                ) : null}
+                {(view === 'all' || view === 'generated') ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void voidSelected()}
+                      disabled={busy}
+                      title="Void every LABELLED order in the selection. Skips PENDING / VOIDED rows."
+                      className={BTN_PRIMARY}
+                    >
+                      <FiSlash className="h-3.5 w-3.5" />
+                      Void selected
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void copySelectedOrderNos()}
+                      title="Copy the selected order numbers to the clipboard, one per line"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-3 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+                    >
+                      <FiCopy className="h-3.5 w-3.5" />
+                      Copy order #s
+                    </button>
+                  </>
+                ) : null}
                 <button
                   type="button"
                   onClick={clearSelection}
@@ -2086,7 +2187,7 @@ export default function OrdersWorkspace() {
                   ) : null}
                 </div>
               </div>
-              <div className="space-y-2 px-5 py-4 text-[12.5px] leading-relaxed text-[#5a4526]">
+              <div className="space-y-2 px-5 py-4 text-[13.5px] leading-relaxed text-[#5a4526]">
                 <p>
                   This cancels the label at the carrier — <span className="font-semibold">it cannot be undone</span>.
                   The tracking number dies and the label must not be used on a parcel.
@@ -2100,14 +2201,14 @@ export default function OrdersWorkspace() {
                 <button
                   type="button"
                   onClick={() => setConfirmVoid(null)}
-                  className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[12.5px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
+                  className="rounded-xl border border-[#e3d9c4] bg-white px-3.5 py-2 text-[13.5px] font-semibold text-[#5a4526] transition hover:bg-[#faf7f0]"
                 >
                   Keep the label
                 </button>
                 <button
                   type="button"
                   onClick={() => void executeVoid(confirmVoid.orderNo)}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-rose-700 px-3.5 py-2 text-[12.5px] font-semibold text-white shadow-sm transition hover:bg-rose-800"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-rose-700 px-3.5 py-2 text-[13.5px] font-semibold text-white shadow-sm transition hover:bg-rose-800"
                 >
                   <FiXCircle className="h-3.5 w-3.5" />
                   Void the label
