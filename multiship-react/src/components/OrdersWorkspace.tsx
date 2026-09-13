@@ -27,6 +27,7 @@ import {
   FiSliders,
   FiSlash,
   FiCopy,
+  FiPrinter,
 } from 'react-icons/fi'
 import { ApiError, isAbortError } from '../api/apiClient'
 import { normalizeCarrierCode } from '../utils/carrierUtils'
@@ -879,6 +880,71 @@ export default function OrdersWorkspace() {
     }
   }, [materialisedSelection])
 
+  /**
+   * Print a PDF Blob through the browser's native print dialog.
+   * Injects the Blob into an off-screen iframe, waits for the doc to
+   * load, then calls window.print() so the printer picker opens
+   * without an intermediate tab.  Cleanup happens after a delay long
+   * enough for the operator to interact with the print dialog
+   * (window.print is synchronous but the underlying dialog isn't).
+   *
+   * Called by the per-row print-label + commercial-invoice icons
+   * (2026-09-13 operator ask).
+   */
+  const printPdfBlob = useCallback((blob: Blob) => {
+    const url = URL.createObjectURL(blob)
+    const iframe = document.createElement('iframe')
+    iframe.style.position = 'fixed'
+    iframe.style.right = '0'
+    iframe.style.bottom = '0'
+    iframe.style.width = '0'
+    iframe.style.height = '0'
+    iframe.style.border = 'none'
+    iframe.src = url
+    iframe.onload = () => {
+      // Small delay so the PDF viewer has a chance to paint before we
+      // pop the printer picker on top of it.
+      setTimeout(() => {
+        try {
+          iframe.contentWindow?.focus()
+          iframe.contentWindow?.print()
+        } catch {
+          // Some browsers block cross-origin-ish print calls on blob:
+          // URLs — fall back to a plain new-tab open. Operator prints
+          // via Ctrl+P from there.
+          window.open(url, '_blank', 'noopener')
+        }
+        // Cleanup after 60s — long enough that the printer picker's
+        // "Cancel" or "Print" click has resolved the print job.
+        setTimeout(() => {
+          try { document.body.removeChild(iframe) } catch { /* already removed */ }
+          URL.revokeObjectURL(url)
+        }, 60_000)
+      }, 150)
+    }
+    document.body.appendChild(iframe)
+  }, [])
+
+  /** Fetch + print the label PDF for one order. */
+  const printLabelPdf = useCallback(async (orderNo: number) => {
+    try {
+      const blob = await orderService.getLabelPdf(orderNo, undefined, { main: true })
+      printPdfBlob(blob)
+    } catch (e) {
+      notify.apiError(e, `Could not print label for #${orderNo}.`)
+    }
+  }, [printPdfBlob])
+
+  /** Fetch + print the commercial-invoice PDF for one order. */
+  const printCommercialInvoice = useCallback(async (orderNo: number) => {
+    try {
+      const blob = await orderService.getCommercialInvoicePdf(orderNo)
+      printPdfBlob(blob)
+    } catch (e) {
+      notify.apiError(e, `Could not print commercial invoice for #${orderNo}.`)
+    }
+  }, [printPdfBlob])
+
   const generateAllReady = async () => {
     const readyOrders = await fetchAllReadyOrders()
 
@@ -954,6 +1020,11 @@ export default function OrdersWorkspace() {
     const isGenerating = generatingOrderNos.includes(orderNo)
 
     if (status === 'GENERATED') {
+      // Show the commercial-invoice icon only on international
+      // shipments (customs data exists) — intlYn is the flag persisted
+      // at label time. Domestic orders 422 on this endpoint so hiding
+      // the icon there matches actual availability.
+      const isIntl = order.shippingDetails?.intlYn === 'Y'
       return (
         <span className="inline-flex items-center gap-1">
           <button
@@ -964,6 +1035,29 @@ export default function OrdersWorkspace() {
             <FiEye className="h-3 w-3" />
             View Label
           </button>
+          {/* Quick-print icons (2026-09-13). Fetch the PDF and pop the
+              browser printer picker via a hidden iframe — no
+              intermediate tab, no navigation. */}
+          <button
+            type="button"
+            onClick={() => void printLabelPdf(orderNo)}
+            title="Print the shipping label"
+            aria-label={`Print label for order ${orderNo}`}
+            className={`${ACTION_BASE} !px-1.5`}
+          >
+            <FiPrinter className="h-3.5 w-3.5" />
+          </button>
+          {isIntl ? (
+            <button
+              type="button"
+              onClick={() => void printCommercialInvoice(orderNo)}
+              title="Print the commercial invoice"
+              aria-label={`Print commercial invoice for order ${orderNo}`}
+              className={`${ACTION_BASE} !px-1.5`}
+            >
+              <FiFileText className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
           {/* Correct a labelled order without re-keying: void the label, then
               the same order reopens pre-filled and regenerates in place
               (regenerate accepts a VOIDED order; it refuses a live one). */}
