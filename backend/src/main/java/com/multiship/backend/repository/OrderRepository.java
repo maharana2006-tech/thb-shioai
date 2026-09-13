@@ -428,6 +428,35 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("channel") String channel
     );
 
+    /**
+     * Select-all-filtered support (2026-09-13) — return just the order_no
+     * for every row matching the same filter set that {@link #findOrdersUnified}
+     * uses. Powers the FE's "Select all M matching the filter" affordance
+     * without shuttling 10k full-row payloads. No pagination; caller is
+     * responsible for scoping tenant + capping via input validation.
+     */
+    @Query(value = """
+        SELECT b.order_no
+        FROM label_batch b
+        LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
+    """ + UNIFIED_FILTER_SQL + """
+        ORDER BY b.order_no
+    """, nativeQuery = true)
+    List<Integer> findOrderNosUnified(
+            @Param("status") String status,
+            @Param("tenantId") String tenantId,
+            @Param("keyword") String keyword,
+            @Param("resolution") String resolution,
+            @Param("customer") String customer,
+            @Param("city") String city,
+            @Param("orderNoLike") String orderNoLike,
+            @Param("tracking") String tracking,
+            @Param("createdFrom") String createdFrom,
+            @Param("createdTo") String createdTo,
+            @Param("source") String source,
+            @Param("channel") String channel
+    );
+
     /** Tab counts for the Labels work queue, computed in one pass. */
     @Query(value = """
         SELECT

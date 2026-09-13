@@ -298,6 +298,50 @@ public class OrderController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
+    /**
+     * Select-all-filtered (2026-09-13) — return only the order numbers
+     * matching the same filter set the main list uses. Powers the
+     * Orders workspace's "Select all M matching the filter" affordance
+     * without shuttling 10k full-row payloads through the paginated
+     * list endpoint.
+     */
+    @Operation(summary = "Order numbers only (for select-all-filtered)",
+            description = "Same filter surface as GET /orders, but returns just order_no[]. No pagination; caller controls its own hard cap.")
+    @PreAuthorize("(hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #tenantId)) or @orderAccess.canViewTenant(authentication, #tenantId)")
+    @GetMapping("/ids")
+    public ResponseEntity<ApiResponse<java.util.List<Integer>>> listOrderIds(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String tenantId,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String resolution,
+            @RequestParam(required = false) String customer,
+            @RequestParam(required = false) String city,
+            @RequestParam(required = false) String orderNo,
+            @RequestParam(required = false) String tracking,
+            @RequestParam(required = false) String createdFrom,
+            @RequestParam(required = false) String createdTo,
+            @RequestParam(required = false) String source,
+            @RequestParam(required = false) String channel) {
+
+        OrderListFilters filters = OrderListFilters.builder()
+                .status(status)
+                .tenantId(tenantId)
+                .search(search)
+                .resolution(resolution)
+                .customer(customer)
+                .city(city)
+                .orderNo(orderNo)
+                .tracking(tracking)
+                .createdFrom(createdFrom)
+                .createdTo(createdTo)
+                .source(source)
+                .channel(channel)
+                .build();
+
+        ApiResponse<java.util.List<Integer>> response = orderService.listOrderNos(filters);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
     /** Tab counts for the Labels work queue: ready, needsDetails, blocked, failed, generated. */
     @Operation(summary = "Work-queue counts",
             description = "One aggregate pass: {ready, needsDetails, blocked, failed, generated}. 'blocked' = orders with no usable account anywhere in the cascade.")

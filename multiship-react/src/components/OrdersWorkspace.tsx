@@ -138,7 +138,29 @@ export default function OrdersWorkspace() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [reloadToken, setReloadToken] = useState(0)
-  const [selectedOrderNos, setSelectedOrderNos] = useState<number[]>([])
+  /**
+   * Selection state (2026-09-13 overhaul).
+   *
+   *   mode='individual' → {@link selectionSet} is the SELECTED order_nos.
+   *   mode='all-filtered' → {@link selectionSet} is the EXCLUDED order_nos
+   *     (Excel/Sheets pattern: "all M matching the filter EXCEPT these N").
+   *     {@link allFilteredIds} holds the full set of matching ids fetched
+   *     once from GET /orders/ids; the filter signature it was fetched
+   *     for is stored so a filter/search change invalidates the cache.
+   *
+   * Persistence: selection survives page navigation (Gmail behaviour).
+   * A filter/search change clears the selection (see the effect below).
+   */
+  type SelectionMode = 'individual' | 'all-filtered'
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>('individual')
+  const [selectionSet, setSelectionSet] = useState<Set<number>>(new Set())
+  const [allFilteredIds, setAllFilteredIds] = useState<number[] | null>(null)
+  const [allFilteredSignature, setAllFilteredSignature] = useState<string | null>(null)
+  // Range-select anchor — the last non-shift-click index within the
+  // current page's rows. Shift-click extends selection from the anchor
+  // to the current index (inclusive), mirroring Gmail/GitHub muscle
+  // memory. Reset whenever the underlying rows array changes.
+  const lastClickedIndexRef = useRef<number | null>(null)
   const [generatingOrderNos, setGeneratingOrderNos] = useState<number[]>([])
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null)
   const [fillDetailsTarget, setFillDetailsTarget] = useState<{
@@ -213,17 +235,31 @@ export default function OrdersWorkspace() {
     setPage(1)
   }, [view, debouncedQuery, pageSize, clientFilter, dateFrom, dateTo, sortBy, sortDirection, debouncedFilters])
 
-  // Filter / pagination change → clear selection. Previously stale
-  // selectedOrderNos from the OLD visible rows would silently apply to
-  // "Generate selected" against the NEW rows, generating labels for
-  // unintended orders. Tab switch already does this at the onClick site
-  // (line ~1031); the effect handles every other change site uniformly.
-  // Sort direction/by is deliberately excluded — reordering the same
-  // rows doesn't invalidate what's selected.
+  /**
+   * Signature of the current filter set — used both to invalidate the
+   * cached all-filtered id list AND to trigger the "clear selection on
+   * filter change" effect below. Page and sort are DELIBERATELY
+   * excluded: paging or reordering doesn't change WHAT the operator
+   * picked, only HOW it's presented. The 2026-09-13 overhaul made
+   * selection survive page navigation (Gmail behaviour).
+   */
+  const filterSignature = useMemo(() => JSON.stringify({
+    view, q: debouncedQuery, client: clientFilter, from: dateFrom, to: dateTo,
+    filters: debouncedFilters, source: sourceFilter, channel: channelFilter,
+  }), [view, debouncedQuery, clientFilter, dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter])
+
+  // Filter change → clear selection and invalidate the all-filtered
+  // cache. Prior behaviour also cleared on page/pageSize change, which
+  // is now DELIBERATELY dropped: paging through results shouldn't
+  // discard picks made on page 1.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale selection on any filter or pagination change; user-input-driven, not derivable at render
-    setSelectedOrderNos([])
-  }, [debouncedQuery, clientFilter, dateFrom, dateTo, debouncedFilters, page, pageSize])
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale selection on filter change; user-input-driven, not derivable at render
+    setSelectionMode('individual')
+    setSelectionSet(new Set())
+    setAllFilteredIds(null)
+    setAllFilteredSignature(null)
+    lastClickedIndexRef.current = null
+  }, [filterSignature])
 
   // Each view has its own natural direction; reset when switching.
   useEffect(() => {
@@ -391,12 +427,219 @@ export default function OrdersWorkspace() {
     }
   }, [view, tabs, loading])
 
-  // ----- selection (page-scoped, Ready tab only) -----
+  // ===== Selection (Ready tab; individual + all-filtered) =====
   const selectableVisible = view === 'ready' ? rows : []
-  const allSelected =
-    selectableVisible.length > 0 && selectableVisible.every((o) => selectedOrderNos.includes(o.orderDetails.orderNo))
-  const toggleOrder = (orderNo: number) =>
-    setSelectedOrderNos((cur) => (cur.includes(orderNo) ? cur.filter((n) => n !== orderNo) : [...cur, orderNo]))
+
+  /**
+   * True when the given order_no is currently selected under the
+   * active selection mode.
+   *   individual → set membership
+   *   all-filtered → in the cached all-filtered id list AND NOT in the
+   *     exclusion set
+   */
+  const isOrderSelected = useCallback((orderNo: number): boolean => {
+    if (selectionMode === 'all-filtered') {
+      if (!allFilteredIds) return false
+      if (selectionSet.has(orderNo)) return false
+      return allFilteredIds.includes(orderNo)
+    }
+    return selectionSet.has(orderNo)
+  }, [selectionMode, selectionSet, allFilteredIds])
+
+  /**
+   * Effective count and materialised id list for the current selection
+   * — used by the sticky action bar and the "Generate selected" call.
+   * In all-filtered mode this walks the cached id list minus exclusions;
+   * otherwise it's just the size of the set.
+   */
+  const selectedCount = useMemo(() => {
+    if (selectionMode === 'all-filtered' && allFilteredIds) {
+      return allFilteredIds.length - selectionSet.size
+    }
+    return selectionSet.size
+  }, [selectionMode, selectionSet, allFilteredIds])
+
+  const materialisedSelection = useCallback((): number[] => {
+    if (selectionMode === 'all-filtered' && allFilteredIds) {
+      return allFilteredIds.filter((id) => !selectionSet.has(id))
+    }
+    return Array.from(selectionSet)
+  }, [selectionMode, selectionSet, allFilteredIds])
+
+  /** All rows visible on the current page are currently selected. */
+  const pageAllSelected = selectableVisible.length > 0
+        && selectableVisible.every((o) => isOrderSelected(o.orderDetails.orderNo))
+
+  /**
+   * Toggle a single row. Records the click index for the shift-click
+   * range extension the next click may perform. When called from
+   * shift-click ({@link shiftKey}=true), extends the selection from
+   * the last-clicked-index anchor to this row's index — same behaviour
+   * as Gmail/GitHub.
+   */
+  const toggleOrder = useCallback((orderNo: number, rowIndex?: number, shiftKey?: boolean) => {
+    const rowsSnapshot = selectableVisible
+    // Shift-click range extension: only when we have an anchor AND we
+    // know the current row's index in the visible list.
+    if (shiftKey && lastClickedIndexRef.current != null && rowIndex != null) {
+      const anchor = lastClickedIndexRef.current
+      const lo = Math.min(anchor, rowIndex)
+      const hi = Math.max(anchor, rowIndex)
+      // Extend semantics: everything in [lo, hi] gets the SAME state
+      // as the anchor row (Gmail behaviour — extending your existing
+      // selection, not toggling in place).
+      const anchorRow = rowsSnapshot[anchor]
+      if (!anchorRow) return
+      const anchorSelected = isOrderSelected(anchorRow.orderDetails.orderNo)
+      setSelectionSet((cur) => {
+        const next = new Set(cur)
+        for (let i = lo; i <= hi; i++) {
+          const rowOrderNo = rowsSnapshot[i]?.orderDetails.orderNo
+          if (rowOrderNo == null) continue
+          if (selectionMode === 'all-filtered') {
+            // In all-filtered mode, "select" = remove exclusion, "unselect" = add exclusion.
+            if (anchorSelected) next.delete(rowOrderNo)
+            else next.add(rowOrderNo)
+          } else {
+            if (anchorSelected) next.add(rowOrderNo)
+            else next.delete(rowOrderNo)
+          }
+        }
+        return next
+      })
+      lastClickedIndexRef.current = rowIndex
+      return
+    }
+    // Plain click: toggle this one row + update the anchor.
+    if (rowIndex != null) lastClickedIndexRef.current = rowIndex
+    if (selectionMode === 'all-filtered') {
+      // Exclusion tracking: click on a currently-selected row adds it
+      // to exclusions; click on an excluded row removes the exclusion.
+      setSelectionSet((cur) => {
+        const next = new Set(cur)
+        if (next.has(orderNo)) next.delete(orderNo)
+        else next.add(orderNo)
+        return next
+      })
+    } else {
+      setSelectionSet((cur) => {
+        const next = new Set(cur)
+        if (next.has(orderNo)) next.delete(orderNo)
+        else next.add(orderNo)
+        return next
+      })
+    }
+  }, [selectableVisible, isOrderSelected, selectionMode])
+
+  /** Select every row on the current page (adds to whatever's already
+   *  selected in individual mode; no-op in all-filtered mode since
+   *  everything's already selected there). */
+  const selectPage = useCallback(() => {
+    if (selectionMode === 'all-filtered') return
+    setSelectionSet((cur) => {
+      const next = new Set(cur)
+      for (const o of selectableVisible) next.add(o.orderDetails.orderNo)
+      return next
+    })
+  }, [selectableVisible, selectionMode])
+
+  /** Clear all selection state. */
+  const clearSelection = useCallback(() => {
+    setSelectionMode('individual')
+    setSelectionSet(new Set())
+    setAllFilteredIds(null)
+    setAllFilteredSignature(null)
+    lastClickedIndexRef.current = null
+  }, [])
+
+  /** Fetch every order id matching the current filter and switch to
+   *  all-filtered mode. Cached by filterSignature so repeat clicks are
+   *  free until the operator changes a filter. */
+  const selectAllFiltered = useCallback(async () => {
+    try {
+      // Reuse cache if the filter signature matches the last fetch.
+      let ids = allFilteredIds
+      if (!ids || allFilteredSignature !== filterSignature) {
+        const params = {
+          status: 'PENDING' as const,
+          resolution: 'READY' as const,
+          tenantId: clientFilter || undefined,
+          search: debouncedQuery.trim() || undefined,
+          customer: debouncedFilters.customer?.trim() || undefined,
+          city: debouncedFilters.city?.trim() || undefined,
+          orderNo: debouncedFilters.orderNo?.trim() || undefined,
+          tracking: debouncedFilters.tracking?.trim() || undefined,
+          createdFrom: dateFrom || undefined,
+          createdTo: dateTo || undefined,
+          source: sourceFilter || undefined,
+          channel: channelFilter || undefined,
+        }
+        const res = await orderService.listOrderIds(params)
+        ids = res.data ?? []
+        setAllFilteredIds(ids)
+        setAllFilteredSignature(filterSignature)
+      }
+      setSelectionMode('all-filtered')
+      setSelectionSet(new Set()) // exclusions = none initially
+    } catch (e) {
+      notify.apiError(e, 'Could not fetch all matching orders.')
+    }
+  }, [allFilteredIds, allFilteredSignature, filterSignature, clientFilter, debouncedQuery,
+      debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter])
+
+  /** Invert selection within the current filter. Fetches the full id
+   *  list if not already cached, then computes the complement. */
+  const invertSelection = useCallback(async () => {
+    let ids = allFilteredIds
+    if (!ids || allFilteredSignature !== filterSignature) {
+      try {
+        const params = {
+          status: 'PENDING' as const,
+          resolution: 'READY' as const,
+          tenantId: clientFilter || undefined,
+          search: debouncedQuery.trim() || undefined,
+          customer: debouncedFilters.customer?.trim() || undefined,
+          city: debouncedFilters.city?.trim() || undefined,
+          orderNo: debouncedFilters.orderNo?.trim() || undefined,
+          tracking: debouncedFilters.tracking?.trim() || undefined,
+          createdFrom: dateFrom || undefined,
+          createdTo: dateTo || undefined,
+          source: sourceFilter || undefined,
+          channel: channelFilter || undefined,
+        }
+        const res = await orderService.listOrderIds(params)
+        ids = res.data ?? []
+        setAllFilteredIds(ids)
+        setAllFilteredSignature(filterSignature)
+      } catch (e) {
+        notify.apiError(e, 'Could not fetch all matching orders to invert.')
+        return
+      }
+    }
+    // Materialise current selection then flip.
+    const currentlySelected = new Set(materialisedSelection())
+    const inverted = ids.filter((id) => !currentlySelected.has(id))
+    setSelectionMode('individual')
+    setSelectionSet(new Set(inverted))
+  }, [allFilteredIds, allFilteredSignature, filterSignature, clientFilter, debouncedQuery,
+      debouncedFilters, dateFrom, dateTo, sourceFilter, channelFilter, materialisedSelection])
+
+  /** Back-compat alias — accepts either an array or a functional
+   *  updater. Existing call sites pre-refactor used both shapes. */
+  const setSelectedOrderNos = (
+      nosOrUpdater: number[] | ((cur: number[]) => number[]),
+  ) => {
+    const nos = typeof nosOrUpdater === 'function'
+        ? nosOrUpdater(materialisedSelection())
+        : nosOrUpdater
+    if (nos.length === 0) clearSelection()
+    else {
+      setSelectionMode('individual')
+      setSelectionSet(new Set(nos))
+    }
+  }
+  const selectedOrderNos = useMemo(() => materialisedSelection(), [materialisedSelection])
+  const allSelected = pageAllSelected
 
   const openFillDetails = (orderNo: number, resolution: OrderAccountResolution) =>
     setFillDetailsTarget({ orderNo, resolution })
@@ -833,20 +1076,35 @@ export default function OrdersWorkspace() {
       defs.push({
         id: 'select',
         header: () => {
+          // Header now toggles PAGE selection only. Escalation to
+          // "all M matching the filter" happens via the Gmail-style
+          // banner rendered below the table.
           const selectable = selectableVisible
-          const allChecked =
-            selectable.length > 0 &&
-            selectable.every((o) => selectedOrderNos.includes(o.orderDetails.orderNo))
           return (
             <input
               type="checkbox"
-              aria-label={allChecked ? 'Clear selection' : 'Select all rows'}
-              checked={allChecked}
-              onChange={() =>
-                setSelectedOrderNos(
-                  allChecked ? [] : selectable.map((o) => o.orderDetails.orderNo),
-                )
-              }
+              aria-label={pageAllSelected ? 'Deselect this page' : 'Select this page'}
+              checked={pageAllSelected}
+              onChange={() => {
+                if (pageAllSelected) {
+                  // Remove page's rows from selection (works for both modes).
+                  if (selectionMode === 'all-filtered') {
+                    setSelectionSet((cur) => {
+                      const next = new Set(cur)
+                      for (const o of selectable) next.add(o.orderDetails.orderNo)
+                      return next
+                    })
+                  } else {
+                    setSelectionSet((cur) => {
+                      const next = new Set(cur)
+                      for (const o of selectable) next.delete(o.orderDetails.orderNo)
+                      return next
+                    })
+                  }
+                } else {
+                  selectPage()
+                }
+              }}
               className="h-4 w-4 rounded border-[#cdbf9f] text-[#1f150c] focus:ring-[#e3d9c4]"
             />
           )
@@ -856,8 +1114,16 @@ export default function OrdersWorkspace() {
           <input
             type="checkbox"
             aria-label={`Select order ${row.original.orderDetails.orderNo}`}
-            checked={selectedOrderNos.includes(row.original.orderDetails.orderNo)}
-            onChange={() => toggleOrder(row.original.orderDetails.orderNo)}
+            checked={isOrderSelected(row.original.orderDetails.orderNo)}
+            onClick={(e) => {
+              // Range-select — shift-click extends from the last-clicked
+              // anchor to this row (Gmail/GitHub muscle memory).
+              toggleOrder(row.original.orderDetails.orderNo, row.index, e.shiftKey)
+              // We handle the state change ourselves; stop React from
+              // firing the onChange handler with a fresh toggle.
+              e.preventDefault()
+            }}
+            onChange={() => { /* handled by onClick */ }}
             className="h-4 w-4 rounded border-[#cdbf9f] text-[#1f150c] focus:ring-[#e3d9c4]"
           />
         ),
@@ -1349,17 +1615,67 @@ export default function OrdersWorkspace() {
           </div>
 
           {view === 'ready' && selectableVisible.length ? (
-            <button
-              type="button"
-              onClick={() =>
-                setSelectedOrderNos(allSelected ? [] : selectableVisible.map((o) => o.orderDetails.orderNo))
-              }
-              className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
-            >
-              {allSelected ? 'Clear selection' : `Select all (${selectableVisible.length})`}
-            </button>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {/* Select-page button — clearly scoped to the visible rows,
+                  distinct from "all matching the filter" below. */}
+              <button
+                type="button"
+                onClick={() => pageAllSelected ? clearSelection() : selectPage()}
+                className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+              >
+                {pageAllSelected ? 'Deselect page' : `Select this page (${selectableVisible.length})`}
+              </button>
+              {/* Invert — flips selection within the current filter.
+                  Fetches all matching ids on first use, caches by filter
+                  signature so repeat clicks are free. */}
+              <button
+                type="button"
+                onClick={() => void invertSelection()}
+                title="Flip the current selection within the current filter"
+                className="rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[11.5px] font-semibold text-[#5a4526] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
+              >
+                Invert
+              </button>
+            </div>
           ) : null}
         </div>
+
+        {/*
+          Gmail-style escalation banner (2026-09-13). When the whole
+          visible page is picked AND we're still in individual mode,
+          offer to expand the selection to every matching order across
+          all pages. Also shown when all-filtered is active so the
+          operator can bail back to page-scoped selection.
+        */}
+        {view === 'ready' && selectableVisible.length && selectionMode === 'individual' && pageAllSelected ? (
+          <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-[11.5px] text-sky-900">
+            <span>
+              All <span className="font-semibold">{selectableVisible.length}</span> orders on this page are selected.
+            </span>
+            <button
+              type="button"
+              onClick={() => void selectAllFiltered()}
+              className="rounded-lg border border-sky-300 bg-white px-2.5 py-1 font-semibold text-sky-900 hover:bg-sky-100"
+            >
+              Select all matching this filter
+            </button>
+          </div>
+        ) : null}
+        {view === 'ready' && selectionMode === 'all-filtered' && allFilteredIds ? (
+          <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-sky-300 bg-sky-100 px-3 py-2 text-[11.5px] text-sky-900">
+            <span>
+              All <span className="font-semibold">{selectedCount}</span> orders matching the current filter are selected
+              {selectionSet.size > 0 ? <> · <span className="font-semibold">{selectionSet.size}</span> excluded</> : null}.
+            </span>
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="rounded-lg border border-sky-300 bg-white px-2.5 py-1 font-semibold text-sky-900 hover:bg-sky-50"
+            >
+              Clear selection
+            </button>
+          </div>
+        ) : null}
 
         {/* ===== data table (shared AdvancedDataTable) ===== */}
         <div className="mt-3">
@@ -1644,7 +1960,7 @@ export default function OrdersWorkspace() {
       </section>
 
       {/* ===== sticky action bar: live bulk progress OR selection ===== */}
-      {bulkProgress || (view === 'ready' && selectedOrderNos.length) ? (
+      {bulkProgress || (view === 'ready' && selectedCount > 0) ? (
         <div className="fixed inset-x-0 bottom-5 z-30 flex justify-center px-4">
           <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 shadow-[0_18px_50px_rgba(15,23,42,0.22)]">
             {bulkProgress ? (
@@ -1663,14 +1979,25 @@ export default function OrdersWorkspace() {
             ) : (
               <>
                 <span className="text-[12.5px] font-semibold text-slate-950 tabular-nums">
-                  {selectedOrderNos.length} selected
+                  {selectedCount} selected{selectionMode === 'all-filtered' ? ' (all matching filter)' : ''}
                 </span>
                 <button
                   type="button"
                   onClick={() => {
-                    void generateForOrders(
-                      rows.filter((o) => selectedOrderNos.includes(o.orderDetails.orderNo))
-                    )
+                    // 2026-09-13 overhaul: use the materialised selection
+                    // (may span multiple pages when all-filtered is active).
+                    // For orders on the current page we can pass the Order
+                    // object directly; for off-page orders we synthesise a
+                    // minimal Order-shaped stub — generateForOrders only
+                    // reads orderNo + accountResolution?.scenario from it,
+                    // and the 'ready' view filter guarantees resolution=READY.
+                    const rowByOrderNo = new Map(rows.map((o) => [o.orderDetails.orderNo, o] as const))
+                    const selection = materialisedSelection()
+                    const orderObjs = selection.map((no) => rowByOrderNo.get(no) ?? ({
+                      orderDetails: { orderNo: no },
+                      accountResolution: { scenario: 'READY' },
+                    } as unknown as Order))
+                    void generateForOrders(orderObjs)
                   }}
                   disabled={busy}
                   className={BTN_PRIMARY}
@@ -1680,7 +2007,7 @@ export default function OrdersWorkspace() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSelectedOrderNos([])}
+                  onClick={clearSelection}
                   aria-label="Clear selection"
                   className="rounded-xl border border-[#e3d9c4] bg-white p-2 text-[#6b5c42] transition hover:border-[#cdbf9f] hover:bg-[#faf7f0]"
                 >

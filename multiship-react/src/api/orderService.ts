@@ -797,6 +797,30 @@ export const orderService = {
     return apiClient.get<ApiResponse<PaginatedOrderData>>(`/orders?${query.toString()}`)
   },
 
+  /**
+   * Select-all-filtered (2026-09-13) — every order number matching the
+   * same filter surface as listOrders, WITHOUT pagination. Powers the
+   * OrdersWorkspace "Select all M matching this filter" flow so the FE
+   * can build a virtual selection set from one request instead of
+   * paging through 10k full rows.
+   */
+  listOrderIds: (params: Omit<OrderListParams, 'page' | 'size' | 'sortBy' | 'sortDirection' | 'includeResolution'> = {}) => {
+    const query = new URLSearchParams()
+    if (params.status) query.set('status', params.status)
+    if (params.tenantId) query.set('tenantId', params.tenantId)
+    if (params.search?.trim()) query.set('search', params.search.trim())
+    if (params.resolution) query.set('resolution', params.resolution)
+    if (params.customer?.trim()) query.set('customer', params.customer.trim())
+    if (params.city?.trim()) query.set('city', params.city.trim())
+    if (params.orderNo?.trim()) query.set('orderNo', params.orderNo.trim())
+    if (params.tracking?.trim()) query.set('tracking', params.tracking.trim())
+    if (params.createdFrom) query.set('createdFrom', params.createdFrom)
+    if (params.createdTo) query.set('createdTo', params.createdTo)
+    if (params.source) query.set('source', params.source)
+    if (params.channel) query.set('channel', params.channel)
+    return apiClient.get<ApiResponse<number[]>>(`/orders/ids?${query.toString()}`)
+  },
+
   /** Work-queue tab counts (ready / needsDetails / blocked / failed / generated). */
   getQueueStats: () => {
     return apiClient.get<ApiResponse<QueueStats>>('/orders/queue-stats')

@@ -204,6 +204,70 @@ public class OrderServiceImpl implements OrderService {
                 .build();
     }
 
+    /**
+     * Select-all-filtered (2026-09-13). Reuses the same filter
+     * normalisation + tenant clamp as {@link #listOrders} but projects
+     * only order_no. Caller (typically the FE Orders workspace) uses
+     * the returned list to seed a virtual "all matching this filter"
+     * selection without paging through 10k rows.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<java.util.List<Integer>> listOrderNos(OrderListFilters filters) {
+        String statusFilter = normalizeFilter(filters.getStatus());
+        String resolutionFilter = normalizeFilter(filters.getResolution());
+        String rawTenantFilter = trimmed(filters.getTenantId());
+        String clampedTenant = tenantScope.clampClientCode(
+                rawTenantFilter.isEmpty() ? null : rawTenantFilter);
+        String tenantFilter = normalizeFilter(clampedTenant);
+        String keywordFilter = trimmed(filters.getSearch());
+        String customerFilter = trimmed(filters.getCustomer());
+        String cityFilter = trimmed(filters.getCity());
+        String orderNoFilter = trimmed(filters.getOrderNo());
+        String trackingFilter = trimmed(filters.getTracking());
+        String createdFrom = trimmed(filters.getCreatedFrom());
+        String createdTo = trimmed(filters.getCreatedTo());
+        String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
+        String channelFilter = trimmed(filters.getChannel()).toUpperCase(java.util.Locale.ROOT);
+
+        if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
+            return ApiResponse.<java.util.List<Integer>>builder()
+                    .status("ERROR").code(400)
+                    .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                    .message("Date filters must use the yyyy-MM-dd format.")
+                    .timestamp(LocalDateTime.now())
+                    .build();
+        }
+        if (!statusFilter.isEmpty() && !VALID_STATUSES.contains(statusFilter)) {
+            return ApiResponse.<java.util.List<Integer>>builder()
+                    .status("ERROR").code(400)
+                    .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                    .message("Unknown status filter '" + filters.getStatus() + "'. Valid: PENDING, GENERATED, ERROR.")
+                    .timestamp(LocalDateTime.now())
+                    .build();
+        }
+        if (!resolutionFilter.isEmpty() && !VALID_RESOLUTIONS.contains(resolutionFilter)) {
+            return ApiResponse.<java.util.List<Integer>>builder()
+                    .status("ERROR").code(400)
+                    .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                    .message("Unknown resolution filter '" + filters.getResolution() + "'. Valid: READY, NEEDS_DETAILS, CHOOSE_ACCOUNT, CLIENT_MISSING.")
+                    .timestamp(LocalDateTime.now())
+                    .build();
+        }
+
+        java.util.List<Integer> ids = orderRepository.findOrderNosUnified(
+                statusFilter, tenantFilter, keywordFilter, resolutionFilter,
+                customerFilter, cityFilter, orderNoFilter, trackingFilter,
+                createdFrom, createdTo, sourceFilter, channelFilter);
+
+        return ApiResponse.<java.util.List<Integer>>builder()
+                .status("SUCCESS").code(200)
+                .message(ids.size() + " order id(s) matched")
+                .timestamp(LocalDateTime.now())
+                .data(ids)
+                .build();
+    }
+
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<Map<String, Long>> getQueueStats() {
