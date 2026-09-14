@@ -452,6 +452,31 @@ export default function AdvancedDataTable<T>({
   const densityMenuRef = useDismissable(openMenu === 'density', () => setOpenMenu(null))
   const exportMenuRef = useDismissable(openMenu === 'export', () => setOpenMenu(null))
 
+  /**
+   * Select column is a fixed viewport gutter (2026-09-14 operator ask):
+   * when the operator pins another column left, the checkbox must NOT
+   * be pushed behind it. Special-case the id: any table whose columns
+   * include one with id === 'select' gets it force-pinned left AND
+   * placed first within the pinned-left group. State the operator
+   * mutates via 📌 / drag continues to work normally; we just derive
+   * an "effective" view on top so the render is always guttered.
+   */
+  const hasSelectColumn = useMemo(
+    () => columns.some((c) => (c as { id?: string }).id === 'select'),
+    [columns],
+  )
+  const effectiveColumnPinning: ColumnPinningState = useMemo(() => {
+    if (!hasSelectColumn) return columnPinning
+    const left = (columnPinning.left ?? []).filter((id) => id !== 'select')
+    const right = (columnPinning.right ?? []).filter((id) => id !== 'select')
+    return { left: ['select', ...left], right }
+  }, [columnPinning, hasSelectColumn])
+  const effectiveColumnOrder: ColumnOrderState = useMemo(() => {
+    if (!hasSelectColumn || columnOrder.length === 0) return columnOrder
+    if (columnOrder[0] === 'select') return columnOrder
+    return ['select', ...columnOrder.filter((id) => id !== 'select')]
+  }, [columnOrder, hasSelectColumn])
+
   // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Table's useReactTable() returns functions that cannot be memoized safely — library-level incompatibility with react-hooks analyzer, not a code issue
   const table = useReactTable<T>({
     data,
@@ -460,9 +485,9 @@ export default function AdvancedDataTable<T>({
     state: {
       sorting,
       columnVisibility,
-      columnOrder,
+      columnOrder: effectiveColumnOrder,
       columnSizing,
-      columnPinning,
+      columnPinning: effectiveColumnPinning,
       pagination: { pageIndex: currentPageIndex, pageSize: currentPageSize },
     },
     manualSorting,
