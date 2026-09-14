@@ -157,9 +157,17 @@ const csvCell = (value: unknown): string => {
 }
 
 function exportRowValues<T>(table: Table<T>): string[][] {
-  const columns = table
-    .getVisibleLeafColumns()
-    .filter((col) => (col.columnDef.meta as { exportable?: boolean } | undefined)?.exportable !== false)
+  const exportable = (col: { columnDef: { meta?: unknown } }) =>
+    (col.columnDef.meta as { exportable?: boolean } | undefined)?.exportable !== false
+  const visible = table.getVisibleLeafColumns().filter(exportable)
+  // Columns folded into another cell are hidden but still carry data the
+  // spreadsheet needs (client, created, generated…) — append them so an
+  // export is never thinner than what the screen shows.
+  const foldedAway = table
+    .getAllLeafColumns()
+    .filter((col) => !col.getIsVisible() && exportable(col)
+      && (col.columnDef.meta as { exportAlways?: boolean } | undefined)?.exportAlways === true)
+  const columns = [...visible, ...foldedAway]
 
   const header = columns.map((col) => {
     const meta = col.columnDef.meta as { headerLabel?: string } | undefined

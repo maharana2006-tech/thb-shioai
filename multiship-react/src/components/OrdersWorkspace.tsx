@@ -1200,8 +1200,11 @@ export default function OrdersWorkspace() {
   // FIRST-load default visibility; once a user toggles the column menu,
   // their preference persists in localStorage and wins over this default.
   const autoHiddenColumns = useMemo<string[]>(() => {
-    if (!rows.length) return []
-    const hidden: string[] = []
+    // Folded into other cells: Client + Src sit under the order number,
+    // Created under Status, Generated under Track. Still in the Columns menu
+    // (and always in the CSV export) for anyone who wants them back.
+    const hidden: string[] = ['customer', 'source', 'createdDate', 'generatedAt']
+    if (!rows.length) return hidden
     if (rows.every((r) => !r.orderDetails.refOrderNumber)) hidden.push('refOrderNumber')
     if (rows.every((r) => r.orderDetails.batchId == null)) hidden.push('batchId')
     return hidden
@@ -1213,6 +1216,45 @@ export default function OrdersWorkspace() {
   // state map directly onto the server-side sort params.
   const columns = useMemo<ColumnDef<Order>[]>(() => {
     const defs: ColumnDef<Order>[] = []
+
+    /** Source (M/A/B) + channel (D2C/B2B, API rows only) chips. */
+    const sourceChips = (o: Order) => {
+      const s = (o.orderDetails.source || 'API').toUpperCase()
+      const sTone: Record<string, string> = {
+        MANUAL: 'bg-amber-50 text-amber-700 ring-amber-200',
+        API: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+        BULK: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
+      }
+      const sLabel: Record<string, string> = {
+        MANUAL: 'Manual — created via /orders/new',
+        API: 'API — imported via external partner / WMS',
+        BULK: 'Bulk — imported via CSV/Excel',
+      }
+      const c = (o.orderDetails.channel || '').toUpperCase()
+      const classified = s === 'API' && (c === 'D2C' || c === 'B2B')
+      const cTone = c === 'B2B'
+        ? 'bg-indigo-50 text-indigo-700 ring-indigo-200'
+        : 'bg-sky-50 text-sky-700 ring-sky-200'
+      return (
+        <span className="inline-flex shrink-0 items-center gap-1">
+          <span
+            title={sLabel[s] || 'Order source'}
+            className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ring-1 ${sTone[s] || sTone.API}`}
+          >
+            {s.charAt(0)}
+          </span>
+          {classified ? (
+            <span
+              title={c === 'B2B' ? 'B2B — business-to-business shipment' : 'D2C — direct-to-consumer shipment'}
+              data-testid="order-channel-chip"
+              className={`inline-flex h-5 items-center rounded-full px-1.5 text-[9px] font-bold uppercase tracking-wide ring-1 ${cTone}`}
+            >
+              {c}
+            </span>
+          ) : null}
+        </span>
+      )
+    }
 
     if (selectionEnabled) {
       defs.push({
@@ -1252,6 +1294,7 @@ export default function OrdersWorkspace() {
           )
         },
         enableSorting: false,
+        size: 44,
         cell: ({ row }) => (
           <input
             type="checkbox"
@@ -1276,15 +1319,30 @@ export default function OrdersWorkspace() {
     defs.push({
       id: 'orderNo',
       accessorFn: (o) => o.orderDetails.orderNo,
-      header: 'Order #',
-      // PR #555 — explicit sizes so table-layout: fixed can allocate space
-      // predictably instead of react-table's 160-default per column.
-      size: 128,
-      cell: ({ row }) => (
-        <span className="font-mono text-[13.5px] font-bold tabular-nums text-[#1f150c]">
-          #{row.original.orderDetails.orderNo}
-        </span>
-      ),
+      header: 'Order',
+      // One identity column: number + where it came from on the first line,
+      // client (and ref, when present) on the second. The standalone Client,
+      // Src and Ref columns stay available in the Columns menu.
+      size: 210,
+      cell: ({ row }) => {
+        const o = row.original.orderDetails
+        const ref = o.refOrderNumber
+        return (
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="flex items-center gap-1.5">
+              <span className="font-mono text-[13.5px] font-bold tabular-nums text-[#1f150c]">#{o.orderNo}</span>
+              {sourceChips(row.original)}
+            </span>
+            <span
+              className="truncate font-mono text-[11.5px] text-[#6b5c42]"
+              title={ref ? `${o.customerCode} · ref ${ref}` : o.customerCode}
+            >
+              {o.customerCode}
+              {ref ? <span className="text-[#b3a583]"> · {ref}</span> : null}
+            </span>
+          </span>
+        )
+      },
       meta: {
         headerLabel: 'Order #',
         exportValue: (o: Order) => o.orderDetails.orderNo,
@@ -1303,6 +1361,7 @@ export default function OrdersWorkspace() {
       ),
       meta: {
         headerLabel: 'Client',
+        exportAlways: true,
         exportValue: (o: Order) => o.orderDetails.customerCode,
       },
     })
@@ -1322,47 +1381,10 @@ export default function OrdersWorkspace() {
       // Channel is spelled out (B2B / D2C) on API rows only — a lone "B" / "D"
       // was read as unclassified.
       size: 108,
-      cell: ({ row }) => {
-        const s = (row.original.orderDetails.source || 'API').toUpperCase()
-        const sTone: Record<string, string> = {
-          MANUAL: 'bg-amber-50 text-amber-700 ring-amber-200',
-          API: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-          BULK: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
-        }
-        const sLabel: Record<string, string> = {
-          MANUAL: 'Manual — created via /orders/new',
-          API: 'API — imported via external partner / WMS',
-          BULK: 'Bulk — imported via CSV/Excel',
-        }
-        const c = (row.original.orderDetails.channel || '').toUpperCase()
-        // Client request: the D2C / B2B classification is shown for API
-        // (partner / WMS) orders only — manual and bulk rows show the source.
-        const classified = s === 'API' && (c === 'D2C' || c === 'B2B')
-        const cTone = c === 'B2B'
-          ? 'bg-indigo-50 text-indigo-700 ring-indigo-200'
-          : 'bg-sky-50 text-sky-700 ring-sky-200'
-        return (
-          <span className="inline-flex items-center gap-1">
-            <span
-              title={sLabel[s] || 'Order source'}
-              className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ring-1 ${sTone[s] || sTone.API}`}
-            >
-              {s.charAt(0)}
-            </span>
-            {classified ? (
-              <span
-                title={c === 'B2B' ? 'B2B — business-to-business shipment' : 'D2C — direct-to-consumer shipment'}
-                data-testid="order-channel-chip"
-                className={`inline-flex h-5 items-center rounded-full px-1.5 text-[9px] font-bold uppercase tracking-wide ring-1 ${cTone}`}
-              >
-                {c}
-              </span>
-            ) : null}
-          </span>
-        )
-      },
+      cell: ({ row }) => sourceChips(row.original),
       meta: {
         headerLabel: 'Source / Channel',
+        exportAlways: true,
         exportValue: (o: Order) => {
           const src = (o.orderDetails.source ?? 'API').toUpperCase()
           return src === 'API' && o.orderDetails.channel ? `${src} ${o.orderDetails.channel.toUpperCase()}` : src
@@ -1389,6 +1411,7 @@ export default function OrdersWorkspace() {
       ),
       meta: {
         headerLabel: 'Ref #',
+        exportAlways: true,
         exportValue: (o: Order) => o.orderDetails.refOrderNumber ?? '',
       },
     })
@@ -1408,6 +1431,7 @@ export default function OrdersWorkspace() {
       ),
       meta: {
         headerLabel: 'Batch',
+        exportAlways: true,
         exportValue: (o: Order) => o.orderDetails.batchId ?? '',
       },
     })
@@ -1421,29 +1445,16 @@ export default function OrdersWorkspace() {
       // state + zip + country). Country implicit ~90% traffic; if you need
       // it, hover. Sort-key still on the underlying city, state so ordering
       // is unchanged.
-      size: 150,
+      size: 200,
       cell: ({ row }) => {
         const s = row.original.shippingDetails
-        // Cell body — state + zip. Fall back to city if state missing.
-        const cellText = s.state && s.zipCode
-          ? `${s.state} · ${s.zipCode}`
-          : s.state
-            ? s.state
-            : s.city
-              ? s.city
-              : '—'
-        // Tooltip = "City, ST ZIP" (full destination) — the only address
-        // fields the /orders list endpoint exposes today. If ShippingDetails
-        // grows recipient / street fields in a future DTO refresh, this
-        // tooltip should expand to a multi-line address block.
+        const sub = s.state && s.zipCode ? `${s.state} · ${s.zipCode}` : s.zipCode || s.state || ''
         const tooltipParts = [s.city, s.state, s.zipCode].filter(Boolean)
         const tooltip = tooltipParts.length > 0 ? tooltipParts.join(' ') : 'No destination on file'
         return (
-          <span
-            className="block truncate text-[13.5px] tabular-nums text-[#3f3527]"
-            title={tooltip}
-          >
-            {cellText}
+          <span className="flex min-w-0 flex-col gap-0.5" title={tooltip}>
+            <span className="truncate text-[13.5px] text-[#3f3527]">{s.city || s.state || '—'}</span>
+            {sub ? <span className="truncate text-[11.5px] tabular-nums text-[#6b5c42]">{sub}</span> : null}
           </span>
         )
       },
@@ -1464,7 +1475,7 @@ export default function OrdersWorkspace() {
         // ops can hover once for the full picture. This is also why the
         // dedicated "Failure reason" column is gone in the failed view —
         // it's fully surfaced here.
-        size: 96,
+        size: 190,
         cell: ({ row }) => {
           const raw = (row.original.labelDetails.status || 'UNKNOWN').toUpperCase()
           const err = row.original.errorDetails?.errorMessage
@@ -1476,7 +1487,8 @@ export default function OrdersWorkspace() {
           }
           const entry = map[raw] || { short: raw.slice(0, 4), dot: 'bg-slate-300', label: raw }
           return (
-            <span className="inline-flex items-center gap-1.5">
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="inline-flex items-center gap-1.5">
               <span
                 title={entry.label}
                 className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-700 ring-1 ring-slate-200"
@@ -1491,6 +1503,13 @@ export default function OrdersWorkspace() {
                   items={[{ tag: 'carrier', text: summarizeCarrierError(err) }]}
                 />
               ) : null}
+              </span>
+              <span
+                className="truncate text-[11.5px] text-[#6b5c42]"
+                title={row.original.orderDetails.createdDate || 'unknown creation date'}
+              >
+                {formatCreated(row.original.orderDetails.createdDate)}
+              </span>
             </span>
           )
         },
@@ -1514,6 +1533,7 @@ export default function OrdersWorkspace() {
         ),
         meta: {
           headerLabel: 'Created',
+        exportAlways: true,
           exportValue: (o: Order) => o.orderDetails.createdDate ?? '',
         },
       })
@@ -1528,7 +1548,7 @@ export default function OrdersWorkspace() {
         // tracking number on hover + click-to-open the carrier tracking
         // URL. Saves ~120px vs the previous "1Z999AA10123456784" full
         // number cell.
-        size: 120,
+        size: 210,
         cell: ({ row }) => {
           const tn = row.original.labelDetails.trackingNumber
           const url = row.original.labelDetails.trackingUrl
@@ -1542,11 +1562,23 @@ export default function OrdersWorkspace() {
               …{last4}
             </span>
           )
-          return url ? (
+          const link = url ? (
             <a href={url} target="_blank" rel="noreferrer" className="inline-block hover:opacity-80">
               {chip}
             </a>
           ) : chip
+          const gen = relativeTime(row.original.labelDetails.generatedAt)
+          return (
+            <span className="flex min-w-0 flex-col gap-0.5">
+              {link}
+              <span
+                className="truncate text-[11.5px] text-[#6b5c42]"
+                title={row.original.labelDetails.generatedAt || 'not generated yet'}
+              >
+                {gen || '—'}
+              </span>
+            </span>
+          )
         },
         meta: {
           headerLabel: 'Tracking',
@@ -1568,6 +1600,7 @@ export default function OrdersWorkspace() {
         ),
         meta: {
           headerLabel: 'Generated',
+        exportAlways: true,
           exportValue: (o: Order) => o.labelDetails.generatedAt ?? '',
         },
       })
@@ -1579,7 +1612,7 @@ export default function OrdersWorkspace() {
         // PR #555 — AccountScenarioBadge is already an icon+short-label chip.
         // Give it a bounded width so it truncates rather than pushing other
         // columns.
-        size: 172,
+        size: 200,
         cell: ({ row }) => (
           <AccountScenarioBadge resolution={row.original.accountResolution ?? undefined} />
         ),
@@ -1604,7 +1637,7 @@ export default function OrdersWorkspace() {
       // PR #555 — actions column carries up to 4 icon buttons + 1 primary
       // action (Generate/Regenerate). Bounded so it doesn't push other
       // columns off screen on mid-size laptops.
-      size: 200,
+      size: 240,
       cell: ({ row }) => {
         const order = row.original
         const orderNo = order.orderDetails.orderNo
@@ -1822,7 +1855,7 @@ export default function OrdersWorkspace() {
         {/* ===== data table (shared AdvancedDataTable) ===== */}
         <div className="mt-3">
           <AdvancedDataTable<Order>
-            tableKey="orders"
+            tableKey="orders-v2"
             columns={columns}
             data={rows}
             // PR #555 — auto-hide Ref # and Batch when every row on the
