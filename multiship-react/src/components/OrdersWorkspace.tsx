@@ -354,7 +354,7 @@ export default function OrdersWorkspace() {
    *  was unstyleable, inconsistent with the app's modal pattern, and blocked
    *  the tab for automation. The modal carries the context that matters:
    *  tracking number, irreversibility, and the refund caveat. */
-  const [confirmVoid, setConfirmVoid] = useState<{ orderNo: number; trackingNumber: string; reissue?: boolean; packages?: number } | null>(null)
+  const [confirmVoid, setConfirmVoid] = useState<{ orderNo: number; trackingNumber: string; packages?: number } | null>(null)
 
   // Escape closes the void confirmation (parity with every other modal).
   useEffect(() => {
@@ -364,19 +364,12 @@ export default function OrdersWorkspace() {
     return () => document.removeEventListener('keydown', onKey)
   }, [confirmVoid])
 
-  const handleVoid = async (orderNo: number, trackingNumber: string | null) => {
+  const handleVoid = async (orderNo: number, trackingNumber: string | null, packages?: number | null) => {
     if (!trackingNumber) return
-    setConfirmVoid({ orderNo, trackingNumber })
-  }
-
-  /** Edit & reissue: void the live label, then open the pre-filled form to regenerate in place. */
-  const handleEditReissue = (orderNo: number, trackingNumber: string | null, packages?: number | null) => {
-    if (!trackingNumber) return
-    setConfirmVoid({ orderNo, trackingNumber, reissue: true, packages: packages ?? undefined })
+    setConfirmVoid({ orderNo, trackingNumber, packages: packages ?? undefined })
   }
 
   const executeVoid = async (orderNo: number) => {
-    const reissue = confirmVoid?.orderNo === orderNo && confirmVoid.reissue === true
     setConfirmVoid(null)
     setVoidingOrderNo(orderNo)
     try {
@@ -384,10 +377,6 @@ export default function OrdersWorkspace() {
       const data = response.data
       if (data?.voided || data?.status === 'ALREADY_VOIDED') {
         notify.success(`Order ${orderNo}: ${data.message}`)
-        if (reissue) {
-          navigate(`/orders/new?fixOrder=${orderNo}`)
-          return
-        }
         refreshQueues()
       } else {
         notify.error(`Void failed: ${data?.message ?? 'Unknown error.'}`)
@@ -639,7 +628,6 @@ export default function OrdersWorkspace() {
     }
   }
   const selectedOrderNos = useMemo(() => materialisedSelection(), [materialisedSelection])
-  const allSelected = pageAllSelected
 
   const openFillDetails = (orderNo: number, resolution: OrderAccountResolution) =>
     setFillDetailsTarget({ orderNo, resolution })
@@ -1058,19 +1046,6 @@ export default function OrdersWorkspace() {
               <FiFileText className="h-3.5 w-3.5" />
             </button>
           ) : null}
-          {/* Correct a labelled order without re-keying: void the label, then
-              the same order reopens pre-filled and regenerates in place
-              (regenerate accepts a VOIDED order; it refuses a live one). */}
-          <button
-            type="button"
-            onClick={() => handleEditReissue(orderNo, order.labelDetails.trackingNumber ?? null, order.orderDetails.packageCount ?? null)}
-            disabled={voidingOrderNo === orderNo}
-            title="Void this label and reopen the order pre-filled to fix and regenerate it"
-            className={`${ACTION_BASE} ${ACTION_RETRY}`}
-          >
-            <FiEdit3 className="h-3 w-3" />
-            Edit &amp; reissue
-          </button>
         </span>
       )
     }
@@ -1304,7 +1279,7 @@ export default function OrdersWorkspace() {
       header: 'Order #',
       // PR #555 — explicit sizes so table-layout: fixed can allocate space
       // predictably instead of react-table's 160-default per column.
-      size: 96,
+      size: 128,
       cell: ({ row }) => (
         <span className="font-mono text-[13.5px] font-bold tabular-nums text-[#1f150c]">
           #{row.original.orderDetails.orderNo}
@@ -1320,7 +1295,7 @@ export default function OrdersWorkspace() {
       id: 'customer',
       accessorFn: (o) => o.orderDetails.customerCode,
       header: 'Client',
-      size: 96,
+      size: 128,
       cell: ({ row }) => (
         <span className="block truncate font-mono text-[12px] font-semibold text-[#5a4526]">
           {row.original.orderDetails.customerCode}
@@ -1346,7 +1321,7 @@ export default function OrdersWorkspace() {
       // Full labels preserved on hover; server folds WMS/ERP/legacy into API.
       // Channel is spelled out (B2B / D2C) on API rows only — a lone "B" / "D"
       // was read as unclassified.
-      size: 92,
+      size: 108,
       cell: ({ row }) => {
         const s = (row.original.orderDetails.source || 'API').toUpperCase()
         const sTone: Record<string, string> = {
@@ -1403,7 +1378,7 @@ export default function OrdersWorkspace() {
       // PR #555 — auto-hidden when all rows on the current page have an
       // empty refOrderNumber (see hiddenColumnsOnEmpty below). Users who
       // deliberately want it visible can toggle via the column menu.
-      size: 90,
+      size: 120,
       cell: ({ row }) => (
         <span
           className="block truncate font-mono text-[12px] text-[#5a4526]"
@@ -1425,7 +1400,7 @@ export default function OrdersWorkspace() {
       enableSorting: false,
       // PR #555 — auto-hidden when all rows on the current page have an
       // empty batchId.
-      size: 72,
+      size: 96,
       cell: ({ row }) => (
         <span className="block truncate font-mono text-[12px] text-[#5a4526]">
           {row.original.orderDetails.batchId ?? <span className="text-[#b3a583]">—</span>}
@@ -1446,7 +1421,7 @@ export default function OrdersWorkspace() {
       // state + zip + country). Country implicit ~90% traffic; if you need
       // it, hover. Sort-key still on the underlying city, state so ordering
       // is unchanged.
-      size: 110,
+      size: 150,
       cell: ({ row }) => {
         const s = row.original.shippingDetails
         // Cell body — state + zip. Fall back to city if state missing.
@@ -1489,7 +1464,7 @@ export default function OrdersWorkspace() {
         // ops can hover once for the full picture. This is also why the
         // dedicated "Failure reason" column is gone in the failed view —
         // it's fully surfaced here.
-        size: 72,
+        size: 96,
         cell: ({ row }) => {
           const raw = (row.original.labelDetails.status || 'UNKNOWN').toUpperCase()
           const err = row.original.errorDetails?.errorMessage
@@ -1528,7 +1503,7 @@ export default function OrdersWorkspace() {
         id: 'createdDate',
         accessorFn: (o) => o.orderDetails.createdDate ?? '',
         header: 'Created',
-        size: 100,
+        size: 130,
         cell: ({ row }) => (
           <span
             className="whitespace-nowrap text-[12px] text-[#6b5c42]"
@@ -1553,7 +1528,7 @@ export default function OrdersWorkspace() {
         // tracking number on hover + click-to-open the carrier tracking
         // URL. Saves ~120px vs the previous "1Z999AA10123456784" full
         // number cell.
-        size: 78,
+        size: 120,
         cell: ({ row }) => {
           const tn = row.original.labelDetails.trackingNumber
           const url = row.original.labelDetails.trackingUrl
@@ -1582,7 +1557,7 @@ export default function OrdersWorkspace() {
         id: 'generatedAt',
         accessorFn: (o) => o.labelDetails.generatedAt ?? '',
         header: 'Gen',
-        size: 84,
+        size: 112,
         cell: ({ row }) => (
           <span
             className="whitespace-nowrap text-[12px] text-[#6b5c42]"
@@ -1604,7 +1579,7 @@ export default function OrdersWorkspace() {
         // PR #555 — AccountScenarioBadge is already an icon+short-label chip.
         // Give it a bounded width so it truncates rather than pushing other
         // columns.
-        size: 140,
+        size: 172,
         cell: ({ row }) => (
           <AccountScenarioBadge resolution={row.original.accountResolution ?? undefined} />
         ),
@@ -1629,7 +1604,7 @@ export default function OrdersWorkspace() {
       // PR #555 — actions column carries up to 4 icon buttons + 1 primary
       // action (Generate/Regenerate). Bounded so it doesn't push other
       // columns off screen on mid-size laptops.
-      size: 172,
+      size: 200,
       cell: ({ row }) => {
         const order = row.original
         const orderNo = order.orderDetails.orderNo
@@ -1651,7 +1626,7 @@ export default function OrdersWorkspace() {
               <button
                 type="button"
                 disabled={voidingOrderNo === orderNo}
-                onClick={() => void handleVoid(orderNo, order.labelDetails.trackingNumber)}
+                onClick={() => void handleVoid(orderNo, order.labelDetails.trackingNumber, order.orderDetails.packageCount)}
                 title={`Void ${order.labelDetails.trackingNumber} at the carrier`}
                 aria-label={`Void order ${orderNo}`}
                 className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:opacity-40"

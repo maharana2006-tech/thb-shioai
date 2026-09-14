@@ -30,6 +30,8 @@ export interface ShippingDetails {
   shipVia: string
   weight: number
   shipViaDescription: string | null
+  /** 'Y' on international shipments — drives the commercial-invoice icon. */
+  intlYn?: string | null
 }
 
 export interface LabelDetails {
