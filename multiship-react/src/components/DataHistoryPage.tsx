@@ -1083,26 +1083,27 @@ export default function DataHistoryPage() {
                           return (
                             <div className="flex items-center gap-2">
                               <div
-                                className="flex min-w-[150px] flex-col gap-1 rounded-xl bg-[#1f150c] px-3 py-1.5 text-[#f4eede]"
+                                className="flex min-w-[208px] flex-col gap-1.5 rounded-xl bg-[#1f150c] px-3 py-2 text-[#f4eede]"
                                 role="progressbar"
                                 aria-valuemin={0}
                                 aria-valuemax={total || undefined}
                                 aria-valuenow={total > 0 ? done : undefined}
                                 title={total > 0 ? `Generating labels — ${done} of ${total} done` : 'Generating labels…'}
                               >
-                                <div className="flex items-center justify-between text-[11px] font-semibold">
+                                {/* Three zones so nothing collides: label + elapsed,
+                                    the bar, then the count. */}
+                                <div className="flex items-center justify-between gap-3 text-[11.5px] font-semibold leading-none">
                                   <span className="inline-flex items-center gap-1.5">
-                                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
+                                    <span className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
                                     Generating…
                                   </span>
-                                  <span className="inline-flex items-center gap-1.5 tabular-nums">
-                                    {total > 0 ? <span>{done}/{total}</span> : null}
-                                    {(() => {
-                                      const st = b.generationStartedAt ? new Date(b.generationStartedAt).getTime() : null
-                                      const el = st != null ? formatDuration(nowTick - st) : null
-                                      return el ? <span className="text-[10px] text-[#f4eede]/70">{el}</span> : null
-                                    })()}
-                                  </span>
+                                  {(() => {
+                                    const st = b.generationStartedAt ? new Date(b.generationStartedAt).getTime() : null
+                                    const el = st != null ? formatDuration(nowTick - st) : null
+                                    return el ? (
+                                      <span className="shrink-0 font-mono tabular-nums text-[#f4eede]/85">{el}</span>
+                                    ) : null
+                                  })()}
                                 </div>
                                 <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#f4eede]/20">
                                   {total > 0 ? (
@@ -1112,14 +1113,18 @@ export default function DataHistoryPage() {
                                     />
                                   ) : (
                                     <div className="h-full w-1/3 animate-pulse rounded-full bg-[#f4eede]/70" />
-      )}
-    </div>
-{progress?.note ? (
-  <div className="max-w-[280px] text-[10px] leading-snug text-[#f4eede]/85" aria-live="polite">
-    {progress.note}
-  </div>
-) : null}
-  </div>
+                                  )}
+                                </div>
+                                <div className="flex items-center justify-between text-[10px] leading-none tabular-nums text-[#f4eede]/70">
+                                  <span>{total > 0 ? `${done} of ${total} orders` : 'starting…'}</span>
+                                  {total > 0 ? <span>{pct}%</span> : null}
+                                </div>
+                                {progress?.note ? (
+                                  <div className="max-w-[260px] text-[10px] leading-snug text-[#f4eede]/85" aria-live="polite">
+                                    {progress.note}
+                                  </div>
+                                ) : null}
+                              </div>
                               <button
                                 type="button"
                                 onClick={() => void cancelGeneration(b.id)}
