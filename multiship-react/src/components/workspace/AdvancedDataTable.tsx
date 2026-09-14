@@ -403,6 +403,16 @@ export default function AdvancedDataTable<T>({
   })
   const [density, setDensity] = useState<Density>(persisted?.density ?? initialDensity)
   const [openMenu, setOpenMenu] = useState<null | 'columns' | 'density' | 'export'>(null)
+  /**
+   * Column-reorder draft (2026-09-14 operator ask). The Columns menu
+   * lets the operator move columns up/down with arrow buttons; changes
+   * accumulate in this draft until they click Save (matches the
+   * operator's explicit preference for a staged commit rather than
+   * live-apply, unlike the visibility and pin toggles above). Null =
+   * no unsaved reorder; Save clears back to null after applying to
+   * {@link columnOrder}.
+   */
+  const [draftColumnOrder, setDraftColumnOrder] = useState<string[] | null>(null)
   /** Which cell is currently in edit mode. `null` = read-only view. */
   const [editing, setEditing] = useState<{ rowId: string; columnId: string } | null>(null)
 
@@ -422,7 +432,12 @@ export default function AdvancedDataTable<T>({
     })
   }, [defaultOrder])
 
-  const columnsMenuRef = useDismissable(openMenu === 'columns', () => setOpenMenu(null))
+  const columnsMenuRef = useDismissable(openMenu === 'columns', () => {
+    // Dropping any staged reorder on dismiss keeps the semantics
+    // predictable: click-away = cancel, Save = commit (2026-09-14).
+    setDraftColumnOrder(null)
+    setOpenMenu(null)
+  })
   const densityMenuRef = useDismissable(openMenu === 'density', () => setOpenMenu(null))
   const exportMenuRef = useDismissable(openMenu === 'export', () => setOpenMenu(null))
 
@@ -644,58 +659,157 @@ export default function AdvancedDataTable<T>({
             <FiColumns className="h-3.5 w-3.5" />
             Columns
           </button>
-          {openMenu === 'columns' ? (
-            <div className="absolute right-0 z-20 mt-1.5 w-64 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
-              {table.getAllLeafColumns().map((col) => {
-                if ((col.columnDef.meta as { hideable?: boolean } | undefined)?.hideable === false) {
-                  return null
-                }
-                const meta = col.columnDef.meta as { headerLabel?: string } | undefined
-                const label =
-                  meta?.headerLabel ||
-                  (typeof col.columnDef.header === 'string' ? col.columnDef.header : col.id)
-                const pinned = col.getIsPinned()
-                return (
-                  <div
-                    key={col.id}
-                    className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] text-slate-700 hover:bg-slate-50"
-                  >
-                    <label className="flex flex-1 cursor-pointer items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={col.getIsVisible()}
-                        onChange={col.getToggleVisibilityHandler()}
-                        className="h-3.5 w-3.5 accent-[#412d15]"
-                      />
-                      {label}
-                    </label>
+          {openMenu === 'columns' ? (() => {
+            /*
+             * Column-reorder + visibility + pin menu (2026-09-14).
+             *
+             * Order rendered = draftColumnOrder if the operator has
+             * staged a reorder, otherwise the committed columnOrder.
+             * Pinned-left columns always sort to the top per operator
+             * preference: reorder within pin group only — an unpinned
+             * column can't cross above a pinned one because the table
+             * would render pinning first anyway (misleading).
+             */
+            const leafCols = table.getAllLeafColumns()
+            const idToCol = new Map(leafCols.map((c) => [c.id, c] as const))
+            const workingIds = (draftColumnOrder ?? leafCols.map((c) => c.id))
+              .filter((id) => idToCol.has(id))
+            // Pinned-first sort. Stable within each group (preserves
+            // whatever order the draft/committed list already has).
+            const pinnedIds = workingIds.filter((id) => idToCol.get(id)?.getIsPinned() === 'left')
+            const unpinnedIds = workingIds.filter((id) => idToCol.get(id)?.getIsPinned() !== 'left')
+            const orderedIds = [...pinnedIds, ...unpinnedIds]
+
+            /** Return the pin-scoped neighbour indices for a given
+             *  index inside the orderedIds array. Swap up = swap with
+             *  the row above IF it's in the same pin group. */
+            const move = (idx: number, direction: -1 | 1) => {
+              const target = idx + direction
+              if (target < 0 || target >= orderedIds.length) return
+              const a = idToCol.get(orderedIds[idx])
+              const b = idToCol.get(orderedIds[target])
+              if (!a || !b) return
+              // Same-pin-group check — moving pinned into unpinned or
+              // vice versa isn't allowed here (change pin state via 📌).
+              const aPinned = a.getIsPinned() === 'left'
+              const bPinned = b.getIsPinned() === 'left'
+              if (aPinned !== bPinned) return
+              const next = [...orderedIds]
+              const tmp = next[idx]
+              next[idx] = next[target]
+              next[target] = tmp
+              setDraftColumnOrder(next)
+            }
+
+            const hasDraft = draftColumnOrder != null
+            return (
+              <div className="absolute right-0 z-20 mt-1.5 w-72 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                {orderedIds.map((id, idx) => {
+                  const col = idToCol.get(id)
+                  if (!col) return null
+                  if ((col.columnDef.meta as { hideable?: boolean } | undefined)?.hideable === false) {
+                    return null
+                  }
+                  const meta = col.columnDef.meta as { headerLabel?: string } | undefined
+                  const label =
+                    meta?.headerLabel ||
+                    (typeof col.columnDef.header === 'string' ? col.columnDef.header : col.id)
+                  const pinned = col.getIsPinned()
+                  // Arrow enable/disable: can't move past a pin-group
+                  // boundary. Compute by peeking at neighbours.
+                  const prev = idx > 0 ? idToCol.get(orderedIds[idx - 1]) : null
+                  const next = idx < orderedIds.length - 1 ? idToCol.get(orderedIds[idx + 1]) : null
+                  const isPinned = pinned === 'left'
+                  const canUp = !!prev && ((prev.getIsPinned() === 'left') === isPinned)
+                  const canDown = !!next && ((next.getIsPinned() === 'left') === isPinned)
+                  return (
+                    <div
+                      key={col.id}
+                      className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-[13.5px] text-slate-700 hover:bg-slate-50"
+                    >
+                      {/* Up/down arrows scoped to the pin group. */}
+                      <div className="flex flex-col">
+                        <button
+                          type="button"
+                          onClick={() => move(idx, -1)}
+                          disabled={!canUp}
+                          aria-label={`Move ${label} up`}
+                          className="rounded-sm p-0.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent"
+                        >
+                          <FiChevronUp className="h-2.5 w-2.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => move(idx, 1)}
+                          disabled={!canDown}
+                          aria-label={`Move ${label} down`}
+                          className="rounded-sm p-0.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:text-slate-200 disabled:hover:bg-transparent"
+                        >
+                          <FiChevronDown className="h-2.5 w-2.5" />
+                        </button>
+                      </div>
+                      <label className="flex flex-1 cursor-pointer items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={col.getIsVisible()}
+                          onChange={col.getToggleVisibilityHandler()}
+                          className="h-3.5 w-3.5 accent-[#412d15]"
+                        />
+                        {label}
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => cyclePin(col)}
+                        title={pinned === 'left' ? 'Unpin' : 'Pin to left'}
+                        aria-pressed={pinned === 'left'}
+                        className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition ${
+                          pinned === 'left'
+                            ? 'bg-[#1f150c] text-white'
+                            : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-100'
+                        }`}
+                      >
+                        📌
+                      </button>
+                    </div>
+                  )
+                })}
+                {/* Save / Cancel row — only shown when there's an
+                    unsaved reorder. Save commits the draft to
+                    columnOrder (which persists via the existing
+                    saveLayout effect); Cancel discards. */}
+                {hasDraft ? (
+                  <div className="mt-1 flex items-center justify-end gap-1.5 border-t border-slate-100 pt-2">
                     <button
                       type="button"
-                      onClick={() => cyclePin(col)}
-                      title={pinned === 'left' ? 'Unpin' : 'Pin to left'}
-                      aria-pressed={pinned === 'left'}
-                      className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold transition ${
-                        pinned === 'left'
-                          ? 'bg-[#1f150c] text-white'
-                          : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-100'
-                      }`}
+                      onClick={() => setDraftColumnOrder(null)}
+                      className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11.5px] font-semibold text-slate-600 transition hover:bg-slate-50"
                     >
-                      📌
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (draftColumnOrder) setColumnOrder(draftColumnOrder)
+                        setDraftColumnOrder(null)
+                      }}
+                      className="rounded-md bg-[#1f150c] px-2.5 py-1 text-[11.5px] font-semibold text-[#f4eede] transition hover:bg-[#33221a]"
+                    >
+                      Save order
                     </button>
                   </div>
-                )
-              })}
-              <button
-                type="button"
-                onClick={resetLayout}
-                className="mt-1 flex w-full items-center gap-2 rounded-lg border-t border-slate-100 pt-2 pl-2 pr-2 pb-1 text-left text-[11.5px] text-slate-500 transition hover:text-slate-800"
-                title="Reset column order, widths, visibility, pinning, and density to defaults"
-              >
-                <FiRotateCcw className="h-3 w-3" />
-                Reset layout
-              </button>
-            </div>
-          ) : null}
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => { setDraftColumnOrder(null); resetLayout() }}
+                  className="mt-1 flex w-full items-center gap-2 rounded-lg border-t border-slate-100 pt-2 pl-2 pr-2 pb-1 text-left text-[11.5px] text-slate-500 transition hover:text-slate-800"
+                  title="Reset column order, widths, visibility, pinning, and density to defaults"
+                >
+                  <FiRotateCcw className="h-3 w-3" />
+                  Reset layout
+                </button>
+              </div>
+            )
+          })() : null}
         </div>
 
         {/* Density menu */}
