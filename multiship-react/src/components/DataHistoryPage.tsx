@@ -52,6 +52,16 @@ const completedAgo = (iso?: string | null): string | null => {
   return `completed ${Math.round(hrs / 24)}d ago`
 }
 
+/** "45s" · "2m 03s" · "1h 04m" — how long a generate run took / has been running. */
+const formatDuration = (ms: number): string | null => {
+  if (!Number.isFinite(ms) || ms < 0) return null
+  const secs = Math.round(ms / 1000)
+  if (secs < 60) return `${secs}s`
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m ${String(secs % 60).padStart(2, '0')}s`
+  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`
+}
+
 /**
  * Data History — every saved CSV/XLSX import. "Commit" in the import modal
  * saves the parsed rows here (no labels generated); this page lists those
@@ -70,6 +80,8 @@ export default function DataHistoryPage() {
   const [batches, setBatches] = useState<ImportBatchSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [openId, setOpenId] = useState<number | null>(null)
+  // Ticks once a second while a run is in flight so the elapsed timer moves.
+  const [nowTick, setNowTick] = useState(() => Date.now())
   const [rowsById, setRowsById] = useState<Record<number, OrderImportRow[] | 'loading'>>({})
   const [generatingId, setGeneratingId] = useState<number | null>(null)
   // Live "X of N" label-generation progress per batch, polled while a batch
@@ -741,6 +753,14 @@ export default function DataHistoryPage() {
     }
   }
 
+  // Only runs while something is generating — no idle interval.
+  const anyGenerating = batches.some((b) => (b.status || '').toUpperCase() === 'IN_PROGRESS') || generatingId != null
+  useEffect(() => {
+    if (!anyGenerating) return
+    const t = setInterval(() => setNowTick(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [anyGenerating])
+
   /** Lazy-load a batch's rows when its row is expanded. */
   const ensureRows = (id: number) => {
     if (rowsById[id]) return
@@ -825,13 +845,33 @@ export default function DataHistoryPage() {
           // that go back through IN_PROGRESS null completedAt so the
           // caption disappears until the next terminal transition.
           const done = completedAgo(b.completedAt)
+          const startedMs = b.generationStartedAt ? new Date(b.generationStartedAt).getTime() : null
+          const running = (b.status || '').toUpperCase() === 'IN_PROGRESS'
+          // Running: tick from the claim. Finished: how long that run took.
+          const elapsed = running && startedMs != null
+            ? formatDuration(nowTick - startedMs)
+            : startedMs != null && b.completedAt
+              ? formatDuration(new Date(b.completedAt).getTime() - startedMs)
+              : null
+          const timingTitle = [
+            b.generationStartedAt ? `Started ${new Date(b.generationStartedAt).toLocaleString()}` : null,
+            b.completedAt ? `Finished ${new Date(b.completedAt).toLocaleString()}` : null,
+          ].filter(Boolean).join(' · ') || undefined
           return (
             <span className="flex max-w-[220px] flex-col items-start gap-0.5">
               <span className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-bold ring-1 ${s.cls}`}>{s.label}</span>
-              {done ? (
+              {elapsed ? (
+                <span
+                  className={`text-[10px] tabular-nums ${running ? 'font-semibold text-[#412d15]' : 'text-[#8a7a5a]'}`}
+                  title={timingTitle}
+                >
+                  {running ? `running ${elapsed}` : `took ${elapsed}`}
+                  {!running && done ? <span className="text-[#b6a684]"> · {done}</span> : null}
+                </span>
+              ) : done ? (
                 <span
                   className="text-[10px] text-[#8a7a5a]"
-                  title={b.completedAt ? new Date(b.completedAt).toLocaleString() : undefined}
+                  title={timingTitle ?? (b.completedAt ? new Date(b.completedAt).toLocaleString() : undefined)}
                 >
                   {done}
                 </span>
@@ -1080,7 +1120,8 @@ export default function DataHistoryPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById],
+    // nowTick re-renders the running-elapsed caption once a second.
+    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById, nowTick],
   )
 
   /** Expanded content for a batch row — the all-columns editable grid. */

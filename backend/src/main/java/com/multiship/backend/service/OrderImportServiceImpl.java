@@ -2139,6 +2139,9 @@ public class OrderImportServiceImpl implements OrderImportService {
                         .status(b.getStatus())
                         .labelBatchId(b.getLabelBatchId())
                         .createdAt(b.getCreatedAt() == null ? null : b.getCreatedAt().toString())
+                        .completedAt(b.getCompletedAt() == null ? null : b.getCompletedAt().toString())
+                        .generationStartedAt(b.getGenerationStartedAt() == null ? null : b.getGenerationStartedAt().toString())
+                        .note(b.getNote())
                         .totalRows(b.getTotalRows())
                         .savedRows(b.getSavedRows())
                         .invalidRows(b.getInvalidRows())
@@ -2282,6 +2285,9 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .status(b.getStatus())
                 .labelBatchId(b.getLabelBatchId())
                 .createdAt(b.getCreatedAt() == null ? null : b.getCreatedAt().toString())
+                .completedAt(b.getCompletedAt() == null ? null : b.getCompletedAt().toString())
+                .generationStartedAt(b.getGenerationStartedAt() == null ? null : b.getGenerationStartedAt().toString())
+                .note(b.getNote())
                 .totalRows(b.getTotalRows())
                 .savedRows(b.getSavedRows())
                 .invalidRows(b.getInvalidRows())
@@ -2427,6 +2433,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         // "In progress" status pill. The new terminal transition at the
         // end of this run stamps a fresh value via stampCompletionIfTerminal.
         batch.setCompletedAt(null);
+        // Start of THIS run — pairs with completedAt for the processing time.
+        batch.setGenerationStartedAt(java.time.LocalDateTime.now());
         // Same for the batch-level note (Batch #11 post-mortem, 2026-09-12)
         // — a stale "UPS was rate-limiting throughout" caption from a
         // prior run should disappear while the retry runs; if the retry
@@ -3080,6 +3088,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                 .labelBatchId(batch.getLabelBatchId())
                 .createdAt(batch.getCreatedAt() == null ? null : batch.getCreatedAt().toString())
                 .completedAt(batch.getCompletedAt() == null ? null : batch.getCompletedAt().toString())
+                .generationStartedAt(batch.getGenerationStartedAt() == null ? null : batch.getGenerationStartedAt().toString())
                 .note(batch.getNote())
                 .totalRows(batch.getTotalRows())
                 .savedRows(batch.getSavedRows())

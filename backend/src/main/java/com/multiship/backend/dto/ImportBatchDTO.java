@@ -18,6 +18,8 @@ public class ImportBatchDTO {
      * batch hasn't finished a generation run yet. Updated on retries.
      */
     private String completedAt;
+    /** When the latest generate run started — with completedAt, the processing time. */
+    private String generationStartedAt;
     /**
      * Optional batch-level note (Batch #11 post-mortem, 2026-09-12) —
      * rendered under the status pill in the FE. Populated when a

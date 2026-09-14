@@ -128,6 +128,10 @@ export interface ImportBatchSummary {
    *  PARTIAL_COMPLETE / FAILED / CANCELLED). Null while the batch
    *  hasn't finished a generation run yet. Updated on retries. */
   completedAt?: string | null
+  /** ISO timestamp of when the latest generate run claimed this import.
+   *  With completedAt this gives the run's processing time; while the run is
+   *  IN_PROGRESS the UI ticks a live elapsed timer from here. */
+  generationStartedAt?: string | null
   /** Batch-level note surfaced under the status pill (Batch #11
    *  post-mortem 2026-09-12). Populated when a generate run
    *  exhausts its retry passes with rows still rate-limited by the

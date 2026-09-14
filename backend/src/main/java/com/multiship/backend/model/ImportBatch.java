@@ -67,6 +67,15 @@ public class ImportBatch {
     private LocalDateTime completedAt;
 
     /**
+     * When the most recent generate run CLAIMED this batch (the
+     * INITIATE/DRAFT/… → IN_PROGRESS transition). With completedAt this gives
+     * the run's processing time; while IN_PROGRESS the UI ticks from here.
+     * Overwritten by each retry, so it always describes the latest run.
+     */
+    @Column(name = "generation_started_at")
+    private LocalDateTime generationStartedAt;
+
+    /**
      * Batch-level note surfaced under the status pill on Data History.
      * Populated when the retry-pass loop exhausts with deferred rows
      * remaining (Batch #11 post-mortem, 2026-09-12): "UPS was rate-
