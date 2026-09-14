@@ -428,7 +428,18 @@ export default function AdvancedDataTable<T>({
       const known = new Set(cur)
       const additions = defaultOrder.filter((id) => !known.has(id))
       const filtered = cur.filter((id) => defaultOrder.includes(id))
-      return additions.length ? [...filtered, ...additions] : filtered
+      if (!additions.length) return filtered
+      // Place a newly-defined column where it was DEFINED rather than at the
+      // end: a saved layout that predates the column used to exile it to the
+      // right (a Date column defined after File surfaced between Rows and
+      // Actions). Columns the user moved themselves keep their position.
+      const next = [...filtered]
+      for (const id of additions) {
+        const want = defaultOrder.indexOf(id)
+        const at = next.findIndex((existing) => defaultOrder.indexOf(existing) > want)
+        next.splice(at < 0 ? next.length : at, 0, id)
+      }
+      return next
     })
   }, [defaultOrder])
 

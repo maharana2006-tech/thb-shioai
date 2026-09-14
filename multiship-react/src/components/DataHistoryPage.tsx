@@ -1169,7 +1169,8 @@ export default function DataHistoryPage() {
             </div>
           )
         },
-        meta: { headerLabel: 'Actions' },
+        // Buttons have no CSV value — keep the column out of the export.
+        meta: { headerLabel: 'Actions', exportable: false },
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
