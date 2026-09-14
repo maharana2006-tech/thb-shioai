@@ -129,6 +129,10 @@ public class OrderServiceImpl implements OrderService {
         String cityFilter = trimmed(filters.getCity());
         String orderNoFilter = trimmed(filters.getOrderNo());
         String trackingFilter = trimmed(filters.getTracking());
+        // Batch-id column filter (2026-09-14). Sanitised to digits-only
+        // so an errant "batch #14" or "b14" typed into the column filter
+        // still resolves to a clean equality check on batch_id.
+        String batchIdFilter = trimmed(filters.getBatchId()).replaceAll("[^0-9]", "");
         String createdFrom = trimmed(filters.getCreatedFrom());
         String createdTo = trimmed(filters.getCreatedTo());
         // Order source: MANUAL | BULK | API | WMS | ERP. '' = all sources.
@@ -175,11 +179,13 @@ public class OrderServiceImpl implements OrderService {
         List<Object[]> results = orderRepository.findOrdersUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
+                batchIdFilter,
                 createdFrom, createdTo, sourceFilter, channelFilter,
                 page * size, size, sortBy, sortDirection);
         long totalRecords = orderRepository.countOrdersUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
+                batchIdFilter,
                 createdFrom, createdTo, sourceFilter, channelFilter);
 
         List<OrderResponseDTO> orders = results.stream()
@@ -225,6 +231,7 @@ public class OrderServiceImpl implements OrderService {
         String cityFilter = trimmed(filters.getCity());
         String orderNoFilter = trimmed(filters.getOrderNo());
         String trackingFilter = trimmed(filters.getTracking());
+        String batchIdFilter = trimmed(filters.getBatchId()).replaceAll("[^0-9]", "");
         String createdFrom = trimmed(filters.getCreatedFrom());
         String createdTo = trimmed(filters.getCreatedTo());
         String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
@@ -258,6 +265,7 @@ public class OrderServiceImpl implements OrderService {
         java.util.List<Integer> ids = orderRepository.findOrderNosUnified(
                 statusFilter, tenantFilter, keywordFilter, resolutionFilter,
                 customerFilter, cityFilter, orderNoFilter, trackingFilter,
+                batchIdFilter,
                 createdFrom, createdTo, sourceFilter, channelFilter);
 
         return ApiResponse.<java.util.List<Integer>>builder()
@@ -265,6 +273,64 @@ public class OrderServiceImpl implements OrderService {
                 .message(ids.size() + " order id(s) matched")
                 .timestamp(LocalDateTime.now())
                 .data(ids)
+                .build();
+    }
+
+    /**
+     * Batch-filter dropdown (2026-09-14). Reuses the same filter
+     * normalisation as {@link #listOrders} and calls
+     * {@link com.multiship.backend.repository.OrderRepository#findDistinctBatchesUnified}.
+     * Returns [{ batchId, count }, ...] newest-first.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<java.util.List<java.util.Map<String, Object>>> listBatches(OrderListFilters filters) {
+        String statusFilter = normalizeFilter(filters.getStatus());
+        String resolutionFilter = normalizeFilter(filters.getResolution());
+        String rawTenantFilter = trimmed(filters.getTenantId());
+        String clampedTenant = tenantScope.clampClientCode(
+                rawTenantFilter.isEmpty() ? null : rawTenantFilter);
+        String tenantFilter = normalizeFilter(clampedTenant);
+        String keywordFilter = trimmed(filters.getSearch());
+        String customerFilter = trimmed(filters.getCustomer());
+        String cityFilter = trimmed(filters.getCity());
+        String orderNoFilter = trimmed(filters.getOrderNo());
+        String trackingFilter = trimmed(filters.getTracking());
+        String batchIdFilter = trimmed(filters.getBatchId()).replaceAll("[^0-9]", "");
+        String createdFrom = trimmed(filters.getCreatedFrom());
+        String createdTo = trimmed(filters.getCreatedTo());
+        String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
+        String channelFilter = trimmed(filters.getChannel()).toUpperCase(java.util.Locale.ROOT);
+
+        if (!isValidDateFilter(createdFrom) || !isValidDateFilter(createdTo)) {
+            return ApiResponse.<java.util.List<java.util.Map<String, Object>>>builder()
+                    .status("ERROR").code(400)
+                    .errorCode(ErrorCode.VALIDATION_ERROR.name())
+                    .message("Date filters must use the yyyy-MM-dd format.")
+                    .timestamp(LocalDateTime.now())
+                    .build();
+        }
+
+        List<Object[]> rows = orderRepository.findDistinctBatchesUnified(
+                statusFilter, tenantFilter, keywordFilter, resolutionFilter,
+                customerFilter, cityFilter, orderNoFilter, trackingFilter,
+                batchIdFilter,
+                createdFrom, createdTo, sourceFilter, channelFilter);
+
+        java.util.List<java.util.Map<String, Object>> out = rows.stream()
+                .map(r -> {
+                    java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+                    m.put("batchId", r[0]);
+                    m.put("count", toLong(r[1]));
+                    return m;
+                })
+                .collect(Collectors.toList());
+
+        return ApiResponse.<java.util.List<java.util.Map<String, Object>>>builder()
+                .status("SUCCESS").code(200)
+                .message(out.size() + " batch(es)")
+                .timestamp(LocalDateTime.now())
+                .data(out)
                 .build();
     }
 

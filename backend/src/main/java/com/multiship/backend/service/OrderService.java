@@ -41,6 +41,14 @@ public interface OrderService {
      */
     ApiResponse<java.util.List<Integer>> listOrderNos(OrderListFilters filters);
 
+    /**
+     * Batch-filter dropdown (2026-09-14) — distinct label_batch.batch_id
+     * values (with counts) that match the current filter surface, so the
+     * FE can render a picker of "batches shown by the current filters"
+     * instead of asking the operator to remember the number.
+     */
+    ApiResponse<java.util.List<java.util.Map<String, Object>>> listBatches(OrderListFilters filters);
+
     /** Work-queue tab counts: ready, needsDetails, blocked, failed, generated. */
     ApiResponse<Map<String, Long>> getQueueStats();
 }

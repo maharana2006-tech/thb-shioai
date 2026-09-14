@@ -723,6 +723,11 @@ export interface OrderListParams {
   orderNo?: string
   /** Column filter: tracking number contains. */
   tracking?: string
+  /** Column filter: exact label-batch id (2026-09-14). Per operator
+   *  preference this is an OVERRIDE — when set, the FE drops the
+   *  other filters so the whole batch is visible regardless of the
+   *  active date / client / status scope. */
+  batch?: string
   /** Created on or after (yyyy-MM-dd). */
   createdFrom?: string
   /** Created on or before (yyyy-MM-dd). */
@@ -791,6 +796,7 @@ export const orderService = {
     if (params.city?.trim()) query.set('city', params.city.trim())
     if (params.orderNo?.trim()) query.set('orderNo', params.orderNo.trim())
     if (params.tracking?.trim()) query.set('tracking', params.tracking.trim())
+    if (params.batch?.trim()) query.set('batch', params.batch.trim())
     if (params.createdFrom) query.set('createdFrom', params.createdFrom)
     if (params.createdTo) query.set('createdTo', params.createdTo)
     if (params.source) query.set('source', params.source)
@@ -816,11 +822,38 @@ export const orderService = {
     if (params.city?.trim()) query.set('city', params.city.trim())
     if (params.orderNo?.trim()) query.set('orderNo', params.orderNo.trim())
     if (params.tracking?.trim()) query.set('tracking', params.tracking.trim())
+    if (params.batch?.trim()) query.set('batch', params.batch.trim())
     if (params.createdFrom) query.set('createdFrom', params.createdFrom)
     if (params.createdTo) query.set('createdTo', params.createdTo)
     if (params.source) query.set('source', params.source)
     if (params.channel) query.set('channel', params.channel)
     return apiClient.get<ApiResponse<number[]>>(`/orders/ids?${query.toString()}`)
+  },
+
+  /**
+   * Batch-filter dropdown source (2026-09-14). Distinct batch_ids the
+   * operator can see under the CURRENT filter surface, sorted newest-
+   * first with per-batch row counts. Powers the Batch picker in the
+   * advanced-filter panel so the operator doesn't have to remember
+   * the number.
+   */
+  listBatches: (params: Omit<OrderListParams, 'page' | 'size' | 'sortBy' | 'sortDirection' | 'includeResolution' | 'batch'> = {}) => {
+    const query = new URLSearchParams()
+    if (params.status) query.set('status', params.status)
+    if (params.tenantId) query.set('tenantId', params.tenantId)
+    if (params.search?.trim()) query.set('search', params.search.trim())
+    if (params.resolution) query.set('resolution', params.resolution)
+    if (params.customer?.trim()) query.set('customer', params.customer.trim())
+    if (params.city?.trim()) query.set('city', params.city.trim())
+    if (params.orderNo?.trim()) query.set('orderNo', params.orderNo.trim())
+    if (params.tracking?.trim()) query.set('tracking', params.tracking.trim())
+    if (params.createdFrom) query.set('createdFrom', params.createdFrom)
+    if (params.createdTo) query.set('createdTo', params.createdTo)
+    if (params.source) query.set('source', params.source)
+    if (params.channel) query.set('channel', params.channel)
+    return apiClient.get<ApiResponse<Array<{ batchId: number; count: number }>>>(
+      `/orders/batches?${query.toString()}`,
+    )
   },
 
   /** Work-queue tab counts (ready / needsDetails / blocked / failed / generated). */

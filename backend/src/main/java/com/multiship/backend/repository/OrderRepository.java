@@ -301,6 +301,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
           AND (:tenantId = '' OR UPPER(COALESCE(b.tenant_id, b.cust_no)) = :tenantId)
           AND (:keyword = ''
                OR CAST(b.order_no AS TEXT) LIKE CONCAT('%', :keyword, '%')
+               OR CAST(COALESCE(b.batch_id, 0) AS TEXT) LIKE CONCAT('%', :keyword, '%')
                OR LOWER(b.shipto_city) LIKE LOWER(CONCAT('%', :keyword, '%'))
                OR LOWER(b.cust_no) LIKE LOWER(CONCAT('%', :keyword, '%'))
                OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :keyword, '%'))
@@ -311,6 +312,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
                OR LOWER(COALESCE(b.shipto_state, '')) LIKE LOWER(CONCAT('%', :city, '%')))
           AND (:orderNoLike = '' OR CAST(b.order_no AS TEXT) LIKE CONCAT('%', :orderNoLike, '%'))
           AND (:tracking = '' OR LOWER(COALESCE(t.tracking_number, '')) LIKE LOWER(CONCAT('%', :tracking, '%')))
+          AND (:batchIdEq = '' OR CAST(COALESCE(b.batch_id, 0) AS TEXT) = :batchIdEq)
           AND (:createdFrom = '' OR b.created_date >= TO_DATE(NULLIF(:createdFrom, ''), 'YYYY-MM-DD'))
           AND (:createdTo = '' OR b.created_date <= TO_DATE(NULLIF(:createdTo, ''), 'YYYY-MM-DD'))
           AND (:source = ''
@@ -408,6 +410,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("city") String city,
             @Param("orderNoLike") String orderNoLike,
             @Param("tracking") String tracking,
+            @Param("batchIdEq") String batchIdEq,
             @Param("createdFrom") String createdFrom,
             @Param("createdTo") String createdTo,
             @Param("source") String source,
@@ -432,6 +435,7 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("city") String city,
             @Param("orderNoLike") String orderNoLike,
             @Param("tracking") String tracking,
+            @Param("batchIdEq") String batchIdEq,
             @Param("createdFrom") String createdFrom,
             @Param("createdTo") String createdTo,
             @Param("source") String source,
@@ -461,6 +465,39 @@ public interface OrderRepository extends JpaRepository<Order, Integer> {
             @Param("city") String city,
             @Param("orderNoLike") String orderNoLike,
             @Param("tracking") String tracking,
+            @Param("batchIdEq") String batchIdEq,
+            @Param("createdFrom") String createdFrom,
+            @Param("createdTo") String createdTo,
+            @Param("source") String source,
+            @Param("channel") String channel
+    );
+
+    /**
+     * Batch-filter dropdown (2026-09-14 operator ask). Distinct
+     * label_batch.batch_id values (with counts) matching the same
+     * filter surface as {@link #findOrdersUnified}. FE renders these
+     * as a picker so the operator doesn't have to remember the batch
+     * number. Excludes rows with NULL batch_id (manual singletons).
+     */
+    @Query(value = """
+        SELECT b.batch_id AS batch_id, COUNT(*) AS row_count
+        FROM label_batch b
+        LEFT JOIN order_label_tracking t ON b.order_no = t.order_no
+    """ + UNIFIED_FILTER_SQL + """
+          AND b.batch_id IS NOT NULL
+        GROUP BY b.batch_id
+        ORDER BY b.batch_id DESC
+    """, nativeQuery = true)
+    List<Object[]> findDistinctBatchesUnified(
+            @Param("status") String status,
+            @Param("tenantId") String tenantId,
+            @Param("keyword") String keyword,
+            @Param("resolution") String resolution,
+            @Param("customer") String customer,
+            @Param("city") String city,
+            @Param("orderNoLike") String orderNoLike,
+            @Param("tracking") String tracking,
+            @Param("batchIdEq") String batchIdEq,
             @Param("createdFrom") String createdFrom,
             @Param("createdTo") String createdTo,
             @Param("source") String source,

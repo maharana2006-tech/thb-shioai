@@ -256,6 +256,7 @@ public class OrderController {
             @Parameter(description = "Column filter: destination city or state contains") @RequestParam(required = false) String city,
             @Parameter(description = "Column filter: order # contains") @RequestParam(required = false) String orderNo,
             @Parameter(description = "Column filter: tracking number contains") @RequestParam(required = false) String tracking,
+            @Parameter(description = "Column filter: exact label-batch id (2026-09-14). Non-digit chars stripped server-side.") @RequestParam(required = false) String batch,
             @Parameter(description = "Created on or after (yyyy-MM-dd)") @RequestParam(required = false) String createdFrom,
             @Parameter(description = "Created on or before (yyyy-MM-dd)") @RequestParam(required = false) String createdTo,
             @Parameter(description = "Order source: MANUAL | BULK | API | WMS | ERP") @RequestParam(required = false) String source,
@@ -287,6 +288,7 @@ public class OrderController {
                 .city(city)
                 .orderNo(orderNo)
                 .tracking(tracking)
+                .batchId(batch)
                 .createdFrom(createdFrom)
                 .createdTo(createdTo)
                 .source(source)
@@ -318,11 +320,59 @@ public class OrderController {
             @RequestParam(required = false) String city,
             @RequestParam(required = false) String orderNo,
             @RequestParam(required = false) String tracking,
+            @RequestParam(required = false) String batch,
             @RequestParam(required = false) String createdFrom,
             @RequestParam(required = false) String createdTo,
             @RequestParam(required = false) String source,
             @RequestParam(required = false) String channel) {
 
+        OrderListFilters filters = OrderListFilters.builder()
+                .status(status)
+                .tenantId(tenantId)
+                .search(search)
+                .resolution(resolution)
+                .customer(customer)
+                .city(city)
+                .orderNo(orderNo)
+                .tracking(tracking)
+                .batchId(batch)
+                .createdFrom(createdFrom)
+                .createdTo(createdTo)
+                .source(source)
+                .channel(channel)
+                .build();
+
+        ApiResponse<java.util.List<Integer>> response = orderService.listOrderNos(filters);
+        return ResponseEntity.status(response.getCode()).body(response);
+    }
+
+    /**
+     * Batch-filter dropdown (2026-09-14 operator ask). Returns distinct
+     * label_batch.batch_id values (with counts) matching the current
+     * filter surface, so the FE Batch picker shows only batches the
+     * operator can see under the active date/client/status/... filters.
+     */
+    @Operation(summary = "Distinct batches for the filter dropdown",
+            description = "Same filter surface as GET /orders; response is [{batchId, count}] sorted newest-first.")
+    @PreAuthorize("(hasAnyRole('ADMIN', 'USER') and @accessScope.canAccessTenant(authentication, #tenantId)) or @orderAccess.canViewTenant(authentication, #tenantId)")
+    @GetMapping("/batches")
+    public ResponseEntity<ApiResponse<java.util.List<java.util.Map<String, Object>>>> listBatches(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String tenantId,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String resolution,
+            @RequestParam(required = false) String customer,
+            @RequestParam(required = false) String city,
+            @RequestParam(required = false) String orderNo,
+            @RequestParam(required = false) String tracking,
+            @RequestParam(required = false) String createdFrom,
+            @RequestParam(required = false) String createdTo,
+            @RequestParam(required = false) String source,
+            @RequestParam(required = false) String channel) {
+
+        // NOTE: no batch param here on purpose — this endpoint POPULATES
+        // the batch dropdown, so filtering by batch would collapse it to
+        // one entry. Everything else composes normally.
         OrderListFilters filters = OrderListFilters.builder()
                 .status(status)
                 .tenantId(tenantId)
@@ -338,7 +388,7 @@ public class OrderController {
                 .channel(channel)
                 .build();
 
-        ApiResponse<java.util.List<Integer>> response = orderService.listOrderNos(filters);
+        ApiResponse<java.util.List<java.util.Map<String, Object>>> response = orderService.listBatches(filters);
         return ResponseEntity.status(response.getCode()).body(response);
     }
 

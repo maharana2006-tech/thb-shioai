@@ -136,9 +136,17 @@ export default function OrdersWorkspace() {
   const sortDirection: 'ASC' | 'DESC' = sorting[0]?.desc ? 'DESC' : 'ASC'
   const [showFilters, setShowFilters] = useState(false)
   const filtersRef = useRef<HTMLDivElement>(null)
-  const emptyColumnFilters = { orderNo: '', customer: '', city: '', status: '', tracking: '' }
+  const emptyColumnFilters = { orderNo: '', customer: '', city: '', status: '', tracking: '', batch: '' }
   const [columnFilters, setColumnFilters] = useState(emptyColumnFilters)
   const [debouncedFilters, setDebouncedFilters] = useState(emptyColumnFilters)
+  /**
+   * Batch-picker dropdown source (2026-09-14). Fetched from
+   * /orders/batches whenever the OTHER filter surface changes AND the
+   * advanced-filter panel is being viewed. Empty when there are no
+   * batches under the current filters, or when the operator hasn't
+   * opened the panel yet (lazy fetch).
+   */
+  const [batchesForPicker, setBatchesForPicker] = useState<Array<{ batchId: number; count: number }>>([])
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [reloadToken, setReloadToken] = useState(0)
@@ -240,6 +248,43 @@ export default function OrdersWorkspace() {
   }, [view, debouncedQuery, pageSize, clientFilter, dateFrom, dateTo, sortBy, sortDirection, debouncedFilters])
 
   /**
+   * Batch-picker source refresh (2026-09-14). Fires only while the
+   * advanced-filter panel is open — the picker isn't visible any
+   * other time, so preloading is wasted network. Skips when the
+   * operator already picked a batch (a single-entry dropdown adds
+   * no value).
+   */
+  useEffect(() => {
+    if (!showFilters) return
+    if (columnFilters.batch.trim()) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await orderService.listBatches({
+          status: VIEW_QUERY[view].status ?? (debouncedFilters.status || undefined),
+          resolution: VIEW_QUERY[view].resolution,
+          tenantId: clientFilter || undefined,
+          search: debouncedQuery.trim() || undefined,
+          customer: debouncedFilters.customer.trim() || undefined,
+          city: debouncedFilters.city.trim() || undefined,
+          orderNo: debouncedFilters.orderNo.trim() || undefined,
+          tracking: debouncedFilters.tracking.trim() || undefined,
+          createdFrom: dateFrom || undefined,
+          createdTo: dateTo || undefined,
+          source: sourceFilter || undefined,
+          channel: channelFilter || undefined,
+        })
+        if (!cancelled) setBatchesForPicker(res.data ?? [])
+      } catch {
+        if (!cancelled) setBatchesForPicker([])
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showFilters, columnFilters.batch, view, debouncedQuery, clientFilter,
+      dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter])
+
+  /**
    * Signature of the current filter set — used both to invalidate the
    * cached all-filtered id list AND to trigger the "clear selection on
    * filter change" effect below. Page and sort are DELIBERATELY
@@ -305,26 +350,40 @@ export default function OrdersWorkspace() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- flip loading spinner before async paginated order-list fetch
     setLoading(true)
 
+    // Batch filter is an OVERRIDE (operator preference 2026-09-14):
+    // when set, we send ONLY the batch id to the backend so the whole
+    // batch is visible regardless of the surrounding date / client /
+    // status / etc. filter scope. When unset, everything composes
+    // normally with AND.
+    const batchOnly = debouncedFilters.batch.trim()
+    const params = batchOnly ? {
+      batch: batchOnly,
+      page: page - 1,
+      size: pageSize,
+      sortBy,
+      sortDirection,
+      includeResolution: view !== 'generated',
+    } : {
+      status: spec.status ?? (debouncedFilters.status || undefined),
+      resolution: spec.resolution,
+      search: debouncedQuery || undefined,
+      tenantId: clientFilter || undefined,
+      customer: debouncedFilters.customer || undefined,
+      city: debouncedFilters.city || undefined,
+      orderNo: debouncedFilters.orderNo || undefined,
+      tracking: debouncedFilters.tracking || undefined,
+      createdFrom: dateFrom || undefined,
+      createdTo: dateTo || undefined,
+      source: sourceFilter || undefined,
+      channel: channelFilter || undefined,
+      page: page - 1,
+      size: pageSize,
+      sortBy,
+      sortDirection,
+      includeResolution: view !== 'generated',
+    }
     orderService
-      .listOrders({
-        status: spec.status ?? (debouncedFilters.status || undefined),
-        resolution: spec.resolution,
-        search: debouncedQuery || undefined,
-        tenantId: clientFilter || undefined,
-        customer: debouncedFilters.customer || undefined,
-        city: debouncedFilters.city || undefined,
-        orderNo: debouncedFilters.orderNo || undefined,
-        tracking: debouncedFilters.tracking || undefined,
-        createdFrom: dateFrom || undefined,
-        createdTo: dateTo || undefined,
-        source: sourceFilter || undefined,
-        channel: channelFilter || undefined,
-        page: page - 1,
-        size: pageSize,
-        sortBy,
-        sortDirection,
-        includeResolution: view !== 'generated',
-      })
+      .listOrders(params)
       .then((response) => {
         if (cancelled) return
         setRows(response.data?.content ?? [])
@@ -2016,6 +2075,40 @@ export default function OrdersWorkspace() {
                           placeholder="Carrier tracking number"
                           className={advInputCls}
                         />,
+                      )}
+                      {/* Batch — dropdown populated from /orders/batches
+                          using the CURRENT filter surface, plus a
+                          free-text fallback (2026-09-14). When set the
+                          batch id overrides every other filter server-
+                          side (see the batchOnly branch above), so the
+                          operator sees the whole batch regardless of
+                          the surrounding scope. */}
+                      {advField(
+                        <FiPackage className="h-3 w-3" />,
+                        'Batch',
+                        <div className="flex items-center gap-1.5">
+                          <select
+                            value={columnFilters.batch}
+                            onChange={(e) => setColumnFilter('batch')(e.target.value)}
+                            className={`${advInputCls} min-w-0 flex-1`}
+                            title="Pick from batches visible under the current filters"
+                          >
+                            <option value="">Any batch</option>
+                            {batchesForPicker.map((b) => (
+                              <option key={b.batchId} value={String(b.batchId)}>
+                                Batch #{b.batchId} — {b.count.toLocaleString()} orders
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            value={columnFilters.batch}
+                            onChange={(e) => setColumnFilter('batch')(e.target.value.replace(/[^0-9]/g, ''))}
+                            placeholder="or type #"
+                            inputMode="numeric"
+                            className={`${advInputCls} w-20`}
+                            title="Type a batch id if it's not in the dropdown"
+                          />
+                        </div>,
                       )}
                       {showStatusColumn
                         ? advField(
