@@ -244,8 +244,9 @@ export default function DataHistoryPage() {
       const res = await orderImportService.listHistory(viewTrash)
       setBatches(res.data ?? [])
     } catch (e) {
+      // Keep whatever is already listed: wiping it rendered the "no imports
+      // yet" empty state on a transient 502, which reads as data loss.
       notify.apiError(e, viewTrash ? 'Could not load Trash.' : 'Could not load import history.')
-      setBatches([])
     } finally {
       setLoading(false)
     }
@@ -545,7 +546,11 @@ export default function DataHistoryPage() {
     setConfirmGenId(null)
     setGeneratingId(id)
     setGenProgressById((m) => ({ ...m, [id]: { done: 0, total: 0 } }))
-    setBatches((list) => list.map((b) => (b.id === id ? { ...b, status: 'IN_PROGRESS' } : b)))
+    // Carry the new run's own start (and drop the previous run's finish) or the
+    // caption would tick from the LAST run's start until the first poll lands.
+    setBatches((list) => list.map((b) => (b.id === id
+      ? { ...b, status: 'IN_PROGRESS', generationStartedAt: new Date().toISOString(), completedAt: null, note: null }
+      : b)))
     // Poll the server's live counter ALONGSIDE the generate request (a separate
     // GET) so the button shows a real "X of N" bar while the POST runs. The flag
     // stops the loop the moment the POST settles.
@@ -572,7 +577,16 @@ export default function DataHistoryPage() {
         setBatches((list) =>
           list.map((b) =>
             b.id === id
-              ? { ...b, status: updated.status, savedRows: updated.savedRows, invalidRows: updated.invalidRows, labelBatchId: updated.labelBatchId ?? b.labelBatchId }
+              ? {
+                  ...b,
+                  status: updated.status,
+                  savedRows: updated.savedRows,
+                  invalidRows: updated.invalidRows,
+                  labelBatchId: updated.labelBatchId ?? b.labelBatchId,
+                  generationStartedAt: updated.generationStartedAt ?? b.generationStartedAt,
+                  completedAt: updated.completedAt ?? b.completedAt,
+                  note: updated.note ?? null,
+                }
               : b,
           ),
         )
@@ -658,7 +672,15 @@ export default function DataHistoryPage() {
         setBatches((list) =>
           list.map((b) =>
             b.id === batchId
-              ? { ...b, status: updated.status, savedRows: updated.savedRows, invalidRows: updated.invalidRows, labelBatchId: updated.labelBatchId ?? b.labelBatchId }
+              ? {
+                  ...b,
+                  status: updated.status,
+                  savedRows: updated.savedRows,
+                  invalidRows: updated.invalidRows,
+                  labelBatchId: updated.labelBatchId ?? b.labelBatchId,
+                  generationStartedAt: updated.generationStartedAt ?? b.generationStartedAt,
+                  completedAt: updated.completedAt ?? b.completedAt,
+                }
               : b,
           ),
         )
@@ -709,7 +731,14 @@ export default function DataHistoryPage() {
         setBatches((list) =>
           list.map((b) =>
             b.id === batchId
-              ? { ...b, status: updated.status, savedRows: updated.savedRows, invalidRows: updated.invalidRows }
+              ? {
+                  ...b,
+                  status: updated.status,
+                  savedRows: updated.savedRows,
+                  invalidRows: updated.invalidRows,
+                  generationStartedAt: updated.generationStartedAt ?? b.generationStartedAt,
+                  completedAt: updated.completedAt ?? b.completedAt,
+                }
               : b,
           ),
         )
@@ -721,14 +750,6 @@ export default function DataHistoryPage() {
     } finally {
       setSavingCell(null)
     }
-  }
-
-  const fmtDate = (v?: string | null) => {
-    if (!v) return '—'
-    const d = new Date(v)
-    return Number.isNaN(d.getTime())
-      ? v
-      : d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })
   }
 
   /** Map an import status to a friendly label + pill classes. */
@@ -814,9 +835,7 @@ export default function DataHistoryPage() {
                 ) : null}
               </span>
               <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[#6b5c42]">
-                <span>
-                  {fmtDate(b.createdAt)} · {b.createdBy || '—'}
-                </span>
+                <span>{b.createdBy || '—'}</span>
                 {b.labelBatchId != null ? (
                   <span
                     title="Label batch — find these orders together in All Orders"
@@ -832,6 +851,31 @@ export default function DataHistoryPage() {
           )
         },
         meta: { headerLabel: 'File' },
+      },
+      {
+        id: 'created',
+        header: 'Date',
+        enableSorting: false,
+        size: 150,
+        accessorFn: (b) => b.createdAt ?? '',
+        cell: ({ row }) => {
+          const iso = row.original.createdAt
+          const d = iso ? new Date(iso) : null
+          const valid = d && !Number.isNaN(d.getTime())
+          return (
+            <span className="flex flex-col gap-0.5" title={valid ? d!.toLocaleString() : undefined}>
+              <span className="text-[12px] font-semibold text-[#3f3527]">
+                {valid ? d!.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
+              </span>
+              {valid ? (
+                <span className="text-[11px] tabular-nums text-[#6b5c42]">
+                  {d!.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              ) : null}
+            </span>
+          )
+        },
+        meta: { headerLabel: 'Date', exportValue: (b: ImportBatchSummary) => b.createdAt ?? '' },
       },
       {
         id: 'status',
@@ -1051,7 +1095,14 @@ export default function DataHistoryPage() {
                                     <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
                                     Generating…
                                   </span>
-                                  {total > 0 ? <span className="tabular-nums">{done}/{total}</span> : null}
+                                  <span className="inline-flex items-center gap-1.5 tabular-nums">
+                                    {total > 0 ? <span>{done}/{total}</span> : null}
+                                    {(() => {
+                                      const st = b.generationStartedAt ? new Date(b.generationStartedAt).getTime() : null
+                                      const el = st != null ? formatDuration(nowTick - st) : null
+                                      return el ? <span className="text-[10px] text-[#f4eede]/70">{el}</span> : null
+                                    })()}
+                                  </span>
                                 </div>
                                 <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#f4eede]/20">
                                   {total > 0 ? (
@@ -1688,7 +1739,7 @@ export default function DataHistoryPage() {
           </p>
         ) : (
           <AdvancedDataTable<ImportBatchSummary>
-            tableKey={viewTrash ? 'order-intake-imports-trash-v2' : 'order-intake-imports-v2'}
+            tableKey={viewTrash ? 'order-intake-imports-trash-v3' : 'order-intake-imports-v3'}
             columns={dhColumns}
             data={filtered}
             renderExpanded={renderBatchExpanded}
