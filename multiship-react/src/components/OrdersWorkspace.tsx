@@ -11,6 +11,7 @@ import {
   FiEye,
   FiFileText,
   FiFilter,
+  FiInfo,
   FiRefreshCw,
   FiCalendar,
   FiPackage,
@@ -1008,45 +1009,15 @@ export default function OrdersWorkspace() {
     const isGenerating = generatingOrderNos.includes(orderNo)
 
     if (status === 'GENERATED') {
-      // Show the commercial-invoice icon only on international
-      // shipments (customs data exists) — intlYn is the flag persisted
-      // at label time. Domestic orders 422 on this endpoint so hiding
-      // the icon there matches actual availability.
-      const isIntl = order.shippingDetails?.intlYn === 'Y'
       return (
-        <span className="inline-flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => navigate(`/label/${orderNo}`)}
-            className={`${ACTION_BASE} ${ACTION_SOLID}`}
-          >
-            <FiEye className="h-3 w-3" />
-            View Label
-          </button>
-          {/* Quick-print icons (2026-09-13). Fetch the PDF and pop the
-              browser printer picker via a hidden iframe — no
-              intermediate tab, no navigation. */}
-          <button
-            type="button"
-            onClick={() => void printLabelPdf(orderNo)}
-            title="Print the shipping label"
-            aria-label={`Print label for order ${orderNo}`}
-            className={`${ACTION_BASE} !px-1.5`}
-          >
-            <FiPrinter className="h-3.5 w-3.5" />
-          </button>
-          {isIntl ? (
-            <button
-              type="button"
-              onClick={() => void printCommercialInvoice(orderNo)}
-              title="Print the commercial invoice"
-              aria-label={`Print commercial invoice for order ${orderNo}`}
-              className={`${ACTION_BASE} !px-1.5`}
-            >
-              <FiFileText className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-        </span>
+        <button
+          type="button"
+          onClick={() => navigate(`/label/${orderNo}`)}
+          className={`${ACTION_BASE} ${ACTION_SOLID}`}
+        >
+          <FiEye className="h-3 w-3" />
+          View Label
+        </button>
       )
     }
 
@@ -1634,35 +1605,45 @@ export default function OrdersWorkspace() {
       id: 'actions',
       header: () => <span className="block text-right">Actions</span>,
       enableSorting: false,
-      // PR #555 — actions column carries up to 4 icon buttons + 1 primary
-      // action (Generate/Regenerate). Bounded so it doesn't push other
-      // columns off screen on mid-size laptops.
-      size: 240,
+      // Every row reserves the same five icon slots; one that doesn't apply
+      // leaves its slot empty, so the icons form clean columns instead of
+      // sliding left and right per row. The primary action closes the row.
+      size: 300,
       cell: ({ row }) => {
         const order = row.original
         const orderNo = order.orderDetails.orderNo
+        const tn = order.labelDetails.trackingNumber
+        const status = (order.labelDetails.status || '').toUpperCase()
+        const generated = status === 'GENERATED'
+        // Commercial invoice exists on international shipments only — intlYn is
+        // persisted at label time, and domestic orders 422 on that endpoint.
+        const isIntl = order.shippingDetails?.intlYn === 'Y'
+        const ICON = 'flex h-7 w-7 items-center justify-center rounded-lg border transition'
+        const NEUTRAL = 'border-[#e6dcc7] bg-[#faf7f0] text-[#5a4526] hover:border-[#dccfb4] hover:bg-[#f2ebda]'
+        const slot = (node: React.ReactNode) => (
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center">{node}</span>
+        )
         return (
-          <span className="inline-flex w-full items-center justify-end gap-1.5">
-            {order.labelDetails.trackingNumber ? (
+          <span className="flex w-full items-center justify-end gap-1">
+            {slot(tn ? (
               <button
                 type="button"
                 onClick={() => setTrackingOrderNo(orderNo)}
-                title={`Live tracking for ${order.labelDetails.trackingNumber}`}
+                title={`Live tracking for ${tn}`}
                 aria-label={`Track order ${orderNo}`}
-                className="rounded-lg border border-[#e6dcc7] bg-[#faf7f0] p-1.5 text-[#5a4526] transition hover:border-[#dccfb4] hover:bg-[#f2ebda]"
+                className={`${ICON} ${NEUTRAL}`}
               >
                 <FiTruck className="h-3.5 w-3.5" />
               </button>
-            ) : null}
-            {order.labelDetails.trackingNumber
-              && (order.labelDetails.status || '').toUpperCase() !== 'VOIDED' ? (
+            ) : null)}
+            {slot(tn && status !== 'VOIDED' ? (
               <button
                 type="button"
                 disabled={voidingOrderNo === orderNo}
-                onClick={() => void handleVoid(orderNo, order.labelDetails.trackingNumber, order.orderDetails.packageCount)}
-                title={`Void ${order.labelDetails.trackingNumber} at the carrier`}
+                onClick={() => void handleVoid(orderNo, tn, order.orderDetails.packageCount)}
+                title={`Void ${tn} at the carrier`}
                 aria-label={`Void order ${orderNo}`}
-                className="rounded-lg border border-rose-200 bg-rose-50 p-1.5 text-rose-700 transition hover:border-rose-300 hover:bg-rose-100 disabled:opacity-40"
+                className={`${ICON} border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-300 hover:bg-rose-100 disabled:opacity-40`}
               >
                 {voidingOrderNo === orderNo ? (
                   <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-rose-300 border-t-rose-700" />
@@ -1670,16 +1651,41 @@ export default function OrdersWorkspace() {
                   <FiXCircle className="h-3.5 w-3.5" />
                 )}
               </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => setDetailsOrderNo(orderNo)}
-              aria-label={`Details for order ${orderNo}`}
-              className="rounded-lg border border-[#e6dcc7] bg-[#faf7f0] p-1.5 text-[#6b5c42] transition hover:border-[#dccfb4] hover:bg-[#f2ebda] hover:text-[#412d15]"
-            >
-              <FiFileText className="h-3.5 w-3.5" />
-            </button>
-            {renderPrimaryAction(order)}
+            ) : null)}
+            {slot(
+              <button
+                type="button"
+                onClick={() => setDetailsOrderNo(orderNo)}
+                title="Order details"
+                aria-label={`Details for order ${orderNo}`}
+                className={`${ICON} ${NEUTRAL}`}
+              >
+                <FiInfo className="h-3.5 w-3.5" />
+              </button>,
+            )}
+            {slot(generated ? (
+              <button
+                type="button"
+                onClick={() => void printLabelPdf(orderNo)}
+                title="Print the shipping label"
+                aria-label={`Print label for order ${orderNo}`}
+                className={`${ICON} ${NEUTRAL}`}
+              >
+                <FiPrinter className="h-3.5 w-3.5" />
+              </button>
+            ) : null)}
+            {slot(generated && isIntl ? (
+              <button
+                type="button"
+                onClick={() => void printCommercialInvoice(orderNo)}
+                title="Print the commercial invoice"
+                aria-label={`Print commercial invoice for order ${orderNo}`}
+                className={`${ICON} ${NEUTRAL}`}
+              >
+                <FiFileText className="h-3.5 w-3.5" />
+              </button>
+            ) : null)}
+            <span className="ml-1 flex min-w-[116px] shrink-0 justify-end">{renderPrimaryAction(order)}</span>
           </span>
         )
       },
