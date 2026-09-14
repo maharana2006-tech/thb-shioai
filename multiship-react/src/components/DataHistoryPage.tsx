@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   FiAlertCircle,
   FiArrowLeft,
+  FiCalendar,
   FiFileText,
   FiFilter,
   FiHome,
@@ -156,9 +157,10 @@ export default function DataHistoryPage() {
   }, [batches])
 
   const activeAdvancedCount =
-    (dateFrom ? 1 : 0) + (dateTo ? 1 : 0) + (createdBy ? 1 : 0) + (batchPresence !== 'ANY' ? 1 : 0) + (minSaved ? 1 : 0)
+    (createdBy ? 1 : 0) + (batchPresence !== 'ANY' ? 1 : 0) + (minSaved ? 1 : 0)
+  const dateFilterActive = dateFrom !== '' || dateTo !== ''
   const anyFilterActive =
-    search.trim() !== '' || statusFilter !== 'ALL' || activeAdvancedCount > 0
+    search.trim() !== '' || statusFilter !== 'ALL' || dateFilterActive || activeAdvancedCount > 0
 
   const clearFilters = () => {
     setSearch('')
@@ -1554,8 +1556,8 @@ export default function DataHistoryPage() {
             ) : null}
           </div>
 
-          {/* Search + sort */}
-          <div className="grid gap-2.5 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
+          {/* Search + date range + sort */}
+          <div className="grid gap-2.5 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
             <label className="relative block">
               <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#b6a684]" />
               <input
@@ -1566,6 +1568,41 @@ export default function DataHistoryPage() {
                 className="w-full rounded-xl border border-[#e3d9c4] bg-[#faf7f0] py-2 pl-9 pr-3 text-[13px] text-[#1f150c] outline-none transition placeholder:text-[#b6a684] focus:border-[#cdbf9f] focus:bg-white focus:ring-4 focus:ring-[#f0e9d8]"
               />
             </label>
+            {/* Created-date range — first-class, not buried in the Filters panel. */}
+            <div className="flex items-center gap-1.5 rounded-xl border border-[#e3d9c4] bg-white px-2.5 py-1.5">
+              <FiCalendar className="h-3.5 w-3.5 shrink-0 text-[#b6a684]" />
+              <span className="hidden font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684] sm:inline">
+                Created
+              </span>
+              <input
+                type="date"
+                value={dateFrom}
+                max={dateTo || undefined}
+                onChange={(e) => setDateFrom(e.target.value)}
+                aria-label="Created from"
+                className="rounded-lg border border-[#e3d9c4] bg-[#faf7f0] px-2 py-1 text-[12px] text-[#1f150c] outline-none transition focus:border-[#cdbf9f] focus:bg-white"
+              />
+              <span className="text-[11px] text-[#b6a684]">to</span>
+              <input
+                type="date"
+                value={dateTo}
+                min={dateFrom || undefined}
+                onChange={(e) => setDateTo(e.target.value)}
+                aria-label="Created to"
+                className="rounded-lg border border-[#e3d9c4] bg-[#faf7f0] px-2 py-1 text-[12px] text-[#1f150c] outline-none transition focus:border-[#cdbf9f] focus:bg-white"
+              />
+              {dateFilterActive ? (
+                <button
+                  type="button"
+                  onClick={() => { setDateFrom(''); setDateTo('') }}
+                  title="Clear the date range"
+                  aria-label="Clear date range"
+                  className="rounded-lg p-1 text-[#b6a684] transition hover:bg-[#faf7f0] hover:text-rose-700"
+                >
+                  <FiX className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
             <select
               value={sortKey}
               onChange={(e) => setSortKey(e.target.value as SortKey)}
@@ -1589,25 +1626,7 @@ export default function DataHistoryPage() {
 
           {/* Advanced panel */}
           {showAdvanced ? (
-            <div className="grid gap-2.5 rounded-xl border border-dashed border-[#e3d9c4] bg-[#faf7f0]/60 p-3 sm:grid-cols-2 lg:grid-cols-5">
-              <label className="block">
-                <span className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">Created from</span>
-                <input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => setDateFrom(e.target.value)}
-                  className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] text-[#1f150c] outline-none focus:border-[#cdbf9f]"
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">Created to</span>
-                <input
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => setDateTo(e.target.value)}
-                  className="w-full rounded-lg border border-[#e3d9c4] bg-white px-2.5 py-1.5 text-[12px] text-[#1f150c] outline-none focus:border-[#cdbf9f]"
-                />
-              </label>
+            <div className="grid gap-2.5 rounded-xl border border-dashed border-[#e3d9c4] bg-[#faf7f0]/60 p-3 sm:grid-cols-2 lg:grid-cols-3">
               <label className="block">
                 <span className="mb-1 block font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#b6a684]">Created by</span>
                 <select
