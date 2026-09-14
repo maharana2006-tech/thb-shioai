@@ -2440,6 +2440,12 @@ public class OrderImportServiceImpl implements OrderImportService {
         // prior run should disappear while the retry runs; if the retry
         // ALSO exhausts we'll set it again below.
         batch.setNote(null);
+        // Persist the claim NOW. These fields used to ride along on the
+        // in-memory entity until the run's final save, so while a batch was
+        // generating the row still showed the previous run's completed_at and
+        // no start time at all — the live elapsed timer had nothing to tick
+        // from until the run was already over.
+        batch = importBatchRepository.save(batch);
         publishBatchEvent(batch, "batch-updated");
 
         // Reuse the commit path — it generates labels and stamps each row's
