@@ -392,9 +392,34 @@ public class OrderController {
         return ResponseEntity.status(response.getCode()).body(response);
     }
 
-    /** Tab counts for the Labels work queue: ready, needsDetails, blocked, failed, generated. */
+    /**
+     * Tab counts for the Labels work queue: ready, needsDetails, chooseAccount,
+     * clientMissing, failed, generated.
+     *
+     * <p><b>Scope is intentionally global-per-tenant.</b> This endpoint does
+     * NOT accept a batch, client, date, or keyword filter and never should —
+     * the tab bar answers "what work needs my attention right now across my
+     * whole queue?" not "what's in the current search view?". Adding filter
+     * params would:
+     * <ul>
+     *   <li>Change the semantic operators expect (Ready: 5 when there are
+     *       actually 500 ready orders elsewhere would be misleading).</li>
+     *   <li>Collapse the {@code queueStatsCache} hit rate (60s Caffeine
+     *       keyed per-tenant, tuned for dashboard polls per Sprint 51 BP-M8) —
+     *       adding filter dims to the cache key defeats the point.</li>
+     *   <li>Diverge from {@code DashboardService} which consumes the same
+     *       counts and clearly wants tenant-wide totals.</li>
+     * </ul>
+     *
+     * <p>If a batch-scoped roll-up is ever needed, add a NEW endpoint like
+     * {@code /orders/batches/{id}/stats} rather than parameterising this one —
+     * it keeps the caches independent and the semantic explicit.
+     *
+     * <p>Considered and deliberately rejected as part of the batch column
+     * filter feature (2026-09-14). See PR #641 / #642 discussion.
+     */
     @Operation(summary = "Work-queue counts",
-            description = "One aggregate pass: {ready, needsDetails, blocked, failed, generated}. 'blocked' = orders with no usable account anywhere in the cascade.")
+            description = "One aggregate pass: {ready, needsDetails, blocked, failed, generated}. Scope is always tenant-wide — see the javadoc for why batch/other filters are NOT accepted.")
     @PreAuthorize("hasAnyRole('ADMIN', 'USER')")
     @GetMapping("/queue-stats")
     public ResponseEntity<ApiResponse<Map<String, Long>>> getQueueStats() {
