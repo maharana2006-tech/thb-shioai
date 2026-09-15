@@ -1178,6 +1178,15 @@ export default function OrdersWorkspace() {
 
   const activeFilterCount =
     Object.values(columnFilters).filter(Boolean).length + (dateFrom ? 1 : 0) + (dateTo ? 1 : 0)
+  // 2026-09-15 operator indicator — Batch is an OVERRIDE: when set, the
+  // /orders request drops every other filter server-side (see the
+  // `batchOnly` branch in the fetch effect). Toolbar chip + panel banner
+  // surface that fact so the operator doesn't wonder why their date /
+  // client / status filters seem to be ignored. `activeBatchId` is the
+  // sanitised digit string ready for display.
+  const activeBatchId = columnFilters.batch.trim()
+  const batchOverrideActive = activeBatchId.length > 0
+  const clearBatchFilter = () => setColumnFilters((cur) => ({ ...cur, batch: '' }))
   const clearColumnFilters = () => {
     setColumnFilters(emptyColumnFilters)
     setDateFrom('')
@@ -2015,6 +2024,29 @@ export default function OrdersWorkspace() {
                   </button>
                 ) : null}
 
+                {/* Batch-override chip (2026-09-15) — visible in the toolbar
+                    row whenever a batch id is set. Signals that every other
+                    filter (client, dates, status, etc.) is being ignored by
+                    the server so the whole batch is visible. Click × to
+                    return to normal filter composition. */}
+                {batchOverrideActive ? (
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11.5px] font-semibold text-amber-900"
+                    title="Batch overrides other filters — every order in the batch is shown regardless of client, dates, or status."
+                  >
+                    <FiInfo className="h-3.5 w-3.5 text-amber-600" />
+                    Batch #{activeBatchId} · other filters ignored
+                    <button
+                      type="button"
+                      onClick={clearBatchFilter}
+                      aria-label="Clear batch filter"
+                      className="ml-0.5 rounded-full p-0.5 text-amber-800 transition hover:bg-amber-100 hover:text-amber-950"
+                    >
+                      <FiX className="h-3 w-3" />
+                    </button>
+                  </span>
+                ) : null}
+
                 {/* Advanced filter popover — anchored to this container. */}
                 {showFilters ? (
                   <div
@@ -2035,6 +2067,31 @@ export default function OrdersWorkspace() {
                         <FiX className="h-3.5 w-3.5" /> Clear all
                       </button>
                     </div>
+                    {/* Batch-override banner (2026-09-15) — explanatory
+                        counterpart to the toolbar chip. Only shown when
+                        a batch id is set, so operators reading the fields
+                        below understand the ones they populated aren't
+                        reaching the server. */}
+                    {batchOverrideActive ? (
+                      <div className="mb-2.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] leading-snug text-amber-900">
+                        <div className="flex items-start gap-1.5">
+                          <FiInfo className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                          <div className="flex-1">
+                            <div className="font-semibold">Batch #{activeBatchId} overrides other filters</div>
+                            <div className="mt-0.5 text-[10.5px] text-amber-800">
+                              Every order in the batch is shown. Clear <em>Batch</em> below to combine with other fields.
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={clearBatchFilter}
+                            className="shrink-0 rounded-md border border-amber-300 bg-white px-1.5 py-0.5 text-[10.5px] font-semibold text-amber-800 transition hover:border-amber-400 hover:bg-amber-100"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="flex flex-col gap-2.5">
                       {advField(
                         <FiHash className="h-3 w-3" />,
