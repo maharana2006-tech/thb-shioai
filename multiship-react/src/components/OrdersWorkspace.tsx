@@ -333,6 +333,13 @@ export default function OrdersWorkspace() {
   }, [reloadToken])
 
   // Tab counts (all tabs at once) — one aggregate query server-side.
+  //
+  // We deliberately do NOT forward the current filter surface (batch,
+  // client, dates, keyword). The tab bar answers "what work needs my
+  // attention across the whole queue?" not "what's in the current
+  // search view?" — see OrderController#getQueueStats javadoc for the
+  // full reasoning. If we ever want batch-scoped counts, that's a new
+  // endpoint, not a queue-stats parameter.
   useEffect(() => {
     let cancelled = false
     orderService

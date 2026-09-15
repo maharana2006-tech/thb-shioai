@@ -49,6 +49,11 @@ public interface OrderService {
      */
     ApiResponse<java.util.List<java.util.Map<String, Object>>> listBatches(OrderListFilters filters);
 
-    /** Work-queue tab counts: ready, needsDetails, blocked, failed, generated. */
+    /**
+     * Work-queue tab counts: ready, needsDetails, chooseAccount, clientMissing,
+     * failed, generated. Always tenant-wide — see the javadoc on
+     * {@code OrderController#getQueueStats} for why no filter params
+     * (batch, client, dates, keyword) are accepted here.
+     */
     ApiResponse<Map<String, Long>> getQueueStats();
 }
