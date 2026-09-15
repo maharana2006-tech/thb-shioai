@@ -363,11 +363,17 @@ class RecipientCountryGuardTest {
     }
 
     @Test
-    void stamps_getRates_localToken_shortCircuits_evenWithoutCountry() {
+    void stamps_getRates_localToken_throwsBeforeCountryGuard() {
+        // Design intent since commit aadd9640: Stamps rate-shop with any
+        // placeholder/unauth token surfaces as IllegalStateException with
+        // a Stamps.com-authorization pointer rather than returning empty.
+        // That happens BEFORE the recipient-country guard, so a blank
+        // country doesn't matter here — the auth message is what fires.
+        // Peer coverage: StampsRateShopTest.localFallbackTokenThrows*.
         StampsConnector connector = new StampsConnector(propsWithLocalSwsim(), new ObjectMapper());
-        java.util.List<CarrierConnector.RateOption> rates = connector.getRates(
-                minimal(""), "stamps-local-abc", "SANDBOX");
-        assertTrue(rates.isEmpty(),
-                "-local- tokens must short-circuit to empty regardless of country presence");
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> connector.getRates(minimal(""), "stamps-local-abc", "SANDBOX"));
+        assertTrue(ex.getMessage().toLowerCase().contains("not authorized"),
+                "message should point at Stamps.com authorization; got: " + ex.getMessage());
     }
 }

@@ -1587,24 +1587,16 @@ public class StampsConnector implements CarrierConnector {
      */
     @Override
     public java.util.List<RateOption> getRates(ShipmentRequestDTO request, String accessToken, String environment) {
-        if (!StringUtils.hasText(accessToken)) {
-            // Surface the unauthorized-account case so the rate-shop
-            // caller labels this ERROR (with a pointer to Stamps.com
-            // auth) instead of the confusing "returned no rates for
-            // this lane" an empty-return produced pre-fix. Same
-            // visibility policy as the FedEx/UPS rate paths.
+        if (!StringUtils.hasText(accessToken) || accessToken.contains("-local-")) {
+            // Surface the placeholder-token case so the rate-shop caller
+            // labels this as ERROR (with a pointer to Stamps.com auth)
+            // instead of the confusing "returned no rates for this lane"
+            // an empty-return produced pre-fix. Same visibility policy
+            // as the FedEx/UPS rate paths.
             throw new IllegalStateException(
                     "Stamps.com is not authorized on this account — no live SWSIM "
                             + "token available. Complete the Stamps.com Authorization "
                             + "flow before rate-shopping USPS.");
-        }
-        if (accessToken.contains("-local-")) {
-            // -local- fallback tokens are the dev/test signal that live
-            // auth is unavailable but the caller wants a graceful no-op
-            // rather than an error — same convention DhlConnector /
-            // UpsConnector / FedexConnector follow. Short-circuit before
-            // the country guard so unit tests don't need a full request.
-            return java.util.List.of();
         }
         // FDX-B4 — recipient country is required. Pre-fix, blank silently
         // defaulted to "US" downstream in the SWSIM envelope builders
