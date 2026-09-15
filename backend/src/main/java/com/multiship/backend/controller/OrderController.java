@@ -250,7 +250,9 @@ public class OrderController {
             @RequestParam(defaultValue = "ASC") String sortDirection,
             @Parameter(description = "PENDING | GENERATED | ERROR") @RequestParam(required = false) String status,
             @Parameter(description = "Scope to one tenant (required for TENANT role)") @RequestParam(required = false) String tenantId,
-            @Parameter(description = "Matches order #, city, customer code, or tracking number") @RequestParam(required = false) String search,
+            @Parameter(description = "Matches order #, batch #, city, customer code, customer_ref, or tracking number as substrings. "
+                    + "Prefix syntax (2026-09-15) narrows to one field: batch:14 (exact), order:900044, tracking:1Z, client:ARHDEV. "
+                    + "Explicit column filters win over prefixes.") @RequestParam(required = false) String search,
             @Parameter(description = "READY | NEEDS_DETAILS | BLOCKED — filters PENDING orders by the account-resolution cascade, computed server-side") @RequestParam(required = false) String resolution,
             @Parameter(description = "Column filter: client code contains") @RequestParam(required = false) String customer,
             @Parameter(description = "Column filter: destination city or state contains") @RequestParam(required = false) String city,

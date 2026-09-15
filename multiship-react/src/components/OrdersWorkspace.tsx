@@ -1965,7 +1965,11 @@ export default function OrdersWorkspace() {
             search={{
               value: query,
               onChange: setQuery,
-              placeholder: 'Search order #, client, city, tracking…',
+              // Prefix syntax (2026-09-15) — batch:14 / order:900044 /
+              // tracking:1Z / client:ARHDEV narrows to one field so
+              // short digits don't drown the operator in noise from
+              // every tracking number that happens to contain them.
+              placeholder: 'Search order #, client, city, tracking… — or batch:14 · order:900044 · tracking:1Z · client:ARHDEV',
             }}
             filterToggle={
               <div ref={filtersRef} className="relative flex flex-wrap items-center gap-2">
