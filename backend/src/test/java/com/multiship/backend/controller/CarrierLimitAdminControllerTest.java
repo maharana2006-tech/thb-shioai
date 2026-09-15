@@ -1,13 +1,16 @@
 package com.multiship.backend.controller;
 
 import com.multiship.backend.dto.ApiResponse;
+import com.multiship.backend.dto.CarrierShippingLimitActiveRequest;
 import com.multiship.backend.dto.CarrierShippingLimitRequest;
 import com.multiship.backend.dto.CarrierShippingLimitResponse;
+import com.multiship.backend.dto.ErrorCode;
 import com.multiship.backend.service.CarrierLimitAdminService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.util.List;
 import java.util.Optional;
@@ -16,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -145,6 +149,58 @@ class CarrierLimitAdminControllerTest {
                 controller.update(99L, req());
 
         assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+    }
+
+    @Test
+    void update_optimisticLockFailure_returns409WithConcurrentEditErrorCode() {
+        // Audit R2 #377 regression guard — the entity has @Version and the
+        // controller catches ObjectOptimisticLockingFailureException, but
+        // no test covered that path. Locking this in.
+        when(service.update(eq(7L), any(CarrierShippingLimitRequest.class)))
+                .thenThrow(new ObjectOptimisticLockingFailureException("CarrierShippingLimit", 7L));
+
+        ResponseEntity<ApiResponse<CarrierShippingLimitResponse>> resp =
+                controller.update(7L, req());
+
+        assertEquals(HttpStatus.CONFLICT, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals(ErrorCode.CARRIER_LIMIT_CONCURRENT_EDIT.name(), resp.getBody().getErrorCode());
+    }
+
+    // ===== setActive (audit L4 #376) =====
+
+    @Test
+    void setActive_ok_returns200AndFlipsFlagOnly() {
+        when(service.setActive(eq(7L), eq(false))).thenReturn(Optional.of(row(7L)));
+
+        ResponseEntity<ApiResponse<CarrierShippingLimitResponse>> resp =
+                controller.setActive(7L, CarrierShippingLimitActiveRequest.builder().active(false).build());
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals(7L, resp.getBody().getData().getId());
+        verify(service).setActive(7L, false);
+    }
+
+    @Test
+    void setActive_missing_returns404() {
+        when(service.setActive(eq(99L), anyBoolean())).thenReturn(Optional.empty());
+
+        ResponseEntity<ApiResponse<CarrierShippingLimitResponse>> resp =
+                controller.setActive(99L, CarrierShippingLimitActiveRequest.builder().active(true).build());
+
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+    }
+
+    @Test
+    void setActive_optimisticLockFailure_returns409WithConcurrentEditErrorCode() {
+        when(service.setActive(eq(7L), anyBoolean()))
+                .thenThrow(new ObjectOptimisticLockingFailureException("CarrierShippingLimit", 7L));
+
+        ResponseEntity<ApiResponse<CarrierShippingLimitResponse>> resp =
+                controller.setActive(7L, CarrierShippingLimitActiveRequest.builder().active(true).build());
+
+        assertEquals(HttpStatus.CONFLICT, resp.getStatusCode());
+        assertEquals(ErrorCode.CARRIER_LIMIT_CONCURRENT_EDIT.name(), resp.getBody().getErrorCode());
     }
 
     // ===== delete =====
