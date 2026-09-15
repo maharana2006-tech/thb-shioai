@@ -1898,13 +1898,19 @@ public class OrderImportServiceImpl implements OrderImportService {
             for (List<OrderImportRowDTO> g : deferred) {
                 String who = carrierLabel(carrierKey(g.get(0)));
                 for (OrderImportRowDTO r : g) {
-                    // A cancel ends the retry passes early — don't blame the carrier for that.
-                    r.setGeneratedMessage(cancelledRun
-                            ? "Not sent — label generation was cancelled. Retry labels to send it."
-                            : who + " is still rate-limiting after " + MAX_RATE_LIMIT_PASSES
-                                    + " automatic retries — click Retry in a few minutes.");
+                    if (cancelledRun) {
+                        // A cancel ended the retry passes early: the order was never
+                        // labelled, so it isn't a failure (it used to stay FAILED from
+                        // the rate-limit hold and show under "Needs attention").
+                        r.setGeneratedStatus("SAVED");
+                        r.setGeneratedMessage("Not sent — label generation was cancelled. Retry labels sends it.");
+                    } else {
+                        r.setGeneratedMessage(who + " is still rate-limiting after " + MAX_RATE_LIMIT_PASSES
+                                + " automatic retries — click Retry in a few minutes.");
+                    }
                 }
-                if (onGroupComplete != null) onGroupComplete.run();
+                // Only orders that went to the carrier move the count.
+                if (onGroupComplete != null && !cancelledRun) onGroupComplete.run();
             }
             if (onNote != null) onNote.accept(null);
         } catch (com.multiship.backend.service.fairness.FairTenantExecutor.TenantSaturatedException sat) {
@@ -2368,13 +2374,16 @@ public class OrderImportServiceImpl implements OrderImportService {
         job.setCreatedAt(java.time.LocalDateTime.now());
         try {
             generationJobRepository.save(job);
+        } catch (org.springframework.dao.DataIntegrityViolationException taken) {
+            // One live job per import (V57 unique index): another request already
+            // queued this import. It owns the run — refuse, and roll NOTHING back.
+            throw new ConcurrentBatchGenerationException("Import #" + id
+                    + " is already queued for label generation. Wait for that run to finish or refresh Import history.");
         } catch (RuntimeException ex) {
-            // Hand the import back rather than leave it IN_PROGRESS with no run behind it.
-            com.multiship.backend.model.ImportBatch b = plan.batch();
-            b.setStatus(plan.previousStatus());
-            b.setGenerationStartedAt(null);
-            importBatchRepository.save(b);
-            publishBatchEvent(b, "batch-updated");
+            // Hand the import back rather than leave it IN_PROGRESS with no run behind
+            // it — atomically, and only if it is still in the state this request set.
+            importBatchRepository.atomicallyTransitionStatus(id, plan.previousStatus(), java.util.List.of("IN_PROGRESS"));
+            importBatchRepository.findById(id).ifPresent(b -> publishBatchEvent(b, "batch-updated"));
             throw ex;
         }
         log.info("Import batch {} label generation queued as job {} ({} order(s), by {})",
@@ -2406,7 +2415,8 @@ public class OrderImportServiceImpl implements OrderImportService {
             return;
         }
         try {
-            GenerationRows g = toGenerationRows(batch, new ArrayList<>(parseBatchRows(batch)), job.isUsePlatformAccount());
+            GenerationRows g = toGenerationRows(batch, batch.getLabelBatchId(),
+                    new ArrayList<>(parseBatchRows(batch)), job.isUsePlatformAccount());
             String scope = job.getRequestedScope();
             if (StringUtils.hasText(scope)) {
                 for (OrderImportRowDTO r : g.rows()) {
@@ -2473,14 +2483,14 @@ public class OrderImportServiceImpl implements OrderImportService {
     /** Stored rows synced with live orders, and the subset still to send. */
     private record GenerationRows(List<OrderImportRowDTO> rows, List<OrderImportRowDTO> rowsToProcess, boolean platform) {}
 
-    private GenerationRows toGenerationRows(com.multiship.backend.model.ImportBatch batch,
+    private GenerationRows toGenerationRows(com.multiship.backend.model.ImportBatch batch, Integer labelBatchId,
                                             List<OrderImportRowDTO> rows, boolean usePlatformAccount) {
         // A row's status is frozen at generation time. If its order was since
         // repaired from the Orders grid (Edit → Fix & regenerate), it is live
         // at the carrier — re-sending the stale row would buy a second label
         // and flip the order back to ERROR. Sync from the order first. This is
         // also what makes a re-queued job safe to run again after a crash.
-        syncRowsWithLiveOrders(rows, batch.getLabelBatchId());
+        syncRowsWithLiveOrders(rows, labelBatchId);
         // Rows that already carry a label are never sent again — Generate as well
         // as Retry.
         List<OrderImportRowDTO> rowsToProcess = rows.stream()
@@ -2489,9 +2499,9 @@ public class OrderImportServiceImpl implements OrderImportService {
         // A retry stays in the file's label batch: rows edited in the grid
         // may have lost their stamp, and the commit would mint a new batch
         // for them (import #29 said batch 24, its repaired order said 25).
-        if (batch.getLabelBatchId() != null) {
+        if (labelBatchId != null) {
             for (OrderImportRowDTO r : rowsToProcess) {
-                if (r.getBatchId() == null) r.setBatchId(batch.getLabelBatchId());
+                if (r.getBatchId() == null) r.setBatchId(labelBatchId);
             }
         }
         // Honor the persisted billing mode too, so the platform-account choice
@@ -2519,12 +2529,16 @@ public class OrderImportServiceImpl implements OrderImportService {
         // after a mid-run crash the lookup had nothing to search and the resume
         // re-sent every order labelled before the crash (13 duplicates in the
         // kill -9 test). Rows carry the id minted at upload; mint one if they don't.
-        if (batch.getLabelBatchId() == null) {
-            Integer labelBatch = firstBatchId(parsed);
-            if (labelBatch == null) labelBatch = mintLabelBatchId();
-            if (labelBatch != null) batch.setLabelBatchId(labelBatch);
-        }
-        GenerationRows gen = toGenerationRows(batch, parsed, usePlatformAccount);
+        //
+        // Held in a local until the claim succeeds. Setting it on the entity here
+        // made it dirty, and Hibernate auto-flushes dirty entities before the claim's
+        // UPDATE runs: a request that loaded the import a moment before another one
+        // claimed it wrote its stale INITIATE back over IN_PROGRESS, passed its own
+        // claim, and the loser's rollback then orphaned the winner's job.
+        Integer labelBatch = batch.getLabelBatchId();
+        if (labelBatch == null) labelBatch = firstBatchId(parsed);
+        if (labelBatch == null) labelBatch = mintLabelBatchId();
+        GenerationRows gen = toGenerationRows(batch, labelBatch, parsed, usePlatformAccount);
         List<OrderImportRowDTO> rowsToProcess = gen.rowsToProcess();
         // Rows flagged at upload/pull as "already generated as order #N" are
         // about to be shipped a second time. Stop and ask unless the caller
@@ -2578,9 +2592,10 @@ public class OrderImportServiceImpl implements OrderImportService {
         // abnormally must not stop it. (Cleared only after winning the claim, so a
         // refused second Generate can't wipe a real Cancel of the running one.)
         cancelledBatchIds.remove(id);
-        // The status is now IN_PROGRESS in the DB; keep the in-memory
-        // entity in sync so downstream save() writes don't overwrite it
-        // with a stale value.
+        // Stamp the claim on a FRESH copy: the entity loaded above predates the
+        // claim, and saving it would overwrite anything written in between.
+        batch = importBatchRepository.findById(id).orElse(batch);
+        if (batch.getLabelBatchId() == null && labelBatch != null) batch.setLabelBatchId(labelBatch);
         batch.setStatus("IN_PROGRESS");
         // Clear the previous completion timestamp when a retry starts so
         // the FE doesn't render "completed 8m ago" alongside an

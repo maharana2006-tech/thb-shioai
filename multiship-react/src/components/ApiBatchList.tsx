@@ -30,7 +30,7 @@ const fmtDateTime = (v?: string | null) =>
       })
     : '—'
 
-const CAN_GENERATE = new Set(['INITIATE', 'PARTIAL_COMPLETE', 'FAILED'])
+const CAN_GENERATE = new Set(['INITIATE', 'PARTIAL_COMPLETE', 'FAILED', 'CANCELLED'])
 
 export default function ApiBatchList() {
   const [batches, setBatches] = useState<ImportBatchSummary[]>([])
@@ -243,7 +243,11 @@ export default function ApiBatchList() {
 
   // Generate is a background job; stop following it if the page is left.
   const mountedRef = useRef(true)
-  useEffect(() => () => { mountedRef.current = false }, [])
+  useEffect(() => {
+    // Set on every mount (React's development double-mount runs the cleanup once).
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   const generateBatch = async (batchId: number, isRetry: boolean, allowDuplicate = false) => {
     const platform = batches.find((b) => b.id === batchId)?.billingMode === 'PLATFORM'
@@ -352,7 +356,7 @@ export default function ApiBatchList() {
             const rows = rowsById[b.id]
             const rowsBusy = rowsLoading === b.id
             const st = (b.status || '').toUpperCase()
-            const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED'
+            const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED' || st === 'CANCELLED'
             const canGen = CAN_GENERATE.has(st)
             const genBusy = generatingId === b.id
             const progress = genProgressById[b.id]

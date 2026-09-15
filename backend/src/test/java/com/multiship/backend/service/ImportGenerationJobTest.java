@@ -236,6 +236,22 @@ class ImportGenerationJobTest {
     }
 
     @Test
+    void aSecondEnqueueThatFindsTheImportAlreadyQueuedIs409_andRollsNothingBack() throws Exception {
+        batch(10, "INITIATE", "ACME");
+        // The claim succeeds but the one-live-job-per-import index says another
+        // request queued it first. That request owns the run: refuse without
+        // resetting the import (the reset is what orphaned the winning job).
+        doAnswer(inv -> { throw new org.springframework.dao.DataIntegrityViolationException("uq_import_gen_job_active"); })
+                .when(jobRepo).save(any(ImportGenerationJob.class));
+
+        OrderImportServiceImpl.ConcurrentBatchGenerationException e = assertThrows(
+                OrderImportServiceImpl.ConcurrentBatchGenerationException.class,
+                () -> service.enqueueGeneration(10L, "alice", false, false, false));
+        assertTrue(e.getMessage().contains("already queued"), e.getMessage());
+        assertEquals("IN_PROGRESS", batches.get(10L).getStatus(), "the winner's claim must stand");
+    }
+
+    @Test
     void startupReaperLeavesImportsWithALiveJobToTheQueue() throws Exception {
         ImportBatch b = batch(8, "IN_PROGRESS", "ACME");
         b.setCreatedAt(LocalDateTime.now().minusHours(3));

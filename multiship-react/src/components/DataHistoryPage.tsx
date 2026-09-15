@@ -90,7 +90,14 @@ export default function DataHistoryPage() {
   const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number; note?: string | null; cancelling?: boolean; jobStatus?: string | null }>>({})
   // Generate is a background job; stop following it if the page is left.
   const mountedRef = useRef(true)
-  useEffect(() => () => { mountedRef.current = false }, [])
+  useEffect(() => {
+    // Set on every mount: React's development double-mount runs the cleanup once,
+    // and a flag left false made the page think it was already gone — it stopped
+    // following the job the moment Generate returned (no toast, and the card fell
+    // back to the slower list poll, which is what flickered).
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
   // Imports this tab asked to cancel. Held until the run actually stops so the
   // card and button keep saying "Cancelling…" — it used to snap straight back
   // to "Cancel" while workers drained, which read as the click doing nothing.
@@ -344,6 +351,22 @@ export default function DataHistoryPage() {
   }, [batches, viewTrash, sseStatus])
 
   /**
+   * Idle refresh. Generate is a background job, so a run can start from another
+   * tab, another operator or the API while this page sits idle — and the 4 s poll
+   * above only runs once the page already knows something is IN_PROGRESS. A slow
+   * refresh (visible tab only, no SSE) picks those up.
+   */
+  useEffect(() => {
+    if (viewTrash) return
+    if (sseStatus === 'open') return
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void reloadQuiet()
+    }, 20_000)
+    return () => window.clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewTrash, sseStatus])
+
+  /**
    * Observer-mode progress polling (2026-09-12 fix). For any batch whose
    * SERVER-side status is IN_PROGRESS but that WASN'T started by this
    * session (generatingId !== id), poll {@code generationProgress} so
@@ -388,7 +411,10 @@ export default function DataHistoryPage() {
                 [id]: { done: d.done, total: d.total, note: d.note ?? null, cancelling: !!d.cancelling, jobStatus: d.jobStatus ?? null },
               }))
             } else if (d && !d.running) {
-              // Server says the run finished — clean up and stop.
+              // Server says the run finished — reload first so the row leaves
+              // IN_PROGRESS at once (waiting for the 4 s list poll left a
+              // count-less "Generating…" card flickering in between), then stop.
+              await reloadQuiet()
               setGenProgressById((m) => {
                 if (!(id in m)) return m
                 const next = { ...m }
@@ -685,9 +711,10 @@ export default function DataHistoryPage() {
   const [cancellingId, setCancellingId] = useState<number | null>(null)
   const cancelGeneration = async (id: number) => {
     if (cancellingId != null) return
-    const ok = window.confirm(
-      `Cancel label generation for import #${id}?\n\nOrders already at the carrier finish (that can take a few seconds); `
-        + `orders still queued are not sent. Labels already made stay in Import history, and Retry labels sends the rest later.`,
+    const ok = await notify.confirm(
+      `Orders already at the carrier finish (that can take a few seconds); orders still queued are not sent. `
+        + `Labels already made stay in Import history, and Retry labels sends the rest later.`,
+      { title: `Cancel label generation for import #${id}?`, confirmLabel: 'Cancel generation', cancelLabel: 'Keep running', danger: true },
     )
     if (!ok) return
     setCancellingId(id)
@@ -1048,9 +1075,10 @@ export default function DataHistoryPage() {
           const isWms = (b.source || '').toUpperCase() === 'WMS'
           // A Draft (saved with errors via "Proceed with errors") can label its valid
           // rows now; the rows with errors are skipped until they are fixed.
+          // CANCELLED leaves orders not yet labelled — Retry sends them (it had no button).
           const canGenerate = canWrite && !isWms && (st === 'INITIATE' || st === 'PARTIAL_COMPLETE' || st === 'FAILED'
-            || (st === 'DRAFT' && b.savedRows > 0))
-          const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED'
+            || st === 'CANCELLED' || (st === 'DRAFT' && b.savedRows > 0))
+          const isRetry = st === 'PARTIAL_COMPLETE' || st === 'FAILED' || st === 'CANCELLED'
           // busy renders the progress bar. Include server-side IN_PROGRESS
           // (2026-09-12 fix) so operators watching a batch started in
           // another session / tab / browser see the same bar. The
@@ -1089,7 +1117,7 @@ export default function DataHistoryPage() {
                     <>
                       <span
                         title="Which carrier account this batch bills to. Platform bills the house account and rebills the client with markup."
-                        className={`${confirming ? 'hidden' : 'inline-flex'} items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold ${
+                        className={`${confirming || busy ? 'hidden' : 'inline-flex'} items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[11px] font-semibold ${
                           platform ? 'border-[#412d15] bg-[#412d15]/5 text-[#412d15]' : 'border-[#e3d9c4] bg-white text-[#5a4526]'
                         }`}
                       >
