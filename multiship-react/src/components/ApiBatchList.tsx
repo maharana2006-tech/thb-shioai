@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { FiDownloadCloud, FiHome, FiRefreshCw, FiZap } from 'react-icons/fi'
 import { wmsService } from '../api/wmsService'
 import { orderImportService } from '../api/orderImportService'
@@ -241,6 +241,10 @@ export default function ApiBatchList() {
     }
   }
 
+  // Generate is a background job; stop following it if the page is left.
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
+
   const generateBatch = async (batchId: number, isRetry: boolean, allowDuplicate = false) => {
     const platform = batches.find((b) => b.id === batchId)?.billingMode === 'PLATFORM'
     setConfirmGenId(null)
@@ -268,8 +272,23 @@ export default function ApiBatchList() {
     void pollProgress()
     try {
       const res = await orderImportService.generateLabels(batchId, { onlyFailed: isRetry, usePlatformAccount: platform, allowDuplicate })
-      applyUpdate(batchId, res.data)
-      notifyForStatus(res.data?.status, res.message ?? 'Label generation finished.')
+      if ((res.data?.status || '').toUpperCase() === 'IN_PROGRESS') {
+        // Queued as a background job: follow it to the end, then show the outcome.
+        const final = await orderImportService.waitForGeneration(batchId, { isAlive: () => mountedRef.current })
+        if (!final) return
+        let detail: Awaited<ReturnType<typeof orderImportService.getHistory>>['data'] | undefined
+        try {
+          detail = (await orderImportService.getHistory(batchId)).data
+        } catch {
+          /* fall back to a reload */
+        }
+        if (detail) applyUpdate(batchId, detail)
+        else await load()
+        notifyForStatus(final.resultStatus ?? detail?.status ?? 'FAILED', final.resultMessage ?? detail?.note ?? 'Label generation finished.')
+      } else {
+        applyUpdate(batchId, res.data)
+        notifyForStatus(res.data?.status, res.message ?? 'Label generation finished.')
+      }
     } catch (e) {
       if (!allowDuplicate && (await confirmDuplicates(e))) {
         polling = false

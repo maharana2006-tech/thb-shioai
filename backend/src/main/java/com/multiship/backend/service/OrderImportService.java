@@ -137,13 +137,37 @@ public interface OrderImportService {
      * "X of N" bar while a generate/retry runs. {@code running} is false (with
      * done=total=0) when no generation is in flight for the batch.
      */
-    /** {@code cancelling}: Cancel was accepted and the run is finishing the orders already at the carrier. */
-    record GenProgressView(int done, int total, boolean running, String note, boolean cancelling) {
-        public GenProgressView(int done, int total, boolean running) { this(done, total, running, null, false); }
-        public GenProgressView(int done, int total, boolean running, String note) { this(done, total, running, note, false); }
+    /**
+     * {@code cancelling}: Cancel was accepted and the run is finishing the orders already at the carrier.
+     * {@code jobStatus}: the latest background job (QUEUED / RUNNING / DONE / FAILED / CANCELLED), null for
+     * an inline run. {@code resultStatus} / {@code resultMessage}: the import's outcome once the job ends —
+     * what the page shows when a run it didn't wait for finishes.
+     */
+    record GenProgressView(int done, int total, boolean running, String note, boolean cancelling,
+                           String jobStatus, String resultStatus, String resultMessage) {
+        public GenProgressView(int done, int total, boolean running) { this(done, total, running, null, false, null, null, null); }
+        public GenProgressView(int done, int total, boolean running, String note) { this(done, total, running, note, false, null, null, null); }
+        public GenProgressView(int done, int total, boolean running, String note, boolean cancelling) {
+            this(done, total, running, note, cancelling, null, null, null);
+        }
     }
 
     /** Snapshot the in-flight generation progress for {@code id}. Never null. */
+    /**
+     * Validate, claim IN_PROGRESS and queue label generation as a background job. Refusals (tenant,
+     * Trash, duplicates, nothing to generate, a run in flight) still throw synchronously.
+     * Implementations without a queue run inline.
+     */
+    default com.multiship.backend.dto.ImportBatchDTO enqueueGeneration(
+            Long id, String requestedBy, boolean onlyFailed, boolean usePlatformAccount, boolean allowDuplicate) {
+        return generateLabelsForBatch(id, requestedBy, onlyFailed, usePlatformAccount, allowDuplicate);
+    }
+
+    /** Run one claimed generation job to completion (called by the background worker). */
+    default void executeGenerationJob(Long jobId) {
+        throw new UnsupportedOperationException("executeGenerationJob");
+    }
+
     GenProgressView generationProgress(Long id);
 
     /**

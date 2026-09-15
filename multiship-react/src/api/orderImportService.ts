@@ -153,6 +153,21 @@ export interface ImportBatchSummary {
 }
 
 /** A saved import with its full rows (detail view). */
+/** Live state of a label run. jobStatus/result* come from the background job row. */
+export interface GenerationProgress {
+  done: number
+  total: number
+  running: boolean
+  note?: string | null
+  cancelling?: boolean
+  /** QUEUED | RUNNING | DONE | FAILED | CANCELLED — null for an inline run. */
+  jobStatus?: string | null
+  /** The import's status once the job ended. */
+  resultStatus?: string | null
+  /** "12 of 14 orders labelled · Partial complete" once the job ended. */
+  resultMessage?: string | null
+}
+
 export interface ImportBatchDetail extends ImportBatchSummary {
   rows: OrderImportRow[]
 }
@@ -340,10 +355,36 @@ export const orderImportService = {
    * done=total=0) when nothing is generating for the batch.
    */
   generationProgress: (id: number, signal?: AbortSignal) =>
-    apiClient.get<ApiResponse<{ done: number; total: number; running: boolean; note?: string | null; cancelling?: boolean }>>(
+    apiClient.get<ApiResponse<GenerationProgress>>(
       `/orders/import/history/${id}/generate/progress`,
       { signal },
     ),
+
+  /**
+   * Generate is a background job: the POST returns 202 with the import IN_PROGRESS.
+   * Follow the job until it lands and resolve with its final progress view
+   * (jobStatus DONE / FAILED / CANCELLED, resultStatus, resultMessage). Resolves
+   * null if `isAlive` turns false first (the page was left).
+   */
+  waitForGeneration: async (
+    id: number,
+    opts?: { intervalMs?: number; isAlive?: () => boolean },
+  ): Promise<GenerationProgress | null> => {
+    const interval = opts?.intervalMs ?? 1000
+    for (;;) {
+      if (opts?.isAlive && !opts.isAlive()) return null
+      try {
+        const d = (await orderImportService.generationProgress(id)).data
+        if (d && !d.running) {
+          // A finished job, or an inline run with no job row: either way it's over.
+          if (!d.jobStatus || (d.jobStatus !== 'QUEUED' && d.jobStatus !== 'RUNNING')) return d
+        }
+      } catch {
+        /* transient — keep following */
+      }
+      await new Promise((r) => setTimeout(r, interval))
+    }
+  },
 
   /**
    * Sprint 51 — correct one row of a saved import in place. The backend

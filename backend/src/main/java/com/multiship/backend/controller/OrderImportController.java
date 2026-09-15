@@ -301,6 +301,8 @@ public class OrderImportController {
             @org.springframework.web.bind.annotation.RequestParam(name = "onlyFailed", defaultValue = "false") boolean onlyFailed,
             @RequestParam(required = false, defaultValue = "false") boolean usePlatformAccount,
             @RequestParam(required = false, defaultValue = "false") boolean allowDuplicate,
+            @io.swagger.v3.oas.annotations.Parameter(description = "false (default) = queue a background job and return 202 with the import IN_PROGRESS — follow it on GET …/generate/progress. true = run inside this request and return the finished import.")
+            @RequestParam(required = false, defaultValue = "false") boolean wait,
             @AuthenticationPrincipal UserDetails userDetails) {
         String username = userDetails == null ? "unknown" : userDetails.getUsername();
         // Sprint 55 audit #302 F3.2 — onlyFailed=true skips rows already
@@ -310,7 +312,10 @@ public class OrderImportController {
         // allowDuplicate=true confirms re-shipping orders flagged as already labelled (409 otherwise).
         com.multiship.backend.dto.ImportBatchDTO dto;
         try {
-            dto = orderImportService.generateLabelsForBatch(id, username, onlyFailed, usePlatformAccount, allowDuplicate);
+            // Refusals still arrive here synchronously either way; only the carrier run moves.
+            dto = wait
+                    ? orderImportService.generateLabelsForBatch(id, username, onlyFailed, usePlatformAccount, allowDuplicate)
+                    : orderImportService.enqueueGeneration(id, username, onlyFailed, usePlatformAccount, allowDuplicate);
         } catch (com.multiship.backend.service.OrderImportServiceImpl.DuplicateShipmentException dup) {
             return ResponseEntity.status(409).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                     .status("ERROR").code(409).timestamp(java.time.LocalDateTime.now())
@@ -333,34 +338,19 @@ public class OrderImportController {
                     .message("Import not found.")
                     .build());
         }
-        // Count ORDERS, not rows: item-line rows of one order share its label, so
-        // "97 of 126 label(s)" read as 29 failures when 8 orders had failed.
-        java.util.Map<String, Boolean> orderDone = new java.util.LinkedHashMap<>();
-        java.util.Map<String, Boolean> orderHasErrors = new java.util.HashMap<>();
-        if (dto.getRows() != null) {
-            int idx = 0;
-            for (com.multiship.backend.dto.OrderImportRowDTO r : dto.getRows()) {
-                idx++;
-                // A row without an orderRef is its own order; key it by position,
-                // which is always unique (rowNumber can be unset).
-                String key = org.springframework.util.StringUtils.hasText(r.getOrderRef())
-                        ? r.getOrderRef().trim().toUpperCase(java.util.Locale.ROOT) : "#pos" + idx;
-                boolean g = "GENERATED".equalsIgnoreCase(r.getGeneratedStatus());
-                orderDone.merge(key, g, Boolean::logicalOr);
-                orderHasErrors.merge(key, r.getErrors() != null && !r.getErrors().isEmpty(), Boolean::logicalOr);
-            }
+        if (!wait && "IN_PROGRESS".equalsIgnoreCase(dto.getStatus())) {
+            // Queued: the request is done, the run isn't. 202 + the claimed import.
+            return ResponseEntity.status(202).body(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
+                    .status("SUCCESS").code(202).timestamp(java.time.LocalDateTime.now())
+                    .message("Label generation started for import #" + id
+                            + ". It runs in the background — you can leave this page.")
+                    .data(dto)
+                    .build());
         }
-        long gen = orderDone.values().stream().filter(Boolean::booleanValue).count();
-        // Orders still carrying errors can't be labelled yet — keep them out of
-        // the "N of M" and say how many wait for fixes.
-        long needFixes = orderDone.entrySet().stream()
-                .filter(e -> !e.getValue() && Boolean.TRUE.equals(orderHasErrors.get(e.getKey()))).count();
-        long totalRows = orderDone.size() - needFixes;
+        // Finished inline (wait=true, or no queue wired). Counts ORDERS, not rows.
         return ResponseEntity.ok(ApiResponse.<com.multiship.backend.dto.ImportBatchDTO>builder()
                 .status("SUCCESS").code(200).timestamp(java.time.LocalDateTime.now())
-                .message(gen + " of " + totalRows + (totalRows == 1 ? " order" : " orders") + " labelled"
-                        + (needFixes > 0 ? " · " + needFixes + (needFixes == 1 ? " needs" : " need") + " fixes" : "")
-                        + " · " + statusLabel(dto.getStatus()))
+                .message(com.multiship.backend.service.OrderImportServiceImpl.generationSummaryMessage(dto))
                 .data(dto)
                 .build());
     }

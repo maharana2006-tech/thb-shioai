@@ -198,10 +198,26 @@ class OrderImportControllerTest {
                 .thenReturn(null);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForBatch(999L, false, false, false, alice);
+                controller.generateForBatch(999L, false, false, false, true, alice);
 
         assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
         assertEquals("Import not found.", resp.getBody().getMessage());
+    }
+
+    @Test
+    void generateForBatch_queuesByDefault_andReturns202WithoutWaitingForTheRun() {
+        ImportBatchDTO claimed = ImportBatchDTO.builder().id(7L).status("IN_PROGRESS").build();
+        when(orderImportService.enqueueGeneration(anyLong(), anyString(), anyBoolean(), anyBoolean(), anyBoolean()))
+                .thenReturn(claimed);
+
+        ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
+                controller.generateForBatch(7L, false, false, false, false, alice);
+
+        assertEquals(HttpStatus.ACCEPTED, resp.getStatusCode());
+        assertEquals("IN_PROGRESS", resp.getBody().getData().getStatus());
+        assertTrue(resp.getBody().getMessage().contains("started"), resp.getBody().getMessage());
+        org.mockito.Mockito.verify(orderImportService, org.mockito.Mockito.never())
+                .generateLabelsForBatch(anyLong(), anyString(), anyBoolean(), anyBoolean(), anyBoolean());
     }
 
     @Test
@@ -223,7 +239,7 @@ class OrderImportControllerTest {
                 .thenReturn(dto);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForBatch(7L, true, false, false, alice);
+                controller.generateForBatch(7L, true, false, false, true, alice);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertNotNull(resp.getBody().getMessage());
@@ -250,7 +266,7 @@ class OrderImportControllerTest {
                 .thenReturn(dto);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForBatch(7L, false, false, false, alice);
+                controller.generateForBatch(7L, false, false, false, true, alice);
 
         assertTrue(resp.getBody().getMessage().contains("1 of 2 orders labelled"),
                 "expected order-based count; got: " + resp.getBody().getMessage());
@@ -266,7 +282,7 @@ class OrderImportControllerTest {
         when(orderImportService.generateLabelsForBatch(anyLong(), anyString(), anyBoolean(), anyBoolean(), anyBoolean()))
                 .thenReturn(dto);
 
-        controller.generateForBatch(7L, true, false, false, alice);
+        controller.generateForBatch(7L, true, false, false, true, alice);
 
         ArgumentCaptor<Boolean> flag = ArgumentCaptor.forClass(Boolean.class);
         verify(orderImportService).generateLabelsForBatch(eq(7L), eq("alice"), flag.capture(), anyBoolean(), anyBoolean());
@@ -282,7 +298,7 @@ class OrderImportControllerTest {
                 .thenReturn(dto);
 
         ResponseEntity<ApiResponse<ImportBatchDTO>> resp =
-                controller.generateForBatch(7L, false, false, false, alice);
+                controller.generateForBatch(7L, false, false, false, true, alice);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("0 of 0 orders labelled"),

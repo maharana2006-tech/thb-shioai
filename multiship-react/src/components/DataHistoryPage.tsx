@@ -87,7 +87,10 @@ export default function DataHistoryPage() {
   const [generatingId, setGeneratingId] = useState<number | null>(null)
   // Live "X of N" label-generation progress per batch, polled while a batch
   // generate/retry runs so the button shows a real progress bar, not a spinner.
-  const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number; note?: string | null; cancelling?: boolean }>>({})
+  const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number; note?: string | null; cancelling?: boolean; jobStatus?: string | null }>>({})
+  // Generate is a background job; stop following it if the page is left.
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
   // Imports this tab asked to cancel. Held until the run actually stops so the
   // card and button keep saying "Cancelling…" — it used to snap straight back
   // to "Cancel" while workers drained, which read as the click doing nothing.
@@ -382,7 +385,7 @@ export default function DataHistoryPage() {
             if (d && d.running && d.total > 0) {
               setGenProgressById((m) => ({
                 ...m,
-                [id]: { done: d.done, total: d.total, note: d.note ?? null, cancelling: !!d.cancelling },
+                [id]: { done: d.done, total: d.total, note: d.note ?? null, cancelling: !!d.cancelling, jobStatus: d.jobStatus ?? null },
               }))
             } else if (d && !d.running) {
               // Server says the run finished — clean up and stop.
@@ -565,7 +568,7 @@ export default function DataHistoryPage() {
           const pr = await orderImportService.generationProgress(id)
           const d = pr.data
           if (polling && d && d.running && d.total > 0) {
-            setGenProgressById((m) => ({ ...m, [id]: { done: d.done, total: d.total, note: d.note ?? null, cancelling: !!d.cancelling } }))
+            setGenProgressById((m) => ({ ...m, [id]: { done: d.done, total: d.total, note: d.note ?? null, cancelling: !!d.cancelling, jobStatus: d.jobStatus ?? null } }))
           }
         } catch {
           /* transient poll error — keep going, the POST result is authoritative */
@@ -577,6 +580,45 @@ export default function DataHistoryPage() {
     try {
       const res = await orderImportService.generateLabels(id, { onlyFailed: isRetry, usePlatformAccount: platform, allowDuplicate })
       const updated = res.data
+      if (updated && (updated.status || '').toUpperCase() === 'IN_PROGRESS') {
+        // Queued as a background job (the default). The card is driven by the
+        // progress poll; follow the job to the end, then show what happened.
+        const final = await orderImportService.waitForGeneration(id, { isAlive: () => mountedRef.current })
+        if (!final) return
+        let detail: Awaited<ReturnType<typeof orderImportService.getHistory>>['data'] | undefined
+        try {
+          detail = (await orderImportService.getHistory(id)).data
+        } catch {
+          /* the list reload below still settles the row */
+        }
+        if (detail) {
+          const d = detail
+          setBatches((list) =>
+            list.map((b) =>
+              b.id === id
+                ? {
+                    ...b,
+                    status: d.status,
+                    savedRows: d.savedRows,
+                    invalidRows: d.invalidRows,
+                    labelBatchId: d.labelBatchId ?? b.labelBatchId,
+                    generationStartedAt: d.generationStartedAt ?? b.generationStartedAt,
+                    completedAt: d.completedAt ?? b.completedAt,
+                    note: d.note ?? null,
+                  }
+                : b,
+            ),
+          )
+          if (d.rows) setRowsById((m) => ({ ...m, [id]: d.rows }))
+        } else {
+          await load()
+        }
+        notifyForStatus(
+          final.resultStatus ?? detail?.status ?? 'FAILED',
+          final.resultMessage ?? detail?.note ?? 'Label generation finished.',
+        )
+        return
+      }
       if (updated) {
         setBatches((list) =>
           list.map((b) =>
@@ -1110,7 +1152,7 @@ export default function DataHistoryPage() {
                                 <div className="flex items-center justify-between gap-3 text-[11.5px] font-semibold leading-none">
                                   <span className="inline-flex items-center gap-1.5">
                                     <span className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                                    {stopping ? 'Cancelling…' : 'Generating…'}
+                                    {stopping ? 'Cancelling…' : progress?.jobStatus === 'QUEUED' ? 'Queued…' : 'Generating…'}
                                   </span>
                                   {(() => {
                                     const st = b.generationStartedAt ? new Date(b.generationStartedAt).getTime() : null

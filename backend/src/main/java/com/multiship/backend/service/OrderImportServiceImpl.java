@@ -122,6 +122,11 @@ public class OrderImportServiceImpl implements OrderImportService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.ImportBatchRepository importBatchRepository;
 
+    /** Durable queue for label-generation runs (V57). Optional: unit-test
+     *  constructors don't wire it, and without it Generate runs inline. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.multiship.backend.repository.ImportGenerationJobRepository generationJobRepository;
+
     /** Live tracking for the retry sync (optional — unit-test constructors don't wire it). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.multiship.backend.repository.OrderTrackingRepository orderTrackingRepository;
@@ -300,6 +305,12 @@ public class OrderImportServiceImpl implements OrderImportService {
         java.time.LocalDateTime now = java.time.LocalDateTime.now();
         int reaped = 0;
         for (com.multiship.backend.model.ImportBatch batch : stale) {
+            // A queued or running job resumes this import (the worker re-queues a
+            // job whose heartbeat stopped) — failing it here would throw the run away.
+            if (generationJobRepository != null && generationJobRepository.existsByImportBatchIdAndStatusIn(
+                    batch.getId(), com.multiship.backend.repository.ImportGenerationJobRepository.ACTIVE)) {
+                continue;
+            }
             // Extra guard: only reap batches genuinely older than the
             // cutoff; a fresh batch that legitimately started a moment
             // before the housekeeper fired must not be interrupted.
@@ -2324,46 +2335,197 @@ public class OrderImportServiceImpl implements OrderImportService {
     @Override
     public com.multiship.backend.dto.ImportBatchDTO generateLabelsForBatch(
             Long id, String requestedBy, boolean onlyFailed, boolean usePlatformAccount, boolean allowDuplicate) {
-        if (importBatchRepository == null || id == null) return null;
+        // Inline run (tests, ?wait=true): validate + claim, then generate in this thread.
+        GenerationPlan plan = prepareGeneration(id, usePlatformAccount, allowDuplicate);
+        if (plan == null) return null;
+        return runGeneration(plan.batch(), plan.rows(), plan.rowsToProcess(), plan.platform(), requestedBy, null);
+    }
+
+    /**
+     * Queue label generation to run in the background. Everything that can refuse
+     * the request — tenant, Trash, duplicate confirmation, nothing to generate, a
+     * run already in flight — happens here, synchronously, so the caller still gets
+     * its 4xx at once. The import is then claimed IN_PROGRESS and a job row is
+     * written for {@link ImportGenerationWorker}. Without the job table (unit tests)
+     * it runs inline instead.
+     */
+    @Override
+    public com.multiship.backend.dto.ImportBatchDTO enqueueGeneration(
+            Long id, String requestedBy, boolean onlyFailed, boolean usePlatformAccount, boolean allowDuplicate) {
+        if (generationJobRepository == null) {
+            return generateLabelsForBatch(id, requestedBy, onlyFailed, usePlatformAccount, allowDuplicate);
+        }
+        GenerationPlan plan = prepareGeneration(id, usePlatformAccount, allowDuplicate);
+        if (plan == null) return null;
+        com.multiship.backend.model.ImportGenerationJob job = new com.multiship.backend.model.ImportGenerationJob();
+        job.setImportBatchId(id);
+        job.setStatus(com.multiship.backend.model.ImportGenerationJob.QUEUED);
+        job.setRequestedBy(requestedBy);
+        // The worker has no logged-in user; it enforces this scope explicitly.
+        job.setRequestedScope(tenantScope == null ? null : tenantScope.resolveScope().orElse(null));
+        job.setUsePlatformAccount(plan.platform());
+        job.setProgressTotal(countGroups(plan.rowsToProcess()));
+        job.setCreatedAt(java.time.LocalDateTime.now());
+        try {
+            generationJobRepository.save(job);
+        } catch (RuntimeException ex) {
+            // Hand the import back rather than leave it IN_PROGRESS with no run behind it.
+            com.multiship.backend.model.ImportBatch b = plan.batch();
+            b.setStatus(plan.previousStatus());
+            b.setGenerationStartedAt(null);
+            importBatchRepository.save(b);
+            publishBatchEvent(b, "batch-updated");
+            throw ex;
+        }
+        log.info("Import batch {} label generation queued as job {} ({} order(s), by {})",
+                id, job.getId(), job.getProgressTotal(), requestedBy);
+        return toBatchDTO(plan.batch(), plan.rows());
+    }
+
+    /**
+     * Run one queued job to completion. Called by {@link ImportGenerationWorker}
+     * after it claimed the row; also the path a re-queued job takes after a crash —
+     * rows are synced with the label batch's live orders first, so orders already
+     * labelled are not sent again.
+     */
+    @Override
+    public void executeGenerationJob(Long jobId) {
+        if (generationJobRepository == null || importBatchRepository == null || jobId == null) return;
+        com.multiship.backend.model.ImportGenerationJob job = generationJobRepository.findById(jobId).orElse(null);
+        if (job == null) return;
+        Long id = job.getImportBatchId();
         com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
-        if (batch == null) return null;
-
-        // Parse the stored rows.
-        List<OrderImportRowDTO> rows = new ArrayList<>();
-        if (importObjectMapper != null && batch.getRowsJson() != null) {
-            try {
-                rows = importObjectMapper.readValue(
-                        batch.getRowsJson(),
-                        new com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>>() {});
-            } catch (Exception e) {
-                rows = new ArrayList<>();
+        if (batch == null || batch.getDeletedAt() != null) {
+            finishJob(jobId, com.multiship.backend.model.ImportGenerationJob.FAILED, null, null,
+                    "Import #" + id + " no longer exists or is in Trash.");
+            return;
+        }
+        if (!"IN_PROGRESS".equalsIgnoreCase(batch.getStatus())) {
+            finishJob(jobId, com.multiship.backend.model.ImportGenerationJob.FAILED, batch.getStatus(), null,
+                    "Import #" + id + " is no longer generating (status " + batch.getStatus() + ").");
+            return;
+        }
+        try {
+            GenerationRows g = toGenerationRows(batch, new ArrayList<>(parseBatchRows(batch)), job.isUsePlatformAccount());
+            String scope = job.getRequestedScope();
+            if (StringUtils.hasText(scope)) {
+                for (OrderImportRowDTO r : g.rows()) {
+                    if (StringUtils.hasText(r.getClientCode()) && !scope.equalsIgnoreCase(r.getClientCode().trim())) {
+                        throw new org.springframework.security.access.AccessDeniedException("Import #" + id
+                                + " holds orders outside client " + scope + ", the scope it was queued under.");
+                    }
+                }
             }
+            com.multiship.backend.dto.ImportBatchDTO dto = runGeneration(
+                    batch, g.rows(), g.rowsToProcess(), g.platform(), job.getRequestedBy(), jobId);
+            String result = dto == null ? null : dto.getStatus();
+            finishJob(jobId, "CANCELLED".equalsIgnoreCase(result)
+                            ? com.multiship.backend.model.ImportGenerationJob.CANCELLED
+                            : com.multiship.backend.model.ImportGenerationJob.DONE,
+                    result, generationSummaryMessage(dto), null);
+        } catch (RuntimeException ex) {
+            log.error("Import batch {} label generation job {} stopped: {}", id, jobId, ex.toString(), ex);
+            String msg = "Label generation stopped unexpectedly: "
+                    + (ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
+            try {
+                com.multiship.backend.model.ImportBatch fresh = importBatchRepository.findById(id).orElse(null);
+                if (fresh != null && "IN_PROGRESS".equalsIgnoreCase(fresh.getStatus())) {
+                    fresh.setStatus("FAILED");
+                    fresh.setNote(truncateTo(msg + " Retry labels resumes — labelled orders aren't sent again.", 500));
+                    stampCompletionIfTerminal(fresh);
+                    importBatchRepository.save(fresh);
+                    publishBatchEvent(fresh, "batch-updated");
+                }
+            } catch (RuntimeException inner) {
+                log.warn("Import batch {}: could not mark FAILED after job {} stopped: {}", id, jobId, inner.getMessage());
+            }
+            finishJob(jobId, com.multiship.backend.model.ImportGenerationJob.FAILED, "FAILED", null, msg);
+        } finally {
+            cancelledBatchIds.remove(id);
         }
-        // Sprint 50 Tier 0.5 PR G — enforce tenant match before we spend
-        // any carrier-billing cycles generating labels. A scoped USER
-        // trying to fire label generation on a foreign tenant's batch
-        // gets 403 here rather than after we've minted N labels.
-        requireMatch(firstClientCode(rows));
-        if (batch.getDeletedAt() != null) {
-            throw new ImportBatchStateException(409, "Import #" + id + " is in Trash — restore it before generating labels.");
-        }
+    }
 
-        // Sprint 55 audit #302 F3.2 — retry-safe filter: skip rows already
-        // GENERATED so we don't re-bill the carrier for successful ones.
-        // Filtered rows keep their existing generatedStatus/tracking on
-        // save; only the not-yet-generated subset is re-processed.
+    private void finishJob(Long jobId, String status, String resultStatus, String resultMessage, String error) {
+        try {
+            generationJobRepository.findById(jobId).ifPresent(j -> {
+                java.time.LocalDateTime now = java.time.LocalDateTime.now();
+                j.setStatus(status);
+                j.setResultStatus(resultStatus);
+                j.setResultMessage(truncateTo(resultMessage, 1000));
+                j.setErrorMessage(truncateTo(error, 2000));
+                j.setFinishedAt(now);
+                j.setHeartbeatAt(now);
+                generationJobRepository.save(j);
+            });
+        } catch (RuntimeException e) {
+            log.warn("Label generation job {}: could not record outcome {}: {}", jobId, status, e.getMessage());
+        }
+    }
+
+    private static String truncateTo(String v, int max) {
+        return v == null || v.length() <= max ? v : v.substring(0, max);
+    }
+
+    /** A validated import, already claimed IN_PROGRESS, ready to generate. */
+    private record GenerationPlan(com.multiship.backend.model.ImportBatch batch, List<OrderImportRowDTO> rows,
+                                  List<OrderImportRowDTO> rowsToProcess, boolean platform, String previousStatus) {}
+
+    /** Stored rows synced with live orders, and the subset still to send. */
+    private record GenerationRows(List<OrderImportRowDTO> rows, List<OrderImportRowDTO> rowsToProcess, boolean platform) {}
+
+    private GenerationRows toGenerationRows(com.multiship.backend.model.ImportBatch batch,
+                                            List<OrderImportRowDTO> rows, boolean usePlatformAccount) {
         // A row's status is frozen at generation time. If its order was since
         // repaired from the Orders grid (Edit → Fix & regenerate), it is live
         // at the carrier — re-sending the stale row would buy a second label
-        // and flip the order back to ERROR. Sync from the order first.
+        // and flip the order back to ERROR. Sync from the order first. This is
+        // also what makes a re-queued job safe to run again after a crash.
         syncRowsWithLiveOrders(rows, batch.getLabelBatchId());
         // Rows that already carry a label are never sent again — Generate as well
-        // as Retry. (Generate used to re-send them: a second Generate through the
-        // API bought duplicate labels.) onlyFailed is kept for callers; both paths
-        // now process exactly the rows without a label.
+        // as Retry.
         List<OrderImportRowDTO> rowsToProcess = rows.stream()
                 .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
                 .toList();
+        // A retry stays in the file's label batch: rows edited in the grid
+        // may have lost their stamp, and the commit would mint a new batch
+        // for them (import #29 said batch 24, its repaired order said 25).
+        if (batch.getLabelBatchId() != null) {
+            for (OrderImportRowDTO r : rowsToProcess) {
+                if (r.getBatchId() == null) r.setBatchId(batch.getLabelBatchId());
+            }
+        }
+        // Honor the persisted billing mode too, so the platform-account choice
+        // survives reloads/retries even when the caller omits the flag.
+        boolean platform = usePlatformAccount || "PLATFORM".equalsIgnoreCase(
+                batch.getBillingMode() == null ? "" : batch.getBillingMode());
+        return new GenerationRows(rows, rowsToProcess, platform);
+    }
+
+    /** Every check that can refuse a Generate, then the atomic IN_PROGRESS claim. */
+    private GenerationPlan prepareGeneration(Long id, boolean usePlatformAccount, boolean allowDuplicate) {
+        if (importBatchRepository == null || id == null) return null;
+        com.multiship.backend.model.ImportBatch batch = importBatchRepository.findById(id).orElse(null);
+        if (batch == null) return null;
+        List<OrderImportRowDTO> parsed = new ArrayList<>(parseBatchRows(batch));
+        // Sprint 50 Tier 0.5 PR G — enforce tenant match before we spend
+        // any carrier-billing cycles generating labels.
+        requireMatch(firstClientCode(parsed));
+        if (batch.getDeletedAt() != null) {
+            throw new ImportBatchStateException(409, "Import #" + id + " is in Trash — restore it before generating labels.");
+        }
+        // Fix the label batch BEFORE the run and persist it with the claim. A resumed
+        // job recognises orders a crashed attempt already labelled by looking inside
+        // this batch; the id used to reach the import only when a run finished, so
+        // after a mid-run crash the lookup had nothing to search and the resume
+        // re-sent every order labelled before the crash (13 duplicates in the
+        // kill -9 test). Rows carry the id minted at upload; mint one if they don't.
+        if (batch.getLabelBatchId() == null) {
+            Integer labelBatch = firstBatchId(parsed);
+            if (labelBatch == null) labelBatch = mintLabelBatchId();
+            if (labelBatch != null) batch.setLabelBatchId(labelBatch);
+        }
+        GenerationRows gen = toGenerationRows(batch, parsed, usePlatformAccount);
+        List<OrderImportRowDTO> rowsToProcess = gen.rowsToProcess();
         // Rows flagged at upload/pull as "already generated as order #N" are
         // about to be shipped a second time. Stop and ask unless the caller
         // confirmed (allowDuplicate) — five labelled copies of one WMS order
@@ -2391,19 +2553,7 @@ public class OrderImportServiceImpl implements OrderImportService {
                         : "Nothing to generate — every order in this import is already labelled.");
             }
         }
-        // A retry stays in the file's label batch: rows edited in the grid
-        // may have lost their stamp, and the commit would mint a new batch
-        // for them (import #29 said batch 24, its repaired order said 25).
-        if (batch.getLabelBatchId() != null) {
-            for (OrderImportRowDTO r : rowsToProcess) {
-                if (r.getBatchId() == null) r.setBatchId(batch.getLabelBatchId());
-            }
-        }
-        // Honor the persisted billing mode too, so the platform-account choice
-        // survives reloads/retries even when the caller omits the flag.
-        boolean platform = usePlatformAccount || "PLATFORM".equalsIgnoreCase(
-                batch.getBillingMode() == null ? "" : batch.getBillingMode());
-
+        String previousStatus = batch.getStatus();
         // Import I-11 — atomic CAS gate against concurrent-generate race.
         // Two operators clicking Generate on the same batch used to BOTH
         // enter this method, fan out per-row label calls in parallel, and
@@ -2451,7 +2601,15 @@ public class OrderImportServiceImpl implements OrderImportService {
         // from until the run was already over.
         batch = importBatchRepository.save(batch);
         publishBatchEvent(batch, "batch-updated");
+        return new GenerationPlan(batch, gen.rows(), rowsToProcess, gen.platform(), previousStatus);
+    }
 
+    /** The carrier run and its outcome. {@code jobId} is null for an inline run. */
+    private com.multiship.backend.dto.ImportBatchDTO runGeneration(com.multiship.backend.model.ImportBatch batch,
+            List<OrderImportRowDTO> rows, List<OrderImportRowDTO> rowsToProcess, boolean platform,
+            String requestedBy, Long jobId) {
+        Long id = batch.getId();
+        final JobSync sync = (jobId == null || generationJobRepository == null) ? null : new JobSync(jobId);
         // Reuse the commit path — it generates labels and stamps each row's
         // generatedStatus (GENERATED / FAILED) in place. platform forces the
         // house account for every row; onlyFailed limits to the not-yet-done subset.
@@ -2467,12 +2625,17 @@ public class OrderImportServiceImpl implements OrderImportService {
             // pass a per-group tick into commit. Always removed when the run ends.
             GenProgress prog = new GenProgress(countGroups(rowsToProcess));
             generationProgressByBatch.put(id, prog);
+            if (sync != null) sync.progress(prog, true);
             try {
+                // A background run mirrors progress and reads Cancel through its job
+                // row (throttled), so any server — or this one after a restart —
+                // sees the same state.
                 commit(rowsToProcess, requestedBy, platform, sourceOverride,
-                        () -> prog.done.incrementAndGet(),
-                        () -> cancelledBatchIds.contains(id),
-                        n -> prog.note = n);
+                        () -> { prog.done.incrementAndGet(); if (sync != null) sync.progress(prog, false); },
+                        () -> cancelledBatchIds.contains(id) || (sync != null && sync.cancelRequested()),
+                        n -> { prog.note = n; if (sync != null) sync.progress(prog, true); });
             } finally {
+                if (sync != null) sync.progress(prog, true);
                 generationProgressByBatch.remove(id);
             }
         }
@@ -2494,7 +2657,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         // status is CANCELLED regardless of the mix of outcomes. Preserves
         // any labels that finished before the toggle so they stay
         // downloadable / voidable from Data History.
-        boolean wasCancelled = cancelledBatchIds.remove(id);
+        // Non-short-circuit: always clear the in-memory flag, whichever path cancelled.
+        boolean wasCancelled = cancelledBatchIds.remove(id) | (sync != null && sync.cancelRequestedNow());
         batch.setStatus(wasCancelled
                 ? "CANCELLED"
                 : deriveGenerationStatus(total, generated, failed, invalid));
@@ -2576,6 +2740,89 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /**
+     * Throttled mirror of an in-memory run onto its job row: progress at most about
+     * once a second (forced for note changes and at the end), and the Cancel flag
+     * read at most once a second. The commit worker threads call these concurrently.
+     */
+    private final class JobSync {
+        private final Long jobId;
+        private final java.util.concurrent.atomic.AtomicLong lastWrite = new java.util.concurrent.atomic.AtomicLong();
+        private final java.util.concurrent.atomic.AtomicLong lastCancelRead = new java.util.concurrent.atomic.AtomicLong();
+        private volatile boolean cancelSeen;
+
+        JobSync(Long jobId) { this.jobId = jobId; }
+
+        void progress(GenProgress p, boolean force) {
+            long now = System.currentTimeMillis();
+            long last = lastWrite.get();
+            if (!force && (now - last < 1_000L || !lastWrite.compareAndSet(last, now))) return;
+            if (force) lastWrite.set(now);
+            try {
+                generationJobRepository.updateProgress(jobId, Math.min(p.done.get(), p.total), p.total,
+                        truncateTo(p.note, 500), java.time.LocalDateTime.now());
+            } catch (RuntimeException e) {
+                log.debug("Label generation job {}: progress write skipped: {}", jobId, e.getMessage());
+            }
+        }
+
+        boolean cancelRequested() {
+            if (cancelSeen) return true;
+            long now = System.currentTimeMillis();
+            long last = lastCancelRead.get();
+            if (now - last < 1_000L || !lastCancelRead.compareAndSet(last, now)) return false;
+            return cancelRequestedNow();
+        }
+
+        boolean cancelRequestedNow() {
+            if (cancelSeen) return true;
+            try {
+                cancelSeen = Boolean.TRUE.equals(generationJobRepository.isCancelRequested(jobId));
+            } catch (RuntimeException e) {
+                log.debug("Label generation job {}: cancel read skipped: {}", jobId, e.getMessage());
+            }
+            return cancelSeen;
+        }
+    }
+
+    /** "12 of 14 orders labelled · 2 need fixes · Partial complete" — orders, not rows. */
+    public static String generationSummaryMessage(com.multiship.backend.dto.ImportBatchDTO dto) {
+        if (dto == null) return null;
+        java.util.Map<String, Boolean> orderDone = new java.util.LinkedHashMap<>();
+        java.util.Map<String, Boolean> orderHasErrors = new java.util.HashMap<>();
+        if (dto.getRows() != null) {
+            int idx = 0;
+            for (OrderImportRowDTO r : dto.getRows()) {
+                idx++;
+                String key = StringUtils.hasText(r.getOrderRef())
+                        ? r.getOrderRef().trim().toUpperCase(Locale.ROOT) : "#pos" + idx;
+                boolean g = "GENERATED".equalsIgnoreCase(r.getGeneratedStatus());
+                orderDone.merge(key, g, Boolean::logicalOr);
+                orderHasErrors.merge(key, r.getErrors() != null && !r.getErrors().isEmpty(), Boolean::logicalOr);
+            }
+        }
+        long gen = orderDone.values().stream().filter(Boolean::booleanValue).count();
+        long needFixes = orderDone.entrySet().stream()
+                .filter(e -> !e.getValue() && Boolean.TRUE.equals(orderHasErrors.get(e.getKey()))).count();
+        long total = orderDone.size() - needFixes;
+        return gen + " of " + total + (total == 1 ? " order" : " orders") + " labelled"
+                + (needFixes > 0 ? " · " + needFixes + (needFixes == 1 ? " needs" : " need") + " fixes" : "")
+                + " · " + batchStatusLabel(dto.getStatus());
+    }
+
+    private static String batchStatusLabel(String status) {
+        if (status == null) return "";
+        return switch (status.toUpperCase(Locale.ROOT)) {
+            case "COMPLETE" -> "Complete";
+            case "PARTIAL_COMPLETE" -> "Partial complete";
+            case "FAILED" -> "Failed";
+            case "IN_PROGRESS" -> "In progress";
+            case "INITIATE" -> "Saved · not generated";
+            case "CANCELLED" -> "Cancelled";
+            default -> status;
+        };
+    }
+
+    /**
      * Generate a label for ONE row of a saved batch, so the operator can ship
      * rows individually straight from Data History. Updates that row's outcome
      * and re-derives the batch status from all rows.
@@ -2645,6 +2892,13 @@ public class OrderImportServiceImpl implements OrderImportService {
                     .build();
         }
         cancelledBatchIds.add(id);
+        if (generationJobRepository != null) {
+            try {
+                generationJobRepository.requestCancel(id);
+            } catch (RuntimeException e) {
+                log.warn("Import batch {}: could not flag its generation job cancelled: {}", id, e.getMessage());
+            }
+        }
         log.info("Import batch {} cancellation requested (current status={}).", id, current);
         publishBatchEvent(batch, "batch-cancel-requested");
         return ApiResponse.<String>builder()
@@ -2904,11 +3158,25 @@ public class OrderImportServiceImpl implements OrderImportService {
 
     @Override
     public GenProgressView generationProgress(Long id) {
-        GenProgress p = id == null ? null : generationProgressByBatch.get(id);
-        if (p == null) return new GenProgressView(0, 0, false);
-        // Clamp done ≤ total in case a poll lands between the last tick and removal.
-        return new GenProgressView(Math.min(p.done.get(), p.total), p.total, true, p.note,
-                cancelledBatchIds.contains(id));
+        if (id == null) return new GenProgressView(0, 0, false);
+        GenProgress p = generationProgressByBatch.get(id);
+        com.multiship.backend.model.ImportGenerationJob job = generationJobRepository == null ? null
+                : generationJobRepository.findFirstByImportBatchIdOrderByIdDesc(id).orElse(null);
+        if (p != null) {
+            // Running in this JVM: the live counter is freshest. Clamp done ≤ total
+            // in case a poll lands between the last tick and removal.
+            boolean cancelling = cancelledBatchIds.contains(id) || (job != null && job.isActive() && job.isCancelRequested());
+            return new GenProgressView(Math.min(p.done.get(), p.total), p.total, true, p.note, cancelling,
+                    job == null ? null : job.getStatus(), null, null);
+        }
+        if (job != null) {
+            // Queued, running on another server, or finished: the job row says.
+            boolean active = job.isActive();
+            return new GenProgressView(Math.min(job.getProgressDone(), job.getProgressTotal()), job.getProgressTotal(),
+                    active, active ? job.getNote() : null, active && job.isCancelRequested(),
+                    job.getStatus(), job.getResultStatus(), job.getResultMessage());
+        }
+        return new GenProgressView(0, 0, false);
     }
 
     /** Count of orderRef groups in a row set — one label (and one progress tick)
