@@ -1902,6 +1902,15 @@
           "dutyAccount" : {
             "type" : "string"
           },
+          "ftrExemption" : {
+            "type" : "string"
+          },
+          "aesCitation" : {
+            "type" : "string"
+          },
+          "exportDeclarationReference" : {
+            "type" : "string"
+          },
           "commodities" : {
             "type" : "array",
             "items" : {
@@ -2112,6 +2121,9 @@
           "isReturn" : {
             "type" : "boolean"
           },
+          "returnType" : {
+            "type" : "string"
+          },
           "dangerousGoods" : {
             "$ref" : "#/components/schemas/DangerousGoodsBlockDTO"
           },
@@ -2144,6 +2156,12 @@
           },
           "labelStockType" : {
             "type" : "string"
+          },
+          "labelStockHeight" : {
+            "type" : "number"
+          },
+          "labelStockWidth" : {
+            "type" : "number"
           }
         },
         "required" : [ "carrierCode", "packageType", "recipientAddressLine1", "recipientCity", "recipientCountryCode", "recipientName", "recipientPostalCode", "recipientState", "shipperAddressLine1", "shipperCity", "shipperCountryCode", "shipperName", "shipperPostalCode", "shipperState", "weight" ]
