@@ -100,6 +100,31 @@ public class CarrierLimitAdminService {
         });
     }
 
+    /**
+     * Audit L4 #376 — flip only the {@code active} column, in isolation from
+     * every other field on the row. Callers that previously used
+     * {@link #update} to toggle a row also send back {@code maxPackages},
+     * {@code notes}, etc., picked from their local snapshot — if a second
+     * admin edited any of those between the fetch + save, their edit was
+     * silently overwritten. This variant sends only the flag, so the race
+     * window closes.
+     *
+     * <p>The @Version column added for audit R2 #377 still guards against
+     * two admins racing on the toggle itself; a lost race throws
+     * {@link org.springframework.orm.ObjectOptimisticLockingFailureException}
+     * which the controller maps to 409 CARRIER_LIMIT_CONCURRENT_EDIT.
+     */
+    @Transactional
+    public Optional<CarrierShippingLimitResponse> setActive(Long id, boolean active) {
+        return repository.findById(id).map(existing -> {
+            existing.setActive(active);
+            CarrierShippingLimit saved = repository.save(existing);
+            resolverService.invalidateCache();
+            log.info("carrier_shipping_limit ACTIVE-TOGGLED id={} active={}", saved.getId(), active);
+            return CarrierShippingLimitResponse.from(saved);
+        });
+    }
+
     @Transactional
     public boolean delete(Long id) {
         if (!repository.existsById(id)) return false;
