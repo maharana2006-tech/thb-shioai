@@ -65,6 +65,15 @@ export interface CarrierAccountRef {
   thirdPartyCountry?: string | null
   createdAt: string | null
   updatedAt: string | null
+  /** Populated only on the verify-account response when the Stamps.com SERA
+   *  3-legged flow needs the operator's browser consent. Absent on list
+   *  responses. Companion field: {@link authorizeUrl}. */
+  needsAuthorization?: boolean | null
+  /** Populated only on the verify-account response, only when the account
+   *  is persisted (URL needs the accountId to sign the state). Nullable
+   *  even when needsAuthorization=true; consumer falls back to
+   *  {@link accountRefService.authorizeStampsSera}. */
+  authorizeUrl?: string | null
 }
 
 export interface CredentialCheck {

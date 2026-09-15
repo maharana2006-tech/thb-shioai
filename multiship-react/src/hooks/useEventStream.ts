@@ -58,18 +58,22 @@ export interface EventStreamOptions {
 export function useEventStream(opts: EventStreamOptions): { status: EventStreamStatus } {
   const [status, setStatus] = useState<EventStreamStatus>('closed')
   // Keep the latest handlers in a ref so the effect below can call
-  // them without re-subscribing when the parent re-renders.
+  // them without re-subscribing when the parent re-renders. Updated
+  // from inside an effect (not during render body) so React 19's
+  // no-ref-mutation-during-render rule is satisfied.
   const handlersRef = useRef(opts.handlers)
-  handlersRef.current = opts.handlers
+  useEffect(() => {
+    handlersRef.current = opts.handlers
+  })
 
   const topicsCsv = (opts.topics ?? []).join(',')
   const enabled = opts.enabled ?? true
 
   useEffect(() => {
-    if (!enabled) {
-      setStatus('closed')
-      return
-    }
+    // When enabled flips false, the previous effect's cleanup already
+    // sets status='closed'. Initial mount with !enabled sees the
+    // useState('closed') seed. Either way, no setStatus needed here.
+    if (!enabled) return
     // BASE_URL is either an absolute origin (prod, VITE_API_BASE_URL)
     // or "/api/v1" (dev, Vite proxy). EventSource takes both fine.
     const url = topicsCsv
@@ -79,6 +83,10 @@ export function useEventStream(opts: EventStreamOptions): { status: EventStreamS
     // withCredentials sends the httpOnly JWT cookie. Without it, the
     // backend would 401 the SSE endpoint immediately.
     const source = new EventSource(url, { withCredentials: true })
+    // Connection-state transitions are the reason this hook exists;
+    // syncing them via useSyncExternalStore would obscure the SSE
+    // lifecycle. Consumer components need to read status synchronously.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setStatus('connecting')
 
     source.onopen = () => setStatus('open')

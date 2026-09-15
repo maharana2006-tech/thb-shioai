@@ -320,9 +320,9 @@ export default function DataHistoryPage() {
    * so the operator never sees stale state.
    */
   const sseHandlers = useMemo(() => ({
-    'batch-updated': (_payload: unknown) => { void reloadQuiet() },
-    'batch-created': (_payload: unknown) => { void reloadQuiet() },
-    'batch-cancel-requested': (_payload: unknown) => { void reloadQuiet() },
+    'batch-updated': () => { void reloadQuiet() },
+    'batch-created': () => { void reloadQuiet() },
+    'batch-cancel-requested': () => { void reloadQuiet() },
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [])
 
