@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { isServiceAllowedForUsTerritory } from './usTerritoryServices'
 
 /**
- * Territory-lane filter-chain regression (2026-09-08).
+ * Territory-lane filter-chain regression (introduced 2026-09-08; PR-lane
+ * assertions revised 2026-09-09 after PR #625 empirically narrowed
+ * UPS_PR / FEDEX_PR based on real carrier rejects).
  *
  * NewShipmentPage's servicesForCarrier memo is a 4-stage pipeline:
  *
@@ -13,16 +15,23 @@ import { isServiceAllowedForUsTerritory } from './usTerritoryServices'
  *
  * For a US → PR lane, isInternational=true (state=PR crosses the customs
  * boundary) but isTerritoryLane=true forces neededScope='DOMESTIC' so
- * Air/Overnight services stay visible. The DB seeds UPS Worldwide
- * (07/08/54/65) and FedEx INTERNATIONAL_* codes with scope=INTERNATIONAL
- * — with neededScope='DOMESTIC' those services fell out at stage 2,
- * BEFORE the per-territory allowlist could add them back at stage 4.
- * The picker then only surfaced the Worldwide half (UPS) or the
- * intl-family half (FedEx), which UPS rejects with 121100.
+ * every scope stays visible up to the allowlist. Stage 4 is the sole
+ * gate on territory lanes; it decides what survives per validated
+ * carrier behaviour:
  *
- * Fix: on territory lanes, SKIP scopeFits and let the per-territory
- * allowlist be the sole gate. This suite pins the behavior directly on
- * the pure filter combinators the memo uses.
+ *   * PR — UPS accepts domestic Air only (Worldwide 07/08/54/65
+ *     rejected with 121100 "service invalid for origin"). FedEx
+ *     accepts intl-family only (INTERNATIONAL_PRIORITY / _ECONOMY /
+ *     _FIRST / _PRIORITY_EXPRESS); every domestic Express is rejected
+ *     "service type not available for destination".
+ *   * VI / GU / AS / MP / UM — UPS Worldwide-family only, FedEx
+ *     intl-family only (Pacific/Outlying territories on the intl
+ *     network).
+ *
+ * The two carriers are asymmetric on PR: UPS moves it on the DOMESTIC
+ * network, FedEx on the INTERNATIONAL network. This suite pins the
+ * per-carrier + per-territory contract on the pure filter combinators
+ * the memo uses.
  */
 
 // Mirror of the memo's `scopeFits` predicate — same signature, same
@@ -78,57 +87,67 @@ function pickServices(opts: {
 }
 
 describe('territory-lane filter chain — US → PR', () => {
-  it('UPS PR surfaces BOTH domestic Air AND Worldwide (bug regression)', () => {
+  it('UPS PR surfaces domestic Air only — Worldwide rejected by 121100', () => {
     const visible = pickServices({
       carrier: 'UPS',
       neededScope: 'DOMESTIC',  // territory-lane rule keeps DOMESTIC
       recipientTerritory: 'PR',
       isTerritoryLane: true,
     })
-    // Domestic Air family
+    // Domestic Air family — the only codes UPS accepts for US → PR.
     expect(visible).toContain('01')
     expect(visible).toContain('02')
     expect(visible).toContain('13')
-    // Worldwide family — this half was dropped pre-fix
-    expect(visible).toContain('07')
-    expect(visible).toContain('08')
-    expect(visible).toContain('65')
+    // Worldwide family — the UPS Rating API REJECTS these for US → PR
+    // with 121100 "service invalid for origin" (operator confirmed
+    // 2026-09-08; PR #625 narrowed UPS_PR to Air-only).
+    expect(visible).not.toContain('07')
+    expect(visible).not.toContain('08')
+    expect(visible).not.toContain('65')
     // Ground — hidden by allowlist
     expect(visible).not.toContain('03')
   })
 
-  it('FedEx PR surfaces BOTH domestic Express AND intl-family (bug regression)', () => {
+  it('FedEx PR surfaces intl-family only — domestic Express rejected', () => {
     const visible = pickServices({
       carrier: 'FEDEX',
       neededScope: 'DOMESTIC',
       recipientTerritory: 'PR',
       isTerritoryLane: true,
     })
-    // Domestic Express
-    expect(visible).toContain('PRIORITY_OVERNIGHT')
-    expect(visible).toContain('FEDEX_2_DAY')
-    expect(visible).toContain('FEDEX_EXPRESS_SAVER')
-    // Intl family — dropped pre-fix
+    // Intl family — the only codes FedEx accepts for US → PR. FedEx
+    // treats PR as INTERNATIONAL destination on its network.
     expect(visible).toContain('INTERNATIONAL_PRIORITY')
     expect(visible).toContain('INTERNATIONAL_ECONOMY')
+    // Domestic Express — FedEx rejects EVERY domestic service for
+    // US → PR with "service type not available for destination"
+    // (operator confirmed 2026-09-08; PR #625 narrowed FEDEX_PR to
+    // intl-only).
+    expect(visible).not.toContain('PRIORITY_OVERNIGHT')
+    expect(visible).not.toContain('FEDEX_2_DAY')
+    expect(visible).not.toContain('FEDEX_EXPRESS_SAVER')
     // Ground — hidden by allowlist
     expect(visible).not.toContain('FEDEX_GROUND')
   })
 
-  it('pre-fix behavior demonstration: scopeFits DOMESTIC drops UPS Worldwide', () => {
-    // Sanity check that documents the bug: applying scopeFits under
-    // neededScope=DOMESTIC (as the code did before the fix) removes
-    // UPS Worldwide services even when the operator ships to PR where
-    // they're valid.
-    const preFix = pickServices({
+  it('asymmetric-per-carrier PR contract: UPS Air, FedEx intl (never overlap)', () => {
+    // Documents the deliberate asymmetry PR #625 enshrined. Same PR
+    // lane, two carriers, disjoint valid service sets.
+    const upsVisible = pickServices({
       carrier: 'UPS',
       neededScope: 'DOMESTIC',
       recipientTerritory: 'PR',
-      isTerritoryLane: false,  // pre-fix path: scopeFits applies
+      isTerritoryLane: true,
     })
-    expect(preFix).toContain('01')  // domestic Air survives
-    expect(preFix).not.toContain('07')  // Worldwide dropped — the bug
-    expect(preFix).not.toContain('65')
+    const fedexVisible = pickServices({
+      carrier: 'FEDEX',
+      neededScope: 'DOMESTIC',
+      recipientTerritory: 'PR',
+      isTerritoryLane: true,
+    })
+    // No shared codes — the sets are disjoint by carrier network design.
+    const overlap = upsVisible.filter((c) => fedexVisible.includes(c))
+    expect(overlap).toEqual([])
   })
 })
 
