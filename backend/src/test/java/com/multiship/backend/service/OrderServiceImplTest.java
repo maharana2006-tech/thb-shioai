@@ -16,6 +16,7 @@ import org.mockito.ArgumentCaptor;
 
 import java.lang.reflect.Field;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -229,5 +230,130 @@ class OrderServiceImplTest {
         assertNotNull(resp.getData());
         assertEquals(0L, resp.getData().getTotalElements());
         assertTrue(resp.getData().getContent().isEmpty());
+    }
+
+    /* -------- listBatches (2026-09-14 batch column filter) --------
+     *
+     * Guards the /orders/batches picker endpoint. Same filter-normalisation
+     * as listOrders — reuse those tests for keyword/tenant/date paths and
+     * cover here only what's specific to listBatches: row shape mapping,
+     * batch-id digit sanitisation, and the response envelope.
+     */
+
+    @Test
+    void listBatchesEmptyResultReturnsSuccessWithEmptyList() {
+        when(orderRepository.findDistinctBatchesUnified(
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(List.of());
+
+        ApiResponse<List<Map<String, Object>>> resp = service.listBatches(emptyFilters());
+
+        assertEquals(200, resp.getCode());
+        assertEquals("SUCCESS", resp.getStatus());
+        assertTrue(resp.getMessage().contains("0 batch"));
+        assertNotNull(resp.getData());
+        assertTrue(resp.getData().isEmpty());
+    }
+
+    @Test
+    void listBatchesMapsRepoRowsToBatchIdAndCount() {
+        // Repo returns Object[] {batch_id, row_count}. Postgres COUNT(*)
+        // widens to Long; batch_id column is INTEGER. Service must return
+        // count as long via toLong (defends against Number subclasses).
+        when(orderRepository.findDistinctBatchesUnified(
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(List.of(
+                        new Object[]{42, 17L},
+                        new Object[]{14, 3L}));
+
+        ApiResponse<List<Map<String, Object>>> resp = service.listBatches(emptyFilters());
+
+        assertEquals(200, resp.getCode());
+        assertEquals(2, resp.getData().size());
+        assertEquals(42, resp.getData().get(0).get("batchId"));
+        assertEquals(17L, resp.getData().get(0).get("count"));
+        assertEquals(14, resp.getData().get(1).get("batchId"));
+        assertEquals(3L, resp.getData().get(1).get("count"));
+    }
+
+    @Test
+    void listBatchesMalformedDateReturns400WithoutHittingRepo() {
+        OrderListFilters f = emptyFilters();
+        f.setCreatedFrom("not-a-date");
+
+        ApiResponse<List<Map<String, Object>>> resp = service.listBatches(f);
+
+        assertEquals(400, resp.getCode());
+        assertEquals("ERROR", resp.getStatus());
+        assertTrue(resp.getMessage().contains("yyyy-MM-dd"));
+    }
+
+    @Test
+    void listBatchesStripsNonDigitsFromBatchIdBeforeRepo() {
+        // Operator types "#14" — service must sanitise to "14" so the
+        // native SQL cast succeeds. Mirrors listOrders behaviour.
+        OrderListFilters f = emptyFilters();
+        f.setBatchId("#14");
+        when(orderRepository.findDistinctBatchesUnified(
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(List.of());
+
+        service.listBatches(f);
+
+        ArgumentCaptor<String> batchCap = ArgumentCaptor.forClass(String.class);
+        verify(orderRepository).findDistinctBatchesUnified(
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                batchCap.capture(),
+                anyString(), anyString(), anyString(), anyString());
+        assertEquals("14", batchCap.getValue());
+    }
+
+    @Test
+    void listBatchesAllNonDigitBatchIdCollapsesToEmpty() {
+        // "abc" carries no numeric payload; treated as no filter so the
+        // dropdown returns every batch in scope.
+        OrderListFilters f = emptyFilters();
+        f.setBatchId("abc");
+        when(orderRepository.findDistinctBatchesUnified(
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(List.of());
+
+        service.listBatches(f);
+
+        ArgumentCaptor<String> batchCap = ArgumentCaptor.forClass(String.class);
+        verify(orderRepository).findDistinctBatchesUnified(
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                batchCap.capture(),
+                anyString(), anyString(), anyString(), anyString());
+        assertEquals("", batchCap.getValue());
+    }
+
+    @Test
+    void listBatchesForwardsTenantAndFiltersToRepo() {
+        OrderListFilters f = emptyFilters();
+        f.setTenantId("ACME");
+        f.setCustomer("BOB");
+        when(orderRepository.findDistinctBatchesUnified(
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(List.of());
+
+        service.listBatches(f);
+
+        verify(orderRepository).findDistinctBatchesUnified(
+                anyString(), eq("ACME"), anyString(), anyString(),
+                eq("BOB"), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString());
     }
 }
