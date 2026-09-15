@@ -31,6 +31,8 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -83,6 +85,29 @@ public class OrderServiceImpl implements OrderService {
     private static final Set<String> VALID_RESOLUTIONS = Set.of("READY", "NEEDS_DETAILS", "CHOOSE_ACCOUNT", "CLIENT_MISSING");
 
     /**
+     * Global-search prefix syntax (2026-09-15). The unified keyword branch
+     * matches order_no + batch_id + city + cust_no + tracking_number +
+     * customer_ref as substrings — great for quick "any id"-style lookups,
+     * but "14" typed alone matches every tracking number containing those
+     * digits too, which drowns the operator in noise.
+     *
+     * <p>Operators who want to narrow can prefix the keyword:
+     * <ul>
+     *   <li>{@code batch:14}       → exact match on batch_id</li>
+     *   <li>{@code order:900044}   → substring match on order_no only</li>
+     *   <li>{@code tracking:1Z999} → substring match on tracking_number only</li>
+     *   <li>{@code client:ARHDEV}  → substring match on cust_no only</li>
+     * </ul>
+     *
+     * <p>Bare keywords (no prefix) keep today's fuzzy-across-fields behaviour.
+     * Prefix parsing is deliberately conservative: an unknown prefix, an
+     * empty suffix, or a prefix that collides with an explicit panel filter
+     * already set falls through to the fuzzy branch — never a silent drop.
+     */
+    private static final Pattern SEARCH_PREFIX =
+            Pattern.compile("^(batch|order|tracking|client)\\s*:\\s*(.+?)\\s*$", Pattern.CASE_INSENSITIVE);
+
+    /**
      * Sprint 51 BP-M8 — 60s cache on the dashboard aggregation queries.
      * {@code /orders/queue-stats} and the dashboard {@code /orders/stats}
      * fire on every page load; when 30 tabs poll every 30s the same
@@ -133,6 +158,18 @@ public class OrderServiceImpl implements OrderService {
         // so an errant "batch #14" or "b14" typed into the column filter
         // still resolves to a clean equality check on batch_id.
         String batchIdFilter = trimmed(filters.getBatchId()).replaceAll("[^0-9]", "");
+        // Global-search prefix syntax (2026-09-15) — see SEARCH_PREFIX
+        // javadoc. Routes batch:/order:/tracking:/client: prefixes to the
+        // dedicated filter slots BEFORE the fuzzy branch fires, so "14"
+        // typed as batch:14 stops matching every tracking number that
+        // happens to contain those digits.
+        KeywordRouting routed = routeKeywordPrefix(
+                keywordFilter, batchIdFilter, orderNoFilter, trackingFilter, customerFilter);
+        keywordFilter = routed.keyword();
+        batchIdFilter = routed.batchId();
+        orderNoFilter = routed.orderNo();
+        trackingFilter = routed.tracking();
+        customerFilter = routed.customer();
         String createdFrom = trimmed(filters.getCreatedFrom());
         String createdTo = trimmed(filters.getCreatedTo());
         // Order source: MANUAL | BULK | API | WMS | ERP. '' = all sources.
@@ -232,6 +269,15 @@ public class OrderServiceImpl implements OrderService {
         String orderNoFilter = trimmed(filters.getOrderNo());
         String trackingFilter = trimmed(filters.getTracking());
         String batchIdFilter = trimmed(filters.getBatchId()).replaceAll("[^0-9]", "");
+        // Match listOrders' prefix-routing so "select all matching this
+        // filter" hits the same rows the list actually shows.
+        KeywordRouting routed = routeKeywordPrefix(
+                keywordFilter, batchIdFilter, orderNoFilter, trackingFilter, customerFilter);
+        keywordFilter = routed.keyword();
+        batchIdFilter = routed.batchId();
+        orderNoFilter = routed.orderNo();
+        trackingFilter = routed.tracking();
+        customerFilter = routed.customer();
         String createdFrom = trimmed(filters.getCreatedFrom());
         String createdTo = trimmed(filters.getCreatedTo());
         String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
@@ -297,6 +343,15 @@ public class OrderServiceImpl implements OrderService {
         String orderNoFilter = trimmed(filters.getOrderNo());
         String trackingFilter = trimmed(filters.getTracking());
         String batchIdFilter = trimmed(filters.getBatchId()).replaceAll("[^0-9]", "");
+        // Match listOrders' prefix-routing so the batch picker reflects the
+        // same rows the list will show once the operator hits enter.
+        KeywordRouting routed = routeKeywordPrefix(
+                keywordFilter, batchIdFilter, orderNoFilter, trackingFilter, customerFilter);
+        keywordFilter = routed.keyword();
+        batchIdFilter = routed.batchId();
+        orderNoFilter = routed.orderNo();
+        trackingFilter = routed.tracking();
+        customerFilter = routed.customer();
         String createdFrom = trimmed(filters.getCreatedFrom());
         String createdTo = trimmed(filters.getCreatedTo());
         String sourceFilter = trimmed(filters.getSource()).toUpperCase(java.util.Locale.ROOT);
@@ -488,6 +543,57 @@ public class OrderServiceImpl implements OrderService {
 
     private long toLong(Object value) {
         return value instanceof Number number ? number.longValue() : 0L;
+    }
+
+    /**
+     * Result of parsing a search-box keyword for a prefix (see
+     * {@link #SEARCH_PREFIX} javadoc). Non-empty fields have been peeled
+     * off the keyword and should be forwarded to the named filter slot;
+     * {@code keyword} holds whatever remains for the fuzzy branch.
+     */
+    private record KeywordRouting(String keyword, String batchId, String orderNo, String tracking, String customer) {}
+
+    /**
+     * Parse a search keyword for {@code batch:/order:/tracking:/client:}
+     * prefix syntax. Routes the suffix to the corresponding filter slot
+     * and blanks the keyword when a route succeeds. Conservative:
+     * unrecognised prefix, empty suffix, non-digit batch value, or an
+     * explicit panel filter already set → returns everything untouched
+     * so the fuzzy keyword branch still fires. Never silently drops
+     * operator input.
+     */
+    private KeywordRouting routeKeywordPrefix(
+            String keyword, String batchId, String orderNo, String tracking, String customer) {
+        if (keyword.isEmpty()) return new KeywordRouting(keyword, batchId, orderNo, tracking, customer);
+        Matcher m = SEARCH_PREFIX.matcher(keyword);
+        if (!m.matches()) return new KeywordRouting(keyword, batchId, orderNo, tracking, customer);
+        String prefix = m.group(1).toLowerCase(Locale.ROOT);
+        String value = m.group(2).trim();
+        if (value.isEmpty()) return new KeywordRouting(keyword, batchId, orderNo, tracking, customer);
+        switch (prefix) {
+            case "batch" -> {
+                String digits = value.replaceAll("[^0-9]", "");
+                if (!digits.isEmpty() && batchId.isEmpty()) {
+                    return new KeywordRouting("", digits, orderNo, tracking, customer);
+                }
+            }
+            case "order" -> {
+                if (orderNo.isEmpty()) {
+                    return new KeywordRouting("", batchId, value, tracking, customer);
+                }
+            }
+            case "tracking" -> {
+                if (tracking.isEmpty()) {
+                    return new KeywordRouting("", batchId, orderNo, value, customer);
+                }
+            }
+            case "client" -> {
+                if (customer.isEmpty()) {
+                    return new KeywordRouting("", batchId, orderNo, tracking, value);
+                }
+            }
+        }
+        return new KeywordRouting(keyword, batchId, orderNo, tracking, customer);
     }
 
     // ===== EXISTING METHODS =====

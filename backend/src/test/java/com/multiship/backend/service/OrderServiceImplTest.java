@@ -356,4 +356,153 @@ class OrderServiceImplTest {
                 eq("BOB"), anyString(), anyString(), anyString(),
                 anyString(), anyString(), anyString(), anyString(), anyString());
     }
+
+    /* -------- search prefix syntax (2026-09-15) --------
+     *
+     * "batch:14" style keywords route to the dedicated filter slot BEFORE
+     * the fuzzy keyword branch fires, so operators can escape the noise
+     * of substring-matching across every ID field. See SEARCH_PREFIX
+     * javadoc on OrderServiceImpl.
+     */
+
+    @Test
+    void batchPrefixRoutesToBatchIdEqAndClearsKeyword() {
+        OrderListFilters f = emptyFilters();
+        f.setSearch("batch:14");
+
+        service.listOrders(f, false, page(0, 20));
+
+        // keyword arg (slot 3) empty, batchIdEq arg (slot 9) = "14".
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), eq(""), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                eq("14"), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+    }
+
+    @Test
+    void orderPrefixRoutesToOrderNoLikeAndClearsKeyword() {
+        OrderListFilters f = emptyFilters();
+        f.setSearch("order:900044");
+
+        service.listOrders(f, false, page(0, 20));
+
+        // orderNoLike is arg slot 7.
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), eq(""), anyString(),
+                anyString(), anyString(), eq("900044"), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+    }
+
+    @Test
+    void trackingPrefixRoutesToTrackingAndClearsKeyword() {
+        OrderListFilters f = emptyFilters();
+        f.setSearch("tracking:1Z9999");
+
+        service.listOrders(f, false, page(0, 20));
+
+        // tracking is arg slot 8.
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), eq(""), anyString(),
+                anyString(), anyString(), anyString(), eq("1Z9999"),
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+    }
+
+    @Test
+    void clientPrefixRoutesToCustomerAndClearsKeyword() {
+        OrderListFilters f = emptyFilters();
+        f.setSearch("client:ARHDEV");
+
+        service.listOrders(f, false, page(0, 20));
+
+        // customer is arg slot 5.
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), eq(""), anyString(),
+                eq("ARHDEV"), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+    }
+
+    @Test
+    void unknownPrefixKeepsKeywordFuzzy() {
+        // "foo:bar" — no matching prefix. Whole string stays in the
+        // keyword slot so today's fuzzy branch handles it.
+        OrderListFilters f = emptyFilters();
+        f.setSearch("foo:bar");
+
+        service.listOrders(f, false, page(0, 20));
+
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), eq("foo:bar"), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+    }
+
+    @Test
+    void bareKeywordUnchangedByRouting() {
+        // "14" alone — no prefix. Stays in the keyword slot; the
+        // fuzzy branch matches it against order_no / batch_id / etc.
+        OrderListFilters f = emptyFilters();
+        f.setSearch("14");
+
+        service.listOrders(f, false, page(0, 20));
+
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), eq("14"), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+    }
+
+    @Test
+    void batchPrefixWithNonDigitSuffixFallsBackToFuzzy() {
+        // "batch:foo" — the batch slot only accepts digits. Since no
+        // digits survive sanitisation the routing is skipped and the
+        // keyword flows through fuzzy so we never silently drop input.
+        OrderListFilters f = emptyFilters();
+        f.setSearch("batch:foo");
+
+        service.listOrders(f, false, page(0, 20));
+
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), eq("batch:foo"), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                eq(""), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+    }
+
+    @Test
+    void explicitBatchFilterWinsOverBatchPrefix() {
+        // Operator has batch #14 pinned via the panel AND typed
+        // "batch:22" in the search box. Panel wins — the prefix is
+        // ignored and the keyword falls through untouched.
+        OrderListFilters f = emptyFilters();
+        f.setBatchId("14");
+        f.setSearch("batch:22");
+
+        service.listOrders(f, false, page(0, 20));
+
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), eq("batch:22"), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                eq("14"), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+    }
+
+    @Test
+    void prefixIsCaseInsensitive() {
+        OrderListFilters f = emptyFilters();
+        f.setSearch("BATCH:14");
+
+        service.listOrders(f, false, page(0, 20));
+
+        verify(orderRepository).findOrdersUnified(
+                anyString(), anyString(), eq(""), anyString(),
+                anyString(), anyString(), anyString(), anyString(),
+                eq("14"), anyString(), anyString(), anyString(), anyString(),
+                anyInt(), anyInt(), anyString(), anyString());
+    }
 }
