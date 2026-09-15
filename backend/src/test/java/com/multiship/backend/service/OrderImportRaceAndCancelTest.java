@@ -214,6 +214,48 @@ class OrderImportRaceAndCancelTest {
                 "runJob's finally block must promote status to CANCELLED when the flag is set");
     }
 
+    @Test
+    void ordersSkippedByCancelAreLeftUntouched_notMarkedFailed() throws Exception {
+        // One worker, so orders go out in turn: the first carrier call cancels,
+        // and the second order must be skipped — untouched, not a failure.
+        ReflectionTestUtils.setField(service, "importCommitConcurrency", 1);
+        ReflectionTestUtils.setField(service, "importMaxPerTenant", 1);
+        com.fasterxml.jackson.databind.ObjectMapper m = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.core.type.TypeReference<List<OrderImportRowDTO>> listType =
+                new com.fasterxml.jackson.core.type.TypeReference<>() {};
+        ImportBatch batch = persistBatchWithOneRow(204L, "INITIATE");
+        OrderImportRowDTO first = m.readValue(batch.getRowsJson(), listType).get(0);
+        first.setOrderRef("A");
+        OrderImportRowDTO second = m.readValue(m.writeValueAsString(first), OrderImportRowDTO.class);
+        second.setRowNumber(2);
+        second.setOrderRef("B");
+        batch.setRowsJson(m.writeValueAsString(List.of(first, second)));
+        batch.setTotalRows(2);
+
+        org.mockito.stubbing.Answer<ApiResponse<LabelGenerationResponse>> cancelThenSucceed = inv -> {
+            service.cancelGeneration(204L);
+            return ApiResponse.<LabelGenerationResponse>builder()
+                    .status("success").code(200)
+                    .data(LabelGenerationResponse.builder().orderNo(998L).trackingNumber("TN-998").status("GENERATED").build())
+                    .build();
+        };
+        when(carrierService.generateManualLabel(any(), any())).thenAnswer(cancelThenSucceed);
+        when(carrierService.generateManualLabel(any(), any(), any())).thenAnswer(cancelThenSucceed);
+
+        service.generateLabelsForBatch(204L, "alice", false, false, true);
+
+        ImportBatch done = saved.get(204L);
+        assertEquals("CANCELLED", done.getStatus());
+        OrderImportRowDTO skipped = m.readValue(done.getRowsJson(), listType).stream()
+                .filter(r -> "B".equals(r.getOrderRef())).findFirst().orElseThrow();
+        assertTrue(!"FAILED".equalsIgnoreCase(skipped.getGeneratedStatus()),
+                "an order Cancel never sent is not a failure; got " + skipped.getGeneratedStatus());
+        assertTrue(skipped.getErrors() == null || skipped.getErrors().isEmpty(),
+                "an order Cancel never sent has nothing to fix; got " + skipped.getErrors());
+        assertTrue(done.getNote() != null && done.getNote().contains("1 order wasn't labelled"),
+                "note should say what the cancel left; got " + done.getNote());
+    }
+
     /* -------------------------- Startup housekeeper -------------------------- */
 
     @Test

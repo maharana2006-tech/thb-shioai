@@ -1883,11 +1883,15 @@ public class OrderImportServiceImpl implements OrderImportService {
                 }
                 deferred = still;
             }
+            boolean cancelledRun = cancelCheck != null && cancelCheck.getAsBoolean();
             for (List<OrderImportRowDTO> g : deferred) {
                 String who = carrierLabel(carrierKey(g.get(0)));
                 for (OrderImportRowDTO r : g) {
-                    r.setGeneratedMessage(who + " is still rate-limiting after " + MAX_RATE_LIMIT_PASSES
-                            + " automatic retries — click Retry in a few minutes.");
+                    // A cancel ends the retry passes early — don't blame the carrier for that.
+                    r.setGeneratedMessage(cancelledRun
+                            ? "Not sent — label generation was cancelled. Retry labels to send it."
+                            : who + " is still rate-limiting after " + MAX_RATE_LIMIT_PASSES
+                                    + " automatic retries — click Retry in a few minutes.");
                 }
                 if (onGroupComplete != null) onGroupComplete.run();
             }
@@ -2520,6 +2524,21 @@ public class OrderImportServiceImpl implements OrderImportService {
                     + " row(s) still queued. Wait for the carrier's quota window to reset, "
                     + "then click Retry.");
         }
+        if (wasCancelled) {
+            // Say what the cancel left behind, in orders: the ones not labelled
+            // (and not held back by validation errors) are what Retry will send.
+            long notLabelled = rows.stream()
+                    .filter(r -> !"GENERATED".equalsIgnoreCase(r.getGeneratedStatus()))
+                    .filter(r -> r.getErrors() == null || r.getErrors().isEmpty())
+                    .map(r -> StringUtils.hasText(r.getOrderRef()) ? r.getOrderRef().trim().toUpperCase(Locale.ROOT)
+                            : "__row_" + r.getRowNumber())
+                    .distinct()
+                    .count();
+            batch.setNote(notLabelled > 0
+                    ? "Cancelled — " + notLabelled + (notLabelled == 1 ? " order wasn't" : " orders weren't")
+                            + " labelled. Retry labels sends " + (notLabelled == 1 ? "it." : "them.")
+                    : null);
+        }
         // commit() stamps every generated row with the shared label batchId;
         // lift it onto the import so the file row shows which All-Orders batch
         // its labels belong to. Keep any prior id if this run generated none.
@@ -2888,7 +2907,8 @@ public class OrderImportServiceImpl implements OrderImportService {
         GenProgress p = id == null ? null : generationProgressByBatch.get(id);
         if (p == null) return new GenProgressView(0, 0, false);
         // Clamp done ≤ total in case a poll lands between the last tick and removal.
-        return new GenProgressView(Math.min(p.done.get(), p.total), p.total, true, p.note);
+        return new GenProgressView(Math.min(p.done.get(), p.total), p.total, true, p.note,
+                cancelledBatchIds.contains(id));
     }
 
     /** Count of orderRef groups in a row set — one label (and one progress tick)
@@ -4444,8 +4464,9 @@ public class OrderImportServiceImpl implements OrderImportService {
     }
 
     /** Sprint 50 Tier 1 finding #8 — return shape for a per-group commit worker. */
-    private record GroupOutcome(int valid, int invalid, int generated, boolean rateLimited) {
-        GroupOutcome(int valid, int invalid, int generated) { this(valid, invalid, generated, false); }
+    private record GroupOutcome(int valid, int invalid, int generated, boolean rateLimited, boolean skipped) {
+        GroupOutcome(int valid, int invalid, int generated) { this(valid, invalid, generated, false, false); }
+        GroupOutcome(int valid, int invalid, int generated, boolean rateLimited) { this(valid, invalid, generated, rateLimited, false); }
     }
 
     /**
@@ -4464,20 +4485,21 @@ public class OrderImportServiceImpl implements OrderImportService {
                 // groups are skipped as soon as the operator hits Cancel. In-flight
                 // carrier calls finish naturally (a paid label can't be interrupted).
                 if (cancelCheck != null && cancelCheck.getAsBoolean()) {
-                    for (OrderImportRowDTO r : group) {
-                        r.setGeneratedStatus("FAILED");
-                        java.util.List<String> errs = new java.util.ArrayList<>(
-                                r.getErrors() == null ? java.util.List.of() : r.getErrors());
-                        errs.add("Cancelled by operator before dispatch");
-                        r.setErrors(errs);
-                    }
-                    outcome = new GroupOutcome(0, group.size(), 0);
+                    // Nothing was sent, so nothing failed. These rows used to be
+                    // marked FAILED with an error added — and an error is what
+                    // Import history reads as "needs fixes", so a cancel turned
+                    // untouched orders into broken ones. Leave them exactly as they
+                    // were so Retry sends them, and don't tick the bar: the count
+                    // should freeze where Cancel landed, not race to 100%.
+                    outcome = new GroupOutcome(0, 0, 0, false, true);
                     return outcome;
                 }
                 outcome = processGroup(group, batchId, usePlatformAccount, sourceOverride);
                 return outcome;
             } finally {
-                if (onGroupComplete != null && (outcome == null || !outcome.rateLimited())) onGroupComplete.run();
+                if (onGroupComplete != null && (outcome == null || (!outcome.rateLimited() && !outcome.skipped()))) {
+                    onGroupComplete.run();
+                }
             }
         };
     }

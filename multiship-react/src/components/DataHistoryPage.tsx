@@ -87,7 +87,11 @@ export default function DataHistoryPage() {
   const [generatingId, setGeneratingId] = useState<number | null>(null)
   // Live "X of N" label-generation progress per batch, polled while a batch
   // generate/retry runs so the button shows a real progress bar, not a spinner.
-  const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number; note?: string | null }>>({})
+  const [genProgressById, setGenProgressById] = useState<Record<number, { done: number; total: number; note?: string | null; cancelling?: boolean }>>({})
+  // Imports this tab asked to cancel. Held until the run actually stops so the
+  // card and button keep saying "Cancelling…" — it used to snap straight back
+  // to "Cancel" while workers drained, which read as the click doing nothing.
+  const [cancelRequested, setCancelRequested] = useState<Set<number>>(() => new Set())
   // Observer-mode poll tracking (2026-09-12 post-mortem) — pre-fix, the
   // progress bar only rendered when THIS browser session called
   // generate(id). Reloading the page or opening Data History in a fresh
@@ -378,7 +382,7 @@ export default function DataHistoryPage() {
             if (d && d.running && d.total > 0) {
               setGenProgressById((m) => ({
                 ...m,
-                [id]: { done: d.done, total: d.total, note: d.note ?? null },
+                [id]: { done: d.done, total: d.total, note: d.note ?? null, cancelling: !!d.cancelling },
               }))
             } else if (d && !d.running) {
               // Server says the run finished — clean up and stop.
@@ -561,7 +565,7 @@ export default function DataHistoryPage() {
           const pr = await orderImportService.generationProgress(id)
           const d = pr.data
           if (polling && d && d.running && d.total > 0) {
-            setGenProgressById((m) => ({ ...m, [id]: { done: d.done, total: d.total, note: d.note ?? null } }))
+            setGenProgressById((m) => ({ ...m, [id]: { done: d.done, total: d.total, note: d.note ?? null, cancelling: !!d.cancelling } }))
           }
         } catch {
           /* transient poll error — keep going, the POST result is authoritative */
@@ -640,14 +644,15 @@ export default function DataHistoryPage() {
   const cancelGeneration = async (id: number) => {
     if (cancellingId != null) return
     const ok = window.confirm(
-      `Cancel label generation for batch ${id}? Workers stop after the current in-flight orders finish. `
-        + `Labels already generated stay downloadable from Import history.`,
+      `Cancel label generation for import #${id}?\n\nOrders already at the carrier finish (that can take a few seconds); `
+        + `orders still queued are not sent. Labels already made stay in Import history, and Retry labels sends the rest later.`,
     )
     if (!ok) return
     setCancellingId(id)
     try {
       await orderImportService.cancelGeneration(id)
-      notify.info('Cancellation requested. Waiting for workers to drain…')
+      setCancelRequested((cur) => new Set(cur).add(id))
+      notify.info(`Cancelling import #${id} — finishing the orders already at the carrier.`)
       // Poll status a few times so the button flips when the run
       // actually finishes; the existing generate() polling loop drives
       // most of the UX, this just covers the case where cancel arrives
@@ -775,6 +780,14 @@ export default function DataHistoryPage() {
         return { label: status || '—', cls: 'bg-slate-100 text-slate-500 ring-slate-200' }
     }
   }
+
+  useEffect(() => {
+    if (cancelRequested.size === 0) return
+    const stillRunning = new Set(batches.filter((b) => (b.status || '').toUpperCase() === 'IN_PROGRESS').map((b) => b.id))
+    const next = new Set([...cancelRequested].filter((id) => stillRunning.has(id)))
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prune once the run ends
+    if (next.size !== cancelRequested.size) setCancelRequested(next)
+  }, [batches, cancelRequested])
 
   // Only runs while something is generating — no idle interval.
   const anyGenerating = batches.some((b) => (b.status || '').toUpperCase() === 'IN_PROGRESS') || generatingId != null
@@ -1080,10 +1093,12 @@ export default function DataHistoryPage() {
                           const total = progress?.total ?? 0
                           const done = Math.min(progress?.done ?? 0, total)
                           const pct = total > 0 ? Math.round((done / total) * 100) : 0
+                          // Another tab's cancel shows up through the server flag.
+                          const stopping = cancelRequested.has(b.id) || !!progress?.cancelling
                           return (
                             <div className="flex items-center gap-2">
                               <div
-                                className="flex min-w-[208px] flex-col gap-1.5 rounded-xl bg-[#1f150c] px-3 py-2 text-[#f4eede]"
+                                className={`flex min-w-[208px] flex-col gap-1.5 rounded-xl px-3 py-2 ${stopping ? 'bg-amber-900 text-amber-50' : 'bg-[#1f150c] text-[#f4eede]'}`}
                                 role="progressbar"
                                 aria-valuemin={0}
                                 aria-valuemax={total || undefined}
@@ -1095,7 +1110,7 @@ export default function DataHistoryPage() {
                                 <div className="flex items-center justify-between gap-3 text-[11.5px] font-semibold leading-none">
                                   <span className="inline-flex items-center gap-1.5">
                                     <span className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-[#f4eede]/40 border-t-[#f4eede]" />
-                                    Generating…
+                                    {stopping ? 'Cancelling…' : 'Generating…'}
                                   </span>
                                   {(() => {
                                     const st = b.generationStartedAt ? new Date(b.generationStartedAt).getTime() : null
@@ -1116,8 +1131,12 @@ export default function DataHistoryPage() {
                                   )}
                                 </div>
                                 <div className="flex items-center justify-between text-[10px] leading-none tabular-nums text-[#f4eede]/70">
-                                  <span>{total > 0 ? `${done} of ${total} orders` : 'starting…'}</span>
-                                  {total > 0 ? <span>{pct}%</span> : null}
+                                  <span>
+                                    {stopping
+                                      ? 'Finishing orders at the carrier'
+                                      : total > 0 ? `${done} of ${total} orders` : 'starting…'}
+                                  </span>
+                                  {total > 0 ? <span>{stopping ? `${done} done` : `${pct}%`}</span> : null}
                                 </div>
                                 {progress?.note ? (
                                   <div className="max-w-[260px] text-[10px] leading-snug text-[#f4eede]/85" aria-live="polite">
@@ -1128,12 +1147,12 @@ export default function DataHistoryPage() {
                               <button
                                 type="button"
                                 onClick={() => void cancelGeneration(b.id)}
-                                disabled={cancellingId === b.id}
+                                disabled={cancellingId === b.id || cancelRequested.has(b.id) || !!progress?.cancelling}
                                 title="Stop workers from picking up more orders. Already-in-flight carrier calls run to completion."
                                 className="inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-[11px] font-semibold text-rose-800 transition hover:bg-rose-100 disabled:opacity-40"
                               >
                                 <FiSlash className="h-3 w-3" />
-                                {cancellingId === b.id ? 'Cancelling…' : 'Cancel'}
+                                {cancellingId === b.id || cancelRequested.has(b.id) || progress?.cancelling ? 'Cancelling…' : 'Cancel'}
                               </button>
                             </div>
                           )
@@ -1180,7 +1199,7 @@ export default function DataHistoryPage() {
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     // nowTick re-renders the running-elapsed caption once a second.
-    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById, nowTick],
+    [canWrite, viewTrash, trashBusyId, confirmGenId, billingSavingId, generatingId, genProgressById, nowTick, cancellingId, cancelRequested],
   )
 
   /** Expanded content for a batch row — the all-columns editable grid. */
