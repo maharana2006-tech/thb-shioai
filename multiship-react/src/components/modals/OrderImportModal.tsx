@@ -296,6 +296,9 @@ export default function OrderImportModal({ onClose, inline = false, onImported }
           <button
             key={f}
             type="button"
+            // downloadErrors reads putChain.current, but only inside an async
+            // onClick — the ref is never read during render.
+            // eslint-disable-next-line react-hooks/refs
             onClick={() => void downloadErrors(f)}
             disabled={downloading != null}
             className={GHOST_BTN}

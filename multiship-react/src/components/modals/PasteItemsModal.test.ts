@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parsePastedItems } from './PasteItemsModal'
+import { parsePastedItems } from './parsePastedItems'
 
 describe('parsePastedItems', () => {
   it('parses tab-separated rows from a spreadsheet and skips a header row', () => {
