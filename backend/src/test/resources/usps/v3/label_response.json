@@ -1,0 +1,25 @@
+{
+  "labelMetadata": {
+    "trackingNumber": "9400111899223197428490",
+    "constructCode": "C01",
+    "SKU": "DPGA0000",
+    "postage": 8.85,
+    "labelType": "4X6LABEL",
+    "labelBrokerID": "eVS-1234567",
+    "bannerText": "USPS GROUND ADVANTAGE",
+    "retailDistributionCode": "RDC01",
+    "serviceTypeCode": "USPS_GROUND_ADVANTAGE",
+    "zone": "5",
+    "commitment": {
+      "name": "3-5 Business Days",
+      "scheduledDeliveryDate": "2026-09-19"
+    },
+    "weightUOM": "LB",
+    "weight": 1.00,
+    "dimensionalWeight": 0.0,
+    "fees": [],
+    "extraServices": [],
+    "trackingURL": "https://tools.usps.com/go/TrackConfirmAction?tLabels=9400111899223197428490"
+  },
+  "labelImage": "JVBERi0xLjQKJfbk/N8KMSAwIG9iago8PC9UeXBlL0NhdGFsb2c+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlL1BhZ2VzL0NvdW50IDEvS2lkc1s0IDAgUl0+PgplbmRvYmo="
+}
