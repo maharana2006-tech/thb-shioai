@@ -278,11 +278,11 @@ describe('OrdersWorkspace — selection clears on filter change', () => {
 })
 
 // ==================================================================
-// Selection clears on pagination change (regression)
+// Selection PRESERVES on pagination change (Gmail behaviour, 2026-09-13)
 // ==================================================================
 
-describe('OrdersWorkspace — selection clears on pagination change', () => {
-  it('changing page-size clears selection', async () => {
+describe('OrdersWorkspace — selection preserves across pagination', () => {
+  it('changing page-size preserves selection (Gmail-style)', async () => {
     // Seed with more rows + multi-page so page-size change is meaningful.
     listOrders.mockResolvedValue({
       data: {
@@ -315,7 +315,13 @@ describe('OrdersWorkspace — selection clears on pagination change', () => {
     }
     fireEvent.change(pagerSelect, { target: { value: '25' } })
 
-    await expectNoSelectedBar()
+    // 2026-09-13 overhaul (OrdersWorkspace.tsx:305-308) deliberately
+    // dropped the clear-on-page/pageSize behaviour: "paging through
+    // results shouldn't discard picks made on page 1". Filter change
+    // still clears (covered in the earlier describe block); paging
+    // does not.
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByText(/\d+ selected/)).toBeInTheDocument()
   })
 })
 
