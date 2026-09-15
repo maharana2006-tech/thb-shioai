@@ -248,15 +248,20 @@ export default function OrdersWorkspace() {
   }, [view, debouncedQuery, pageSize, clientFilter, dateFrom, dateTo, sortBy, sortDirection, debouncedFilters])
 
   /**
-   * Batch-picker source refresh (2026-09-14). Fires only while the
-   * advanced-filter panel is open — the picker isn't visible any
-   * other time, so preloading is wasted network. Skips when the
-   * operator already picked a batch (a single-entry dropdown adds
-   * no value).
+   * Batch-picker source refresh (2026-09-14; guard-drop 2026-09-15).
+   * Fires only while the advanced-filter panel is open — the picker
+   * isn't visible any other time, so preloading is wasted network.
+   *
+   * We do NOT skip the fetch when a batch is already picked: the
+   * /orders/batches endpoint deliberately ignores any locally-set
+   * batch id (see the controller comment at OrderController#listBatches)
+   * so the response is always the full list under the surrounding
+   * filters, not a single entry. Keeping the dropdown live is what
+   * lets an operator switch from batch #14 to #22 without having to
+   * clear the batch first.
    */
   useEffect(() => {
     if (!showFilters) return
-    if (columnFilters.batch.trim()) return
     let cancelled = false
     void (async () => {
       try {
@@ -281,7 +286,7 @@ export default function OrdersWorkspace() {
     })()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showFilters, columnFilters.batch, view, debouncedQuery, clientFilter,
+  }, [showFilters, view, debouncedQuery, clientFilter,
       dateFrom, dateTo, debouncedFilters, sourceFilter, channelFilter])
 
   /**
