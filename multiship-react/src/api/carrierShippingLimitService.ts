@@ -68,6 +68,16 @@ export const carrierShippingLimitService = {
   update: (id: number, payload: CarrierShippingLimitPayload) =>
     apiClient.put<ApiResponse<CarrierShippingLimit>>(`${BASE}/${id}`, payload),
 
+  /**
+   * Audit L4 #376 — flip only the `active` flag. Pairs with the backend's
+   * dedicated PATCH endpoint so a row-level activate/deactivate no longer
+   * round-trips every other field. Removes the race where a second admin's
+   * mid-edit of `maxPackages` / `notes` / etc. got silently overwritten by
+   * the toggler's stale snapshot.
+   */
+  setActive: (id: number, active: boolean) =>
+    apiClient.patch<ApiResponse<CarrierShippingLimit>>(`${BASE}/${id}/active`, { active }),
+
   remove: (id: number) =>
     apiClient.delete<void>(`${BASE}/${id}`),
 }

@@ -29,6 +29,7 @@ import { renderWithProviders } from '../test/renderWithProviders'
 const listMock = vi.fn()
 const createMock = vi.fn()
 const updateMock = vi.fn()
+const setActiveMock = vi.fn()
 const removeMock = vi.fn()
 const confirmMock = vi.fn()
 const successMock = vi.fn()
@@ -40,6 +41,7 @@ vi.mock('../api/carrierShippingLimitService', () => ({
     get: vi.fn(),
     create: (...args: unknown[]) => createMock(...args),
     update: (...args: unknown[]) => updateMock(...args),
+    setActive: (...args: unknown[]) => setActiveMock(...args),
     remove: (...args: unknown[]) => removeMock(...args),
   },
 }))
@@ -202,8 +204,11 @@ describe('CarrierShippingLimitsPage — filters', () => {
 })
 
 describe('CarrierShippingLimitsPage — row actions', () => {
-  it('Deactivate on an active row → update() then success + refetch', async () => {
-    updateMock.mockResolvedValueOnce({})
+  // Audit L4 #376 — the toggle used to full-payload PUT via update();
+  // it now calls the dedicated setActive() PATCH so a mid-edit by
+  // another admin can't be stomped by the toggler's stale snapshot.
+  it('Deactivate on an active row → setActive(id, false) then success + refetch', async () => {
+    setActiveMock.mockResolvedValueOnce({})
     const Page = await loadPage()
     renderWithProviders(<Page />)
     await waitFor(() => expect(screen.getByText('UPS')).toBeTruthy())
@@ -213,15 +218,17 @@ describe('CarrierShippingLimitsPage — row actions', () => {
     const upsRow = screen.getByText('UPS').closest('tr')!
     await userEvent.click(within(upsRow).getByRole('button', { name: /Deactivate/i }))
 
-    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1))
-    expect(updateMock.mock.calls[0][0]).toBe(1)
-    expect(updateMock.mock.calls[0][1].active).toBe(false)
+    await waitFor(() => expect(setActiveMock).toHaveBeenCalledTimes(1))
+    expect(setActiveMock.mock.calls[0][0]).toBe(1)
+    expect(setActiveMock.mock.calls[0][1]).toBe(false)
+    // Regression guard for #376: the old full-payload PUT is silent now.
+    expect(updateMock).not.toHaveBeenCalled()
     expect(successMock).toHaveBeenCalledWith('Deactivated UPS/UPS_GROUND row.')
     await waitFor(() => expect(listMock).toHaveBeenCalled())
   })
 
   it('Activate on an inactive row → success message uses the "(default)" service label', async () => {
-    updateMock.mockResolvedValueOnce({})
+    setActiveMock.mockResolvedValueOnce({})
     const Page = await loadPage()
     renderWithProviders(<Page />)
     await waitFor(() => expect(screen.getByText('FEDEX')).toBeTruthy())
@@ -229,13 +236,13 @@ describe('CarrierShippingLimitsPage — row actions', () => {
     const fedexRow = screen.getByText('FEDEX').closest('tr')!
     await userEvent.click(within(fedexRow).getByRole('button', { name: /^Activate$/i }))
 
-    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1))
-    expect(updateMock.mock.calls[0][1].active).toBe(true)
+    await waitFor(() => expect(setActiveMock).toHaveBeenCalledTimes(1))
+    expect(setActiveMock.mock.calls[0][1]).toBe(true)
     expect(successMock).toHaveBeenCalledWith('Activated FEDEX/(default) row.')
   })
 
-  it('toggle when update() rejects → notify.apiError; no crash', async () => {
-    updateMock.mockRejectedValueOnce(new Error('boom'))
+  it('toggle when setActive() rejects → notify.apiError; no crash', async () => {
+    setActiveMock.mockRejectedValueOnce(new Error('boom'))
     const Page = await loadPage()
     renderWithProviders(<Page />)
     await waitFor(() => expect(screen.getByText('UPS')).toBeTruthy())
