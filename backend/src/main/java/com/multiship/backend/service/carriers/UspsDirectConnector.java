@@ -751,6 +751,78 @@ public class UspsDirectConnector implements CarrierConnector {
     }
 
     // ================================================================
+    // Void — PR-D. Optimistic model. USPS APIs v3 have NO synchronous
+    // void / cancel endpoint (documented gotcha #9 in
+    // docs/usps-direct-integration.md). Cancellations happen batch-only
+    // via USPS's eVS Refund workflow: the label is marked "cancelled"
+    // on the platform side immediately, then a nightly reconciliation
+    // job ({@link com.multiship.backend.service.carriers.usps.UspsDirectVoidReconciliationService})
+    // reads the eVS Refund report and either confirms (APPROVED — keep
+    // VOIDED) or reverses the local status (DENIED → VOID_FAILED) once
+    // USPS decides. See decision #19 in the design doc for the UX
+    // rationale.
+    // ================================================================
+
+    /**
+     * USPS_DIRECT void — <strong>optimistic, never touches USPS at
+     * call-time</strong>. Returns {@code voided=true} with status
+     * {@code VOID_PENDING_RECONCILIATION} so the existing
+     * {@code VoidServiceImpl} flow flips
+     * {@link com.multiship.backend.model.OrderTracking#getStatus()}
+     * to {@code VOIDED} immediately and the order page shows the
+     * cancellation right away.
+     *
+     * <p>The real accept/reject decision happens asynchronously:
+     * {@code UspsDirectVoidReconciliationService.reconcile(csv)}
+     * processes the eVS Refund report (uploaded by the platform admin
+     * via {@code POST /api/v1/admin/usps-direct/void-reconciliation/run})
+     * and either marks
+     * {@code void_reconciliation_status = RECONCILED_APPROVED}
+     * (leaving {@code status = VOIDED}) or flips
+     * {@code status = VOID_FAILED} on {@code RECONCILED_DENIED} (label
+     * scanned in transit).
+     *
+     * <p>Boundary guards:
+     * <ul>
+     *   <li>Blank / null tracking number → {@link IllegalArgumentException}
+     *       — refusing to queue a nameless refund keeps the audit trail
+     *       honest.</li>
+     *   <li>{@code -local-} tokens are ACCEPTABLE here — no USPS call is
+     *       made, so an unconfigured platform doesn't block the local
+     *       flip. Differs from every other USPS_DIRECT method (all others
+     *       reject {@code -local-} with {@link IllegalStateException}).</li>
+     * </ul>
+     *
+     * <p><b>REGULATORY_REFERENCE</b>: USPS APIs v3 offer no
+     * label-void / label-cancel endpoint as of 2026-09-16 (Web Tools
+     * sunset 2026-01-25 removed the last synchronous path). All refunds
+     * flow through the batch PS Form 3533 process on the USPS Business
+     * Customer Gateway — see
+     * <a href="https://about.usps.com/forms/ps3533.pdf">PS 3533
+     * Application for Refund of Fees, Products and Withdrawal of Customer
+     * Accounts</a>. Changing this method's semantics requires re-checking
+     * that USPS has not since shipped a synchronous void endpoint.
+     */
+    @Override
+    public VoidResult voidShipment(String trackingNumber, String accessToken, String environment,
+                                    String accountNumber, String senderCountryCode) {
+        if (!StringUtils.hasText(trackingNumber)) {
+            throw new IllegalArgumentException(
+                    "USPS Direct void requires a tracking number.");
+        }
+        log.info("USPS Direct void queued (optimistic) for tracking {} — awaiting eVS Refund report reconciliation.",
+                trackingNumber);
+        return new VoidResult(
+                trackingNumber,
+                true,
+                "VOID_PENDING_RECONCILIATION",
+                "Void queued for reconciliation. USPS APIs v3 have no synchronous void endpoint; "
+                        + "cancellation is confirmed by the eVS Refund report (typically 1-2 business days). "
+                        + "If USPS rejects the refund (label scanned in transit), the order will flip to VOID_FAILED.",
+                null);
+    }
+
+    // ================================================================
     // Tracking (PR-B) — GET /tracking/v3.2/tracking/{trackingNumber}
     // ================================================================
 

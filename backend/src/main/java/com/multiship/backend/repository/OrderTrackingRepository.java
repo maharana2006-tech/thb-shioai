@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -57,4 +59,38 @@ public interface OrderTrackingRepository extends JpaRepository<OrderTracking, Lo
     List<OrderTracking> findGeneratedNewestFirst(org.springframework.data.domain.Pageable pageable);
 
     Optional<OrderTracking> findByTrackingNumberIgnoreCase(String trackingNumber);
+
+    /**
+     * PR-D USPS_DIRECT — VOIDED USPS shipments in the given window that
+     * have not yet been reconciled against USPS's eVS Refund report.
+     * Feeds {@code UspsRefundCsvExporter}: every row in this list is a
+     * candidate for the PS 3533 CSV the platform admin uploads to the
+     * USPS Business Customer Gateway.
+     *
+     * <p>Filters:
+     * <ul>
+     *   <li>{@code status = 'VOIDED'} — only optimistic voids are
+     *       refund-eligible; generated labels stay off the report.</li>
+     *   <li>{@code void_reconciliation_status IS NULL} — already-
+     *       reconciled rows stay off (APPROVED means USPS already refunded,
+     *       DENIED means the row is now VOID_FAILED and mustn't be re-billed).</li>
+     *   <li>{@code label_generated_at BETWEEN :from AND :to} — mirrors
+     *       the date-range filter USPS's report itself uses.</li>
+     *   <li>{@code UPPER(ship_via_cd) LIKE 'USPS%'} — USPS carrier scope.
+     *       Uses ship_via_cd because carrier_code isn't populated on the
+     *       tracking row; the LIKE catches USPS, USPS_GROUND_ADVANTAGE etc.</li>
+     * </ul>
+     */
+    @Query("""
+        SELECT t FROM OrderTracking t
+        WHERE UPPER(t.status) = 'VOIDED'
+          AND t.voidReconciliationStatus IS NULL
+          AND t.labelGeneratedAt BETWEEN :from AND :to
+          AND UPPER(COALESCE(t.shipViaCd, '')) LIKE 'USPS%'
+          AND t.trackingNumber IS NOT NULL AND TRIM(t.trackingNumber) <> ''
+        ORDER BY t.labelGeneratedAt DESC, t.id DESC
+    """)
+    List<OrderTracking> findVoidedUnreconciledUspsBetween(
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to);
 }

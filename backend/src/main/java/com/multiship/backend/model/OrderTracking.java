@@ -117,4 +117,37 @@ public class OrderTracking {
 
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    /**
+     * PR-D USPS_DIRECT — reconciliation state for optimistic voids.
+     * USPS APIs v3 have NO synchronous void endpoint (documented gotcha
+     * #9 in docs/usps-direct-integration.md), so a click on "Void" for a
+     * USPS_DIRECT order returns success immediately: {@code VoidService}
+     * flips {@link #status} to {@code VOIDED} on the strength of a
+     * connector-side "queued" verdict. This column is then updated
+     * asynchronously by
+     * {@code UspsDirectVoidReconciliationService.reconcile(csv)} once
+     * the platform admin uploads USPS's eVS Refund report.
+     *
+     * <ul>
+     *   <li>{@code NULL} — never reconciled (or not a void).</li>
+     *   <li>{@code PENDING} — optimistic void queued, USPS unheard.</li>
+     *   <li>{@code RECONCILED_APPROVED} — USPS refunded the postage;
+     *       {@link #status} stays {@code VOIDED}.</li>
+     *   <li>{@code RECONCILED_DENIED} — USPS refused the refund (label
+     *       was scanned in transit is the common case);
+     *       {@link #status} is flipped to {@code VOID_FAILED} and an
+     *       operator toast is emitted.</li>
+     * </ul>
+     */
+    @Column(name = "void_reconciliation_status", length = 30)
+    private String voidReconciliationStatus;
+
+    /**
+     * PR-D USPS_DIRECT — timestamp of the last reconciliation check on
+     * this row. NULL until the first eVS Refund report is uploaded and
+     * the reconciliation service processes it.
+     */
+    @Column(name = "void_reconciliation_checked_at")
+    private LocalDateTime voidReconciliationCheckedAt;
 }
