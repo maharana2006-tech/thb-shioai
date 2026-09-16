@@ -1,20 +1,31 @@
 package com.multiship.backend.service.carriers.usps.queue;
 
+import com.multiship.backend.dto.UspsDashboardMetricsDTO;
 import com.multiship.backend.dto.UspsLabelQueueMetricsDTO;
+import com.multiship.backend.dto.UspsQuotaHeadroomDTO;
+import com.multiship.backend.dto.UspsReconciliationRollupDTO;
+import com.multiship.backend.dto.UspsRetryBucketDTO;
 import com.multiship.backend.model.UspsLabelQueueItem;
 import com.multiship.backend.model.UspsLabelQueueItem.Status;
 import com.multiship.backend.repository.UspsLabelQueueRepository;
+import com.multiship.backend.service.carriers.usps.UspsDirectVoidReconciliationService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
@@ -33,6 +44,10 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
     /** Window (in completions) used to compute average processing time. */
     private static final int AVG_PROCESSING_SAMPLE_SIZE = 100;
 
+    /** PR-F4 - default lookback windows when caller passes null / zero. */
+    private static final Duration DEFAULT_RETRY_LOOKBACK = Duration.ofHours(24);
+    private static final Duration DEFAULT_RECONCILIATION_LOOKBACK = Duration.ofDays(30);
+
     private final UspsLabelQueueRepository repo;
 
     /**
@@ -43,13 +58,51 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
      */
     private final long hourlyCap;
 
+    /**
+     * PR-F4 - optional processor reference for reading the live
+     * TokenBucket. {@code null} in unit tests that use the two-arg
+     * constructor; Spring picks the four-arg constructor at runtime and
+     * populates this. Guarded on every read.
+     */
+    private final UspsLabelQueueProcessor processor;
+
+    /**
+     * PR-F4 - optional reconciliation service for the void-rollup
+     * sub-DTO. {@code null} in unit tests; Spring populates via the
+     * four-arg constructor. Guarded on every read.
+     */
+    private final UspsDirectVoidReconciliationService reconciliationService;
+
+    /**
+     * Legacy 2-arg constructor kept for the existing unit tests that
+     * pre-date PR-F4. The dashboard-specific dependencies default to
+     * {@code null} and the corresponding dashboard endpoints are
+     * effectively inert (return zeros / empty). Prod always uses the
+     * 4-arg constructor via Spring.
+     */
     public UspsLabelQueueServiceImpl(
             UspsLabelQueueRepository repo,
             @Value("${usps.direct.queue.hourly-cap:55}") long hourlyCap) {
+        this(repo, hourlyCap, null, null);
+    }
+
+    /**
+     * PR-F4 - production constructor. Spring auto-wires all four
+     * arguments. Marked {@code @Autowired} so Spring picks it over
+     * the 2-arg legacy constructor even though both are public.
+     */
+    @Autowired
+    public UspsLabelQueueServiceImpl(
+            UspsLabelQueueRepository repo,
+            @Value("${usps.direct.queue.hourly-cap:55}") long hourlyCap,
+            UspsLabelQueueProcessor processor,
+            UspsDirectVoidReconciliationService reconciliationService) {
         this.repo = repo;
         // Belt-and-braces - a mis-configured 0 would divide-by-zero the
         // estimator; clamp to the 55/hour default in that case.
         this.hourlyCap = hourlyCap <= 0 ? 55L : hourlyCap;
+        this.processor = processor;
+        this.reconciliationService = reconciliationService;
     }
 
     // ============================================================
@@ -415,5 +468,149 @@ public class UspsLabelQueueServiceImpl implements UspsLabelQueueService {
         log.info("USPS label queue: cancelled id={} (tenant={} shipment={})",
                 queueItemId, row.getTenantCode(), row.getShipmentId());
         return true;
+    }
+
+    // ============================================================
+    // PR-F4 - admin dashboard aggregates
+    // ============================================================
+
+    @Override
+    @Transactional(readOnly = true)
+    public UspsDashboardMetricsDTO getDashboardMetrics(Duration retryLookback,
+                                                       Duration reconciliationLookback) {
+        Duration retryWin = normalizeLookback(retryLookback, DEFAULT_RETRY_LOOKBACK);
+        Duration reconWin = normalizeLookback(reconciliationLookback, DEFAULT_RECONCILIATION_LOOKBACK);
+
+        UspsLabelQueueMetricsDTO queue = buildMetrics(null);
+        UspsQuotaHeadroomDTO quota = buildQuotaHeadroom();
+        UspsRetryBucketDTO retries = buildRetryBuckets(retryWin);
+        UspsReconciliationRollupDTO reconciliation = buildReconciliationRollup(reconWin);
+
+        return UspsDashboardMetricsDTO.builder()
+                .generatedAt(Instant.now())
+                .queue(queue)
+                .quota(quota)
+                .retries(retries)
+                .reconciliation(reconciliation)
+                .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public UspsRetryBucketDTO getRetryBuckets(Duration lookback) {
+        return buildRetryBuckets(normalizeLookback(lookback, DEFAULT_RETRY_LOOKBACK));
+    }
+
+    /** Normalise a caller-supplied lookback: null / zero / negative =&gt; default. */
+    private static Duration normalizeLookback(Duration lookback, Duration fallback) {
+        if (lookback == null) return fallback;
+        if (lookback.isZero() || lookback.isNegative()) return fallback;
+        return lookback;
+    }
+
+    /**
+     * PR-F4 - non-mutating quota snapshot. Reads the live TokenBucket
+     * via the processor's public accessors; when the processor bean is
+     * absent (unit-test path with the 2-arg constructor) reports
+     * {@code remainingTokens = 0} with the {@link #hourlyCap}-derived
+     * utilisation + next-replenish estimate so the dashboard renders a
+     * meaningful "no headroom - processor cold" state instead of blanks.
+     */
+    private UspsQuotaHeadroomDTO buildQuotaHeadroom() {
+        long cap;
+        int remaining;
+        if (processor != null) {
+            cap = processor.getConfiguredHourlyCap();
+            remaining = processor.getRemainingHourlyQuota();
+        } else {
+            // No processor bean - use the service's cap + assume the
+            // bucket is drained (worst-case UX for the dashboard).
+            cap = hourlyCap;
+            remaining = 0;
+        }
+        // Belt-and-braces cap fallback in the extreme case a nested
+        // mis-config leaks a non-positive cap through.
+        if (cap <= 0) cap = 55L;
+
+        long nextReplenishSec = 0L;
+        if (remaining <= 0) {
+            // Rough proxy - one token per (3600 / cap) seconds. Ceils
+            // to at least 1s so the FE never renders "0s" while showing
+            // 100% utilisation.
+            nextReplenishSec = Math.max(1L, (long) Math.ceil(3600.0 / (double) cap));
+        }
+
+        BigDecimal utilization;
+        if (cap <= 0) {
+            utilization = BigDecimal.ZERO;
+        } else {
+            long consumed = Math.max(0L, cap - Math.max(0, remaining));
+            utilization = BigDecimal.valueOf(consumed)
+                    .multiply(BigDecimal.valueOf(100))
+                    .divide(BigDecimal.valueOf(cap), 1, RoundingMode.HALF_UP);
+        }
+        return UspsQuotaHeadroomDTO.builder()
+                .hourlyCap(cap)
+                .remainingTokens(remaining)
+                .utilizationPercent(utilization)
+                .lastReplenishAt(Instant.now())
+                .nextReplenishInSeconds(nextReplenishSec)
+                .build();
+    }
+
+    /**
+     * PR-F4 - per-hour retry / failure histogram over the last
+     * {@code lookback} window. Builds a {@link UspsRetryBucketDTO}
+     * with one entry per active hour.
+     */
+    private UspsRetryBucketDTO buildRetryBuckets(Duration lookback) {
+        int hours = Math.max(1, (int) Math.min(lookback.toHours(), Integer.MAX_VALUE));
+        LocalDateTime start = LocalDateTime.now().minus(lookback);
+
+        List<UspsLabelQueueRepository.HourlyRetryBucket> rows =
+                repo.findRetryCountsByHour(start);
+
+        List<UspsRetryBucketDTO.Bucket> buckets = new ArrayList<>(rows.size());
+        for (UspsLabelQueueRepository.HourlyRetryBucket row : rows) {
+            LocalDateTime hs = row.getHourStart();
+            Instant instant = hs == null ? null : hs.toInstant(ZoneOffset.UTC);
+            long attempts = row.getAttempts() == null ? 0L : row.getAttempts();
+            long retries = row.getRetries() == null ? 0L : row.getRetries();
+            long failures = row.getFailures() == null ? 0L : row.getFailures();
+            buckets.add(new UspsRetryBucketDTO.Bucket(instant, attempts, retries, failures));
+        }
+        return UspsRetryBucketDTO.builder()
+                .hoursLookback(hours)
+                .buckets(buckets)
+                .build();
+    }
+
+    /**
+     * PR-F4 - void-reconciliation rollup. Delegates to
+     * {@link UspsDirectVoidReconciliationService#getRollup(Duration)}
+     * when the bean is present; returns an empty rollup when absent
+     * (unit tests using the 2-arg constructor path).
+     */
+    private UspsReconciliationRollupDTO buildReconciliationRollup(Duration lookback) {
+        if (reconciliationService == null) {
+            return UspsReconciliationRollupDTO.builder()
+                    .lookbackDays((int) Math.max(1, lookback.toDays()))
+                    .voidedShipmentsInWindow(0L)
+                    .reconciledApproved(0L)
+                    .reconciledDenied(0L)
+                    .notYetReconciled(0L)
+                    .pendingRefundValue(BigDecimal.ZERO)
+                    .currency("USD")
+                    .build();
+        }
+        UspsReconciliationRollupDTO out = reconciliationService.getRollup(lookback);
+        // Defensive: never return a null DTO from the composite path.
+        return Objects.requireNonNullElseGet(out, () ->
+                UspsReconciliationRollupDTO.builder()
+                        .lookbackDays((int) Math.max(1, lookback.toDays()))
+                        .voidedShipmentsInWindow(0L)
+                        .reconciledApproved(0L).reconciledDenied(0L).notYetReconciled(0L)
+                        .pendingRefundValue(BigDecimal.ZERO).currency("USD")
+                        .build());
     }
 }

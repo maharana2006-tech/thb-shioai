@@ -1,10 +1,13 @@
 package com.multiship.backend.service.carriers.usps;
 
+import com.multiship.backend.dto.UspsReconciliationRollupDTO;
 import com.multiship.backend.dto.UspsVoidReconciliationSummaryDTO;
 import com.multiship.backend.model.OrderTracking;
 import com.multiship.backend.repository.OrderTrackingRepository;
-import lombok.RequiredArgsConstructor;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -12,7 +15,9 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -20,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -69,13 +75,38 @@ import java.util.Optional;
  * rows whose {@code voidReconciliationStatus} is already terminal
  * (APPROVED / DENIED) even if the caller passes a CSV that includes
  * them; the row is counted as {@code skipped} with a note.
+ *
+ * <p>PR-F4 adds {@link #getRollup(Duration)} - aggregate counts +
+ * pending refund value for the admin dashboard.
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class UspsDirectVoidReconciliationService {
 
     private final OrderTrackingRepository orderTrackingRepository;
+
+    /**
+     * EntityManager for the PR-F4 rollup query. Package-visible +
+     * field-injected via {@link PersistenceContext} because the rollup
+     * is a single-shot GROUP BY that doesn't warrant its own repo
+     * method + JPQL constructor projection. Nullable in unit tests -
+     * {@link #setEntityManagerForTest(EntityManager)} lets those tests
+     * inject a stub or leave it null (the rollup method returns an
+     * empty DTO when null).
+     */
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    /**
+     * Default constructor - Spring picks this and populates
+     * {@link #entityManager} via {@link PersistenceContext}. Existing
+     * unit tests kept working because their {@code new
+     * UspsDirectVoidReconciliationService(repo)} call still resolves.
+     */
+    @Autowired
+    public UspsDirectVoidReconciliationService(OrderTrackingRepository orderTrackingRepository) {
+        this.orderTrackingRepository = orderTrackingRepository;
+    }
 
     /**
      * Header row this service expects. Order-independent — the parser
@@ -313,5 +344,154 @@ public class UspsDirectVoidReconciliationService {
 
     private static boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
+    }
+
+    // ================================================================
+    // PR-F4 - admin-dashboard rollup
+    // ================================================================
+
+    /**
+     * PR-F4 - rollup of the USPS_DIRECT void reconciliation state
+     * over the last {@code lookback} window. Aggregates
+     * {@code void_reconciliation_status} on {@code order_label_tracking}
+     * for rows where {@code UPPER(status) = 'VOIDED'} AND
+     * {@code UPPER(ship_via_cd) LIKE 'USPS%'} (USPS carrier scope,
+     * mirrors {@code findVoidedUnreconciledUspsBetween}) AND
+     * {@code label_generated_at &gt;= now() - lookback}.
+     *
+     * <p>Groups by reconciliation status, tallies:
+     * <ul>
+     *   <li>voidedShipmentsInWindow - all matching rows.</li>
+     *   <li>reconciledApproved - {@code RECONCILED_APPROVED} bucket.</li>
+     *   <li>reconciledDenied - {@code RECONCILED_DENIED} bucket.</li>
+     *   <li>notYetReconciled - {@code voidReconciliationStatus IS NULL}
+     *       bucket.</li>
+     *   <li>lastReconciliationAt - {@code max(void_reconciliation_checked_at)}
+     *       across the window; {@code null} on an empty window.</li>
+     *   <li>pendingRefundValue - {@code sum(carrier_amount)} for rows
+     *       where reconciliation status is null; best-effort (zero when
+     *       the column wasn't populated at label time).</li>
+     * </ul>
+     *
+     * <p>JPQL rather than native so the query runs against H2 / Postgres
+     * without dialect tweaks; the entity manager is null-safe (unit
+     * tests without a persistence context get an empty rollup).
+     *
+     * @param lookback non-null rolling window. Zero / negative /
+     *                 exceeding {@code Long.MAX_VALUE.toDays()} clamps
+     *                 to the default 30 days.
+     */
+    @Transactional(readOnly = true)
+    public UspsReconciliationRollupDTO getRollup(Duration lookback) {
+        Duration window = (lookback == null || lookback.isZero() || lookback.isNegative())
+                ? Duration.ofDays(30)
+                : lookback;
+        int lookbackDays = (int) Math.max(1L, Math.min(Integer.MAX_VALUE, window.toDays()));
+        LocalDateTime from = LocalDateTime.now().minus(window);
+
+        if (entityManager == null) {
+            // No persistence context - degrade to empty rollup so
+            // callers don't NPE. Prod always has a real EM.
+            return emptyRollup(lookbackDays);
+        }
+
+        long voidedTotal = countVoidedInWindow(from);
+        long approvedCount = countByReconStatus(from, RECONCILED_APPROVED);
+        long deniedCount = countByReconStatus(from, RECONCILED_DENIED);
+        long pendingCount = countUnreconciled(from);
+        LocalDateTime lastCheckedAt = maxReconciliationCheckedAt(from);
+        BigDecimal pendingRefundValue = Objects.requireNonNullElse(
+                sumPendingRefundValue(from), BigDecimal.ZERO);
+
+        return UspsReconciliationRollupDTO.builder()
+                .lookbackDays(lookbackDays)
+                .voidedShipmentsInWindow(voidedTotal)
+                .reconciledApproved(approvedCount)
+                .reconciledDenied(deniedCount)
+                .notYetReconciled(pendingCount)
+                .lastReconciliationAt(lastCheckedAt)
+                .pendingRefundValue(pendingRefundValue)
+                .currency("USD")
+                .build();
+    }
+
+    private long countVoidedInWindow(LocalDateTime from) {
+        Long v = entityManager.createQuery("""
+                SELECT COUNT(t) FROM OrderTracking t
+                 WHERE UPPER(t.status) = 'VOIDED'
+                   AND UPPER(COALESCE(t.shipViaCd, '')) LIKE 'USPS%'
+                   AND t.labelGeneratedAt >= :from
+                """, Long.class)
+                .setParameter("from", from)
+                .getSingleResult();
+        return v == null ? 0L : v;
+    }
+
+    private long countByReconStatus(LocalDateTime from, String status) {
+        Long v = entityManager.createQuery("""
+                SELECT COUNT(t) FROM OrderTracking t
+                 WHERE UPPER(t.status) = 'VOIDED'
+                   AND UPPER(COALESCE(t.shipViaCd, '')) LIKE 'USPS%'
+                   AND t.labelGeneratedAt >= :from
+                   AND UPPER(t.voidReconciliationStatus) = :status
+                """, Long.class)
+                .setParameter("from", from)
+                .setParameter("status", status.toUpperCase(Locale.ROOT))
+                .getSingleResult();
+        return v == null ? 0L : v;
+    }
+
+    private long countUnreconciled(LocalDateTime from) {
+        Long v = entityManager.createQuery("""
+                SELECT COUNT(t) FROM OrderTracking t
+                 WHERE UPPER(t.status) = 'VOIDED'
+                   AND UPPER(COALESCE(t.shipViaCd, '')) LIKE 'USPS%'
+                   AND t.labelGeneratedAt >= :from
+                   AND t.voidReconciliationStatus IS NULL
+                """, Long.class)
+                .setParameter("from", from)
+                .getSingleResult();
+        return v == null ? 0L : v;
+    }
+
+    private LocalDateTime maxReconciliationCheckedAt(LocalDateTime from) {
+        return entityManager.createQuery("""
+                SELECT MAX(t.voidReconciliationCheckedAt) FROM OrderTracking t
+                 WHERE UPPER(t.status) = 'VOIDED'
+                   AND UPPER(COALESCE(t.shipViaCd, '')) LIKE 'USPS%'
+                   AND t.labelGeneratedAt >= :from
+                """, LocalDateTime.class)
+                .setParameter("from", from)
+                .getSingleResult();
+    }
+
+    private BigDecimal sumPendingRefundValue(LocalDateTime from) {
+        return entityManager.createQuery("""
+                SELECT COALESCE(SUM(t.carrierAmount), 0) FROM OrderTracking t
+                 WHERE UPPER(t.status) = 'VOIDED'
+                   AND UPPER(COALESCE(t.shipViaCd, '')) LIKE 'USPS%'
+                   AND t.labelGeneratedAt >= :from
+                   AND t.voidReconciliationStatus IS NULL
+                """, BigDecimal.class)
+                .setParameter("from", from)
+                .getSingleResult();
+    }
+
+    private static UspsReconciliationRollupDTO emptyRollup(int lookbackDays) {
+        return UspsReconciliationRollupDTO.builder()
+                .lookbackDays(lookbackDays)
+                .voidedShipmentsInWindow(0L)
+                .reconciledApproved(0L)
+                .reconciledDenied(0L)
+                .notYetReconciled(0L)
+                .lastReconciliationAt(null)
+                .pendingRefundValue(BigDecimal.ZERO)
+                .currency("USD")
+                .build();
+    }
+
+    // Test hook - inject an EntityManager stub without a Spring context.
+    void setEntityManagerForTest(EntityManager em) {
+        this.entityManager = em;
     }
 }

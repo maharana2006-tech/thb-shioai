@@ -1,7 +1,10 @@
 package com.multiship.backend.service.carriers.usps.queue;
 
+import com.multiship.backend.dto.UspsDashboardMetricsDTO;
 import com.multiship.backend.dto.UspsLabelQueueMetricsDTO;
+import com.multiship.backend.dto.UspsRetryBucketDTO;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -21,6 +24,12 @@ import java.util.List;
  * "scenario A" MPS explosion: ONE order with N packages becomes N
  * queue rows sharing a {@code parent_order_no} so the admin surface
  * can aggregate progress across the pieces.
+ *
+ * <p>PR-F4 adds dashboard aggregates -
+ * {@link #getDashboardMetrics(Duration, Duration)} composes queue +
+ * quota + retries + reconciliation for the admin dashboard;
+ * {@link #getRetryBuckets(Duration)} exposes the per-hour retry
+ * histogram alone for lightweight polling.
  */
 public interface UspsLabelQueueService {
 
@@ -79,6 +88,36 @@ public interface UspsLabelQueueService {
      * {@code CANCELLED}) - the row is left untouched in that case.
      */
     boolean cancel(Long queueItemId);
+
+    // ================================================================
+    // PR-F4 - admin dashboard aggregates
+    // ================================================================
+
+    /**
+     * PR-F4 - composite dashboard payload. One round-trip fills the
+     * entire USPS Direct admin dashboard (queue depth, quota headroom,
+     * per-hour retry chart, void-reconciliation rollup).
+     *
+     * @param retryLookback         Rolling window for the per-hour
+     *                              retry histogram. Non-null; a value
+     *                              of {@link Duration#ZERO} or negative
+     *                              defaults to 24 hours.
+     * @param reconciliationLookback Rolling window for the
+     *                              reconciliation rollup. Non-null;
+     *                              zero / negative defaults to 30 days.
+     */
+    UspsDashboardMetricsDTO getDashboardMetrics(Duration retryLookback,
+                                                Duration reconciliationLookback);
+
+    /**
+     * PR-F4 - per-hour retry / failure histogram alone (no reconciliation
+     * or quota calls). Exposed as a lightweight endpoint the FE can poll
+     * for chart-only refreshes without paying the composite's cost.
+     *
+     * @param lookback  Non-null rolling window. Zero / negative defaults
+     *                  to 24 hours.
+     */
+    UspsRetryBucketDTO getRetryBuckets(Duration lookback);
 
     /**
      * Enqueue request.

@@ -36,6 +36,13 @@ import java.util.Optional;
  *       projection the {@code /mps-progress} endpoint aggregates in
  *       a single round-trip instead of iterating rows.</li>
  * </ul>
+ *
+ * <p>PR-F4 adds dashboard aggregation:
+ * <ul>
+ *   <li>{@link #findRetryCountsByHour(LocalDateTime)} - GROUP BY over
+ *       {@code date_trunc('hour', enqueued_at)} for the per-hour
+ *       retry / failure histogram on the admin dashboard.</li>
+ * </ul>
  */
 @Repository
 public interface UspsLabelQueueRepository
@@ -121,6 +128,51 @@ public interface UspsLabelQueueRepository
             """)
     List<StatusCount> findStatusCountsByParentOrderNo(@Param("parentOrderNo") Long parentOrderNo);
 
+    // ================================================================
+    // PR-F4 - dashboard aggregation
+    // ================================================================
+
+    /**
+     * PR-F4 - per-hour retry / failure histogram feeding the admin
+     * dashboard's stacked-bar chart. One row per {@code date_trunc('hour',
+     * enqueued_at)} bucket with at least one row in the window.
+     *
+     * <p>Columns:
+     * <ul>
+     *   <li>{@code hourStart} - {@code date_trunc('hour', enqueued_at)}
+     *       cast to {@code TIMESTAMP} (LocalDateTime in JVM land).</li>
+     *   <li>{@code attempts} - rows with {@code retry_count = 0}
+     *       (first-attempt enqueues, roughly "how many label requests
+     *       hit us this hour").</li>
+     *   <li>{@code retries} - {@code sum(retry_count)} across the
+     *       hour's rows; captures the retry churn USPS instability
+     *       drives.</li>
+     *   <li>{@code failures} - rows in {@code FAILED} status right now.
+     *       Snapshot; a later successful retry moves the row out of
+     *       FAILED and it leaves this counter on the next query.</li>
+     * </ul>
+     *
+     * <p>Native query (Postgres {@code date_trunc}) because JPQL has
+     * no portable "truncate to hour" primitive. H2 in test mode
+     * supports {@code date_trunc} via its Postgres-compat function,
+     * so the same query runs against both the production DB and the
+     * test containers used by IT suites.
+     *
+     * <p>Ordered by {@code hourStart} ASC so the FE can plot left to
+     * right without a client-side sort.
+     */
+    @Query(value = """
+            SELECT date_trunc('hour', enqueued_at) AS hourStart,
+                   COUNT(*) FILTER (WHERE retry_count = 0) AS attempts,
+                   COALESCE(SUM(retry_count), 0) AS retries,
+                   COUNT(*) FILTER (WHERE status = 'FAILED') AS failures
+              FROM usps_label_queue
+             WHERE enqueued_at >= :startInstant
+          GROUP BY 1
+          ORDER BY 1 ASC
+            """, nativeQuery = true)
+    List<HourlyRetryBucket> findRetryCountsByHour(@Param("startInstant") LocalDateTime startInstant);
+
     /**
      * Native GROUP BY row shape - Spring Data will project a native
      * result into this interface automatically. Kept intentionally
@@ -129,6 +181,18 @@ public interface UspsLabelQueueRepository
     interface TenantDepth {
         String getTenantCode();
         Long getDepth();
+    }
+
+    /**
+     * PR-F4 - projection interface for {@link #findRetryCountsByHour(LocalDateTime)}.
+     * All fields nullable at the JDBC level - the mapper collapses
+     * NULL to 0 in the service.
+     */
+    interface HourlyRetryBucket {
+        LocalDateTime getHourStart();
+        Long getAttempts();
+        Long getRetries();
+        Long getFailures();
     }
 
     /**
