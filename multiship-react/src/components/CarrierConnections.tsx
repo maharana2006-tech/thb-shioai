@@ -921,7 +921,15 @@ export default function CarrierConnections({
         header: 'Account name',
         cell: ({ row }) =>
           row.original.accountName ? (
-            <span className="text-[12.5px] text-slate-700">{row.original.accountName}</span>
+            // One line with the full text on hover, like the account number above:
+            // a long name (the FedEx platform placeholder runs to 97 characters)
+            // used to wrap over four lines and stretch the whole row.
+            <span
+              title={row.original.accountName}
+              className="block max-w-[240px] truncate text-[12.5px] text-slate-700"
+            >
+              {row.original.accountName}
+            </span>
           ) : (
             <span className="text-[11.5px] italic text-slate-400">Unnamed — click to add</span>
           ),
